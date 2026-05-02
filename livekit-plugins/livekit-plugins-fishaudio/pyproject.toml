@@ -23,7 +23,7 @@ classifiers = [
 ]
 dependencies = [
     "livekit-agents[codecs]>=1.5.7",
-    "fish-audio-sdk; python_version >= '3.10'",
+    "msgpack>=1.0",
 ]
 
 [project.urls]

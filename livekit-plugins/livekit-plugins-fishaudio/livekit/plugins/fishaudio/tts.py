@@ -3,22 +3,18 @@ from __future__ import annotations
 import asyncio
 import os
 import weakref
-from collections.abc import AsyncIterator
 from dataclasses import dataclass, replace
+from typing import Any
 
-from fish_audio_sdk import (
-    AsyncWebSocketSession,
-    Session as FishAudioSession,
-    TTSRequest,
-)
-from fish_audio_sdk.exceptions import WebSocketErr
-from fish_audio_sdk.schemas import Backends
+import aiohttp
+import msgpack
 
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    tokenize,
     tts,
     utils,
 )
@@ -26,126 +22,177 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGive
 from livekit.agents.utils import is_given
 
 from .log import logger
-from .models import LatencyMode, OutputFormat
+from .models import LatencyMode, OutputFormat, TTSModels
+from .version import __version__
 
-DEFAULT_MODEL: Backends = "s1"
-DEFAULT_REFERENCE_ID = "8ef4a238714b45718ce04243307c57a7"
+DEFAULT_MODEL: TTSModels = "s1"
+DEFAULT_VOICE_ID = "933563129e564b19a115bedd57b7406a"
+DEFAULT_BASE_URL = "https://api.fish.audio"
+NUM_CHANNELS = 1
+USER_AGENT = f"livekit-plugins-fishaudio/{__version__}"
+
+# Fish Audio's default sample rate per output format. Opus only supports 48 kHz;
+# the other formats default to 24 kHz, which matches the previous plugin default.
+_DEFAULT_SAMPLE_RATE: dict[OutputFormat, int] = {
+    "opus": 48000,
+    "pcm": 24000,
+    "wav": 24000,
+    "mp3": 24000,
+}
 
 
 @dataclass
 class _TTSOptions:
-    model: Backends
+    model: TTSModels | str
     output_format: OutputFormat
     sample_rate: int
-    num_channels: int
-    reference_id: NotGivenOr[str]
+    voice_id: NotGivenOr[str]
     base_url: str
     api_key: str
     latency_mode: LatencyMode
+    chunk_length: int
+
+    def get_http_url(self, path: str) -> str:
+        return f"{self.base_url}{path}"
+
+    def get_ws_url(self, path: str) -> str:
+        return f"{self.base_url.replace('http', 'ws', 1)}{path}"
 
 
 class TTS(tts.TTS):
-    """
-    Fish Audio TTS implementation for LiveKit Agents.
-
-    This plugin provides text-to-speech synthesis using Fish Audio's API.
-    It supports both chunked (non-streaming) and real-time WebSocket streaming modes,
-    as well as reference ID-based and custom reference audio-based synthesis.
-
-    Args:
-        api_key (NotGivenOr[str]): Fish Audio API key. Can be set via argument or `FISH_API_KEY` environment variable.
-        model (Backends): TTS model/backend to use. Defaults to "s1".
-        reference_id (NotGivenOr[str]): Reference voice model ID. Defaults to a general-purpose voice.
-        output_format (OutputFormat): Audio output format. Defaults to "pcm" for streaming.
-        sample_rate (int): Audio sample rate in Hz. Defaults to 24000.
-        num_channels (int): Number of audio channels. Defaults to 1 (mono).
-        base_url (NotGivenOr[str]): Custom base URL for the Fish Audio API. Optional.
-        latency_mode (LatencyMode): Streaming latency mode for WebSocket. "normal" (~500ms) or "balanced" (~300ms). Defaults to "balanced".
-    """
-
     def __init__(
         self,
         *,
         api_key: NotGivenOr[str] = NOT_GIVEN,
-        model: Backends = DEFAULT_MODEL,
-        reference_id: NotGivenOr[str] = DEFAULT_REFERENCE_ID,
-        output_format: OutputFormat = "pcm",
-        sample_rate: int = 24000,
-        num_channels: int = 1,
+        model: TTSModels | str = DEFAULT_MODEL,
+        voice_id: NotGivenOr[str] = DEFAULT_VOICE_ID,
+        output_format: OutputFormat = "opus",
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         latency_mode: LatencyMode = "balanced",
+        chunk_length: int = 100,
+        tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
     ) -> None:
+        """
+        Create a new instance of Fish Audio TTS.
+
+        See https://docs.fish.audio/api-reference/endpoint/websocket/tts-live for more details
+        on the Fish Audio Live TTS WebSocket API.
+
+        Args:
+            api_key (NotGivenOr[str]): Fish Audio API key. Reads ``FISH_API_KEY`` if unset.
+            model (TTSModels | str): TTS model to use. Defaults to ``"s1"``. Known values
+                are ``"s1"`` and ``"s2-pro"``; arbitrary strings are accepted to support
+                models added by Fish Audio after this version.
+            voice_id (NotGivenOr[str]): Voice model ID. Fish Audio's API refers to this
+                as ``reference_id``; it's the same value either way.
+            output_format (OutputFormat): Audio output format. Defaults to ``"opus"``.
+            sample_rate (int): Audio sample rate in Hz. Defaults to 48000 for ``"opus"``
+                (the only rate Fish supports for opus) and 24000 for ``"pcm"``/``"wav"``/
+                ``"mp3"``. Passing a non-48000 rate with ``"opus"`` raises ``ValueError``.
+            base_url (NotGivenOr[str]): Custom base URL. Defaults to ``https://api.fish.audio``.
+            latency_mode (LatencyMode): Streaming latency mode. ``"normal"``, ``"balanced"``,
+                or ``"low"``. Defaults to ``"balanced"``.
+            chunk_length (int): Upper bound on text Fish buffers before auto-synthesizing
+                (100–300). With sentence-level flushing this is only hit by sentences longer
+                than ``chunk_length``; otherwise audio is produced when each sentence is
+                flushed. Defaults to 100.
+            tokenizer (tokenize.SentenceTokenizer): Sentence tokenizer used to detect
+                sentence boundaries. Defaults to ``tokenize.blingfire.SentenceTokenizer()``.
+            http_session (aiohttp.ClientSession | None): Optional aiohttp session.
+        """
+        if is_given(sample_rate):
+            if output_format == "opus" and sample_rate != 48000:
+                raise ValueError(
+                    "Fish Audio only supports 48000 Hz for opus output; "
+                    f"got sample_rate={sample_rate}"
+                )
+            resolved_sample_rate = sample_rate
+        else:
+            resolved_sample_rate = _DEFAULT_SAMPLE_RATE[output_format]
+
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
-            sample_rate=sample_rate,
-            num_channels=num_channels,
+            sample_rate=resolved_sample_rate,
+            num_channels=NUM_CHANNELS,
         )
 
         fish_api_key = api_key if is_given(api_key) else os.getenv("FISH_API_KEY")
         if not fish_api_key:
             raise ValueError(
-                "Fish Audio API key is required, either as argument or set FISH_API_KEY environment variable"
+                "Fish Audio API key is required, either as argument or set "
+                "FISH_API_KEY environment variable"
             )
+
+        if not 100 <= chunk_length <= 300:
+            raise ValueError("chunk_length must be between 100 and 300")
 
         self._opts = _TTSOptions(
             model=model,
             output_format=output_format,
-            sample_rate=sample_rate,
-            num_channels=num_channels,
-            reference_id=reference_id,
-            base_url=base_url if is_given(base_url) else "https://api.fish.audio",
+            sample_rate=resolved_sample_rate,
+            voice_id=voice_id,
+            base_url=base_url if is_given(base_url) else DEFAULT_BASE_URL,
             api_key=fish_api_key,
             latency_mode=latency_mode,
+            chunk_length=chunk_length,
         )
 
-        # Initialize Fish Audio sessions
-        self._session = FishAudioSession(self._opts.api_key, base_url=self._opts.base_url)
-
-        # WebSocket session for streaming (lazy initialized)
-        self._ws_session: AsyncWebSocketSession | None = None
-        self._ws_session_lock = asyncio.Lock()
-
-        # Track active streams
+        self._session = http_session
+        # min_sentence_len=1 emits each sentence as soon as the next one starts,
+        # rather than batching short sentences together — minimizes TTFB on the
+        # first sentence and keeps Fish synthesizing continuously.
+        self._sentence_tokenizer = (
+            tokenizer
+            if is_given(tokenizer)
+            else tokenize.blingfire.SentenceTokenizer(min_sentence_len=1)
+        )
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
-        logger.info(
-            "FishAudioTTS initialized",
-            extra={
-                "model": self._opts.model,
-                "format": self._opts.output_format,
-                "sample_rate": self._opts.sample_rate,
-                "latency_mode": self._opts.latency_mode,
-            },
-        )
+    @property
+    def model(self) -> TTSModels | str:
+        return self._opts.model
 
     @property
-    def model(self) -> Backends:
-        return self._opts.model
+    def provider(self) -> str:
+        return "FishAudio"
 
     @property
     def output_format(self) -> OutputFormat:
         return self._opts.output_format
 
     @property
-    def reference_id(self) -> NotGivenOr[str]:
-        return self._opts.reference_id
-
-    @property
-    def session(self) -> FishAudioSession:
-        return self._session
+    def voice_id(self) -> NotGivenOr[str]:
+        return self._opts.voice_id
 
     @property
     def latency_mode(self) -> LatencyMode:
         return self._opts.latency_mode
 
-    async def _ensure_ws_session(self) -> AsyncWebSocketSession:
-        """Get the current WebSocket session, creating one if needed"""
-        async with self._ws_session_lock:
-            if self._ws_session is None:
-                self._ws_session = AsyncWebSocketSession(
-                    apikey=self._opts.api_key, base_url=self._opts.base_url
-                )
-            return self._ws_session
+    def _ensure_session(self) -> aiohttp.ClientSession:
+        if not self._session:
+            self._session = utils.http_context.http_session()
+        return self._session
+
+    def update_options(
+        self,
+        *,
+        model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
+        voice_id: NotGivenOr[str] = NOT_GIVEN,
+        latency_mode: NotGivenOr[LatencyMode] = NOT_GIVEN,
+        chunk_length: NotGivenOr[int] = NOT_GIVEN,
+    ) -> None:
+        if is_given(model):
+            self._opts.model = model
+        if is_given(voice_id):
+            self._opts.voice_id = voice_id
+        if is_given(latency_mode):
+            self._opts.latency_mode = latency_mode
+        if is_given(chunk_length):
+            if not 100 <= chunk_length <= 300:
+                raise ValueError("chunk_length must be between 100 and 300")
+            self._opts.chunk_length = chunk_length
 
     def synthesize(
         self,
@@ -153,276 +200,233 @@ class TTS(tts.TTS):
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> ChunkedStream:
-        """
-        Synthesize speech from text using chunked (non-streaming) mode.
-
-        Args:
-            text (str): The text to synthesize.
-            conn_options (APIConnectOptions): Connection options for the API call.
-
-        Returns:
-            ChunkedStream: A stream object that will produce synthesized audio.
-        """
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
     def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+        self,
+        *,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SynthesizeStream:
-        """
-        Create a real-time streaming TTS session using WebSocket.
-
-        Args:
-            conn_options (APIConnectOptions): Connection options for the WebSocket.
-
-        Returns:
-            SynthesizeStream: A streaming object for real-time text-to-speech.
-        """
         stream = SynthesizeStream(tts=self, conn_options=conn_options)
         self._streams.add(stream)
         return stream
 
     async def aclose(self) -> None:
-        """
-        Close TTS resources and WebSocket sessions.
-        """
         for stream in list(self._streams):
             await stream.aclose()
         self._streams.clear()
 
-        if self._ws_session is not None:
-            await self._ws_session.close()  # type: ignore[no-untyped-call]
-            self._ws_session = None
+
+def _build_tts_request(opts: _TTSOptions, *, text: str = "") -> dict[str, Any]:
+    # Send the same field set the upstream Fish Audio Python SDK sends so the
+    # server doesn't fall back to its own (larger) defaults — in particular the
+    # docs default of `chunk_length=300` produces large bursts that leave audible
+    # gaps between Fish's chunk boundaries.
+    return {
+        "text": text,
+        "chunk_length": opts.chunk_length,
+        "format": opts.output_format,
+        "sample_rate": opts.sample_rate,
+        "mp3_bitrate": 128000,
+        "opus_bitrate": 64000,
+        "references": [],
+        # Fish Audio's wire field is `reference_id`; we expose it as `voice_id` on
+        # the plugin for consistency with other TTS plugins.
+        "reference_id": opts.voice_id if is_given(opts.voice_id) else None,
+        "normalize": True,
+        "latency": opts.latency_mode,
+        "prosody": None,
+        "top_p": 0.7,
+        "temperature": 0.7,
+    }
 
 
 class ChunkedStream(tts.ChunkedStream):
-    """
-    ChunkedStream implementation for Fish Audio TTS.
+    """Synthesize via the Fish Audio HTTP /v1/tts endpoint."""
 
-    This class handles non-streaming synthesis by communicating with the Fish Audio
-    REST API and returning complete audio data.
-    """
-
-    def __init__(
-        self,
-        *,
-        tts: TTS,
-        input_text: str,
-        conn_options: APIConnectOptions,
-    ) -> None:
+    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        """
-        Generate audio and push it to the emitter.
+        payload = _build_tts_request(self._opts, text=self._input_text)
 
-        Args:
-            output_emitter (tts.AudioEmitter): The emitter to receive synthesized audio data.
-
-        Raises:
-            APIConnectionError: If connection to Fish Audio fails.
-            APITimeoutError: If the request times out.
-            APIStatusError: If Fish Audio API returns an error.
-        """
         try:
-            audio_data = await asyncio.wait_for(
-                asyncio.to_thread(self._generate_audio_sync), timeout=self._conn_options.timeout
-            )
-
-            if not audio_data:
-                logger.warning("No audio data generated from Fish Audio API")
-                return
-
-            output_emitter.initialize(
-                request_id=utils.shortuuid(),
-                sample_rate=self._opts.sample_rate,
-                num_channels=self._opts.num_channels,
-                mime_type=f"audio/{self._opts.output_format}",
-            )
-            output_emitter.push(audio_data)
-            output_emitter.flush()
-
-        except asyncio.TimeoutError as e:
-            logger.error(
-                "Fish Audio TTS request timed out",
-                extra={
-                    "timeout": self._conn_options.timeout,
-                    "text_length": len(self._input_text),
+            async with self._tts._ensure_session().post(
+                self._opts.get_http_url("/v1/tts"),
+                headers={
+                    "Authorization": f"Bearer {self._opts.api_key}",
+                    "Content-Type": "application/msgpack",
+                    "model": self._opts.model,
                 },
-            )
-            raise APITimeoutError(
-                f"Fish Audio TTS request timed out after {self._conn_options.timeout}s"
-            ) from e
-        except APITimeoutError:
-            # Already logged - re-raise without wrapping
-            raise
-        except (APIConnectionError, APIStatusError):
-            # Already logged - re-raise without wrapping
-            raise
+                data=msgpack.packb(payload, use_bin_type=True),
+                timeout=aiohttp.ClientTimeout(total=30, sock_connect=self._conn_options.timeout),
+            ) as resp:
+                resp.raise_for_status()
+
+                output_emitter.initialize(
+                    request_id=utils.shortuuid(),
+                    sample_rate=self._opts.sample_rate,
+                    num_channels=NUM_CHANNELS,
+                    mime_type=f"audio/{self._opts.output_format}",
+                )
+
+                async for data, _ in resp.content.iter_chunks():
+                    output_emitter.push(data)
+
+                output_emitter.flush()
+
+        except asyncio.TimeoutError:
+            raise APITimeoutError() from None
+        except aiohttp.ClientResponseError as e:
+            raise APIStatusError(
+                message=e.message, status_code=e.status, request_id=None, body=None
+            ) from None
         except Exception as e:
-            # Unexpected errors only (shouldn't happen in normal operation)
-            logger.error(
-                "Unexpected error in Fish Audio TTS synthesis",
-                exc_info=e,
-                extra={"text_length": len(self._input_text)},
-            )
-            raise APIConnectionError("Fish Audio TTS synthesis failed") from e
-
-    def _generate_audio_sync(self) -> bytes:
-        """
-        Synchronously generate audio using Fish Audio SDK.
-
-        Returns:
-            bytes: The synthesized audio data.
-
-        Raises:
-            APIConnectionError: If the SDK call fails.
-        """
-        request = TTSRequest(
-            text=self._input_text,
-            reference_id=self._opts.reference_id if is_given(self._opts.reference_id) else None,
-            format=self._opts.output_format,
-            sample_rate=self._opts.sample_rate,
-        )
-
-        audio_data = bytearray()
-        try:
-            for chunk in self._tts.session.tts(request, backend=self._opts.model):
-                audio_data.extend(chunk)
-        except Exception as e:
-            logger.error(
-                "Fish Audio SDK TTS call failed",
-                exc_info=e,
-                extra={
-                    "text_length": len(self._input_text),
-                    "reference_id": self._opts.reference_id,
-                    "format": self._opts.output_format,
-                },
-            )
-            raise APIConnectionError("Fish Audio SDK TTS call failed") from e
-
-        return bytes(audio_data)
+            raise APIConnectionError() from e
 
 
 class SynthesizeStream(tts.SynthesizeStream):
-    """
-    Real-time streaming TTS implementation using WebSocket.
+    """Streaming TTS via the Fish Audio /v1/tts/live WebSocket endpoint."""
 
-    This class handles incremental text input and streams audio output in real-time,
-    optimized for low-latency interactive applications like chatbots and voice assistants.
-    """
-
-    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
+    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        """
-        Run the streaming TTS session.
-
-        Args:
-            output_emitter (tts.AudioEmitter): The emitter to receive audio chunks.
-
-        Raises:
-            APIConnectionError: If WebSocket connection fails.
-            APITimeoutError: If WebSocket connection times out.
-            APIStatusError: If Fish Audio returns an error.
-        """
         request_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=request_id,
             sample_rate=self._opts.sample_rate,
-            num_channels=self._opts.num_channels,
-            stream=True,
+            num_channels=NUM_CHANNELS,
             mime_type=f"audio/{self._opts.output_format}",
+            stream=True,
         )
         output_emitter.start_segment(segment_id=request_id)
 
+        ws: aiohttp.ClientWebSocketResponse | None = None
         try:
-            ws_session = await asyncio.wait_for(
-                self._tts._ensure_ws_session(), timeout=self._conn_options.timeout
+            ws = await asyncio.wait_for(
+                self._tts._ensure_session().ws_connect(
+                    self._opts.get_ws_url("/v1/tts/live"),
+                    headers={
+                        "Authorization": f"Bearer {self._opts.api_key}",
+                        "User-Agent": USER_AGENT,
+                        "model": self._opts.model,
+                    },
+                ),
+                self._conn_options.timeout,
             )
 
-            await self._stream_audio(ws_session, output_emitter)
+            await self._run_ws(ws, output_emitter)
 
-        except asyncio.TimeoutError as e:
-            logger.error(
-                "Failed to connect to Fish Audio WebSocket",
-                extra={
-                    "timeout": self._conn_options.timeout,
-                    "latency_mode": self._opts.latency_mode,
-                },
-            )
-            raise APITimeoutError(
-                f"Fish Audio WebSocket connection timed out after {self._conn_options.timeout}s"
-            ) from e
-        except APITimeoutError:
-            # Already logged - re-raise without wrapping
-            raise
-        except (APIConnectionError, APIStatusError):
-            # Already logged - re-raise without wrapping
+        except asyncio.TimeoutError:
+            raise APITimeoutError() from None
+        except aiohttp.ClientResponseError as e:
+            raise APIStatusError(
+                message=e.message, status_code=e.status, request_id=request_id, body=None
+            ) from None
+        except APIStatusError:
             raise
         except Exception as e:
-            # Unexpected errors
-            logger.error(
-                "Unexpected error during Fish Audio WebSocket streaming",
-                exc_info=e,
-                extra={"latency_mode": self._opts.latency_mode},
-            )
-            raise APIStatusError(f"Fish Audio streaming failed: {e}") from e
+            raise APIConnectionError() from e
         finally:
+            if ws is not None:
+                await ws.close()
             output_emitter.end_segment()
 
-    async def _stream_audio(
-        self, ws_session: AsyncWebSocketSession, output_emitter: tts.AudioEmitter
+    async def _run_ws(
+        self,
+        ws: aiohttp.ClientWebSocketResponse,
+        output_emitter: tts.AudioEmitter,
     ) -> None:
-        """
-        Internal method to handle the actual WebSocket streaming.
+        # Tokenize incoming text by sentence and flush after each sentence so
+        # Fish synthesizes immediately at sentence boundaries instead of waiting
+        # for `chunk_length` characters to accumulate. The result is much smoother
+        # audio: gaps line up with sentence breaks (where pauses are natural)
+        # rather than mid-clause.
+        sent_stream = self._tts._sentence_tokenizer.stream()
 
-        Args:
-            ws_session (AsyncWebSocketSession): Connected WebSocket session.
-            output_emitter (tts.AudioEmitter): The emitter to receive audio chunks.
+        async def input_task() -> None:
+            try:
+                first_token = True
+                async for data in self._input_ch:
+                    if isinstance(data, self._FlushSentinel):
+                        sent_stream.flush()
+                        continue
+                    if not data:
+                        continue
+                    if first_token:
+                        self._mark_started()
+                        first_token = False
+                    sent_stream.push_text(data)
+            finally:
+                sent_stream.end_input()
 
-        Raises:
-            APIConnectionError: If WebSocket connection fails.
-            WebSocketErr: If Fish Audio WebSocket returns an error.
-        """
+        async def send_task() -> None:
+            start_msg = {"event": "start", "request": _build_tts_request(self._opts)}
+            await ws.send_bytes(msgpack.packb(start_msg, use_bin_type=True))
 
-        # Create TTS request for streaming
-        request = TTSRequest(
-            text="",  # Empty for streaming mode
-            reference_id=self._opts.reference_id if is_given(self._opts.reference_id) else None,
-            format=self._opts.output_format,
-            sample_rate=self._opts.sample_rate,
-            latency=self._opts.latency_mode,
-        )
-
-        async def text_generator() -> AsyncIterator[str]:
-            async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
+            async for ev in sent_stream:
+                sentence = ev.token
+                if not sentence:
                     continue
-                yield data
+                await ws.send_bytes(
+                    msgpack.packb({"event": "text", "text": sentence + " "}, use_bin_type=True)
+                )
+                await ws.send_bytes(msgpack.packb({"event": "flush"}, use_bin_type=True))
 
+            await ws.send_bytes(msgpack.packb({"event": "stop"}, use_bin_type=True))
+
+        async def recv_task() -> None:
+            # No per-receive timeout: Fish has natural inter-sentence gaps that
+            # can exceed `_conn_options.timeout` when the LLM is slow.
+            while True:
+                msg = await ws.receive()
+                if msg.type in (
+                    aiohttp.WSMsgType.CLOSED,
+                    aiohttp.WSMsgType.CLOSE,
+                    aiohttp.WSMsgType.CLOSING,
+                ):
+                    raise APIStatusError(
+                        "Fish Audio websocket connection closed unexpectedly",
+                        status_code=ws.close_code or -1,
+                        request_id=None,
+                        body=f"{msg.data=} {msg.extra=}",
+                    )
+
+                if msg.type != aiohttp.WSMsgType.BINARY:
+                    logger.debug("unexpected Fish Audio message type %s", msg.type)
+                    continue
+
+                data = msgpack.unpackb(msg.data, raw=False)
+                event = data.get("event")
+                if event == "audio":
+                    audio = data.get("audio")
+                    if audio:
+                        output_emitter.push(audio)
+                elif event == "finish":
+                    reason = data.get("reason")
+                    if reason == "error":
+                        raise APIStatusError(
+                            "Fish Audio TTS reported an error",
+                            status_code=-1,
+                            request_id=None,
+                            body=str(data),
+                        )
+                    break
+                else:
+                    logger.debug("unknown Fish Audio event: %s", data)
+
+        tasks = [
+            asyncio.create_task(input_task()),
+            asyncio.create_task(send_task()),
+            asyncio.create_task(recv_task()),
+        ]
         try:
-            audio_iterator = ws_session.tts(
-                request=request, text_stream=text_generator(), backend=self._opts.model
-            )
-
-            async for audio_chunk in audio_iterator:
-                if audio_chunk:
-                    output_emitter.push(audio_chunk)
-                    self._mark_started()
-
-        except WebSocketErr as e:
-            logger.error(
-                "Fish Audio WebSocket error during streaming",
-                exc_info=e,
-                extra={
-                    "latency_mode": self._opts.latency_mode,
-                    "format": self._opts.output_format,
-                    "reference_id": self._opts.reference_id,
-                },
-            )
-            raise APIConnectionError(f"Fish Audio WebSocket error: {e}") from e
+            await asyncio.gather(*tasks)
+        finally:
+            await sent_stream.aclose()
+            await utils.aio.gracefully_cancel(*tasks)
