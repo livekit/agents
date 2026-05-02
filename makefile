@@ -1,5 +1,5 @@
 .PHONY: help install format format-check lint lint-fix check type-check test test-unit test-docker clean build \
-        link-rtc link-rtc-local link-rtc-version unlink-rtc status doctor
+        link-rtc link-rtc-local link-rtc-version unlink-rtc status doctor proto
 
 # Colors for output
 CYAN := \033[36m
@@ -33,7 +33,7 @@ help: ## Show this help message
 	@grep -E '^(format|format-check|lint|lint-fix|type-check|check):.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(CYAN)%-20s$(RESET) %s\n", $$1, $$2}'
 	@echo ""
 	@echo "$(BOLD)Other:$(RESET)"
-	@grep -E '^(install|clean|build):.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(CYAN)%-20s$(RESET) %s\n", $$1, $$2}'
+	@grep -E '^(install|clean|build|proto):.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(CYAN)%-20s$(RESET) %s\n", $$1, $$2}'
 
 install: ## Install all dependencies with dev extras
 	@echo "$(BOLD)$(CYAN)Installing dependencies...$(RESET)"
@@ -81,6 +81,20 @@ check: format-check lint type-check ## Run all checks (format, lint, type-check)
 	@echo "$(BOLD)$(GREEN)✓ All checks passed!$(RESET)"
 
 fix: format lint-fix ## Run format and lint checks and fix issues automatically (format, lint)
+
+PROTOCOL_DIR := $(MAKEFILE_DIR)/../protocol
+LIVEKIT_PROTOCOL_SDK := $(MAKEFILE_DIR)/../python-sdks/livekit-protocol
+VENV_PROTOCOL := $(MAKEFILE_DIR)/.venv/lib/python3.14/site-packages/livekit/protocol
+proto: ## Regenerate livekit-protocol stubs and install into .venv
+	@echo "$(BOLD)$(CYAN)Regenerating protobufs from $(PROTOCOL_DIR)...$(RESET)"
+	@uv run scripts/regenerate_protos.py \
+		--protocol-dir $(PROTOCOL_DIR) \
+		--sdk-dir $(LIVEKIT_PROTOCOL_SDK)
+	@echo "$(BOLD)$(CYAN)Copying stubs into $(VENV_PROTOCOL)...$(RESET)"
+	@test -d "$(VENV_PROTOCOL)" || { echo "$(RED)$(VENV_PROTOCOL) not found. Run 'make install' first.$(RESET)"; exit 1; }
+	@rsync -a --delete $(LIVEKIT_PROTOCOL_SDK)/livekit/protocol/ $(VENV_PROTOCOL)/
+	@echo "$(BOLD)$(GREEN)✓ Protobufs regenerated and installed into .venv$(RESET)"
+	@echo "$(YELLOW)Note: 'uv sync' will overwrite .venv with the PyPI package. Re-run 'make proto' after sync.$(RESET)"
 
 unit-tests:
 	@echo "$(BOLD)$(CYAN)Running unit tests...$(RESET)"

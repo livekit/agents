@@ -70,7 +70,10 @@ livekit-plugins-phonic = { workspace = true }
 livekit-plugins-did = { workspace = true }
 
 [tool.uv.workspace]
-members = ["livekit-plugins/*", "livekit-agents"]
+members = [
+    "livekit-plugins/*",
+    "livekit-agents",
+]
 exclude = [
     "livekit-plugins/community",
     "livekit-plugins/livekit-blingfire",
@@ -97,7 +100,7 @@ docs = ["pdoc3", "setuptools", "beautifulsoup4", "markdownify"]
 [tool.ruff]
 line-length = 100
 target-version = "py310"
-exclude = [".github"]
+exclude = [".github", "**/*_pb2.py", "**/*_pb2.pyi"]
 
 [tool.ruff.lint]
 select = [

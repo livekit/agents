@@ -4,6 +4,7 @@ from typing import Literal, Protocol
 
 from typing_extensions import TypedDict
 
+from ..inference.turn_detection import MultimodalTurnDetector
 from ..language import LanguageCode
 from ..llm import ChatContext
 from ..types import NOT_GIVEN, NotGivenOr
@@ -20,15 +21,21 @@ class _TurnDetector(Protocol):
         return "unknown"
 
     # TODO: Move those two functions to EOU ctor (capabilities dataclass)
-    async def unlikely_threshold(self, language: LanguageCode | None) -> float | None: ...
-    async def supports_language(self, language: LanguageCode | None) -> bool: ...
+    async def unlikely_threshold(
+        self, language: LanguageCode | None, modality: Literal["multimodal", "text"] = "multimodal"
+    ) -> float | None: ...
+    async def supports_language(
+        self, language: LanguageCode | None, modality: Literal["multimodal", "text"] = "multimodal"
+    ) -> bool: ...
 
     async def predict_end_of_turn(
         self, chat_ctx: ChatContext, *, timeout: float | None = None
     ) -> float: ...
 
 
-TurnDetectionMode = Literal["stt", "vad", "realtime_llm", "manual"] | _TurnDetector
+TurnDetectionMode = (
+    Literal["stt", "vad", "realtime_llm", "manual"] | _TurnDetector | MultimodalTurnDetector
+)
 """
 The mode of turn detection to use.
 
