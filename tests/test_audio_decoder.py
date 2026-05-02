@@ -8,9 +8,9 @@ from concurrent.futures import ThreadPoolExecutor
 import aiohttp
 import pytest
 
+from livekit.agents import inference
 from livekit.agents.stt import SpeechEventType
 from livekit.agents.utils.codecs import AudioStreamDecoder, StreamBuffer
-from livekit.plugins import deepgram
 
 from .utils import wer
 
@@ -19,8 +19,8 @@ TEST_AUDIO_FILEPATH = os.path.join(os.path.dirname(__file__), "change-sophie.opu
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(
-    os.getenv("DEEPGRAM_API_KEY") is None,
-    reason="DEEPGRAM_API_KEY not set",
+    os.getenv("LIVEKIT_API_KEY") is None or os.getenv("LIVEKIT_API_SECRET") is None,
+    reason="LIVEKIT_API_KEY/LIVEKIT_API_SECRET not set",
 )
 async def test_decode_and_transcribe():
     # Skip if test file doesn't exist
@@ -34,7 +34,7 @@ async def test_decode_and_transcribe():
     decoder.end_input()
 
     session = aiohttp.ClientSession()
-    stt = deepgram.STT(http_session=session)
+    stt = inference.STT(model="deepgram/nova-3", http_session=session)
     stream = stt.stream()
 
     # Push frames to STT
