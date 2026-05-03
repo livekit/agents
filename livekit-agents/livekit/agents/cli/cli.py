@@ -1816,7 +1816,32 @@ def _build_cli(server: AgentServer) -> typer.Typer:
                 envvar="LIVEKIT_API_SECRET",
             ),
         ] = None,
+        reload_dir: Annotated[
+            list[pathlib.Path] | None,  # noqa: UP007
+            typer.Option(
+                "--reload-dir",
+                envvar="LIVEKIT_RELOAD_DIRS",
+                help=(
+                    "Additional directory to watch for .py changes (repeatable). "
+                    "Watched recursively; avoid huge trees. "
+                    "Env var LIVEKIT_RELOAD_DIRS is split on os.pathsep."
+                ),
+            ),
+        ] = None,
     ) -> None:
+        c = AgentsConsole.get_instance()
+        _configure_logger(c, log_level.value)
+
+        resolved_reload_dirs: list[pathlib.Path] = []
+        for p in reload_dir or []:
+            rp = pathlib.Path(p).expanduser().resolve()
+            if not rp.exists():
+                c.print(" ")
+                c.print(f"[error]--reload-dir path does not exist: {p}")
+                c.print(" ")
+                raise typer.Exit(code=1)
+            resolved_reload_dirs.append(rp)
+
         args = proto.CliArgs(
             log_level=log_level.value,
             url=url,
@@ -1824,10 +1849,8 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             api_secret=api_secret,
             devmode=True,
             reload=reload,
+            reload_dirs=resolved_reload_dirs,
         )
-
-        c = AgentsConsole.get_instance()
-        _configure_logger(c, log_level.value)
 
         term_program = os.environ.get("TERM_PROGRAM")
 
@@ -1836,6 +1859,8 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             args.reload = False
 
         if not args.reload:
+            if resolved_reload_dirs:
+                c.print("[error]--reload-dir provided but auto-reload is disabled; ignoring.")
             _run_worker(server=server, args=args)
             return
 

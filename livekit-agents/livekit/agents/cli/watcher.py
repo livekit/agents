@@ -83,9 +83,14 @@ class WatchServer:
         self._close_fut = asyncio.Future[None]()
 
     async def run(self) -> None:
-        watch_paths = _find_watchable_paths(self._main_file)
-        for pth in watch_paths:
+        auto_paths = _find_watchable_paths(self._main_file)
+        user_paths = list(self._cli_args.reload_dirs)
+        watch_paths = [*auto_paths, *user_paths]
+
+        for pth in auto_paths:
             logger.log(DEV_LEVEL, f"Watching {pth}")
+        for pth in user_paths:
+            logger.log(DEV_LEVEL, f"Watching {pth} (user)")
 
         self._pch = await utils.aio.duplex_unix._AsyncDuplex.open(self._mp_pch)
         read_ipc_task = self._loop.create_task(self._read_ipc_task())

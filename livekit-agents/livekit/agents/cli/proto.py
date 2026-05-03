@@ -1,6 +1,7 @@
 from __future__ import annotations  # noqa: I001
 
 import io
+import pathlib
 import socket
 from dataclasses import dataclass, field
 from typing import ClassVar
@@ -22,6 +23,10 @@ class CliArgs:
 
     devmode: bool = False
     reload: bool = False
+
+    # extra directories supplied by the user via `--reload-dir` / LIVEKIT_RELOAD_DIRS;
+    # unioned with the auto-discovered watch paths inside WatchServer.
+    reload_dirs: list[pathlib.Path] = field(default_factory=list)
 
     # simulate_job: str | None = None
 
