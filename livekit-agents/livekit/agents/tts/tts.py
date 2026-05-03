@@ -1192,11 +1192,17 @@ class AudioEmitter:
                         audio_decoder.push(data)
                     elif decode_atask:
                         if isinstance(data, AudioEmitter._FlushSegment):
-                            if audio_decoder:
-                                audio_decoder.end_input()
-                                await decode_atask
-                                _flush_frame()
-                                audio_decoder = None
+                            # don't tear the decoder down here. flush_if_delayed
+                            # can fire mid-stream while a stateful codec
+                            # (WAV/OGG/MP3) is in the middle of a file; ending
+                            # input would discard the parser, and the next
+                            # bytes — a pure PCM/Opus packet continuation
+                            # without a fresh container header — would fail to
+                            # parse against a freshly-created decoder. The only
+                            # purpose of FlushSegment here is to release the
+                            # held-back tail so a slow upstream doesn't starve
+                            # the consumer.
+                            _flush_frame()
 
                         elif isinstance(data, AudioEmitter._EndSegment) and segment_ctx:
                             if audio_decoder:

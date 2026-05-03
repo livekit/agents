@@ -86,9 +86,7 @@ class TTS(tts.TTS):
             voice_id (NotGivenOr[str]): Voice model ID. Fish Audio's API refers to this
                 as ``reference_id``; it's the same value either way.
             output_format (OutputFormat): Audio output format. Defaults to ``"wav"``.
-            sample_rate (int): Audio sample rate in Hz. Defaults to 48000 for ``"opus"``
-                (the only rate Fish supports for opus) and 24000 for ``"pcm"``/``"wav"``/
-                ``"mp3"``. Passing a non-48000 rate with ``"opus"`` raises ``ValueError``.
+            sample_rate (int): Audio sample rate in Hz.
             base_url (NotGivenOr[str]): Custom base URL. Defaults to ``https://api.fish.audio``.
             latency_mode (LatencyMode): Streaming latency mode. ``"normal"``, ``"balanced"``,
                 or ``"low"``. Defaults to ``"balanced"``.
