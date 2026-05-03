@@ -25,7 +25,7 @@ from .log import logger
 from .models import LatencyMode, OutputFormat, TTSModels
 from .version import __version__
 
-DEFAULT_MODEL: TTSModels = "s1"
+DEFAULT_MODEL: TTSModels = "s2-pro"
 DEFAULT_VOICE_ID = "933563129e564b19a115bedd57b7406a"
 DEFAULT_BASE_URL = "https://api.fish.audio"
 NUM_CHANNELS = 1
@@ -37,7 +37,7 @@ _DEFAULT_SAMPLE_RATE: dict[OutputFormat, int] = {
     "opus": 48000,
     "pcm": 24000,
     "wav": 24000,
-    "mp3": 24000,
+    "mp3": 32000,
 }
 
 
@@ -66,7 +66,7 @@ class TTS(tts.TTS):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         model: TTSModels | str = DEFAULT_MODEL,
         voice_id: NotGivenOr[str] = DEFAULT_VOICE_ID,
-        output_format: OutputFormat = "opus",
+        output_format: OutputFormat = "wav",
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         latency_mode: LatencyMode = "balanced",
@@ -82,12 +82,10 @@ class TTS(tts.TTS):
 
         Args:
             api_key (NotGivenOr[str]): Fish Audio API key. Reads ``FISH_API_KEY`` if unset.
-            model (TTSModels | str): TTS model to use. Defaults to ``"s1"``. Known values
-                are ``"s1"`` and ``"s2-pro"``; arbitrary strings are accepted to support
-                models added by Fish Audio after this version.
+            model (TTSModels | str): TTS model to use. Defaults to ``"s2-pro"``.
             voice_id (NotGivenOr[str]): Voice model ID. Fish Audio's API refers to this
                 as ``reference_id``; it's the same value either way.
-            output_format (OutputFormat): Audio output format. Defaults to ``"opus"``.
+            output_format (OutputFormat): Audio output format. Defaults to ``"wav"``.
             sample_rate (int): Audio sample rate in Hz. Defaults to 48000 for ``"opus"``
                 (the only rate Fish supports for opus) and 24000 for ``"pcm"``/``"wav"``/
                 ``"mp3"``. Passing a non-48000 rate with ``"opus"`` raises ``ValueError``.
@@ -227,7 +225,7 @@ def _build_tts_request(opts: _TTSOptions, *, text: str = "") -> dict[str, Any]:
         "chunk_length": opts.chunk_length,
         "format": opts.output_format,
         "sample_rate": opts.sample_rate,
-        "mp3_bitrate": 128000,
+        "mp3_bitrate": 64,
         "opus_bitrate": 64000,
         "references": [],
         # Fish Audio's wire field is `reference_id`; we expose it as `voice_id` on
