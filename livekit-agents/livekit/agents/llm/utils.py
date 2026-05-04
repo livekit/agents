@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import inspect
+import re
 import types
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -39,6 +40,30 @@ if TYPE_CHECKING:
 
 THINK_TAG_START = "<think>"
 THINK_TAG_END = "</think>"
+
+
+_JSON_STRING_RE = re.compile(r'"(?:[^"\\]|\\.)*"', re.DOTALL)
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f]")
+_CONTROL_CHAR_ESCAPES = {
+    "\b": "\\b",
+    "\f": "\\f",
+    "\n": "\\n",
+    "\r": "\\r",
+    "\t": "\\t",
+}
+
+
+def _sanitize_json_control_chars(json_str: str) -> str:
+    # Some LLMs emit raw control chars (newlines, tabs) inside tool-call argument
+    # strings, which is invalid JSON and crashes from_json. Escape them in place.
+    def escape_control(m: re.Match[str]) -> str:
+        c = m.group(0)
+        return _CONTROL_CHAR_ESCAPES.get(c, f"\\u{ord(c):04x}")
+
+    def fix_string(m: re.Match[str]) -> str:
+        return _CONTROL_CHAR_RE.sub(escape_control, m.group(0))
+
+    return _JSON_STRING_RE.sub(fix_string, json_str)
 
 
 def _compute_lcs(old_ids: list[str], new_ids: list[str]) -> list[str]:
@@ -385,12 +410,12 @@ def prepare_function_arguments(
     type_hints = get_type_hints(fnc, include_extras=True)
 
     if isinstance(json_arguments, str):
-        args_dict = from_json(json_arguments)
+        args_dict = from_json(_sanitize_json_control_chars(json_arguments))
         # some providers (e.g. Nova Sonic) double-encode tool arguments as nested
         # JSON strings. unwrap until we reach a non-string value.
         while isinstance(args_dict, str):
             try:
-                args_dict = from_json(args_dict)
+                args_dict = from_json(_sanitize_json_control_chars(args_dict))
             except Exception:
                 raise ValueError(
                     f"function arguments decoded to a non-JSON string: {args_dict[:200]}"
