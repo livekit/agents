@@ -9,6 +9,7 @@ cross-session memory via Synap (https://maximem.ai):
 
 Install: pip install maximem-synap-livekit-agents
 Get an API key at synap.maximem.ai
+Open source: https://github.com/maximem-ai/maximem_synap_sdk/tree/main/packages/integrations
 """
 
 import os
