@@ -733,7 +733,7 @@ async def test_backchannel_boundary_suppresses_start_boundary_interruption() -> 
     )
 
     try:
-        recognition.on_start_of_agent_speech(started_at=time.time())
+        recognition._on_start_of_agent_speech(started_at=time.time())
         await recognition._on_overlap_speech_event(_interruption_event())
 
         assert hooks.interruptions == []
@@ -767,9 +767,9 @@ async def test_backchannel_boundary_releases_end_boundary_transcript() -> None:
     recognition._input_started_at = input_started_at
 
     try:
-        recognition.on_start_of_agent_speech(started_at=time.time())
+        recognition._on_start_of_agent_speech(started_at=time.time())
         speech_ended_at = time.time()
-        recognition.on_end_of_agent_speech(ignore_user_transcript_until=speech_ended_at)
+        recognition._on_end_of_agent_speech(ignore_user_transcript_until=speech_ended_at)
 
         assert not recognition._should_hold_stt_event(
             _final_transcript_event(

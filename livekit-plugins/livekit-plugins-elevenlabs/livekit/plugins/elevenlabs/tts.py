@@ -200,9 +200,21 @@ class TTS(tts.TTS):
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
+        self._markup = self._ElevenLabsMarkup(self)
 
         self.__current_connection: _Connection | None = None
         self._connection_lock = asyncio.Lock()
+
+    class _ElevenLabsMarkup(tts.TTS.Markup):
+        def llm_instructions(self) -> str | None:
+            from livekit.agents.tts._provider_format import llm_instructions
+
+            return llm_instructions("elevenlabs")
+
+        def to_text(self, text: str) -> str:
+            from livekit.agents.tts._provider_format import strip_markup
+
+            return strip_markup("elevenlabs", text)
 
     @property
     def model(self) -> str:

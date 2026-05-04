@@ -46,10 +46,13 @@ def to_chat_ctx(
 
         if msg.type == "message":
             for content in msg.content:
-                if content and isinstance(content, str):
-                    current_content.append({"text": content})
-                elif isinstance(content, llm.ImageContent):
+                if isinstance(content, llm.ImageContent):
                     current_content.append(_build_image(content))
+                elif isinstance(content, llm.AudioContent):
+                    pass
+                elif content:
+                    # str or Instructions
+                    current_content.append({"text": str(content)})
         elif msg.type == "function_call":
             current_content.append(
                 {

@@ -416,6 +416,25 @@ class TTS(tts.TTS):
             mark_refreshed_on_get=True,
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
+        self._markup = self._GatewayMarkup(self)
+
+    class _GatewayMarkup(tts.TTS.Markup):
+        def __init__(self, gateway_tts: TTS) -> None:
+            super().__init__(gateway_tts)
+            self._gateway_tts = gateway_tts
+
+        def _upstream_provider(self) -> str:
+            return self._gateway_tts._opts.model.split("/")[0]
+
+        def llm_instructions(self) -> str | None:
+            from ..tts._provider_format import llm_instructions
+
+            return llm_instructions(self._upstream_provider())
+
+        def to_text(self, text: str) -> str:
+            from ..tts._provider_format import strip_markup
+
+            return strip_markup(self._upstream_provider(), text)
 
     @classmethod
     def from_model_string(cls, model: str) -> TTS:

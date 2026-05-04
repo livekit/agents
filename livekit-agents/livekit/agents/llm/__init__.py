@@ -2,6 +2,7 @@ from . import remote_chat_context, utils
 from .chat_context import (
     AgentConfigUpdate,
     AgentHandoff,
+    AgentInstructions,
     AudioContent,
     ChatContent,
     ChatContext,
@@ -38,6 +39,7 @@ from .realtime import (
     RealtimeSessionReconnectedEvent,
     RemoteItemAddedEvent,
 )
+from .response_field import Response, ResponseField
 from .tool_context import (
     FunctionTool,
     ProviderTool,
@@ -59,6 +61,7 @@ __all__ = [
     "LLM",
     "LLMStream",
     "CollectedResponse",
+    "AgentInstructions",
     "execute_function_call",
     "FunctionCallResult",
     "ChatContext",
@@ -108,6 +111,8 @@ __all__ = [
     "RealtimeSessionRestoredEvent",
     "LLMError",
     "RemoteItemAddedEvent",
+    "Response",
+    "ResponseField",
 ]
 
 # Cleanup docs of unexported modules

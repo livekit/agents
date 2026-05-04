@@ -339,10 +339,12 @@ def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatC
         }
         msg.role = role_map[item.role]
 
+        from ..llm.chat_context import Instructions
+
         for content in item.content:
-            if isinstance(content, str):
+            if isinstance(content, (str, Instructions)):
                 content_pb = msg.content.add()
-                content_pb.text = content
+                content_pb.text = str(content)
 
         msg.interrupted = item.interrupted
 
