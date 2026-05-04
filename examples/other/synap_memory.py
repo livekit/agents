@@ -3,9 +3,10 @@
 Demonstrates three patterns for giving a LiveKit voice agent persistent,
 cross-session memory via Synap (https://maximem.ai):
 
-1. preload_synap_context  — inject long-term memory before the call starts
-2. attach_synap_recording — record every turn automatically
-3. synap_search_tool      — LLM-callable tool for explicit memory search
+1. preload_synap_context    — inject long-term memory before the call starts
+2. attach_synap_recording   — record every turn automatically
+3. synap_search_tool /
+   synap_store_tool         — LLM-callable tools for explicit memory search and store
 
 Install: pip install maximem-synap-livekit-agents
 Get an API key at synap.maximem.ai
@@ -23,7 +24,7 @@ from synap_livekit_agents import (
     synap_store_tool,
 )
 
-from livekit.agents import Agent, AgentSession, ChatContext, RoomInputOptions
+from livekit.agents import Agent, AgentSession, ChatContext
 from livekit.plugins import deepgram, openai, silero
 
 load_dotenv()
@@ -37,6 +38,8 @@ CUSTOMER_ID = "demo-customer"
 
 
 async def entrypoint(ctx):
+    await ctx.connect()
+
     chat_ctx = ChatContext()
 
     # 1. Inject long-term memory before the first LLM turn
@@ -73,7 +76,6 @@ async def entrypoint(ctx):
     await session.start(
         agent=agent,
         room=ctx.room,
-        room_input_options=RoomInputOptions(),
     )
 
 
