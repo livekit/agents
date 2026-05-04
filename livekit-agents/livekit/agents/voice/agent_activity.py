@@ -1362,6 +1362,15 @@ class AgentActivity(RecognitionHooks):
                         continue
                 speech._authorize_generation()
                 await speech._wait_for_generation()
+
+                if self._paused_speech and self._paused_speech.handle is self._current_speech:
+                    # clear paused speech after generation done
+                    self._paused_speech = None
+                    if self._false_interruption_timer is not None:
+                        self._false_interruption_timer.cancel()
+                        self._false_interruption_timer = None
+                    if (audio_output := self._session.output.audio) and audio_output.can_pause:
+                        audio_output.resume()
                 self._current_speech = None
                 last_playout_ts = time.time()
 
@@ -1881,6 +1890,7 @@ class AgentActivity(RecognitionHooks):
                     content=[info.new_transcript],
                     transcript_confidence=info.transcript_confidence,
                 )
+                user_message.metrics = self._init_metrics_from_end_of_turn(info)
                 self._agent._chat_ctx.items.append(user_message)
                 self._session._conversation_item_added(user_message)
 
@@ -1936,6 +1946,11 @@ class AgentActivity(RecognitionHooks):
             content=[info.new_transcript],
             transcript_confidence=info.transcript_confidence,
         )
+
+        metrics_report: llm.MetricsReport = self._init_metrics_from_end_of_turn(info)
+
+        if user_message is not None:
+            user_message.metrics = metrics_report
 
         if isinstance(self.llm, llm.RealtimeModel):
             if self.llm.capabilities.turn_detection:
@@ -1996,6 +2011,7 @@ class AgentActivity(RecognitionHooks):
             return
 
         on_user_turn_completed_delay = time.perf_counter() - start_time
+        metrics_report["on_user_turn_completed_delay"] = on_user_turn_completed_delay
 
         if isinstance(self.llm, llm.RealtimeModel):
             # ignore stt transcription for realtime model
@@ -2012,29 +2028,6 @@ class AgentActivity(RecognitionHooks):
                 self._agent._chat_ctx.items.append(user_message)
                 self._session._conversation_item_added(user_message)
             return
-
-        metrics_report: llm.MetricsReport = {}
-        if self.stt:
-            metrics_report["stt_metadata"] = {
-                "model_name": self.stt.model,
-                "model_provider": self.stt.provider,
-            }
-        if info.started_speaking_at is not None:
-            metrics_report["started_speaking_at"] = info.started_speaking_at
-
-        if info.stopped_speaking_at is not None:
-            metrics_report["stopped_speaking_at"] = info.stopped_speaking_at
-
-        if info.transcription_delay is not None:
-            metrics_report["transcription_delay"] = info.transcription_delay
-
-        if info.end_of_turn_delay is not None:
-            metrics_report["end_of_turn_delay"] = info.end_of_turn_delay
-
-        metrics_report["on_user_turn_completed_delay"] = on_user_turn_completed_delay
-
-        if user_message is not None:
-            user_message.metrics = metrics_report
 
         speech_handle: SpeechHandle | None = None
         if preemptive := self._preemptive_generation:
@@ -2219,7 +2212,7 @@ class AgentActivity(RecognitionHooks):
             if self._audio_recognition:
                 self._audio_recognition.on_start_of_agent_speech(started_at=started_speaking_at)
             if self.interruption_enabled:
-                self._interruption_by_audio_activity_enabled = False
+                self._disable_vad_interruption_soon()
 
         audio_out: _AudioOutput | None = None
         tts_gen_data: _TTSGenerationData | None = None
@@ -2576,7 +2569,7 @@ class AgentActivity(RecognitionHooks):
             if self._audio_recognition:
                 self._audio_recognition.on_start_of_agent_speech(started_at=started_speaking_at)
             if self.interruption_enabled:
-                self._interruption_by_audio_activity_enabled = False
+                self._disable_vad_interruption_soon()
 
         audio_out: _AudioOutput | None = None
         if audio_output is not None:
@@ -3037,7 +3030,7 @@ class AgentActivity(RecognitionHooks):
             if self._audio_recognition:
                 self._audio_recognition.on_start_of_agent_speech(started_at=started_speaking_at)
             if self.interruption_enabled:
-                self._interruption_by_audio_activity_enabled = False
+                self._disable_vad_interruption_soon()
 
         tasks: list[asyncio.Task[Any]] = []
         tees: list[utils.aio.itertools.Tee[Any]] = []
@@ -3474,7 +3467,7 @@ class AgentActivity(RecognitionHooks):
                 if self._audio_recognition and self._paused_speech.agent_state == "speaking":
                     self._audio_recognition.on_start_of_agent_speech(started_at=time.time())
                 if self.interruption_enabled:
-                    self._interruption_by_audio_activity_enabled = False
+                    self._disable_vad_interruption_soon()
                 audio_output.resume()
                 resumed = True
                 logger.debug("resumed false interrupted speech", extra={"timeout": timeout})
@@ -3528,7 +3521,27 @@ class AgentActivity(RecognitionHooks):
         ):
             self._session.output.audio.resume()
 
+    def _disable_vad_interruption_soon(self) -> None:
+        """Disable VAD interruption after the backchannel boundary expires."""
+        if self._audio_recognition and self._audio_recognition.backchannel_boundary_active:
+
+            def _disable_vad_interruption() -> None:
+                # only disable it if the agent is still speaking
+                if (
+                    self._session.agent_state == "speaking"
+                    and self._interruption_by_audio_activity_enabled
+                ):
+                    logger.trace("backchannel boundary expired")
+                    self._interruption_by_audio_activity_enabled = False
+
+            self._audio_recognition.backchannel_boundary_callback = _disable_vad_interruption
+        else:
+            self._interruption_by_audio_activity_enabled = False
+
     def _restore_interruption_by_audio_activity(self) -> None:
+        if self._audio_recognition:
+            self._audio_recognition._cancel_backchannel_boundary()
+
         self._interruption_by_audio_activity_enabled = (
             self._default_interruption_by_audio_activity_enabled
         )
@@ -3558,6 +3571,27 @@ class AgentActivity(RecognitionHooks):
             "adaptive interruption disabled due to unrecoverable error, "
             "falling back to VAD-based interruption"
         )
+
+    def _init_metrics_from_end_of_turn(self, info: _EndOfTurnInfo) -> llm.MetricsReport:
+        metrics_report: llm.MetricsReport = {}
+        if self.stt:
+            metrics_report["stt_metadata"] = {
+                "model_name": self.stt.model,
+                "model_provider": self.stt.provider,
+            }
+        if info.started_speaking_at is not None:
+            metrics_report["started_speaking_at"] = info.started_speaking_at
+
+        if info.stopped_speaking_at is not None:
+            metrics_report["stopped_speaking_at"] = info.stopped_speaking_at
+
+        if info.transcription_delay is not None:
+            metrics_report["transcription_delay"] = info.transcription_delay
+
+        if info.end_of_turn_delay is not None:
+            metrics_report["end_of_turn_delay"] = info.end_of_turn_delay
+
+        return metrics_report
 
     # move them to the end to avoid shadowing the same named modules for mypy
     @property

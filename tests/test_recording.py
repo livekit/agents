@@ -119,6 +119,7 @@ def _make_mock_tagger(
 def _make_mock_http() -> MagicMock:
     """Create a mock aiohttp.ClientSession with async post."""
     mock_resp = AsyncMock()
+    mock_resp.status = 200
     mock_resp.raise_for_status = MagicMock()
     mock_http = MagicMock(spec=aiohttp.ClientSession)
     mock_post_cm = AsyncMock()

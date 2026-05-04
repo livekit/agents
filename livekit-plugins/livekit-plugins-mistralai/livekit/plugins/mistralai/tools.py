@@ -43,3 +43,16 @@ class CodeInterpreter(MistralTool):
 
     def to_dict(self) -> dict[str, Any]:
         return {"type": "code_interpreter"}
+
+
+@dataclass
+class Connector(MistralTool):
+    """Enable the connector tool"""
+
+    connector_id: str
+
+    def __post_init__(self) -> None:
+        super().__init__(id=f"mistral_connector_{self.connector_id}")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"type": "connector", "connector_id": self.connector_id}

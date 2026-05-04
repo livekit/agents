@@ -34,7 +34,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents>=1.5.6",
+    "livekit-agents>=1.5.7",
     "livekit>=1.0.23,<2",  # FrameProcessor support requires livekit>=1.0.23 (PR #4145)
     "numpy>=1.20.0",
     # Note: krisp-audio is a required runtime dependency but not available on public PyPI.
