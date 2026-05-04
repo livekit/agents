@@ -2586,13 +2586,23 @@ class AgentActivity(RecognitionHooks):
 
         reply_started_at = time.time()
 
+        _strip_markup = False
+        _expressive = self._agent.expressiveness
+        if not utils.is_given(_expressive):
+            _expressive = self._session.options.expressiveness
+        if _expressive and self.tts:
+            _strip_markup = True
+
         async def _read_text(
             llm_output: AsyncIterable[str | FlushSentinel | BaseModel],
         ) -> AsyncIterable[str]:
             async for chunk in llm_output:
                 if isinstance(chunk, (FlushSentinel, BaseModel)):
                     continue
-                yield chunk
+                if _strip_markup and self.tts:
+                    chunk = self.tts.markup.to_text(chunk)
+                if chunk:
+                    yield chunk
 
         tr_node = self._agent.transcription_node(_read_text(tr_input), model_settings)
         tr_node_result = await tr_node if asyncio.iscoroutine(tr_node) else tr_node
