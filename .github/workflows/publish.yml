@@ -275,35 +275,15 @@ jobs:
             --api-secret "$LIVEKIT_API_SECRET" \
             --default
 
-      - name: Generate livekit.toml
-        working-directory: examples/${{ matrix.example }}
-        env:
-          HEALTHCARE_AGENT_ID: ${{ secrets.HEALTHCARE_AGENT_ID }}
-          SURVEY_AGENT_ID: ${{ secrets.SURVEY_AGENT_ID }}
-          FRONTDESK_AGENT_ID: ${{ secrets.FRONTDESK_AGENT_ID }}
-          DRIVETHRU_AGENT_ID: ${{ secrets.DRIVETHRU_AGENT_ID }}
-        run: |
-          case "${{ matrix.example }}" in
-            healthcare)  AGENT_ID="$HEALTHCARE_AGENT_ID" ;;
-            survey)      AGENT_ID="$SURVEY_AGENT_ID" ;;
-            frontdesk)   AGENT_ID="$FRONTDESK_AGENT_ID" ;;
-            drive-thru)  AGENT_ID="$DRIVETHRU_AGENT_ID" ;;
-          esac
-          lk agent config --id "$AGENT_ID" .
-
       - name: Build secrets file
         working-directory: examples/${{ matrix.example }}
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          CAL_API_KEY: ${{ secrets.CAL_API_KEY }}
         run: |
           : > .env.deploy
           case "${{ matrix.example }}" in
             healthcare)
               keys="OPENAI_API_KEY"
-              ;;
-            frontdesk)
-              keys="CAL_API_KEY"
               ;;
             *)
               keys=""
