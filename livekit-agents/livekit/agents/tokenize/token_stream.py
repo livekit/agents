@@ -48,12 +48,14 @@ class BufferedTokenStream:
         min_token_len: int,
         min_ctx_len: int,
         retain_format: bool = False,
+        xml_aware: bool = True,
     ) -> None:
         self._event_ch = aio.Chan[TokenData]()
         self._tokenize_fnc = tokenize_fnc
         self._min_ctx_len = min_ctx_len
         self._min_token_len = min_token_len
         self._retain_format = retain_format
+        self._xml_aware = xml_aware
         self._current_segment_id = shortuuid()
 
         self._buf_tokens: list[str] = []  # <= min_token_len
@@ -77,7 +79,7 @@ class BufferedTokenStream:
             tok_text = tok[0] if isinstance(tok, tuple) else tok
 
             # don't emit a token that would split an XML tag
-            if _has_unclosed_xml_tags(tok_text):
+            if self._xml_aware and _has_unclosed_xml_tags(tok_text):
                 break
 
             tokens.pop(0)
@@ -169,4 +171,5 @@ class BufferedWordStream(BufferedTokenStream, WordStream):
             tokenize_fnc=tokenizer,
             min_token_len=min_token_len,
             min_ctx_len=min_ctx_len,
+            xml_aware=False,
         )

@@ -460,7 +460,9 @@ class ChatContext:
         if is_given(extra):
             kwargs["extra"] = extra
 
-        if isinstance(content, str):
+        if isinstance(content, Instructions):
+            message = ChatMessage(role=role, content=[str(content)], **kwargs)
+        elif isinstance(content, str):
             message = ChatMessage(role=role, content=[content], **kwargs)
         else:
             message = ChatMessage(role=role, content=content, **kwargs)
