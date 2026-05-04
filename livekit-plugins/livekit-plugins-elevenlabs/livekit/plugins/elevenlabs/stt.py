@@ -114,9 +114,10 @@ class STT(stt.STT):
             model_id (ElevenLabsSTTModels | str): ElevenLabs STT model to use. If not specified a default model will
                 be selected based on parameters provided.
             keyterms (NotGivenOr[list[str]]): A list of keywords or phrases to bias the transcription towards.
-                Each keyterm can contain at most 5 words and must be less than 50 characters.
-                Maximum of 100 keyterms. Supported for Scribe v2 batch recognition and for the
-                Scribe v2 realtime model. Usage incurs additional costs.
+                Limits differ by mode:
+                - Scribe v2 batch: up to 100 keyterms, each at most 5 words and less than 50 characters.
+                - Scribe v2 realtime: up to 50 keyterms, each at most 20 characters.
+                Usage incurs additional costs.
             no_verbatim (NotGivenOr[bool]): If True, filler words and disfluencies are removed from
                 the transcript. Only supported for the Scribe v2 realtime model. Default is False
                 (verbatim transcription) when not provided.
