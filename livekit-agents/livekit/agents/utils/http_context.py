@@ -57,3 +57,8 @@ async def _close_http_ctx() -> None:
         logger.debug("http_session(): closing the httpclient ctx")
         await val().close()
         _ContextVar.set(None)
+
+
+def _is_http_session_ctx_set() -> bool:
+    """Return True if an http session factory is bound to the current context."""
+    return _ContextVar.get(None) is not None

@@ -442,6 +442,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._closing_task: asyncio.Task[None] | None = None
         self._closing: bool = False
         self._job_context_cb_registered: bool = False
+        self._owned_http_session_ctx: bool = False
 
         self._global_run_state: RunResult | None = None
         # TODO(theomonnom): need a better way to expose early assistant metrics
@@ -624,6 +625,18 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # configure observability first
             record_is_given = is_given(record)
             job_ctx = get_job_context(required=False)
+
+            # Outside a job context (tests, scripts, ad-hoc usage) there's no
+            # http session bound to the event loop. Create one scoped to this
+            # session so STT/TTS can use http_context.http_session()
+            if (
+                job_ctx is None
+                and not self._owned_http_session_ctx
+                and not utils.http_context._is_http_session_ctx_set()
+            ):
+                utils.http_context._new_session_ctx()
+                self._owned_http_session_ctx = True
+
             if not is_given(record):
                 # defer to server-side setting for recording
                 record = job_ctx.job.enable_recording if job_ctx else False
@@ -906,6 +919,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         async with self._lock:
             if not self._started:
+                # start() may have set up the http session ctx before failing —
+                # clean it up so we don't leak the factory on a failed start.
+                if self._owned_http_session_ctx:
+                    await utils.http_context._close_http_ctx()
+                    self._owned_http_session_ctx = False
                 return
 
             self._closing = True
@@ -1007,6 +1025,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._room_io:
                 await self._room_io.aclose()
                 self._room_io = None
+
+            if self._owned_http_session_ctx:
+                await utils.http_context._close_http_ctx()
+                self._owned_http_session_ctx = False
 
         logger.debug("session closed", extra={"reason": reason.value, "error": error})
 
