@@ -245,3 +245,82 @@ jobs:
     if: always() && needs.publish.result == 'success'
     uses: ./.github/workflows/publish-docs.yml
     secrets: inherit
+
+  deploy-examples:
+    name: Deploy ${{ matrix.example }}
+    needs: [publish]
+    if: always() && needs.publish.result == 'success'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        example: [healthcare, survey, frontdesk, drive-thru]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Install LiveKit CLI
+        run: |
+          curl -sSL https://get.livekit.io/cli | bash
+          lk --version
+
+      - name: Add LiveKit Cloud project
+        env:
+          LIVEKIT_URL: ${{ secrets.LIVEKIT_EXAMPLES_URL }}
+          LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_EXAMPLES_API_KEY }}
+          LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_EXAMPLES_API_SECRET }}
+        run: |
+          lk project add examples \
+            --url "$LIVEKIT_URL" \
+            --api-key "$LIVEKIT_API_KEY" \
+            --api-secret "$LIVEKIT_API_SECRET" \
+            --default
+
+      - name: Generate livekit.toml
+        working-directory: examples/${{ matrix.example }}
+        env:
+          HEALTHCARE_AGENT_ID: ${{ secrets.HEALTHCARE_AGENT_ID }}
+          SURVEY_AGENT_ID: ${{ secrets.SURVEY_AGENT_ID }}
+          FRONTDESK_AGENT_ID: ${{ secrets.FRONTDESK_AGENT_ID }}
+          DRIVETHRU_AGENT_ID: ${{ secrets.DRIVETHRU_AGENT_ID }}
+        run: |
+          case "${{ matrix.example }}" in
+            healthcare)  AGENT_ID="$HEALTHCARE_AGENT_ID" ;;
+            survey)      AGENT_ID="$SURVEY_AGENT_ID" ;;
+            frontdesk)   AGENT_ID="$FRONTDESK_AGENT_ID" ;;
+            drive-thru)  AGENT_ID="$DRIVETHRU_AGENT_ID" ;;
+          esac
+          lk agent config --id "$AGENT_ID" .
+
+      - name: Build secrets file
+        working-directory: examples/${{ matrix.example }}
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CAL_API_KEY: ${{ secrets.CAL_API_KEY }}
+        run: |
+          : > .env.deploy
+          case "${{ matrix.example }}" in
+            healthcare)
+              keys="OPENAI_API_KEY"
+              ;;
+            frontdesk)
+              keys="CAL_API_KEY"
+              ;;
+            *)
+              keys=""
+              ;;
+          esac
+          for k in $keys; do
+            val="${!k}"
+            if [ -n "$val" ]; then
+              echo "${k}=${val}" >> .env.deploy
+            fi
+          done
+
+      - name: Deploy ${{ matrix.example }}
+        working-directory: examples/${{ matrix.example }}
+        run: |
+          args=()
+          if [ -s .env.deploy ]; then
+            args+=(--secrets-file .env.deploy)
+          fi
+          lk agent deploy "${args[@]}" .
