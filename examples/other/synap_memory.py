@@ -24,7 +24,7 @@ from synap_livekit_agents import (
     synap_store_tool,
 )
 
-from livekit.agents import Agent, AgentSession, ChatContext
+from livekit.agents import Agent, AgentSession, ChatContext, JobContext
 from livekit.plugins import deepgram, openai, silero
 
 load_dotenv()
@@ -37,7 +37,7 @@ USER_ID = "demo-user-001"
 CUSTOMER_ID = "demo-customer"
 
 
-async def entrypoint(ctx):
+async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
     chat_ctx = ChatContext()
