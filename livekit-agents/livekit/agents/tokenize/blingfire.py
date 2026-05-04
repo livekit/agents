@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from livekit import blingfire
 
 from . import token_stream, tokenizer
+from .token_stream import _has_unclosed_xml_tags
 
 __all__ = [
     "SentenceTokenizer",
@@ -18,7 +19,7 @@ def _split_sentences(
 ) -> list[tuple[str, int, int]]:
     _, offsets = blingfire.text_to_sentences_with_offsets(text)
 
-    merged_sentences = []
+    sentences: list[tuple[str, int, int]] = []
     start = 0
 
     for _, end in offsets:
@@ -28,19 +29,31 @@ def _split_sentences(
             continue
 
         if retain_format:
-            merged_sentences.append((raw_sentence, start, end))
+            sentences.append((raw_sentence, start, end))
         else:
-            merged_sentences.append((sentence, start, end))
+            sentences.append((sentence, start, end))
         start = end
 
     if start < len(text):
         raw_sentence = text[start:]
         if retain_format:
-            merged_sentences.append((raw_sentence, start, len(text)))
+            sentences.append((raw_sentence, start, len(text)))
         elif sentence := raw_sentence.strip():
-            merged_sentences.append((sentence, start, len(text)))
+            sentences.append((sentence, start, len(text)))
 
-    return merged_sentences
+    # merge sentences where a split landed inside an XML tag
+    if sentences:
+        merged: list[tuple[str, int, int]] = [sentences[0]]
+        for sent_text, s_start, s_end in sentences[1:]:
+            prev_text, prev_start, prev_end = merged[-1]
+            if _has_unclosed_xml_tags(prev_text):
+                gap = text[prev_end:s_start] if retain_format else " "
+                merged[-1] = (prev_text + gap + sent_text, prev_start, s_end)
+            else:
+                merged.append((sent_text, s_start, s_end))
+        sentences = merged
+
+    return sentences
 
 
 @dataclass
