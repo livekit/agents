@@ -36,7 +36,6 @@ session = AgentSession(
 
 > **Note:** Realtime models use provider plugins directly as they are not supported by LiveKit Inference. These examples require provider-specific API keys (e.g., `OPENAI_API_KEY`).
 
-- [`getting_started.py`](./getting_started.py) - OpenAI Realtime model with noise cancellation
 - [`weather_agent.py`](./weather_agent.py) - OpenAI Realtime API with function calls for weather information
 - [`realtime_video_agent.py`](./realtime_video_agent.py) - Google Gemini with multimodal video and voice capabilities
 - [`realtime_joke_teller.py`](./realtime_joke_teller.py) - Amazon Nova Sonic real-time model with function calls
@@ -81,7 +80,6 @@ session = AgentSession(
 
 - [`background_audio.py`](./background_audio.py) - Playing background audio or ambient sounds during conversations
 - [`push_to_talk.py`](./push_to_talk.py) - Push-to-talk interaction
-- [`tts_text_pacing.py`](./tts_text_pacing.py) - Pacing control for TTS requests
 - [`speaker_id_multi_speaker.py`](./speaker_id_multi_speaker.py) - Multi-speaker identification
 
 ### 📊 Tracing & Error Handling
