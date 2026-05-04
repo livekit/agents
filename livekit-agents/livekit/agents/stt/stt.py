@@ -7,7 +7,7 @@ from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from types import TracebackType
-from typing import Any, Generic, Literal, TypeVar
+from typing import Any, Generic, Literal, Protocol, TypeVar, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -278,6 +278,18 @@ class STT(
         pass
 
 
+@runtime_checkable
+class SpeakerContext(Protocol):
+    """Protocol for STT context models that can generate LLM instructions.
+
+    STT plugins that provide speaker metadata should implement this protocol
+    on their context model so the expressiveness system can auto-inject
+    speaker context into the LLM.
+    """
+
+    def to_instructions(self) -> str: ...
+
+
 class RecognizeStream(ABC):
     class _FlushSentinel:
         """Sentinel to mark when it was flushed"""
@@ -320,6 +332,21 @@ class RecognizeStream(ABC):
 
         self._start_time_offset: float = 0.0
         self._start_time: float = time.time()
+        self._context: BaseModel | None = None
+
+    @property
+    def context(self) -> BaseModel | None:
+        """Persistent speaker metadata updated by the STT plugin during recognition.
+
+        STT plugins set this to a ``BaseModel`` instance (e.g. a voice profile with
+        emotion, gender, etc.) as they learn about the speaker over the life of the
+        stream.  Accessible via ``agent.audio_recognition.stt_context``.
+        """
+        return self._context
+
+    @context.setter
+    def context(self, value: BaseModel | None) -> None:
+        self._context = value
 
     @property
     def start_time_offset(self) -> float:

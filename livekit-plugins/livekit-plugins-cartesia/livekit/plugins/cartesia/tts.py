@@ -172,6 +172,7 @@ class TTS(tts.TTS):
             mark_refreshed_on_get=True,
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
+        self._markup = self._CartesiaMarkup(self)
         self._sentence_tokenizer = (
             tokenizer if is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
         )
@@ -197,6 +198,17 @@ class TTS(tts.TTS):
                     "word_timestamps is only supported for languages en, de, es, and fr with `sonic` models"
                     " or all languages with `preview` models"
                 )
+
+    class _CartesiaMarkup(tts.TTS.Markup):
+        def llm_instructions(self) -> str | None:
+            from livekit.agents.tts._provider_format import llm_instructions
+
+            return llm_instructions("cartesia")
+
+        def to_text(self, text: str) -> str:
+            from livekit.agents.tts._provider_format import strip_markup
+
+            return strip_markup("cartesia", text)
 
     @property
     def model(self) -> str:

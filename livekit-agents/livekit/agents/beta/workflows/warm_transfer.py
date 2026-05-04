@@ -25,7 +25,7 @@ from ...voice.background_audio import (
     BuiltinAudioClip,
     PlayHandle,
 )
-from .utils import InstructionParts
+from .utils import WorkflowInstructions
 
 if TYPE_CHECKING:
     from ...voice.turn import TurnDetectionMode
@@ -46,7 +46,7 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         sip_number: NotGivenOr[str] = NOT_GIVEN,
         sip_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         hold_audio: NotGivenOr[AudioSource | AudioConfig | list[AudioConfig] | None] = NOT_GIVEN,
-        instructions: NotGivenOr[InstructionParts | Instructions | str] = NOT_GIVEN,
+        instructions: NotGivenOr[WorkflowInstructions | Instructions | str] = NOT_GIVEN,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
@@ -79,19 +79,19 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         """
 
         if not is_given(instructions):
-            instructions = InstructionParts(persona=PERSONA, extra=extra_instructions)
+            instructions = WorkflowInstructions(persona=PERSONA, extra=extra_instructions)
         elif extra_instructions:
             logger.warning("`extra_instructions` will be ignored when `instructions` is provided")
 
-        if isinstance(instructions, InstructionParts):
+        if isinstance(instructions, WorkflowInstructions):
             conversation_history = self._format_conversation_history(chat_ctx)
-            instructions = Instructions(INSTRUCTIONS_TEMPLATE).format(
-                persona=instructions.persona if is_given(instructions.persona) else PERSONA,
-                extra=instructions.extra,
+            instructions = instructions.resolve(
+                template=INSTRUCTIONS_TEMPLATE,
+                default_persona=PERSONA,
                 _conversation_history=conversation_history,
             )
 
-        assert is_given(instructions)  # for type checking
+        assert isinstance(instructions, (str, Instructions))  # for type checking
         super().__init__(
             instructions=instructions,
             chat_ctx=NOT_GIVEN,  # don't pass the chat_ctx
