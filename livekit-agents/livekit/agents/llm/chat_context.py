@@ -401,7 +401,7 @@ class AgentConfigUpdate(BaseModel):
     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
     type: Literal["agent_config_update"] = Field(default="agent_config_update")
 
-    instructions: Instructions | str | None = None
+    instructions: str | None = None
     tools_added: list[str] | None = None
     tools_removed: list[str] | None = None
 

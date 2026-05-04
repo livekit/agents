@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import typing
 from collections.abc import Callable
 
@@ -9,6 +10,34 @@ from .tokenizer import SentenceStream, TokenData, WordStream
 # Tokenizers can either provide us with a list of tokens or a list of tokens along with their start and end indices.  # noqa: E501
 # If the start and end indices are not available, we attempt to locate the token within the text using str.find.  # noqa: E501
 TokenizeCallable = Callable[[str], list[str] | list[tuple[str, int, int]]]
+
+_XML_TAG_RE = re.compile(r"<(/?)(\w+)[^>]*(/?)\s*>")
+
+
+def _has_unclosed_xml_tags(text: str) -> bool:
+    """Return True if *text* contains an incomplete or unclosed XML tag."""
+    if "<" not in text:
+        return False
+
+    # incomplete tag at end: < without matching >
+    last_open = text.rfind("<")
+    last_close = text.rfind(">")
+    if last_open > last_close:
+        return True
+
+    # unbalanced open/close pairs
+    depth = 0
+    for m in _XML_TAG_RE.finditer(text):
+        is_closing = m.group(1) == "/"
+        is_self_closing = m.group(3) == "/"
+        if is_self_closing:
+            continue
+        elif is_closing:
+            depth -= 1
+        else:
+            depth += 1
+
+    return depth > 0
 
 
 class BufferedTokenStream:
@@ -44,13 +73,17 @@ class BufferedTokenStream:
             if len(tokens) <= 1:
                 break
 
+            tok = tokens[0]
+            tok_text = tok[0] if isinstance(tok, tuple) else tok
+
+            # don't emit a token that would split an XML tag
+            if _has_unclosed_xml_tags(tok_text):
+                break
+
+            tokens.pop(0)
+
             if self._out_buf:
                 self._out_buf += " "
-
-            tok = tokens.pop(0)
-            tok_text = tok
-            if isinstance(tok, tuple):
-                tok_text = tok[0]
 
             self._out_buf += tok_text
             if len(self._out_buf) >= self._min_token_len:
