@@ -14,9 +14,6 @@ Get an API key at synap.maximem.ai
 import os
 
 from dotenv import load_dotenv
-from livekit.agents import Agent, AgentSession, ChatContext, RoomInputOptions
-from livekit.plugins import deepgram, openai, silero
-
 from maximem_synap import MaximemSynapSDK
 from synap_livekit_agents import (
     attach_synap_recording,
@@ -24,6 +21,9 @@ from synap_livekit_agents import (
     synap_search_tool,
     synap_store_tool,
 )
+
+from livekit.agents import Agent, AgentSession, ChatContext, RoomInputOptions
+from livekit.plugins import deepgram, openai, silero
 
 load_dotenv()
 
@@ -77,6 +77,6 @@ async def entrypoint(ctx):
 
 
 if __name__ == "__main__":
-    from livekit.agents import cli, WorkerOptions
+    from livekit.agents import WorkerOptions, cli
 
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
