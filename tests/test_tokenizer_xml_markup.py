@@ -11,7 +11,6 @@ import pytest
 from livekit.agents.tokenize.blingfire import SentenceTokenizer
 from livekit.agents.tts.markup_utils import strip_xml_tags
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -38,9 +37,7 @@ async def _stream_tokenize(tok: SentenceTokenizer, text: str) -> list[str]:
     return [ev.token async for ev in stream]
 
 
-async def _stream_tokenize_chunked(
-    tok: SentenceTokenizer, text: str, chunk_size: int
-) -> list[str]:
+async def _stream_tokenize_chunked(tok: SentenceTokenizer, text: str, chunk_size: int) -> list[str]:
     """Push text in chunks of *chunk_size* characters (simulates LLM streaming)."""
     stream = tok.stream()
     for i in range(0, len(text), chunk_size):
@@ -143,12 +140,20 @@ class TestBatchTokenizer:
         _assert_wrapping_tag_intact(sentences, "spell")
 
     def test_spell_with_periods(self) -> None:
+        """Dots inside <spell> look like sentence endings to blingfire. Our merge must catch this."""
         text = "Spell it: <spell>U.S.A.</spell>. Got it?"
         sentences = self.tok.tokenize(text)
         _assert_wrapping_tag_intact(sentences, "spell")
 
     def test_spell_with_abbreviation(self) -> None:
+        """N.A.S.A. has 4 dots — each looks like a sentence ending."""
         text = "The org is <spell>N.A.S.A.</spell>. They do space stuff."
+        sentences = self.tok.tokenize(text)
+        _assert_wrapping_tag_intact(sentences, "spell")
+
+    def test_spell_with_full_sentences_inside(self) -> None:
+        """Content inside <spell> that blingfire would split if not protected."""
+        text = "Read this: <spell>The quick brown fox jumped over the lazy dog. The cat sat on the mat and looked around.</spell>. Now continue talking about something else."
         sentences = self.tok.tokenize(text)
         _assert_wrapping_tag_intact(sentences, "spell")
 
@@ -161,6 +166,23 @@ class TestBatchTokenizer:
         text = 'Pronounce <phoneme alphabet="ipa" ph="ˈæktʃuəli">actually</phoneme>. Easy right?'
         sentences = self.tok.tokenize(text)
         _assert_wrapping_tag_intact(sentences, "phoneme")
+
+    def test_wrapping_tag_inner_sentences_force_split(self) -> None:
+        """Blingfire WILL split the inner content. Our merge must rejoin."""
+        text = (
+            "I need to tell you something important. "
+            "<outer>The first thing you should know is very important. "
+            "The second thing is equally critical to understand. "
+            "The third thing wraps everything up nicely.</outer> "
+            "That was everything I had to say today."
+        )
+        sentences = self.tok.tokenize(text)
+        _assert_wrapping_tag_intact(sentences, "outer")
+        for s in sentences:
+            if "<outer>" in s:
+                assert "first thing" in s
+                assert "third thing" in s
+                assert "</outer>" in s
 
     # -- Multiple tags in one text --
 
@@ -196,6 +218,36 @@ class TestBatchTokenizer:
         text = "<spell>A.B.</spell><spell>C.D.</spell>. Done."
         sentences = self.tok.tokenize(text)
         _assert_wrapping_tag_intact(sentences, "spell")
+
+    def test_nested_wrapping_tags(self) -> None:
+        text = (
+            "Let me start by explaining the context here. "
+            "<outer><inner>The inner content has a full sentence that should not be split. "
+            "It also has a second sentence inside the inner tags.</inner> "
+            "And this part is between inner and outer.</outer> "
+            "Finally we are outside all the tags."
+        )
+        sentences = self.tok.tokenize(text)
+        _assert_tags_balanced(sentences, "nested")
+        _assert_wrapping_tag_intact(sentences, "outer")
+        _assert_wrapping_tag_intact(sentences, "inner")
+
+    def test_wrapping_tag_with_multiple_inner_sentences(self) -> None:
+        """When a wrapping tag spans multiple sentences, they merge to preserve tag integrity."""
+        text = (
+            "Here is some context before the tag starts. "
+            "<outer>The first sentence inside the tag is quite long. "
+            "The second sentence is also a full thought. "
+            "The third sentence finishes the tagged content.</outer> "
+            "And now we continue outside the tag normally."
+        )
+        sentences = self.tok.tokenize(text)
+        _assert_tags_balanced(sentences, "multi-inner")
+        _assert_wrapping_tag_intact(sentences, "outer")
+        for s in sentences:
+            if "<outer>" in s:
+                assert "first sentence" in s
+                assert "third sentence" in s
 
     def test_unicode_text_with_tags(self) -> None:
         text = '<emotion value="happy"/> こんにちは。元気ですか？'
@@ -282,6 +334,24 @@ class TestStreamingTokenizer:
         _assert_wrapping_tag_intact(tokens, "spell")
 
     @pytest.mark.asyncio
+    async def test_wrapping_tag_inner_sentences_streaming(self) -> None:
+        """Multiple full sentences inside wrapping tag, streamed char by char."""
+        text = (
+            "I want to tell you something important now. "
+            "<outer>The first thing you should know is quite significant. "
+            "The second thing is equally critical to understand. "
+            "The third thing wraps up the entire explanation.</outer> "
+            "That was everything I needed to explain today."
+        )
+        tokens = await _stream_tokenize(self.tok, text)
+        _assert_wrapping_tag_intact(tokens, "outer")
+        for t in tokens:
+            if "<outer>" in t:
+                assert "first thing" in t
+                assert "third thing" in t
+                assert "</outer>" in t
+
+    @pytest.mark.asyncio
     async def test_phoneme_streaming(self) -> None:
         text = 'Say <phoneme alphabet="cmu-arpabet" ph="M AE1">Madison</phoneme>. Nice city.'
         tokens = await _stream_tokenize(self.tok, text)
@@ -348,6 +418,38 @@ class TestStreamingTokenizer:
         tokens = await _stream_tokenize_chunked(self.tok, text, chunk_size=7)
         _assert_tags_balanced(tokens, "large-chunks")
         _assert_wrapping_tag_intact(tokens, "spell")
+
+    # -- Nested tags --
+
+    @pytest.mark.asyncio
+    async def test_nested_tags_streaming(self) -> None:
+        text = (
+            "Let me explain the full context of the situation. "
+            "<outer><inner>The inner content has a complete sentence here. "
+            "It also has another sentence that could be split.</inner> "
+            "This part sits between inner and outer tags.</outer> "
+            "And this is fully outside all the tags."
+        )
+        tokens = await _stream_tokenize(self.tok, text)
+        _assert_tags_balanced(tokens, "nested-stream")
+        _assert_wrapping_tag_intact(tokens, "outer")
+        _assert_wrapping_tag_intact(tokens, "inner")
+
+    @pytest.mark.asyncio
+    async def test_nested_multi_sentence_streaming(self) -> None:
+        """Nested tags with multiple inner sentences, streamed."""
+        text = (
+            "Here is something before all the tags start. "
+            "<outer>The outer layer has its own first sentence. "
+            "<inner>The inner layer also has a complete first sentence. "
+            "And the inner layer has a second complete sentence too.</inner> "
+            "Back in the outer layer for one more sentence.</outer> "
+            "And this sentence is completely outside all tags."
+        )
+        tokens = await _stream_tokenize(self.tok, text)
+        _assert_tags_balanced(tokens, "nested-multi-stream")
+        _assert_wrapping_tag_intact(tokens, "outer")
+        _assert_wrapping_tag_intact(tokens, "inner")
 
     # -- No markup --
 
