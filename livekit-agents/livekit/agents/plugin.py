@@ -6,6 +6,7 @@ from abc import ABC
 from typing import Literal
 
 from . import utils
+from .diagnostics import DiagnosticCheck, PluginDiagnosticInfo
 
 EventTypes = Literal["plugin_registered",]
 
@@ -38,6 +39,18 @@ class Plugin(ABC):  # noqa: B024
     # plugin can implement an optional download_files method
     def download_files(self) -> None:  # noqa: B027
         pass
+
+    # plugin can implement optional diagnostic metadata for first-run checks
+    def diagnostic_info(self) -> PluginDiagnosticInfo | None:  # noqa: B027
+        """Return static first-run diagnostic metadata for this plugin."""
+
+        return None
+
+    # plugin can implement optional safe deep diagnostic checks
+    def diagnostics(self) -> list[DiagnosticCheck]:  # noqa: B027
+        """Return side-effect-safe deep diagnostic checks for this plugin."""
+
+        return []
 
     @property
     def package(self) -> str:

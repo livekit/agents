@@ -382,6 +382,32 @@ python myagent.py start
 
 Runs the agent with production-ready optimizations.
 
+### Checking your setup
+
+```shell
+python agent.py doctor
+```
+
+Runs local diagnostics without starting a worker. Replace `agent.py` with your agent entrypoint. Use this first when setup fails or before deploying to confirm required packages, environment variables, credentials, and downloadable model files are in place.
+
+Useful options:
+
+- `--json`: output a machine-readable report for CI or support tickets.
+- `--online`: include a safe LiveKit network connectivity check.
+- `--deep`: run plugin-declared checks that are safe to execute.
+- `--strict`: exit non-zero on warnings as well as errors.
+
+### CLI modes
+
+| Command | Use for | Requires LiveKit server | Notes |
+| --- | --- | --- | --- |
+| `console` | Local terminal testing | Yes for the default Cloud Inference examples | Uses local audio or text input; fastest way to iterate on agent behavior. |
+| `dev` | Development with clients | Yes | Starts a worker with dev defaults and auto-reload. |
+| `start` | Production workers | Yes | Runs with production defaults. |
+| `connect` | Attach an agent to a room | Yes | Creates or joins the room and simulates a job for that room. |
+| `download-files` | Preload plugin assets | No | Downloads files required by registered plugins, such as local model assets. |
+| `doctor` | Diagnose setup issues | No by default | Add `--online` for network and credential checks. |
+
 ## Contributing
 
 The Agents framework is under active development in a rapidly evolving field. We welcome and appreciate contributions of any kind, be it feedback, bugfixes, features, new plugins and tools, or better documentation. You can file issues under this repo, open a PR, or chat with us in the [LiveKit community](https://docs.livekit.io/intro/community/).

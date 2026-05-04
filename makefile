@@ -89,9 +89,12 @@ unit-tests:
 		tests/test_aio.py \
 		tests/test_audio_decoder.py \
 		tests/test_chat_ctx.py \
+		tests/test_cli_doctor.py \
 		tests/test_config.py \
 		tests/test_connection_pool.py \
 		tests/test_debounce.py \
+		tests/test_plugin_diagnostics.py \
+		tests/test_plugin_diagnostic_metadata.py \
 		tests/test_google_thought_signatures.py \
 		tests/test_inference_stt_fallback.py \
 		tests/test_inference_tts_fallback.py \
