@@ -105,12 +105,3 @@ def strip_markup(provider: str, text: str) -> str:
     elif provider == "elevenlabs":
         return strip_xml_tags(text, _ELEVENLABS_TAGS)
     return text
-
-
-def get_tags(provider: str) -> list[str]:
-    """Return the list of markup tags a provider supports."""
-    if provider == "cartesia":
-        return _CARTESIA_TAGS
-    elif provider == "elevenlabs":
-        return _ELEVENLABS_TAGS
-    return []
