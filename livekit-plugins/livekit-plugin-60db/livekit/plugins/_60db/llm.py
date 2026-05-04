@@ -160,6 +160,7 @@ class LLMStream(llm.LLMStream):
                 "POST",
                 self._llm_instance._api_url,
                 json=body,
+                timeout=httpx.Timeout(self._conn_options.timeout, connect=15.0),
             ) as response:
                 response.raise_for_status()
 

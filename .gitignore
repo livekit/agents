@@ -182,3 +182,6 @@ docs/
 
 # Examples for development
 examples/dev/*
+test_install.py
+test_new.json
+test_services.py
