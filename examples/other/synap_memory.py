@@ -11,11 +11,11 @@ Install: pip install maximem-synap-livekit-agents
 Get an API key at synap.maximem.ai
 """
 
-import asyncio
 import os
 
+from dotenv import load_dotenv
 from livekit.agents import Agent, AgentSession, ChatContext, RoomInputOptions
-from livekit.plugins import openai
+from livekit.plugins import deepgram, openai, silero
 
 from maximem_synap import MaximemSynapSDK
 from synap_livekit_agents import (
@@ -25,8 +25,12 @@ from synap_livekit_agents import (
     synap_store_tool,
 )
 
+load_dotenv()
+
 sdk = MaximemSynapSDK(api_key=os.environ["SYNAP_API_KEY"])
 
+# In production, derive USER_ID from the room participant identity or JWT claims
+# so each caller gets their own Synap memory namespace.
 USER_ID = "demo-user-001"
 CUSTOMER_ID = "demo-customer"
 
@@ -48,6 +52,7 @@ async def entrypoint(ctx):
             "Use synap_search to recall user preferences when relevant. "
             "Use synap_store to save important new facts the user mentions."
         ),
+        chat_ctx=chat_ctx,
         tools=[
             synap_search_tool(sdk=sdk, user_id=USER_ID, customer_id=CUSTOMER_ID),
             synap_store_tool(sdk=sdk, user_id=USER_ID, customer_id=CUSTOMER_ID),
@@ -56,7 +61,9 @@ async def entrypoint(ctx):
 
     session = AgentSession(
         llm=openai.LLM(model="gpt-4o"),
-        chat_ctx=chat_ctx,
+        stt=deepgram.STT(),
+        tts=openai.TTS(),
+        vad=silero.VAD.load(),
     )
 
     # 2. Automatically record every user transcription and assistant response
