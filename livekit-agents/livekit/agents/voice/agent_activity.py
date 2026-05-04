@@ -2473,15 +2473,22 @@ class AgentActivity(RecognitionHooks):
         if new_message is not None:
             chat_ctx.insert(new_message)
 
-        # re-resolve instructions for the current turn's modality
+        # resolve modality-specific instructions for this turn
         turn_modality = speech_handle.input_details.modality
-        turn_instructions = instructions if instructions is not None else self._agent.instructions
-        update_instructions(
-            chat_ctx,
-            instructions=turn_instructions,
-            modality=turn_modality,
-            add_if_missing=True,
-        )
+        if instructions is not None:
+            instr_text = (
+                instructions.as_modality(turn_modality)
+                if isinstance(instructions, Instructions)
+                else instructions
+            )
+            chat_ctx.add_message(role="system", content=[instr_text])
+        elif isinstance(self._agent.instructions, Instructions):
+            update_instructions(
+                chat_ctx,
+                instructions=self._agent.instructions,
+                modality=turn_modality,
+                add_if_missing=False,
+            )
 
         # inject expressiveness instructions (TTS markup guide + speaker context)
         _expressiveness = self._agent.expressiveness
