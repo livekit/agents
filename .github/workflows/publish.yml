@@ -257,6 +257,8 @@ jobs:
         example: [healthcare, survey, frontdesk, drive-thru]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ inputs.branch || github.event.pull_request.merge_commit_sha }}
 
       - name: Install LiveKit CLI
         run: |
