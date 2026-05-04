@@ -6,18 +6,16 @@ Environment variables used:
 - `FISH_API_KEY` for authentication (required)
 """
 
-from fish_audio_sdk.schemas import Backends
-
 from livekit.agents import Plugin
 
 from .log import logger
-from .models import LatencyMode, OutputFormat
+from .models import LatencyMode, OutputFormat, TTSModels
 from .tts import TTS
 from .version import __version__
 
 __all__ = [
     "TTS",
-    "Backends",
+    "TTSModels",
     "OutputFormat",
     "LatencyMode",
     "__version__",
