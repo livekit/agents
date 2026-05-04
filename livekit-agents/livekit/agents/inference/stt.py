@@ -737,7 +737,7 @@ class SpeechStream(stt.SpeechStream):
         language = LanguageCode(data.get("language", self._opts.language or "en"))
         words = data.get("words", []) or []
         # The gateway carries provider-specific data on the `extra` field
-        # of the transcript message. We surface it on SpeechData.metadata 
+        # of the transcript message. We surface it on SpeechData.metadata
         extra = data.get("extra")
         metadata = extra if isinstance(extra, dict) and extra else None
         return stt.SpeechData(
