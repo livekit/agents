@@ -126,6 +126,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
         self._classify_task: asyncio.Task[None] | None = None
         self._no_speech_timer: asyncio.TimerHandle | None = None
         self._silence_timer: asyncio.TimerHandle | None = None
+        self._silence_timer_trigger: Literal["short_speech", "long_speech"] | None = None
         self._detection_timeout_timer: asyncio.TimerHandle | None = None
 
         self._verdict_result: AMDResult | None = None
@@ -174,6 +175,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
         if self._silence_timer is not None:
             self._silence_timer.cancel()
             self._silence_timer = None
+            self._silence_timer_trigger = None
         if self._no_speech_timer is not None:
             self._no_speech_timer.cancel()
             self._no_speech_timer = None
@@ -193,6 +195,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
             if self._silence_timer is not None:
                 self._silence_timer.cancel()
                 self._silence_timer = None
+                self._silence_timer_trigger = None
             if not self._transcript:
                 self._silence_timer = asyncio.get_running_loop().call_later(
                     max(0, self._human_silence_threshold - silence_duration),
@@ -203,6 +206,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
                         speech_duration=speech_duration,
                     ),
                 )
+                self._silence_timer_trigger = "short_speech"
             else:
                 self._silence_timer = asyncio.get_running_loop().call_later(
                     max(0, self._machine_silence_threshold - silence_duration),
@@ -211,6 +215,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
                         speech_duration=speech_duration,
                     ),
                 )
+                self._silence_timer_trigger = "long_speech"
             return
 
         if self._classify_task is None:
@@ -219,10 +224,12 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
         if self._silence_timer is not None:
             self._silence_timer.cancel()
             self._silence_timer = None
+            self._silence_timer_trigger = None
         self._silence_timer = asyncio.get_running_loop().call_later(
             max(0, self._machine_silence_threshold - silence_duration),
             functools.partial(self._silence_timer_callback, speech_duration=speech_duration),
         )
+        self._silence_timer_trigger = "long_speech"
 
     def _set_verdict(self, result: AMDResult) -> None:
         self._verdict_result = result
@@ -250,6 +257,9 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
         reason: NotGivenOr[str] = NOT_GIVEN,
         speech_duration: float | None = None,
     ) -> None:
+        self._silence_timer = None
+        self._silence_timer_trigger = None
+
         if is_given(category) and is_given(reason) and self._verdict_result is None:
             self._set_verdict(
                 AMDResult(
@@ -273,6 +283,23 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
         # ignore text from other sources (e.g. when both session and AMD have STT specified)
         if source != self._source:
             return
+
+        if self._silence_timer is not None and self._silence_timer_trigger == "short_speech":
+            self._silence_timer.cancel()
+            self._silence_timer = None
+            self._silence_timer_trigger = None
+
+            # invariant: trigger == "short_speech" implies on_user_speech_ended ran
+            assert self._speech_ended_at is not None
+            remaining = (self._speech_ended_at + self._machine_silence_threshold) - time.time()
+            self._silence_timer = asyncio.get_running_loop().call_later(
+                max(0, remaining),
+                functools.partial(
+                    self._silence_timer_callback,
+                    speech_duration=self.speech_duration,
+                ),
+            )
+            self._silence_timer_trigger = "long_speech"
 
         if self._classify_task is None:
             self._classify_task = asyncio.create_task(self._classify_user_speech())
@@ -316,6 +343,9 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
             self._extension_count += 1
             if self._silence_timer is not None:
                 self._silence_timer.cancel()
+                self._silence_timer = None
+                self._silence_timer_trigger = None
+
             loop = asyncio.get_running_loop()
 
             def _on_postpone_elapsed() -> None:
@@ -332,6 +362,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
                 self._try_emit_result()
 
             self._silence_timer = loop.call_later(clamped, _on_postpone_elapsed)
+            self._silence_timer_trigger = "long_speech"
             return f"waiting {clamped:.1f}s for more audio"
 
         @log_exceptions(logger=logger)
@@ -378,6 +409,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
         if self._silence_timer is not None:
             self._silence_timer.cancel()
             self._silence_timer = None
+            self._silence_timer_trigger = None
         if self._detection_timeout_timer is not None:
             self._detection_timeout_timer.cancel()
             self._detection_timeout_timer = None
