@@ -257,8 +257,10 @@ class _AMDClassifier(EventEmitter[Literal["amd_result"]]):
         reason: NotGivenOr[str] = NOT_GIVEN,
         speech_duration: float | None = None,
     ) -> None:
-        self._silence_timer = None
-        self._silence_timer_trigger = None
+        if self._silence_timer:
+            self._silence_timer.cancel()
+            self._silence_timer = None
+            self._silence_timer_trigger = None
 
         if is_given(category) and is_given(reason) and self._verdict_result is None:
             self._set_verdict(
