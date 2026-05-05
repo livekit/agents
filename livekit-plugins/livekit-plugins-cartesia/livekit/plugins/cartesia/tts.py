@@ -70,6 +70,8 @@ class _TTSOptions:
     emotion: list[TTSVoiceEmotion | str] | None
     volume: float | None
     word_timestamps: bool
+    add_phoneme_timestamps: bool
+    use_normalized_timestamps: bool
     api_key: str
     language: LanguageCode | None
     base_url: str
@@ -97,6 +99,8 @@ class TTS(tts.TTS):
         volume: float | None = None,
         sample_rate: int = 24000,
         word_timestamps: bool = True,
+        add_phoneme_timestamps: bool = False,
+        use_normalized_timestamps: bool = False,
         pronunciation_dict_id: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
@@ -119,6 +123,8 @@ class TTS(tts.TTS):
             volume (float, optional): Volume of the speech, with sonic-3, the value is valid between 0.5 and 2.0
             sample_rate (int, optional): The audio sample rate in Hz. Defaults to 24000.
             word_timestamps (bool, optional): Whether to add word timestamps to the output. Defaults to True.
+            add_phoneme_timestamps (bool, optional): Whether to add phoneme-level timestamps to the output. Defaults to False.
+            use_normalized_timestamps (bool, optional): Whether to use normalized timestamps. Defaults to False.
             pronunciation_dict_id (str, optional): The pronunciation dictionary ID to use for custom pronunciations. Defaults to None.
             api_key (str, optional): The Cartesia API key. If not provided, it will be read from the CARTESIA_API_KEY environment variable.
             http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
@@ -157,6 +163,8 @@ class TTS(tts.TTS):
             api_key=cartesia_api_key,
             base_url=base_url,
             word_timestamps=word_timestamps,
+            add_phoneme_timestamps=add_phoneme_timestamps,
+            use_normalized_timestamps=use_normalized_timestamps,
             api_version=api_version,
             pronunciation_dict_id=pronunciation_dict_id,
         )
@@ -248,6 +256,8 @@ class TTS(tts.TTS):
         emotion: NotGivenOr[TTSVoiceEmotion | str | list[TTSVoiceEmotion | str]] = NOT_GIVEN,
         volume: NotGivenOr[float] = NOT_GIVEN,
         pronunciation_dict_id: NotGivenOr[str] = NOT_GIVEN,
+        add_phoneme_timestamps: NotGivenOr[bool] = NOT_GIVEN,
+        use_normalized_timestamps: NotGivenOr[bool] = NOT_GIVEN,
         api_version: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """
@@ -263,6 +273,8 @@ class TTS(tts.TTS):
             speed (TTSVoiceSpeed | float, optional): Voice Control - Speed (https://docs.cartesia.ai/user-guides/voice-control)
             emotion (list[TTSVoiceEmotion], optional): Voice Control - Emotion (https://docs.cartesia.ai/user-guides/voice-control)
             pronunciation_dict_id (str, optional): The pronunciation dictionary ID to use for custom pronunciations.
+            add_phoneme_timestamps (bool, optional): Whether to add phoneme-level timestamps to the output.
+            use_normalized_timestamps (bool, optional): Whether to use normalized timestamps.
         """
         if is_given(model):
             self._opts.model = model
@@ -279,6 +291,10 @@ class TTS(tts.TTS):
             self._opts.volume = volume
         if is_given(pronunciation_dict_id):
             self._opts.pronunciation_dict_id = pronunciation_dict_id
+        if is_given(add_phoneme_timestamps):
+            self._opts.add_phoneme_timestamps = add_phoneme_timestamps
+        if is_given(use_normalized_timestamps):
+            self._opts.use_normalized_timestamps = use_normalized_timestamps
         if is_given(api_version):
             self._opts.api_version = api_version
 
@@ -508,6 +524,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                         output_emitter.push_timed_transcript(
                             TimedString(text=word, start_time=start, end_time=end)
                         )
+                elif data.get("phoneme_timestamps"):
+                    pass  # phoneme_timestamps are received but not surfaced by the output emitter
                 elif data.get("type") == "error":
                     logger.error(
                         "Cartesia returned error. Include the cartesia_context_id to support@cartesia.ai for help debugging.",
@@ -599,5 +617,9 @@ def _to_cartesia_options(opts: _TTSOptions, *, streaming: bool) -> dict[str, Any
 
     if streaming:
         options["add_timestamps"] = opts.word_timestamps
+        if opts.add_phoneme_timestamps:
+            options["add_phoneme_timestamps"] = True
+        if opts.use_normalized_timestamps:
+            options["use_normalized_timestamps"] = True
 
     return options
