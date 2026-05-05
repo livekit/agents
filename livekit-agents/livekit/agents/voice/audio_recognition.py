@@ -880,6 +880,14 @@ class AudioRecognition:
 
     @utils.log_exceptions(logger=logger)
     async def _on_vad_event(self, ev: vad.VADEvent) -> None:
+        # Forward to the active STT plugin so it can react to session-level VAD
+        # (e.g. call finalize() on END_OF_SPEECH for externally-driven modes).
+        if (stt_inst := self._session.stt) is not None:
+            try:
+                stt_inst.on_vad_event(ev)
+            except Exception:
+                logger.exception("error forwarding VAD event to STT")
+
         if ev.type == vad.VADEventType.START_OF_SPEECH:
             speech_start_time = time.time() - ev.speech_duration - ev.inference_duration
             if not self._vad_speech_started:
