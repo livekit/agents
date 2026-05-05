@@ -868,9 +868,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     "model": self._opts.model,
                     "speech_sample_rate": self._opts.speech_sample_rate,
                     "output_audio_codec": self._opts.output_audio_codec,
-                    "output_audio_bitrate": self._opts.output_audio_bitrate,
-                    "min_buffer_size": self._opts.min_buffer_size,
-                    "max_chunk_length": self._opts.max_chunk_length,
                 }
                 if self._opts.model == "bulbul:v2":
                     data["pitch"] = self._opts.pitch
@@ -880,6 +877,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                         data["enable_cached_responses"] = self._opts.enable_cached_responses
                 if self._opts.model in ("bulbul:v3", "bulbul:v3-beta"):
                     data["temperature"] = self._opts.temperature
+                    data["output_audio_bitrate"] = self._opts.output_audio_bitrate
+                    data["min_buffer_size"] = self._opts.min_buffer_size
+                    data["max_chunk_length"] = self._opts.max_chunk_length
                 if self._opts.model == "bulbul:v3" and self._opts.dict_id is not None:
                     data["dict_id"] = self._opts.dict_id
                 config_msg = {"type": "config", "data": data}
