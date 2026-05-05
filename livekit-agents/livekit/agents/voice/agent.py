@@ -193,15 +193,18 @@ class Agent:
         return self._expressiveness
 
     @property
-    def audio_recognition(self) -> AudioRecognition | None:
+    def audio_recognition(self) -> AudioRecognition:
         """Access the audio recognition system for this agent.
 
         The only public member is ``stt_context`` — live speaker metadata from the
         STT stream.
+
+        Raises:
+            RuntimeError: If the agent is not running.
         """
-        if self._activity is None:
-            return None
-        return self._activity._audio_recognition
+        activity = self._get_activity_or_raise()
+        assert activity._audio_recognition is not None
+        return activity._audio_recognition
 
     async def update_instructions(self, instructions: str) -> None:
         """
