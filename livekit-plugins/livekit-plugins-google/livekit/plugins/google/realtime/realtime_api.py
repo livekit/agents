@@ -495,6 +495,11 @@ class RealtimeSession(llm.RealtimeSession):
         self._session_lock = asyncio.Lock()
         self._num_retries = 0
 
+        # true while synchronous tool call is in flight for 3.1 only
+        # Audio frames dropped here to prevent server from thinking incoming audio is a
+        # new turn and cancelling the pending tool call
+        self._tool_call_pending = False
+
     async def _close_active_session(self) -> None:
         async with self._session_lock:
             if self._active_session:
@@ -672,6 +677,8 @@ class RealtimeSession(llm.RealtimeSession):
         return self._session_resumption_handle
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
+        if self._tool_call_pending:
+            return
         for f in self._resample_audio(frame):
             for nf in self._bstream.write(f.data.tobytes()):
                 realtime_input = types.LiveClientRealtimeInput(
@@ -816,6 +823,7 @@ class RealtimeSession(llm.RealtimeSession):
             await self._close_active_session()
 
             self._session_should_close.clear()
+            self._tool_call_pending = False  # reset if previous session ended mid-tool-call
             config = self._build_connect_config()
             session = None
             try:
@@ -937,6 +945,7 @@ class RealtimeSession(llm.RealtimeSession):
                     )
                 elif isinstance(msg, types.LiveClientToolResponse) and msg.function_responses:
                     await session.send_tool_response(function_responses=msg.function_responses)
+                    self._tool_call_pending = False
                 elif isinstance(msg, types.LiveClientRealtimeInput):
                     if msg.audio:
                         await session.send_realtime_input(audio=msg.audio)
@@ -1298,6 +1307,13 @@ class RealtimeSession(llm.RealtimeSession):
                 )
             )
         self._mark_current_generation_done()
+        is_blocking = (
+            not is_given(self._opts.tool_behavior)
+            or self._opts.tool_behavior == types.Behavior.BLOCKING
+        )
+        if is_blocking:
+            self._tool_call_pending = True
+            self._bstream.clear()
 
     def _handle_tool_call_cancellation(
         self, tool_call_cancellation: types.LiveServerToolCallCancellation
@@ -1306,6 +1322,7 @@ class RealtimeSession(llm.RealtimeSession):
             "server cancelled tool calls",
             extra={"function_call_ids": tool_call_cancellation.ids},
         )
+        self._tool_call_pending = False
 
     def _handle_usage_metadata(self, usage_metadata: types.UsageMetadata) -> None:
         current_gen = self._current_generation
