@@ -24,9 +24,9 @@ from .tts import (
     ChunkedStream,
     Encoding,
     SynthesizeStream,
-    TTSModels,
     TextNormalization,
     TimestampType,
+    TTSModels,
 )
 from .version import __version__
 
