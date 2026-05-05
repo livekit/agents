@@ -894,7 +894,7 @@ def update_instructions(
     Instructions are resolved to a plain string using the given modality before storage.
     """
     text = (
-        instructions.as_modality(modality)
+        instructions.render(modality=modality)
         if isinstance(instructions, Instructions)
         else instructions
     )

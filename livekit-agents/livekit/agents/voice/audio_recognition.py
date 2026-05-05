@@ -260,6 +260,18 @@ class AudioRecognition:
     def stt_context(self, value: BaseModel | None) -> None:
         self.__stt_context = value
 
+    def llm_instructions(self) -> str | None:
+        """Speaker context formatted as LLM instructions.
+
+        Returns ``stt_context.to_instructions()`` if the context implements
+        :class:`SpeakerContext`, otherwise ``None``.
+        """
+        ctx = self.__stt_context
+        if ctx is not None and isinstance(ctx, stt.SpeakerContext):
+            result = ctx.to_instructions()
+            return result if result else None
+        return None
+
     @property
     def _adaptive_interruption_active(self) -> bool:
         return (

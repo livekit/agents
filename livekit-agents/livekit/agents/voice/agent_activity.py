@@ -80,7 +80,7 @@ from .turn import EndpointingOptions, TurnDetectionMode
 
 if TYPE_CHECKING:
     from ..llm import mcp
-    from .agent_session import AgentSession
+    from .agent_session import AgentSession, ExpressivenessOptions
 
 
 _AgentActivityContextVar = contextvars.ContextVar["AgentActivity"]("agents_activity")
@@ -2113,55 +2113,63 @@ class AgentActivity(RecognitionHooks):
 
     # endregion
 
-    def _inject_expressiveness_instructions(self, chat_ctx: llm.ChatContext) -> None:
+    def _resolve_expressiveness_options(self) -> ExpressivenessOptions | None:
+        """Resolve expressiveness from agent (overrides session). Returns None if disabled."""
+        from .agent_session import DEFAULT_EXPRESSIVENESS_OPTIONS, ExpressivenessOptions
+
+        expr = self._agent.expressiveness
+        if not utils.is_given(expr):
+            expr = self._session.options.expressiveness
+        if isinstance(expr, dict):
+            return ExpressivenessOptions(**{**DEFAULT_EXPRESSIVENESS_OPTIONS, **expr})
+        if expr:
+            return DEFAULT_EXPRESSIVENESS_OPTIONS
+        return None
+
+    def _inject_expressiveness_instructions(
+        self,
+        chat_ctx: llm.ChatContext,
+        options: ExpressivenessOptions,
+        speech_handle: SpeechHandle,
+    ) -> None:
         """Inject TTS markup guide and speaker context into the chat context."""
-        import string
 
-        from ..llm.chat_context import AgentInstructions
+        def _to_instructions(v: Instructions | str) -> Instructions:
+            return v if isinstance(v, Instructions) else Instructions(v)
 
-        instructions = self._agent.instructions
-        if not isinstance(instructions, AgentInstructions):
-            instructions = AgentInstructions(
-                str(instructions) if not isinstance(instructions, str) else instructions
-            )
-
-        class _SafeFormatter(string.Formatter):
-            def get_field(self, field_name: str, args: Any, kwargs: Any) -> Any:
-                try:
-                    return super().get_field(field_name, args, kwargs)
-                except (KeyError, AttributeError, TypeError):
-                    return ("", field_name)
-
-            def format_field(self, value: Any, format_spec: str) -> str:
-                if value is None:
-                    return ""
-                return str(super().format_field(value, format_spec))
-
-        fmt = _SafeFormatter()
+        turn_modality = speech_handle.input_details.modality if speech_handle else None
 
         tts_instructions = self.tts.markup.llm_instructions() if self.tts else None
         if tts_instructions:
-            text = fmt.format(
-                instructions.tts_instructions_template,
-                tts_instructions=tts_instructions,
-                audio_recognition=self._audio_recognition,
-                tts=self.tts,
+            tts_template = _to_instructions(options["tts_instructions_template"])
+            text = tts_template.render(
+                modality=turn_modality,
+                data={
+                    "tts": {
+                        "markup": {
+                            "llm_instructions": tts_instructions,
+                        },
+                    },
+                },
             )
             if text.strip():
                 chat_ctx.add_message(role="system", content=text)
 
         stt_ctx = self._audio_recognition.stt_context if self._audio_recognition else None
-        if stt_ctx is not None and isinstance(stt_ctx, stt.SpeakerContext):
-            speaker_context: str = stt_ctx.to_instructions()
-            if speaker_context:
-                text = fmt.format(
-                    instructions.audio_recognition_instructions_template,
-                    speaker_context=speaker_context,
-                    audio_recognition=self._audio_recognition,
-                    tts=self.tts,
-                )
-                if text.strip():
-                    chat_ctx.add_message(role="system", content=text)
+        llm_instr = self._audio_recognition.llm_instructions() if self._audio_recognition else None
+        if stt_ctx is not None and llm_instr is not None:
+            speaker_template = _to_instructions(options["audio_recognition_instructions_template"])
+            text = speaker_template.render(
+                modality=turn_modality,
+                data={
+                    "audio_recognition": {
+                        "stt_context": stt_ctx.model_dump(),
+                        "llm_instructions": llm_instr,
+                    },
+                },
+            )
+            if text.strip():
+                chat_ctx.add_message(role="system", content=text)
 
     def _on_pipeline_reply_done(self, _: asyncio.Task[None]) -> None:
         if not self._speech_q and (not self._current_speech or self._current_speech.done()):
@@ -2454,7 +2462,13 @@ class AgentActivity(RecognitionHooks):
         current_span = trace.get_current_span(context=speech_handle._agent_turn_context)
         current_span.set_attribute(trace_types.ATTR_SPEECH_ID, speech_handle.id)
         if instructions is not None:
-            current_span.set_attribute(trace_types.ATTR_INSTRUCTIONS, str(instructions))
+            turn_modality = speech_handle.input_details.modality
+            instr_trace = (
+                instructions.render(modality=turn_modality)
+                if isinstance(instructions, Instructions)
+                else instructions
+            )
+            current_span.set_attribute(trace_types.ATTR_INSTRUCTIONS, instr_trace)
         if new_message:
             current_span.set_attribute(trace_types.ATTR_USER_INPUT, new_message.text_content or "")
 
@@ -2477,7 +2491,7 @@ class AgentActivity(RecognitionHooks):
         turn_modality = speech_handle.input_details.modality
         if instructions is not None:
             instr_text = (
-                instructions.as_modality(turn_modality)
+                instructions.render(modality=turn_modality)
                 if isinstance(instructions, Instructions)
                 else instructions
             )
@@ -2491,11 +2505,9 @@ class AgentActivity(RecognitionHooks):
             )
 
         # inject expressiveness instructions (TTS markup guide + speaker context)
-        _expressiveness = self._agent.expressiveness
-        if not utils.is_given(_expressiveness):
-            _expressiveness = self._session.options.expressiveness
-        if _expressiveness:
-            self._inject_expressiveness_instructions(chat_ctx)
+        _expr_opts = self._resolve_expressiveness_options()
+        if _expr_opts is not None:
+            self._inject_expressiveness_instructions(chat_ctx, _expr_opts, speech_handle)
 
         # TODO(theomonnom): since pause is closing STT/LLM/TTS, we have issues for SpeechHandle still in queue  # noqa: E501
         # I should implement a retry mechanism?
@@ -2593,12 +2605,7 @@ class AgentActivity(RecognitionHooks):
 
         reply_started_at = time.time()
 
-        _strip_markup = False
-        _expressive = self._agent.expressiveness
-        if not utils.is_given(_expressive):
-            _expressive = self._session.options.expressiveness
-        if _expressive and self.tts:
-            _strip_markup = True
+        _strip_markup = self.tts is not None and self._resolve_expressiveness_options() is not None
 
         async def _read_text(
             llm_output: AsyncIterable[str | FlushSentinel | BaseModel],
@@ -2777,10 +2784,7 @@ class AgentActivity(RecognitionHooks):
         if forwarded_text:
             # strip TTS markup from transcript/chat history (only when expressiveness
             # injected markup instructions into the LLM context)
-            _is_expressive = self._agent.expressiveness
-            if not utils.is_given(_is_expressive):
-                _is_expressive = self._session.options.expressiveness
-            if self.tts and _is_expressive:
+            if self.tts and self._resolve_expressiveness_options() is not None:
                 forwarded_text = self.tts.markup.to_text(forwarded_text)
 
             extra_kwargs: dict = {}
