@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import io
+import wave
 
 import pytest
 
@@ -15,11 +17,24 @@ def _make_pcm(sample_rate: int, num_channels: int, duration_ms: int) -> bytes:
     return b"\x00\x00" * num_samples
 
 
+def _make_wav(sample_rate: int, num_channels: int, duration_ms: int) -> bytes:
+    num_samples = sample_rate * duration_ms // 1000
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(num_channels)
+        w.setsampwidth(2)
+        w.setframerate(sample_rate)
+        w.writeframes(b"\x00\x00" * (num_samples * num_channels))
+    return buf.getvalue()
+
+
 SR = 24000
 NC = 1
 
 
-async def _run_emitter(produce_fn, *, stream: bool = False, expect_finals: int = 1):
+async def _run_emitter(
+    produce_fn, *, stream: bool = False, expect_finals: int = 1, mime_type: str = "audio/pcm"
+):
     """Run emitter, collect events until we've seen expect_finals is_final events."""
     dst_ch = utils.aio.Chan[tts.SynthesizedAudio]()
     emitter = tts.AudioEmitter(label="test", dst_ch=dst_ch)
@@ -27,7 +42,7 @@ async def _run_emitter(produce_fn, *, stream: bool = False, expect_finals: int =
         request_id="req1",
         sample_rate=SR,
         num_channels=NC,
-        mime_type="audio/pcm",
+        mime_type=mime_type,
         stream=stream,
     )
 
@@ -190,6 +205,47 @@ async def test_marker_does_not_inflate_duration():
     emitter, events = await _run_emitter(produce)
     assert events[-1].is_final
     assert abs(emitter.pushed_duration() - 0.1) < 0.02
+
+
+@pytest.mark.asyncio
+async def test_flush_mid_stream_preserves_decoder_state():
+    """Regression: flush() between two chunks of the same encoded stream must not
+    tear the decoder down.
+
+    A stateful codec (WAV/OGG/MP3) parses headers once; if the FlushSegment branch
+    in the decoder path discards the decoder, the next chunk — which is mid-file
+    payload (raw PCM continuation, no RIFF) — gets fed to a fresh decoder that
+    expects a header and fails. The user-visible symptom is
+    ``ValueError: Invalid WAV file: missing RIFF/WAVE: ...`` and silent audio loss.
+
+    flush() must release the held-back tail without touching the decoder.
+    """
+    duration_ms = 500
+    wav = _make_wav(SR, NC, duration_ms)
+    # Split somewhere inside the data chunk so chunk2 has no RIFF header — this is
+    # the exact shape the streaming decoder branch must handle.
+    split = 100
+    chunk1, chunk2 = wav[:split], wav[split:]
+    assert chunk1[:4] == b"RIFF"
+    assert chunk2[:4] != b"RIFF"
+
+    def produce(e):
+        e.push(chunk1)
+        e.flush()
+        e.push(chunk2)
+        e.end_input()
+
+    emitter, events = await _run_emitter(produce, mime_type="audio/wav")
+
+    expected_samples = SR * duration_ms // 1000
+    total_samples = sum(ev.frame.samples_per_channel for ev in events)
+    # Accept a small tolerance for the trailing-tail handling, but anything close
+    # to the full payload means the decoder survived the flush. Pre-fix this
+    # would drop nearly everything (a few hundred samples of pre-flush audio).
+    assert total_samples >= int(expected_samples * 0.95), (
+        f"lost samples after mid-stream flush: got {total_samples}, expected ~{expected_samples}"
+    )
+    assert events[-1].is_final
 
 
 @pytest.mark.asyncio

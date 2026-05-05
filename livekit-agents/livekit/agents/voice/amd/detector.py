@@ -312,16 +312,15 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             )
             if self._classifier:
                 self._classifier.start_timers()
-            return
-
-        await wait_for_track_publication(
-            room=session._room_io.room,
-            identity=self._participant_identity or None,
-            kind=rtc.TrackKind.KIND_AUDIO,
-            wait_for_subscription=True,
-        )
-        if not self._closed and self._classifier:
-            self._classifier.start_timers()
+        else:
+            await wait_for_track_publication(
+                room=session._room_io.room,
+                identity=self._participant_identity or None,
+                kind=rtc.TrackKind.KIND_AUDIO,
+                wait_for_subscription=True,
+            )
+            if not self._closed and self._classifier:
+                self._classifier.start_timers()
 
         if is_given(self._stt) and not self._closed:
             logger.debug("starting amd stt pipeline")

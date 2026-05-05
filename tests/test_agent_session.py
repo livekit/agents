@@ -1017,18 +1017,34 @@ async def _close_test_session(session: object) -> None:
 
 
 def check_timestamp(
-    t_event: float, t_target: float, *, speed_factor: float = 1.0, max_abs_diff: float = 0.75
+    t_event: float,
+    t_target: float,
+    *,
+    speed_factor: float = 1.0,
+    max_abs_diff: float = 0.75,
+    min_real_time_diff: float = 0.3,
 ) -> None:
     """
     Check if the event timestamp is within the target timestamp +/- max_abs_diff.
     The event timestamp is scaled by the speed factor.
+
+    ``max_abs_diff`` is expressed in scaled time. A real-time floor of
+    ``min_real_time_diff`` (wallclock seconds) is also applied so high
+    ``speed_factor`` values don't compress the effective tolerance below the
+    scheduling-jitter noise floor on CI runners — without this, the real-time
+    tolerance is ``max_abs_diff / speed_factor``, which at speed=5 is only
+    150 ms and routinely flakes.
     """
-    t_event = t_event * speed_factor
+    t_event_scaled = t_event * speed_factor
+    effective_diff = max(max_abs_diff, min_real_time_diff * speed_factor)
     print(
-        f"check_timestamp: t_event: {t_event}, t_target: {t_target}, max_abs_diff: {max_abs_diff}"
+        f"check_timestamp: t_event={t_event_scaled} (real {t_event:.3f}s), "
+        f"t_target={t_target}, effective_diff={effective_diff} "
+        f"(max_abs_diff={max_abs_diff}, min_real_time_diff={min_real_time_diff})"
     )
-    assert abs(t_event - t_target) <= max_abs_diff, (
-        f"event timestamp {t_event} is not within {max_abs_diff} of target {t_target}"
+    assert abs(t_event_scaled - t_target) <= effective_diff, (
+        f"event timestamp {t_event_scaled} is not within {effective_diff} of target {t_target} "
+        f"(real-time tolerance {effective_diff / speed_factor:.3f}s)"
     )
 
 
