@@ -9,11 +9,14 @@ Provider docs:
 - Cartesia: https://docs.cartesia.ai/build-with-cartesia/sonic-3/volume-speed-emotion
 - Cartesia: https://docs.cartesia.ai/build-with-cartesia/sonic-3/prompting-tips
 - ElevenLabs: https://elevenlabs.io/docs/overview/capabilities/text-to-speech/best-practices
+- Inworld: https://docs.inworld.ai/tts/realtime-tts-2-preview
 """
 
 from __future__ import annotations
 
-from .markup_utils import strip_xml_tags
+from .markup_utils import convert_expression_tags, strip_bracket_tags, strip_xml_tags
+
+# -- Cartesia (native XML) ---------------------------------------------------
 
 _CARTESIA_TAGS = ["emotion", "speed", "volume", "break", "spell"]
 
@@ -60,6 +63,8 @@ Examples:
   Your confirmation code is <spell>A7X9</spell>.
   Hold on. <break time="1s"/> Alright, I've got it."""
 
+# -- ElevenLabs v2/v2.5 (native XML SSML) ------------------------------------
+
 _ELEVENLABS_TAGS = ["break", "phoneme"]
 
 _ELEVENLABS_LLM_INSTRUCTIONS = """\
@@ -93,6 +98,91 @@ Examples:
   The total is forty-two dollars and fifty cents.
   Say <phoneme alphabet="cmu-arpabet" ph="M AE1 D IH0 S AH0 N">Madison</phoneme>."""
 
+# -- ElevenLabs v3 (uses <expression> → converted to [] by plugin) -----------
+
+_ELEVENLABS_V3_TAGS = ["expression"]
+
+_ELEVENLABS_V3_LLM_INSTRUCTIONS = """\
+Normalize all numbers, symbols, and abbreviations so they read naturally when spoken aloud:
+  $42.50 → forty-two dollars and fifty cents
+  555-555-5555 → five five five, five five five, five five five five
+  Dr. → Doctor, Ave. → Avenue, St. → Street
+  100% → one hundred percent
+  14:30 → two thirty PM
+  2024-01-01 → January first, two thousand twenty-four
+
+You can control your vocal delivery using expression tags. Place them before \
+the text they affect:
+  <expression value="EXPRESSION"/>
+
+Available expressions:
+  Emotions: laughs, chuckles, whispers, sighs, crying, excited, happy, sad, \
+angry, annoyed, sarcastic, curious, surprised, thoughtful, mischievously, \
+appalled, muttering.
+  Non-verbal: exhales, exhales sharply, inhales deeply, clears throat, snorts, \
+swallows, gulps.
+  Pauses: short pause, long pause.
+
+Use CAPITALIZATION for word-level emphasis: "I told you NOT to do that."
+
+Tips:
+- Convey emotions through both expression tags and word choice.
+- Use punctuation for natural pacing — ellipses (...) add hesitant pauses.
+- Always expand abbreviations and numbers into spoken form.
+
+Examples:
+  <expression value="excited"/> I can't believe we actually did it!
+  <expression value="whispers"/> Don't tell anyone, but I think we're lost.
+  <expression value="sighs"/> I suppose you're right.
+  <expression value="laughs"/> That's the funniest thing I've heard all day.
+  <expression value="short pause"/> Alright, let me think about that."""
+
+# -- Inworld TTS 2 (uses <expression> → converted to [] by plugin) -----------
+
+_INWORLD_TAGS = ["expression"]
+
+_INWORLD_LLM_INSTRUCTIONS = """\
+Normalize all numbers, symbols, and abbreviations for spoken clarity:
+  $42.50 → forty-two dollars and fifty cents
+  Dr. → Doctor, Ave. → Avenue
+  100% → one hundred percent
+  14:30 → two thirty PM
+  github.com/inworld → github dot com slash inworld
+
+You can control your vocal delivery using expression tags. Place them before \
+the text they affect. Descriptions can be detailed and natural:
+  <expression value="DESCRIPTION"/>
+
+Emotions and delivery:
+  <expression value="say excitedly"/>
+  <expression value="sound sad"/>
+  <expression value="speak as if barely holding back rage"/>
+  <expression value="whisper gently"/>
+  <expression value="say with a falling pitch"/>
+  <expression value="very quiet"/>
+  <expression value="very fast"/>
+
+Non-verbal sounds (place inline where they occur naturally):
+  <expression value="laugh"/>
+  <expression value="sigh"/>
+  <expression value="clear throat"/>
+  <expression value="cough"/>
+
+Use CAPITALIZATION for word-level emphasis: "I told you NOT to do that."
+
+Tips:
+- Longer, descriptive instructions work better than single words.
+- Combine qualities: <expression value="say sadly with deliberate pauses in a low voice"/>
+- Don't combine contradictory directions (e.g., whisper + very loud).
+- Use contractions for conversational tone (don't, can't, I'm).
+- No markdown, bullet points, or emojis — write natural spoken sentences.
+
+Examples:
+  <expression value="say excitedly"/> I can't believe we actually did it!
+  <expression value="sound concerned"/> Are you sure you're okay?
+  I was just about to tell you <expression value="laugh"/> that's the funniest thing I've heard.
+  <expression value="slow and hushed with every word weighted by grief"/> I'm so sorry for your loss."""
+
 
 def llm_instructions(provider: str) -> str | None:
     """Return LLM instruction text for a TTS provider."""
@@ -100,6 +190,10 @@ def llm_instructions(provider: str) -> str | None:
         return _CARTESIA_LLM_INSTRUCTIONS
     elif provider == "elevenlabs":
         return _ELEVENLABS_LLM_INSTRUCTIONS
+    elif provider == "elevenlabs_v3":
+        return _ELEVENLABS_V3_LLM_INSTRUCTIONS
+    elif provider == "inworld":
+        return _INWORLD_LLM_INSTRUCTIONS
     return None
 
 
@@ -109,4 +203,19 @@ def strip_markup(provider: str, text: str) -> str:
         return strip_xml_tags(text, _CARTESIA_TAGS)
     elif provider == "elevenlabs":
         return strip_xml_tags(text, _ELEVENLABS_TAGS)
+    elif provider in ("elevenlabs_v3", "inworld"):
+        text = strip_xml_tags(text, ["expression"])
+        return strip_bracket_tags(text)
+    return text
+
+
+def convert_markup(provider: str, text: str) -> str:
+    """Convert framework-standard markup to provider's native format.
+
+    Providers using native XML (Cartesia, ElevenLabs v2) need no conversion.
+    Providers using square brackets (ElevenLabs v3, Inworld) have their
+    ``<expression value="..."/>`` tags converted to ``[...]``.
+    """
+    if provider in ("elevenlabs_v3", "inworld"):
+        return convert_expression_tags(text)
     return text

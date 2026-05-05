@@ -94,6 +94,15 @@ class TTS(
             """
             return text
 
+        def convert(self, text: str) -> str:
+            """Convert framework-standard markup to the provider's native format.
+
+            Called before text is sent to the TTS. The default is a no-op.
+            Plugins that use non-XML formats (e.g. square brackets) override this
+            to convert ``<expression value="..."/>`` tags to their native syntax.
+            """
+            return text
+
     def __init__(
         self,
         *,
