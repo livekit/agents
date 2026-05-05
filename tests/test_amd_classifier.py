@@ -47,7 +47,7 @@ class TestAMDClassifier:
         clf = _make_classifier(human_silence_threshold=0.1)
         clf.start()
         results: list[AMDPredictionEvent] = []
-        clf.on("amd_result", results.append)
+        clf.on("amd_prediction", results.append)
 
         clf.on_user_speech_started()
         await asyncio.sleep(0.05)
@@ -73,7 +73,7 @@ class TestAMDClassifier:
         clf = _make_classifier(human_silence_threshold=0.1, machine_silence_threshold=0.3)
         clf.start()
         results: list[AMDPredictionEvent] = []
-        clf.on("amd_result", results.append)
+        clf.on("amd_prediction", results.append)
 
         clf.on_user_speech_started()
         await asyncio.sleep(0.05)
@@ -233,7 +233,7 @@ class TestAMDClassifier:
         clf = _make_classifier(llm=llm, human_silence_threshold=0.1, machine_silence_threshold=0.3)
         clf.start()
         results: list[AMDPredictionEvent] = []
-        clf.on("amd_result", results.append)
+        clf.on("amd_prediction", results.append)
 
         clf.on_user_speech_started()
         await asyncio.sleep(0.05)
