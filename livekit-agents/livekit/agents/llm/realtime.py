@@ -74,6 +74,13 @@ class RealtimeCapabilities:
     """Whether the tool and tool choice can be specified per response"""
     supports_say: bool = False
     """Whether the model supports session.say()"""
+    ephemeral_response: bool = False
+    """Whether the model honors ``add_to_chat_ctx=False`` on ``generate_reply``
+    by producing the response without polluting the substrate's persistent
+    conversation state. Plugins that set this to ``True`` must also suppress
+    local-context writes for the assistant turn (handled in
+    ``AgentActivity._realtime_generation_task_impl``).
+    """
 
 
 class RealtimeError(Exception):
@@ -218,9 +225,31 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
         self,
         *,
         instructions: NotGivenOr[str] = NOT_GIVEN,
+        add_to_chat_ctx: bool = True,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
-    ) -> asyncio.Future[GenerationCreatedEvent]: ...  # can raise RealtimeError on Timeout
+    ) -> asyncio.Future[GenerationCreatedEvent]:
+        """Trigger a model response.
+
+        When ``add_to_chat_ctx`` is False, the resulting assistant turn is not
+        written to the agent's local chat context AND, for plugins that
+        declare ``RealtimeCapabilities.ephemeral_response=True``, is generated
+        in a way that does not pollute the substrate's persistent conversation
+        state. Plugins that do not declare the capability emit a
+        ``DeprecationWarning`` from the dispatcher and fall back to
+        ``add_to_chat_ctx=True`` behavior.
+
+        Concurrency
+        -----------
+        A ``RealtimeSession`` allows at most one in-flight isolated call
+        (``add_to_chat_ctx=False``) at a time. Issuing a second isolated call
+        while the first is in flight raises ``RuntimeError`` with diagnostic
+        context (in-flight ``client_event_id``, ``response_id``, and
+        elapsed-since-issue); callers MUST await the prior call's future
+        before issuing the next. Default ``add_to_chat_ctx=True`` calls
+        retain their existing concurrency semantics.
+        """  # can raise RealtimeError on Timeout
+        ...
 
     # commit the input audio buffer to the server
     @abstractmethod

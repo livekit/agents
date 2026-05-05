@@ -1133,6 +1133,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         *,
         user_input: NotGivenOr[str | llm.ChatMessage] = NOT_GIVEN,
         instructions: NotGivenOr[str | Instructions] = NOT_GIVEN,
+        add_to_chat_ctx: bool = True,
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         tools: NotGivenOr[list[str]] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
@@ -1145,6 +1146,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             user_input (NotGivenOr[str | llm.ChatMessage], optional): The user's input that may influence the reply,
                 such as answering a question.
             instructions (NotGivenOr[str], optional): Additional instructions for generating the reply.
+            add_to_chat_ctx (bool, optional): When ``False`` and the underlying LLM is a
+                ``RealtimeModel`` whose plugin declares ``RealtimeCapabilities.ephemeral_response=True``,
+                the rendered assistant turn is not written to the agent's local chat context AND is
+                generated in a way that does not pollute the substrate's persistent conversation state.
+                Plugins that do not declare the capability emit a ``DeprecationWarning`` and fall back to
+                ``add_to_chat_ctx=True`` behavior. Combining ``add_to_chat_ctx=False`` with a non-realtime
+                LLM raises ``NotImplementedError``. Default ``True`` preserves existing behavior.
+
+                Concurrency: a session allows at most one in-flight isolated call at a time. Issuing a
+                second isolated call while the first is in flight raises ``RuntimeError``; await the
+                prior call's future first.
             tool_choice (NotGivenOr[llm.ToolChoice], optional): Specifies the external tool to use when
                 generating the reply. If generate_reply is invoked within a function_tool, defaults to "none".
             tools (NotGivenOr[list[str]], optional): List of tool IDs to make available for this response.
@@ -1159,6 +1171,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         Returns:
             SpeechHandle: A handle to the generated reply.
         """  # noqa: E501
+        if not add_to_chat_ctx and not isinstance(self._llm, llm.RealtimeModel):
+            raise NotImplementedError(
+                "add_to_chat_ctx=False is only supported for RealtimeModel "
+                "(out-of-band response generation). Pipeline LLM dispatch with "
+                "add_to_chat_ctx=False is not yet implemented; file an issue if "
+                "you need this."
+            )
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
 
@@ -1183,6 +1202,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             handle = activity._generate_reply(
                 user_message=user_message if user_message else None,
                 instructions=instructions,
+                add_to_chat_ctx=add_to_chat_ctx,
                 tool_choice=tool_choice,
                 tools=tools,
                 allow_interruptions=allow_interruptions,
