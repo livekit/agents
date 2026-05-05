@@ -269,7 +269,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
                     category=category,
                     reason=reason,
                     transcript="",
-                    delay=time.time() - (self._speech_ended_at or time.time()),
+                    delay=(time.time() - self._speech_ended_at) if self._speech_ended_at else 0.0,
                 )
             )
 
@@ -330,7 +330,9 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
                         category=label,
                         reason="llm",
                         transcript=ctx["transcript"],
-                        delay=time.time() - (self._speech_ended_at or time.time()),
+                        delay=(time.time() - self._speech_ended_at)
+                        if self._speech_ended_at
+                        else 0.0,
                     )
                 )
 
