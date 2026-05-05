@@ -2,7 +2,7 @@
 
 Support for Soniox [Speech-to-Text](https://soniox.com/docs/stt) and [Text-to-Speech](https://soniox.com/docs/tts) APIs, using WebSocket streaming interfaces.
 
-See [STT documentation](https://docs.livekit.io/agents/integrations/stt/soniox/) and [TTS documentation](https://docs.livekit.io/agents/integrations/tts/soniox/) for more information.
+See [STT documentation](https://docs.livekit.io/agents/models/stt/soniox/) and [TTS documentation](https://docs.livekit.io/agents/models/tts/soniox/) for more information.
 
 ## Installation
 
