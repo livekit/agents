@@ -76,7 +76,7 @@ from .generation import (
     update_instructions,
 )
 from .speech_handle import DEFAULT_INPUT_DETAILS, InputDetails, SpeechHandle
-from .turn import EndpointingOptions, TurnDetectionMode
+from .turn import EndpointingOptions, TurnDetectionMode, UserStateSource
 
 if TYPE_CHECKING:
     from ..llm import mcp
@@ -199,6 +199,23 @@ class AgentActivity(RecognitionHooks):
             else self._session.turn_detection
         )
         self._turn_detection = self._validate_turn_detection(turn_detection)
+
+        # validate + resolve user_state_source locally (don't mutate session)
+        self._user_state_source: UserStateSource = self._session.user_state_source
+        if self._user_state_source == "stt" and not self.stt:
+            logger.warning(
+                "user_state_source is set to 'stt', but no STT model is provided. "
+                "STT events will never fire, so user_state will be stuck. "
+                "Falling back to 'auto'."
+            )
+            self._user_state_source = "auto"
+        elif self._user_state_source == "vad" and not self.vad:
+            logger.warning(
+                "user_state_source is set to 'vad', but no VAD model is provided. "
+                "VAD events will never fire, so user_state will be stuck. "
+                "Falling back to 'auto'."
+            )
+            self._user_state_source = "auto"
 
         self._interruption_detector: inference.AdaptiveInterruptionDetector | None = (
             self._resolve_interruption_detection()
@@ -444,6 +461,7 @@ class AgentActivity(RecognitionHooks):
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         endpointing_opts: NotGivenOr[EndpointingOptions] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
+        user_state_source: NotGivenOr[UserStateSource] = NOT_GIVEN,
         # deprecated
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
@@ -469,6 +487,21 @@ class AgentActivity(RecognitionHooks):
         if self._rt_session is not None:
             self._rt_session.update_options(tool_choice=self._tool_choice)
 
+        if utils.is_given(user_state_source):
+            if user_state_source == "stt" and not self.stt:
+                logger.warning(
+                    "user_state_source is set to 'stt', but no STT model is provided. "
+                    "Falling back to 'auto'."
+                )
+                user_state_source = "auto"
+            elif user_state_source == "vad" and not self.vad:
+                logger.warning(
+                    "user_state_source is set to 'vad', but no VAD model is provided. "
+                    "Falling back to 'auto'."
+                )
+                user_state_source = "auto"
+            self._user_state_source = user_state_source
+
         if utils.is_given(turn_detection):
             turn_detection = self._validate_turn_detection(turn_detection)
 
@@ -490,6 +523,9 @@ class AgentActivity(RecognitionHooks):
                 if is_given(endpointing_opts)
                 else NOT_GIVEN,
                 turn_detection=turn_detection,
+                user_state_source=self._user_state_source
+                if utils.is_given(user_state_source)
+                else NOT_GIVEN,
             )
 
     def _create_speech_task(
@@ -784,6 +820,7 @@ class AgentActivity(RecognitionHooks):
             interruption_detection=self._interruption_detector,
             endpointing=create_endpointing(self.endpointing_opts),
             turn_detection=self._turn_detection,
+            user_state_source=self._user_state_source,
             stt_model=self.stt.model if self.stt else None,
             stt_provider=self.stt.provider if self.stt else None,
         )
@@ -1659,12 +1696,27 @@ class AgentActivity(RecognitionHooks):
 
     # region recognition hooks
 
+    def _should_update_user_state(self, from_vad: bool) -> bool:
+        """Whether this event source should drive ``user_state`` transitions."""
+        if self._user_state_source == "vad":
+            return from_vad
+        if self._user_state_source == "stt":
+            return not from_vad
+        # "auto": VAD drives unless turn_detection is "stt"
+        if from_vad:
+            td = self._turn_detection
+            return not (isinstance(td, str) and td == "stt")
+        else:
+            td = self._turn_detection
+            return isinstance(td, str) and td == "stt"
+
     def on_start_of_speech(
         self,
         ev: vad.VADEvent | None,
         speech_start_time: float,
     ) -> None:
-        self._session._update_user_state("speaking", last_speaking_time=speech_start_time)
+        if self._should_update_user_state(from_vad=ev is not None):
+            self._session._update_user_state("speaking", last_speaking_time=speech_start_time)
         if self._audio_recognition:
             self._audio_recognition.on_start_of_speech(
                 started_at=speech_start_time,
@@ -1695,7 +1747,7 @@ class AgentActivity(RecognitionHooks):
             self._update_paused_speech(current_speech, timeout=0)
             audio_output.pause()
 
-    def on_end_of_speech(self, ev: vad.VADEvent | None) -> None:
+    def on_end_of_speech(self, ev: vad.VADEvent | None, *, force: bool = False) -> None:
         speech_end_time = time.time()
         if ev:
             speech_end_time = speech_end_time - ev.silence_duration - ev.inference_duration
@@ -1711,14 +1763,25 @@ class AgentActivity(RecognitionHooks):
                 else NOT_GIVEN,
             )
 
-        self._session._update_user_state(
-            "listening",
-            last_speaking_time=speech_end_time,
-        )
+        if force or self._should_update_user_state(from_vad=ev is not None):
+            self._session._update_user_state(
+                "listening",
+                last_speaking_time=speech_end_time,
+            )
         self._user_silence_event.set()
 
         if self._paused_speech:
             self._start_false_interruption_timer(self._paused_speech.timeout)
+
+    def on_stt_speech_started(self) -> None:
+        """Notify that STT detected speech start (without triggering endpointing)."""
+        self._stt_eos_received = False
+        self._user_silence_event.clear()
+
+    def on_stt_speech_ended(self) -> None:
+        """Notify that STT detected speech end (without triggering endpointing)."""
+        self._stt_eos_received = True
+        self._user_silence_event.set()
 
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None:
         if self._turn_detection in ("manual", "realtime_llm"):

@@ -43,6 +43,18 @@ The mode of turn detection to use.
 If the needed model (VAD, STT, or RealtimeModel) is not provided, fallback to the default mode.
 """
 
+UserStateSource = Literal["vad", "stt", "auto"]
+"""
+Controls which signal drives the ``user_state`` machine (``"speaking"`` / ``"listening"``).
+
+- ``"vad"``: VAD always drives ``user_state`` (original default behavior).
+- ``"stt"``: only STT events drive ``user_state``; VAD still runs for interruption
+  detection but does **not** flip ``user_state``. Useful in noisy environments where
+  VAD fires on background noise that produces no transcript.
+- ``"auto"`` *(default)*: VAD drives ``user_state`` unless ``turn_detection`` is
+  ``"stt"``, in which case STT drives it. Preserves backward-compatible behavior.
+"""
+
 
 class EndpointingOptions(TypedDict, total=False):
     """Configuration for endpointing.
@@ -176,6 +188,9 @@ class TurnHandlingOptions(TypedDict, total=False):
     turn_detection: TurnDetectionMode | None
     """Strategy for deciding when the user has finished speaking.
     Absent means the session auto-selects."""
+    user_state_source: UserStateSource
+    """Which signal drives the ``user_state`` machine (``"speaking"``/``"listening"``).
+    Defaults to ``"auto"``."""
     endpointing: EndpointingOptions
     """Endpointing configuration. Defaults to ``{"min_delay": 0.5, "max_delay": 3.0}``."""
     interruption: InterruptionOptions

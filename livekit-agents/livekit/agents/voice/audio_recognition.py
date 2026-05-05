@@ -30,7 +30,7 @@ from ..utils import aio, is_given
 from . import io
 from ._utils import _set_participant_attributes
 from .endpointing import BaseEndpointing
-from .turn import TurnDetectionMode as TurnDetectionMode
+from .turn import TurnDetectionMode as TurnDetectionMode, UserStateSource as UserStateSource
 
 if TYPE_CHECKING:
     from .agent_session import AgentSession
@@ -65,7 +65,9 @@ class RecognitionHooks(Protocol):
     def on_interruption(self, ev: inference.OverlappingSpeechEvent) -> None: ...
     def on_start_of_speech(self, ev: vad.VADEvent | None, speech_start_time: float) -> None: ...
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None: ...
-    def on_end_of_speech(self, ev: vad.VADEvent | None) -> None: ...
+    def on_end_of_speech(self, ev: vad.VADEvent | None, *, force: bool = False) -> None: ...
+    def on_stt_speech_started(self) -> None: ...
+    def on_stt_speech_ended(self) -> None: ...
     def on_interim_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None) -> None: ...
     def on_final_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None = None) -> None: ...
     def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool: ...
@@ -133,6 +135,7 @@ class AudioRecognition:
         vad: vad.VAD | None,
         interruption_detection: inference.AdaptiveInterruptionDetector | None,
         turn_detection: TurnDetectionMode | None,
+        user_state_source: UserStateSource = "auto",
         stt_model: str | None = None,
         stt_provider: str | None = None,
     ) -> None:
@@ -151,6 +154,7 @@ class AudioRecognition:
         self._stt_provider = stt_provider
         self._turn_detection_mode = turn_detection if isinstance(turn_detection, str) else None
         self._vad_base_turn_detection = self._turn_detection_mode in ("vad", None)
+        self._user_state_source: UserStateSource = user_state_source
         self._user_turn_committed = False  # true if user turn ended but EOU task not done
 
         self._sample_rate: int | None = None
@@ -206,17 +210,37 @@ class AudioRecognition:
 
         self._vad_speech_started: bool = False
 
+    @property
+    def _stt_drives_user_state(self) -> bool:
+        """Whether STT START/END_OF_SPEECH events should call user-state hooks.
+
+        - ``"stt"``: always ``True`` - STT drives ``user_state`` regardless of
+          ``turn_detection`` mode.
+        - ``"vad"``: always ``False`` - VAD drives ``user_state``.
+        - ``"auto"``: ``True`` only when ``turn_detection`` is ``"stt"``.
+        """
+        if self._user_state_source == "stt":
+            return True
+        if self._user_state_source == "vad":
+            return False
+        # "auto": STT drives only when turn_detection mode is "stt"
+        return self._turn_detection_mode == "stt"
+
     def update_options(
         self,
         *,
         endpointing: NotGivenOr[BaseEndpointing] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
+        user_state_source: NotGivenOr[UserStateSource] = NOT_GIVEN,
         # deprecated
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if is_given(endpointing):
             self._endpointing = endpointing
+
+        if is_given(user_state_source):
+            self._user_state_source = user_state_source
 
         if is_given(turn_detection):
             self._turn_detector = turn_detection if not isinstance(turn_detection, str) else None
@@ -923,44 +947,61 @@ class AudioRecognition:
             )
             self._audio_interim_transcript = ev.alternatives[0].text
 
-        elif ev.type == stt.SpeechEventType.END_OF_SPEECH and self._turn_detection_mode == "stt":
-            with trace.use_span(self._ensure_user_turn_span()):
-                self._hooks.on_end_of_speech(None)
+        elif ev.type == stt.SpeechEventType.END_OF_SPEECH and (
+            self._stt_drives_user_state or self._turn_detection_mode == "stt"
+        ):
+            # Notify activity of STT speech end (sets _stt_eos_received, etc.)
+            # without triggering duplicate endpointing — VAD hooks handle those.
+            self._hooks.on_stt_speech_ended()
 
-            # STT EOT changes user state from speaking to listening without updating VAD internal states
-            # VAD EOS will also skip updating user state from listening (STT enforced) to listening (VAD detected)
-            # and user state won't be updated until a new VAD SOS is received
-            # reset VAD so that incorrect end of turn from STT can be corrected by VAD interruption
-            # if user is still speaking (an immediate VAD SOS will interrupt the agent)
-            if self._vad:
+            # user-state: update directly (bypass on_end_of_speech hooks to avoid
+            # duplicate endpointing/overlap notifications)
+            if self._stt_drives_user_state:
+                self._session._update_user_state("listening", last_speaking_time=time.time())
+
+            # turn-detection: reset VAD so incorrect end-of-turn from STT can be
+            # corrected by a VAD interruption if the user is still speaking
+            if self._turn_detection_mode == "stt" and self._vad:
                 if self._speaking:
                     logger.warning(
                         "stt end of speech received while user is speaking, resetting vad"
                     )
                 self.update_vad(self._vad)
 
-            self._speaking = False
-            self._user_turn_committed = True
-            if not self._vad or self._last_speaking_time is None:
-                self._last_speaking_time = time.time()
+            # turn-detection: commit turn + EOU (only when turn_detection is "stt")
+            if self._turn_detection_mode == "stt":
+                self._user_turn_committed = True
+                if not self._vad or self._last_speaking_time is None:
+                    self._last_speaking_time = time.time()
 
-            chat_ctx = self._hooks.retrieve_chat_ctx().copy()
-            self._run_eou_detection(chat_ctx)
+                chat_ctx = self._hooks.retrieve_chat_ctx().copy()
+                self._run_eou_detection(chat_ctx)
 
-        elif ev.type == stt.SpeechEventType.START_OF_SPEECH and self._turn_detection_mode == "stt":
+        elif ev.type == stt.SpeechEventType.START_OF_SPEECH and (
+            self._stt_drives_user_state or self._turn_detection_mode == "stt"
+        ):
             # If the plugin provided a server onset timestamp, use it;
             # otherwise fall back to message arrival time.
             if self._speech_start_time is None:
                 self._speech_start_time = ev.speech_start_time or time.time()
 
-            with trace.use_span(self._ensure_user_turn_span(start_time=self._speech_start_time)):
-                self._hooks.on_start_of_speech(None, speech_start_time=self._speech_start_time)
+            # Notify activity of STT speech start (resets _stt_eos_received, etc.)
+            # without triggering duplicate endpointing — VAD hooks handle those.
+            self._hooks.on_stt_speech_started()
 
-            self._speaking = True
-            self._last_speaking_time = time.time()
+            # user-state: update directly (bypass on_start_of_speech hooks to avoid
+            # duplicate endpointing/overlap notifications)
+            if self._stt_drives_user_state:
+                self._session._update_user_state(
+                    "speaking", last_speaking_time=self._speech_start_time
+                )
 
-            if self._end_of_turn_task is not None:
-                self._end_of_turn_task.cancel()
+            # turn-detection: timing + cancel EOU (only when turn_detection is "stt")
+            if self._turn_detection_mode == "stt":
+                self._last_speaking_time = time.time()
+
+                if self._end_of_turn_task is not None:
+                    self._end_of_turn_task.cancel()
 
     @utils.log_exceptions(logger=logger)
     async def _on_vad_event(self, ev: vad.VADEvent) -> None:
@@ -992,10 +1033,11 @@ class AudioRecognition:
                     self._speech_start_time = time.time() - ev.raw_accumulated_speech
 
         elif ev.type == vad.VADEventType.END_OF_SPEECH:
+            self._vad_speech_started = False
+
             with trace.use_span(self._ensure_user_turn_span()):
                 self._hooks.on_end_of_speech(ev)
 
-            self._vad_speech_started = False
             self._speaking = False
 
             if self._vad_base_turn_detection or (
@@ -1221,9 +1263,9 @@ class AudioRecognition:
             # reset the speaking state to prevent stuck user speaking state during handoff
             if self._speaking:
                 with trace.use_span(self._ensure_user_turn_span()):
-                    self._hooks.on_end_of_speech(None)
+                    self._hooks.on_end_of_speech(None, force=True)
                 self._speaking = False
-                self._vad_speech_started = False
+            self._vad_speech_started = False
 
     @utils.log_exceptions(logger=logger)
     async def _interruption_task(
