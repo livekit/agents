@@ -44,6 +44,34 @@ session = AgentSession(
 )
 ```
 
+### LLM-based detector
+
+`LLMTurnDetector` is an additional turn-detection option that delegates the
+classification call to any `livekit.agents.llm.LLM` instance. It plugs into the
+same `turn_detection=` slot as the ONNX models above.
+
+```python
+from livekit.agents import AgentSession
+from livekit.plugins import openai
+from livekit.plugins.turn_detector import LLMTurnDetector
+
+session = AgentSession(
+    ...
+    turn_detection=LLMTurnDetector(llm=openai.LLM(model="gpt-4o-mini")),
+)
+```
+
+Configuration:
+
+- `instructions`: override the default classification prompt (e.g., for
+  domain-specific tuning).
+- `unlikely_threshold` (default `0.5`): probability below which endpointing
+  treats the turn as likely-incomplete and waits longer.
+- `timeout` (default `1.5`): hard cap on the classifier call; on timeout the
+  detector returns a neutral probability rather than blocking the agent.
+- `max_history_turns` (default `6`): how many trailing chat messages are
+  included in the classifier prompt.
+
 ## Running your agent
 
 This plugin requires model files. Before starting your agent for the first time, or when building Docker images for deployment, run the following command to download the model files:

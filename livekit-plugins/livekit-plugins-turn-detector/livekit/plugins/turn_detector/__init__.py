@@ -17,9 +17,10 @@
 See https://docs.livekit.io/agents/build/turns/turn-detector/ for more information.
 """
 
+from .llm_based import LLMTurnDetector
 from .version import __version__
 
-__all__ = ["english", "multilingual", "__version__"]
+__all__ = ["LLMTurnDetector", "english", "multilingual", "__version__"]
 
 
 # Cleanup docs of unexported modules
