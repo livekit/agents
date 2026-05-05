@@ -13,7 +13,7 @@ import time
 from livekit.agents.llm import FunctionToolCall
 from livekit.agents.voice.amd.classifier import (
     AMDCategory,
-    AMDResult,
+    AMDPredictionEvent,
     _AMDClassifier,
 )
 
@@ -46,7 +46,7 @@ class TestAMDClassifier:
         """Short utterance + no STT text => HUMAN/short_greeting verdict."""
         clf = _make_classifier(human_silence_threshold=0.1)
         clf.start()
-        results: list[AMDResult] = []
+        results: list[AMDPredictionEvent] = []
         clf.on("amd_result", results.append)
 
         clf.on_user_speech_started()
@@ -72,7 +72,7 @@ class TestAMDClassifier:
         speech_ended + machine_silence_threshold."""
         clf = _make_classifier(human_silence_threshold=0.1, machine_silence_threshold=0.3)
         clf.start()
-        results: list[AMDResult] = []
+        results: list[AMDPredictionEvent] = []
         clf.on("amd_result", results.append)
 
         clf.on_user_speech_started()
@@ -232,7 +232,7 @@ class TestAMDClassifier:
         )
         clf = _make_classifier(llm=llm, human_silence_threshold=0.1, machine_silence_threshold=0.3)
         clf.start()
-        results: list[AMDResult] = []
+        results: list[AMDPredictionEvent] = []
         clf.on("amd_result", results.append)
 
         clf.on_user_speech_started()

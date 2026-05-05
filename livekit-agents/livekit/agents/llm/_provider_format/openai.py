@@ -37,7 +37,7 @@ def to_chat_ctx(
                 tc["extra_content"] = extra_content
             tool_calls.append(tc)
         if tool_calls:
-            msg["tool_calls"] = tool_calls
+            msg["tool_calls"] = tool_calls  # type: ignore[assignment]
         messages.append(msg)
 
         # append tool outputs following the tool calls

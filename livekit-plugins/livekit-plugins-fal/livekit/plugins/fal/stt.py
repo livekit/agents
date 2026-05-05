@@ -91,4 +91,4 @@ class WizperSTT(stt.STT):
         )
 
     async def aclose(self) -> None:
-        await self._fal_client._client.aclose()
+        await (await self._fal_client._client).aclose()
