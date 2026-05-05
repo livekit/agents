@@ -28,6 +28,7 @@ livekit-plugins-groq = { workspace = true }
 livekit-plugins-hedra = { workspace = true }
 livekit-plugins-hamming = { workspace = true }
 livekit-plugins-hume = { workspace = true }
+livekit-plugins-inception = { workspace = true }
 livekit-plugins-inworld = { workspace = true }
 livekit-plugins-krisp = { workspace = true }
 livekit-plugins-keyframe = { workspace = true }
