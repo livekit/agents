@@ -943,6 +943,7 @@ class TTS(tts.TTS):
         self._pool: _ConnectionPool | None = None
         self._pool_lock = asyncio.Lock()
         self._streams = weakref.WeakSet[SynthesizeStream]()
+        self._markup = self._InworldMarkup(self)
         self._sentence_tokenizer = (
             tokenizer
             if is_given(tokenizer)
@@ -950,6 +951,22 @@ class TTS(tts.TTS):
                 retain_format=retain_format if is_given(retain_format) else True
             )
         )
+
+    class _InworldMarkup(tts.TTS.Markup):
+        def llm_instructions(self) -> str | None:
+            from livekit.agents.tts._provider_format import llm_instructions
+
+            return llm_instructions("inworld")
+
+        def to_text(self, text: str) -> str:
+            from livekit.agents.tts._provider_format import strip_markup
+
+            return strip_markup("inworld", text)
+
+        def convert(self, text: str) -> str:
+            from livekit.agents.tts._provider_format import convert_markup
+
+            return convert_markup("inworld", text)
 
     @property
     def model(self) -> str:
