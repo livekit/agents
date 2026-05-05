@@ -436,6 +436,11 @@ class TTS(tts.TTS):
 
             return strip_markup(self._upstream_provider(), text)
 
+        def convert(self, text: str) -> str:
+            from ..tts._provider_format import convert_markup
+
+            return convert_markup(self._upstream_provider(), text)
+
     @classmethod
     def from_model_string(cls, model: str) -> TTS:
         """Create a TTS instance from a model string

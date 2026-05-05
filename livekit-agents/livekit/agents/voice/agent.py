@@ -534,15 +534,16 @@ class Agent:
             async with wrapped_tts.stream(conn_options=conn_options) as stream:
 
                 async def _forward_input() -> None:
+                    convert = activity.tts.markup.convert if activity.tts else None
                     prev_response = ""
                     async for chunk in text:
                         if isinstance(chunk, str):
-                            stream.push_text(chunk)
+                            stream.push_text(convert(chunk) if convert else chunk)
                         elif isinstance(chunk, BaseModel) and response_field:
                             full_response = getattr(chunk, response_field, "") or ""
                             delta = full_response[len(prev_response) :]
                             if delta:
-                                stream.push_text(delta)
+                                stream.push_text(convert(delta) if convert else delta)
                             prev_response = full_response
 
                     stream.end_input()

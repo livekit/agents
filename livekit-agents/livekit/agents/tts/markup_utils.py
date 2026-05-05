@@ -2,6 +2,18 @@ from __future__ import annotations
 
 import re
 
+_EXPRESSION_RE = re.compile(r'<expression\s+value="([^"]*)"(?:\s*/>|>(?:.*?)</expression>)')
+
+
+def convert_expression_tags(text: str) -> str:
+    """Convert ``<expression value="..."/>`` XML tags to ``[...]`` bracket format."""
+    return _EXPRESSION_RE.sub(lambda m: f"[{m.group(1)}]", text)
+
+
+def strip_bracket_tags(text: str) -> str:
+    """Strip square bracket tags like ``[laughs]``, ``[whisper]`` from text."""
+    return re.sub(r"\[[^\]]+\]", "", text)
+
 
 def strip_xml_tags(text: str, tags: list[str]) -> str:
     """Strip specific XML-style tags from text, preserving their inner content.

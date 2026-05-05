@@ -206,15 +206,26 @@ class TTS(tts.TTS):
         self._connection_lock = asyncio.Lock()
 
     class _ElevenLabsMarkup(tts.TTS.Markup):
+        def _provider_key(self) -> str:
+            model = self._tts.model if hasattr(self._tts, "model") else ""
+            if "v3" in model or "eleven_v3" in model:
+                return "elevenlabs_v3"
+            return "elevenlabs"
+
         def llm_instructions(self) -> str | None:
             from livekit.agents.tts._provider_format import llm_instructions
 
-            return llm_instructions("elevenlabs")
+            return llm_instructions(self._provider_key())
 
         def to_text(self, text: str) -> str:
             from livekit.agents.tts._provider_format import strip_markup
 
-            return strip_markup("elevenlabs", text)
+            return strip_markup(self._provider_key(), text)
+
+        def convert(self, text: str) -> str:
+            from livekit.agents.tts._provider_format import convert_markup
+
+            return convert_markup(self._provider_key(), text)
 
     @property
     def model(self) -> str:
