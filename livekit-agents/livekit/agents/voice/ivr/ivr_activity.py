@@ -38,8 +38,9 @@ class IVRActivity:
     @property
     def tools(self) -> list[llm.FunctionTool | llm.RawFunctionTool]:
         from ...beta.tools.send_dtmf import send_dtmf_events
+        from ...beta.tools.speak_to_ivr import speak_to_ivr
 
-        return [send_dtmf_events]
+        return [send_dtmf_events, speak_to_ivr]
 
     def _on_user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
         if not ev.is_final:
