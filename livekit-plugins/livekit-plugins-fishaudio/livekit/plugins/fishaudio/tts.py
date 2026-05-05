@@ -312,6 +312,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         "User-Agent": USER_AGENT,
                         "model": self._opts.model,
                     },
+                    heartbeat=30.0,
                 ),
                 self._conn_options.timeout,
             )
@@ -378,7 +379,8 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def recv_task() -> None:
             # No per-receive timeout: Fish has natural inter-sentence gaps that
-            # can exceed `_conn_options.timeout` when the LLM is slow.
+            # can exceed `_conn_options.timeout` when the LLM is slow. Dead
+            # connections are detected by aiohttp's ws heartbeat (see ws_connect).
             while True:
                 msg = await ws.receive()
                 if msg.type in (
