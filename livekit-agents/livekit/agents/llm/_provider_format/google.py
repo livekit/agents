@@ -51,12 +51,15 @@ def to_chat_ctx(
 
         if msg.type == "message":
             for content in msg.content:
-                if content and isinstance(content, str):
-                    parts.append({"text": content})
+                if isinstance(content, llm.ImageContent):
+                    parts.append(_to_image_part(content))
+                elif isinstance(content, llm.AudioContent):
+                    pass
                 elif content and isinstance(content, dict):
                     parts.append({"text": json.dumps(content)})
-                elif isinstance(content, llm.ImageContent):
-                    parts.append(_to_image_part(content))
+                elif content:
+                    # str or Instructions
+                    parts.append({"text": str(content)})
         elif msg.type == "function_call":
             fc_part: dict[str, Any] = {
                 "function_call": {

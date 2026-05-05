@@ -952,6 +952,22 @@ class TTS(tts.TTS):
             )
         )
 
+    class Markup(tts.TTS.Markup):
+        def llm_instructions(self) -> str | None:
+            from livekit.agents.tts._provider_format import llm_instructions
+
+            return llm_instructions("inworld")
+
+        def to_text(self, text: str) -> str:
+            from livekit.agents.tts._provider_format import strip_markup
+
+            return strip_markup("inworld", text)
+
+        def convert(self, text: str) -> str:
+            from livekit.agents.tts._provider_format import convert_markup
+
+            return convert_markup("inworld", text)
+
     @property
     def model(self) -> str:
         return self._opts.model

@@ -78,7 +78,7 @@ def _get_latest_instructions(chat_ctx: ChatContext) -> str | None:
     """
     for item in reversed(chat_ctx.items):
         if item.type == "agent_config_update" and item.instructions:
-            return item.instructions
+            return str(item.instructions)
     return None
 
 

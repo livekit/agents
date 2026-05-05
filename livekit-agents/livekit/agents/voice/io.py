@@ -6,6 +6,8 @@ from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Literal
 
+from pydantic import BaseModel
+
 from livekit import rtc
 
 from .. import llm, stt
@@ -33,7 +35,7 @@ LLMNode = Callable[
     | Awaitable[AsyncIterable[llm.ChatChunk | str | FlushSentinel] | str | llm.ChatChunk | None],
 ]
 TTSNode = Callable[
-    [AsyncIterable[str], ModelSettings],
+    [AsyncIterable[str | BaseModel], ModelSettings],
     AsyncIterable[rtc.AudioFrame] | None | Awaitable[AsyncIterable[rtc.AudioFrame] | None],
 ]
 

@@ -537,124 +537,88 @@ def test_truncate_multiple_instructions():
 
 
 def test_instructions_serialization():
-    """Instructions must survive Pydantic validation, to_dict, and from_dict round-trips."""
-    from livekit.agents.beta import Instructions
+    """Instructions is resolved to str before storage in ChatMessage content."""
     from livekit.agents.llm import ChatContext, ChatMessage
+    from livekit.agents.llm.chat_context import Instructions
 
-    # Pydantic preserves Instructions type
-    instr = Instructions("audio variant", text="text variant")
-    msg = ChatMessage(role="system", content=[instr])
-    assert isinstance(msg.content[0], Instructions)
-    assert msg.content[0].text == "text variant"
+    # Instructions is no longer a valid ChatContent type; it must be resolved to str first
+    instr = Instructions("common text", audio="audio addition", text="text addition")
 
-    # to_dict serializes both variants as a dict
-    ctx = ChatContext([ChatMessage(role="system", content=[instr])])
-    data = ctx.to_dict()
+    # str(instr) returns the common text
+    assert str(instr) == "common text"
+
+    # render resolves to a plain string
+    assert instr.render(modality="audio") == "common text\n\naudio addition"
+    assert instr.render(modality="text") == "common text\n\ntext addition"
+
+    # ChatMessage content must be str (Instructions is resolved before storage)
+    resolved = instr.render(modality="audio")
+    msg = ChatMessage(role="system", content=[resolved])
+    assert isinstance(msg.content[0], str)
+    assert msg.content[0] == "common text\n\naudio addition"
+
+    # add_message with Instructions resolves to str(instr) = common
+    ctx = ChatContext()
+    ctx.add_message(role="system", content=instr)
+    assert isinstance(ctx.items[0].content[0], str)
+    assert ctx.items[0].content[0] == "common text"
+
+    # to_dict / from_dict round-trip with resolved str content
+    ctx2 = ChatContext([ChatMessage(role="system", content=[resolved])])
+    data = ctx2.to_dict()
     serialized = data["items"][0]["content"][0]
-    assert isinstance(serialized, dict)
-    assert serialized["audio"] == "audio variant"
-    assert serialized["text"] == "text variant"
+    assert isinstance(serialized, str)
+    assert serialized == "common text\n\naudio addition"
 
-    # from_dict reconstructs Instructions
-    restored = ChatContext.from_dict(ctx.to_dict())
+    restored = ChatContext.from_dict(ctx2.to_dict())
     restored_content = restored.items[0].content[0]
-    assert isinstance(restored_content, Instructions)
-    assert restored_content.audio == "audio variant"
-    assert restored_content.text == "text variant"
+    assert isinstance(restored_content, str)
+    assert restored_content == "common text\n\naudio addition"
 
     # Plain str content stays as str after round-trip
     plain_ctx = ChatContext([ChatMessage(role="user", content=["hello"])])
     plain_restored = ChatContext.from_dict(plain_ctx.to_dict())
     assert type(plain_restored.items[0].content[0]) is str
 
-    # Instructions without text variant round-trips (falls back to audio)
-    audio_only = Instructions("audio only")
-    audio_ctx = ChatContext([ChatMessage(role="system", content=[audio_only])])
-    audio_restored = ChatContext.from_dict(audio_ctx.to_dict())
-    audio_content = audio_restored.items[0].content[0]
-    assert isinstance(audio_content, Instructions)
-    assert audio_content.audio == "audio only"
-    assert audio_content.text == "audio only"
 
+def test_instructions_render():
+    """render() returns a plain str combining common + modality-specific additions."""
+    from livekit.agents.llm.chat_context import Instructions
 
-def test_instructions_string_operations():
-    """Instructions supports + and r+ operations, propagating both variants."""
-    from livekit.agents.beta import Instructions
-
-    # Instructions + Instructions
-    a = Instructions("audio A", text="text A")
-    b = Instructions("audio B", text="text B")
-    result = a + b
-    assert isinstance(result, Instructions)
-    assert result.audio == "audio Aaudio B"
-    assert result.text == "text Atext B"
-
-    # Instructions + str
-    instr = Instructions("audio", text="text")
-    result = instr + " suffix"
-    assert result.audio == "audio suffix"
-    assert result.text == "text suffix"
-
-    # str + Instructions (radd)
-    result = "prefix " + instr
-    assert result.audio == "prefix audio"
-    assert result.text == "prefix text"
-
-    # Adding to Instructions without text variant keeps text=None
-    audio_only = Instructions("audio only")
-    result = audio_only + " more"
-    assert result._text_variant is None
-    assert result.audio == "audio only more"
-
-    # One side has text variant, other doesn't
-    a = Instructions("audio A", text="text A")
-    b = Instructions("audio B")
-    result = a + " " + b
-    assert result.audio == "audio A audio B"
-    assert result.text == "text A audio B"
-
-
-def test_instructions_as_modality():
-    """as_modality() bakes the correct variant into str() while preserving both variants."""
-    from livekit.agents.beta import Instructions
-    from livekit.agents.llm import ChatContext, ChatMessage
-    from livekit.agents.voice.generation import INSTRUCTIONS_MESSAGE_ID, apply_instructions_modality
-
-    instr = Instructions("audio instructions", text="text instructions")
-
-    # as_modality('audio')
-    resolved = instr.as_modality("audio")
-    assert str(resolved) == "audio instructions"
-    assert resolved.audio == "audio instructions"
-    assert resolved.text == "text instructions"
-
-    # as_modality('text')
-    resolved = instr.as_modality("text")
-    assert str(resolved) == "text instructions"
-
-    # Can switch modality after resolving
-    resolved_text = instr.as_modality("text")
-    resolved_audio = resolved_text.as_modality("audio")
-    assert str(resolved_audio) == "audio instructions"
-
-    # Instructions without text variant returns audio for both modalities
-    audio_only = Instructions("audio only")
-    assert str(audio_only.as_modality("audio")) == "audio only"
-    assert str(audio_only.as_modality("text")) == "audio only"
-
-    # apply_instructions_modality() on ChatContext
-    ctx = ChatContext([ChatMessage(id=INSTRUCTIONS_MESSAGE_ID, role="system", content=[instr])])
-    apply_instructions_modality(ctx, modality="audio")
-    assert str(ctx.items[0].content[0]) == "audio instructions"
-    apply_instructions_modality(ctx, modality="text")
-    assert str(ctx.items[0].content[0]) == "text instructions"
-
-    # Re-applying after copy
-    base_ctx = ChatContext(
-        [ChatMessage(id=INSTRUCTIONS_MESSAGE_ID, role="system", content=[instr])]
+    instr = Instructions(
+        "You are a helpful assistant.",
+        audio="Keep responses short for voice.",
+        text="Use markdown formatting.",
     )
-    turn1_ctx = base_ctx.copy()
-    apply_instructions_modality(turn1_ctx, modality="text")
-    turn2_ctx = turn1_ctx.copy()
-    apply_instructions_modality(turn2_ctx, modality="audio")
-    assert str(turn2_ctx.items[0].content[0]) == "audio instructions"
+
+    # render('audio') returns common + audio addition
+    resolved_audio = instr.render(modality="audio")
+    assert isinstance(resolved_audio, str)
+    assert resolved_audio == "You are a helpful assistant.\n\nKeep responses short for voice."
+
+    # render('text') returns common + text addition
+    resolved_text = instr.render(modality="text")
+    assert isinstance(resolved_text, str)
+    assert resolved_text == "You are a helpful assistant.\n\nUse markdown formatting."
+
+    # str(instr) returns just the common text
+    assert str(instr) == "You are a helpful assistant."
+
+    # Instructions without modality additions returns just common for both
+    common_only = Instructions("common only")
+    assert common_only.render(modality="audio") == "common only"
+    assert common_only.render(modality="text") == "common only"
+
+    # Instructions with only one modality addition
+    audio_only = Instructions("base", audio="audio extra")
+    assert audio_only.render(modality="audio") == "base\n\naudio extra"
+    assert audio_only.render(modality="text") == "base"
+
+    text_only = Instructions("base", text="text extra")
+    assert text_only.render(modality="audio") == "base"
+    assert text_only.render(modality="text") == "base\n\ntext extra"
+
+    # Empty common with additions
+    empty_common = Instructions("", audio="audio only", text="text only")
+    assert empty_common.render(modality="audio") == "audio only"
+    assert empty_common.render(modality="text") == "text only"

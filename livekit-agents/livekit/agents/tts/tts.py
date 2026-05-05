@@ -68,6 +68,41 @@ class TTS(
     rtc.EventEmitter[Literal["metrics_collected", "error"] | TEvent],
     Generic[TEvent],
 ):
+    class Markup:
+        """Declares TTS markup capabilities for the expressiveness pipeline.
+
+        Plugins override this inner class to declare what markup tags the TTS supports
+        and how to convert marked-up text back to plain text.
+        """
+
+        def __init__(self, tts: TTS) -> None:
+            self._tts = tts
+
+        def llm_instructions(self) -> str | None:
+            """Return instructions for the LLM describing available markup tags.
+
+            The framework injects this into the LLM system prompt when
+            ``expressiveness=True``.  Return ``None`` if this TTS has no markup support.
+            """
+            return None
+
+        def to_text(self, text: str) -> str:
+            """Strip TTS-specific markup from *text*, returning plain text.
+
+            Used for transcripts streamed to the user and for chat history storage.
+            The TTS itself receives the original marked-up text.
+            """
+            return text
+
+        def convert(self, text: str) -> str:
+            """Convert framework-standard markup to the provider's native format.
+
+            Called before text is sent to the TTS. The default is a no-op.
+            Plugins that use non-XML formats (e.g. square brackets) override this
+            to convert ``<expression value="..."/>`` tags to their native syntax.
+            """
+            return text
+
     def __init__(
         self,
         *,
@@ -80,6 +115,12 @@ class TTS(
         self._sample_rate = sample_rate
         self._num_channels = num_channels
         self._label = f"{type(self).__module__}.{type(self).__name__}"
+        self._markup = self.Markup(self)
+
+    @property
+    def markup(self) -> Markup:
+        """Access TTS markup capabilities (instructions for LLM, text stripping)."""
+        return self._markup
 
     @property
     def label(self) -> str:
