@@ -21,6 +21,7 @@ import os
 import weakref
 from dataclasses import dataclass
 from typing import Any, Literal, TypedDict
+from urllib.parse import quote
 
 import aiohttp
 
@@ -74,6 +75,8 @@ class STTOptions:
     sample_rate: STTRealtimeSampleRates
     server_vad: NotGivenOr[VADOptions | None]
     keyterms: NotGivenOr[list[str]]
+    no_verbatim: NotGivenOr[bool]
+    enable_logging: NotGivenOr[bool]
 
 
 class STT(stt.STT):
@@ -91,6 +94,8 @@ class STT(stt.STT):
         http_session: aiohttp.ClientSession | None = None,
         model_id: NotGivenOr[ElevenLabsSTTModels | str] = NOT_GIVEN,
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
+        no_verbatim: NotGivenOr[bool] = NOT_GIVEN,
+        enable_logging: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of ElevenLabs STT.
@@ -109,9 +114,16 @@ class STT(stt.STT):
             model_id (ElevenLabsSTTModels | str): ElevenLabs STT model to use. If not specified a default model will
                 be selected based on parameters provided.
             keyterms (NotGivenOr[list[str]]): A list of keywords or phrases to bias the transcription towards.
-                Each keyterm can contain at most 5 words and must be less than 50 characters.
-                Maximum of 100 keyterms. Only supported for Scribe v2 batch recognition
-                (not realtime streaming). Usage incurs additional costs.
+                Limits differ by mode:
+                - Scribe v2 batch: up to 100 keyterms, each at most 5 words and less than 50 characters.
+                - Scribe v2 realtime: up to 50 keyterms, each at most 20 characters.
+                Usage incurs additional costs.
+            no_verbatim (NotGivenOr[bool]): If True, filler words and disfluencies are removed from
+                the transcript. Only supported for the Scribe v2 realtime model. Default is False
+                (verbatim transcription) when not provided.
+            enable_logging (NotGivenOr[bool]): If False, activates zero-retention mode: ElevenLabs
+                will not store or log request data. Only supported for the Scribe v2 realtime model.
+                Default is True (logging enabled) when not provided.
         """
 
         if is_given(use_realtime):
@@ -157,6 +169,8 @@ class STT(stt.STT):
             include_timestamps=include_timestamps,
             model_id=model_id,
             keyterms=keyterms,
+            no_verbatim=no_verbatim,
+            enable_logging=enable_logging,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -280,6 +294,8 @@ class STT(stt.STT):
         tag_audio_events: NotGivenOr[bool] = NOT_GIVEN,
         server_vad: NotGivenOr[VADOptions] = NOT_GIVEN,
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
+        no_verbatim: NotGivenOr[bool] = NOT_GIVEN,
+        enable_logging: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         if is_given(tag_audio_events):
             self._opts.tag_audio_events = tag_audio_events
@@ -290,8 +306,19 @@ class STT(stt.STT):
         if is_given(keyterms):
             self._opts.keyterms = keyterms
 
+        if is_given(no_verbatim):
+            self._opts.no_verbatim = no_verbatim
+
+        if is_given(enable_logging):
+            self._opts.enable_logging = enable_logging
+
         for stream in self._streams:
-            stream.update_options(server_vad=server_vad)
+            stream.update_options(
+                server_vad=server_vad,
+                keyterms=keyterms,
+                no_verbatim=no_verbatim,
+                enable_logging=enable_logging,
+            )
 
     def stream(
         self,
@@ -337,9 +364,29 @@ class SpeechStream(stt.SpeechStream):
         self,
         *,
         server_vad: NotGivenOr[VADOptions] = NOT_GIVEN,
+        keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
+        no_verbatim: NotGivenOr[bool] = NOT_GIVEN,
+        enable_logging: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
+        reconnect = False
+
         if is_given(server_vad):
             self._opts.server_vad = server_vad
+            reconnect = True
+
+        if is_given(keyterms):
+            self._opts.keyterms = keyterms
+            reconnect = True
+
+        if is_given(no_verbatim):
+            self._opts.no_verbatim = no_verbatim
+            reconnect = True
+
+        if is_given(enable_logging):
+            self._opts.enable_logging = enable_logging
+            reconnect = True
+
+        if reconnect:
             self._reconnect_event.set()
 
     def _on_audio_duration_report(self, duration: float) -> None:
@@ -508,6 +555,16 @@ class SpeechStream(stt.SpeechStream):
 
         if self._opts.include_timestamps:
             params.append("include_timestamps=true")
+
+        if is_given(self._opts.keyterms):
+            for keyterm in self._opts.keyterms:
+                params.append(f"keyterms={quote(keyterm, safe='')}")
+
+        if is_given(self._opts.no_verbatim):
+            params.append(f"no_verbatim={str(self._opts.no_verbatim).lower()}")
+
+        if is_given(self._opts.enable_logging):
+            params.append(f"enable_logging={str(self._opts.enable_logging).lower()}")
 
         query_string = "&".join(params)
 
