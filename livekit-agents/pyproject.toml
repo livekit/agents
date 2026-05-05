@@ -31,7 +31,7 @@ dependencies = [
     "certifi>=2025.6.15",
     "livekit==1.1.7",
     "livekit-api>=1.0.7,<2",
-    "livekit-protocol>=1.1.6,<2",
+    "livekit-protocol>=1.1.8,<2",
     "livekit-blingfire~=1.1,<2",
     "protobuf>=3",
     "pyjwt>=2.0",

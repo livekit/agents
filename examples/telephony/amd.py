@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from livekit import api, rtc
 from livekit.agents import (
     AMD,
+    NOT_GIVEN,
     Agent,
     AgentServer,
     AgentSession,
@@ -73,37 +74,39 @@ async def entrypoint(ctx: JobContext):
         raise RuntimeError(
             "session room_io is unavailable. Make sure you use dev or start commands"
         )
-    session.room_io.set_participant(participant_identity)
+    if participant_identity:
+        session.room_io.set_participant(participant_identity)
 
     async with AMD(
         session,
-        participant_identity=participant_identity,
+        participant_identity=participant_identity or NOT_GIVEN,
     ) as detector:
         # start running amd before the SIP participant joins to avoid audio loss
-        logger.info(f"creating SIP participant for {participant_identity}")
-        await ctx.api.sip.create_sip_participant(
-            api.CreateSIPParticipantRequest(
-                room_name=ctx.room.name,
-                sip_trunk_id=outbound_trunk_id,
-                sip_call_to=phone_number,
-                participant_identity=participant_identity,
-                wait_until_answered=True,
+        if phone_number and outbound_trunk_id and participant_identity:
+            logger.info(f"creating SIP participant for {participant_identity}")
+            await ctx.api.sip.create_sip_participant(
+                api.CreateSIPParticipantRequest(
+                    room_name=ctx.room.name,
+                    sip_trunk_id=outbound_trunk_id,
+                    sip_call_to=phone_number,
+                    participant_identity=participant_identity,
+                    wait_until_answered=True,
+                )
             )
-        )
-        participant = await ctx.wait_for_participant(identity=participant_identity)
-        logger.info(
-            "participant joined",
-            extra={
-                "actual_identity": participant.identity,
-                "expected_identity": participant_identity,
-                "kind": participant.kind,
-                "audio_tracks_subscribed": [
-                    pub.sid
-                    for pub in participant.track_publications.values()
-                    if pub.subscribed and pub.kind == rtc.TrackKind.KIND_AUDIO
-                ],
-            },
-        )
+            participant = await ctx.wait_for_participant(identity=participant_identity)
+            logger.info(
+                "participant joined",
+                extra={
+                    "actual_identity": participant.identity,
+                    "expected_identity": participant_identity,
+                    "kind": participant.kind,
+                    "audio_tracks_subscribed": [
+                        pub.sid
+                        for pub in participant.track_publications.values()
+                        if pub.subscribed and pub.kind == rtc.TrackKind.KIND_AUDIO
+                    ],
+                },
+            )
 
         result = await detector.execute()
         logger.info(f"AMD result: {result}")
