@@ -24,6 +24,7 @@ members = [
     "livekit-plugins-baseten",
     "livekit-plugins-bey",
     "livekit-plugins-bithuman",
+    "livekit-plugins-blaze",
     "livekit-plugins-browser",
     "livekit-plugins-cambai",
     "livekit-plugins-cartesia",
@@ -2305,6 +2306,26 @@ dependencies = [
 requires-dist = [
     { name = "bithuman", specifier = ">=0.5.25" },
     { name = "livekit-agents", editable = "livekit-agents" },
+]
+
+[[package]]
+name = "livekit-plugins-blaze"
+source = { editable = "livekit-plugins/livekit-plugins-blaze" }
+dependencies = [
+    { name = "httpx" },
+    { name = "livekit-agents" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "websockets" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.27.0" },
+    { name = "livekit-agents", editable = "livekit-agents" },
+    { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "pydantic-settings", specifier = ">=2.0.0" },
+    { name = "websockets", specifier = ">=12.0" },
 ]
 
 [[package]]

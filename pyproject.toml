@@ -13,6 +13,7 @@ livekit-plugins-azure = { workspace = true }
 livekit-plugins-baseten = { workspace = true }
 livekit-plugins-bey = { workspace = true }
 livekit-plugins-bithuman = { workspace = true }
+livekit-plugins-blaze = { workspace = true }
 livekit-plugins-cambai = { workspace = true }
 livekit-plugins-cartesia = { workspace = true }
 livekit-plugins-cerebras = { workspace = true }
