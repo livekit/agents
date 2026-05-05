@@ -39,6 +39,11 @@ MIN_LANGUAGE_DETECTION_LENGTH = 5
 # Mirrors turn_detector.base.MAX_HISTORY_TURNS for tracing
 _EOU_MAX_HISTORY_TURNS = 6
 
+# grace period to wait for late STT transcripts before committing a turn.
+# some streaming STT providers segment long utterances internally and deliver the last
+# segment's FINAL_TRANSCRIPT after the endpointing delay, creating a phantom user turn.
+_STT_FLUSH_GRACE_PERIOD = 0.5
+
 
 @dataclass
 class _EndOfTurnInfo:
@@ -205,6 +210,12 @@ class AudioRecognition:
         self._closing = asyncio.Event()
 
         self._vad_speech_started: bool = False
+
+        # timestamp of the last turn commit — used to suppress phantom turns
+        # from late STT segments arriving shortly after a turn was committed
+        self._last_turn_committed_at: float | None = None
+        # late FINAL_TRANSCRIPT text stored here until consumed by the turn task
+        self._pending_late_transcript: str = ""
 
     def update_options(
         self,
@@ -647,12 +658,20 @@ class AudioRecognition:
             self._interruption_detection is not None and self._vad is not None
         )
 
+    def consume_pending_late_transcript(self) -> str:
+        """Return and clear any late STT text stored during the grace period."""
+        text = self._pending_late_transcript
+        self._pending_late_transcript = ""
+        return text
+
     def clear_user_turn(self) -> None:
         self._audio_transcript = ""
         self._audio_interim_transcript = ""
         self._audio_preflight_transcript = ""
         self._final_transcript_confidence = []
         self._user_turn_committed = False
+        self._pending_late_transcript = ""
+        self._last_turn_committed_at = None
 
         # reset stt to clear the buffer from previous user turn
         stt = self._stt
@@ -780,6 +799,36 @@ class AudioRecognition:
         ):
             # ignore transcript for manual turn detection when user turn already committed
             # and EOU task is done or this is an interim transcript
+            return
+
+        # handle late STT segments arriving shortly after a turn commit while
+        # the user is not speaking — these are leftover segments from the
+        # previous utterance that would create phantom turns if processed
+        # normally.  interims/preflights are silently dropped (they are
+        # cumulative so merging would duplicate text); the final that follows
+        # carries the complete text and is merged into the previous turn.
+        if (
+            ev.type
+            in (
+                stt.SpeechEventType.FINAL_TRANSCRIPT,
+                stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                stt.SpeechEventType.PREFLIGHT_TRANSCRIPT,
+            )
+            and self._vad is not None
+            and not self._speaking
+            and self._last_turn_committed_at is not None
+            and time.time() - self._last_turn_committed_at < _STT_FLUSH_GRACE_PERIOD
+        ):
+            if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
+                late_text = ev.alternatives[0].text if ev.alternatives else ""
+                if late_text:
+                    self._pending_late_transcript = (
+                        f"{self._pending_late_transcript} {late_text}".strip()
+                    )
+                    logger.debug(
+                        "stored late STT transcript for pending turn",
+                        extra={"late_transcript": late_text},
+                    )
             return
 
         # handle interruption detection
@@ -974,6 +1023,8 @@ class AudioRecognition:
                 self._hooks.on_start_of_speech(ev, speech_start_time=speech_start_time)
 
             self._speaking = True
+            self._last_turn_committed_at = None  # new speech → reset phantom protection
+            self._pending_late_transcript = ""
 
             if self._end_of_turn_task is not None:
                 self._end_of_turn_task.cancel()
@@ -1150,8 +1201,11 @@ class AudioRecognition:
 
                 # clear the transcript if the user turn was committed
                 self._audio_transcript = ""
+                self._audio_interim_transcript = ""
+                self._audio_preflight_transcript = ""
                 self._final_transcript_confidence = []
                 self._last_final_transcript_time = None
+                self._last_turn_committed_at = time.time()
                 # concurrent user speech might have changed it
                 # only reset if there is no new speech
                 if self._last_speaking_time == last_speaking_time:
