@@ -200,12 +200,11 @@ class TTS(tts.TTS):
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
-        self._markup = self._ElevenLabsMarkup(self)
 
         self.__current_connection: _Connection | None = None
         self._connection_lock = asyncio.Lock()
 
-    class _ElevenLabsMarkup(tts.TTS.Markup):
+    class Markup(tts.TTS.Markup):
         def _provider_key(self) -> str:
             model = self._tts.model if hasattr(self._tts, "model") else ""
             if "v3" in model or "eleven_v3" in model:

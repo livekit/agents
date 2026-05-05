@@ -416,9 +416,8 @@ class TTS(tts.TTS):
             mark_refreshed_on_get=True,
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
-        self._markup = self._GatewayMarkup(self)
 
-    class _GatewayMarkup(tts.TTS.Markup):
+    class Markup(tts.TTS.Markup):
         def __init__(self, gateway_tts: TTS) -> None:
             super().__init__(gateway_tts)
             self._gateway_tts = gateway_tts
