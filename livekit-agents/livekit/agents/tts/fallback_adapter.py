@@ -46,8 +46,8 @@ class AvailabilityChangedEvent:
 class FallbackAdapter(
     TTS[Literal["tts_availability_changed"]],
 ):
-    """
-    Manages multiple TTS instances, providing a fallback mechanism to ensure continuous TTS service.
+    """Agent Fallback Adapter for TTS. Manages multiple STT instances with automatic fallback
+    when the primary provider fails.
     """
 
     def __init__(

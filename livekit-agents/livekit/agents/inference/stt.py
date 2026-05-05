@@ -147,7 +147,7 @@ STTLanguages = Literal["multi", "en", "de", "es", "fr", "ja", "pt", "zh", "hi"]
 
 
 class FallbackModel(TypedDict, total=False):
-    """A fallback model with optional extra configuration.
+    """Inference Fallback Adapter: configuration for a fallback STT model that runs server-side in LiveKit Inference, providing automatic fallback between providers.
 
     Extra fields are passed through to the provider.
 

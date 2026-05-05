@@ -77,7 +77,7 @@ def _parse_model_string(model: str) -> tuple[str, str | None]:
 
 
 class FallbackModel(TypedDict):
-    """A fallback model with optional extra configuration.
+    """Inference Fallback Adapter: configuration for a fallback TTS model that runs server-side in LiveKit Inference, providing automatic fallback between providers.
 
     Extra fields are passed through to the provider.
 
