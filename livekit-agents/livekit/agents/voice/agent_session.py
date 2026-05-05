@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 import copy
 import time
-from collections.abc import AsyncIterable, Callable, Sequence
+from collections.abc import AsyncIterable, Awaitable, Callable, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from contextvars import Token
 from dataclasses import dataclass
+from enum import Enum
 from types import TracebackType
 from typing import (
     TYPE_CHECKING,
@@ -114,6 +115,26 @@ _RECORDING_ALL_OFF: RecordingOptions = {
     "logs": False,
     "transcript": False,
 }
+
+
+_AGENT_SESSION_CLOSE_TIMEOUT = 10.0
+_AGENT_TASK_CLOSE_UNWIND_LIMIT = 32
+
+
+class _CloseStepResult(Enum):
+    COMPLETED = "completed"
+    FAILED = "failed"
+    TIMED_OUT = "timed_out"
+    SKIPPED = "skipped"
+    START_FAILED = "start_failed"
+    BACKGROUND = "background"
+
+    @property
+    def attempted(self) -> bool:
+        return self not in {
+            _CloseStepResult.SKIPPED,
+            _CloseStepResult.START_FAILED,
+        }
 
 
 def _resolve_recording_options(record: bool | RecordingOptions) -> RecordingOptions:
@@ -887,6 +908,163 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def shutdown(self, *, drain: bool = True) -> None:
         self._close_soon(error=None, drain=drain, reason=CloseReason.USER_INITIATED)
 
+    @staticmethod
+    def _log_late_close_step_result(
+        task: asyncio.Future[object], *, step: str, reason: CloseReason
+    ) -> None:
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            return
+        except Exception as e:
+            logger.warning(
+                "agent session close step failed after timeout",
+                exc_info=e,
+                extra={"step": step, "reason": reason.value},
+            )
+
+    @staticmethod
+    def _log_background_close_step_result(
+        task: asyncio.Future[object],
+        *,
+        step: str,
+        reason: CloseReason,
+        timeout_handle: asyncio.TimerHandle,
+    ) -> None:
+        timeout_handle.cancel()
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            return
+        except Exception as e:
+            logger.warning(
+                "agent session background close step failed",
+                exc_info=e,
+                extra={"step": step, "reason": reason.value},
+            )
+
+    def _run_close_step_in_background(
+        self,
+        step: str,
+        awaitable_factory: Callable[[], Awaitable[object]],
+        *,
+        reason: CloseReason,
+    ) -> _CloseStepResult:
+        try:
+            task = asyncio.ensure_future(awaitable_factory())
+        except Exception as e:
+            logger.warning(
+                "agent session close step failed before starting",
+                exc_info=e,
+                extra={"step": step, "reason": reason.value},
+            )
+            return _CloseStepResult.START_FAILED
+
+        def _cancel_background_step() -> None:
+            if task.done():
+                return
+
+            task.cancel()
+            logger.warning(
+                "agent session background close step timed out",
+                extra={
+                    "step": step,
+                    "reason": reason.value,
+                    "timeout": _AGENT_SESSION_CLOSE_TIMEOUT,
+                },
+            )
+
+        timeout_handle = asyncio.get_running_loop().call_later(
+            _AGENT_SESSION_CLOSE_TIMEOUT,
+            _cancel_background_step,
+        )
+        task.add_done_callback(
+            lambda t: AgentSession._log_background_close_step_result(
+                t,
+                step=step,
+                reason=reason,
+                timeout_handle=timeout_handle,
+            )
+        )
+        logger.warning(
+            "agent session close deadline exceeded; running close step in background",
+            extra={"step": step, "reason": reason.value},
+        )
+        return _CloseStepResult.BACKGROUND
+
+    async def _run_close_step(
+        self,
+        step: str,
+        awaitable_factory: Callable[[], Awaitable[object]],
+        *,
+        deadline: float,
+        reason: CloseReason,
+        run_after_deadline: bool = False,
+    ) -> _CloseStepResult:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            if run_after_deadline:
+                return self._run_close_step_in_background(
+                    step,
+                    awaitable_factory,
+                    reason=reason,
+                )
+
+            logger.warning(
+                "agent session close deadline exceeded; skipping close step",
+                extra={"step": step, "reason": reason.value},
+            )
+            return _CloseStepResult.SKIPPED
+
+        try:
+            task = asyncio.ensure_future(awaitable_factory())
+        except Exception as e:
+            logger.warning(
+                "agent session close step failed before starting",
+                exc_info=e,
+                extra={"step": step, "reason": reason.value},
+            )
+            return _CloseStepResult.START_FAILED
+
+        try:
+            done, _ = await asyncio.wait({task}, timeout=remaining)
+        except asyncio.CancelledError:
+            if not task.done():
+                task.cancel()
+                task.add_done_callback(
+                    lambda t: AgentSession._log_late_close_step_result(t, step=step, reason=reason)
+                )
+            raise
+
+        if task not in done:
+            task.cancel()
+            task.add_done_callback(
+                lambda t: AgentSession._log_late_close_step_result(t, step=step, reason=reason)
+            )
+            logger.warning(
+                "agent session close step timed out",
+                extra={"step": step, "reason": reason.value, "timeout": remaining},
+            )
+            return _CloseStepResult.TIMED_OUT
+
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            logger.warning(
+                "agent session close step was cancelled",
+                extra={"step": step, "reason": reason.value},
+            )
+            return _CloseStepResult.FAILED
+        except Exception as e:
+            logger.warning(
+                "agent session close step failed",
+                exc_info=e,
+                extra={"step": step, "reason": reason.value},
+            )
+            return _CloseStepResult.FAILED
+
+        return _CloseStepResult.COMPLETED
+
     @utils.log_exceptions(logger=logger)
     async def _aclose_impl(
         self,
@@ -908,19 +1086,62 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if not self._started:
                 return
 
+            close_deadline = time.monotonic() + _AGENT_SESSION_CLOSE_TIMEOUT
+
             self._closing = True
             self._cancel_user_away_timer()
             self._on_aec_warmup_expired()  # always clear aec warmup when closing the session
 
             if self._amd is not None:
-                await self._amd.aclose()
-                self._amd = None
+                amd_close = await self._run_close_step(
+                    "amd.aclose",
+                    self._amd.aclose,
+                    deadline=close_deadline,
+                    reason=reason,
+                    run_after_deadline=True,
+                )
+                if amd_close.attempted:
+                    self._amd = None
 
             activity = self._activity
+            agent_task_unwind_count = 0
+            agent_task_visited_activities: set[int] = set()
             while activity and isinstance(agent_task := activity.agent, AgentTask):
+                agent_task_unwind_count += 1
+                activity_id = id(activity)
+                if activity_id in agent_task_visited_activities:
+                    logger.warning(
+                        "agent session close stopped unwinding repeated nested agent task activity",
+                        extra={"reason": reason.value},
+                    )
+                    activity = None
+                    break
+
+                agent_task_visited_activities.add(activity_id)
+                if agent_task_unwind_count > _AGENT_TASK_CLOSE_UNWIND_LIMIT:
+                    logger.warning(
+                        "agent session close stopped unwinding nested agent tasks",
+                        extra={"reason": reason.value, "limit": _AGENT_TASK_CLOSE_UNWIND_LIMIT},
+                    )
+                    break
+
                 # notify AgentTask to complete and wait it to resume the parent agent
                 agent_task.cancel()
-                await agent_task._wait_for_inactive()
+                task_activity = activity
+                inactive = await self._run_close_step(
+                    "agent_task.wait_for_inactive",
+                    agent_task._wait_for_inactive,
+                    deadline=close_deadline,
+                    reason=reason,
+                )
+                if inactive is not _CloseStepResult.COMPLETED:
+                    await self._run_close_step(
+                        "agent_task.activity.aclose",
+                        task_activity.aclose,
+                        deadline=close_deadline,
+                        reason=reason,
+                        run_after_deadline=True,
+                    )
 
                 if old_agent := agent_task._old_agent:
                     activity = old_agent._activity
@@ -929,17 +1150,45 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             if activity is not None:
                 if not drain:
-                    try:
+
+                    async def _interrupt_activity() -> None:
                         # force interrupt speeches when closing the session
-                        await activity.interrupt(force=True)
-                    except RuntimeError:
-                        # uninterruptible speech
-                        pass
-                await activity.drain()
+                        try:
+                            await activity.interrupt(force=True)
+                        except RuntimeError:
+                            # uninterruptible speech
+                            pass
+
+                    await self._run_close_step(
+                        "activity.interrupt",
+                        _interrupt_activity,
+                        deadline=close_deadline,
+                        reason=reason,
+                        run_after_deadline=True,
+                    )
+
+                await self._run_close_step(
+                    "activity.drain",
+                    activity.drain,
+                    deadline=close_deadline,
+                    reason=reason,
+                )
 
                 # wait any uninterruptible speech to finish
                 if activity.current_speech:
-                    await activity.current_speech
+                    current_speech = activity.current_speech
+
+                    async def _wait_for_current_speech() -> None:
+                        # Do not let the close-step timeout cancel the speech future before
+                        # activity.aclose() gets a chance to own speech teardown.
+                        await asyncio.shield(current_speech)
+
+                    await self._run_close_step(
+                        "activity.current_speech",
+                        _wait_for_current_speech,
+                        deadline=close_deadline,
+                        reason=reason,
+                    )
 
                 # detach the inputs and outputs
                 self.input.audio = None
@@ -957,8 +1206,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                         transcript_timeout=self._opts.session_close_transcript_timeout,
                     )
 
-                await activity.aclose()
-            self._activity = None
+                activity_close = await self._run_close_step(
+                    "activity.aclose",
+                    activity.aclose,
+                    deadline=close_deadline,
+                    reason=reason,
+                    run_after_deadline=True,
+                )
+                if activity_close.attempted:
+                    self._activity = None
+            else:
+                self._activity = None
 
             if self._agent_speaking_span:
                 self._agent_speaking_span.end()
@@ -969,19 +1227,50 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._user_speaking_span = None
 
             if self._forward_audio_atask is not None:
-                await utils.aio.cancel_and_wait(self._forward_audio_atask)
+                forward_audio_atask = self._forward_audio_atask
+                forward_audio_close = await self._run_close_step(
+                    "forward_audio.cancel",
+                    lambda: utils.aio.cancel_and_wait(forward_audio_atask),
+                    deadline=close_deadline,
+                    reason=reason,
+                    run_after_deadline=True,
+                )
+                if forward_audio_close.attempted:
+                    self._forward_audio_atask = None
 
             if self._recorder_io:
-                await self._recorder_io.aclose()
+                recorder_close = await self._run_close_step(
+                    "recorder_io.aclose",
+                    self._recorder_io.aclose,
+                    deadline=close_deadline,
+                    reason=reason,
+                    run_after_deadline=True,
+                )
+                if recorder_close.attempted:
+                    self._recorder_io = None
 
             if self._ivr_activity is not None:
-                await self._ivr_activity.aclose()
+                ivr_close = await self._run_close_step(
+                    "ivr_activity.aclose",
+                    self._ivr_activity.aclose,
+                    deadline=close_deadline,
+                    reason=reason,
+                    run_after_deadline=True,
+                )
+                if ivr_close.attempted:
+                    self._ivr_activity = None
 
             toolsets = [tool for tool in self._tools if isinstance(tool, llm.Toolset)]
             if toolsets:
-                await asyncio.gather(
-                    *(toolset.aclose() for toolset in toolsets),
-                    return_exceptions=True,
+                await self._run_close_step(
+                    "toolsets.aclose",
+                    lambda: asyncio.gather(
+                        *(toolset.aclose() for toolset in toolsets),
+                        return_exceptions=True,
+                    ),
+                    deadline=close_deadline,
+                    reason=reason,
+                    run_after_deadline=True,
                 )
 
             if self._session_span:
@@ -1000,13 +1289,27 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._root_span_context = None
 
             if self._session_host:
-                await self._session_host.aclose()
-                self._session_host = None
+                session_host_close = await self._run_close_step(
+                    "session_host.aclose",
+                    self._session_host.aclose,
+                    deadline=close_deadline,
+                    reason=reason,
+                    run_after_deadline=True,
+                )
+                if session_host_close.attempted:
+                    self._session_host = None
 
             # close room io after close event is emitted
             if self._room_io:
-                await self._room_io.aclose()
-                self._room_io = None
+                room_io_close = await self._run_close_step(
+                    "room_io.aclose",
+                    self._room_io.aclose,
+                    deadline=close_deadline,
+                    reason=reason,
+                    run_after_deadline=True,
+                )
+                if room_io_close.attempted:
+                    self._room_io = None
 
         logger.debug("session closed", extra={"reason": reason.value, "error": error})
 
