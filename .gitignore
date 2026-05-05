@@ -30,6 +30,10 @@ share/python-wheels/
 *.egg
 MANIFEST
 
+
+.claude/
+.code-review-graph/
+
 # PyInstaller
 #  Usually these files are written by a python script from a template
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
@@ -178,3 +182,6 @@ docs/
 
 # Examples for development
 examples/dev/*
+test_install.py
+test_new.json
+test_services.py
