@@ -172,7 +172,6 @@ class TTS(tts.TTS):
             mark_refreshed_on_get=True,
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
-        self._markup = self._CartesiaMarkup(self)
         self._sentence_tokenizer = (
             tokenizer if is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
         )
@@ -199,7 +198,7 @@ class TTS(tts.TTS):
                     " or all languages with `preview` models"
                 )
 
-    class _CartesiaMarkup(tts.TTS.Markup):
+    class Markup(tts.TTS.Markup):
         def llm_instructions(self) -> str | None:
             from livekit.agents.tts._provider_format import llm_instructions
 
