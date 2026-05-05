@@ -112,6 +112,7 @@ class AvatarSession(BaseAvatarSession):
             sample_rate=SAMPLE_RATE,
             wait_remote_track=rtc.TrackKind.KIND_VIDEO,
             clear_buffer_timeout=None,
+            wait_playback_start=True,
         )
 
         return session_id
