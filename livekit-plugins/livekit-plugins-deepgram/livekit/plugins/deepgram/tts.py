@@ -26,6 +26,7 @@ from livekit.agents.utils import is_given
 
 from ._utils import _to_deepgram_url
 from .log import logger
+from .models import TTSModels
 
 BASE_URL = "https://api.deepgram.com/v1/speak"
 NUM_CHANNELS = 1
@@ -33,22 +34,24 @@ NUM_CHANNELS = 1
 
 @dataclass
 class _TTSOptions:
-    model: str
+    model: TTSModels | str
     encoding: str
     sample_rate: int
     word_tokenizer: tokenize.WordTokenizer
     base_url: str
     api_key: str
     mip_opt_out: bool = False
+    bit_rate: int | None = None
 
 
 class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        model: str = "aura-2-andromeda-en",
+        model: TTSModels | str = "aura-2-andromeda-en",
         encoding: str = "linear16",
         sample_rate: int = 24000,
+        bit_rate: int | None = None,
         api_key: str | None = None,
         base_url: str = BASE_URL,
         word_tokenizer: NotGivenOr[tokenize.WordTokenizer] = NOT_GIVEN,
@@ -59,9 +62,12 @@ class TTS(tts.TTS):
         Create a new instance of Deepgram TTS.
 
         Args:
-            model (str): TTS model to use. Defaults to "aura-2-andromeda-en".
+            model (TTSModels | str): TTS model to use. Defaults to "aura-2-andromeda-en".
+                See https://developers.deepgram.com/docs/tts-models for available models.
             encoding (str): Audio encoding to use. Defaults to "linear16".
             sample_rate (int): Sample rate of audio. Defaults to 24000.
+            bit_rate (int | None): Bit rate for compressed encodings (e.g. mp3). Defaults to None.
+                See https://developers.deepgram.com/reference/text-to-speech-api#query-bit_rate
             api_key (str): Deepgram API key. If not provided, will look for DEEPGRAM_API_KEY in environment.
             base_url (str): Base URL for Deepgram TTS API. Defaults to "https://api.deepgram.com/v1/speak"
             word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to basic WordTokenizer.
@@ -85,6 +91,7 @@ class TTS(tts.TTS):
             model=model,
             encoding=encoding,
             sample_rate=sample_rate,
+            bit_rate=bit_rate,
             word_tokenizer=word_tokenizer,
             base_url=base_url,
             api_key=api_key,
@@ -110,12 +117,14 @@ class TTS(tts.TTS):
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
-        config = {
+        config: dict = {
             "encoding": self._opts.encoding,
             "model": self._opts.model,
             "sample_rate": self._opts.sample_rate,
             "mip_opt_out": self._opts.mip_opt_out,
         }
+        if self._opts.bit_rate is not None:
+            config["bit_rate"] = self._opts.bit_rate
         ws = await asyncio.wait_for(
             session.ws_connect(
                 _to_deepgram_url(config, self._opts.base_url, websocket=True),
@@ -159,14 +168,39 @@ class TTS(tts.TTS):
     def update_options(
         self,
         *,
-        model: NotGivenOr[str] = NOT_GIVEN,
+        model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
+        encoding: NotGivenOr[str] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        bit_rate: NotGivenOr[int | None] = NOT_GIVEN,
     ) -> None:
         """
         Args:
-            model (str): TTS model to use.
+            model (TTSModels | str): TTS model to use.
+            encoding (str): Audio encoding to use.
+            sample_rate (int): Sample rate of audio in Hz.
+            bit_rate (int | None): Bit rate for compressed encodings (e.g. mp3).
+                See https://developers.deepgram.com/reference/text-to-speech-api#query-bit_rate
         """
+        connection_params_changed = False
         if is_given(model):
             self._opts.model = model
+            connection_params_changed = True
+        if is_given(encoding):
+            self._opts.encoding = encoding
+            connection_params_changed = True
+        if is_given(sample_rate):
+            self._opts.sample_rate = sample_rate
+            self._sample_rate = sample_rate  # keep base class property in sync
+            connection_params_changed = True
+        if is_given(bit_rate):
+            self._opts.bit_rate = bit_rate
+            connection_params_changed = True
+
+        if connection_params_changed:
+            # These params are baked into the WebSocket URL at connection time, so any
+            # existing pooled connection must be invalidated to avoid serving audio at
+            # the wrong rate/encoding.
+            self._pool.invalidate()
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -200,18 +234,17 @@ class ChunkedStream(tts.ChunkedStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
+            http_params: dict = {
+                "encoding": self._opts.encoding,
+                "container": "none",
+                "model": self._opts.model,
+                "sample_rate": self._opts.sample_rate,
+                "mip_opt_out": self._opts.mip_opt_out,
+            }
+            if self._opts.bit_rate is not None:
+                http_params["bit_rate"] = self._opts.bit_rate
             async with self._tts._ensure_session().post(
-                _to_deepgram_url(
-                    {
-                        "encoding": self._opts.encoding,
-                        "container": "none",
-                        "model": self._opts.model,
-                        "sample_rate": self._opts.sample_rate,
-                        "mip_opt_out": self._opts.mip_opt_out,
-                    },
-                    self._opts.base_url,
-                    websocket=False,
-                ),
+                _to_deepgram_url(http_params, self._opts.base_url, websocket=False),
                 headers={
                     "Authorization": f"Token {self._opts.api_key}",
                     "Content-Type": "application/json",
