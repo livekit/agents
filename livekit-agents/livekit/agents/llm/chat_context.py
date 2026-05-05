@@ -49,9 +49,11 @@ class Instructions:
             text="Use markdown formatting.",
         )
 
-    ``str(instructions)`` returns the common instructions.
-    ``as_modality("audio")`` returns common + audio additions.
-    ``as_modality("text")`` returns common + text additions.
+    Rendering::
+
+        instr.render()                              # → common text
+        instr.render(modality="audio")               # → common + audio addition
+        instr.render(modality="text", name="Alex")   # → common + text, with {name} filled
     """
 
     def __init__(
@@ -65,75 +67,64 @@ class Instructions:
         self.audio = audio
         self.text = text
 
-    def as_modality(self, modality: Literal["audio", "text"]) -> str:
-        """Return combined instructions for the given modality."""
-        parts = [self.common]
-        addition = self.audio if modality == "audio" else self.text
-        if addition:
-            parts.append(addition)
-        return "\n\n".join(p for p in parts if p)
+    def render(
+        self,
+        *,
+        modality: Literal["audio", "text"] | None = None,
+        data: dict[str, object] | None = None,
+    ) -> str:
+        """Render instructions to a plain string.
 
-    def format(self, *args: object, **kwargs: object) -> Instructions:
-        any_instructions = any(isinstance(arg, Instructions) for arg in args) or any(
-            isinstance(v, Instructions) for v in kwargs.values()
-        )
+        Args:
+            modality: If given, appends the modality-specific addition to the common text.
+            data: Template variables to fill. Missing placeholders log a warning
+                and are replaced with empty strings.
+        """
+        parts = [self.common]
+        if modality is not None:
+            addition = self.audio if modality == "audio" else self.text
+            if addition:
+                parts.append(addition)
+
+        result = "\n\n".join(p for p in parts if p)
+
+        if data:
+            result = utils.misc.safe_render(result, data)
+
+        return result
+
+    @staticmethod
+    def resolve_template(template: str, **kwargs: object) -> Instructions:
+        """Fill a template string, producing an ``Instructions`` with modality variants.
+
+        If any kwarg value is an ``Instructions`` object, its ``common``/``audio``/``text``
+        parts are substituted into the matching variant of the result. This is used by
+        workflow tasks to build modality-aware instructions from a single template.
+        """
+        any_instructions = any(isinstance(v, Instructions) for v in kwargs.values())
         if any_instructions:
-            common_args = tuple(str(arg) if isinstance(arg, Instructions) else arg for arg in args)
-            audio_args = tuple(
-                (arg.audio or str(arg)) if isinstance(arg, Instructions) else arg for arg in args
-            )
-            text_args = tuple(
-                (arg.text or str(arg)) if isinstance(arg, Instructions) else arg for arg in args
-            )
-            common_kwargs = {
+            common_kw: dict[str, object] = {
                 k: str(v) if isinstance(v, Instructions) else v for k, v in kwargs.items()
             }
-            audio_kwargs = {
+            audio_kw: dict[str, object] = {
                 k: (v.audio or str(v)) if isinstance(v, Instructions) else v
                 for k, v in kwargs.items()
             }
-            text_kwargs = {
+            text_kw: dict[str, object] = {
                 k: (v.text or str(v)) if isinstance(v, Instructions) else v
                 for k, v in kwargs.items()
             }
+            return Instructions(
+                common=utils.misc.safe_render(template, common_kw),
+                audio=utils.misc.safe_render(template, audio_kw),
+                text=utils.misc.safe_render(template, text_kw),
+            )
         else:
-            common_args = audio_args = text_args = args
-            common_kwargs = audio_kwargs = text_kwargs = kwargs
-
-        return Instructions(
-            common=self.common.format(*common_args, **common_kwargs),
-            audio=(
-                self.audio.format(*audio_args, **audio_kwargs) if self.audio is not None else None
-            ),
-            text=self.text.format(*text_args, **text_kwargs) if self.text is not None else None,
-        )
+            rendered = utils.misc.safe_render(template, kwargs)
+            return Instructions(common=rendered)
 
     def __str__(self) -> str:
         return self.common
-
-    def __add__(self, other: object) -> Instructions:
-        if isinstance(other, Instructions):
-            return Instructions(
-                common=self.common + other.common,
-                audio=_concat_optional(self.audio, other.audio),
-                text=_concat_optional(self.text, other.text),
-            )
-        if isinstance(other, str):
-            return Instructions(
-                common=self.common + other,
-                audio=(self.audio + other) if self.audio is not None else None,
-                text=(self.text + other) if self.text is not None else None,
-            )
-        raise TypeError(f"Cannot add Instructions and {type(other)}")
-
-    def __radd__(self, other: object) -> Instructions:
-        if isinstance(other, str):
-            return Instructions(
-                common=other + self.common,
-                audio=(other + self.audio) if self.audio is not None else None,
-                text=(other + self.text) if self.text is not None else None,
-            )
-        raise TypeError(f"Cannot add {type(other)} and Instructions")
 
     def __repr__(self) -> str:
         return f"Instructions({self.common!r})"
@@ -151,52 +142,6 @@ class Instructions:
         if isinstance(other, str):
             return self.common == other
         return NotImplemented
-
-
-def _concat_optional(a: str | None, b: str | None) -> str | None:
-    if a is not None and b is not None:
-        return a + b
-    return a or b
-
-
-class AgentInstructions(Instructions):
-    """Instructions with expressiveness templates for use with :class:`Agent`.
-
-    Extends :class:`Instructions` with templates that control how TTS markup
-    and speaker context are injected when ``expressiveness=True``.
-    """
-
-    DEFAULT_TTS_INSTRUCTIONS_TEMPLATE: str = (
-        "The TTS supports the following formatting capabilities. "
-        "Use them when appropriate to make speech more expressive:\n\n"
-        "{tts_instructions}"
-    )
-
-    DEFAULT_AUDIO_RECOGNITION_INSTRUCTIONS_TEMPLATE: str = (
-        "The following has been detected about the speaker:\n\n"
-        "{speaker_context}\n\n"
-        "Adapt your tone and response accordingly."
-    )
-
-    def __init__(
-        self,
-        audio: str = "",
-        *,
-        text: str | None = None,
-        tts_instructions_template: str | None = None,
-        audio_recognition_instructions_template: str | None = None,
-    ) -> None:
-        super().__init__(audio, text=text)
-        self.tts_instructions_template = (
-            tts_instructions_template
-            if tts_instructions_template is not None
-            else self.DEFAULT_TTS_INSTRUCTIONS_TEMPLATE
-        )
-        self.audio_recognition_instructions_template = (
-            audio_recognition_instructions_template
-            if audio_recognition_instructions_template is not None
-            else self.DEFAULT_AUDIO_RECOGNITION_INSTRUCTIONS_TEMPLATE
-        )
 
 
 class ImageContent(BaseModel):

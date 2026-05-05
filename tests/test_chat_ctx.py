@@ -547,12 +547,12 @@ def test_instructions_serialization():
     # str(instr) returns the common text
     assert str(instr) == "common text"
 
-    # as_modality resolves to a plain string
-    assert instr.as_modality("audio") == "common text\n\naudio addition"
-    assert instr.as_modality("text") == "common text\n\ntext addition"
+    # render resolves to a plain string
+    assert instr.render(modality="audio") == "common text\n\naudio addition"
+    assert instr.render(modality="text") == "common text\n\ntext addition"
 
     # ChatMessage content must be str (Instructions is resolved before storage)
-    resolved = instr.as_modality("audio")
+    resolved = instr.render(modality="audio")
     msg = ChatMessage(role="system", content=[resolved])
     assert isinstance(msg.content[0], str)
     assert msg.content[0] == "common text\n\naudio addition"
@@ -581,51 +581,8 @@ def test_instructions_serialization():
     assert type(plain_restored.items[0].content[0]) is str
 
 
-def test_instructions_string_operations():
-    """Instructions supports + and r+ operations, propagating all variants."""
-    from livekit.agents.llm.chat_context import Instructions
-
-    # Instructions + Instructions
-    a = Instructions("common A", audio="audio A", text="text A")
-    b = Instructions("common B", audio="audio B", text="text B")
-    result = a + b
-    assert isinstance(result, Instructions)
-    assert result.common == "common Acommon B"
-    assert result.audio == "audio Aaudio B"
-    assert result.text == "text Atext B"
-
-    # Instructions + str
-    instr = Instructions("common", audio="audio", text="text")
-    result = instr + " suffix"
-    assert result.common == "common suffix"
-    assert result.audio == "audio suffix"
-    assert result.text == "text suffix"
-
-    # str + Instructions (radd)
-    result = "prefix " + instr
-    assert result.common == "prefix common"
-    assert result.audio == "prefix audio"
-    assert result.text == "prefix text"
-
-    # Adding to Instructions without modality-specific additions keeps them None
-    common_only = Instructions("common only")
-    result = common_only + " more"
-    assert result.audio is None
-    assert result.text is None
-    assert result.common == "common only more"
-
-    # One side has additions, other doesn't -- _concat_optional merges
-    a = Instructions("common A", audio="audio A", text="text A")
-    b = Instructions("common B")
-    result = a + b
-    assert result.common == "common Acommon B"
-    # _concat_optional(some, None) returns some
-    assert result.audio == "audio A"
-    assert result.text == "text A"
-
-
-def test_instructions_as_modality():
-    """as_modality() returns a plain str combining common + modality-specific additions."""
+def test_instructions_render():
+    """render() returns a plain str combining common + modality-specific additions."""
     from livekit.agents.llm.chat_context import Instructions
 
     instr = Instructions(
@@ -634,13 +591,13 @@ def test_instructions_as_modality():
         text="Use markdown formatting.",
     )
 
-    # as_modality('audio') returns common + audio addition
-    resolved_audio = instr.as_modality("audio")
+    # render('audio') returns common + audio addition
+    resolved_audio = instr.render(modality="audio")
     assert isinstance(resolved_audio, str)
     assert resolved_audio == "You are a helpful assistant.\n\nKeep responses short for voice."
 
-    # as_modality('text') returns common + text addition
-    resolved_text = instr.as_modality("text")
+    # render('text') returns common + text addition
+    resolved_text = instr.render(modality="text")
     assert isinstance(resolved_text, str)
     assert resolved_text == "You are a helpful assistant.\n\nUse markdown formatting."
 
@@ -649,19 +606,19 @@ def test_instructions_as_modality():
 
     # Instructions without modality additions returns just common for both
     common_only = Instructions("common only")
-    assert common_only.as_modality("audio") == "common only"
-    assert common_only.as_modality("text") == "common only"
+    assert common_only.render(modality="audio") == "common only"
+    assert common_only.render(modality="text") == "common only"
 
     # Instructions with only one modality addition
     audio_only = Instructions("base", audio="audio extra")
-    assert audio_only.as_modality("audio") == "base\n\naudio extra"
-    assert audio_only.as_modality("text") == "base"
+    assert audio_only.render(modality="audio") == "base\n\naudio extra"
+    assert audio_only.render(modality="text") == "base"
 
     text_only = Instructions("base", text="text extra")
-    assert text_only.as_modality("audio") == "base"
-    assert text_only.as_modality("text") == "base\n\ntext extra"
+    assert text_only.render(modality="audio") == "base"
+    assert text_only.render(modality="text") == "base\n\ntext extra"
 
     # Empty common with additions
     empty_common = Instructions("", audio="audio only", text="text only")
-    assert empty_common.as_modality("audio") == "audio only"
-    assert empty_common.as_modality("text") == "text only"
+    assert empty_common.render(modality="audio") == "audio only"
+    assert empty_common.render(modality="text") == "text only"

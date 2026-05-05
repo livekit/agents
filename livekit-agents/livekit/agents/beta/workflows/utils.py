@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any
 
-from ...llm.chat_context import AgentInstructions, Instructions
+from ...llm.chat_context import Instructions
 from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given
 
@@ -45,10 +45,10 @@ def format_dtmf(events: list[DtmfEvent]) -> str:
     return " ".join(event.value for event in events)
 
 
-class WorkflowInstructions(AgentInstructions):
+class WorkflowInstructions(Instructions):
     """Customizable instruction sections for built-in workflow tasks.
 
-    Extends :class:`AgentInstructions` with ``persona`` and ``extra`` fields
+    Extends :class:`Instructions` with ``persona`` and ``extra`` fields
     that workflow tasks resolve against their own templates and defaults.
 
     Each field overrides that section when set; leave as ``NOT_GIVEN`` to
@@ -63,15 +63,8 @@ class WorkflowInstructions(AgentInstructions):
         text: str | None = None,
         persona: NotGivenOr[Instructions | str] = NOT_GIVEN,
         extra: Instructions | str = "",
-        tts_instructions_template: str | None = None,
-        audio_recognition_instructions_template: str | None = None,
     ) -> None:
-        super().__init__(
-            audio,
-            text=text,
-            tts_instructions_template=tts_instructions_template,
-            audio_recognition_instructions_template=audio_recognition_instructions_template,
-        )
+        super().__init__(audio, text=text)
         self.persona: NotGivenOr[Instructions | str] = persona
         self.extra: Instructions | str = extra
 
@@ -83,7 +76,8 @@ class WorkflowInstructions(AgentInstructions):
         **format_kwargs: Any,
     ) -> Instructions:
         """Resolve into a final :class:`Instructions` by formatting the template."""
-        return Instructions(template).format(
+        return Instructions.resolve_template(
+            template,
             persona=self.persona if is_given(self.persona) else default_persona,
             extra=self.extra,
             **format_kwargs,

@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
     from .agent_activity import AgentActivity
-    from .agent_session import AgentSession
+    from .agent_session import AgentSession, ExpressivenessOptions
     from .audio_recognition import AudioRecognition
     from .io import TimedString
     from .turn import TurnDetectionMode
@@ -73,7 +73,7 @@ class Agent:
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
         mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
-        expressiveness: NotGivenOr[bool] = NOT_GIVEN,
+        expressiveness: NotGivenOr[bool | ExpressivenessOptions] = NOT_GIVEN,
         min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         # deprecated
@@ -189,7 +189,7 @@ class Agent:
         return self._interruption_detection
 
     @property
-    def expressiveness(self) -> NotGivenOr[bool]:
+    def expressiveness(self) -> NotGivenOr[bool | ExpressivenessOptions]:
         return self._expressiveness
 
     @property

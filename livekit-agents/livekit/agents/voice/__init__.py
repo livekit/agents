@@ -1,6 +1,11 @@
 from . import io, run_result
 from .agent import Agent, AgentTask, ModelSettings
-from .agent_session import AgentSession, RecordingOptions, VoiceActivityVideoSampler
+from .agent_session import (
+    AgentSession,
+    ExpressivenessOptions,
+    RecordingOptions,
+    VoiceActivityVideoSampler,
+)
 from .audio_recognition import AudioRecognition
 from .events import (
     AgentEvent,
@@ -32,6 +37,7 @@ __all__ = [
     "VoiceActivityVideoSampler",
     "Agent",
     "ModelSettings",
+    "ExpressivenessOptions",
     "AgentTask",
     "SpeechHandle",
     "RunContext",
