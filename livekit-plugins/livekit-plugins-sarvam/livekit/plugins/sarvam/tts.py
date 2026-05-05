@@ -25,6 +25,7 @@ import enum
 import json
 import os
 import platform
+import struct
 import weakref
 from dataclasses import dataclass, replace
 from typing import Literal
@@ -54,6 +55,35 @@ SARVAM_TTS_WS_URL = "wss://api.sarvam.ai/text-to-speech/ws"
 # Sarvam TTS specific models and speakers
 SarvamTTSModels = Literal["bulbul:v2", "bulbul:v3-beta", "bulbul:v3"]
 SarvamTTSOutputAudioBitrate = Literal["32k", "64k", "96k", "128k", "192k"]
+
+def _pcm_to_wav(data: bytes, sample_rate: int, num_channels: int, bit_depth: int = 16) -> bytes:
+    """Wrap raw PCM bytes in a RIFF/WAVE container.
+
+    The Sarvam API may return raw PCM bytes for the ``wav`` codec instead of a
+    properly-headered WAV file.  This helper prepends the minimal RIFF/WAVE
+    header so downstream decoders can parse the audio correctly.
+    """
+    data_size = len(data)
+    byte_rate = sample_rate * num_channels * bit_depth // 8
+    block_align = num_channels * bit_depth // 8
+    header = struct.pack(
+        "<4sI4s4sIHHIIHH4sI",
+        b"RIFF",
+        36 + data_size,  # overall file size minus 8 bytes
+        b"WAVE",
+        b"fmt ",
+        16,  # PCM fmt chunk size
+        1,  # AudioFormat: PCM
+        num_channels,
+        sample_rate,
+        byte_rate,
+        block_align,
+        bit_depth,
+        b"data",
+        data_size,
+    )
+    return header + data
+
 
 ALLOWED_OUTPUT_AUDIO_BITRATES: set[str] = {"32k", "64k", "96k", "128k", "192k"}
 ALLOWED_OUTPUT_AUDIO_CODECS: set[str] = {
@@ -732,9 +762,19 @@ class ChunkedStream(tts.ChunkedStream):
                     mime_type=mime_type,
                 )
                 # handle multiple audio chunks
-                for b64 in audios:
-                    wav_bytes = base64.b64decode(b64)
-                    output_emitter.push(wav_bytes)
+                raw_chunks = [base64.b64decode(b64) for b64 in audios]
+                if self._opts.output_audio_codec == "wav":
+                    # Sarvam may return raw PCM without a RIFF/WAVE header for
+                    # the wav codec; detect this and wrap accordingly.
+                    all_bytes = b"".join(raw_chunks)
+                    if not all_bytes.startswith(b"RIFF"):
+                        all_bytes = _pcm_to_wav(
+                            all_bytes, self._tts.sample_rate, self._tts.num_channels
+                        )
+                    output_emitter.push(all_bytes)
+                else:
+                    for chunk in raw_chunks:
+                        output_emitter.push(chunk)
         except asyncio.TimeoutError as e:
             raise APITimeoutError("Sarvam TTS API request timed out") from e
         except aiohttp.ClientError as e:
@@ -760,6 +800,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._send_task: asyncio.Task | None = None
         self._recv_task: asyncio.Task | None = None
         self._ws_conn: aiohttp.ClientWebSocketResponse | None = None
+
+        # Buffer raw PCM for wav codec (Sarvam streams raw PCM chunks that must
+        # be collected into a single RIFF/WAVE container before emitting).
+        self._wav_buffer: list[bytes] = []
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
@@ -1071,7 +1115,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                 return True
 
             audio_bytes = base64.b64decode(audio_data)
-            output_emitter.push(audio_bytes)
+            if self._opts.output_audio_codec == "wav":
+                # Buffer raw PCM; the complete WAV container will be pushed once
+                # the "final" event is received (see _handle_event_message).
+                self._wav_buffer.append(audio_bytes)
+            else:
+                output_emitter.push(audio_bytes)
 
             return True
 
@@ -1118,6 +1167,17 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         if event_type == "final":
             logger.debug("Generation complete event received", extra=self._build_log_context())
+            if self._wav_buffer:
+                # All raw PCM chunks have been collected; emit as a complete WAV.
+                all_pcm = b"".join(self._wav_buffer)
+                self._wav_buffer.clear()
+                if not all_pcm.startswith(b"RIFF"):
+                    all_pcm = _pcm_to_wav(
+                        all_pcm,
+                        self._opts.speech_sample_rate,
+                        1,  # Sarvam always outputs mono
+                    )
+                output_emitter.push(all_pcm)
             output_emitter.end_input()
             return False  # Stop processing
         else:
