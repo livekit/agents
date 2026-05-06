@@ -762,7 +762,7 @@ class SpeechStream(stt.SpeechStream):
                     # the generator stays parked on _input_ch and pins the previous
                     # gRPC streaming call, leaking it across iterations.
                     frame_task = asyncio.create_task(
-                        cast(Coroutine[rtc.AudioFrame, Any, Any], anext(input_iter))
+                        self._input_ch.recv()
                     )
                     done, _ = await asyncio.wait(
                         [frame_task, stop_task], return_when=asyncio.FIRST_COMPLETED
