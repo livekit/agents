@@ -110,9 +110,9 @@ async def entrypoint(ctx: JobContext):
 
         result = await detector.execute()
         logger.info(f"AMD result: {result}")
-        if result.category == "human":
+        if result.category == "human" or result.category == "uncertain":
             logger.info(
-                "human answered the call, proceeding with normal conversation",
+                "human answered the call or amd is uncertain, proceeding with normal conversation",
                 extra={"transcript": result.transcript},
             )
 
