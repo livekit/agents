@@ -430,6 +430,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         output_emitter.start_segment(segment_id=context_id)
 
         sent_stream = self._tts._sentence_tokenizer.stream()
+        input_sent_event = asyncio.Event()
 
         async def _input_task() -> None:
             async for data in self._input_ch:
@@ -445,6 +446,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 pkt = {"text": ev.token + " ", "contextId": context_id}
                 self._mark_started()
                 await ws.send_str(json.dumps(pkt))
+                input_sent_event.set()
                 sent_count += 1
             # Empty input: server returns notReady, never emits done — fail fast.
             if sent_count == 0:
@@ -453,6 +455,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             await ws.send_str(json.dumps({"operation": "flush", "contextId": context_id}))
 
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            await input_sent_event.wait()
             while True:
                 msg = await ws.receive(timeout=self._conn_options.timeout)
                 if msg.type in (
@@ -497,6 +500,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 try:
                     await asyncio.gather(*tasks)
                 finally:
+                    input_sent_event.set()
                     await sent_stream.aclose()
                     await utils.aio.gracefully_cancel(*tasks)
         except asyncio.TimeoutError:
