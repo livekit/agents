@@ -7,7 +7,10 @@ from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from types import TracebackType
-from typing import Any, Generic, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
+
+if TYPE_CHECKING:
+    from .. import vad as _vad
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -275,6 +278,15 @@ class STT(
 
     def prewarm(self) -> None:
         """Pre-warm connection to the STT service"""
+        pass
+
+    def on_vad_event(self, ev: _vad.VADEvent) -> None:
+        """Receive VAD events from the session-level VAD, when one is attached.
+
+        Default implementation is a no-op. Plugins may override this to react to
+        external VAD signals — for example, to call `finalize()` on END_OF_SPEECH
+        when running in an externally-driven turn detection mode.
+        """
         pass
 
 
