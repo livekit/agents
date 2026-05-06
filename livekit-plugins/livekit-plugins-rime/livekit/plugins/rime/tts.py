@@ -227,7 +227,11 @@ class TTS(tts.TTS):
             "segment": self._segment,
             **_model_params(self._opts),
         }
-        return f"{self._ws_base_url}/ws3?{urlencode(params)}"
+        encoded = {
+            k: ("true" if v else "false") if isinstance(v, bool) else v
+            for k, v in params.items()
+        }
+        return f"{self._ws_base_url}/ws3?{urlencode(encoded)}"
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
