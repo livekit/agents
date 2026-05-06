@@ -14,22 +14,24 @@
 
 """Krisp VIVA plugin for LiveKit Agents
 
-This plugin provides real-time noise reduction
-using Krisp's proprietary algorithms via the VIVA SDK.
+This plugin provides real-time noise reduction using Krisp's proprietary
+algorithms. Two authentication backends are supported:
 
-Features:
-    - KrispVivaFilterFrameProcessor: Real-time noise reduction FrameProcessor
+- :class:`LiveKitCloudAuthProvider` (default): LiveKit Cloud-managed auth +
+  bundled model. No Krisp env vars required.
+- :class:`KrispLicenseAuthProvider`: Krisp-direct auth using a license key
+  and a ``.kef`` model file.
 """
 
 from livekit.agents import Plugin
 
-from .krisp_instance import (
-    KRISP_FRAME_DURATIONS,
-    KRISP_SAMPLE_RATES,
-    KrispSDKManager,
-    int_to_krisp_frame_duration,
-    int_to_krisp_sample_rate,
+from .auth import (
+    KrispAuthProvider,
+    KrispBackend,
+    KrispLicenseAuthProvider,
+    LiveKitCloudAuthProvider,
 )
+from .krisp_instance import KrispSDKManager
 from .log import logger
 from .version import __version__
 from .viva_filter import KrispVivaFilterFrameProcessor
@@ -37,10 +39,10 @@ from .viva_filter import KrispVivaFilterFrameProcessor
 __all__ = [
     "KrispVivaFilterFrameProcessor",
     "KrispSDKManager",
-    "KRISP_SAMPLE_RATES",
-    "KRISP_FRAME_DURATIONS",
-    "int_to_krisp_sample_rate",
-    "int_to_krisp_frame_duration",
+    "KrispAuthProvider",
+    "KrispBackend",
+    "LiveKitCloudAuthProvider",
+    "KrispLicenseAuthProvider",
     "__version__",
 ]
 
