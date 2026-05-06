@@ -107,7 +107,7 @@ class AsyncRunContext(RunContext[Userdata_T]):
         self._step_idx += 1
 
         tool_output = self._make_tool_output(
-            message, call_id=f"{self.function_call.call_id}/update_{self._step_idx}"
+            message, call_id=f"{self.function_call.call_id}_update_{self._step_idx}"
         )
         if tool_output.fnc_call_out is None:
             return
@@ -281,7 +281,7 @@ class AsyncToolset(Toolset):
                 if output is None:
                     return
 
-                tool_output = async_ctx._make_tool_output(output, call_id=f"{call_id}/finished")
+                tool_output = async_ctx._make_tool_output(output, call_id=f"{call_id}_finished")
                 if tool_output.fnc_call_out is None:
                     return
 
