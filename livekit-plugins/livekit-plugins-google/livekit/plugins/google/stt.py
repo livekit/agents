@@ -51,7 +51,7 @@ from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
 )
-from livekit.agents.utils import is_given
+from livekit.agents.utils import is_given, ChanClosed
 from livekit.agents.voice.io import TimedString
 
 from .log import logger
@@ -772,7 +772,7 @@ class SpeechStream(stt.SpeechStream):
                         return
                     try:
                         frame = frame_task.result()
-                    except StopAsyncIteration:
+                    except ChanClosed:
                         return
 
                     if isinstance(frame, rtc.AudioFrame):
@@ -921,10 +921,6 @@ class SpeechStream(stt.SpeechStream):
                 if e.code == 409:
                     if audio_pushed:
                         logger.debug("stream timed out, restarting.")
-                    else:
-                        # No audio has been pushed — back off so we don't tight-loop
-                        # against Google's server-side 5-minute idle timeout.
-                        await asyncio.sleep(5.0)
                 else:
                     raise APIStatusError(
                         f"{e.message} {e.details}", status_code=e.code or -1
