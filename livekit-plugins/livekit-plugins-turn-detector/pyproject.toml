@@ -23,7 +23,8 @@ classifiers = [
 ]
 dependencies = [
     "livekit-agents>=1.5.8",
-    "transformers>=4.47.1,!=4.57.2,!=4.57.3",  # 4.57.2-4.57.3 have a bug with local_files_only=True (huggingface/transformers#42369)
+    "tokenizers>=0.20,<1",
+    "huggingface-hub>=0.25",
     "numpy>=1.26",
     "onnxruntime>=1.18",
     "jinja2",
