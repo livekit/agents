@@ -12,7 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Krisp VIVA noise reduction audio filter for LiveKit Agents."""
+"""Krisp VIVA noise reduction audio filter for LiveKit Agents.
+
+This module provides an audio filter implementation using Krisp VIVA SDK
+for real-time noise suppression in LiveKit voice agents.
+"""
 
 from __future__ import annotations
 
@@ -86,7 +90,11 @@ def _resolve_auth_provider(
 
 
 class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
-    """FrameProcessor for Krisp noise reduction.
+    """FrameProcessor implementation for Krisp noise reduction.
+
+    This class implements the FrameProcessor interface from livekit-rtc,
+    allowing it to be used directly with the noise_cancellation parameter
+    in AudioInputOptions or RoomInputOptions.
 
     Example:
         ```python
@@ -137,10 +145,17 @@ class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
             model_path: **Deprecated.** Use
                 ``auth_provider=KrispLicenseAuthProvider(model_path=...)``
                 instead. Path to the Krisp model file (``.kef``).
-            noise_suppression_level: Noise suppression level (0-100).
-            frame_duration_ms: Frame duration in milliseconds (10, 15, 20, 30
-                or 32).
-            sample_rate: Sample rate in Hz. Defaults to 16000.
+            noise_suppression_level: Noise suppression level (0-100, default: 100).
+            frame_duration_ms: Frame duration in milliseconds (10, 15, 20, 30, or 32, default: 10).
+            sample_rate: sample rate in Hz. If None, default to 16000 Hz.
+
+        Raises:
+            RuntimeError: If the chosen backend wheel is not installed or the
+                SDK cannot be initialized.
+            ValueError: If ``frame_duration_ms`` is not supported, or — for
+                :class:`KrispLicenseAuthProvider` — if ``model_path`` is
+                missing or does not have a ``.kef`` extension.
+            FileNotFoundError: If the license-mode model file does not exist.
         """
         provider = _resolve_auth_provider(auth_provider, model_path)
 
@@ -195,6 +210,12 @@ class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
             raise
 
     def _create_session(self, sample_rate: int) -> None:
+        """Create a new Krisp session with the correct sample rate.
+
+        Args:
+            sample_rate: The sample rate of the audio frames in Hz.
+        """
+        # If session already exists for this sample rate, don't recreate
         if self._session is not None and self._sample_rate == sample_rate:
             return
 
@@ -213,12 +234,29 @@ class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
             raise
 
     def _process(self, frame: rtc.AudioFrame) -> rtc.AudioFrame:
+        """Process an audio frame with Krisp noise reduction.
+
+        This is the method required by the FrameProcessor interface.
+
+        Args:
+            frame: Input audio frame. Must contain exactly the number of samples
+                   matching the configured frame_duration_ms at the frame's sample_rate.
+                   For example: 10ms @ 16kHz = 160 samples, 20ms @ 32kHz = 640 samples.
+
+        Returns:
+            Filtered audio frame with noise reduction applied.
+            If filtering is disabled, returns the original frame.
+
+        Raises:
+            ValueError: If frame size doesn't match the expected frame duration.
+        """
         if not self._filtering_enabled:
             return frame
 
         if self._session is None or self._sample_rate != frame.sample_rate:
             raise ValueError(f"Session not created or sample rate mismatch: {frame.sample_rate}Hz")
 
+        # Verify frame size matches expected duration
         expected_samples = int((frame.sample_rate * self._frame_duration_ms) / 1000)
         if frame.samples_per_channel != expected_samples:
             raise ValueError(
@@ -227,11 +265,14 @@ class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
                 f"got {frame.samples_per_channel} samples"
             )
 
+        # Convert frame to numpy array
         audio_samples = np.frombuffer(frame.data, dtype=np.int16)
 
         try:
+            # Process through Krisp
             filtered_samples = self._session.process(audio_samples, self._noise_suppression_level)
 
+            # Validate output
             if filtered_samples is None or len(filtered_samples) == 0:
                 logger.warning("Krisp returned empty output, using original audio")
                 filtered_samples = audio_samples
@@ -242,6 +283,7 @@ class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
                 )
                 filtered_samples = audio_samples
 
+            # Return filtered frame
             return rtc.AudioFrame(
                 data=filtered_samples.tobytes(),
                 sample_rate=frame.sample_rate,
@@ -251,9 +293,11 @@ class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
 
         except Exception as e:
             logger.error(f"Error processing frame: {e}")
+            # Return original frame on error
             return frame
 
     def process(self, frame: rtc.AudioFrame) -> rtc.AudioFrame:
+        """Public method that calls _process (for backward compatibility)."""
         return self._process(frame)
 
     def _on_stream_info_updated(
@@ -287,35 +331,53 @@ class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
             self._create_session(self._desired_sample_rate)
 
     def enable(self) -> None:
+        """Enable noise filtering."""
         self._filtering_enabled = True
 
     def disable(self) -> None:
+        """Disable noise filtering (audio will pass through unmodified)."""
         self._filtering_enabled = False
 
     @property
     def enabled(self) -> bool:
+        """Check if filtering is currently enabled (required by FrameProcessor interface)."""
         return self._filtering_enabled
 
     @enabled.setter
     def enabled(self, value: bool) -> None:
+        """Set filtering enabled state (required by FrameProcessor interface)."""
         self._filtering_enabled = value
 
     @property
     def is_enabled(self) -> bool:
+        """Check if filtering is currently enabled (backward compatibility)."""
         return self._filtering_enabled
 
     def _close(self) -> None:
-        # _close runs on track transitions, not just final destruction. Drop
-        # the session here but keep the SDK reference until __del__.
+        """Clean up processor session resources (required by FrameProcessor interface).
+
+        Note: This method is called during track transitions (when streams are closed/reopened),
+        not just when the processor is destroyed. Therefore, we only clean up the session here,
+        not the SDK reference. The SDK will be released in __del__ when the processor is
+        actually being destroyed (at the end of the call).
+        """
         if self._session is not None:
             self._session = None
+
         logger.debug("Krisp frame processor session closed")
 
     def close(self) -> None:
+        """Clean up processor session resources (public method for backward compatibility)."""
         self._close()
 
     def __del__(self) -> None:
-        # During Python shutdown, the manager module may already be torn down.
+        """Destructor to ensure cleanup of session resources.
+
+        Note: During Python shutdown, we avoid calling C extensions to prevent GIL errors.
+        Always call close() explicitly for proper cleanup.
+        """
+        # Check if we're in Python shutdown (modules being cleaned up)
+        # If KrispSDKManager is None, we're in shutdown - don't do anything
         if KrispSDKManager is None:
             return
 
@@ -323,16 +385,20 @@ class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
             try:
                 if getattr(self, "_session", None) is not None:
                     self._session = None
+                # Release SDK reference only if we still have it
                 KrispSDKManager.release()
                 self._sdk_acquired = False
             except Exception:
+                # Silently ignore errors during shutdown
                 pass
 
     def __enter__(self) -> KrispVivaFilterFrameProcessor:
+        """Context manager entry."""
         return self
 
     def __exit__(
         self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: Any
     ) -> Literal[False]:
+        """Context manager exit - clean up session."""
         self.close()
         return False
