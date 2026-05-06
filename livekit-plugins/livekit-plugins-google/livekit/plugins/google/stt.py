@@ -19,10 +19,10 @@ import contextlib
 import dataclasses
 import time
 import weakref
-from collections.abc import AsyncGenerator, AsyncIterable, Callable, Coroutine
+from collections.abc import AsyncGenerator, AsyncIterable, Callable
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any, cast, get_args
+from typing import cast, get_args
 
 from grpc.aio import StreamStreamCall
 
@@ -51,7 +51,8 @@ from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
 )
-from livekit.agents.utils import is_given, ChanClosed
+from livekit.agents.utils import is_given
+from livekit.agents.utils.aio import ChanClosed
 from livekit.agents.voice.io import TimedString
 
 from .log import logger
@@ -755,15 +756,12 @@ class SpeechStream(stt.SpeechStream):
             try:
                 yield self._build_init_request(client)
 
-                input_iter = aiter(self._input_ch)
                 while True:
                     # Race the next-frame await against should_stop so this generator
                     # can exit even when no audio is flowing. Without this, on reconnect
                     # the generator stays parked on _input_ch and pins the previous
                     # gRPC streaming call, leaking it across iterations.
-                    frame_task = asyncio.create_task(
-                        self._input_ch.recv()
-                    )
+                    frame_task = asyncio.create_task(self._input_ch.recv())
                     done, _ = await asyncio.wait(
                         [frame_task, stop_task], return_when=asyncio.FIRST_COMPLETED
                     )
