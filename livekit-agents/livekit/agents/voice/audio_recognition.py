@@ -653,6 +653,7 @@ class AudioRecognition:
         self._audio_preflight_transcript = ""
         self._final_transcript_confidence = []
         self._user_turn_committed = False
+        self._turn_speech_started = False
 
         # reset stt to clear the buffer from previous user turn
         stt = self._stt
