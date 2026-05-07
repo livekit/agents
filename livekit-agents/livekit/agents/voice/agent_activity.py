@@ -5,7 +5,7 @@ import contextvars
 import heapq
 import json
 import time
-from collections.abc import AsyncIterable, Coroutine, Sequence
+from collections.abc import AsyncIterable, Callable, Coroutine, Sequence
 from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any
@@ -177,6 +177,16 @@ class AgentActivity(RecognitionHooks):
 
         self._drain_blocked_tasks: list[asyncio.Task[Any]] = []
         self._mcp_tools: list[mcp.MCPToolset] = []
+        self._toolset_changed_callbacks: dict[llm.Toolset, Callable[[llm.Toolset], None]] = {}
+        self._mcp_reload_failed_callbacks: dict[mcp.MCPServer, Callable[[BaseException], None]] = {}
+        self._toolset_refresh_task: asyncio.Task[None] | None = None
+        self._toolset_refresh_pending = False
+        self._tool_names_snapshot: set[str] = set()
+        # Serializes _publish_tools_change between the public update_tools API and the
+        # background refresh task triggered by toolset change notifications. Cannot
+        # reuse self._lock because that one is held across long operations like
+        # _close_session, which would deadlock the cancel_and_wait of the refresh task.
+        self._refresh_lock = asyncio.Lock()
 
         self._on_enter_task: asyncio.Task | None = None
         self._on_exit_task: asyncio.Task | None = None
@@ -398,31 +408,138 @@ class AgentActivity(RecognitionHooks):
             )
 
     async def update_tools(self, tools: list[llm.Tool | llm.Toolset]) -> None:
-        # Compute tool diff before updating
-        old_tool_names = set(get_fnc_tool_names(self._agent._tools))
-        new_tool_names = set(get_fnc_tool_names(tools))
-        tools_added = list(new_tool_names - old_tool_names) or None
-        tools_removed = list(old_tool_names - new_tool_names) or None
+        if self._closed:
+            return
 
         tools = list({tool.id: tool for tool in tools}.values())
         self._agent._tools = tools
 
-        # Record the configuration change
-        config_update = llm.AgentConfigUpdate(
-            tools_added=tools_added,
-            tools_removed=tools_removed,
-            agent_id=self._agent.id,
+        await self._publish_tools_change(record_noop=True)
+        self._sync_toolset_change_subscriptions()
+
+    async def _publish_tools_change(self, *, record_noop: bool = False) -> None:
+        """Push the current tool set to the realtime session and chat context.
+
+        Reads ``self.tools``, diffs against ``self._tool_names_snapshot``, updates
+        the realtime session (when present), updates the chat context (for
+        non-realtime LLMs), and inserts an ``AgentConfigUpdate`` describing the
+        diff. ``record_noop`` preserves the public update_tools() audit trail even
+        when the requested tool set is unchanged. The snapshot is advanced last, so
+        a transient failure mid-publish leaves the previous snapshot in place and
+        the next refresh retries.
+
+        Serialized via ``self._refresh_lock`` so the public ``update_tools`` API
+        and the background refresh task triggered by toolset change notifications
+        cannot interleave their writes to ``_chat_ctx`` and ``rt_session``.
+        """
+        async with self._refresh_lock:
+            # Re-check after acquiring: a publish queued behind the lock could be
+            # awoken by a cancelled refresh task right as _close_session is about
+            # to await rt_session.aclose(). Writing to a closing session yields
+            # noisy errors out to the caller.
+            if self._closed:
+                return
+
+            tools = self.tools
+            tool_ctx = llm.ToolContext(tools)
+            tool_names = set(get_fnc_tool_names(tools))
+            tools_added = sorted(tool_names - self._tool_names_snapshot) or None
+            tools_removed = sorted(self._tool_names_snapshot - tool_names) or None
+
+            config_update: llm.AgentConfigUpdate | None = None
+            if tools_added or tools_removed or record_noop:
+                config_update = llm.AgentConfigUpdate(
+                    tools_added=tools_added,
+                    tools_removed=tools_removed,
+                    agent_id=self._agent.id,
+                )
+                # Store full tool definitions in-memory (not serialized)
+                config_update._tools = tool_ctx.flatten()
+
+            if self._rt_session is not None:
+                await self._rt_session.update_tools(tool_ctx.flatten())
+
+            if isinstance(self.llm, llm.LLM):
+                # for realtime LLM, we assume the server will remove unvalid tool messages
+                await self.update_chat_ctx(self._agent._chat_ctx.copy(tools=tools))
+
+            if config_update is not None:
+                self._agent._chat_ctx.insert(config_update)
+
+            self._tool_names_snapshot = tool_names
+
+    def _sync_toolset_change_subscriptions(self) -> None:
+        toolsets = set(llm.ToolContext(self.tools).toolsets)
+
+        for toolset in list(self._toolset_changed_callbacks):
+            if toolset not in toolsets:
+                callback = self._toolset_changed_callbacks.pop(toolset)
+                toolset._remove_tools_changed_callback(callback)
+
+        for toolset in toolsets:
+            if toolset not in self._toolset_changed_callbacks:
+                toolset._add_tools_changed_callback(self._request_toolset_refresh)
+                self._toolset_changed_callbacks[toolset] = self._request_toolset_refresh
+
+        # Bridge MCP-specific reload failures (after retries are exhausted) onto
+        # the session-level error event so operators can react.
+        from ..llm.mcp import MCPToolset
+
+        mcp_servers = {ts._mcp_server for ts in toolsets if isinstance(ts, MCPToolset)}
+        for server in list(self._mcp_reload_failed_callbacks):
+            if server not in mcp_servers:
+                fail_cb = self._mcp_reload_failed_callbacks.pop(server)
+                server._remove_reload_failed_callback(fail_cb)
+
+        for server in mcp_servers:
+            if server not in self._mcp_reload_failed_callbacks:
+                # Bind the source server at registration time so the bridge can
+                # tag the ErrorEvent with the actual failing component. Without
+                # this, listeners couldn't tell which MCP server went stale when
+                # an agent has multiple servers.
+                bound_cb = partial(self._on_mcp_reload_failed, server)
+                server._add_reload_failed_callback(bound_cb)
+                self._mcp_reload_failed_callbacks[server] = bound_cb
+
+    def _clear_toolset_change_subscriptions(self) -> None:
+        for toolset, ts_cb in list(self._toolset_changed_callbacks.items()):
+            toolset._remove_tools_changed_callback(ts_cb)
+        self._toolset_changed_callbacks.clear()
+
+        for server, fail_cb in list(self._mcp_reload_failed_callbacks.items()):
+            server._remove_reload_failed_callback(fail_cb)
+        self._mcp_reload_failed_callbacks.clear()
+
+    def _on_mcp_reload_failed(self, server: mcp.MCPServer, error: BaseException) -> None:
+        if self._closed:
+            return
+        try:
+            self._session.emit("error", ErrorEvent(error=error, source=server))
+        except Exception:
+            logger.exception("error while emitting MCP reload-failed event")
+
+    def _request_toolset_refresh(self, toolset: llm.Toolset) -> None:
+        if self._closed:
+            return
+
+        self._toolset_refresh_pending = True
+        if self._toolset_refresh_task is not None and not self._toolset_refresh_task.done():
+            return
+
+        self._toolset_refresh_task = asyncio.create_task(
+            self._refresh_tools_from_toolsets(),
+            name=f"AgentActivity.refresh_tools.{toolset.id}",
         )
-        # Store full tool definitions in-memory (not serialized)
-        config_update._tools = llm.ToolContext(tools).flatten()
-        self._agent._chat_ctx.insert(config_update)
 
-        if self._rt_session is not None:
-            await self._rt_session.update_tools(llm.ToolContext(self.tools).flatten())
-
-        if isinstance(self.llm, llm.LLM):
-            # for realtime LLM, we assume the server will remove unvalid tool messages
-            await self.update_chat_ctx(self._agent._chat_ctx.copy(tools=tools))
+    async def _refresh_tools_from_toolsets(self) -> None:
+        try:
+            while self._toolset_refresh_pending and not self._closed:
+                self._toolset_refresh_pending = False
+                await self._publish_tools_change()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("failed to refresh tools after toolset update")
 
     async def update_chat_ctx(
         self, chat_ctx: llm.ChatContext, *, exclude_invalid_function_calls: bool = True
@@ -706,6 +823,9 @@ class AgentActivity(RecognitionHooks):
                 return_exceptions=True,
             )
 
+        self._tool_names_snapshot = set(get_fnc_tool_names(self.tools))
+        self._sync_toolset_change_subscriptions()
+
         if isinstance(self.llm, llm.RealtimeModel):
             rt_reused = reuse_resources is not None and reuse_resources.rt_session is not None
             if rt_reused:
@@ -953,8 +1073,13 @@ class AgentActivity(RecognitionHooks):
             self._interruption_detector.off("error", self._on_error)
             self._interruption_detector.off("overlapping_speech", self._on_overlap_speech_ended)
 
-        if self._rt_session is not None:
-            await self._rt_session.aclose()
+        self._clear_toolset_change_subscriptions()
+        if self._toolset_refresh_task is not None:
+            await utils.aio.cancel_and_wait(self._toolset_refresh_task)
+
+        async with self._refresh_lock:
+            if self._rt_session is not None:
+                await self._rt_session.aclose()
 
         if self._realtime_spans is not None:
             self._realtime_spans.clear()

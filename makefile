@@ -99,6 +99,7 @@ unit-tests:
 		tests/test_ivr_activity.py \
 		tests/test_langgraph.py \
 		tests/test_language.py \
+		tests/test_mcp.py \
 		tests/test_schema_gemini.py \
 		tests/test_tts_fallback.py \
 		tests/test_stt_fallback.py \

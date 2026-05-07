@@ -63,6 +63,7 @@ class Toolset:
         self._id = id
         self._tools: Sequence[Tool | Toolset] = list(tools) if tools is not None else []
         self._tools.extend(find_function_tools(self))
+        self._tools_changed_callbacks: set[Callable[[Toolset], None]] = set()
 
     @property
     def id(self) -> str:
@@ -93,6 +94,19 @@ class Toolset:
         toolsets = [tool for tool in self._tools if isinstance(tool, Toolset)]
         if toolsets:
             await asyncio.gather(*(toolset.aclose() for toolset in toolsets))
+
+    def _add_tools_changed_callback(self, callback: Callable[[Toolset], None]) -> None:
+        self._tools_changed_callbacks.add(callback)
+
+    def _remove_tools_changed_callback(self, callback: Callable[[Toolset], None]) -> None:
+        self._tools_changed_callbacks.discard(callback)
+
+    def _notify_tools_changed(self) -> None:
+        for callback in list(self._tools_changed_callbacks):
+            try:
+                callback(self)
+            except Exception:
+                logger.exception("error in tools_changed callback")
 
 
 # Used by ToolChoice
