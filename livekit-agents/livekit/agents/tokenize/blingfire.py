@@ -61,6 +61,7 @@ class _TokenizerOptions:
     min_sentence_len: int
     stream_context_len: int
     retain_format: bool
+    max_token_len: int | None
 
 
 class SentenceTokenizer(tokenizer.SentenceTokenizer):
@@ -70,11 +71,13 @@ class SentenceTokenizer(tokenizer.SentenceTokenizer):
         min_sentence_len: int = 20,
         stream_context_len: int = 10,
         retain_format: bool = False,
+        max_token_len: int | None = None,
     ) -> None:
         self._config = _TokenizerOptions(
             min_sentence_len=min_sentence_len,
             stream_context_len=stream_context_len,
             retain_format=retain_format,
+            max_token_len=max_token_len,
         )
 
     def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
@@ -94,6 +97,7 @@ class SentenceTokenizer(tokenizer.SentenceTokenizer):
                 min_sentence_len=self._config.min_sentence_len,
                 retain_format=self._config.retain_format,
             ),
+            max_token_len=self._config.max_token_len,
             min_token_len=self._config.min_sentence_len,
             min_ctx_len=self._config.stream_context_len,
         )

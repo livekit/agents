@@ -610,7 +610,12 @@ class SynthesizeStream(tts.SynthesizeStream):
             mime_type="audio/pcm",
         )
 
-        sent_tokenizer_stream = tokenize.basic.SentenceTokenizer().stream()
+        from ..tts._provider_format import max_input_len
+
+        provider = self._opts.model.split("/")[0]
+        sent_tokenizer_stream = tokenize.blingfire.SentenceTokenizer(
+            max_token_len=max_input_len(provider),
+        ).stream()
         input_sent_event = asyncio.Event()
 
         async def _input_task() -> None:

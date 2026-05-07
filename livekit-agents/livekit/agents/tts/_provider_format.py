@@ -118,6 +118,16 @@ Examples:
   <expression value="quietly with a calm and steady tone"/> Your account number is one two three four five six."""
 
 
+_MAX_INPUT_LEN: dict[str, int] = {
+    "inworld": 900,
+}
+
+
+def max_input_len(provider: str) -> int | None:
+    """Return the max text chunk length for a provider, or None if unlimited."""
+    return _MAX_INPUT_LEN.get(provider)
+
+
 def llm_instructions(provider: str) -> str | None:
     """Return LLM instruction text for a TTS provider."""
     if provider == "cartesia":

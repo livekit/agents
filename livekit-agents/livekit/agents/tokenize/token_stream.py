@@ -47,6 +47,7 @@ class BufferedTokenStream:
         tokenize_fnc: TokenizeCallable,
         min_token_len: int,
         min_ctx_len: int,
+        max_token_len: int | None = None,
         retain_format: bool = False,
         xml_aware: bool = True,
     ) -> None:
@@ -54,6 +55,7 @@ class BufferedTokenStream:
         self._tokenize_fnc = tokenize_fnc
         self._min_ctx_len = min_ctx_len
         self._min_token_len = min_token_len
+        self._max_token_len = max_token_len
         self._retain_format = retain_format
         self._xml_aware = xml_aware
         self._current_segment_id = shortuuid()
@@ -83,6 +85,17 @@ class BufferedTokenStream:
                 break
 
             tokens.pop(0)
+
+            # if adding this sentence would exceed max, emit what we have first
+            if (
+                self._max_token_len
+                and self._out_buf
+                and len(self._out_buf) + 1 + len(tok_text) > self._max_token_len
+            ):
+                self._event_ch.send_nowait(
+                    TokenData(token=self._out_buf, segment_id=self._current_segment_id)
+                )
+                self._out_buf = ""
 
             if self._out_buf:
                 self._out_buf += " "
@@ -151,11 +164,13 @@ class BufferedSentenceStream(BufferedTokenStream, SentenceStream):
         tokenizer: TokenizeCallable,
         min_token_len: int,
         min_ctx_len: int,
+        max_token_len: int | None = None,
     ) -> None:
         super().__init__(
             tokenize_fnc=tokenizer,
             min_token_len=min_token_len,
             min_ctx_len=min_ctx_len,
+            max_token_len=max_token_len,
         )
 
 
