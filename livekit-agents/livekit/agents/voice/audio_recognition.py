@@ -204,7 +204,7 @@ class AudioRecognition:
         self._stt_request_ids: list[str] = []
         self._closing = asyncio.Event()
 
-        self._vad_speech_started: bool = False
+        self._turn_speech_started: bool = False
 
     def update_options(
         self,
@@ -966,13 +966,9 @@ class AudioRecognition:
     async def _on_vad_event(self, ev: vad.VADEvent) -> None:
         if ev.type == vad.VADEventType.START_OF_SPEECH:
             speech_start_time = time.time() - ev.speech_duration - ev.inference_duration
-            # _vad_speech_started is now per-turn (not per-burst): it stays True across
-            # END_OF_SPEECH within the same uncommitted turn so that subsequent bursts
-            # do not overwrite the original turn's _speech_start_time. It is reset
-            # only when an EOU commits or the VAD stream closes.
-            if not self._vad_speech_started:
+            if not self._turn_speech_started:
                 self._speech_start_time = speech_start_time
-                self._vad_speech_started = True
+                self._turn_speech_started = True
 
             with trace.use_span(self._ensure_user_turn_span(start_time=speech_start_time)):
                 self._hooks.on_start_of_speech(ev, speech_start_time=speech_start_time)
@@ -1159,7 +1155,7 @@ class AudioRecognition:
                 # only reset if there is no new speech
                 if self._last_speaking_time == last_speaking_time:
                     self._speech_start_time = None
-                    self._vad_speech_started = False
+                    self._turn_speech_started = False
                     self._last_speaking_time = None
 
             self._user_turn_committed = False
@@ -1226,7 +1222,7 @@ class AudioRecognition:
                 with trace.use_span(self._ensure_user_turn_span()):
                     self._hooks.on_end_of_speech(None)
                 self._speaking = False
-                self._vad_speech_started = False
+                self._turn_speech_started = False
 
     @utils.log_exceptions(logger=logger)
     async def _interruption_task(
