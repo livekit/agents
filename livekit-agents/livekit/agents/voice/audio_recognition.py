@@ -966,9 +966,12 @@ class AudioRecognition:
     async def _on_vad_event(self, ev: vad.VADEvent) -> None:
         if ev.type == vad.VADEventType.START_OF_SPEECH:
             speech_start_time = time.time() - ev.speech_duration - ev.inference_duration
+            # _vad_speech_started is now per-turn (not per-burst): it stays True across
+            # END_OF_SPEECH within the same uncommitted turn so that subsequent bursts
+            # do not overwrite the original turn's _speech_start_time. It is reset
+            # only when an EOU commits or the VAD stream closes.
             if not self._vad_speech_started:
-                if self._speech_start_time is None:
-                    self._speech_start_time = speech_start_time
+                self._speech_start_time = speech_start_time
                 self._vad_speech_started = True
 
             with trace.use_span(self._ensure_user_turn_span(start_time=speech_start_time)):
@@ -996,7 +999,6 @@ class AudioRecognition:
             with trace.use_span(self._ensure_user_turn_span()):
                 self._hooks.on_end_of_speech(ev)
 
-            self._vad_speech_started = False
             self._speaking = False
 
             if self._vad_base_turn_detection or (
