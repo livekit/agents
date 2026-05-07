@@ -428,7 +428,7 @@ async def drive_thru_agent(ctx: JobContext) -> None:
                 ],
             },
         ),
-        llm=inference.LLM("openai/gpt-5-mini"),
+        llm=inference.LLM("openai/gpt-4.1-mini"),
         tts=inference.TTS("inworld/inworld-tts-2"),
         expressiveness=True,
         turn_detection=MultilingualModel(),
