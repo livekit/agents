@@ -632,7 +632,11 @@ class SynthesizeStream(tts.SynthesizeStream):
             base_pkt["type"] = "input_transcript"
             async for ev in sent_tokenizer_stream:
                 token_pkt = base_pkt.copy()
-                token_pkt["transcript"] = ev.token + " "
+                converted = self._tts.markup.convert(ev.token)
+                logger.debug(
+                    f"[TTS→API] {converted[:100]!r}{'...' if len(converted) > 100 else ''}"
+                )
+                token_pkt["transcript"] = converted + " "
                 generation_config: dict[str, Any] = {}
                 if self._opts.voice:
                     generation_config["voice"] = self._opts.voice

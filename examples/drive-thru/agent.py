@@ -82,39 +82,6 @@ class DriveThruAgent(Agent):
             ],
         )
 
-    async def llm_node(self, chat_ctx, tools, model_settings):
-        logger.info("=== LLM CHAT CONTEXT ===")
-        for item in chat_ctx.items:
-            if item.type == "message":
-                logger.info(f"  [{item.role}] {item.text_content}")
-        stream = Agent.default.llm_node(self, chat_ctx, tools, model_settings)
-        if hasattr(stream, "__aiter__"):
-            async for chunk in stream:
-                if isinstance(chunk, str):
-                    print(f"[LLM] {chunk!r}", end="", flush=True)
-                elif hasattr(chunk, "delta") and chunk.delta and chunk.delta.content:
-                    print(f"[LLM] {chunk.delta.content!r}", end="", flush=True)
-                yield chunk
-            print()
-        else:
-            yield stream
-
-    async def tts_node(self, text, model_settings):
-        from pydantic import BaseModel
-
-        async def _debug_text(text_iter):
-            async for chunk in text_iter:
-                if isinstance(chunk, str):
-                    print(f"[TTS push] {chunk!r}", flush=True)
-                elif isinstance(chunk, BaseModel):
-                    print(f"[TTS push model] {chunk!r}", flush=True)
-                else:
-                    print(f"[TTS push ???] {type(chunk)}", flush=True)
-                yield chunk
-
-        async for frame in Agent.default.tts_node(self, _debug_text(text), model_settings):
-            yield frame
-
     def build_combo_order_tool(
         self, combo_items: list[MenuItem], drink_items: list[MenuItem], sauce_items: list[MenuItem]
     ) -> FunctionTool:
