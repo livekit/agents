@@ -11,7 +11,7 @@ from .tokenizer import SentenceStream, TokenData, WordStream
 # If the start and end indices are not available, we attempt to locate the token within the text using str.find.  # noqa: E501
 TokenizeCallable = Callable[[str], list[str] | list[tuple[str, int, int]]]
 
-_XML_TAG_RE = re.compile(r"<(/?)(\w+)[^>]*(/?)\s*>")
+_XML_TAG_RE = re.compile(r"<(/?)(\w+)[^>]*?(/?)\s*>")
 
 
 def _has_unclosed_xml_tags(text: str) -> bool:
