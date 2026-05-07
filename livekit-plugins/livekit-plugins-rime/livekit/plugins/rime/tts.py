@@ -434,6 +434,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         sent_stream = self._tts._sentence_tokenizer.stream()
         input_sent_event = asyncio.Event()
+        empty_input = False
 
         async def _input_task() -> None:
             async for data in self._input_ch:
@@ -444,6 +445,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             sent_stream.end_input()
 
         async def _send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            nonlocal empty_input
             sent_count = 0
             async for ev in sent_stream:
                 pkt = {"text": ev.token + " ", "contextId": context_id}
@@ -451,14 +453,17 @@ class SynthesizeStream(tts.SynthesizeStream):
                 await ws.send_str(json.dumps(pkt))
                 input_sent_event.set()
                 sent_count += 1
-            # Empty input: server returns notReady, never emits done — fail fast.
             if sent_count == 0:
-                raise APIError("Rime WS: no text was provided to synthesize")
-            # Per-utterance flush — eos would close the pooled WS.
+                empty_input = True
+                input_sent_event.set()
+                output_emitter.end_input()
+                return
             await ws.send_str(json.dumps({"operation": "flush", "contextId": context_id}))
 
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             await input_sent_event.wait()
+            if empty_input:
+                return
             while True:
                 msg = await ws.receive(timeout=self._conn_options.timeout)
                 if msg.type in (
