@@ -83,39 +83,28 @@ form (e.g. $42.50 → forty-two dollars and fifty cents, Dr. → Doctor, \
 3:45 PM → three forty-five PM, account 123456 → one two three four five six).
 
 Control vocal delivery with an expression tag before the text it applies to. \
-Describe mood, rhythm, pitch, and manner together — longer, detailed \
-descriptions outperform short labels. A tag applies until the next one:
-  <expression value="DESCRIPTION"/>
+Always layer mood, energy, pacing, and vocal style into one rich description — \
+short labels like "speak happily" sound flat. A tag applies until the next one:
+  <expression value="RICH DESCRIPTION"/>
 
-Common delivery styles:
-  <expression value="speak conversationally with a relaxed pace"/>
-  <expression value="speak warmly and gently"/>
-  <expression value="sound concerned with a measured pace and low tone"/>
-  <expression value="speak tired but warm like coming home from a long day"/>
-  <expression value="very fast with a sharp and urgent tone"/>
-  <expression value="very slow with deliberate pauses and clear articulation"/>
-  <expression value="whisper in a hushed style"/>
-  <expression value="say playfully"/>
-  <expression value="overwhelmed with excitement and barely able to contain yourself"/>
-  <expression value="slow and hushed with every word weighted by grief"/>
-  <expression value="speak as if barely holding back rage forcing every word through gritted teeth"/>
-
-Non-verbal sounds go inline where they occur naturally:
-  <expression value="laugh"/>, <expression value="sigh"/>, \
-<expression value="breathe"/>, <expression value="clear throat"/>, \
-<expression value="cough"/>, <expression value="yawn"/>.
+Non-verbal sounds go inline: <expression value="laugh"/>, \
+<expression value="sigh"/>, <expression value="breathe"/>, \
+<expression value="clear throat"/>, <expression value="cough"/>, \
+<expression value="yawn"/>.
 
 <break time="1s"/> — pause (max 10s, up to 20 per response).
 Use CAPITALIZATION for emphasis on key words.
 
 Examples:
-  <expression value="speak conversationally"/> Hey, so, I was thinking we could try something different.
-  <expression value="speak warmly and gently"/> I missed you. How was today?
-  <expression value="sound concerned"/> Are you sure you're okay? You don't sound like yourself.
+  <expression value="speak conversationally with a warm relaxed pace and a smile in the voice"/> Hey, so, I was thinking we could try something different.
+  <expression value="sound genuinely concerned with a low measured tone and careful pacing"/> Are you sure you're okay? You don't sound like yourself.
+  <expression value="overwhelmed with excitement and barely able to contain yourself"/> We just hit a million users! I still can't believe it!
+  <expression value="slow and hushed with every word weighted by grief"/> I got the call this morning. He's gone.
+  <expression value="sing joyfully with a bright melodic rhythm and high energy"/> La la la, welcome to the show, we're so glad you're here, let's go!
+  <expression value="speak fast and urgent with sharp intensity"/> Run, don't stop, they're right behind us, keep moving!
+  <expression value="whisper softly in a hushed intimate tone"/> Don't tell anyone, but I think we're lost.
   Wait, you actually did that? <expression value="laugh"/> That's wild.
-  <expression value="sigh"/> I don't know. It's been one of those weeks where you just kind of... lose the thread.
-  <expression value="very fast"/> Run, don't stop, they're right behind us, keep moving!
-  <expression value="quietly with a calm and steady tone"/> Your account number is one two three four five six."""
+  <expression value="sigh"/> I don't know. It's been one of those weeks where you just kind of... lose the thread."""
 
 
 _MAX_INPUT_LEN: dict[str, int] = {
