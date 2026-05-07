@@ -652,7 +652,17 @@ class AudioRecognition:
         self._audio_interim_transcript = ""
         self._audio_preflight_transcript = ""
         self._final_transcript_confidence = []
+        self._last_final_transcript_time = None
+        self._speech_start_time = None
+        self._last_speaking_time = None
+        self._vad_speech_started = False
         self._user_turn_committed = False
+
+        # end any in-progress user_turn span so the next speech starts a fresh one
+        if self._user_turn_span is not None and self._user_turn_span.is_recording():
+            self._user_turn_span.end()
+        self._user_turn_span = None
+        self._stt_request_ids = []
 
         # reset stt to clear the buffer from previous user turn
         stt = self._stt
