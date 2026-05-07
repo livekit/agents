@@ -228,8 +228,7 @@ class TTS(tts.TTS):
             **_model_params(self._opts),
         }
         encoded = {
-            k: ("true" if v else "false") if isinstance(v, bool) else v
-            for k, v in params.items()
+            k: ("true" if v else "false") if isinstance(v, bool) else v for k, v in params.items()
         }
         return f"{self._ws_base_url}/ws3?{urlencode(encoded)}"
 
