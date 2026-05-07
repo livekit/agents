@@ -967,7 +967,8 @@ class AudioRecognition:
         if ev.type == vad.VADEventType.START_OF_SPEECH:
             speech_start_time = time.time() - ev.speech_duration - ev.inference_duration
             if not self._vad_speech_started:
-                self._speech_start_time = speech_start_time
+                if self._speech_start_time is None:
+                    self._speech_start_time = speech_start_time
                 self._vad_speech_started = True
 
             with trace.use_span(self._ensure_user_turn_span(start_time=speech_start_time)):
