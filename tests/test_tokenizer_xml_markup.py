@@ -112,6 +112,36 @@ class TestBatchTokenizer:
         sentences = self.tok.tokenize(text)
         assert '<volume ratio="0.5"/>' in sentences[0]
 
+    def test_self_closing_with_attributes_allows_sentence_split(self) -> None:
+        """Regression: greedy [^>]* in regex ate the / in self-closing tags,
+        causing the tokenizer to think every <tag attr="..."/> was unclosed
+        and hold the entire buffer (never splitting sentences)."""
+        text = (
+            '<expression value="speak warmly with a gentle pace"/> '
+            "This is the first sentence of a longer response. "
+            "This is the second sentence that should be separate. "
+            "And here is a third sentence that comes after."
+        )
+        sentences = self.tok.tokenize(text)
+        # Must split into multiple sentences — the expression tag is self-closing
+        # and should NOT prevent splitting
+        assert len(sentences) >= 2, (
+            f"Self-closing tag with attributes blocked sentence splitting: {sentences}"
+        )
+
+    def test_expression_tag_does_not_block_splitting(self) -> None:
+        """Regression: <expression value="..."/> must not hold the buffer."""
+        text = (
+            '<expression value="sing joyfully with a bright melodic rhythm and high energy"/> '
+            "La la la, welcome to the show. "
+            "We are so glad that you are here today. "
+            "Let us have some fun together now."
+        )
+        sentences = self.tok.tokenize(text)
+        assert len(sentences) >= 2, (
+            f"Expression tag blocked sentence splitting: {sentences}"
+        )
+
     def test_break_between_sentences(self) -> None:
         text = 'First sentence. <break time="1.5s"/> Second sentence.'
         sentences = self.tok.tokenize(text)
@@ -318,6 +348,36 @@ class TestStreamingTokenizer:
         text = 'Wait. <break time="2s"/> OK continue now.'
         tokens = await _stream_tokenize(self.tok, text)
         _assert_tags_balanced(tokens, "stream-break")
+
+    # -- Regression: self-closing tags must not block splitting --
+
+    @pytest.mark.asyncio
+    async def test_self_closing_allows_split_streaming(self) -> None:
+        """Regression: self-closing tags with attributes must not hold the buffer."""
+        text = (
+            '<expression value="speak warmly with a gentle pace"/> '
+            "This is the first sentence of a longer response. "
+            "This is the second sentence that should be separate. "
+            "And here is a third sentence that comes after."
+        )
+        tokens = await _stream_tokenize(self.tok, text)
+        assert len(tokens) >= 2, (
+            f"Self-closing tag blocked streaming sentence split: {tokens}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_expression_tag_allows_split_streaming(self) -> None:
+        """Regression: long expression tags must not hold the buffer."""
+        text = (
+            '<expression value="sing joyfully with a bright melodic rhythm and high energy"/> '
+            "La la la, welcome to the show. "
+            "We are so glad that you are here today. "
+            "Let us have some fun together now."
+        )
+        tokens = await _stream_tokenize(self.tok, text)
+        assert len(tokens) >= 2, (
+            f"Expression tag blocked streaming sentence split: {tokens}"
+        )
 
     # -- Wrapping tags --
 
