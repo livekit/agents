@@ -139,49 +139,76 @@ Examples:
 
 # -- Inworld TTS 2 (uses <expression> → converted to [] by plugin) -----------
 
-_INWORLD_TAGS = ["expression"]
+_INWORLD_TAGS = ["expression", "break"]
 
 _INWORLD_LLM_INSTRUCTIONS = """\
-Normalize all numbers, symbols, and abbreviations for spoken clarity:
-  $42.50 → forty-two dollars and fifty cents
-  Dr. → Doctor, Ave. → Avenue
-  100% → one hundred percent
-  14:30 → two thirty PM
-  github.com/inworld → github dot com slash inworld
+Write everything as natural spoken sentences. No markdown, bullet points, \
+emojis, or special characters. Use contractions (don't, can't, I'm).
 
-You can control your vocal delivery using expression tags. Place them before \
-the text they affect. Descriptions can be detailed and natural:
+Normalize all numbers, symbols, and abbreviations into spoken form:
+  $1,249.99 → twelve hundred forty-nine dollars and ninety-nine cents
+  (555) 123-4567 → five five five, one two three, four five six seven
+  Dr. → Doctor, Ave. → Avenue, St. → Street
+  100% → one hundred percent
+  3:45 PM → three forty-five PM
+  12/04/2025 → december fourth, twenty twenty-five
+  test@example.com → test at example dot com
+  github.com/inworld → github dot com slash inworld
+  v3.2 → version three point two
+  Account numbers digit-by-digit: 123456 → one two three four five six
+  Math as words: 2 + 2 = 4 → two plus two equals four
+  Pronounceable acronyms as words: NASA. Non-pronounceable spell out: A-P-I
+
+DELIVERY — open your response with an expression tag that describes how you \
+should sound. Layer mood, rhythm, pitch, and manner together for the best \
+results. A delivery tag applies to everything that follows it. Change the tag \
+only when the delivery should change — fewer tags produce more consistent results:
   <expression value="DESCRIPTION"/>
 
-Emotions and delivery:
-  <expression value="say excitedly"/>
-  <expression value="sound sad"/>
-  <expression value="speak as if barely holding back rage"/>
-  <expression value="whisper gently"/>
-  <expression value="say with a falling pitch"/>
-  <expression value="very quiet"/>
-  <expression value="very fast"/>
+Descriptions are free-form English. Use lowercase without punctuation inside \
+the tag. Longer, more specific descriptions outperform short labels:
+  <expression value="speak warmly with a gentle pace"/>
+  <expression value="sound concerned with a measured pace and low tone"/>
+  <expression value="very fast with a sharp and urgent tone"/>
+  <expression value="very slow with deliberate pauses and clear articulation"/>
+  <expression value="whisper in a hushed style"/>
+  <expression value="speak tired but warm like coming home from a long day"/>
+  <expression value="overwhelmed with excitement and barely able to contain yourself"/>
+  <expression value="slow and hushed with every word weighted by grief"/>
 
-Non-verbal sounds (place inline where they occur naturally):
+NON-VERBAL — these six tags are the exception and go inline where the sound \
+should occur naturally:
   <expression value="laugh"/>
   <expression value="sigh"/>
+  <expression value="breathe"/>
   <expression value="clear throat"/>
   <expression value="cough"/>
+  <expression value="yawn"/>
 
-Use CAPITALIZATION for word-level emphasis: "I told you NOT to do that."
+PAUSE — insert a silence (max 10 seconds, up to 20 per response):
+  <break time="1s"/> or <break time="500ms"/>
 
-Tips:
-- Longer, descriptive instructions work better than single words.
-- Combine qualities: <expression value="say sadly with deliberate pauses in a low voice"/>
-- Don't combine contradictory directions (e.g., whisper + very loud).
-- Use contractions for conversational tone (don't, can't, I'm).
-- No markdown, bullet points, or emojis — write natural spoken sentences.
+EMPHASIS — use CAPITALIZATION for stress on important words or syllables:
+  We NEED a real vacation.
+  You MUST run this as root.
+  AbsoLUTEly.
+
+Rules:
+- Delivery tags before the text they affect. Non-verbals inline.
+- Never combine contradictory directions in one tag (e.g., whisper + very loud).
+- Match delivery to content — mismatches degrade quality.
+- Delivery instructions must be in English even when speaking other languages.
+- Use ellipses (...) for trailing off or hesitation.
+- Vary sentence length for natural rhythm.
 
 Examples:
-  <expression value="say excitedly"/> I can't believe we actually did it!
-  <expression value="sound concerned"/> Are you sure you're okay?
-  I was just about to tell you <expression value="laugh"/> that's the funniest thing I've heard.
-  <expression value="slow and hushed with every word weighted by grief"/> I'm so sorry for your loss."""
+  <expression value="speak warmly and conversationally"/> Hey, so, uh, I was thinking we could try a different approach.
+  <expression value="sound concerned with a measured pace"/> Are you sure you're okay? You don't sound like yourself.
+  <expression value="overwhelmed with excitement"/> We just hit a million users! I still can't believe it.
+  Wait, you actually did that? <expression value="laugh"/> That's wild.
+  <expression value="sigh"/> I don't know. It's been one of those weeks where you just kind of... lose the thread.
+  <expression value="slow and hushed with every word weighted by grief"/> I got the call this morning. He's gone.
+  <expression value="quietly with a calm and steady tone"/> Your account number is one two three four five six. Please keep this safe."""
 
 
 def llm_instructions(provider: str) -> str | None:
@@ -203,8 +230,11 @@ def strip_markup(provider: str, text: str) -> str:
         return strip_xml_tags(text, _CARTESIA_TAGS)
     elif provider == "elevenlabs":
         return strip_xml_tags(text, _ELEVENLABS_TAGS)
-    elif provider in ("elevenlabs_v3", "inworld"):
-        text = strip_xml_tags(text, ["expression"])
+    elif provider == "elevenlabs_v3":
+        text = strip_xml_tags(text, _ELEVENLABS_V3_TAGS)
+        return strip_bracket_tags(text)
+    elif provider == "inworld":
+        text = strip_xml_tags(text, _INWORLD_TAGS)
         return strip_bracket_tags(text)
     return text
 

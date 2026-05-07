@@ -423,23 +423,29 @@ class TTS(tts.TTS):
             super().__init__(gateway_tts)
             self._gateway_tts = gateway_tts
 
-        def _upstream_provider(self) -> str:
-            return self._gateway_tts._opts.model.split("/")[0]
+        def _provider_key(self) -> str:
+            model = self._gateway_tts._opts.model
+            provider = model.split("/")[0]
+            if provider == "inworld" and "tts-2" in model:
+                return "inworld"
+            elif provider == "inworld":
+                return ""  # older inworld models don't support markup
+            return provider
 
         def llm_instructions(self) -> str | None:
             from ..tts._provider_format import llm_instructions
 
-            return llm_instructions(self._upstream_provider())
+            return llm_instructions(self._provider_key())
 
         def to_text(self, text: str) -> str:
             from ..tts._provider_format import strip_markup
 
-            return strip_markup(self._upstream_provider(), text)
+            return strip_markup(self._provider_key(), text)
 
         def convert(self, text: str) -> str:
             from ..tts._provider_format import convert_markup
 
-            return convert_markup(self._upstream_provider(), text)
+            return convert_markup(self._provider_key(), text)
 
     @classmethod
     def from_model_string(cls, model: str) -> TTS:
