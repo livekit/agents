@@ -77,7 +77,7 @@ class FrontDeskAgent(Agent):
         self._slots_map: dict[str, AvailableSlot] = {}
 
     async def on_enter(self) -> None:
-        await self.session.say("hello, I can help you to schedule an appointment")
+        await self.session.say("Hello, I can help you schedule an appointment!")
 
     @function_tool
     async def schedule_appointment(
