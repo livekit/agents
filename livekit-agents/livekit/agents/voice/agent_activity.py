@@ -1005,6 +1005,8 @@ class AgentActivity(RecognitionHooks):
 
         should_discard = (
             self._current_speech
+            and not self._current_speech.done()
+            and not self._current_speech.interrupted
             and not self._current_speech.allow_interruptions
             and self._session.options.interruption["discard_audio_if_uninterruptible"]
         ) or (
