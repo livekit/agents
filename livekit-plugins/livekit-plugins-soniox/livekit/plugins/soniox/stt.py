@@ -51,6 +51,13 @@ END_TOKEN = "<end>"
 FINALIZED_TOKEN = "<fin>"
 
 
+class _SessionFinished(Exception):
+    """Internal sentinel raised by the recv task when Soniox signals a normal
+    end-of-session (`finished` frame followed by a clean WS close). `_run`
+    catches it so the gather unwinds and sibling tasks (e.g. send_audio
+    blocked on an empty queue) are cancelled by the surrounding finally."""
+
+
 def is_end_token(token: dict) -> bool:
     """Return True if the given token marks an end or finalized event."""
     return token.get("text") in (END_TOKEN, FINALIZED_TOKEN)
@@ -324,6 +331,10 @@ class SpeechStream(stt.SpeechStream):
         ]
         try:
             await asyncio.gather(*tasks)
+        except _SessionFinished:
+            # Normal end-of-session signaled by the server; sibling tasks are
+            # cancelled by the finally block, then _run returns cleanly.
+            pass
         except aiohttp.ClientError as e:
             # Mid-stream transport failure (e.g. dropped connection) — surface it as
             # APIError so the base class retry/backoff policy applies.
@@ -379,7 +390,6 @@ class SpeechStream(stt.SpeechStream):
                 logger.error(f"Error while sending audio data: {e}")
                 break
 
-    @utils.log_exceptions(logger=logger)
     async def _recv_messages_task(self) -> None:
         """Receive transcription messages, handle tokens, errors, and dispatch events."""
 
@@ -436,7 +446,7 @@ class SpeechStream(stt.SpeechStream):
                 aiohttp.WSMsgType.CLOSING,
             ):
                 if finished:
-                    return
+                    raise _SessionFinished
                 raise APIStatusError(
                     message="Soniox Speech-to-Text API connection closed unexpectedly",
                     status_code=self._ws.close_code or -1,
@@ -546,7 +556,7 @@ class SpeechStream(stt.SpeechStream):
                 logger.exception(f"Error processing message: {e}")
 
         if finished:
-            return
+            raise _SessionFinished
         raise APIStatusError(
             message="Soniox Speech-to-Text API connection ended without close frame",
             status_code=self._ws.close_code or -1,
