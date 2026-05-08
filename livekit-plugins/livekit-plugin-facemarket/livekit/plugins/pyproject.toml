@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "livekit-plugins-facemarket"
-version = "0.1.0"
+version = "1.0.0"
 description = "FaceMarket avatar plugin for LiveKit Agents"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -33,10 +33,6 @@ classifiers = [
 
 [project.urls]
 Homepage = "https://facemarket.ai/vih"
-
-[project.scripts]
-facemarket-avatar-demo = "livekit.plugins.facemarket.demo:main"
-facemarket-voice-agent-demo = "livekit.plugins.facemarket.voice_agent_demo:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

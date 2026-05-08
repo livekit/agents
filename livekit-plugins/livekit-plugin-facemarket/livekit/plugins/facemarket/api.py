@@ -12,7 +12,7 @@ from .exceptions import FaceMarketPlatformError
 from .log import logger
 from .schemas import SessionInfo, StartSessionRequest
 
-BASE_URL = "https://pre.facemarket.ai/vih"
+BASE_URL = "https://facemarket.ai/vih"
 AUTH_PATH = "/dispatcher/auth/session/token"
 START_PATH = "/dispatcher/v1/session/start"
 STOP_PATH = "/dispatcher/v1/session/stop"
