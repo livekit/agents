@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=69", "wheel"]
+requires = ["hatchling", "setuptools>=69", "wheel"]
 build-backend = "hatchling.build"
 
 [project]
@@ -32,7 +32,11 @@ classifiers = [
 [project.urls]
 Homepage = "https://facemarket.ai/vih"
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["livekit.plugins.facemarket*"]
-namespaces = true
+[tool.hatch.version]
+path = "livekit/plugins/facemarket/version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["livekit"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/livekit"]
