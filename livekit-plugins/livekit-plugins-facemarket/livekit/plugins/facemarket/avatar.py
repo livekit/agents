@@ -7,7 +7,7 @@ import json
 import uuid
 from collections import defaultdict
 from collections.abc import Callable, Coroutine
-from typing import Any, Protocol
+from typing import Any, Callable, Literal, TypeAlias, Protocol
 
 from livekit import rtc
 from livekit.agents import AgentSession
@@ -33,6 +33,21 @@ SUPPORTED_EVENTS = {
 }
 
 EVENT_CALLBACK = Callable[..., Any]
+
+AGENT_SESSION_EVENT_NAME: TypeAlias = Literal[
+    "user_state_changed",
+    "agent_state_changed",
+    "user_input_transcribed",
+    "conversation_item_added",
+    "agent_false_interruption",
+    "overlapping_speech",
+    "function_tools_executed",
+    "metrics_collected",
+    "session_usage_updated",
+    "speech_created",
+    "error",
+    "close",
+]
 
 
 class _FaceMarketAPIClient(Protocol):
@@ -91,7 +106,7 @@ class AvatarSession:
         self._bg_tasks: set[asyncio.Task[Any]] = set()
         self._room_data_handler: Callable[..., Any] | None = None
         self._track_subscribed_handler: Callable[..., Any] | None = None
-        self._agent_handlers: list[tuple[str, Callable[..., Any]]] = []
+        self._agent_handlers: list[tuple[AGENT_SESSION_EVENT_NAME, Callable[..., Any]]] = []
         self._is_prompt_mode = False
         self._agent_is_speaking = False
         self._response_audio_active = False
@@ -365,7 +380,7 @@ class AvatarSession:
             )
             self._create_bg_task(self._publish_event(event_name, message))
 
-        bindings = [
+        bindings: list[tuple[AGENT_SESSION_EVENT_NAME, Callable[..., Any]]] = [
             ("user_state_changed", _user_state_changed),
             ("agent_state_changed", _agent_state_changed),
             ("user_input_transcribed", _user_input_transcribed),
@@ -411,11 +426,11 @@ class AvatarSession:
     async def _publish_event(self, event: str, data: dict[str, Any] | None = None) -> None:
         if self._room is None:
             return
-        payload = {
+        payload: dict[str, Any] = {
             "event": event,
             "requestId": str(uuid.uuid4()),
         }
-        if data:
+        if data is not None:
             payload["data"] = data
         encoded = json.dumps(payload).encode("utf-8")
         logger.info("publishing FaceMarket data event=%s data=%s", event, data or {})
