@@ -206,9 +206,6 @@ class AudioRecognition:
 
         self._vad_speech_started: bool = False
 
-        # skip stt warning
-        self._skip_stt_warning_started: bool = False
-
     def update_options(
         self,
         *,
@@ -514,13 +511,6 @@ class AudioRecognition:
         self._sample_rate = frame.sample_rate
         if not skip_stt and self._stt_pipeline is not None:
             self._stt_pipeline.audio_ch.send_nowait(frame)
-
-        # warn once per skipping window
-        if skip_stt and not self._skip_stt_warning_started:
-            self._skip_stt_warning_started = True
-            logger.warning("skipping stt due to aec warmup or discard_audio_if_uninterruptible")
-        elif not skip_stt and self._skip_stt_warning_started:
-            self._skip_stt_warning_started = False
 
         if self._vad_ch is not None:
             self._vad_ch.send_nowait(frame)

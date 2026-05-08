@@ -219,6 +219,9 @@ class AgentActivity(RecognitionHooks):
         # speeches that audio playout finished but not done because of tool calls
         self._background_speeches: set[SpeechHandle] = set()
 
+        # skip_stt/discard_audio_if_uninterruptible warning
+        self._skip_stt_warning_started: bool = False
+
     def _validate_turn_detection(
         self, turn_detection: TurnDetectionMode | None
     ) -> TurnDetectionMode | None:
@@ -1003,21 +1006,39 @@ class AgentActivity(RecognitionHooks):
         if not self._started:
             return
 
-        should_discard = (
-            self._current_speech
-            and not self._current_speech.done()
-            and not self._current_speech.interrupted
-            and not self._current_speech.allow_interruptions
-            and self._session.options.interruption["discard_audio_if_uninterruptible"]
-        ) or (
+        aec_warmup_active: bool = (
             self._session.agent_state == "speaking"
             and self._session._aec_warmup_remaining > 0
             and self._session._aec_warmup_timer is not None
         )
 
+        speech_active: bool = (
+            self._current_speech is not None
+            and not self._current_speech.done()
+            and not self._current_speech.interrupted
+            and not self._current_speech.allow_interruptions
+            and self._session.options.interruption["discard_audio_if_uninterruptible"]
+        )
+
+        should_discard: bool = aec_warmup_active or speech_active
+
         if not should_discard:
             if self._rt_session is not None:
                 self._rt_session.push_audio(frame)
+
+        # warn once per contiguous window
+        if should_discard and not self._skip_stt_warning_started:
+            self._skip_stt_warning_started = True
+            logger.warning(
+                "stt audio discarding started",
+                extra={
+                    "aec_warmup_active": aec_warmup_active,
+                    "speech_active": speech_active,
+                },
+            )
+        elif not should_discard and self._skip_stt_warning_started:
+            self._skip_stt_warning_started = False
+            logger.warning("stt audio discarding stopped")
 
         # Always forward to _audio_recognition for VAD, even when discarding STT/LLM
         # VAD needs frames to detect speech end and update user state correctly
