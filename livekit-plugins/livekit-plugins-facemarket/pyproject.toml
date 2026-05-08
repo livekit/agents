@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling", "setuptools>=69", "wheel"]
+build-backend = "hatchling.build"
+
+[project]
+name = "livekit-plugins-facemarket"
+version = "1.0.0"
+description = "FaceMarket avatar plugin for LiveKit Agents"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "FaceMarket" }
+]
+dependencies = [
+  "livekit-agents>=1.5.8",
+  "aiohttp>=3.10,<4",
+  "certifi>=2024.0.0",
+  "livekit-api>=1.0.0,<2",
+]
+keywords = ["livekit", "avatar", "plugin", "agents", "facemarket", "ai", "realtime", "audio", "video"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Multimedia :: Video",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3 :: Only",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://facemarket.ai/vih"
+
+[tool.hatch.version]
+path = "livekit/plugins/facemarket/version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["livekit"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/livekit"]
