@@ -146,7 +146,9 @@ class VAD(agents.vad.VAD):
         session: onnxruntime.InferenceSession,
         opts: _VADOptions,
     ) -> None:
-        super().__init__(capabilities=agents.vad.VADCapabilities(update_interval=0.032))
+        super().__init__(
+            capabilities=agents.vad.VADCapabilities(update_interval=0.032, supports_reset=True)
+        )
         self._onnx_session = session
         self._opts = opts
         self._streams = weakref.WeakSet[VADStream]()
@@ -319,10 +321,8 @@ class VADStream(agents.vad.VADStream):
             nonlocal input_frames, inference_frames, resampler
             nonlocal input_copy_remaining_fract, extra_inference_time
 
-            start_time = time.perf_counter()
-
             self._model.reset()
-            self._exp_filter = utils.ExpFilter(alpha=0.35)
+            self._exp_filter.reset()
 
             speech_buffer_index = 0
             self._speech_buffer_max_reached = False
@@ -350,15 +350,6 @@ class VADStream(agents.vad.VADStream):
                 )
             else:
                 resampler = None
-
-            reset_duration = time.perf_counter() - start_time
-            logger.debug(
-                "reset vad stream",
-                extra={
-                    "reset_duration": reset_duration,
-                    "reset_duration_ms": reset_duration * 1000,
-                },
-            )
 
         async for input_frame in self._input_ch:
             if isinstance(input_frame, self._ResetSentinel):

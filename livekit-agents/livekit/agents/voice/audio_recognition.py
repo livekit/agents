@@ -27,6 +27,7 @@ from ..stt import SpeechEvent
 from ..telemetry import trace_types, tracer
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import aio, is_given
+from ..vad import VADStream
 from . import io
 from ._utils import _set_participant_attributes
 from .endpointing import BaseEndpointing
@@ -171,7 +172,7 @@ class AudioRecognition:
 
         self._stt_pipeline: _STTPipeline | None = None
         self._vad_ch: aio.Chan[rtc.AudioFrame] | None = None
-        self._vad_stream: vad.VADStream | None = None
+        self._vad_stream: VADStream | None = None
 
         self._tasks: set[asyncio.Task[Any]] = set()
 
@@ -938,7 +939,7 @@ class AudioRecognition:
             if self._vad:
                 if self._speaking:
                     _start_time = time.perf_counter()
-                    if self._vad_stream is not None and hasattr(self._vad_stream, "reset"):
+                    if self._vad_stream is not None and self._vad.capabilities.supports_reset:
                         self._vad_stream.reset()
                     else:
                         self.update_vad(self._vad)
@@ -946,7 +947,7 @@ class AudioRecognition:
                     logger.warning(
                         "stt end of speech received while user is speaking, resetting vad",
                         extra={
-                            "reset_duration": time.perf_counter() - _start_time,
+                            "reset_duration_ms": (time.perf_counter() - _start_time) * 1000,
                         },
                     )
 

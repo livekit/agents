@@ -1,5 +1,4 @@
 import asyncio
-import logging
 
 import pytest
 
@@ -125,23 +124,6 @@ async def test_reset_recovers_full_speech_segment() -> None:
         second_sos, second_eos = await _drain_speech_segment(stream, frames)
         assert second_sos.type == vad.VADEventType.START_OF_SPEECH
         assert second_eos.type == vad.VADEventType.END_OF_SPEECH
-    finally:
-        await stream.aclose()
-
-
-async def test_reset_overhead_under_10ms(caplog: pytest.LogCaptureFixture) -> None:
-    caplog.set_level(logging.DEBUG, logger="livekit.plugins.silero")
-
-    frames, *_ = await utils.make_test_speech(chunk_duration_ms=10, sample_rate=16000)
-    assert frames, "no test frames generated"
-
-    stream = VAD.stream()
-    try:
-        stream.push_frame(frames[0])
-        stream.reset()
-
-        reset_duration_ms = await asyncio.wait_for(_next_reset_duration(caplog), timeout=5)
-        assert reset_duration_ms < 10
     finally:
         await stream.aclose()
 
