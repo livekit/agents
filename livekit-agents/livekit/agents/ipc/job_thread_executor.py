@@ -284,6 +284,7 @@ class ThreadJobExecutor:
         monitor_task = asyncio.create_task(self._monitor_task())
 
         await self._join_fut
+
         await utils.aio.cancel_and_wait(ping_task, monitor_task)
         await utils.aio.cancel_and_wait(*self._inference_tasks)
 
@@ -344,6 +345,6 @@ class ThreadJobExecutor:
         }
         if self._running_job:
             extra["job_id"] = self._running_job.job.id
-            extra["room_id"] = self._running_job.job.room.sid
+            extra["room"] = self._running_job.job.room.name
 
         return extra
