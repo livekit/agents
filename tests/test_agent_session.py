@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -743,6 +744,35 @@ async def test_backchannel_boundary_suppresses_start_boundary_interruption() -> 
 
         assert len(hooks.interruptions) == 1
     finally:
+        await _close_test_session(session)
+
+
+async def test_stt_eos_resets_active_vad_stream_without_restarting_vad() -> None:
+    actions = FakeActions()
+    session = create_session(actions)
+    recognition = AudioRecognition(
+        session,
+        hooks=_TestRecognitionHooks(),
+        endpointing=BaseEndpointing(min_delay=0.0, max_delay=0.0),
+        stt=None,
+        vad=None,
+        interruption_detection=None,
+        turn_detection="stt",
+    )
+    recognition._speaking = True
+    recognition._vad = MagicMock()
+    resettable_stream = MagicMock()
+    recognition._vad_stream = resettable_stream
+
+    try:
+        with patch.object(recognition, "update_vad") as update_vad:
+            await recognition._on_stt_event(SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
+
+        resettable_stream.reset.assert_called_once_with()
+        update_vad.assert_not_called()
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
         await _close_test_session(session)
 
 

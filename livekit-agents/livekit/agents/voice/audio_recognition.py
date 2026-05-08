@@ -171,6 +171,7 @@ class AudioRecognition:
 
         self._stt_pipeline: _STTPipeline | None = None
         self._vad_ch: aio.Chan[rtc.AudioFrame] | None = None
+        self._vad_stream: vad.VADStream | None = None
 
         self._tasks: set[asyncio.Task[Any]] = set()
 
@@ -589,6 +590,7 @@ class AudioRecognition:
     def update_vad(self, vad: vad.VAD | None) -> None:
         self._vad = vad
         if vad:
+            self._vad_stream = None
             self._vad_ch = aio.Chan[rtc.AudioFrame]()
             self._vad_atask = asyncio.create_task(
                 self._vad_task(vad, self._vad_ch, self._vad_atask)
@@ -599,6 +601,7 @@ class AudioRecognition:
             self._tasks.add(task)
             self._vad_atask = None
             self._vad_ch = None
+            self._vad_stream = None
 
         self._interruption_enabled = (
             self._interruption_detection is not None and self._vad is not None
@@ -934,10 +937,18 @@ class AudioRecognition:
             # if user is still speaking (an immediate VAD SOS will interrupt the agent)
             if self._vad:
                 if self._speaking:
+                    _start_time = time.perf_counter()
+                    if self._vad_stream is not None and hasattr(self._vad_stream, "reset"):
+                        self._vad_stream.reset()
+                    else:
+                        self.update_vad(self._vad)
+
                     logger.warning(
-                        "stt end of speech received while user is speaking, resetting vad"
+                        "stt end of speech received while user is speaking, resetting vad",
+                        extra={
+                            "reset_duration": time.perf_counter() - _start_time,
+                        },
                     )
-                self.update_vad(self._vad)
 
             self._speaking = False
             self._user_turn_committed = True
@@ -1203,6 +1214,7 @@ class AudioRecognition:
             await aio.cancel_and_wait(task)
 
         stream = vad.stream()
+        self._vad_stream = stream
 
         @utils.log_exceptions(logger=logger)
         async def _forward() -> None:
@@ -1217,6 +1229,8 @@ class AudioRecognition:
         finally:
             await aio.cancel_and_wait(forward_task)
             await stream.aclose()
+            if self._vad_stream is stream:
+                self._vad_stream = None
 
             # reset the speaking state to prevent stuck user speaking state during handoff
             if self._speaking:

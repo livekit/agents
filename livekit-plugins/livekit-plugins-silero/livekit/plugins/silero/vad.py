@@ -311,7 +311,60 @@ class VADStream(agents.vad.VADStream):
 
         extra_inference_time = 0.0
 
+        def _reset_state() -> None:
+            nonlocal speech_buffer_index
+            nonlocal pub_speaking, pub_speech_duration, pub_silence_duration
+            nonlocal pub_current_sample, pub_timestamp
+            nonlocal speech_threshold_duration, silence_threshold_duration
+            nonlocal input_frames, inference_frames, resampler
+            nonlocal input_copy_remaining_fract, extra_inference_time
+
+            start_time = time.perf_counter()
+
+            self._model.reset()
+            self._exp_filter = utils.ExpFilter(alpha=0.35)
+
+            speech_buffer_index = 0
+            self._speech_buffer_max_reached = False
+            if self._speech_buffer is not None:
+                self._speech_buffer.fill(0)
+
+            pub_speaking = False
+            pub_speech_duration = 0.0
+            pub_silence_duration = 0.0
+            pub_current_sample = 0
+            pub_timestamp = 0.0
+            speech_threshold_duration = 0.0
+            silence_threshold_duration = 0.0
+
+            input_frames = []
+            inference_frames = []
+            input_copy_remaining_fract = 0.0
+            extra_inference_time = 0.0
+
+            if self._input_sample_rate and self._input_sample_rate != self._opts.sample_rate:
+                resampler = rtc.AudioResampler(
+                    input_rate=self._input_sample_rate,
+                    output_rate=self._opts.sample_rate,
+                    quality=rtc.AudioResamplerQuality.QUICK,
+                )
+            else:
+                resampler = None
+
+            reset_duration = time.perf_counter() - start_time
+            logger.debug(
+                "reset vad stream",
+                extra={
+                    "reset_duration": reset_duration,
+                    "reset_duration_ms": reset_duration * 1000,
+                },
+            )
+
         async for input_frame in self._input_ch:
+            if isinstance(input_frame, self._ResetSentinel):
+                _reset_state()
+                continue
+
             if not isinstance(input_frame, rtc.AudioFrame):
                 continue  # ignore flush sentinel for now
 

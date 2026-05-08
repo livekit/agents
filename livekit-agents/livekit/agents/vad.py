@@ -99,10 +99,15 @@ class VADStream(ABC):
     class _FlushSentinel:
         pass
 
+    class _ResetSentinel:
+        pass
+
     def __init__(self, vad: VAD) -> None:
         self._vad = vad
         self._last_activity_time = time.perf_counter()
-        self._input_ch = aio.Chan[rtc.AudioFrame | VADStream._FlushSentinel]()
+        self._input_ch = aio.Chan[
+            rtc.AudioFrame | VADStream._FlushSentinel | VADStream._ResetSentinel
+        ]()
         self._event_ch = aio.Chan[VADEvent]()
 
         self._tee_aiter = aio.itertools.tee(self._event_ch, 2)
@@ -157,6 +162,12 @@ class VADStream(ABC):
         self._check_input_not_ended()
         self._check_not_closed()
         self._input_ch.send_nowait(self._FlushSentinel())
+
+    def reset(self) -> None:
+        """Reset state without closing the stream."""
+        self._check_input_not_ended()
+        self._check_not_closed()
+        self._input_ch.send_nowait(self._ResetSentinel())
 
     def end_input(self) -> None:
         """Mark the end of input, no more audio will be pushed"""

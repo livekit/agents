@@ -1,3 +1,6 @@
+import asyncio
+import logging
+
 import pytest
 
 from livekit.agents import vad
@@ -12,6 +15,15 @@ VAD = silero.VAD.load(
     min_speech_duration=0.5,
     min_silence_duration=0.75,
 )
+
+
+async def _next_reset_duration(caplog: pytest.LogCaptureFixture) -> float:
+    while True:
+        for record in caplog.records:
+            if record.getMessage() == "reset vad stream":
+                return float(record.__dict__["reset_duration_ms"])
+
+        await asyncio.sleep(0.01)
 
 
 @pytest.mark.parametrize("sample_rate", SAMPLE_RATES)
@@ -58,6 +70,80 @@ async def test_chunks_vad(sample_rate) -> None:
 
     with open(f"test_vad.{sample_rate}.inference_frames.wav", "wb") as f:
         f.write(utils.make_wav_file(inference_frames))
+
+
+async def _drain_speech_segment(
+    stream: vad.VADStream, frames: list, *, timeout: float = 30.0
+) -> tuple[vad.VADEvent, vad.VADEvent]:
+    """Push *frames* until both START_OF_SPEECH and END_OF_SPEECH have fired."""
+
+    done = asyncio.Event()
+
+    async def _pump() -> None:
+        for frame in frames:
+            if done.is_set():
+                return
+            stream.push_frame(frame)
+            await asyncio.sleep(0)
+
+    async def _consume() -> tuple[vad.VADEvent, vad.VADEvent]:
+        sos_event: vad.VADEvent | None = None
+        async for ev in stream:
+            if ev.type == vad.VADEventType.START_OF_SPEECH and sos_event is None:
+                sos_event = ev
+            elif ev.type == vad.VADEventType.END_OF_SPEECH and sos_event is not None:
+                return sos_event, ev
+
+        raise AssertionError("stream ended before END_OF_SPEECH")
+
+    pump_task = asyncio.create_task(_pump())
+    try:
+        return await asyncio.wait_for(_consume(), timeout=timeout)
+    finally:
+        done.set()
+        pump_task.cancel()
+        try:
+            await pump_task
+        except asyncio.CancelledError:
+            pass
+
+
+async def test_reset_recovers_full_speech_segment() -> None:
+    """Real speech audio should still produce a complete SOS + EOS cycle after reset."""
+
+    frames, *_ = await utils.make_test_speech(chunk_duration_ms=10, sample_rate=16000)
+    assert len(frames) > 1, "frames aren't chunked"
+
+    stream = VAD.stream()
+    try:
+        first_sos, first_eos = await _drain_speech_segment(stream, frames)
+        assert first_sos.type == vad.VADEventType.START_OF_SPEECH
+        assert first_eos.type == vad.VADEventType.END_OF_SPEECH
+
+        stream.reset()
+
+        second_sos, second_eos = await _drain_speech_segment(stream, frames)
+        assert second_sos.type == vad.VADEventType.START_OF_SPEECH
+        assert second_eos.type == vad.VADEventType.END_OF_SPEECH
+    finally:
+        await stream.aclose()
+
+
+async def test_reset_overhead_under_10ms(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.DEBUG, logger="livekit.plugins.silero")
+
+    frames, *_ = await utils.make_test_speech(chunk_duration_ms=10, sample_rate=16000)
+    assert frames, "no test frames generated"
+
+    stream = VAD.stream()
+    try:
+        stream.push_frame(frames[0])
+        stream.reset()
+
+        reset_duration_ms = await asyncio.wait_for(_next_reset_duration(caplog), timeout=5)
+        assert reset_duration_ms < 10
+    finally:
+        await stream.aclose()
 
 
 @pytest.mark.parametrize("sample_rate", SAMPLE_RATES)
