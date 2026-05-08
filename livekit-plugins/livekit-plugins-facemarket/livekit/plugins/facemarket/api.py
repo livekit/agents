@@ -82,9 +82,9 @@ class FaceMarketAPI:
 
         return SessionInfo(
             session_id=str(session_id),
-            room_id=str(data["roomId"]),
-            livekit_url=str(data["livekitUrl"]),
-            room_token=str(data["roomToken"]),
+            room_id=str(data["roomId"]) if data.get("roomId") else None,
+            livekit_url=str(data["livekitUrl"]) if data.get("livekitUrl") else None,
+            room_token=str(data["roomToken"]) if data.get("roomToken") else None,
             green_screen=data.get("greenScreen"),
         )
 
