@@ -7,7 +7,7 @@ import json
 import uuid
 from collections import defaultdict
 from collections.abc import Callable, Coroutine
-from typing import Any, Callable, Literal, TypeAlias, Protocol
+from typing import Any, Literal, Protocol, TypeAlias
 
 from livekit import rtc
 from livekit.agents import AgentSession
