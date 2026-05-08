@@ -109,6 +109,7 @@ class TTS(tts.TTS):
         inactivity_timeout: int = WS_INACTIVITY_TIMEOUT,
         auto_mode: NotGivenOr[bool] = NOT_GIVEN,
         apply_text_normalization: Literal["auto", "off", "on"] = "auto",
+        apply_language_text_normalization: NotGivenOr[bool] = NOT_GIVEN,
         word_tokenizer: NotGivenOr[tokenize.WordTokenizer | tokenize.SentenceTokenizer] = NOT_GIVEN,
         enable_ssml_parsing: bool = False,
         enable_logging: bool = True,
@@ -135,6 +136,8 @@ class TTS(tts.TTS):
             auto_mode (bool): Reduces latency by disabling chunk schedule and buffers.
                 Sentence tokenizer will be used to synthesize one sentence at a time.
                 Defaults to True unless ``chunk_length_schedule`` is provided.
+            apply_text_normalization (Literal["auto", "off", "on"]): This parameter controls text normalization with three modes: ‘auto’, ‘on’, and ‘off’. When set to ‘auto’, the system will automatically decide whether to apply text normalization (e.g., spelling out numbers). With ‘on’, text normalization will always be applied, while with ‘off’, it will be skipped.
+            apply_language_text_normalization (bool): This parameter controls language text normalization. This helps with proper pronunciation of text in some supported languages.
             word_tokenizer (NotGivenOr[tokenize.WordTokenizer | tokenize.SentenceTokenizer]): Tokenizer for processing text. Defaults to basic WordTokenizer when auto_mode=False, `livekit.agents.tokenize.blingfire.SentenceTokenizer` otherwise.
             enable_ssml_parsing (bool): Enable SSML parsing for input text. Defaults to False.
             enable_logging (bool): Enable logging of the request. When set to false, zero retention mode will be used. Defaults to True.
@@ -197,6 +200,7 @@ class TTS(tts.TTS):
             sync_alignment=sync_alignment,
             auto_mode=auto_mode,
             apply_text_normalization=apply_text_normalization,
+            apply_language_text_normalization=apply_language_text_normalization,
             preferred_alignment=preferred_alignment,
             pronunciation_dictionary_locators=pronunciation_dictionary_locators,
         )
@@ -512,6 +516,7 @@ class _TTSOptions:
     inactivity_timeout: int
     sync_alignment: bool
     apply_text_normalization: Literal["auto", "on", "off"]
+    apply_language_text_normalization: NotGivenOr[bool]
     preferred_alignment: NotGivenOr[Literal["normalized", "original"]]
     auto_mode: NotGivenOr[bool]
     pronunciation_dictionary_locators: NotGivenOr[list[PronunciationDictionaryLocator]]
@@ -886,6 +891,10 @@ def _multi_stream_url(opts: _TTSOptions) -> str:
     params.append(f"enable_logging={str(opts.enable_logging).lower()}")
     params.append(f"inactivity_timeout={opts.inactivity_timeout}")
     params.append(f"apply_text_normalization={opts.apply_text_normalization}")
+    if is_given(opts.apply_language_text_normalization):
+        params.append(
+            f"apply_language_text_normalization={str(opts.apply_language_text_normalization).lower()}"
+        )
     if opts.sync_alignment:
         params.append("sync_alignment=true")
     if is_given(opts.auto_mode):
