@@ -150,6 +150,7 @@ class _SegmentSynchronizerImpl:
 
         self._out_ch = utils.aio.Chan[TimedString]()
         self._close_future = asyncio.Future[None]()
+        self._inputs_done_fut = asyncio.Future[None]()
 
         self._main_atask = asyncio.create_task(self._main_task())
         self._main_atask.add_done_callback(lambda _: self._out_ch.close())
@@ -203,6 +204,7 @@ class _SegmentSynchronizerImpl:
         self._audio_data.done = True
         self._audio_data.sr_stream.end_input()
         self._reestimate_speed()
+        self._maybe_mark_inputs_done()
 
     def push_text(self, text: str) -> None:
         if self.closed:
@@ -235,6 +237,7 @@ class _SegmentSynchronizerImpl:
         self._text_data.word_stream.end_input()
 
         self._reestimate_speed()
+        self._maybe_mark_inputs_done()
 
     def pause(self) -> None:
         if self.closed:
@@ -277,23 +280,25 @@ class _SegmentSynchronizerImpl:
         if pushed_speaking_units > 0:
             self._speed_on_speaking_unit = pushed_hyphens / pushed_speaking_units
 
-    def mark_playback_finished(self, *, playback_position: float, interrupted: bool) -> None:
+    def _maybe_mark_inputs_done(self) -> None:
+        if self._text_data.done and self._audio_data.done and not self._inputs_done_fut.done():
+            self._inputs_done_fut.set_result(None)
+
+    async def wait_inputs_done(self) -> None:
+        await asyncio.shield(self._inputs_done_fut)
+
+    def mark_playback_finished(self, *, playback_position: float, interrupted: bool) -> bool:
         if self.closed:
             logger.warning("_SegmentSynchronizerImpl.playback_finished called after close")
-            return
+            return True
 
         self._interrupted = interrupted
-        if not self._text_data.done or not self._audio_data.done:
-            logger.warning(
-                "_SegmentSynchronizerImpl.playback_finished called before text/audio input is done",
-                extra={"text_done": self._text_data.done, "audio_done": self._audio_data.done},
-            )
-            return
-
-        # if the playback of the segment is done and were not interrupted, make sure the whole
-        # transcript is sent. (In case we're late)
         if not interrupted:
+            # If playback finished before the text stream drained, release the remaining words
+            # as soon as they arrive so the upstream playback_finished event can include them.
             self._playback_completed = True
+
+        return interrupted or self._inputs_done_fut.done()
 
     @property
     def synchronized_transcript(self) -> str:
@@ -400,6 +405,8 @@ class _SegmentSynchronizerImpl:
             return
 
         self._close_future.set_result(None)
+        if not self._inputs_done_fut.done():
+            self._inputs_done_fut.set_result(None)
         if self._start_wall_time is None:
             # avoid assertion error in _main_task if playback completed
             self._start_wall_time = time.time()
@@ -459,6 +466,7 @@ class TranscriptSynchronizer:
         self._rotate_segment_atask: asyncio.Task[None] | None = None
 
         self._pending_impls: list[_SegmentSynchronizerImpl] = []
+        self._finalizing_impls: list[_SegmentSynchronizerImpl] = []
         self._aclose_tasks: list[asyncio.Task[None]] = []
 
     @property
@@ -480,7 +488,11 @@ class TranscriptSynchronizer:
             with contextlib.suppress(Exception):
                 await impl.aclose()
         self._pending_impls.clear()
-        for task in self._aclose_tasks:
+        for impl in self._finalizing_impls:
+            with contextlib.suppress(Exception):
+                await impl.aclose()
+        self._finalizing_impls.clear()
+        for task in list(self._aclose_tasks):
             with contextlib.suppress(Exception):
                 await task
         self._aclose_tasks.clear()
@@ -522,15 +534,7 @@ class TranscriptSynchronizer:
         except Exception:
             logger.exception("failed to close segment synchronizer impl during rotation")
 
-        # always create a new impl even if aclose() failed, to avoid leaving
-        # self._impl pointing to a closed impl which causes the agent to get stuck
-        self._impl = _SegmentSynchronizerImpl(
-            options=self._opts, next_in_chain=self._text_output._next_in_chain
-        )
-
-        # apply the current pause state to the new impl
-        if self._paused:
-            self._impl.pause()
+        self._replace_active_impl()
 
     def rotate_segment(self) -> None:
         if self._closed:
@@ -543,6 +547,15 @@ class TranscriptSynchronizer:
             self._rotate_segment_task(self._rotate_segment_atask)
         )
 
+    def _replace_active_impl(self) -> None:
+        # Always create a new impl even if the previous impl failed to close, to
+        # avoid leaving self._impl pointing to a closed impl which gets output stuck.
+        self._impl = _SegmentSynchronizerImpl(
+            options=self._opts, next_in_chain=self._text_output._next_in_chain
+        )
+        if self._paused:
+            self._impl.pause()
+
     def _advance_segment(self) -> None:
         """Move the active impl to the pending queue and install a fresh
         active impl, without closing the moved impl. The pending impl
@@ -552,12 +565,27 @@ class TranscriptSynchronizer:
         if self._closed:
             return
 
-        self._pending_impls.append(self._impl)
-        self._impl = _SegmentSynchronizerImpl(
-            options=self._opts, next_in_chain=self._text_output._next_in_chain
+        if self._impl not in self._finalizing_impls:
+            self._pending_impls.append(self._impl)
+        self._replace_active_impl()
+
+    def _iter_live_impls(self) -> tuple[_SegmentSynchronizerImpl, ...]:
+        return (
+            *self._pending_impls,
+            *self._finalizing_impls,
+            self._impl,
         )
-        if self._paused:
-            self._impl.pause()
+
+    def _track_aclose_task(self, task: asyncio.Task[None]) -> None:
+        self._aclose_tasks.append(task)
+
+        def _remove_task(_: asyncio.Task[None]) -> None:
+            with contextlib.suppress(ValueError):
+                self._aclose_tasks.remove(task)
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                task.exception()
+
+        task.add_done_callback(_remove_task)
 
     async def barrier(self) -> None:
         if self._rotate_segment_atask is None:
@@ -621,10 +649,13 @@ class _SyncedAudioOutput(io.AudioOutput):
         super().flush()
         self._next_in_chain.flush()
 
+        pushed_duration = self._pushed_duration
+        self._pushed_duration = 0.0
+
         if not self._synchronizer.enabled:
             return
 
-        if not self._pushed_duration:
+        if not pushed_duration:
             # in case there is no audio after text was pushed, rotate the segment
             self._synchronizer.rotate_segment()
             return
@@ -650,9 +681,7 @@ class _SyncedAudioOutput(io.AudioOutput):
     def on_playback_started(self, *, created_at: float) -> None:
         super().on_playback_started(created_at=created_at)
         if self._synchronizer.enabled:
-            self._impl_for_playback_started().on_playback_started(
-                start_time=created_at
-            )
+            self._impl_for_playback_started().on_playback_started(start_time=created_at)
 
     def on_playback_finished(
         self,
@@ -671,27 +700,101 @@ class _SyncedAudioOutput(io.AudioOutput):
 
         if self._synchronizer._pending_impls:
             target = self._synchronizer._pending_impls.pop(0)
-            target.mark_playback_finished(
-                playback_position=playback_position, interrupted=interrupted
-            )
-            super().on_playback_finished(
+            self._schedule_playback_finished(
+                target,
                 playback_position=playback_position,
                 interrupted=interrupted,
-                synchronized_transcript=target.synchronized_transcript,
             )
-            self._synchronizer._aclose_tasks.append(asyncio.create_task(target.aclose()))
         else:
-            self._synchronizer._impl.mark_playback_finished(
-                playback_position=playback_position, interrupted=interrupted
-            )
-            super().on_playback_finished(
+            target = self._synchronizer._impl
+            self._schedule_playback_finished(
+                target,
                 playback_position=playback_position,
                 interrupted=interrupted,
-                synchronized_transcript=self._synchronizer._impl.synchronized_transcript,
+                replace_active=True,
             )
-            self._synchronizer.rotate_segment()
 
         self._pushed_duration = 0.0
+
+    def _schedule_playback_finished(
+        self,
+        target: _SegmentSynchronizerImpl,
+        *,
+        playback_position: float,
+        interrupted: bool,
+        replace_active: bool = False,
+    ) -> None:
+        self._synchronizer._finalizing_impls.append(target)
+        ready = target.mark_playback_finished(
+            playback_position=playback_position, interrupted=interrupted
+        )
+        if ready:
+            if replace_active and self._synchronizer._impl is target:
+                self._synchronizer._replace_active_impl()
+                replace_active = False
+            self._emit_playback_finished(
+                target,
+                playback_position=playback_position,
+                interrupted=interrupted,
+            )
+            task = asyncio.create_task(
+                self._close_finished_impl(target, replace_active=replace_active)
+            )
+        else:
+            task = asyncio.create_task(
+                self._finish_playback_when_ready(
+                    target,
+                    playback_position=playback_position,
+                    interrupted=interrupted,
+                    replace_active=replace_active,
+                )
+            )
+        self._synchronizer._track_aclose_task(task)
+
+    def _emit_playback_finished(
+        self,
+        target: _SegmentSynchronizerImpl,
+        *,
+        playback_position: float,
+        interrupted: bool,
+    ) -> None:
+        super().on_playback_finished(
+            playback_position=playback_position,
+            interrupted=interrupted,
+            synchronized_transcript=target.synchronized_transcript,
+        )
+
+    @utils.log_exceptions(logger=logger)
+    async def _finish_playback_when_ready(
+        self,
+        target: _SegmentSynchronizerImpl,
+        *,
+        playback_position: float,
+        interrupted: bool,
+        replace_active: bool,
+    ) -> None:
+        await target.wait_inputs_done()
+        target.mark_playback_finished(playback_position=playback_position, interrupted=interrupted)
+        self._emit_playback_finished(
+            target,
+            playback_position=playback_position,
+            interrupted=interrupted,
+        )
+        await self._close_finished_impl(target, replace_active=replace_active)
+
+    @utils.log_exceptions(logger=logger)
+    async def _close_finished_impl(
+        self, target: _SegmentSynchronizerImpl, *, replace_active: bool
+    ) -> None:
+        try:
+            if replace_active and self._synchronizer._impl is target:
+                self._synchronizer._replace_active_impl()
+            await target.aclose()
+        finally:
+            with contextlib.suppress(ValueError):
+                self._synchronizer._finalizing_impls.remove(target)
+            with contextlib.suppress(ValueError):
+                self._synchronizer._pending_impls.remove(target)
 
     def on_attached(self) -> None:
         super().on_attached()
@@ -705,15 +808,17 @@ class _SyncedAudioOutput(io.AudioOutput):
         super().pause()
         # track pause state at synchronizer level so it persists across segment rotations
         self._synchronizer._paused = True
-        if not self._synchronizer._impl.closed:
-            self._synchronizer._impl.pause()
+        for impl in self._synchronizer._iter_live_impls():
+            if not impl.closed:
+                impl.pause()
 
     def resume(self) -> None:
         super().resume()
         # track pause state at synchronizer level so it persists across segment rotations
         self._synchronizer._paused = False
-        if not self._synchronizer._impl.closed:
-            self._synchronizer._impl.resume()
+        for impl in self._synchronizer._iter_live_impls():
+            if not impl.closed:
+                impl.resume()
 
 
 class _SyncedTextOutput(io.TextOutput):

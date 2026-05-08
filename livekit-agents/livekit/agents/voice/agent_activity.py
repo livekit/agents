@@ -3048,9 +3048,10 @@ class AgentActivity(RecognitionHooks):
             nonlocal read_transcript_from_tts
             assert isinstance(self.llm, llm.RealtimeModel)
 
-            forward_tasks: list[asyncio.Task[Any]] = []
+            msg_tasks: list[asyncio.Task[Any]] = []
             try:
                 async for msg in generation_ev.message_stream:
+                    msg_tasks = []
                     msg_modalities = await msg.modalities
                     tts_text_input: AsyncIterable[str] | None = None
                     if "audio" not in msg_modalities and self.tts:
@@ -3090,7 +3091,7 @@ class AgentActivity(RecognitionHooks):
                                 tr_text_input = timed_texts
                                 read_transcript_from_tts = True
 
-                            tasks.append(tts_task)
+                            msg_tasks.append(tts_task)
                             realtime_audio_result = tts_gen_data.audio_ch
                         elif "audio" in msg_modalities:
                             realtime_audio = self._agent.realtime_audio_output_node(
@@ -3117,7 +3118,7 @@ class AgentActivity(RecognitionHooks):
                                 audio_output=audio_output,
                                 tts_output=realtime_audio_result,
                             )
-                            forward_tasks.append(forward_task)
+                            msg_tasks.append(forward_task)
                             audio_out.first_frame_fut.add_done_callback(
                                 partial(_on_first_frame, audio_out=audio_out)
                             )
@@ -3131,16 +3132,22 @@ class AgentActivity(RecognitionHooks):
                             text_output=text_output,
                             source=tr_node_result,
                         )
-                        forward_tasks.append(forward_task)
+                        msg_tasks.append(forward_task)
 
                     if not audio_out and text_out:
                         text_out.first_text_fut.add_done_callback(_on_first_frame)
 
                     outputs.append((msg, text_out, audio_out))
 
-                await asyncio.gather(*forward_tasks)
+                    await asyncio.gather(*msg_tasks)
+                    msg_tasks.clear()
+
+                    if audio_output is not None and audio_out is not None:
+                        await audio_output.wait_for_playout()
+                        if not audio_out.first_frame_fut.done():
+                            audio_out.first_frame_fut.cancel()
             finally:
-                await utils.aio.cancel_and_wait(*forward_tasks)
+                await utils.aio.cancel_and_wait(*msg_tasks)
 
         message_outputs: list[
             tuple[MessageGeneration, _TextOutput | None, _AudioOutput | None]
@@ -3257,10 +3264,7 @@ class AgentActivity(RecognitionHooks):
                         ):
                             partial_idx = idx
 
-                    if (
-                        partial_idx is not None
-                        and self.llm.capabilities.message_truncation
-                    ):
+                    if partial_idx is not None and self.llm.capabilities.message_truncation:
                         msg_gen, text_out, _ = message_outputs[partial_idx]
                         transcript = playback_ev.synchronized_transcript or (
                             text_out.text if text_out else ""
@@ -3273,8 +3277,7 @@ class AgentActivity(RecognitionHooks):
                             audio_transcript=transcript,
                         )
         elif read_transcript_from_tts and any(
-            text_out is not None and not text_out.text
-            for _, text_out, _ in message_outputs
+            text_out is not None and not text_out.text for _, text_out, _ in message_outputs
         ):
             logger.warning(
                 "`use_tts_aligned_transcript` is enabled but no agent transcript was returned from tts"
@@ -3317,9 +3320,7 @@ class AgentActivity(RecognitionHooks):
             self._session._conversation_item_added(msg)
 
         if trace_text_parts:
-            current_span.set_attribute(
-                trace_types.ATTR_RESPONSE_TEXT, " ".join(trace_text_parts)
-            )
+            current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, " ".join(trace_text_parts))
 
         for _, _, audio_out in message_outputs:
             if audio_out is not None and not audio_out.first_frame_fut.done():
