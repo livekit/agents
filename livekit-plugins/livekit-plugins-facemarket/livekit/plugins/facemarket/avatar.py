@@ -540,6 +540,11 @@ class AvatarSession:
     async def _reset_runtime_state_async(self) -> None:
         current = asyncio.current_task()
         pending_tasks = [task for task in self._bg_tasks if task is not current and not task.done()]
+
         self._reset_runtime_state()
+
         if pending_tasks:
+            for task in pending_tasks:
+                task.cancel()
+
             await asyncio.gather(*pending_tasks, return_exceptions=True)

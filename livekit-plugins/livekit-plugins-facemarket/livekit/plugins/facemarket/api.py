@@ -82,9 +82,9 @@ class FaceMarketAPI:
 
         return SessionInfo(
             session_id=str(session_id),
-            room_id=str(data["roomId"]) if data.get("roomId") else None,
-            livekit_url=str(data["livekitUrl"]) if data.get("livekitUrl") else None,
-            room_token=str(data["roomToken"]) if data.get("roomToken") else None,
+            room_id=str(data["roomId"]),
+            livekit_url=str(data["livekitUrl"]),
+            room_token=str(data["roomToken"]),
             green_screen=data.get("greenScreen"),
         )
 
@@ -148,20 +148,6 @@ class FaceMarketAPI:
             raise FaceMarketPlatformError(
                 f"FaceMarket API returned non-JSON response: status={response.status}"
             ) from exc
-
-        if response.status >= 500:
-            logger.info(
-                "FaceMarket API response status=%s payload=%s",
-                response.status,
-                _redact_payload(payload),
-            )
-            raise aiohttp.ClientResponseError(
-                request_info=response.request_info,
-                history=response.history,
-                status=response.status,
-                message=str(payload),
-                headers=response.headers,
-            )
 
         if response.status >= 400:
             logger.info(
