@@ -1026,10 +1026,10 @@ class AgentActivity(RecognitionHooks):
             if self._rt_session is not None:
                 self._rt_session.push_audio(frame)
 
-        # warn once per contiguous window
+        # warn once per continuous window
         if should_discard and not self._skip_stt_warning_started:
             self._skip_stt_warning_started = True
-            logger.warning(
+            logger.info(
                 "stt audio discarding started",
                 extra={
                     "aec_warmup_active": aec_warmup_active,
@@ -1038,7 +1038,7 @@ class AgentActivity(RecognitionHooks):
             )
         elif not should_discard and self._skip_stt_warning_started:
             self._skip_stt_warning_started = False
-            logger.warning("stt audio discarding stopped")
+            logger.info("stt audio discarding stopped")
 
         # Always forward to _audio_recognition for VAD, even when discarding STT/LLM
         # VAD needs frames to detect speech end and update user state correctly
