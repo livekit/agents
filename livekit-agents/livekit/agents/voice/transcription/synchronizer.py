@@ -197,6 +197,8 @@ class _SegmentSynchronizerImpl:
         if self.closed:
             logger.warning("_SegmentSynchronizerImpl.end_audio_input called after close")
             return
+        if self._audio_data.done:
+            return
 
         self._audio_data.done = True
         self._audio_data.sr_stream.end_input()
@@ -225,6 +227,8 @@ class _SegmentSynchronizerImpl:
     def end_text_input(self) -> None:
         if self.closed:
             logger.warning("_SegmentSynchronizerImpl.end_text_input called after close")
+            return
+        if self._text_data.done:
             return
 
         self._text_data.done = True
@@ -454,6 +458,9 @@ class TranscriptSynchronizer:
         self._impl = _SegmentSynchronizerImpl(options=self._opts, next_in_chain=next_in_chain_text)
         self._rotate_segment_atask: asyncio.Task[None] | None = None
 
+        self._pending_impls: list[_SegmentSynchronizerImpl] = []
+        self._aclose_tasks: list[asyncio.Task[None]] = []
+
     @property
     def audio_output(self) -> _SyncedAudioOutput:
         return self._audio_output
@@ -469,6 +476,14 @@ class TranscriptSynchronizer:
     async def aclose(self) -> None:
         self._closed = True
         await self.barrier()
+        for impl in self._pending_impls:
+            with contextlib.suppress(Exception):
+                await impl.aclose()
+        self._pending_impls.clear()
+        for task in self._aclose_tasks:
+            with contextlib.suppress(Exception):
+                await task
+        self._aclose_tasks.clear()
         await self._impl.aclose()
 
     def set_enabled(self, enabled: bool) -> None:
@@ -528,6 +543,22 @@ class TranscriptSynchronizer:
             self._rotate_segment_task(self._rotate_segment_atask)
         )
 
+    def _advance_segment(self) -> None:
+        """Move the active impl to the pending queue and install a fresh
+        active impl, without closing the moved impl. The pending impl
+        will receive its playback_started/playback_finished events from
+        _SyncedAudioOutput in capture order, then be closed.
+        """
+        if self._closed:
+            return
+
+        self._pending_impls.append(self._impl)
+        self._impl = _SegmentSynchronizerImpl(
+            options=self._opts, next_in_chain=self._text_output._next_in_chain
+        )
+        if self._paused:
+            self._impl.pause()
+
     async def barrier(self) -> None:
         if self._rotate_segment_atask is None:
             return
@@ -576,12 +607,13 @@ class _SyncedAudioOutput(io.AudioOutput):
             return
 
         if self._synchronizer._impl.audio_input_ended:
-            # this should not happen if `on_playback_finished` is called after each flush
-            logger.warning(
-                "_SegmentSynchronizerImpl audio marked as ended in capture audio, rotating segment"
-            )
-            self._synchronizer.rotate_segment()
-            await self._synchronizer.barrier()
+            # The active impl had its audio input ended (typically because
+            # the prior item's flush() has run but its text flush hasn't
+            # yet); advance to a fresh impl so this frame doesn't push
+            # into a closed sr_stream. _advance_segment moves the prior
+            # impl to pending (it stays alive to receive its playback
+            # events and finish forwarding any in-flight text).
+            self._synchronizer._advance_segment()
 
         self._synchronizer._impl.push_audio(frame)
 
@@ -598,15 +630,29 @@ class _SyncedAudioOutput(io.AudioOutput):
             return
 
         self._synchronizer._impl.end_audio_input()
+        if self._synchronizer._impl.text_input_ended:
+            self._synchronizer._advance_segment()
 
     def clear_buffer(self) -> None:
         self._next_in_chain.clear_buffer()
+
+    def _impl_for_playback_started(self) -> _SegmentSynchronizerImpl:
+        # Audio playback events arrive in capture order. Find the oldest
+        # impl that hasn't received its playback_started yet. Falls back
+        # to the active impl when there's nothing pending (e.g. before
+        # the first segment has been advanced).
+        for pending in self._synchronizer._pending_impls:
+            if not pending._start_fut.is_set():
+                return pending
+        return self._synchronizer._impl
 
     # this is going to be automatically called by the next_in_chain
     def on_playback_started(self, *, created_at: float) -> None:
         super().on_playback_started(created_at=created_at)
         if self._synchronizer.enabled:
-            self._synchronizer._impl.on_playback_started(start_time=created_at)
+            self._impl_for_playback_started().on_playback_started(
+                start_time=created_at
+            )
 
     def on_playback_finished(
         self,
@@ -623,16 +669,28 @@ class _SyncedAudioOutput(io.AudioOutput):
             )
             return
 
-        self._synchronizer._impl.mark_playback_finished(
-            playback_position=playback_position, interrupted=interrupted
-        )
-        super().on_playback_finished(
-            playback_position=playback_position,
-            interrupted=interrupted,
-            synchronized_transcript=self._synchronizer._impl.synchronized_transcript,
-        )
+        if self._synchronizer._pending_impls:
+            target = self._synchronizer._pending_impls.pop(0)
+            target.mark_playback_finished(
+                playback_position=playback_position, interrupted=interrupted
+            )
+            super().on_playback_finished(
+                playback_position=playback_position,
+                interrupted=interrupted,
+                synchronized_transcript=target.synchronized_transcript,
+            )
+            self._synchronizer._aclose_tasks.append(asyncio.create_task(target.aclose()))
+        else:
+            self._synchronizer._impl.mark_playback_finished(
+                playback_position=playback_position, interrupted=interrupted
+            )
+            super().on_playback_finished(
+                playback_position=playback_position,
+                interrupted=interrupted,
+                synchronized_transcript=self._synchronizer._impl.synchronized_transcript,
+            )
+            self._synchronizer.rotate_segment()
 
-        self._synchronizer.rotate_segment()
         self._pushed_duration = 0.0
 
     def on_attached(self) -> None:
@@ -688,12 +746,11 @@ class _SyncedTextOutput(io.TextOutput):
 
         self._capturing = True
         if self._synchronizer._impl.text_input_ended:
-            # this should not happen if `on_playback_finished` is called after each flush
-            logger.warning(
-                "_SegmentSynchronizerImpl text marked as ended in capture text, rotating segment"
-            )
-            self._synchronizer.rotate_segment()
-            await self._synchronizer.barrier()
+            # Mirror of the audio fallback: text input on the active impl
+            # was ended (the prior item's text flush() ran but its audio
+            # flush hasn't yet); advance so this text doesn't push into
+            # a closed word_stream.
+            self._synchronizer._advance_segment()
 
         self._synchronizer._impl.push_text(text)
 
@@ -708,6 +765,8 @@ class _SyncedTextOutput(io.TextOutput):
 
         self._capturing = False
         self._synchronizer._impl.end_text_input()
+        if self._synchronizer._impl.audio_input_ended:
+            self._synchronizer._advance_segment()
 
     def on_attached(self) -> None:
         super().on_attached()

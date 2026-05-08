@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import time
 
@@ -116,12 +117,15 @@ class _ParticipantAudioOutput(io.AudioOutput):
         if not self._pushed_duration:
             return
 
-        if self._flush_task and not self._flush_task.done():
-            # shouldn't happen if only one active speech handle at a time
-            logger.error("flush called while playback is in progress")
-            self._flush_task.cancel()
+        prior_task = self._flush_task
 
-        self._flush_task = asyncio.create_task(self._wait_for_playout())
+        async def _serialized_playout() -> None:
+            if prior_task is not None and not prior_task.done():
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await prior_task
+            await self._wait_for_playout()
+
+        self._flush_task = asyncio.create_task(_serialized_playout())
 
     def clear_buffer(self) -> None:
         self._audio_bstream.clear()
