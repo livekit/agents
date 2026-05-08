@@ -24,7 +24,7 @@ def _redact_payload(value: Any) -> Any:
     if isinstance(value, dict):
         return {
             key: "<redacted>"
-            if key.lower().endswith("token")
+            if key.lower().endswith("token") or key.lower() == "authorization"
             else _redact_payload(item)
             for key, item in value.items()
         }
