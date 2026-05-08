@@ -13,10 +13,11 @@ authors = [
     { name = "FaceMarket" }
 ]
 dependencies = [
-    "livekit-agents>=1.5.8",
-    "aiohttp>=3.10,<4",
-    "certifi>=2024.0.0",
-    "livekit-api>=1.0.0,<2",
+dependencies = [
+  "livekit-agents>=1.5.8",
+  "aiohttp>=3.10,<4",
+  "certifi>=2024.0.0",
+  "livekit-api>=1.0.0,<2",
 ]
 keywords = ["livekit", "avatar", "plugin", "agents", "facemarket", "ai", "realtime", "audio", "video"]
 classifiers = [
