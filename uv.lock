@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.12.0, <3.15"
 resolution-markers = [
     "python_full_version >= '3.14' and platform_machine != 's390x'",
@@ -32,7 +32,6 @@ members = [
     "livekit-plugins-deepgram",
     "livekit-plugins-did",
     "livekit-plugins-elevenlabs",
-    "livekit-plugins-facemarket",
     "livekit-plugins-fal",
     "livekit-plugins-fireworksai",
     "livekit-plugins-fishaudio",
@@ -2416,23 +2415,6 @@ dependencies = [
 requires-dist = [{ name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" }]
 
 [[package]]
-name = "livekit-plugins-facemarket"
-version = "1.0.0"
-source = { editable = "livekit-plugins/livekit-plugins-facemarket" }
-dependencies = [
-    { name = "aiohttp" },
-    { name = "certifi" },
-    { name = "livekit-api" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiohttp", specifier = ">=3.10,<4" },
-    { name = "certifi", specifier = ">=2024.0.0" },
-    { name = "livekit-api", specifier = ">=1.0.0,<2" },
-]
-
-[[package]]
 name = "livekit-plugins-fal"
 source = { editable = "livekit-plugins/livekit-plugins-fal" }
 dependencies = [
@@ -4564,7 +4546,7 @@ name = "pyzmq"
 version = "26.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cffi", marker = "python_full_version < '3.14' and implementation_name == 'pypy'" },
+    { name = "cffi", marker = "implementation_name == 'pypy'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/b1/11/b9213d25230ac18a71b39b3723494e57adebe36e066397b961657b3b41c1/pyzmq-26.4.0.tar.gz", hash = "sha256:4bd13f85f80962f91a651a7356fe0472791a5f7a92f227822b5acf44795c626d", size = 278293, upload-time = "2025-04-04T12:05:44.049Z" }
 wheels = [
