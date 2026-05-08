@@ -634,7 +634,9 @@ class SessionHost:
             items_list: list[agent_pb.ChatContext.ChatItem] = []
             error: str | None = None
             text = req.run_input.text
-            if text:
+            if not text:
+                error = "empty run_input text"
+            else:
                 try:
                     await self._session.interrupt(force=True)
                 except RuntimeError:
@@ -646,6 +648,9 @@ class SessionHost:
                     items_list = [_chat_item_to_proto(ev.item) for ev in result.events]
                 except Exception as e:
                     error = str(e)
+
+                if not items_list and not error:
+                    error = "agent produced no response items"
 
             resp = agent_pb.AgentSessionMessage(
                 response=agent_pb.SessionResponse(
