@@ -185,7 +185,7 @@ class AvatarSession:
 
             try:
                 await asyncio.wait_for(self._ready_event.wait(), timeout=ready_timeout)
-            except TimeoutError as exc:
+            except asyncio.TimeoutError as exc:
                 session_id = self.session_id or "<unknown>"
                 await self._safe_stop_remote_session()
                 self._reset_runtime_state()
