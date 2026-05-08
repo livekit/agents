@@ -19,6 +19,7 @@ livekit-plugins-cerebras = { workspace = true }
 livekit-plugins-clova = { workspace = true }
 livekit-plugins-deepgram = { workspace = true }
 livekit-plugins-elevenlabs = { workspace = true }
+livekit-plugins-facemarket = { workspace = true }
 livekit-plugins-fal = { workspace = true }
 livekit-plugins-fireworksai = { workspace = true }
 livekit-plugins-fishaudio = { workspace = true }

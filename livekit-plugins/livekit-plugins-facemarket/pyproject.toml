@@ -7,8 +7,8 @@ name = "livekit-plugins-facemarket"
 version = "1.0.0"
 description = "FaceMarket avatar plugin for LiveKit Agents"
 readme = "README.md"
-requires-python = ">=3.12"
-license = { text = "Proprietary" }
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
 authors = [
   { name = "FaceMarket" }
 ]
@@ -16,9 +16,6 @@ dependencies = [
   "aiohttp>=3.10,<4",
   "certifi>=2024.0.0",
   "livekit-api>=1.0.0,<2",
-  "livekit-agents>=1.4.0,<2",
-  "livekit-plugins-openai>=1.4.0,<2",
-  "livekit-plugins-silero>=1.4.0,<2",
 ]
 keywords = ["livekit", "avatar", "plugin", "agents", "facemarket", "ai", "realtime", "audio", "video"]
 classifiers = [
@@ -27,6 +24,8 @@ classifiers = [
     "Topic :: Multimedia :: Sound/Audio",
     "Topic :: Multimedia :: Video",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Operating System :: OS Independent",
 ]
