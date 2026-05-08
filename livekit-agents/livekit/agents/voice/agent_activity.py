@@ -389,7 +389,7 @@ class AgentActivity(RecognitionHooks):
             agent_id=self._agent.id,
         )
         self._agent._chat_ctx.insert(config_update)
-        self._session._chat_ctx.insert(config_update)
+        self._session._config_update_added(config_update)
 
         if self._rt_session is not None:
             await self._rt_session.update_instructions(instructions)
@@ -408,16 +408,16 @@ class AgentActivity(RecognitionHooks):
         tools = list({tool.id: tool for tool in tools}.values())
         self._agent._tools = tools
 
-        # Record the configuration change (skip if no visible diff)
-        if tools_added or tools_removed:
-            config_update = llm.AgentConfigUpdate(
-                tools_added=tools_added,
-                tools_removed=tools_removed,
-                agent_id=self._agent.id,
-            )
-            config_update._tools = llm.ToolContext(tools).flatten()
-            self._agent._chat_ctx.insert(config_update)
-            self._session._chat_ctx.insert(config_update)
+        # Record the configuration change
+        config_update = llm.AgentConfigUpdate(
+            tools_added=tools_added,
+            tools_removed=tools_removed,
+            agent_id=self._agent.id,
+        )
+        # Store full tool definitions in-memory (not serialized)
+        config_update._tools = llm.ToolContext(tools).flatten()
+        self._agent._chat_ctx.insert(config_update)
+        self._session._config_update_added(config_update)
 
         if self._rt_session is not None:
             await self._rt_session.update_tools(llm.ToolContext(self.tools).flatten())
@@ -533,9 +533,15 @@ class AgentActivity(RecognitionHooks):
             # mark a speech_handle as done, if every "linked" tasks are done
             speech_handle._tasks.append(task)
 
-            def _mark_done_if_needed(_: asyncio.Task) -> None:
+            def _mark_done_if_needed(done_task: asyncio.Task) -> None:
                 if all(task.done() for task in speech_handle._tasks):
-                    speech_handle._mark_done()
+                    # propagate the first task exception to the speech handle
+                    error: BaseException | None = None
+                    for t in speech_handle._tasks:
+                        if not t.cancelled() and (exc := t.exception()):
+                            error = exc
+                            break
+                    speech_handle._mark_done(error=error)
 
             task.add_done_callback(_mark_done_if_needed)
 
@@ -768,24 +774,23 @@ class AgentActivity(RecognitionHooks):
             except ValueError:
                 logger.exception("failed to update the instructions")
 
-        # Record initial agent configuration (skip if empty)
-        initial_tools = get_fnc_tool_names(self.tools) or None
-        if self._agent.instructions or initial_tools:
-            initial_config = llm.AgentConfigUpdate(
-                instructions=self._agent.instructions,
-                tools_added=initial_tools,
-                agent_id=self._agent.id,
-            )
-            initial_config._tools = llm.ToolContext(self.tools).flatten()
-            self._agent._chat_ctx.insert(initial_config)
-            self._session._chat_ctx.insert(initial_config)
+        # Record initial agent configuration
+        initial_config = llm.AgentConfigUpdate(
+            instructions=self._agent.instructions,
+            tools_added=get_fnc_tool_names(self.tools) or None,
+            agent_id=self._agent.id,
+        )
+        initial_config._tools = llm.ToolContext(self.tools).flatten()
+        self._agent._chat_ctx.insert(initial_config)
+        self._session._config_update_added(initial_config)
 
         await self._resume_scheduling_task()
+        use_stt = self.stt and self._session.input.audio_enabled
         self._audio_recognition = AudioRecognition(
             self._session,
             hooks=self,
-            stt=self._agent.stt_node if self.stt else None,
-            vad=self.vad,
+            stt=self._agent.stt_node if use_stt else None,
+            vad=self.vad if self._session.input.audio_enabled else None,
             interruption_detection=self._interruption_detector,
             endpointing=create_endpointing(self.endpointing_opts),
             turn_detection=self._turn_detection,
@@ -1895,7 +1900,6 @@ class AgentActivity(RecognitionHooks):
                     content=[info.new_transcript],
                     transcript_confidence=info.transcript_confidence,
                 )
-                user_message.metrics = self._init_metrics_from_end_of_turn(info)
                 self._agent._chat_ctx.items.append(user_message)
                 self._session._conversation_item_added(user_message)
 
@@ -1951,11 +1955,6 @@ class AgentActivity(RecognitionHooks):
             content=[info.new_transcript],
             transcript_confidence=info.transcript_confidence,
         )
-
-        metrics_report: llm.MetricsReport = self._init_metrics_from_end_of_turn(info)
-
-        if user_message is not None:
-            user_message.metrics = metrics_report
 
         if isinstance(self.llm, llm.RealtimeModel):
             if self.llm.capabilities.turn_detection:
@@ -2016,7 +2015,6 @@ class AgentActivity(RecognitionHooks):
             return
 
         on_user_turn_completed_delay = time.perf_counter() - start_time
-        metrics_report["on_user_turn_completed_delay"] = on_user_turn_completed_delay
 
         if isinstance(self.llm, llm.RealtimeModel):
             # ignore stt transcription for realtime model
@@ -2033,6 +2031,29 @@ class AgentActivity(RecognitionHooks):
                 self._agent._chat_ctx.items.append(user_message)
                 self._session._conversation_item_added(user_message)
             return
+
+        metrics_report: llm.MetricsReport = {}
+        if self.stt:
+            metrics_report["stt_metadata"] = {
+                "model_name": self.stt.model,
+                "model_provider": self.stt.provider,
+            }
+        if info.started_speaking_at is not None:
+            metrics_report["started_speaking_at"] = info.started_speaking_at
+
+        if info.stopped_speaking_at is not None:
+            metrics_report["stopped_speaking_at"] = info.stopped_speaking_at
+
+        if info.transcription_delay is not None:
+            metrics_report["transcription_delay"] = info.transcription_delay
+
+        if info.end_of_turn_delay is not None:
+            metrics_report["end_of_turn_delay"] = info.end_of_turn_delay
+
+        metrics_report["on_user_turn_completed_delay"] = on_user_turn_completed_delay
+
+        if user_message is not None:
+            user_message.metrics = metrics_report
 
         speech_handle: SpeechHandle | None = None
         if preemptive := self._preemptive_generation:
@@ -2217,7 +2238,7 @@ class AgentActivity(RecognitionHooks):
             if self._audio_recognition:
                 self._audio_recognition.on_start_of_agent_speech(started_at=started_speaking_at)
             if self.interruption_enabled:
-                self._disable_vad_interruption_soon()
+                self._interruption_by_audio_activity_enabled = False
 
         audio_out: _AudioOutput | None = None
         tts_gen_data: _TTSGenerationData | None = None
@@ -2274,6 +2295,10 @@ class AgentActivity(RecognitionHooks):
             if task is not None and task.done() and not task.cancelled():
                 if exc := task.exception():
                     raise exc
+
+        if tts_task and tts_task.done() and not tts_task.cancelled() and (exc := tts_task.exception()):
+            speech_handle._mark_done(error=exc)
+            return
 
         if audio_output is not None:
             await speech_handle.wait_if_not_interrupted(
@@ -2574,7 +2599,7 @@ class AgentActivity(RecognitionHooks):
             if self._audio_recognition:
                 self._audio_recognition.on_start_of_agent_speech(started_at=started_speaking_at)
             if self.interruption_enabled:
-                self._disable_vad_interruption_soon()
+                self._interruption_by_audio_activity_enabled = False
 
         audio_out: _AudioOutput | None = None
         if audio_output is not None:
@@ -2612,6 +2637,14 @@ class AgentActivity(RecognitionHooks):
         )
 
         await speech_handle.wait_if_not_interrupted([*tasks])
+
+        if llm_task.done() and not llm_task.cancelled() and (exc := llm_task.exception()):
+            speech_handle._mark_done(error=exc)
+            return
+
+        if tts_task and tts_task.done() and not tts_task.cancelled() and (exc := tts_task.exception()):
+            speech_handle._mark_done(error=exc)
+            return
 
         # wait for the end of the playout if the audio is enabled
         if audio_output is not None:
@@ -3035,7 +3068,7 @@ class AgentActivity(RecognitionHooks):
             if self._audio_recognition:
                 self._audio_recognition.on_start_of_agent_speech(started_at=started_speaking_at)
             if self.interruption_enabled:
-                self._disable_vad_interruption_soon()
+                self._interruption_by_audio_activity_enabled = False
 
         tasks: list[asyncio.Task[Any]] = []
         tees: list[utils.aio.itertools.Tee[Any]] = []
@@ -3197,6 +3230,11 @@ class AgentActivity(RecognitionHooks):
         )
 
         await speech_handle.wait_if_not_interrupted([*tasks])
+
+        for task in tasks:
+            if task.done() and not task.cancelled() and (exc := task.exception()):
+                speech_handle._mark_done(error=exc)
+                return
 
         current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, speech_handle.interrupted)
         current_span.set_attribute(
@@ -3472,7 +3510,7 @@ class AgentActivity(RecognitionHooks):
                 if self._audio_recognition and self._paused_speech.agent_state == "speaking":
                     self._audio_recognition.on_start_of_agent_speech(started_at=time.time())
                 if self.interruption_enabled:
-                    self._disable_vad_interruption_soon()
+                    self._interruption_by_audio_activity_enabled = False
                 audio_output.resume()
                 resumed = True
                 logger.debug("resumed false interrupted speech", extra={"timeout": timeout})
@@ -3526,27 +3564,7 @@ class AgentActivity(RecognitionHooks):
         ):
             self._session.output.audio.resume()
 
-    def _disable_vad_interruption_soon(self) -> None:
-        """Disable VAD interruption after the backchannel boundary expires."""
-        if self._audio_recognition and self._audio_recognition.backchannel_boundary_active:
-
-            def _disable_vad_interruption() -> None:
-                # only disable it if the agent is still speaking
-                if (
-                    self._session.agent_state == "speaking"
-                    and self._interruption_by_audio_activity_enabled
-                ):
-                    logger.trace("backchannel boundary expired")
-                    self._interruption_by_audio_activity_enabled = False
-
-            self._audio_recognition.backchannel_boundary_callback = _disable_vad_interruption
-        else:
-            self._interruption_by_audio_activity_enabled = False
-
     def _restore_interruption_by_audio_activity(self) -> None:
-        if self._audio_recognition:
-            self._audio_recognition._cancel_backchannel_boundary()
-
         self._interruption_by_audio_activity_enabled = (
             self._default_interruption_by_audio_activity_enabled
         )
@@ -3576,27 +3594,6 @@ class AgentActivity(RecognitionHooks):
             "adaptive interruption disabled due to unrecoverable error, "
             "falling back to VAD-based interruption"
         )
-
-    def _init_metrics_from_end_of_turn(self, info: _EndOfTurnInfo) -> llm.MetricsReport:
-        metrics_report: llm.MetricsReport = {}
-        if self.stt:
-            metrics_report["stt_metadata"] = {
-                "model_name": self.stt.model,
-                "model_provider": self.stt.provider,
-            }
-        if info.started_speaking_at is not None:
-            metrics_report["started_speaking_at"] = info.started_speaking_at
-
-        if info.stopped_speaking_at is not None:
-            metrics_report["stopped_speaking_at"] = info.stopped_speaking_at
-
-        if info.transcription_delay is not None:
-            metrics_report["transcription_delay"] = info.transcription_delay
-
-        if info.end_of_turn_delay is not None:
-            metrics_report["end_of_turn_delay"] = info.end_of_turn_delay
-
-        return metrics_report
 
     # move them to the end to avoid shadowing the same named modules for mypy
     @property

@@ -5,7 +5,7 @@ import struct
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from google.protobuf.duration_pb2 import Duration
 from google.protobuf.timestamp_pb2 import Timestamp
@@ -51,7 +51,6 @@ if TYPE_CHECKING:
     from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput  # type: ignore[import-untyped]
     from ..inference.interruption import OverlappingSpeechEvent
     from .agent_session import AgentSession, AgentSessionOptions
-    from .room_io.types import TextInputCallback
 
 
 TOPIC_SESSION_MESSAGES = "lk.agent.session"
@@ -126,8 +125,8 @@ class RoomSessionTransport(SessionTransport):
             )
             await writer.write(data)
             await writer.aclose()
-        except Exception:
-            logger.warning("failed to send binary stream message", exc_info=True)
+        except Exception as e:
+            logger.warning("failed to send binary stream message: %s", e)
 
     async def close(self) -> None:
         if self._recv_ch.closed:
@@ -154,6 +153,7 @@ _TCP_MAX_MESSAGE_SIZE = 1 << 20
 
 
 class TcpSessionTransport(SessionTransport):
+
     def __init__(self, host: str, port: int) -> None:
         self._host = host
         self._port = port
@@ -360,7 +360,6 @@ class SessionHost:
         self._tasks = utils.aio.TaskSet()
         self._session: AgentSession | None = None
         self._events_registered = False
-        self._text_input_cb: TextInputCallback | None = None
 
     def register_session(self, session: AgentSession) -> None:
         self._session = session
@@ -374,9 +373,6 @@ class SessionHost:
             session.on("session_usage_updated", self._on_session_usage_updated)
             session.on("overlapping_speech", self._on_overlapping_speech)
             session.on("error", self._on_error)
-
-    def register_text_input(self, text_input_cb: TextInputCallback) -> None:
-        self._text_input_cb = text_input_cb
 
     async def start(self) -> None:
         if self._started:
@@ -595,6 +591,7 @@ class SessionHost:
 
     async def _handle_request(self, req: agent_pb.SessionRequest) -> None:
         assert self._session is not None
+        req_type = req.WhichOneof("request")
 
         if req.HasField("ping"):
             resp = agent_pb.AgentSessionMessage(
@@ -638,27 +635,17 @@ class SessionHost:
             error: str | None = None
             text = req.run_input.text
             if text:
-                if self._text_input_cb is not None:
-                    from .room_io.types import TextInputEvent
+                try:
+                    await self._session.interrupt(force=True)
+                except RuntimeError:
+                    pass
 
-                    cb_result = self._text_input_cb(
-                        self._session,
-                        TextInputEvent(text=text, info=None, participant=None),
-                    )
-                    if asyncio.iscoroutine(cb_result):
-                        await cb_result
-                else:
-                    try:
-                        await self._session.interrupt(force=True)
-                    except RuntimeError:
-                        pass
-
-                    try:
-                        result: RunResult[None] = self._session.run(user_input=text)
-                        await result
-                        items_list = [_chat_item_to_proto(ev.item) for ev in result.events]
-                    except Exception as e:
-                        error = str(e)
+                try:
+                    result: RunResult[None] = self._session.run(user_input=text)
+                    await result
+                    items_list = [_chat_item_to_proto(ev.item) for ev in result.events]
+                except Exception as e:
+                    error = str(e)
 
             resp = agent_pb.AgentSessionMessage(
                 response=agent_pb.SessionResponse(
@@ -820,3 +807,148 @@ def _session_usage_to_proto(usage: AgentSessionUsage) -> agent_pb.AgentSessionUs
                 )
             )
     return agent_pb.AgentSessionUsage(model_usage=model_usages)
+
+
+RemoteSessionEventTypes = Literal[
+    "agent_state_changed",
+    "user_state_changed",
+    "conversation_item_added",
+    "user_input_transcribed",
+    "function_tools_executed",
+    "session_usage_updated",
+    "error",
+]
+
+
+class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
+
+    def __init__(self, transport: SessionTransport) -> None:
+        super().__init__()
+        self._transport = transport
+        self._started = False
+        self._pending_requests: dict[str, asyncio.Future[agent_pb.SessionResponse]] = {}
+        self._recv_task: asyncio.Task[None] | None = None
+
+    @classmethod
+    def from_room(cls, room: rtc.Room, agent_identity: str) -> RemoteSession:
+        transport = RoomSessionTransport(room, agent_identity)
+        return cls(transport)
+
+    async def start(self) -> None:
+        if self._started:
+            return
+        self._started = True
+        await self._transport.start()
+        self._recv_task = asyncio.create_task(self._recv_loop())
+
+    async def aclose(self) -> None:
+        if not self._started:
+            return
+        self._started = False
+
+        for future in self._pending_requests.values():
+            future.cancel()
+        self._pending_requests.clear()
+
+        if self._recv_task:
+            await utils.aio.cancel_and_wait(self._recv_task)
+
+        await self._transport.close()
+
+    async def _recv_loop(self) -> None:
+        try:
+            async for msg in self._transport:
+                if msg.HasField("response"):
+                    self._dispatch_response(msg.response)
+                elif msg.HasField("event"):
+                    event_field = msg.event.WhichOneof("event")
+                    if event_field:
+                        self.emit(event_field, msg.event)
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.warning("error processing session message", exc_info=True)
+
+    def _dispatch_response(self, response: agent_pb.SessionResponse) -> None:
+        future = self._pending_requests.pop(response.request_id, None)
+        if future and not future.done():
+            future.set_result(response)
+
+    async def _send_request(
+        self,
+        request: agent_pb.SessionRequest,
+        timeout: float = 60.0,
+    ) -> agent_pb.SessionResponse:
+        req_type = request.WhichOneof("request")
+        future: asyncio.Future[agent_pb.SessionResponse] = asyncio.Future()
+        self._pending_requests[request.request_id] = future
+
+        try:
+            msg = agent_pb.AgentSessionMessage(request=request)
+            await self._transport.send_message(msg)
+            resp = await asyncio.wait_for(future, timeout=timeout)
+        except asyncio.TimeoutError:
+            self._pending_requests.pop(request.request_id, None)
+            logger.warning("remote session request timed out", extra={"request_id": request.request_id, "type": req_type, "timeout": timeout})
+            raise
+        except Exception:
+            self._pending_requests.pop(request.request_id, None)
+            raise
+
+        if resp.error:
+            raise RuntimeError(f"session request {req_type} failed: {resp.error}")
+
+        return resp
+
+    async def wait_for_ready(
+        self, timeout: float = 5.0, retry_interval: float = 0.5
+    ) -> None:
+        deadline = asyncio.get_event_loop().time() + timeout
+        while True:
+            remaining = deadline - asyncio.get_event_loop().time()
+            if remaining <= 0:
+                raise TimeoutError("wait_for_ready timed out")
+            req = agent_pb.SessionRequest(
+                request_id=utils.shortuuid("req_"),
+                ping=agent_pb.SessionRequest.Ping(),
+            )
+            try:
+                await self._send_request(req, timeout=min(retry_interval, remaining))
+                return
+            except (TimeoutError, asyncio.TimeoutError):
+                if asyncio.get_event_loop().time() >= deadline:
+                    raise TimeoutError("wait_for_ready timed out")
+
+    async def get_chat_history(self) -> agent_pb.SessionResponse.GetChatHistoryResponse:
+        req = agent_pb.SessionRequest(
+            request_id=utils.shortuuid("req_"),
+            get_chat_history=agent_pb.SessionRequest.GetChatHistory(),
+        )
+        resp = await self._send_request(req)
+        return resp.get_chat_history
+
+    async def get_agent_info(self) -> agent_pb.SessionResponse.GetAgentInfoResponse:
+        req = agent_pb.SessionRequest(
+            request_id=utils.shortuuid("req_"),
+            get_agent_info=agent_pb.SessionRequest.GetAgentInfo(),
+        )
+        resp = await self._send_request(req)
+        return resp.get_agent_info
+
+    async def get_session_state(self) -> agent_pb.SessionResponse.GetSessionStateResponse:
+        req = agent_pb.SessionRequest(
+            request_id=utils.shortuuid("req_"),
+            get_session_state=agent_pb.SessionRequest.GetSessionState(),
+        )
+        resp = await self._send_request(req)
+        return resp.get_session_state
+
+    async def run(
+        self, text: str, timeout: float = 60.0
+    ) -> agent_pb.SessionResponse.RunInputResponse:
+        req = agent_pb.SessionRequest(
+            request_id=utils.shortuuid("req_"),
+            run_input=agent_pb.SessionRequest.RunInput(text=text),
+        )
+        resp = await self._send_request(req, timeout=timeout)
+        return resp.run_input
