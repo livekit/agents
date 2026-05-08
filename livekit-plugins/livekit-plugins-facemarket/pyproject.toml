@@ -13,7 +13,6 @@ authors = [
     { name = "FaceMarket" }
 ]
 dependencies = [
-dependencies = [
   "livekit-agents>=1.5.8",
   "aiohttp>=3.10,<4",
   "certifi>=2024.0.0",
