@@ -9,7 +9,7 @@ from .exceptions import (
 from .version import __version__
 
 __all__ = [
-    'FaceMarketAPI',
+    "FaceMarketAPI",
     "AvatarSession",
     "FaceMarketError",
     "FaceMarketPlatformError",
@@ -21,6 +21,7 @@ __all__ = [
 from livekit.agents import Plugin
 
 from .log import logger
+
 
 class FaceMarketPlugin(Plugin):
     def __init__(self) -> None:

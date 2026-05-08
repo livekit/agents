@@ -78,9 +78,7 @@ class FaceMarketAPI:
             or data.get("session_id")
         )
         if not session_id:
-            raise FaceMarketPlatformError(
-                "FaceMarket start response did not contain sessionId"
-            )
+            raise FaceMarketPlatformError("FaceMarket start response did not contain sessionId")
 
         return SessionInfo(
             session_id=str(session_id),
@@ -121,7 +119,9 @@ class FaceMarketAPI:
         for attempt in range(attempts):
             try:
                 connector = aiohttp.TCPConnector(ssl=self._ssl_context)
-                async with aiohttp.ClientSession(timeout=self._timeout, connector=connector) as http:
+                async with aiohttp.ClientSession(
+                    timeout=self._timeout, connector=connector
+                ) as http:
                     async with http.request(
                         method,
                         url,

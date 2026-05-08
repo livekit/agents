@@ -12,4 +12,3 @@ class FaceMarketPlatformError(FaceMarketError):
 
 class SessionReadyTimeoutError(FaceMarketSessionError):
     """Raised when the coordinator never confirms session readiness."""
-

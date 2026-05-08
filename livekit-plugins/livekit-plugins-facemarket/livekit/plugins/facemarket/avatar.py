@@ -6,12 +6,13 @@ import inspect
 import json
 import uuid
 from collections import defaultdict
-from typing import Any, Callable, Coroutine, Protocol
+from collections.abc import Callable, Coroutine
+from typing import Any, Protocol
 
 from livekit import rtc
-from livekit.api import AccessToken, VideoGrants
 from livekit.agents import AgentSession
 from livekit.agents.types import ATTRIBUTE_PUBLISH_ON_BEHALF
+from livekit.api import AccessToken, VideoGrants
 
 from .api import FaceMarketAPI
 from .exceptions import FaceMarketSessionError, SessionReadyTimeoutError
@@ -249,7 +250,10 @@ class AvatarSession:
             )
             if not is_renderer:
                 return
-            if track_kind != rtc.TrackKind.KIND_VIDEO and publication_kind != rtc.TrackKind.KIND_VIDEO:
+            if (
+                track_kind != rtc.TrackKind.KIND_VIDEO
+                and publication_kind != rtc.TrackKind.KIND_VIDEO
+            ):
                 return
             self._create_bg_task(self._mark_ready())
 
@@ -327,12 +331,16 @@ class AvatarSession:
             new_state = _state_name(getattr(event, "new_state", None))
             if new_state == "speaking" and not self._agent_is_speaking:
                 self._agent_is_speaking = True
-                self._create_bg_task(self._publish_response_audio_start(source="agent_state_changed"))
+                self._create_bg_task(
+                    self._publish_response_audio_start(source="agent_state_changed")
+                )
                 return
 
             if self._agent_is_speaking and new_state != "speaking":
                 self._agent_is_speaking = False
-                self._create_bg_task(self._publish_response_audio_finish(source="agent_state_changed"))
+                self._create_bg_task(
+                    self._publish_response_audio_finish(source="agent_state_changed")
+                )
 
         def _speech_created(event: Any) -> None:
             speech_handle = getattr(event, "speech_handle", None)
@@ -350,7 +358,11 @@ class AvatarSession:
             if language:
                 message["language"] = language
 
-            event_name = "input.asr.final" if bool(getattr(event, "is_final", False)) else "input.asr.partial"
+            event_name = (
+                "input.asr.final"
+                if bool(getattr(event, "is_final", False))
+                else "input.asr.partial"
+            )
             self._create_bg_task(self._publish_event(event_name, message))
 
         bindings = [
@@ -388,7 +400,9 @@ class AvatarSession:
         if not self._response_audio_active:
             logger.info("FaceMarket response audio is not active, skip finish source=%s", source)
             return
-        dc_event = "response.audio.promptFinish" if self._is_prompt_mode else "response.audio.finish"
+        dc_event = (
+            "response.audio.promptFinish" if self._is_prompt_mode else "response.audio.finish"
+        )
         self._response_audio_active = False
         self._is_prompt_mode = False
         logger.info("FaceMarket response audio finish source=%s event=%s", source, dc_event)
@@ -465,14 +479,22 @@ class AvatarSession:
             logger.exception("failed to stop FaceMarket session during cleanup")
 
     def _detach_handlers(self) -> None:
-        if self._room is not None and self._room_data_handler is not None and hasattr(self._room, "off"):
+        if (
+            self._room is not None
+            and self._room_data_handler is not None
+            and hasattr(self._room, "off")
+        ):
             try:
                 self._room.off("data_received", self._room_data_handler)
             except Exception:
                 logger.debug("failed to detach room data handler", exc_info=True)
         self._room_data_handler = None
 
-        if self._room is not None and self._track_subscribed_handler is not None and hasattr(self._room, "off"):
+        if (
+            self._room is not None
+            and self._track_subscribed_handler is not None
+            and hasattr(self._room, "off")
+        ):
             try:
                 self._room.off("track_subscribed", self._track_subscribed_handler)
             except Exception:
