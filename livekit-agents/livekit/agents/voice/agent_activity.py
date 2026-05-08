@@ -75,6 +75,7 @@ from .generation import (
     remove_instructions,
     update_instructions,
 )
+from .io import PlaybackFinishedEvent
 from .speech_handle import DEFAULT_INPUT_DETAILS, InputDetails, SpeechHandle
 from .turn import EndpointingOptions, TurnDetectionMode
 
@@ -3012,6 +3013,8 @@ class AgentActivity(RecognitionHooks):
             2. _TextOutput.first_text_fut (None)
             """
             nonlocal started_speaking_at, started_forwarding_at
+            if started_speaking_at is not None:
+                return
             try:
                 started_speaking_at = fut.result() or time.time()
                 started_forwarding_at = (
@@ -3048,12 +3051,6 @@ class AgentActivity(RecognitionHooks):
             forward_tasks: list[asyncio.Task[Any]] = []
             try:
                 async for msg in generation_ev.message_stream:
-                    if len(forward_tasks) > 0:
-                        logger.warning(
-                            "expected to receive only one message generation from the realtime API"
-                        )
-                        break
-
                     msg_modalities = await msg.modalities
                     tts_text_input: AsyncIterable[str] | None = None
                     if "audio" not in msg_modalities and self.tts:
@@ -3241,59 +3238,92 @@ class AgentActivity(RecognitionHooks):
             msg.metrics = assistant_metrics
             return msg
 
-        msg_gen, text_out, audio_out = (
-            message_outputs[0] if len(message_outputs) > 0 else (None, None, None)
-        )  # there should be only one message
+        partial_idx: int | None = None
+        playback_ev: PlaybackFinishedEvent | None = None
 
-        forwarded_text = text_out.text if text_out else ""
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*tasks)
 
-            if msg_gen and audio_output is not None:
+            if message_outputs and audio_output is not None:
                 audio_output.clear_buffer()
-
                 playback_ev = await audio_output.wait_for_playout()
-                playback_position = playback_ev.playback_position
-                if (
-                    audio_out is not None
-                    and audio_out.first_frame_fut.done()
-                    and not audio_out.first_frame_fut.cancelled()
-                ):
-                    # playback_ev is valid only if the first frame was already played
-                    if playback_ev.synchronized_transcript is not None:
-                        forwarded_text = playback_ev.synchronized_transcript
-                else:
-                    forwarded_text = ""
-                    playback_position = 0
 
-                # truncate server-side message (if supported)
-                if self.llm.capabilities.message_truncation:
-                    msg_modalities = await msg_gen.modalities
-                    self._rt_session.truncate(
-                        message_id=msg_gen.message_id,
-                        modalities=msg_modalities,
-                        audio_end_ms=int(playback_position * 1000),
-                        audio_transcript=forwarded_text,
-                    )
+                if playback_ev.interrupted:
+                    for idx, (_, _, audio_out_i) in enumerate(message_outputs):
+                        if (
+                            audio_out_i is not None
+                            and audio_out_i.first_frame_fut.done()
+                            and not audio_out_i.first_frame_fut.cancelled()
+                        ):
+                            partial_idx = idx
 
-        elif read_transcript_from_tts and text_out and not text_out.text:
+                    if (
+                        partial_idx is not None
+                        and self.llm.capabilities.message_truncation
+                    ):
+                        msg_gen, text_out, _ = message_outputs[partial_idx]
+                        transcript = playback_ev.synchronized_transcript or (
+                            text_out.text if text_out else ""
+                        )
+                        msg_modalities = await msg_gen.modalities
+                        self._rt_session.truncate(
+                            message_id=msg_gen.message_id,
+                            modalities=msg_modalities,
+                            audio_end_ms=int(playback_ev.playback_position * 1000),
+                            audio_transcript=transcript,
+                        )
+        elif read_transcript_from_tts and any(
+            text_out is not None and not text_out.text
+            for _, text_out, _ in message_outputs
+        ):
             logger.warning(
                 "`use_tts_aligned_transcript` is enabled but no agent transcript was returned from tts"
             )
 
-        if msg_gen and forwarded_text:
+        trace_text_parts: list[str] = []
+        for idx, (msg_gen, text_out, audio_out) in enumerate(message_outputs):
+            if msg_gen is None:
+                continue
+
+            if audio_output is not None:
+                started_playing = (
+                    audio_out is not None
+                    and audio_out.first_frame_fut.done()
+                    and not audio_out.first_frame_fut.cancelled()
+                )
+                if not started_playing:
+                    continue
+
+            if idx == partial_idx and playback_ev is not None:
+                forwarded_text = playback_ev.synchronized_transcript or (
+                    text_out.text if text_out else ""
+                )
+                item_interrupted = True
+            else:
+                forwarded_text = text_out.text if text_out else ""
+                item_interrupted = False
+
+            if not forwarded_text:
+                continue
+
+            trace_text_parts.append(forwarded_text)
             msg = _create_assistant_message(
                 message_id=msg_gen.message_id,
                 forwarded_text=forwarded_text,
-                interrupted=speech_handle.interrupted,
+                interrupted=item_interrupted,
             )
             self._agent._chat_ctx._upsert_item(msg)
             speech_handle._item_added([msg])
             self._session._conversation_item_added(msg)
-            current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, forwarded_text)
 
-        if audio_out is not None and not audio_out.first_frame_fut.done():
-            audio_out.first_frame_fut.cancel()
+        if trace_text_parts:
+            current_span.set_attribute(
+                trace_types.ATTR_RESPONSE_TEXT, " ".join(trace_text_parts)
+            )
+
+        for _, _, audio_out in message_outputs:
+            if audio_out is not None and not audio_out.first_frame_fut.done():
+                audio_out.first_frame_fut.cancel()
 
         for tee in tees:
             await tee.aclose()

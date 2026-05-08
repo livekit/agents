@@ -100,7 +100,6 @@ class _ParticipantAudioOutput(io.AudioOutput):
         await super().capture_frame(frame)
 
         if self._flush_task and not self._flush_task.done():
-            logger.error("capture_frame called while flush is in progress")
             await self._flush_task
 
         for f in self._audio_bstream.push(frame.data):
