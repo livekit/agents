@@ -5,7 +5,7 @@ import datetime
 import os
 import time
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterable, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator
 from dataclasses import dataclass
 from types import TracebackType
 from typing import TYPE_CHECKING, ClassVar, Generic, Literal, TypeVar
@@ -92,6 +92,33 @@ class TTS(
             Used for transcripts streamed to the user and for chat history storage.
             The TTS itself receives the original marked-up text.
             """
+            return text
+
+        async def to_text_stream(
+            self, text_stream: AsyncIterable[str]
+        ) -> AsyncGenerator[str, None]:
+            """Strip TTS markup from a stream of text chunks.
+
+            Buffers partial XML tags across chunks so that ``to_text`` always
+            receives complete tags to strip.
+            """
+            buf = ""
+            async for chunk in text_stream:
+                buf += chunk
+                if buf.rfind("<") > buf.rfind(">"):
+                    continue
+                stripped = self.to_text(buf)
+                buf = ""
+                if stripped:
+                    yield stripped
+
+            if buf:
+                buf = self.to_text(buf)
+            if buf:
+                yield buf
+
+        def normalize(self, text: str) -> str:
+            """Fix common LLM markup mistakes (e.g. unclosed self-closing tags)."""
             return text
 
         def convert(self, text: str) -> str:

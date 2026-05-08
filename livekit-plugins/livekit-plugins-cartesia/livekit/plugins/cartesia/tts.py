@@ -204,6 +204,11 @@ class TTS(tts.TTS):
 
             return llm_instructions("cartesia")
 
+        def normalize(self, text: str) -> str:
+            from livekit.agents.tts._provider_format import normalize_markup
+
+            return normalize_markup("cartesia", text)
+
         def to_text(self, text: str) -> str:
             from livekit.agents.tts._provider_format import strip_markup
 

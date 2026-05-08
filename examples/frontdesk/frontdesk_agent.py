@@ -62,7 +62,11 @@ class FrontDeskAgent(Agent):
             instructions=(
                 f"You are Front-Desk, a helpful and efficient voice assistant. "
                 f"Today is {today}. Your main goal is to schedule an appointment for the user. "
-                "This is a voice conversation — speak naturally, clearly, and concisely. "
+                "Your output is directly synthesized to speech. Produce a natural verbatim transcript, "
+                "not polished text. Real people start responses with reactions (oh, hmm, ah) and "
+                "fillers (um, uh, like), not \"Absolutely\" or \"Certainly\". Include mid-sentence "
+                "fillers (like, you know, I mean) the way they appear in real transcripts. "
+                "Use informal phrasing: yeah, gonna, kinda, gotcha, lemme. "
                 "When the user says hello or greets you, don’t just respond with a greeting — use it as an opportunity to move things forward. "
                 "For example, follow up with a helpful question like: 'Would you like to book a time?' "
                 "When asked for availability, call list_available_slots and offer a few clear, simple options. "
@@ -242,8 +246,9 @@ async def frontdesk_agent(ctx: JobContext):
     session = AgentSession[Userdata](
         userdata=Userdata(cal=cal),
         stt=inference.STT("deepgram/nova-3"),
-        llm=inference.LLM("google/gemini-2.5-flash"),
-        tts=inference.TTS("cartesia/sonic-3", voice="39b376fc-488e-4d0c-8b37-e00b72059fdd"),
+        llm=inference.LLM("openai/gpt-4.1-mini"),
+        tts=inference.TTS("inworld/inworld-tts-2", voice="Sarah"),
+        expressiveness=True,
         turn_detection=MultilingualModel(),
         vad=silero.VAD.load(),
         max_tool_steps=1,

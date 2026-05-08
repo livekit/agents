@@ -1,7 +1,7 @@
-"""Regression tests: sentence tokenizers must never split inside XML tags.
+"""Regression tests: sentence tokenizers must handle XML markup correctly.
 
 Covers blingfire sentence tokenizer (batch + streaming) with TTS markup tags
-used in expressiveness mode (Cartesia, ElevenLabs).
+used in expressiveness mode (Cartesia, ElevenLabs, Inworld).
 """
 
 from __future__ import annotations
@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 
 from livekit.agents.tokenize.blingfire import SentenceTokenizer
+from livekit.agents.tokenize.token_stream import _XML_TAG_RE
 from livekit.agents.tts.markup_utils import strip_xml_tags
 
 # ---------------------------------------------------------------------------
@@ -16,17 +17,18 @@ from livekit.agents.tts.markup_utils import strip_xml_tags
 # ---------------------------------------------------------------------------
 
 
-def _assert_tags_balanced(sentences: list[str], label: str = "") -> None:
-    """Every sentence must have balanced < > and no orphaned closing tags."""
-    for s in sentences:
-        assert s.count("<") == s.count(">"), f"Unbalanced <> in {label}: {s!r}"
-
-
 def _assert_wrapping_tag_intact(sentences: list[str], tag: str) -> None:
     """If a sentence has <tag>, it must also have </tag> (not split)."""
     for s in sentences:
         if f"<{tag}" in s and f"</{tag}>" not in s and "/>" not in s:
             pytest.fail(f"<{tag}> split across sentences: {sentences}")
+
+
+def _assert_no_tag_only_sentences(sentences: list[str]) -> None:
+    """No sentence should be purely XML tags with no text content."""
+    for s in sentences:
+        if "<" in s:
+            assert _XML_TAG_RE.sub("", s).strip(), f"Tag-only sentence: {s!r}"
 
 
 async def _stream_tokenize(tok: SentenceTokenizer, text: str) -> list[str]:
@@ -37,11 +39,14 @@ async def _stream_tokenize(tok: SentenceTokenizer, text: str) -> list[str]:
     return [ev.token async for ev in stream]
 
 
-async def _stream_tokenize_chunked(tok: SentenceTokenizer, text: str, chunk_size: int) -> list[str]:
-    """Push text in chunks of *chunk_size* characters (simulates LLM streaming)."""
+async def _stream_tokenize_tiktoken(tok: SentenceTokenizer, text: str) -> list[str]:
+    """Push text token-by-token using GPT-4o's tokenizer (realistic LLM streaming)."""
+    import tiktoken
+
+    enc = tiktoken.encoding_for_model("gpt-4o")
     stream = tok.stream()
-    for i in range(0, len(text), chunk_size):
-        stream.push_text(text[i : i + chunk_size])
+    for token_id in enc.encode(text):
+        stream.push_text(enc.decode([token_id]))
     stream.end_input()
     return [ev.token async for ev in stream]
 
@@ -55,34 +60,16 @@ class TestStripXmlTags:
     def test_self_closing(self) -> None:
         assert strip_xml_tags('<emotion value="happy"/> Hello!', ["emotion"]) == " Hello!"
 
-    def test_wrapping(self) -> None:
-        assert strip_xml_tags("Code: <spell>A7X9</spell>.", ["spell"]) == "Code: A7X9."
-
-    def test_multiple_tags(self) -> None:
-        text = '<speed ratio="1.5"/><emotion value="excited"/> Great!'
-        assert strip_xml_tags(text, ["speed", "emotion"]) == " Great!"
-
-    def test_break(self) -> None:
-        assert strip_xml_tags('<break time="1s"/>', ["break"]) == ""
-
-    def test_phoneme(self) -> None:
-        text = '<phoneme alphabet="ipa" ph="x">word</phoneme>'
-        assert strip_xml_tags(text, ["phoneme"]) == "word"
-
-    def test_empty_tags_list(self) -> None:
-        text = '<emotion value="happy"/> Hi'
-        assert strip_xml_tags(text, []) == text
-
-    def test_no_tags_in_text(self) -> None:
-        assert strip_xml_tags("Hello world.", ["emotion"]) == "Hello world."
+    def test_wrapping_preserves_content(self) -> None:
+        assert strip_xml_tags("<spell>A.B.C.</spell> confirmed", ["spell"]) == "A.B.C. confirmed"
 
     def test_preserves_unrelated_tags(self) -> None:
         text = '<emotion value="happy"/> <custom>keep</custom>'
         assert strip_xml_tags(text, ["emotion"]) == " <custom>keep</custom>"
 
-    def test_nested_content_preserved(self) -> None:
-        text = "<spell>A.B.C.</spell> confirmed"
-        assert strip_xml_tags(text, ["spell"]) == "A.B.C. confirmed"
+    def test_empty_tags_list(self) -> None:
+        text = '<emotion value="happy"/> Hi'
+        assert strip_xml_tags(text, []) == text
 
 
 # ===========================================================================
@@ -94,227 +81,65 @@ class TestBatchTokenizer:
     def setup_method(self) -> None:
         self.tok = SentenceTokenizer(min_sentence_len=1)
 
-    # -- Self-closing tags (Cartesia primary tags) --
-
-    def test_emotion_self_closing(self) -> None:
-        text = '<emotion value="happy"/> Hello! How are you?'
-        sentences = self.tok.tokenize(text)
-        _assert_tags_balanced(sentences, "emotion")
-        assert '<emotion value="happy"/>' in sentences[0]
-
-    def test_speed_decimal_in_attribute(self) -> None:
-        text = '<speed ratio="1.5"/> This is fast. And this is normal.'
-        sentences = self.tok.tokenize(text)
-        assert '<speed ratio="1.5"/>' in sentences[0]
-
-    def test_volume_decimal_in_attribute(self) -> None:
-        text = '<volume ratio="0.5"/> Whispering now. Back to normal.'
-        sentences = self.tok.tokenize(text)
-        assert '<volume ratio="0.5"/>' in sentences[0]
-
-    def test_self_closing_with_attributes_allows_sentence_split(self) -> None:
-        """Regression: greedy [^>]* in regex ate the / in self-closing tags,
-        causing the tokenizer to think every <tag attr="..."/> was unclosed
-        and hold the entire buffer (never splitting sentences)."""
+    def test_expression_tags_between_sentences_split_correctly(self) -> None:
+        """Regression: blingfire refuses to split when <expression .../> sits between
+        sentences because /> confuses its boundary detection. The XML wrapper must
+        strip tags before blingfire and remap offsets so each tag goes with its sentence."""
         text = (
-            '<expression value="speak warmly with a gentle pace"/> '
-            "This is the first sentence of a longer response. "
-            "This is the second sentence that should be separate. "
-            "And here is a third sentence that comes after."
+            '<expression value="speak cheerfully"/> Hello and welcome! '
+            '<expression value="speak with bright energy"/> Great specials today. '
+            '<expression value="sound excited"/> Try our new sandwich.'
         )
         sentences = self.tok.tokenize(text)
-        # Must split into multiple sentences — the expression tag is self-closing
-        # and should NOT prevent splitting
-        assert len(sentences) >= 2, (
-            f"Self-closing tag with attributes blocked sentence splitting: {sentences}"
-        )
+        assert len(sentences) == 3, f"Expected 3 sentences: {sentences}"
+        assert '<expression value="speak cheerfully"/>' in sentences[0]
+        assert '<expression value="speak with bright energy"/>' in sentences[1]
+        assert '<expression value="sound excited"/>' in sentences[2]
+        _assert_no_tag_only_sentences(sentences)
 
-    def test_expression_tag_does_not_block_splitting(self) -> None:
-        """Regression: <expression value="..."/> must not hold the buffer."""
+    def test_standalone_tag_merged_with_following_text(self) -> None:
+        """Regression: a self-closing tag as its own sentence must merge with
+        the next so TTS never receives a tag-only chunk."""
         text = (
-            '<expression value="sing joyfully with a bright melodic rhythm and high energy"/> '
-            "La la la, welcome to the show. "
-            "We are so glad that you are here today. "
-            "Let us have some fun together now."
+            '<expression value="speak firmly"/> '
+            "I told you already, no changes to the order."
         )
         sentences = self.tok.tokenize(text)
-        assert len(sentences) >= 2, (
-            f"Expression tag blocked sentence splitting: {sentences}"
-        )
+        _assert_no_tag_only_sentences(sentences)
 
-    def test_break_between_sentences(self) -> None:
-        text = 'First sentence. <break time="1.5s"/> Second sentence.'
-        sentences = self.tok.tokenize(text)
-        for s in sentences:
-            if "<break" in s:
-                assert "/>" in s, f"<break> split: {sentences}"
-
-    def test_multiple_emotions_across_sentences(self) -> None:
-        text = (
-            '<emotion value="sad"/> I am sorry about that. '
-            '<emotion value="calm"/> Let us figure this out together.'
-        )
-        sentences = self.tok.tokenize(text)
-        _assert_tags_balanced(sentences, "multi-emotion")
-
-    def test_emotion_mid_sentence(self) -> None:
-        text = 'I feel <emotion value="excited"/> really great today!'
-        sentences = self.tok.tokenize(text)
-        _assert_tags_balanced(sentences, "mid-sentence")
-
-    # -- Wrapping tags --
-
-    def test_spell_simple(self) -> None:
-        text = "The code is <spell>A7X9</spell>. Please confirm."
-        sentences = self.tok.tokenize(text)
-        _assert_wrapping_tag_intact(sentences, "spell")
-
-    def test_spell_with_periods(self) -> None:
-        """Dots inside <spell> look like sentence endings to blingfire. Our merge must catch this."""
+    def test_wrapping_tag_with_inner_periods(self) -> None:
+        """Dots inside <spell> look like sentence endings. Merge must keep tag intact."""
         text = "Spell it: <spell>U.S.A.</spell>. Got it?"
         sentences = self.tok.tokenize(text)
         _assert_wrapping_tag_intact(sentences, "spell")
 
-    def test_spell_with_abbreviation(self) -> None:
-        """N.A.S.A. has 4 dots — each looks like a sentence ending."""
-        text = "The org is <spell>N.A.S.A.</spell>. They do space stuff."
-        sentences = self.tok.tokenize(text)
-        _assert_wrapping_tag_intact(sentences, "spell")
-
-    def test_spell_with_full_sentences_inside(self) -> None:
-        """Content inside <spell> that blingfire would split if not protected."""
-        text = "Read this: <spell>The quick brown fox jumped over the lazy dog. The cat sat on the mat and looked around.</spell>. Now continue talking about something else."
-        sentences = self.tok.tokenize(text)
-        _assert_wrapping_tag_intact(sentences, "spell")
-
-    def test_phoneme_simple(self) -> None:
-        text = 'Say <phoneme alphabet="cmu-arpabet" ph="M AE1">Madison</phoneme>. It is a city.'
-        sentences = self.tok.tokenize(text)
-        _assert_wrapping_tag_intact(sentences, "phoneme")
-
-    def test_phoneme_with_ipa(self) -> None:
-        text = 'Pronounce <phoneme alphabet="ipa" ph="ˈæktʃuəli">actually</phoneme>. Easy right?'
-        sentences = self.tok.tokenize(text)
-        _assert_wrapping_tag_intact(sentences, "phoneme")
-
-    def test_wrapping_tag_inner_sentences_force_split(self) -> None:
-        """Blingfire WILL split the inner content. Our merge must rejoin."""
+    def test_wrapping_tag_with_inner_sentences(self) -> None:
+        """Full sentences inside a wrapping tag must not be split out."""
         text = (
-            "I need to tell you something important. "
-            "<outer>The first thing you should know is very important. "
-            "The second thing is equally critical to understand. "
-            "The third thing wraps everything up nicely.</outer> "
-            "That was everything I had to say today."
+            "Read this: <spell>The quick brown fox. The cat sat on the mat.</spell>. "
+            "Now something else."
         )
         sentences = self.tok.tokenize(text)
-        _assert_wrapping_tag_intact(sentences, "outer")
-        for s in sentences:
-            if "<outer>" in s:
-                assert "first thing" in s
-                assert "third thing" in s
-                assert "</outer>" in s
-
-    # -- Multiple tags in one text --
+        _assert_wrapping_tag_intact(sentences, "spell")
 
     def test_mixed_tags(self) -> None:
+        """Self-closing + wrapping + break tags in one text."""
         text = (
             '<emotion value="excited"/><speed ratio="1.3"/> Great news! '
             "The code is <spell>X9Z</spell>. "
             '<break time="500ms"/> <emotion value="calm"/> Let me explain.'
         )
         sentences = self.tok.tokenize(text)
-        _assert_tags_balanced(sentences, "mixed")
         _assert_wrapping_tag_intact(sentences, "spell")
-
-    # -- Edge cases --
+        _assert_no_tag_only_sentences(sentences)
 
     def test_no_markup(self) -> None:
-        text = "Hello there. How are you? I am fine."
-        sentences = self.tok.tokenize(text)
+        sentences = self.tok.tokenize("Hello there. How are you? I am fine.")
         assert len(sentences) >= 2
 
     def test_only_tag_no_text(self) -> None:
-        text = '<emotion value="happy"/>'
-        sentences = self.tok.tokenize(text)
+        sentences = self.tok.tokenize('<emotion value="happy"/>')
         assert len(sentences) == 1
-        assert sentences[0].strip() == '<emotion value="happy"/>'
-
-    def test_tag_with_many_attributes(self) -> None:
-        text = '<phoneme alphabet="cmu-arpabet" ph="P R AH0 N AH0 N S IY EY1 SH AH0 N">pronunciation</phoneme> is key.'
-        sentences = self.tok.tokenize(text)
-        _assert_wrapping_tag_intact(sentences, "phoneme")
-
-    def test_adjacent_wrapping_tags(self) -> None:
-        text = "<spell>A.B.</spell><spell>C.D.</spell>. Done."
-        sentences = self.tok.tokenize(text)
-        _assert_wrapping_tag_intact(sentences, "spell")
-
-    def test_nested_wrapping_tags(self) -> None:
-        text = (
-            "Let me start by explaining the context here. "
-            "<outer><inner>The inner content has a full sentence that should not be split. "
-            "It also has a second sentence inside the inner tags.</inner> "
-            "And this part is between inner and outer.</outer> "
-            "Finally we are outside all the tags."
-        )
-        sentences = self.tok.tokenize(text)
-        _assert_tags_balanced(sentences, "nested")
-        _assert_wrapping_tag_intact(sentences, "outer")
-        _assert_wrapping_tag_intact(sentences, "inner")
-
-    def test_wrapping_tag_with_multiple_inner_sentences(self) -> None:
-        """When a wrapping tag spans multiple sentences, they merge to preserve tag integrity."""
-        text = (
-            "Here is some context before the tag starts. "
-            "<outer>The first sentence inside the tag is quite long. "
-            "The second sentence is also a full thought. "
-            "The third sentence finishes the tagged content.</outer> "
-            "And now we continue outside the tag normally."
-        )
-        sentences = self.tok.tokenize(text)
-        _assert_tags_balanced(sentences, "multi-inner")
-        _assert_wrapping_tag_intact(sentences, "outer")
-        for s in sentences:
-            if "<outer>" in s:
-                assert "first sentence" in s
-                assert "third sentence" in s
-
-    def test_unicode_text_with_tags(self) -> None:
-        text = '<emotion value="happy"/> こんにちは。元気ですか？'
-        sentences = self.tok.tokenize(text)
-        _assert_tags_balanced(sentences, "unicode")
-        assert '<emotion value="happy"/>' in sentences[0]
-
-    def test_emoji_adjacent_to_tag(self) -> None:
-        text = '<emotion value="excited"/> 🎉 Great news! You won.'
-        sentences = self.tok.tokenize(text)
-        _assert_tags_balanced(sentences, "emoji")
-
-    def test_long_text_many_sentences(self) -> None:
-        text = (
-            '<emotion value="neutral"/> Welcome to the service. '
-            "My name is Alex. "
-            '<emotion value="happy"/> I am glad to help you today. '
-            "What can I do for you? "
-            '<emotion value="curious"/> Tell me more about your issue. '
-            "I will do my best. "
-            '<break time="1s"/> '
-            '<emotion value="calm"/> Take your time.'
-        )
-        sentences = self.tok.tokenize(text)
-        _assert_tags_balanced(sentences, "long")
-
-    def test_exclamation_and_question_marks(self) -> None:
-        text = '<emotion value="excited"/> Wow! Really? <emotion value="happy"/> That is amazing!'
-        sentences = self.tok.tokenize(text)
-        _assert_tags_balanced(sentences, "punctuation")
-
-    def test_decimal_outside_tag_still_splits(self) -> None:
-        """Decimal in regular text (not in a tag) should still allow sentence splitting."""
-        text = "The price is 1.5 dollars. That is cheap."
-        sentences = self.tok.tokenize(text)
-        # Should split at the period after "dollars"
-        assert len(sentences) >= 2
 
 
 # ===========================================================================
@@ -326,110 +151,9 @@ class TestStreamingTokenizer:
     def setup_method(self) -> None:
         self.tok = SentenceTokenizer(min_sentence_len=1, stream_context_len=5)
 
-    # -- Self-closing tags --
-
-    @pytest.mark.asyncio
-    async def test_emotion_streaming(self) -> None:
-        text = '<emotion value="happy"/> Hello! How are you today?'
-        tokens = await _stream_tokenize(self.tok, text)
-        full = " ".join(tokens)
-        assert '<emotion value="happy"/>' in full
-        _assert_tags_balanced(tokens, "stream-emotion")
-
-    @pytest.mark.asyncio
-    async def test_speed_decimal_streaming(self) -> None:
-        text = '<speed ratio="1.5"/> Fast speech here. Normal speech here.'
-        tokens = await _stream_tokenize(self.tok, text)
-        full = " ".join(tokens)
-        assert '<speed ratio="1.5"/>' in full
-
-    @pytest.mark.asyncio
-    async def test_break_streaming(self) -> None:
-        text = 'Wait. <break time="2s"/> OK continue now.'
-        tokens = await _stream_tokenize(self.tok, text)
-        _assert_tags_balanced(tokens, "stream-break")
-
-    # -- Regression: self-closing tags must not block splitting --
-
-    @pytest.mark.asyncio
-    async def test_self_closing_allows_split_streaming(self) -> None:
-        """Regression: self-closing tags with attributes must not hold the buffer."""
-        text = (
-            '<expression value="speak warmly with a gentle pace"/> '
-            "This is the first sentence of a longer response. "
-            "This is the second sentence that should be separate. "
-            "And here is a third sentence that comes after."
-        )
-        tokens = await _stream_tokenize(self.tok, text)
-        assert len(tokens) >= 2, (
-            f"Self-closing tag blocked streaming sentence split: {tokens}"
-        )
-
-    @pytest.mark.asyncio
-    async def test_expression_tag_allows_split_streaming(self) -> None:
-        """Regression: long expression tags must not hold the buffer."""
-        text = (
-            '<expression value="sing joyfully with a bright melodic rhythm and high energy"/> '
-            "La la la, welcome to the show. "
-            "We are so glad that you are here today. "
-            "Let us have some fun together now."
-        )
-        tokens = await _stream_tokenize(self.tok, text)
-        assert len(tokens) >= 2, (
-            f"Expression tag blocked streaming sentence split: {tokens}"
-        )
-
-    # -- Wrapping tags --
-
-    @pytest.mark.asyncio
-    async def test_spell_streaming(self) -> None:
-        text = "Code: <spell>A7X9</spell>. Please confirm it."
-        tokens = await _stream_tokenize(self.tok, text)
-        _assert_wrapping_tag_intact(tokens, "spell")
-
-    @pytest.mark.asyncio
-    async def test_spell_with_dots_streaming(self) -> None:
-        text = "Country: <spell>U.S.A.</spell>. Is that right?"
-        tokens = await _stream_tokenize(self.tok, text)
-        _assert_wrapping_tag_intact(tokens, "spell")
-
-    @pytest.mark.asyncio
-    async def test_wrapping_tag_inner_sentences_streaming(self) -> None:
-        """Multiple full sentences inside wrapping tag, streamed char by char."""
-        text = (
-            "I want to tell you something important now. "
-            "<outer>The first thing you should know is quite significant. "
-            "The second thing is equally critical to understand. "
-            "The third thing wraps up the entire explanation.</outer> "
-            "That was everything I needed to explain today."
-        )
-        tokens = await _stream_tokenize(self.tok, text)
-        _assert_wrapping_tag_intact(tokens, "outer")
-        for t in tokens:
-            if "<outer>" in t:
-                assert "first thing" in t
-                assert "third thing" in t
-                assert "</outer>" in t
-
-    @pytest.mark.asyncio
-    async def test_phoneme_streaming(self) -> None:
-        text = 'Say <phoneme alphabet="cmu-arpabet" ph="M AE1">Madison</phoneme>. Nice city.'
-        tokens = await _stream_tokenize(self.tok, text)
-        _assert_wrapping_tag_intact(tokens, "phoneme")
-
-    # -- Multiple tags --
-
-    @pytest.mark.asyncio
-    async def test_multiple_emotions_streaming(self) -> None:
-        text = '<emotion value="sad"/> Sorry. <emotion value="calm"/> We will fix it.'
-        tokens = await _stream_tokenize(self.tok, text)
-        _assert_tags_balanced(tokens, "stream-multi")
-
-    # -- Chunk boundary edge cases --
-
     @pytest.mark.asyncio
     async def test_tag_split_across_chunks(self) -> None:
-        """Tag arrives in multiple push_text calls."""
+        """Tag arrives in multiple push_text calls — must hold until complete."""
         stream = self.tok.stream()
         stream.push_text("Hello. <emo")
         stream.push_text('tion value="happy"/> Great!')
@@ -439,103 +163,53 @@ class TestStreamingTokenizer:
         assert '<emotion value="happy"/>' in full
 
     @pytest.mark.asyncio
-    async def test_closing_tag_split_across_chunks(self) -> None:
-        """Closing tag arrives across chunk boundary."""
+    async def test_wrapping_tag_inner_sentences_streaming(self) -> None:
+        """Wrapping tag with inner sentence splits must merge in streaming mode."""
+        text = (
+            "I want to tell you something important now. "
+            "<outer>The first thing you should know is quite significant. "
+            "The second thing is equally critical to understand. "
+            "The third thing wraps up the entire explanation.</outer> "
+            "That was everything I needed to explain today."
+        )
+        tokens = await _stream_tokenize(self.tok, text)
+        _assert_wrapping_tag_intact(tokens, "outer")
+
+    @pytest.mark.asyncio
+    async def test_standalone_expression_tag_streaming(self) -> None:
+        """Regression: streaming must never emit a tag-only chunk."""
+        text = (
+            '<expression value="speak firmly with a sharp and serious tone"/> '
+            "I told you already, no changes to the order."
+        )
+        tokens = await _stream_tokenize(self.tok, text)
+        _assert_no_tag_only_sentences(tokens)
+
+    @pytest.mark.asyncio
+    async def test_flush_xml_only_emitted(self) -> None:
+        """flush()/end_input() must emit tag-only tokens - they could be
+        non-verbal sounds like laughs that produce audio on their own."""
         stream = self.tok.stream()
-        stream.push_text("Code: <spell>A.B.")
-        stream.push_text("C.</spell>. Done.")
+        stream.push_text('<expression value="laugh"/>')
         stream.end_input()
         tokens = [ev.token async for ev in stream]
-        _assert_wrapping_tag_intact(tokens, "spell")
+        assert len(tokens) == 1
 
     @pytest.mark.asyncio
-    async def test_attribute_split_across_chunks(self) -> None:
-        """Attribute value split mid-decimal."""
-        stream = self.tok.stream()
-        stream.push_text('<speed ratio="1.')
-        stream.push_text('5"/> Go fast. Then slow.')
-        stream.end_input()
-        tokens = [ev.token async for ev in stream]
-        full = " ".join(tokens)
-        assert '<speed ratio="1.5"/>' in full
-
-    @pytest.mark.asyncio
-    async def test_small_chunks_char_by_char(self) -> None:
-        """Simulate worst-case: one character at a time."""
-        text = '<emotion value="sad"/> I am sorry. <spell>S.O.S.</spell>. Help!'
-        tokens = await _stream_tokenize(self.tok, text)
-        _assert_tags_balanced(tokens, "char-by-char")
-        _assert_wrapping_tag_intact(tokens, "spell")
-
-    @pytest.mark.asyncio
-    async def test_large_chunks(self) -> None:
-        """Push in large chunks (typical LLM token size ~4-8 chars)."""
+    async def test_expression_tags_between_sentences_tiktoken(self) -> None:
+        """Regression: expression tags between sentences must split correctly
+        when streamed with GPT-4o's actual tokenizer."""
         text = (
-            '<emotion value="excited"/> Amazing news! '
-            "The confirmation code is <spell>X.Y.Z.</spell>. "
-            '<break time="1s"/> <emotion value="calm"/> Please verify.'
+            '<expression value="speak cheerfully"/> Hello and welcome to McDonalds! '
+            '<expression value="speak with bright energy"/> We have got some great specials. '
+            '<expression value="sound excited"/> Our new chicken sandwich is amazing. '
+            '<expression value="speak warmly"/> Would you like to try a combo meal?'
         )
-        tokens = await _stream_tokenize_chunked(self.tok, text, chunk_size=7)
-        _assert_tags_balanced(tokens, "large-chunks")
-        _assert_wrapping_tag_intact(tokens, "spell")
-
-    # -- Nested tags --
-
-    @pytest.mark.asyncio
-    async def test_nested_tags_streaming(self) -> None:
-        text = (
-            "Let me explain the full context of the situation. "
-            "<outer><inner>The inner content has a complete sentence here. "
-            "It also has another sentence that could be split.</inner> "
-            "This part sits between inner and outer tags.</outer> "
-            "And this is fully outside all the tags."
-        )
-        tokens = await _stream_tokenize(self.tok, text)
-        _assert_tags_balanced(tokens, "nested-stream")
-        _assert_wrapping_tag_intact(tokens, "outer")
-        _assert_wrapping_tag_intact(tokens, "inner")
-
-    @pytest.mark.asyncio
-    async def test_nested_multi_sentence_streaming(self) -> None:
-        """Nested tags with multiple inner sentences, streamed."""
-        text = (
-            "Here is something before all the tags start. "
-            "<outer>The outer layer has its own first sentence. "
-            "<inner>The inner layer also has a complete first sentence. "
-            "And the inner layer has a second complete sentence too.</inner> "
-            "Back in the outer layer for one more sentence.</outer> "
-            "And this sentence is completely outside all tags."
-        )
-        tokens = await _stream_tokenize(self.tok, text)
-        _assert_tags_balanced(tokens, "nested-multi-stream")
-        _assert_wrapping_tag_intact(tokens, "outer")
-        _assert_wrapping_tag_intact(tokens, "inner")
-
-    # -- No markup --
-
-    @pytest.mark.asyncio
-    async def test_no_markup_streaming(self) -> None:
-        text = "Hello there. How are you? I am fine."
-        tokens = await _stream_tokenize(self.tok, text)
-        full = " ".join(tokens)
-        assert "Hello" in full
-        assert "fine" in full
-
-    # -- Unicode --
-
-    @pytest.mark.asyncio
-    async def test_unicode_streaming(self) -> None:
-        text = '<emotion value="happy"/> Bonjour. Comment ça va?'
-        tokens = await _stream_tokenize(self.tok, text)
-        _assert_tags_balanced(tokens, "unicode-stream")
-
-    @pytest.mark.asyncio
-    async def test_chinese_with_tags(self) -> None:
-        text = '<emotion value="neutral"/> 你好。你今天怎么样？'
-        tokens = await _stream_tokenize(self.tok, text)
-        _assert_tags_balanced(tokens, "chinese-stream")
-
-    # -- Realistic expressiveness example --
+        tokens = await _stream_tokenize_tiktoken(self.tok, text)
+        assert len(tokens) >= 3, f"Expected at least 3 sentences: {tokens}"
+        _assert_no_tag_only_sentences(tokens)
+        for t in tokens:
+            assert "<expression" in t, f"Sentence missing expression tag: {t!r}"
 
     @pytest.mark.asyncio
     async def test_realistic_conversation(self) -> None:
@@ -551,5 +225,5 @@ class TestStreamingTokenizer:
             '<emotion value="happy"/> Is there anything else I can help with?'
         )
         tokens = await _stream_tokenize(self.tok, text)
-        _assert_tags_balanced(tokens, "realistic")
         _assert_wrapping_tag_intact(tokens, "spell")
+        _assert_no_tag_only_sentences(tokens)

@@ -40,6 +40,104 @@ def _has_unclosed_xml_tags(text: str) -> bool:
     return depth > 0
 
 
+def _is_xml_only(text: str) -> bool:
+    """Return True if *text* contains XML tags but no substantive text content."""
+    if "<" not in text:
+        return False
+
+    stripped = _XML_TAG_RE.sub("", text).strip()
+    return len(stripped) == 0
+
+
+def _clean_to_orig(clean_pos: int, tag_spans: list[tuple[int, int]]) -> int:
+    """Map a position in tag-stripped text to the corresponding original position.
+
+    Tags that sit right at the boundary are left for the next sentence.
+    """
+    orig = clean_pos
+    for tag_start, tag_end in tag_spans:
+        if tag_start < orig:
+            orig += tag_end - tag_start
+        else:
+            break
+    return orig
+
+
+def _xml_wrap_tokenizer(
+    tokenize_fnc: TokenizeCallable,
+) -> TokenizeCallable:
+    """Wrap a tokenizer so XML tags don't interfere with sentence splitting.
+
+    Strips tag markers before tokenization (content inside wrapping tags is
+    kept so the tokenizer can account for its length), remaps offsets back to
+    the original text, and merges sentences with unclosed or tag-only content.
+    """
+
+    def _wrapped(text: str) -> list[tuple[str, int, int]]:
+        try:
+            return _wrapped_impl(text)
+        except Exception:
+            return [(text, 0, len(text))] if text.strip() else []
+
+    def _wrapped_impl(text: str) -> list[tuple[str, int, int]]:
+        tag_spans = [(m.start(), m.end()) for m in _XML_TAG_RE.finditer(text)]
+        if not tag_spans:
+            return tokenize_fnc(text)
+
+        clean_text = _XML_TAG_RE.sub("", text)
+        if not clean_text.strip():
+            return [(text, 0, len(text))] if text.strip() else []
+
+        raw_tokens = tokenize_fnc(clean_text)
+        if not raw_tokens:
+            return []
+
+        # extract clean-text end offsets
+        clean_ends: list[int] = []
+        for tok in raw_tokens:
+            clean_ends.append(tok[2] if isinstance(tok, tuple) else -1)
+
+        # if tokenizer didn't provide offsets, approximate from token lengths
+        if clean_ends[0] == -1:
+            pos = 0
+            clean_ends = []
+            for tok in raw_tokens:
+                tok_text = tok if isinstance(tok, str) else tok[0]
+                idx = clean_text.find(tok_text, pos)
+                pos = (idx if idx >= 0 else pos) + len(tok_text)
+                clean_ends.append(pos)
+
+        # remap to original positions and rebuild sentences
+        result: list[tuple[str, int, int]] = []
+        start = 0
+        for clean_end in clean_ends:
+            orig_end = _clean_to_orig(clean_end, tag_spans)
+            sentence = text[start:orig_end].strip()
+            if sentence:
+                result.append((sentence, start, orig_end))
+            start = orig_end
+
+        if start < len(text):
+            sentence = text[start:].strip()
+            if sentence:
+                result.append((sentence, start, len(text)))
+
+        # merge sentences with unclosed tags or tag-only content
+        if result:
+            merged: list[tuple[str, int, int]] = [result[0]]
+            for sent_text, s_start, s_end in result[1:]:
+                prev_text, prev_start, _ = merged[-1]
+                if _has_unclosed_xml_tags(prev_text) or _is_xml_only(prev_text):
+                    merged[-1] = (text[prev_start:s_end].strip(), prev_start, s_end)
+                else:
+                    merged.append((sent_text, s_start, s_end))
+            result = merged
+
+        return result
+
+    return _wrapped
+
+
 class BufferedTokenStream:
     def __init__(
         self,
@@ -52,7 +150,9 @@ class BufferedTokenStream:
         xml_aware: bool = True,
     ) -> None:
         self._event_ch = aio.Chan[TokenData]()
-        self._tokenize_fnc = tokenize_fnc
+        self._tokenize_fnc = (
+            _xml_wrap_tokenizer(tokenize_fnc) if xml_aware else tokenize_fnc
+        )
         self._min_ctx_len = min_ctx_len
         self._min_token_len = min_token_len
         self._max_token_len = max_token_len
@@ -67,6 +167,8 @@ class BufferedTokenStream:
     @typing.no_type_check
     def push_text(self, text: str) -> None:
         self._check_not_closed()
+        if not text:
+            return
         self._in_buf += text
 
         if len(self._in_buf) < self._min_ctx_len:

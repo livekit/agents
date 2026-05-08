@@ -3,11 +3,14 @@ from __future__ import annotations
 import re
 
 _EXPRESSION_RE = re.compile(r'<expression\s+value="([^"]*)"(?:\s*/>|>(?:.*?)</expression>)')
+_SOUND_RE = re.compile(r'<sound\s+value="([^"]*)"(?:\s*/>|>(?:.*?)</sound>)')
 
 
 def convert_expression_tags(text: str) -> str:
-    """Convert ``<expression value="..."/>`` XML tags to ``[...]`` bracket format."""
-    return _EXPRESSION_RE.sub(lambda m: f"[{m.group(1)}]", text)
+    """Convert ``<expression>`` and ``<sound>`` XML tags to ``[...]`` bracket format."""
+    text = _EXPRESSION_RE.sub(lambda m: f"[{m.group(1)}]", text)
+    text = _SOUND_RE.sub(lambda m: f"[{m.group(1)}]", text)
+    return text
 
 
 def strip_bracket_tags(text: str) -> str:

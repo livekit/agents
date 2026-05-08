@@ -442,6 +442,11 @@ class TTS(tts.TTS):
 
             return strip_markup(self._provider_key(), text)
 
+        def normalize(self, text: str) -> str:
+            from ..tts._provider_format import normalize_markup
+
+            return normalize_markup(self._provider_key(), text)
+
         def convert(self, text: str) -> str:
             from ..tts._provider_format import convert_markup
 
@@ -623,7 +628,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if isinstance(data, self._FlushSentinel):
                     sent_tokenizer_stream.flush()
                     continue
-                sent_tokenizer_stream.push_text(data)
+                sent_tokenizer_stream.push_text(self._tts.markup.normalize(data))
 
             sent_tokenizer_stream.end_input()
 

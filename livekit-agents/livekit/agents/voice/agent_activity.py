@@ -2594,13 +2594,19 @@ class AgentActivity(RecognitionHooks):
         async def _read_text(
             llm_output: AsyncIterable[str | FlushSentinel | BaseModel],
         ) -> AsyncIterable[str]:
-            async for chunk in llm_output:
-                if isinstance(chunk, (FlushSentinel, BaseModel)):
-                    continue
-                if _strip_markup and self.tts:
-                    chunk = self.tts.markup.to_text(chunk)
-                if chunk:
-                    yield chunk
+            async def _plain_chunks() -> AsyncGenerator[str, None]:
+                async for chunk in llm_output:
+                    if isinstance(chunk, (FlushSentinel, BaseModel)):
+                        continue
+                    if chunk:
+                        yield chunk
+
+            source: AsyncIterable[str] = _plain_chunks()
+            if _strip_markup and self.tts:
+                source = self.tts.markup.to_text_stream(source)
+
+            async for chunk in source:
+                yield chunk
 
         tr_node = self._agent.transcription_node(_read_text(tr_input), model_settings)
         tr_node_result = await tr_node if asyncio.iscoroutine(tr_node) else tr_node

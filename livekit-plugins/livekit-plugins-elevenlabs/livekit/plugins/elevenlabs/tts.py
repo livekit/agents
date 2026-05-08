@@ -218,6 +218,11 @@ class TTS(tts.TTS):
 
             return llm_instructions(self._provider_key())
 
+        def normalize(self, text: str) -> str:
+            from livekit.agents.tts._provider_format import normalize_markup
+
+            return normalize_markup(self._provider_key(), text)
+
         def to_text(self, text: str) -> str:
             from livekit.agents.tts._provider_format import strip_markup
 

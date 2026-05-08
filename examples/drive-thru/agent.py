@@ -429,7 +429,7 @@ async def drive_thru_agent(ctx: JobContext) -> None:
             },
         ),
         llm=inference.LLM("openai/gpt-4.1-mini"),
-        tts=inference.TTS("inworld/inworld-tts-2"),
+        tts=inference.TTS("inworld/inworld-tts-2", voice="Sarah"),
         expressiveness=True,
         turn_detection=MultilingualModel(),
         vad=silero.VAD.load(),
