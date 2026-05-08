@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=69", "wheel"]
-build-backend = "setuptools.build_meta"
+build-backend = "hatchling.build"
 
 [project]
 name = "livekit-plugins-facemarket"
@@ -25,8 +25,7 @@ classifiers = [
     "Topic :: Multimedia :: Video",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3 :: Only",
     "Operating System :: OS Independent",
 ]
 
