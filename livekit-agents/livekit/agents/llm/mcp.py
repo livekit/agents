@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from datetime import timedelta
@@ -17,7 +17,8 @@ from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStre
 from typing_extensions import Self
 
 from ..log import logger
-from .tool_context import Toolset
+from .async_toolset import AsyncRunContext, AsyncToolset, cancel_task, get_running_tasks
+from .tool_context import Tool, Toolset
 
 try:
     import httpx
@@ -87,6 +88,7 @@ class MCPServer(ABC):
 
         self._cache_dirty = True
         self._lk_tools: list[MCPTool] | None = None
+        self._lk_tools_async_mode: bool = False
 
         self._client_task: asyncio.Task[None] | None = None
         self._closing_ev = asyncio.Event()
@@ -140,20 +142,31 @@ class MCPServer(ABC):
             self._lk_tools = None
             self._closing_ev.clear()
 
-    async def list_tools(self) -> list[MCPTool]:
+    async def list_tools(self, *, async_mode: bool = False) -> list[MCPTool]:
         if self._client is None:
             raise RuntimeError("MCPServer isn't initialized")
 
-        if not self._cache_dirty and self._lk_tools is not None:
+        if (
+            not self._cache_dirty
+            and self._lk_tools is not None
+            and self._lk_tools_async_mode == async_mode
+        ):
             return self._lk_tools
 
         tools = await self._client.list_tools()
         lk_tools = [
-            self._make_function_tool(tool.name, tool.description, tool.inputSchema, tool.meta)
+            self._make_function_tool(
+                tool.name,
+                tool.description,
+                tool.inputSchema,
+                tool.meta,
+                async_mode=async_mode,
+            )
             for tool in tools.tools
         ]
 
         self._lk_tools = lk_tools
+        self._lk_tools_async_mode = async_mode
         self._cache_dirty = False
         return lk_tools
 
@@ -163,17 +176,12 @@ class MCPServer(ABC):
         description: str | None,
         input_schema: dict[str, Any],
         meta: dict[str, Any] | None,
+        *,
+        async_mode: bool = False,
     ) -> MCPTool:
-        async def _tool_called(raw_arguments: dict[str, Any]) -> Any:
-            # In case (somehow), the tool is called after the MCPServer aclose.
-            if self._client is None:
-                raise ToolError(
-                    "Tool invocation failed: internal service is unavailable. "
-                    "Please check that the MCPServer is still running."
-                )
-
-            tool_result = await self._client.call_tool(name, raw_arguments)
-
+        async def _resolve(
+            tool_result: mcp.types.CallToolResult, raw_arguments: dict[str, Any]
+        ) -> Any:
             if tool_result.isError:
                 error_str = "\n".join(
                     part.text if hasattr(part, "text") else str(part)
@@ -187,6 +195,53 @@ class MCPServer(ABC):
                 resolved = await resolved
             return resolved
 
+        if async_mode:
+
+            async def _tool_called_async(
+                ctx: AsyncRunContext, raw_arguments: dict[str, Any]
+            ) -> Any:
+                if self._client is None:
+                    raise ToolError(
+                        "Tool invocation failed: internal service is unavailable. "
+                        "Please check that the MCPServer is still running."
+                    )
+
+                async def _on_progress(
+                    progress: float, total: float | None, message: str | None
+                ) -> None:
+                    if message:
+                        logger.debug(
+                            "MCPTool progress callback",
+                            extra={
+                                "tool_name": name,
+                                "progress": progress,
+                                "total": total,
+                                "progress_message": message,
+                            },
+                        )
+                        await ctx.update(message)
+
+                tool_result = await self._client.call_tool(
+                    name, raw_arguments, progress_callback=_on_progress
+                )
+                return await _resolve(tool_result, raw_arguments)
+
+            impl: Callable[..., Awaitable[Any]] = _tool_called_async
+        else:
+
+            async def _tool_called(raw_arguments: dict[str, Any]) -> Any:
+                # in case the tool is called after the MCPServer aclose.
+                if self._client is None:
+                    raise ToolError(
+                        "Tool invocation failed: internal service is unavailable. "
+                        "Please check that the MCPServer is still running."
+                    )
+
+                tool_result = await self._client.call_tool(name, raw_arguments)
+                return await _resolve(tool_result, raw_arguments)
+
+            impl = _tool_called
+
         raw_schema = {
             "name": name,
             "description": description,
@@ -195,7 +250,7 @@ class MCPServer(ABC):
         if meta:
             raw_schema["meta"] = meta
 
-        return function_tool(_tool_called, raw_schema=raw_schema)
+        return function_tool(impl, raw_schema=raw_schema)
 
     async def aclose(self) -> None:
         self._closing_ev.set()
@@ -353,11 +408,11 @@ class MCPServerHTTP(MCPServer):
                 httpx_client_factory=self._create_http_client,
             )
 
-    async def list_tools(self) -> list[MCPTool]:
+    async def list_tools(self, *, async_mode: bool = False) -> list[MCPTool]:
         """
         List tools from the MCP server, filtered by allowed_tools if specified.
         """
-        all_tools = await super().list_tools()
+        all_tools = await super().list_tools(async_mode=async_mode)
 
         # If no filter is set, return all tools
         if self._allowed_tools is None:
@@ -431,19 +486,43 @@ class MCPServerStdio(MCPServer):
         return f"MCPServerStdio(command={self.command}, args={self.args}, cwd={self.cwd})"
 
 
-class MCPToolset(Toolset):
+class MCPToolset(AsyncToolset):
     """A toolset that exposes tools from a Model Context Protocol (MCP) server.
 
     MCPToolset wraps an ``MCPServer`` instance and makes its tools available for
     use by an ``Agent``. On ``setup()``, it connects to the MCP server (if not
     already connected), fetches the available tools, and caches them locally.
+
+    When ``async_mode=True``, MCP tools are produced with an :class:`AsyncRunContext`
+    parameter so they run as background tasks and forward MCP progress
+    notifications via ``ctx.update()``. The toolset also exposes
+    ``get_running_tasks`` and ``cancel_task`` to the LLM in this mode.
+    When ``async_mode=False`` (default), tools block the agent's reply loop
+    until completion — same behavior as before.
     """
 
-    def __init__(self, *, id: str, mcp_server: MCPServer) -> None:
-        super().__init__(id=id)
+    def __init__(
+        self,
+        *,
+        id: str,
+        mcp_server: MCPServer,
+        async_mode: bool = False,
+        on_duplicate_call: AsyncToolset.DuplicateMode = "confirm",
+    ) -> None:
+        super().__init__(id=id, on_duplicate_call=on_duplicate_call)
         self._mcp_server = mcp_server
+        self._async_mode = async_mode
         self._initialized = False
         self._lock = asyncio.Lock()
+
+    @property
+    def tools(self) -> Sequence[Tool | Toolset]:
+        # Only expose the AsyncToolset helper tools when async_mode is on,
+        # otherwise the LLM would see `get_running_tasks` / `cancel_task`
+        # without anything to manage.
+        if self._async_mode:
+            return [*self._tools, get_running_tasks, cancel_task]
+        return list(self._tools)
 
     async def setup(self, *, reload: bool = False) -> Self:
         """Initialize the MCP server connection and fetch available tools.
@@ -466,8 +545,8 @@ class MCPToolset(Toolset):
             elif reload:
                 self._mcp_server.invalidate_cache()
 
-            tools = await self._mcp_server.list_tools()
-            self._tools = tools
+            tools = await self._mcp_server.list_tools(async_mode=self._async_mode)
+            self._tools = [self._wrap_tool(tool) for tool in tools]
             self._initialized = True
             return self
 
