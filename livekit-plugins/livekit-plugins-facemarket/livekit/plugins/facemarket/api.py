@@ -66,7 +66,7 @@ class FaceMarketAPI:
 
         data = payload.get("data") or {}
         logger.info("FaceMarket start response payload=%s", _redact_payload(payload))
-        if data.get("roomToken") or data.get("livekitUrl"):
+        if data.get("roomToken") and data.get("livekitUrl"):
             raise FaceMarketPlatformError(
                 "FaceMarket start returned hosted-room response, not plugin-mode response. "
                 "Expected data.sessionId/session_id and renderer/coordinator joining the provided room."
