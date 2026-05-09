@@ -22,7 +22,7 @@ class MyAgent(Agent):
                 "Use the book_flight tool when the user wants to book a flight; it takes "
                 "a couple of minutes and will report progress along the way — narrate the "
                 "updates naturally and don't make up flight details. "
-                "Don't repeat information you have already said in the conversation."
+                "Don't repeat information you have already said in the conversation. "
                 f"Today is {datetime.now().strftime('%Y-%m-%d %A')}"
             ),
         )
