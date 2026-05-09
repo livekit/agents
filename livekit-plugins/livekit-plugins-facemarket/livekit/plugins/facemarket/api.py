@@ -156,7 +156,7 @@ class FaceMarketAPI:
                 _redact_payload(payload),
             )
             raise FaceMarketPlatformError(
-                f"FaceMarket API request failed: status={response.status}, body={payload!r}"
+                f"FaceMarket API request failed: status={response.status}, body={_redact_payload(payload)!r}"
             )
 
         code = payload.get("code")
