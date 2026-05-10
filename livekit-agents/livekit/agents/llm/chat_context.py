@@ -30,9 +30,9 @@ from ..types import NOT_GIVEN, NotGivenOr
 from ..utils.misc import is_given
 from . import _provider_format
 
-if TYPE_CHECKING:
-    from livekit.protocol.agent_pb import agent_session as agent_pb
+from livekit.protocol.agent_pb import agent_session as agent_pb
 
+if TYPE_CHECKING:
     from ..llm import LLM, Tool, Toolset
 
 
