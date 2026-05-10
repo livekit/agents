@@ -1267,7 +1267,8 @@ class AudioRecognition:
         if self._user_turn_span and self._user_turn_span.is_recording():
             return self._user_turn_span
 
-        start_time: float = start_time or time.time()
+        if start_time is None:
+            start_time = time.time()
         start_time_ns = int(start_time * 1_000_000_000)
         self._user_turn_span = tracer.start_span("user_turn", start_time=start_time_ns)
 
