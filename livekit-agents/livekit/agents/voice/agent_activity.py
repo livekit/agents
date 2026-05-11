@@ -2888,18 +2888,24 @@ class AgentActivity(RecognitionHooks):
                     ori_tools = self._rt_session.tools.flatten()
                     await self._rt_session.update_tools(llm.ToolContext(tools).flatten())
 
+            generate_reply_fut = self._rt_session.generate_reply(
+                instructions=instructions or NOT_GIVEN,
+                tool_choice=(model_settings.tool_choice if per_response_tool_choice else NOT_GIVEN),
+                tools=(
+                    llm.ToolContext(tools).flatten()
+                    if per_response_tool_choice and tools is not None
+                    else NOT_GIVEN
+                ),
+            )
+            await speech_handle.wait_if_not_interrupted([generate_reply_fut])
+            if speech_handle.interrupted:
+                # cancel the pending generation; the plugin emits response.cancel
+                if not generate_reply_fut.done():
+                    generate_reply_fut.cancel()
+                return
+
             try:
-                generation_ev = await self._rt_session.generate_reply(
-                    instructions=instructions or NOT_GIVEN,
-                    tool_choice=(
-                        model_settings.tool_choice if per_response_tool_choice else NOT_GIVEN
-                    ),
-                    tools=(
-                        llm.ToolContext(tools).flatten()
-                        if per_response_tool_choice and tools is not None
-                        else NOT_GIVEN
-                    ),
-                )
+                generation_ev = generate_reply_fut.result()
             except llm.RealtimeError as e:
                 logger.error(
                     "failed to generate a reply%s: %s",
