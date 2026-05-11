@@ -389,6 +389,7 @@ class AgentActivity(RecognitionHooks):
             agent_id=self._agent.id,
         )
         self._agent._chat_ctx.insert(config_update)
+        self._session._chat_ctx.insert(config_update)
 
         if self._rt_session is not None:
             await self._rt_session.update_instructions(instructions)
@@ -407,15 +408,16 @@ class AgentActivity(RecognitionHooks):
         tools = list({tool.id: tool for tool in tools}.values())
         self._agent._tools = tools
 
-        # Record the configuration change
-        config_update = llm.AgentConfigUpdate(
-            tools_added=tools_added,
-            tools_removed=tools_removed,
-            agent_id=self._agent.id,
-        )
-        # Store full tool definitions in-memory (not serialized)
-        config_update._tools = llm.ToolContext(tools).flatten()
-        self._agent._chat_ctx.insert(config_update)
+        # Record the configuration change (skip if no visible diff)
+        if tools_added or tools_removed:
+            config_update = llm.AgentConfigUpdate(
+                tools_added=tools_added,
+                tools_removed=tools_removed,
+                agent_id=self._agent.id,
+            )
+            config_update._tools = llm.ToolContext(tools).flatten()
+            self._agent._chat_ctx.insert(config_update)
+            self._session._chat_ctx.insert(config_update)
 
         if self._rt_session is not None:
             await self._rt_session.update_tools(llm.ToolContext(self.tools).flatten())
@@ -766,14 +768,17 @@ class AgentActivity(RecognitionHooks):
             except ValueError:
                 logger.exception("failed to update the instructions")
 
-        # Record initial agent configuration
-        initial_config = llm.AgentConfigUpdate(
-            instructions=self._agent.instructions,
-            tools_added=get_fnc_tool_names(self.tools) or None,
-            agent_id=self._agent.id,
-        )
-        initial_config._tools = llm.ToolContext(self.tools).flatten()
-        self._agent._chat_ctx.insert(initial_config)
+        # Record initial agent configuration (skip if empty)
+        initial_tools = get_fnc_tool_names(self.tools) or None
+        if self._agent.instructions or initial_tools:
+            initial_config = llm.AgentConfigUpdate(
+                instructions=self._agent.instructions,
+                tools_added=initial_tools,
+                agent_id=self._agent.id,
+            )
+            initial_config._tools = llm.ToolContext(self.tools).flatten()
+            self._agent._chat_ctx.insert(initial_config)
+            self._session._chat_ctx.insert(initial_config)
 
         await self._resume_scheduling_task()
         self._audio_recognition = AudioRecognition(
