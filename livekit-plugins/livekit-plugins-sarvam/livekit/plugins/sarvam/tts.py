@@ -30,6 +30,7 @@ from dataclasses import dataclass, replace
 from typing import Literal
 
 import aiohttp
+import numpy as np
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -74,9 +75,13 @@ _CODEC_TO_MIME: dict[str, str] = {
     "flac": "audio/flac",
     "aac": "audio/aac",
     "linear16": "audio/pcm",
-    "mulaw": "audio/mulaw",
-    "alaw": "audio/alaw",
+    # G.711 telephony codecs are decoded to linear 16-bit PCM in this plugin
+    # before being pushed to the AudioEmitter, so they advertise audio/pcm.
+    "mulaw": "audio/pcm",
+    "alaw": "audio/pcm",
 }
+
+_TELEPHONY_CODECS: frozenset[str] = frozenset({"mulaw", "alaw"})
 
 
 def _codec_to_mime_type(codec: str) -> str:
@@ -85,6 +90,55 @@ def _codec_to_mime_type(codec: str) -> str:
     if mime is None:
         raise ValueError(f"Unsupported output_audio_codec: {codec}")
     return mime
+
+
+def _build_mulaw_table() -> np.ndarray:
+    """Build an ITU-T G.711 mu-law to linear 16-bit PCM lookup table."""
+    table = np.zeros(256, dtype=np.int16)
+    for i in range(256):
+        u = (~i) & 0xFF
+        sign = -1 if (u & 0x80) else 1
+        exponent = (u >> 4) & 0x07
+        mantissa = u & 0x0F
+        sample = ((mantissa << 3) + 0x84) << exponent
+        table[i] = sign * (sample - 0x84)
+    return table
+
+
+def _build_alaw_table() -> np.ndarray:
+    """Build an ITU-T G.711 A-law to linear 16-bit PCM lookup table.
+
+    Note: A-law sign convention is inverted relative to mu-law -- when the
+    sign bit of the XOR'd byte is set, the sample is positive.
+    """
+    table = np.zeros(256, dtype=np.int16)
+    for i in range(256):
+        a = i ^ 0x55
+        sign = 1 if (a & 0x80) else -1
+        exponent = (a >> 4) & 0x07
+        mantissa = a & 0x0F
+        if exponent == 0:
+            sample = (mantissa << 4) + 8
+        else:
+            sample = ((mantissa << 4) + 0x108) << (exponent - 1)
+        table[i] = sign * sample
+    return table
+
+
+_MULAW_TABLE: np.ndarray = _build_mulaw_table()
+_ALAW_TABLE: np.ndarray = _build_alaw_table()
+
+
+def _decode_telephony(codec: str, data: bytes) -> bytes:
+    """Decode 8-bit G.711 mu-law/A-law samples to little-endian linear 16-bit PCM."""
+    if codec == "mulaw":
+        table = _MULAW_TABLE
+    elif codec == "alaw":
+        table = _ALAW_TABLE
+    else:
+        raise ValueError(f"_decode_telephony does not support codec: {codec}")
+    pcm = table[np.frombuffer(data, dtype=np.uint8)]
+    return pcm.astype("<i2").tobytes()
 
 
 # Supported languages in BCP-47 format
@@ -756,6 +810,8 @@ class ChunkedStream(tts.ChunkedStream):
                 # handle multiple audio chunks
                 for b64 in audios:
                     wav_bytes = base64.b64decode(b64)
+                    if self._opts.output_audio_codec in _TELEPHONY_CODECS:
+                        wav_bytes = _decode_telephony(self._opts.output_audio_codec, wav_bytes)
                     output_emitter.push(wav_bytes)
         except asyncio.TimeoutError as e:
             raise APITimeoutError("Sarvam TTS API request timed out") from e
@@ -1108,6 +1164,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                 return True
 
             audio_bytes = base64.b64decode(audio_data)
+            if self._opts.output_audio_codec in _TELEPHONY_CODECS:
+                audio_bytes = _decode_telephony(self._opts.output_audio_codec, audio_bytes)
             output_emitter.push(audio_bytes)
 
             return True

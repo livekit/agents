@@ -59,8 +59,6 @@ def _mime_to_av_format(mime: str | None) -> str | None:
         "audio/ogg": "ogg",
         "audio/webm": "webm",
         "audio/mp4": "mp4",
-        "audio/mulaw": "mulaw",
-        "audio/alaw": "alaw",
     }
     return _TABLE.get(mime)
 
