@@ -243,9 +243,7 @@ async def _agent_publishing_tone(agent_room: rtc.Room):
         agent_room,
         sample_rate=tone._sample_rate,
         num_channels=1,
-        track_publish_options=rtc.TrackPublishOptions(
-            source=rtc.TrackSource.SOURCE_MICROPHONE
-        ),
+        track_publish_options=rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE),
         track_name=_TONE_NAME,
     )
     # Replace the helper's internal AudioSource with our SineToneSource so the
@@ -269,9 +267,7 @@ def _agent_audio_publications(user_room: rtc.Room) -> list[rtc.RemoteTrackPublic
     if agent is None:
         return []
     return [
-        pub
-        for pub in agent.track_publications.values()
-        if pub.kind == rtc.TrackKind.KIND_AUDIO
+        pub for pub in agent.track_publications.values() if pub.kind == rtc.TrackKind.KIND_AUDIO
     ]
 
 
@@ -314,9 +310,11 @@ class TestReconnect:
         `reconnected`, and audio must keep flowing."""
         room_name = _e2e_room_name("resume")
 
-        async with _connect_e2e_room(_USER_IDENTITY, room_name) as user_room, \
-                  _connect_e2e_room(_AGENT_IDENTITY, room_name, agent=True) as agent_room, \
-                  _agent_publishing_tone(agent_room) as (_output, _tone):
+        async with (
+            _connect_e2e_room(_USER_IDENTITY, room_name) as user_room,
+            _connect_e2e_room(_AGENT_IDENTITY, room_name, agent=True) as agent_room,
+            _agent_publishing_tone(agent_room) as (_output, _tone),
+        ):
             await asyncio.wait_for(
                 wait_for_participant(user_room, identity=_AGENT_IDENTITY),
                 timeout=10.0,
@@ -344,8 +342,7 @@ class TestReconnect:
                 # Brief grace window for any stray Reconnected dispatch.
                 await asyncio.sleep(1.0)
                 assert not reconnected_fired.is_set(), (
-                    "RoomEvent::Reconnected fired on a resume — should only fire on "
-                    "full reconnect"
+                    "RoomEvent::Reconnected fired on a resume — should only fire on full reconnect"
                 )
 
                 # Publication identity is preserved.
@@ -356,9 +353,7 @@ class TestReconnect:
                 )
 
                 # Audio continues to flow uninterrupted.
-                await mon.assert_audio_continuous(
-                    min_rms=_AUDIO_RMS_THRESHOLD, duration=1.5
-                )
+                await mon.assert_audio_continuous(min_rms=_AUDIO_RMS_THRESHOLD, duration=1.5)
 
     async def test_full_reconnect_republishes_once_and_audio_recovers(self):
         """Full reconnect must fire `reconnected` exactly once, end with
@@ -367,9 +362,11 @@ class TestReconnect:
         recover."""
         room_name = _e2e_room_name("full")
 
-        async with _connect_e2e_room(_USER_IDENTITY, room_name) as user_room, \
-                  _connect_e2e_room(_AGENT_IDENTITY, room_name, agent=True) as agent_room, \
-                  _agent_publishing_tone(agent_room) as (_output, _tone):
+        async with (
+            _connect_e2e_room(_USER_IDENTITY, room_name) as user_room,
+            _connect_e2e_room(_AGENT_IDENTITY, room_name, agent=True) as agent_room,
+            _agent_publishing_tone(agent_room) as (_output, _tone),
+        ):
             await asyncio.wait_for(
                 wait_for_participant(user_room, identity=_AGENT_IDENTITY),
                 timeout=10.0,
@@ -413,9 +410,7 @@ class TestReconnect:
                 )
 
                 async with AudioEnergyMonitor.watch(new_track) as new_mon:
-                    await new_mon.wait_for_audio(
-                        min_rms=_AUDIO_RMS_THRESHOLD, timeout=10.0
-                    )
+                    await new_mon.wait_for_audio(min_rms=_AUDIO_RMS_THRESHOLD, timeout=10.0)
                     await new_mon.assert_audio_continuous(
                         min_rms=_AUDIO_RMS_THRESHOLD, duration=1.5
                     )

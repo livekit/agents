@@ -193,7 +193,6 @@ class _ParticipantAudioOutput(io.AudioOutput):
             await self._audio_source.capture_frame(frame)
 
 
-
 class _ParticipantLegacyTranscriptionOutput:
     def __init__(
         self,

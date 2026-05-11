@@ -304,9 +304,7 @@ class BackgroundAudioPlayer:
                 if current is not None:
                     await self._room.local_participant.unpublish_track(current.sid)
 
-    def _find_publication_by_name(
-        self, name: str
-    ) -> rtc.LocalTrackPublication | None:
+    def _find_publication_by_name(self, name: str) -> rtc.LocalTrackPublication | None:
         for pub in self._room.local_participant.track_publications.values():
             if pub.name == name:
                 return pub
