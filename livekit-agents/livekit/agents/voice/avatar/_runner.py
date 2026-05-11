@@ -153,6 +153,13 @@ class AvatarRunner:
 
             await self._av_sync.push(frame)
             if isinstance(frame, rtc.AudioFrame):
+                if self._playback_position == 0.0 and frame.duration > 0.0:
+                    notify_task = self._audio_recv.notify_playback_started()
+                    if asyncio.iscoroutine(notify_task):
+                        task = asyncio.create_task(notify_task)
+                        self._tasks.add(task)
+                        task.add_done_callback(self._tasks.discard)
+
                 self._playback_position += frame.duration
 
     def _on_clear_buffer(self) -> None:

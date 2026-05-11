@@ -79,6 +79,9 @@ def _ensure_strict_json_schema(
     # Strip empty schema objects ({}) — they are JSON Schema's identity element
     # for anyOf (match anything) and cause OpenAI strict mode to reject the schema.
     # Common when Union[..., Any] or ForwardRef patterns produce bare {} entries.
+    # Also convert oneOf → anyOf because OpenAI strict mode does not permit oneOf.
+    # Pydantic emits oneOf for discriminated unions, but anyOf is semantically equivalent
+    # for the LLM's purposes and is accepted by the API.
     for union_key in ("anyOf", "oneOf"):
         variants = json_schema.get(union_key)
         if is_list(variants):
@@ -89,8 +92,9 @@ def _ensure_strict_json_schema(
                 )
                 json_schema.pop(union_key, None)
             elif len(variants) >= 2:
-                json_schema[union_key] = [
-                    _ensure_strict_json_schema(variant, path=(*path, union_key, str(i)), root=root)
+                json_schema.pop(union_key, None)
+                json_schema["anyOf"] = [
+                    _ensure_strict_json_schema(variant, path=(*path, "anyOf", str(i)), root=root)
                     for i, variant in enumerate(variants)
                 ]
             else:

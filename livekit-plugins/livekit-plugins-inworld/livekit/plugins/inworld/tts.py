@@ -63,6 +63,7 @@ DEFAULT_BUFFER_CHAR_THRESHOLD = 120
 DEFAULT_MAX_BUFFER_DELAY_MS = 3000
 NUM_CHANNELS = 1
 
+TTSModels = Literal["inworld-tts-2", "inworld-tts-1.5-max"]
 Encoding = Literal["LINEAR16", "PCM", "MP3", "OGG_OPUS", "FLAC"]
 TimestampType = Literal["TIMESTAMP_TYPE_UNSPECIFIED", "WORD", "CHARACTER"]
 _TextNormalizationStr = Literal["APPLY_TEXT_NORMALIZATION_UNSPECIFIED", "ON", "OFF"]
@@ -87,7 +88,7 @@ def _resolve_text_normalization(value: Any) -> _TextNormalizationStr:
 
 @dataclass
 class _TTSOptions:
-    model: str
+    model: TTSModels | str
     encoding: Encoding
     voice: str
     sample_rate: int
@@ -729,7 +730,7 @@ class _ConnectionPool:
             if conn:
                 try:
                     ctx_id, waiter = await conn.acquire_context(emitter, opts, remaining_timeout)
-                except Exception:
+                except BaseException:
                     # Release reservation since we didn't get a context
                     conn.release_reservation()
                     # Remove failed new connection from pool
@@ -818,7 +819,7 @@ class TTS(tts.TTS):
         *,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         voice: NotGivenOr[str] = NOT_GIVEN,
-        model: NotGivenOr[str] = NOT_GIVEN,
+        model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
         encoding: NotGivenOr[Encoding] = NOT_GIVEN,
         bit_rate: NotGivenOr[int] = NOT_GIVEN,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
@@ -976,7 +977,7 @@ class TTS(tts.TTS):
         self,
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
-        model: NotGivenOr[str] = NOT_GIVEN,
+        model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
         encoding: NotGivenOr[Encoding] = NOT_GIVEN,
         bit_rate: NotGivenOr[int] = NOT_GIVEN,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
@@ -1287,9 +1288,7 @@ def _parse_timestamp_info(
         ends = word_align.get("wordEndTimeSeconds", [])
 
         for word, start, end in zip(words, starts, ends, strict=False):
-            # Each word gets a trailing space so that when the synchronizer concatenates
-            # them via `pushed_text += text`, the transcript reads naturally.
-            text = f"{word} "
+            text = f"{word}"
             timed_strings.append(
                 TimedString(
                     text,

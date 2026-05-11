@@ -41,6 +41,10 @@ class _STTStatus:
 class FallbackAdapter(
     STT[Literal["stt_availability_changed"]],
 ):
+    """Agent Fallback Adapter for STT. Manages multiple STT instances with automatic fallback
+    when the primary provider fails.
+    """
+
     def __init__(
         self,
         stt: list[STT],

@@ -81,6 +81,7 @@ class _LLMOptions:
     http_options: NotGivenOr[types.HttpOptions]
     seed: NotGivenOr[int]
     safety_settings: NotGivenOr[list[types.SafetySettingOrDict]]
+    service_tier: NotGivenOr[types.ServiceTier]
 
 
 BLOCKED_REASONS = [
@@ -117,6 +118,7 @@ class LLM(llm.LLM):
         http_options: NotGivenOr[types.HttpOptions] = NOT_GIVEN,
         seed: NotGivenOr[int] = NOT_GIVEN,
         safety_settings: NotGivenOr[list[types.SafetySettingOrDict]] = NOT_GIVEN,
+        service_tier: NotGivenOr[types.ServiceTier] = NOT_GIVEN,
         credentials: google.auth.credentials.Credentials | None = None,
     ) -> None:
         """
@@ -148,6 +150,7 @@ class LLM(llm.LLM):
             http_options (HttpOptions, optional): The HTTP options to use for the session.
             seed (int, optional): Random seed for reproducible generation. Defaults to None.
             safety_settings (list[SafetySettingOrDict], optional): Safety settings for content filtering. Defaults to None.
+            service_tier (types.ServiceTier, optional): The service tier for the request (e.g. types.ServiceTier.PRIORITY). Defaults to None.
         """  # noqa: E501
         super().__init__()
         gcp_project = project if is_given(project) else os.environ.get("GOOGLE_CLOUD_PROJECT")
@@ -220,6 +223,7 @@ class LLM(llm.LLM):
             http_options=http_options,
             seed=seed,
             safety_settings=safety_settings,
+            service_tier=service_tier,
         )
         self._client = Client(
             api_key=gemini_api_key,
@@ -384,6 +388,9 @@ class LLM(llm.LLM):
         if is_given(self._opts.safety_settings):
             extra["safety_settings"] = self._opts.safety_settings
 
+        if is_given(self._opts.service_tier):
+            extra["service_tier"] = self._opts.service_tier
+
         return LLMStream(
             self,
             client=self._client,
@@ -464,6 +471,20 @@ class LLMStream(llm.LLMStream):
                         request_id=request_id,
                     )
 
+                if response.usage_metadata is not None:
+                    usage = response.usage_metadata
+                    self._event_ch.send_nowait(
+                        llm.ChatChunk(
+                            id=request_id,
+                            usage=llm.CompletionUsage(
+                                completion_tokens=usage.candidates_token_count or 0,
+                                prompt_tokens=usage.prompt_token_count or 0,
+                                prompt_cached_tokens=usage.cached_content_token_count or 0,
+                                total_tokens=usage.total_token_count or 0,
+                            ),
+                        )
+                    )
+
                 if not response.candidates:
                     continue
 
@@ -492,20 +513,6 @@ class LLMStream(llm.LLMStream):
                     if chat_chunk is not None:
                         retryable = False
                         self._event_ch.send_nowait(chat_chunk)
-
-                if response.usage_metadata is not None:
-                    usage = response.usage_metadata
-                    self._event_ch.send_nowait(
-                        llm.ChatChunk(
-                            id=request_id,
-                            usage=llm.CompletionUsage(
-                                completion_tokens=usage.candidates_token_count or 0,
-                                prompt_tokens=usage.prompt_token_count or 0,
-                                prompt_cached_tokens=usage.cached_content_token_count or 0,
-                                total_tokens=usage.total_token_count or 0,
-                            ),
-                        )
-                    )
 
             if not response_generated:
                 raise APIStatusError(

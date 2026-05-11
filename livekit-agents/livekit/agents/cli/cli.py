@@ -68,7 +68,7 @@ class _ToggleMode(Exception):
     pass
 
 
-class _ExitCli(Exception):
+class _ExitCli(BaseException):
     pass
 
 

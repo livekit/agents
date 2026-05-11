@@ -7,6 +7,7 @@ import json
 import time
 from collections.abc import AsyncIterable, Coroutine, Sequence
 from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from opentelemetry import context as otel_context, trace
@@ -18,8 +19,6 @@ from livekit.agents.metrics.base import Metadata
 from .. import inference, llm, stt, tts, utils, vad
 from ..llm.chat_context import Instructions
 from ..llm.tool_context import (
-    FunctionToolInfo,
-    RawFunctionToolInfo,
     StopResponse,
     ToolFlag,
     get_fnc_tool_names,
@@ -54,6 +53,7 @@ from .audio_recognition import (
 from .endpointing import create_endpointing
 from .events import (
     AgentFalseInterruptionEvent,
+    AgentState,
     ErrorEvent,
     FunctionToolsExecutedEvent,
     MetricsCollectedEvent,
@@ -97,6 +97,27 @@ _OnEnterContextVar = contextvars.ContextVar["_OnEnterData"]("agents_activity_on_
 
 
 @dataclass
+class _ReusableResources:
+    stt_pipeline: _STTPipeline | None = None
+    rt_session: llm.RealtimeSession | None = None
+
+    async def cleanup(self) -> None:
+        tasks = []
+        if self.stt_pipeline is not None:
+            tasks.append(self.stt_pipeline.aclose())
+            self.stt_pipeline = None
+        if self.rt_session is not None:
+            tasks.append(self.rt_session.aclose())
+            self.rt_session = None
+
+        if tasks:
+            outputs = await asyncio.gather(*tasks, return_exceptions=True)
+            for output in outputs:
+                if isinstance(output, Exception):
+                    logger.error("error cleaning up reusable resources", exc_info=output)
+
+
+@dataclass
 class _PreemptiveGeneration:
     speech_handle: SpeechHandle
     user_message: llm.ChatMessage
@@ -105,6 +126,13 @@ class _PreemptiveGeneration:
     tools: list[llm.Tool | llm.Toolset]
     tool_choice: llm.ToolChoice | None
     created_at: float
+
+
+@dataclass
+class _PausedSpeechInfo:
+    handle: SpeechHandle
+    agent_state: AgentState
+    timeout: float
 
 
 # NOTE: AgentActivity isn't exposed to the public API
@@ -120,6 +148,7 @@ class AgentActivity(RecognitionHooks):
         self._started = False
         self._closed = False
         self._scheduling_paused = True
+        self._new_turns_blocked = False
 
         self._current_speech: SpeechHandle | None = None
         self._speech_q: list[tuple[int, float, SpeechHandle]] = []
@@ -127,7 +156,7 @@ class AgentActivity(RecognitionHooks):
         self._user_silence_event.set()
 
         # for false interruption handling
-        self._paused_speech: SpeechHandle | None = None
+        self._paused_speech: _PausedSpeechInfo | None = None
         self._false_interruption_timer: asyncio.TimerHandle | None = None
         self._cancel_speech_pause_task: asyncio.Task[None] | None = None
 
@@ -142,6 +171,9 @@ class AgentActivity(RecognitionHooks):
         self._speech_tasks: list[asyncio.Task[Any]] = []
 
         self._preemptive_generation: _PreemptiveGeneration | None = None
+        self._preemptive_generation_count: int = 0
+        self._authorization_allowed = asyncio.Event()
+        self._authorization_allowed.set()
 
         self._drain_blocked_tasks: list[asyncio.Task[Any]] = []
         self._mcp_tools: list[mcp.MCPToolset] = []
@@ -303,6 +335,7 @@ class AgentActivity(RecognitionHooks):
             mode=agent_endpointing.get("mode", session_endpointing["mode"]),
             min_delay=agent_endpointing.get("min_delay", session_endpointing["min_delay"]),
             max_delay=agent_endpointing.get("max_delay", session_endpointing["max_delay"]),
+            alpha=agent_endpointing.get("alpha", session_endpointing["alpha"]),
         )
 
     @property
@@ -356,6 +389,7 @@ class AgentActivity(RecognitionHooks):
             agent_id=self._agent.id,
         )
         self._agent._chat_ctx.insert(config_update)
+        self._session._chat_ctx.insert(config_update)
 
         if self._rt_session is not None:
             await self._rt_session.update_instructions(instructions)
@@ -374,15 +408,16 @@ class AgentActivity(RecognitionHooks):
         tools = list({tool.id: tool for tool in tools}.values())
         self._agent._tools = tools
 
-        # Record the configuration change
-        config_update = llm.AgentConfigUpdate(
-            tools_added=tools_added,
-            tools_removed=tools_removed,
-            agent_id=self._agent.id,
-        )
-        # Store full tool definitions in-memory (not serialized)
-        config_update._tools = llm.ToolContext(tools).flatten()
-        self._agent._chat_ctx.insert(config_update)
+        # Record the configuration change (skip if no visible diff)
+        if tools_added or tools_removed:
+            config_update = llm.AgentConfigUpdate(
+                tools_added=tools_added,
+                tools_removed=tools_removed,
+                agent_id=self._agent.id,
+            )
+            config_update._tools = llm.ToolContext(tools).flatten()
+            self._agent._chat_ctx.insert(config_update)
+            self._session._chat_ctx.insert(config_update)
 
         if self._rt_session is not None:
             await self._rt_session.update_tools(llm.ToolContext(self.tools).flatten())
@@ -427,6 +462,7 @@ class AgentActivity(RecognitionHooks):
                 max_delay=max_endpointing_delay
                 if is_given(max_endpointing_delay)
                 else self.endpointing_opts["max_delay"],
+                alpha=self.endpointing_opts["alpha"],
             )
 
         if utils.is_given(tool_choice):
@@ -511,7 +547,7 @@ class AgentActivity(RecognitionHooks):
 
         return task
 
-    async def start(self, *, reuse_stt_pipeline: _STTPipeline | None = None) -> None:
+    async def start(self, *, reuse_resources: _ReusableResources | None = None) -> None:
         # `start` must only be called by AgentSession
 
         async with self._lock:
@@ -536,7 +572,7 @@ class AgentActivity(RecognitionHooks):
                         self.tts.prewarm()
 
                 # don't use start_span for _start_session, avoid nested user/assistant turns
-                await self._start_session(reuse_stt_pipeline=reuse_stt_pipeline)
+                await self._start_session(reuse_resources=reuse_resources)
                 self._started = True
 
                 @tracer.start_as_current_span(
@@ -560,24 +596,72 @@ class AgentActivity(RecognitionHooks):
             finally:
                 start_span.end()
 
-    async def _detach_stt_pipeline_if_reusable(
-        self, new_activity: AgentActivity
-    ) -> _STTPipeline | None:
-        """Detach and return the STT pipeline if it can be handed off to *new_activity*.
+    async def _detach_reusable_resources(self, new_activity: AgentActivity) -> _ReusableResources:
+        """Detach reusable resources for handoff to *new_activity*."""
+        resources = _ReusableResources()
 
-        Requires the same STT instance and the same stt_node implementation.
-        """
-        if (
-            self._audio_recognition
-            and self.stt is not None
-            and type(self.agent).stt_node is type(new_activity.agent).stt_node
-            and self.stt is new_activity.stt
-        ):
-            return await self._audio_recognition.detach_stt()
+        try:
+            # stt pipeline
+            if (
+                self._audio_recognition
+                and self.stt is not None
+                and type(self.agent).stt_node is type(new_activity.agent).stt_node
+                and self.stt is new_activity.stt
+            ):
+                resources.stt_pipeline = await self._audio_recognition.detach_stt()
 
-        return None
+            # rt session
+            if (
+                self._rt_session is not None
+                and isinstance(self.llm, llm.RealtimeModel)
+                and self.llm is new_activity.llm
+            ):
+                # context update is supported or chat context is equivalent
+                reusable = self.llm.capabilities.mutable_chat_context or (
+                    self._rt_session.chat_ctx.copy(
+                        exclude_instructions=True, exclude_handoff=True, exclude_config_update=True
+                    ).is_equivalent(
+                        new_activity.agent.chat_ctx.copy(
+                            exclude_instructions=True,
+                            exclude_handoff=True,
+                            exclude_config_update=True,
+                        )
+                    )
+                )
+                # instructions update is supported or instructions are the same
+                reusable = reusable and (
+                    self.llm.capabilities.mutable_instructions
+                    or self.agent.instructions == new_activity.agent.instructions
+                )
+                # tools update is supported or tools are the same
+                reusable = reusable and (
+                    self.llm.capabilities.mutable_tools
+                    or llm.ToolContext(self.tools) == llm.ToolContext(new_activity.tools)
+                )
 
-    async def _start_session(self, *, reuse_stt_pipeline: _STTPipeline | None = None) -> None:
+                if reusable:
+                    # detach: remove event listeners but don't close the session
+                    self._rt_session.off("generation_created", self._on_generation_created)
+                    self._rt_session.off("input_speech_started", self._on_input_speech_started)
+                    self._rt_session.off("input_speech_stopped", self._on_input_speech_stopped)
+                    self._rt_session.off(
+                        "input_audio_transcription_completed",
+                        self._on_input_audio_transcription_completed,
+                    )
+                    self._rt_session.off("metrics_collected", self._on_metrics_collected)
+                    self._rt_session.off("remote_item_added", self._on_remote_item_added)
+                    self._rt_session.off("error", self._on_error)
+                    resources.rt_session = self._rt_session
+                    self._rt_session = None  # prevent _close_session from closing it
+
+        except Exception:
+            # avoid leaking resources
+            await resources.cleanup()
+            raise
+
+        return resources
+
+    async def _start_session(self, *, reuse_resources: _ReusableResources | None = None) -> None:
         assert self._lock.locked(), "_start_session should only be used when locked."
 
         if isinstance(self.llm, llm.LLM):
@@ -625,7 +709,19 @@ class AgentActivity(RecognitionHooks):
             )
 
         if isinstance(self.llm, llm.RealtimeModel):
-            self._rt_session = self.llm.session()
+            rt_reused = reuse_resources is not None and reuse_resources.rt_session is not None
+            if rt_reused:
+                assert reuse_resources and reuse_resources.rt_session is not None
+                logger.debug("reusing realtime session from previous activity")
+                self._rt_session = reuse_resources.rt_session
+                reuse_resources.rt_session = None  # ownership transferred
+
+                # clear any stale audio/generation state
+                self._rt_session.interrupt()
+                self._rt_session.clear_audio()
+            else:
+                self._rt_session = self.llm.session()
+
             self._rt_session.on("generation_created", self._on_generation_created)
             self._rt_session.on("input_speech_started", self._on_input_speech_started)
             self._rt_session.on("input_speech_stopped", self._on_input_speech_stopped)
@@ -639,27 +735,23 @@ class AgentActivity(RecognitionHooks):
 
             remove_instructions(self._agent._chat_ctx)
 
-            try:
-                await self._rt_session.update_instructions(self._agent.instructions)
-            except llm.RealtimeError:
-                logger.exception("failed to update the instructions")
+            capabilities = self.llm.capabilities
+            reset_instructions = reset_chat_ctx = reset_tools = True
+            if rt_reused:
+                # skip the update if the session is reused and no mid-session update is supported
+                # this means the content is the same as the previous session
+                reset_instructions = capabilities.mutable_instructions
+                reset_chat_ctx = capabilities.mutable_chat_context
+                reset_tools = capabilities.mutable_tools
 
-            try:
-                await self._rt_session.update_chat_ctx(self._agent.chat_ctx)
-            except llm.RealtimeError:
-                logger.exception("failed to update the chat_ctx")
-
-            try:
-                await self._rt_session.update_tools(llm.ToolContext(self.tools).flatten())
-            except llm.RealtimeError:
-                logger.exception("failed to update the tools")
+            await self._rt_session._update_session(
+                instructions=self._agent.instructions if reset_instructions else NOT_GIVEN,
+                chat_ctx=self._agent.chat_ctx if reset_chat_ctx else NOT_GIVEN,
+                tools=llm.ToolContext(self.tools).flatten() if reset_tools else NOT_GIVEN,
+            )
 
             self._realtime_spans = utils.BoundedDict[str, trace.Span](maxsize=100)
-            if (
-                not self.llm.capabilities.audio_output
-                and not self.tts
-                and self._session.output.audio
-            ):
+            if not capabilities.audio_output and not self.tts and self._session.output.audio:
                 logger.error(
                     "audio output is enabled but RealtimeModel has no audio modality "
                     "and no TTS is set. Either enable audio modality in the RealtimeModel "
@@ -676,14 +768,17 @@ class AgentActivity(RecognitionHooks):
             except ValueError:
                 logger.exception("failed to update the instructions")
 
-        # Record initial agent configuration
-        initial_config = llm.AgentConfigUpdate(
-            instructions=self._agent.instructions,
-            tools_added=get_fnc_tool_names(self.tools) or None,
-            agent_id=self._agent.id,
-        )
-        initial_config._tools = llm.ToolContext(self.tools).flatten()
-        self._agent._chat_ctx.insert(initial_config)
+        # Record initial agent configuration (skip if empty)
+        initial_tools = get_fnc_tool_names(self.tools) or None
+        if self._agent.instructions or initial_tools:
+            initial_config = llm.AgentConfigUpdate(
+                instructions=self._agent.instructions,
+                tools_added=initial_tools,
+                agent_id=self._agent.id,
+            )
+            initial_config._tools = llm.ToolContext(self.tools).flatten()
+            self._agent._chat_ctx.insert(initial_config)
+            self._session._chat_ctx.insert(initial_config)
 
         await self._resume_scheduling_task()
         self._audio_recognition = AudioRecognition(
@@ -697,14 +792,17 @@ class AgentActivity(RecognitionHooks):
             stt_model=self.stt.model if self.stt else None,
             stt_provider=self.stt.provider if self.stt else None,
         )
-        if reuse_stt_pipeline is not None:
+        if reuse_resources and reuse_resources.stt_pipeline is not None:
             logger.debug("reusing STT pipeline from previous activity")
-            self._audio_recognition.start(stt_pipeline=reuse_stt_pipeline)
+            self._audio_recognition.start(stt_pipeline=reuse_resources.stt_pipeline)
+            reuse_resources.stt_pipeline = None  # ownership transferred
         else:
             self._audio_recognition.start()
 
     @tracer.start_as_current_span("drain_agent_activity")
-    async def drain(self) -> None:
+    async def drain(
+        self, *, new_activity: AgentActivity | None = None
+    ) -> _ReusableResources | None:
         # `drain` must only be called by AgentSession
         # AgentSession makes sure there is always one agent available to the users.
         current_span = trace.get_current_span()
@@ -733,6 +831,15 @@ class AgentActivity(RecognitionHooks):
 
             await self._pause_scheduling_task()
 
+            # detach after speech tasks are done but before _close_session
+            if new_activity is not None:
+                try:
+                    return await self._detach_reusable_resources(new_activity)
+                except BaseException:
+                    logger.exception("failed to detach reusable resources")
+
+            return None
+
     async def _pause_scheduling_task(
         self, *, blocked_tasks: list[asyncio.Task] | None = None
     ) -> None:
@@ -758,11 +865,12 @@ class AgentActivity(RecognitionHooks):
             return
 
         self._scheduling_paused = False
+        self._new_turns_blocked = False
         self._scheduling_atask = asyncio.create_task(
             self._scheduling_task(), name="_scheduling_task"
         )
 
-    async def resume(self, *, reuse_stt_pipeline: _STTPipeline | None = None) -> None:
+    async def resume(self, *, reuse_resources: _ReusableResources | None = None) -> None:
         # `resume` must only be called by AgentSession
 
         async with self._lock:
@@ -771,14 +879,19 @@ class AgentActivity(RecognitionHooks):
                 attributes={trace_types.ATTR_AGENT_LABEL: self.agent.label},
             )
             try:
-                await self._start_session(reuse_stt_pipeline=reuse_stt_pipeline)
+                await self._start_session(reuse_resources=reuse_resources)
             finally:
                 span.end()
 
     def _wake_up_scheduling_task(self) -> None:
         self._q_updated.set()
 
-    async def pause(self, *, blocked_tasks: list[asyncio.Task]) -> None:
+    async def pause(
+        self,
+        *,
+        blocked_tasks: list[asyncio.Task],
+        new_activity: AgentActivity | None = None,
+    ) -> _ReusableResources | None:
         # `pause` must only be called by AgentSession
 
         # When draining, the tasks that have done the "premption" must be ignored.
@@ -791,11 +904,24 @@ class AgentActivity(RecognitionHooks):
                 "pause_agent_activity",
                 attributes={trace_types.ATTR_AGENT_LABEL: self._agent.label},
             )
+
+            resources: _ReusableResources | None = None
             try:
                 await self._pause_scheduling_task(blocked_tasks=blocked_tasks)
+
+                # detach after speech tasks are done but before _close_session
+                if new_activity is not None:
+                    resources = await self._detach_reusable_resources(new_activity)
+
                 await self._close_session()
+            except BaseException:
+                if resources is not None:
+                    await resources.cleanup()
+                raise
             finally:
                 span.end()
+
+            return resources
 
     async def _close_session(self) -> None:
         assert self._lock.locked(), "_close_session should only be used when locked."
@@ -919,10 +1045,14 @@ class AgentActivity(RecognitionHooks):
         if (
             not is_given(audio)
             and not self.tts
+            and not (isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.supports_say)
             and self._session.output.audio
             and self._session.output.audio_enabled
         ):
-            raise RuntimeError("trying to generate speech from text without a TTS model")
+            raise RuntimeError(
+                "trying to generate speech from text without a TTS model or a RealtimeSession that supports say(); "
+                "add a TTS model to AgentSession to enable say()"
+            )
 
         if (
             isinstance(self.llm, llm.RealtimeModel)
@@ -945,18 +1075,40 @@ class AgentActivity(RecognitionHooks):
             SpeechCreatedEvent(speech_handle=handle, user_initiated=True, source="say"),
         )
 
-        task = self._create_speech_task(
-            self._tts_task(
+        if (
+            self._rt_session is not None
+            and not is_given(audio)
+            and not self.tts
+            and isinstance(self.llm, llm.RealtimeModel)
+            and self.llm.capabilities.supports_say
+        ):
+            if not add_to_chat_ctx:
+                logger.warning(
+                    "add_to_chat_ctx=False is not supported when say() uses a RealtimeModel; "
+                    "the message will still be added to the chat context"
+                )
+            self._create_speech_task(
+                self._realtime_reply_task(
+                    speech_handle=handle,
+                    text=text,
+                    model_settings=ModelSettings(),
+                ),
                 speech_handle=handle,
-                text=text,
-                audio=audio or None,
-                add_to_chat_ctx=add_to_chat_ctx,
-                model_settings=ModelSettings(),
-            ),
-            speech_handle=handle,
-            name="AgentActivity.tts_say",
-        )
-        task.add_done_callback(self._on_pipeline_reply_done)
+                name="AgentActivity.realtime_say",
+            )
+        else:
+            task = self._create_speech_task(
+                self._tts_task(
+                    speech_handle=handle,
+                    text=text,
+                    audio=audio or None,
+                    add_to_chat_ctx=add_to_chat_ctx,
+                    model_settings=ModelSettings(),
+                ),
+                speech_handle=handle,
+                name="AgentActivity.tts_say",
+            )
+            task.add_done_callback(self._on_pipeline_reply_done)
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
         return handle
 
@@ -967,6 +1119,7 @@ class AgentActivity(RecognitionHooks):
         chat_ctx: NotGivenOr[llm.ChatContext | None] = NOT_GIVEN,
         instructions: NotGivenOr[str | Instructions] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
+        tools: NotGivenOr[list[str]] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         schedule_speech: bool = True,
         input_details: InputDetails = DEFAULT_INPUT_DETAILS,
@@ -992,24 +1145,39 @@ class AgentActivity(RecognitionHooks):
                     # when generate_reply is called inside a function_tool, set tool_choice to None by default  # noqa: E501
                     tool_choice = "none"
 
-        tools = self.tools
+        all_tools = self.tools.copy()
+
+        # resolve tool names to Tool objects if tools param is given
+        resolved_tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN
+        if is_given(tools):
+            tool_ctx = llm.ToolContext(all_tools)
+            toolset_dict = {t.id: t for t in tool_ctx.toolsets}
+            tool_dict = {t.id: t for t in tool_ctx.flatten()}
+            resolved_tools = list[llm.Tool | llm.Toolset]()
+            for name in set(tools):
+                tool = toolset_dict.get(name) or tool_dict.get(name)
+                if tool is None:
+                    raise ValueError(
+                        f"tool '{name}' not found in agent's registered tools. "
+                        f"Available tools: {list(tool_ctx.function_tools.keys())}"
+                    )
+                resolved_tools.append(tool)
 
         # if tool has the IGNORE_ON_ENTER flag, every generate_reply inside on_enter will ignore it
         if on_enter_data := _OnEnterContextVar.get(None):
             if on_enter_data.agent == self._agent and on_enter_data.session == self._session:
                 filtered_tools: list[llm.Tool | llm.Toolset] = []
-                for tool in tools:
-                    info: RawFunctionToolInfo | FunctionToolInfo | None = None
-                    if isinstance(tool, llm.RawFunctionTool | llm.FunctionTool):
-                        info = tool.info
-
-                    if info and (info.flags & ToolFlag.IGNORE_ON_ENTER):
+                to_filter = resolved_tools if is_given(resolved_tools) else all_tools
+                for tool in to_filter:
+                    if (
+                        isinstance(tool, llm.RawFunctionTool | llm.FunctionTool)
+                        and tool.info.flags & ToolFlag.IGNORE_ON_ENTER
+                    ):
                         continue
 
                     # TODO(long): add IGNORE_ON_ENTER to ToolSet?
                     filtered_tools.append(tool)
-
-                tools = filtered_tools
+                to_filter[:] = filtered_tools
 
         handle = SpeechHandle.create(
             allow_interruptions=allow_interruptions
@@ -1029,7 +1197,7 @@ class AgentActivity(RecognitionHooks):
                     # TODO(theomonnom): support llm.ChatMessage for the realtime model
                     user_input=user_message.text_content if user_message else None,
                     instructions=instructions or None,
-                    # TODO(theomonnom): the list of tools should always be passed here
+                    tools=resolved_tools if is_given(resolved_tools) else None,
                     model_settings=ModelSettings(tool_choice=tool_choice),
                 ),
                 speech_handle=handle,
@@ -1041,7 +1209,7 @@ class AgentActivity(RecognitionHooks):
                 self._pipeline_reply_task(
                     speech_handle=handle,
                     chat_ctx=chat_ctx or self._agent._chat_ctx,
-                    tools=tools,
+                    tools=resolved_tools if is_given(resolved_tools) else all_tools,
                     new_message=user_message if is_given(user_message) else None,
                     instructions=instructions or None,
                     model_settings=ModelSettings(
@@ -1064,6 +1232,12 @@ class AgentActivity(RecognitionHooks):
         if self._preemptive_generation is not None:
             self._preemptive_generation.speech_handle._cancel()
             self._preemptive_generation = None
+
+    def _pause_authorization(self) -> None:
+        self._authorization_allowed.clear()
+
+    def _resume_authorization(self) -> None:
+        self._authorization_allowed.set()
 
     def _interrupt_background_speeches(self, force: bool = False) -> list[SpeechHandle]:
         interrupted_speeches: list[SpeechHandle] = []
@@ -1193,6 +1367,15 @@ class AgentActivity(RecognitionHooks):
                         continue
                 speech._authorize_generation()
                 await speech._wait_for_generation()
+
+                if self._paused_speech and self._paused_speech.handle is self._current_speech:
+                    # clear paused speech after generation done
+                    self._paused_speech = None
+                    if self._false_interruption_timer is not None:
+                        self._false_interruption_timer.cancel()
+                        self._false_interruption_timer = None
+                    if (audio_output := self._session.output.audio) and audio_output.can_pause:
+                        audio_output.resume()
                 self._current_speech = None
                 last_playout_ts = time.time()
 
@@ -1379,7 +1562,7 @@ class AgentActivity(RecognitionHooks):
             # user_initiated generations are directly handled inside _realtime_reply_task
             return
 
-        if self._scheduling_paused:
+        if self._scheduling_paused or self._new_turns_blocked:
             # TODO(theomonnom): should we "forward" this new turn to the next agent?
             logger.warning("skipping new realtime generation, the speech scheduling is not running")
             return
@@ -1421,25 +1604,20 @@ class AgentActivity(RecognitionHooks):
             # disable interruption from audio activity while aec warmup is active
             return
 
-        opt = self._session.options
-        use_pause = (
-            opt.interruption["resume_false_interruption"]
-            and opt.interruption["false_interruption_timeout"] is not None
-        )
-
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.turn_detection:
             # ignore if realtime model has turn detection enabled
             return
 
+        interruption_options = self._session.options.interruption
         if (
             self.stt is not None
-            and opt.interruption["min_words"] > 0
+            and interruption_options["min_words"] > 0
             and self._audio_recognition is not None
         ):
             text = self._audio_recognition.current_transcript
 
             # TODO(long): better word splitting for multi-language
-            if len(split_words(text, split_character=True)) < opt.interruption["min_words"]:
+            if len(split_words(text, split_character=True)) < interruption_options["min_words"]:
                 return
 
         if self._rt_session is not None:
@@ -1450,8 +1628,6 @@ class AgentActivity(RecognitionHooks):
             and not self._current_speech.interrupted
             and self._current_speech.allow_interruptions
         ):
-            self._paused_speech = self._current_speech
-
             # reset the false interruption timer
             if self._false_interruption_timer:
                 self._false_interruption_timer.cancel()
@@ -1467,8 +1643,12 @@ class AgentActivity(RecognitionHooks):
                     started_at=time.time(),
                 )
 
-            if use_pause and self._session.output.audio and self._session.output.audio.can_pause:
-                self._session.output.audio.pause()
+            if self._pause_enabled():
+                assert (timeout := interruption_options["false_interruption_timeout"]) is not None
+                assert (audio_output := self._session.output.audio) is not None
+
+                self._update_paused_speech(self._current_speech, timeout)
+                audio_output.pause()
                 self._session._update_agent_state("listening")
                 if self._audio_recognition:
                     self._audio_recognition.on_end_of_agent_speech(
@@ -1484,10 +1664,11 @@ class AgentActivity(RecognitionHooks):
 
     # region recognition hooks
 
-    def on_start_of_speech(self, ev: vad.VADEvent | None) -> None:
-        speech_start_time = time.time()
-        if ev:
-            speech_start_time = speech_start_time - ev.speech_duration - ev.inference_duration
+    def on_start_of_speech(
+        self,
+        ev: vad.VADEvent | None,
+        speech_start_time: float,
+    ) -> None:
         self._session._update_user_state("speaking", last_speaking_time=speech_start_time)
         if self._audio_recognition:
             self._audio_recognition.on_start_of_speech(
@@ -1503,6 +1684,21 @@ class AgentActivity(RecognitionHooks):
             # cancel the timer when user starts speaking but leave the paused state unchanged
             self._false_interruption_timer.cancel()
             self._false_interruption_timer = None
+
+        if (
+            self._session.agent_state != "speaking"
+            and self._pause_enabled()
+            and (current_speech := self._current_speech) is not None
+            and not current_speech.interrupted
+            and current_speech.allow_interruptions
+            and (self._paused_speech is None or self._paused_speech.handle is not current_speech)
+        ):
+            # pause the audio output if agent is not speaking (in thinking state);
+            # resume immediately when user stops speaking, the timeout will be updated by _interrupt_by_audio_activity
+            assert (audio_output := self._session.output.audio) is not None
+
+            self._update_paused_speech(current_speech, timeout=0)
+            audio_output.pause()
 
     def on_end_of_speech(self, ev: vad.VADEvent | None) -> None:
         speech_end_time = time.time()
@@ -1526,13 +1722,8 @@ class AgentActivity(RecognitionHooks):
         )
         self._user_silence_event.set()
 
-        if (
-            self._paused_speech
-            and (timeout := self._session.options.interruption["false_interruption_timeout"])
-            is not None
-        ):
-            # schedule a resume timer when user stops speaking
-            self._start_false_interruption_timer(timeout)
+        if self._paused_speech:
+            self._start_false_interruption_timer(self._paused_speech.timeout)
 
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None:
         if self._turn_detection in ("manual", "realtime_llm"):
@@ -1638,15 +1829,28 @@ class AgentActivity(RecognitionHooks):
         )
 
     def on_preemptive_generation(self, info: _PreemptiveGenerationInfo) -> None:
+        preemptive_opts = self._session.options.preemptive_generation
         if (
-            not self._session.options.preemptive_generation
+            not preemptive_opts["enabled"]
             or self._scheduling_paused
+            or self._new_turns_blocked
             or (self._current_speech is not None and not self._current_speech.interrupted)
             or not isinstance(self.llm, llm.LLM)
         ):
             return
 
         self._cancel_preemptive_generation()
+
+        if (
+            info.started_speaking_at is not None
+            and time.time() - info.started_speaking_at > preemptive_opts["max_speech_duration"]
+        ):
+            return
+
+        if self._preemptive_generation_count >= preemptive_opts["max_retries"]:
+            return
+
+        self._preemptive_generation_count += 1
 
         user_message = llm.ChatMessage(
             role="user",
@@ -1677,7 +1881,7 @@ class AgentActivity(RecognitionHooks):
         # IMPORTANT: This method is sync to avoid it being cancelled by the AudioRecognition
         # We explicitly create a new task here
 
-        if self._scheduling_paused:
+        if self._scheduling_paused or self._new_turns_blocked:
             self._cancel_preemptive_generation()
             logger.warning(
                 "skipping user input, speech scheduling is paused",
@@ -1691,6 +1895,7 @@ class AgentActivity(RecognitionHooks):
                     content=[info.new_transcript],
                     transcript_confidence=info.transcript_confidence,
                 )
+                user_message.metrics = self._init_metrics_from_end_of_turn(info)
                 self._agent._chat_ctx.items.append(user_message)
                 self._session._conversation_item_added(user_message)
 
@@ -1729,6 +1934,8 @@ class AgentActivity(RecognitionHooks):
             # is detected. So the previous execution should complete quickly.
             await old_task
 
+        self._preemptive_generation_count = 0
+
         # When the audio recognition detects the end of a user turn:
         #  - check if realtime model server-side turn detection is enabled
         #  - check if there is no current generation happening
@@ -1744,6 +1951,11 @@ class AgentActivity(RecognitionHooks):
             content=[info.new_transcript],
             transcript_confidence=info.transcript_confidence,
         )
+
+        metrics_report: llm.MetricsReport = self._init_metrics_from_end_of_turn(info)
+
+        if user_message is not None:
+            user_message.metrics = metrics_report
 
         if isinstance(self.llm, llm.RealtimeModel):
             if self.llm.capabilities.turn_detection:
@@ -1778,7 +1990,7 @@ class AgentActivity(RecognitionHooks):
             if self._rt_session is not None:
                 self._rt_session.interrupt()
 
-        if self._scheduling_paused:
+        if self._scheduling_paused or self._new_turns_blocked:
             logger.warning(
                 "skipping on_user_turn_completed, speech scheduling is paused",
                 extra={"user_input": info.new_transcript},
@@ -1804,6 +2016,7 @@ class AgentActivity(RecognitionHooks):
             return
 
         on_user_turn_completed_delay = time.perf_counter() - start_time
+        metrics_report["on_user_turn_completed_delay"] = on_user_turn_completed_delay
 
         if isinstance(self.llm, llm.RealtimeModel):
             # ignore stt transcription for realtime model
@@ -1811,7 +2024,7 @@ class AgentActivity(RecognitionHooks):
         elif self.llm is None:
             return  # skip response if no llm is set
 
-        if self._scheduling_paused:
+        if self._scheduling_paused or self._new_turns_blocked:
             logger.warning(
                 "skipping reply to user input, speech scheduling is paused",
                 extra={"user_input": info.new_transcript},
@@ -1820,29 +2033,6 @@ class AgentActivity(RecognitionHooks):
                 self._agent._chat_ctx.items.append(user_message)
                 self._session._conversation_item_added(user_message)
             return
-
-        metrics_report: llm.MetricsReport = {}
-        if self.stt:
-            metrics_report["stt_metadata"] = {
-                "model_name": self.stt.model,
-                "model_provider": self.stt.provider,
-            }
-        if info.started_speaking_at is not None:
-            metrics_report["started_speaking_at"] = info.started_speaking_at
-
-        if info.stopped_speaking_at is not None:
-            metrics_report["stopped_speaking_at"] = info.stopped_speaking_at
-
-        if info.transcription_delay is not None:
-            metrics_report["transcription_delay"] = info.transcription_delay
-
-        if info.end_of_turn_delay is not None:
-            metrics_report["end_of_turn_delay"] = info.end_of_turn_delay
-
-        metrics_report["on_user_turn_completed_delay"] = on_user_turn_completed_delay
-
-        if user_message is not None:
-            user_message.metrics = metrics_report
 
         speech_handle: SpeechHandle | None = None
         if preemptive := self._preemptive_generation:
@@ -1967,7 +2157,8 @@ class AgentActivity(RecognitionHooks):
 
         # See discussion in https://github.com/livekit/agents/issues/4432
         authorization_tasks: list[asyncio.Future[Any]] = [
-            asyncio.ensure_future(speech_handle._wait_for_authorization())
+            asyncio.ensure_future(speech_handle._wait_for_authorization()),
+            asyncio.ensure_future(self._authorization_allowed.wait()),
         ]
         if speech_handle.allow_interruptions:
             authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
@@ -1994,9 +2185,12 @@ class AgentActivity(RecognitionHooks):
             text_source = _read_text()
             audio_source = _read_text()
 
-        tasks: list[asyncio.Task[Any]] = []
+        tts_task: asyncio.Task[Any] | None = None
+        forward_audio_task: asyncio.Task[Any] | None = None
+        forward_text_task: asyncio.Task[Any] | None = None
         started_speaking_at: float | None = None
         stopped_speaking_at: float | None = None
+        started_forwarding_at: float | None = None
 
         def _on_first_frame(fut: asyncio.Future[float] | asyncio.Future[None]) -> None:
             """
@@ -2004,9 +2198,14 @@ class AgentActivity(RecognitionHooks):
             1. _AudioOutput.first_frame_fut (float)
             2. _TextOutput.first_text_fut (None)
             """
-            nonlocal started_speaking_at
+            nonlocal started_speaking_at, started_forwarding_at
             try:
                 started_speaking_at = fut.result() or time.time()
+                started_forwarding_at = (
+                    audio_out.started_forwarding_at
+                    if audio_out and audio_out.started_forwarding_at is not None
+                    else started_speaking_at
+                )
             except BaseException:
                 return
 
@@ -2018,7 +2217,7 @@ class AgentActivity(RecognitionHooks):
             if self._audio_recognition:
                 self._audio_recognition.on_start_of_agent_speech(started_at=started_speaking_at)
             if self.interruption_enabled:
-                self._interruption_by_audio_activity_enabled = False
+                self._disable_vad_interruption_soon()
 
         audio_out: _AudioOutput | None = None
         tts_gen_data: _TTSGenerationData | None = None
@@ -2033,7 +2232,6 @@ class AgentActivity(RecognitionHooks):
                     model=self.tts.model if self.tts else None,
                     provider=self.tts.provider if self.tts else None,
                 )
-                tasks.append(tts_task)
                 if (
                     self.use_tts_aligned_transcript
                     and (tts := self.tts)
@@ -2042,16 +2240,14 @@ class AgentActivity(RecognitionHooks):
                 ):
                     text_source = timed_texts
 
-                forward_task, audio_out = perform_audio_forwarding(
+                forward_audio_task, audio_out = perform_audio_forwarding(
                     audio_output=audio_output, tts_output=tts_gen_data.audio_ch
                 )
-                tasks.append(forward_task)
             else:
                 # use the provided audio
-                forward_task, audio_out = perform_audio_forwarding(
+                forward_audio_task, audio_out = perform_audio_forwarding(
                     audio_output=audio_output, tts_output=audio
                 )
-                tasks.append(forward_task)
 
             audio_out.first_frame_fut.add_done_callback(_on_first_frame)
 
@@ -2060,16 +2256,24 @@ class AgentActivity(RecognitionHooks):
         tr_node_result = await tr_node if asyncio.iscoroutine(tr_node) else tr_node
         text_out: _TextOutput | None = None
         if tr_node_result is not None:
-            forward_text, text_out = perform_text_forwarding(
+            forward_text_task, text_out = perform_text_forwarding(
                 text_output=tr_output,
                 source=tr_node_result,
             )
-            tasks.append(forward_text)
             if audio_output is None:
                 # update the agent state based on text if no audio output
                 text_out.first_text_fut.add_done_callback(_on_first_frame)
 
-        await speech_handle.wait_if_not_interrupted([*tasks])
+        all_tasks: list[asyncio.Future[Any]] = [
+            t for t in (tts_task, forward_audio_task, forward_text_task) if t is not None
+        ]
+        await speech_handle.wait_if_not_interrupted(all_tasks)
+
+        # check for errors in generation/forwarding tasks (e.g. missing audio file)
+        for task in (tts_task, forward_audio_task, forward_text_task):
+            if task is not None and task.done() and not task.cancelled():
+                if exc := task.exception():
+                    raise exc
 
         if audio_output is not None:
             await speech_handle.wait_if_not_interrupted(
@@ -2079,7 +2283,7 @@ class AgentActivity(RecognitionHooks):
         stopped_speaking_at = time.time()
         current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, speech_handle.interrupted)
         if speech_handle.interrupted:
-            await utils.aio.cancel_and_wait(*tasks)
+            await utils.aio.cancel_and_wait(*all_tasks)
 
             if audio_output is not None:
                 audio_output.clear_buffer()
@@ -2113,6 +2317,11 @@ class AgentActivity(RecognitionHooks):
             if stopped_speaking_at and started_speaking_at:
                 assistant_metrics["started_speaking_at"] = started_speaking_at
                 assistant_metrics["stopped_speaking_at"] = stopped_speaking_at
+
+                if started_forwarding_at is not None:
+                    assistant_metrics["playback_latency"] = (
+                        started_speaking_at - started_forwarding_at
+                    )
 
             msg = self._agent._chat_ctx.add_message(
                 role="assistant",
@@ -2228,8 +2437,8 @@ class AgentActivity(RecognitionHooks):
 
         tts_task: asyncio.Task[bool] | None = None
         tts_gen_data: _TTSGenerationData | None = None
-        read_transcript_from_tts = False
-        if audio_output is not None:
+
+        async def _start_tts_inference() -> tuple[asyncio.Task[bool], _TTSGenerationData]:
             await llm_gen_data.started_fut  # make sure tts span starts after llm span
             tts_task, tts_gen_data = perform_tts_inference(
                 node=self._agent.tts_node,
@@ -2239,15 +2448,17 @@ class AgentActivity(RecognitionHooks):
                 model=self.tts.model if self.tts else None,
                 provider=self.tts.provider if self.tts else None,
             )
+            return tts_task, tts_gen_data
+
+        # start preemptive tts inference if enabled
+        preemptive_opts = self._session.options.preemptive_generation
+        if (
+            audio_output is not None
+            and preemptive_opts["enabled"]
+            and preemptive_opts["preemptive_tts"]
+        ):
+            tts_task, tts_gen_data = await _start_tts_inference()
             tasks.append(tts_task)
-            if (
-                self.use_tts_aligned_transcript
-                and (tts := self.tts)
-                and (tts.capabilities.aligned_transcript or not tts.capabilities.streaming)
-                and (timed_texts := await tts_gen_data.timed_texts_fut)
-            ):
-                tr_input = timed_texts
-                read_transcript_from_tts = True
 
         wait_for_scheduled = asyncio.ensure_future(speech_handle._wait_for_scheduled())
         await speech_handle.wait_if_not_interrupted([wait_for_scheduled])
@@ -2266,10 +2477,27 @@ class AgentActivity(RecognitionHooks):
             await text_tee.aclose()
             return
 
+        # start tts inference if not already started and audio output is enabled
+        if audio_output is not None and tts_task is None:
+            tts_task, tts_gen_data = await _start_tts_inference()
+            tasks.append(tts_task)
+
+        read_transcript_from_tts = False
+        if (
+            tts_gen_data is not None
+            and self.use_tts_aligned_transcript
+            and (tts := self.tts)
+            and (tts.capabilities.aligned_transcript or not tts.capabilities.streaming)
+            and (timed_texts := await tts_gen_data.timed_texts_fut)
+        ):
+            tr_input = timed_texts
+            read_transcript_from_tts = True
+
         self._session._update_agent_state("thinking")
 
         authorization_tasks: list[asyncio.Future[Any]] = [
-            asyncio.ensure_future(speech_handle._wait_for_authorization())
+            asyncio.ensure_future(speech_handle._wait_for_authorization()),
+            asyncio.ensure_future(self._authorization_allowed.wait()),
         ]
         if speech_handle.allow_interruptions:
             authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
@@ -2304,6 +2532,7 @@ class AgentActivity(RecognitionHooks):
 
         started_speaking_at: float | None = None
         stopped_speaking_at: float | None = None
+        started_forwarding_at: float | None = None
 
         def _on_first_frame(fut: asyncio.Future[float] | asyncio.Future[None]) -> None:
             """
@@ -2311,9 +2540,14 @@ class AgentActivity(RecognitionHooks):
             1. _AudioOutput.first_frame_fut (float)
             2. _TextOutput.first_text_fut (None)
             """
-            nonlocal started_speaking_at
+            nonlocal started_speaking_at, started_forwarding_at
             try:
                 started_speaking_at = fut.result() or time.time()
+                started_forwarding_at = (
+                    audio_out.started_forwarding_at
+                    if audio_out and audio_out.started_forwarding_at is not None
+                    else started_speaking_at
+                )
             except BaseException:
                 return
 
@@ -2324,6 +2558,7 @@ class AgentActivity(RecognitionHooks):
                 early_metrics["llm_node_ttft"] = llm_gen_data.ttft
             if tts_gen_data and tts_gen_data.ttfb is not None:
                 early_metrics["tts_node_ttfb"] = tts_gen_data.ttfb
+            early_metrics["playback_latency"] = started_speaking_at - started_forwarding_at
             if user_metrics and "stopped_speaking_at" in user_metrics:
                 early_metrics["e2e_latency"] = (
                     started_speaking_at - user_metrics["stopped_speaking_at"]
@@ -2339,7 +2574,7 @@ class AgentActivity(RecognitionHooks):
             if self._audio_recognition:
                 self._audio_recognition.on_start_of_agent_speech(started_at=started_speaking_at)
             if self.interruption_enabled:
-                self._interruption_by_audio_activity_enabled = False
+                self._disable_vad_interruption_soon()
 
         audio_out: _AudioOutput | None = None
         if audio_output is not None:
@@ -2408,6 +2643,9 @@ class AgentActivity(RecognitionHooks):
             assistant_metrics["started_speaking_at"] = started_speaking_at
             assistant_metrics["stopped_speaking_at"] = stopped_speaking_at
 
+            if started_forwarding_at is not None:
+                assistant_metrics["playback_latency"] = started_speaking_at - started_forwarding_at
+
             if user_metrics and "stopped_speaking_at" in user_metrics:
                 e2e_latency = started_speaking_at - user_metrics["stopped_speaking_at"]
                 assistant_metrics["e2e_latency"] = e2e_latency
@@ -2446,6 +2684,9 @@ class AgentActivity(RecognitionHooks):
             )
 
         if forwarded_text:
+            extra_kwargs: dict = {}
+            if llm_gen_data.generated_extra:
+                extra_kwargs["extra"] = llm_gen_data.generated_extra
             msg = chat_ctx.add_message(
                 role="assistant",
                 content=forwarded_text,
@@ -2453,6 +2694,7 @@ class AgentActivity(RecognitionHooks):
                 interrupted=speech_handle.interrupted,
                 created_at=reply_started_at,
                 metrics=assistant_metrics,
+                **extra_kwargs,
             )
             self._agent._chat_ctx.insert(msg)
             self._session._conversation_item_added(msg)
@@ -2587,21 +2829,38 @@ class AgentActivity(RecognitionHooks):
         *,
         speech_handle: SpeechHandle,
         model_settings: ModelSettings,
+        tools: list[llm.Tool | llm.Toolset] | None = None,
         user_input: str | None = None,
         instructions: str | None = None,
         tool_reply: bool = False,
+        text: str | AsyncIterable[str] | None = None,
     ) -> None:
         assert self._rt_session is not None, "rt_session is not available"
-
         # realtime_reply_task is called only when there's text input, native audio input is handled by _realtime_generation_task
         authorization_tasks: list[asyncio.Future[Any]] = [
-            asyncio.ensure_future(speech_handle._wait_for_authorization())
+            asyncio.ensure_future(speech_handle._wait_for_authorization()),
+            asyncio.ensure_future(self._authorization_allowed.wait()),
         ]
         if speech_handle.allow_interruptions:
             authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
         await speech_handle.wait_if_not_interrupted(authorization_tasks)
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*authorization_tasks)
+            return
+
+        if text is not None:
+            try:
+                generation_ev = await self._rt_session.say(text)
+            except llm.RealtimeError as e:
+                logger.error("failed to say text: %s", str(e))
+                return
+
+            await self._realtime_generation_task(
+                speech_handle=speech_handle,
+                generation_ev=generation_ev,
+                model_settings=model_settings,
+            )
+            return
 
         if user_input is not None:
             chat_ctx = self._rt_session.chat_ctx.copy()
@@ -2610,19 +2869,35 @@ class AgentActivity(RecognitionHooks):
             self._agent._chat_ctx._upsert_item(msg)
             self._session._conversation_item_added(msg)
 
-        per_response_tool_choice = (
-            self._rt_session.realtime_model.capabilities.per_response_tool_choice
-        )
-        ori_tool_choice = self._tool_choice
-        if utils.is_given(model_settings.tool_choice) and not per_response_tool_choice:
-            self._rt_session.update_options(tool_choice=model_settings.tool_choice)
-
+        ori_tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN
+        ori_tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN
         try:
+            if not (
+                per_response_tool_choice
+                := self._rt_session.realtime_model.capabilities.per_response_tool_choice
+            ):
+                # update the tool and tool choice at the session level if they are specified
+                if (
+                    is_given(model_settings.tool_choice)
+                    and model_settings.tool_choice != self._tool_choice
+                ):
+                    ori_tool_choice = self._tool_choice
+                    self._rt_session.update_options(tool_choice=model_settings.tool_choice)
+
+                if tools is not None:
+                    ori_tools = self._rt_session.tools.flatten()
+                    await self._rt_session.update_tools(llm.ToolContext(tools).flatten())
+
             try:
                 generation_ev = await self._rt_session.generate_reply(
                     instructions=instructions or NOT_GIVEN,
                     tool_choice=(
                         model_settings.tool_choice if per_response_tool_choice else NOT_GIVEN
+                    ),
+                    tools=(
+                        llm.ToolContext(tools).flatten()
+                        if per_response_tool_choice and tools is not None
+                        else NOT_GIVEN
                     ),
                 )
             except llm.RealtimeError as e:
@@ -2642,13 +2917,18 @@ class AgentActivity(RecognitionHooks):
                 instructions=instructions,
             )
         finally:
-            # reset tool_choice value (only needed for non-per-response models)
-            if (
-                not per_response_tool_choice
-                and utils.is_given(model_settings.tool_choice)
-                and model_settings.tool_choice != ori_tool_choice
-            ):
-                self._rt_session.update_options(tool_choice=ori_tool_choice)
+            # reset tool_choice and tools
+            if is_given(ori_tool_choice):
+                try:
+                    self._rt_session.update_options(tool_choice=ori_tool_choice)
+                except Exception:
+                    logger.exception("failed to reset tool_choice")
+
+            if is_given(ori_tools):
+                try:
+                    await self._rt_session.update_tools(ori_tools)
+                except Exception:
+                    logger.exception("failed to reset tools")
 
     @utils.log_exceptions(logger=logger)
     async def _realtime_generation_task(
@@ -2711,7 +2991,8 @@ class AgentActivity(RecognitionHooks):
         tool_ctx = llm.ToolContext(self.tools)
 
         authorization_tasks: list[asyncio.Future[Any]] = [
-            asyncio.ensure_future(speech_handle._wait_for_authorization())
+            asyncio.ensure_future(speech_handle._wait_for_authorization()),
+            asyncio.ensure_future(self._authorization_allowed.wait()),
         ]
         if speech_handle.allow_interruptions:
             authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
@@ -2725,16 +3006,24 @@ class AgentActivity(RecognitionHooks):
 
         started_speaking_at: float | None = None
         stopped_speaking_at: float | None = None
+        started_forwarding_at: float | None = None
 
-        def _on_first_frame(fut: asyncio.Future[float] | asyncio.Future[None]) -> None:
+        def _on_first_frame(
+            fut: asyncio.Future[float] | asyncio.Future[None], audio_out: _AudioOutput | None = None
+        ) -> None:
             """
             Callback to update the agent state when the first frame is captured:
             1. _AudioOutput.first_frame_fut (float)
             2. _TextOutput.first_text_fut (None)
             """
-            nonlocal started_speaking_at
+            nonlocal started_speaking_at, started_forwarding_at
             try:
                 started_speaking_at = fut.result() or time.time()
+                started_forwarding_at = (
+                    audio_out.started_forwarding_at
+                    if audio_out and audio_out.started_forwarding_at is not None
+                    else started_speaking_at
+                )
             except BaseException:
                 return
 
@@ -2746,7 +3035,7 @@ class AgentActivity(RecognitionHooks):
             if self._audio_recognition:
                 self._audio_recognition.on_start_of_agent_speech(started_at=started_speaking_at)
             if self.interruption_enabled:
-                self._interruption_by_audio_activity_enabled = False
+                self._disable_vad_interruption_soon()
 
         tasks: list[asyncio.Task[Any]] = []
         tees: list[utils.aio.itertools.Tee[Any]] = []
@@ -2837,7 +3126,9 @@ class AgentActivity(RecognitionHooks):
                                 tts_output=realtime_audio_result,
                             )
                             forward_tasks.append(forward_task)
-                            audio_out.first_frame_fut.add_done_callback(_on_first_frame)
+                            audio_out.first_frame_fut.add_done_callback(
+                                partial(_on_first_frame, audio_out=audio_out)
+                            )
 
                     # text output
                     tr_node = self._agent.transcription_node(tr_text_input, model_settings)
@@ -2938,6 +3229,11 @@ class AgentActivity(RecognitionHooks):
             if stopped_speaking_at and started_speaking_at:
                 assistant_metrics["started_speaking_at"] = started_speaking_at
                 assistant_metrics["stopped_speaking_at"] = stopped_speaking_at
+
+                if started_forwarding_at is not None:
+                    assistant_metrics["playback_latency"] = (
+                        started_speaking_at - started_forwarding_at
+                    )
 
             msg = llm.ChatMessage(
                 role="assistant",
@@ -3125,13 +3421,38 @@ class AgentActivity(RecognitionHooks):
                     f"Tool reply cannot be prevented when using {self.llm._label}, it generates reply automatically."
                 )
 
+    def _update_paused_speech(self, speech_handle: SpeechHandle, timeout: float) -> None:
+        """Record that ``speech_handle`` is paused.
+
+        If already paused for this handle, only ``timeout`` is updated — the
+        ``agent_state`` captured at first pause is preserved, so the resume
+        path restores the correct state even across multiple calls.
+        """
+        if self._paused_speech and self._paused_speech.handle is speech_handle:
+            self._paused_speech.timeout = timeout
+        else:
+            self._paused_speech = _PausedSpeechInfo(
+                handle=speech_handle,
+                agent_state=self._session.agent_state,
+                timeout=timeout,
+            )
+
+    def _pause_enabled(self) -> bool:
+        interruption_options = self._session.options.interruption
+        return bool(
+            interruption_options["resume_false_interruption"]
+            and interruption_options["false_interruption_timeout"] is not None
+            and self._session.output.audio
+            and self._session.output.audio.can_pause
+        )
+
     def _start_false_interruption_timer(self, timeout: float) -> None:
         if self._false_interruption_timer is not None:
             self._false_interruption_timer.cancel()
 
         def _on_false_interruption() -> None:
             if self._paused_speech is None or (
-                self._current_speech and self._current_speech is not self._paused_speech
+                self._current_speech and self._current_speech is not self._paused_speech.handle
             ):
                 # already new speech is scheduled, do nothing
                 self._paused_speech = None
@@ -3142,16 +3463,16 @@ class AgentActivity(RecognitionHooks):
                 self._session.options.interruption["resume_false_interruption"]
                 and (audio_output := self._session.output.audio)
                 and audio_output.can_pause
-                and not self._paused_speech.done()
+                and not self._paused_speech.handle.done()
             ):
                 self._session._update_agent_state(
-                    "speaking",
-                    otel_context=self._paused_speech._agent_turn_context,
+                    self._paused_speech.agent_state,
+                    otel_context=self._paused_speech.handle._agent_turn_context,
                 )
-                if self._audio_recognition:
+                if self._audio_recognition and self._paused_speech.agent_state == "speaking":
                     self._audio_recognition.on_start_of_agent_speech(started_at=time.time())
                 if self.interruption_enabled:
-                    self._interruption_by_audio_activity_enabled = False
+                    self._disable_vad_interruption_soon()
                 audio_output.resume()
                 resumed = True
                 logger.debug("resumed false interrupted speech", extra={"timeout": timeout})
@@ -3188,15 +3509,15 @@ class AgentActivity(RecognitionHooks):
 
         if (
             interrupt
-            and not self._paused_speech.interrupted
-            and self._paused_speech.allow_interruptions
+            and not self._paused_speech.handle.interrupted
+            and self._paused_speech.handle.allow_interruptions
         ):
-            self._paused_speech.interrupt()
+            self._paused_speech.handle.interrupt()
             # ensure the generation is done — but only if a generation
             # was actually started; a paused speech that was never
             # authorized won't have an active generation future.
-            if self._paused_speech._generations:
-                await self._paused_speech._wait_for_generation()
+            if self._paused_speech.handle._generations:
+                await self._paused_speech.handle._wait_for_generation()
         self._paused_speech = None
 
         if (
@@ -3205,7 +3526,27 @@ class AgentActivity(RecognitionHooks):
         ):
             self._session.output.audio.resume()
 
+    def _disable_vad_interruption_soon(self) -> None:
+        """Disable VAD interruption after the backchannel boundary expires."""
+        if self._audio_recognition and self._audio_recognition.backchannel_boundary_active:
+
+            def _disable_vad_interruption() -> None:
+                # only disable it if the agent is still speaking
+                if (
+                    self._session.agent_state == "speaking"
+                    and self._interruption_by_audio_activity_enabled
+                ):
+                    logger.trace("backchannel boundary expired")
+                    self._interruption_by_audio_activity_enabled = False
+
+            self._audio_recognition.backchannel_boundary_callback = _disable_vad_interruption
+        else:
+            self._interruption_by_audio_activity_enabled = False
+
     def _restore_interruption_by_audio_activity(self) -> None:
+        if self._audio_recognition:
+            self._audio_recognition._cancel_backchannel_boundary()
+
         self._interruption_by_audio_activity_enabled = (
             self._default_interruption_by_audio_activity_enabled
         )
@@ -3235,6 +3576,27 @@ class AgentActivity(RecognitionHooks):
             "adaptive interruption disabled due to unrecoverable error, "
             "falling back to VAD-based interruption"
         )
+
+    def _init_metrics_from_end_of_turn(self, info: _EndOfTurnInfo) -> llm.MetricsReport:
+        metrics_report: llm.MetricsReport = {}
+        if self.stt:
+            metrics_report["stt_metadata"] = {
+                "model_name": self.stt.model,
+                "model_provider": self.stt.provider,
+            }
+        if info.started_speaking_at is not None:
+            metrics_report["started_speaking_at"] = info.started_speaking_at
+
+        if info.stopped_speaking_at is not None:
+            metrics_report["stopped_speaking_at"] = info.stopped_speaking_at
+
+        if info.transcription_delay is not None:
+            metrics_report["transcription_delay"] = info.transcription_delay
+
+        if info.end_of_turn_delay is not None:
+            metrics_report["end_of_turn_delay"] = info.end_of_turn_delay
+
+        return metrics_report
 
     # move them to the end to avoid shadowing the same named modules for mypy
     @property

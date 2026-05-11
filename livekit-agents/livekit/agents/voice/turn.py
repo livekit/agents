@@ -60,12 +60,17 @@ class EndpointingOptions(TypedDict, total=False):
     max_delay: float
     """Maximum time (s) the agent waits before terminating the turn.
     Defaults to ``3.0``."""
+    alpha: float
+    """Exponential moving average coefficient for dynamic endpointing.
+    The higher the value, the more weight is given to the history.
+    Defaults to ``0.9``. Only applies when mode is ``dynamic``."""
 
 
 _ENDPOINTING_DEFAULTS: EndpointingOptions = {
     "mode": "fixed",
     "min_delay": 0.5,
     "max_delay": 3.0,
+    "alpha": 0.9,
 }
 
 
@@ -100,6 +105,12 @@ class InterruptionOptions(TypedDict, total=False):
     false_interruption_timeout: float | None
     """Seconds of silence after an interruption before it is
     classified as false. ``None`` disables. Defaults to ``2.0``."""
+    backchannel_boundary: float | tuple[float, float] | None
+    """Seconds to suppress adaptive interruption handling when the agent
+    starts or stops speaking each turn to allow for easier turn correction.
+    Use tuple to apply different values for start and end separately.
+    ``None`` disables. Defaults to ``(1.0, 3.5)``. End value should be higher
+    to account for STT transcript timestamp inaccuracy."""
 
 
 _INTERRUPTION_DEFAULTS: InterruptionOptions = {
@@ -109,6 +120,40 @@ _INTERRUPTION_DEFAULTS: InterruptionOptions = {
     "min_words": 0,
     "resume_false_interruption": True,
     "false_interruption_timeout": 2.0,
+    "backchannel_boundary": (
+        1.0,
+        3.5,  # higher value for the end as STT timestamps aren't very reliable
+    ),
+}
+
+
+class PreemptiveGenerationOptions(TypedDict, total=False):
+    """Configuration for preemptive generation."""
+
+    enabled: bool
+    """Whether preemptive generation is enabled. Defaults to ``True``."""
+
+    preemptive_tts: bool
+    """Whether to also run TTS preemptively before the turn is confirmed.
+    When ``False`` (default), only LLM runs preemptively; TTS starts once the
+    turn is confirmed and the speech is scheduled."""
+
+    max_speech_duration: float
+    """Maximum user speech duration (s) for which preemptive generation
+    is attempted. Beyond this threshold, preemptive generation is skipped
+    since long utterances are more likely to change and users may expect
+    slower responses. Defaults to ``10.0``."""
+
+    max_retries: int
+    """Maximum number of preemptive generation attempts per user turn.
+    The counter resets when the turn completes. Defaults to ``3``."""
+
+
+_PREEMPTIVE_GENERATION_DEFAULTS: PreemptiveGenerationOptions = {
+    "enabled": True,
+    "preemptive_tts": False,
+    "max_speech_duration": 10.0,
+    "max_retries": 3,
 }
 
 
@@ -121,6 +166,7 @@ class TurnHandlingOptions(TypedDict, total=False):
             turn_handling={
                 "endpointing": {"min_delay": 0.3},
                 "interruption": {"enabled": False},
+                "preemptive_generation": {"preemptive_tts": True},
             },
         )
 
@@ -134,6 +180,17 @@ class TurnHandlingOptions(TypedDict, total=False):
     """Endpointing configuration. Defaults to ``{"min_delay": 0.5, "max_delay": 3.0}``."""
     interruption: InterruptionOptions
     """Interruption handling configuration. Use ``{"enabled": False}`` to disable."""
+    preemptive_generation: PreemptiveGenerationOptions
+    """Preemptive generation configuration. Use ``{"enabled": False}`` to disable."""
+
+
+def _resolve_preemptive_generation(
+    config: PreemptiveGenerationOptions | None = None,
+) -> PreemptiveGenerationOptions:
+    """Fill in defaults for missing keys."""
+    if config is None:
+        return PreemptiveGenerationOptions(**_PREEMPTIVE_GENERATION_DEFAULTS)
+    return PreemptiveGenerationOptions(**{**_PREEMPTIVE_GENERATION_DEFAULTS, **config})
 
 
 def _resolve_endpointing(config: EndpointingOptions | None = None) -> EndpointingOptions:
@@ -163,6 +220,7 @@ def _migrate_turn_handling(
     allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
     resume_false_interruption: NotGivenOr[bool] = NOT_GIVEN,
     agent_false_interruption_timeout: NotGivenOr[float | None] = NOT_GIVEN,
+    preemptive_generation: NotGivenOr[bool] = NOT_GIVEN,
 ) -> TurnHandlingOptions:
     """Build a TurnHandlingOptions from deprecated keyword arguments."""
     if is_given(agent_false_interruption_timeout):
@@ -198,5 +256,8 @@ def _migrate_turn_handling(
 
     if is_given(turn_detection):
         result["turn_detection"] = turn_detection
+
+    if is_given(preemptive_generation):
+        result["preemptive_generation"] = {"enabled": preemptive_generation}
 
     return result

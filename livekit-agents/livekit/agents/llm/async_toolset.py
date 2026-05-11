@@ -6,11 +6,13 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, get_origin, get_type_hints
 
 from .. import utils
+from ..job import JobContext, get_job_context
 from ..llm.chat_context import ChatItem, FunctionCall
 from ..llm.tool_context import (
     FunctionTool,
     RawFunctionTool,
     Tool,
+    ToolError,
     Toolset,
     function_tool,
 )
@@ -22,6 +24,31 @@ from ..voice.generation import ToolExecutionOutput, make_tool_output
 
 if TYPE_CHECKING:
     from ..voice.agent_session import AgentSession
+
+# Module-level registry of running async tasks, keyed by (JobContext | None, call_id).
+# Registered when a task starts in _wrap_tool, auto-removed via done callback.
+_RunningTasks: dict[tuple[JobContext | None, str], _RunningTask] = {}
+
+
+@function_tool
+async def get_running_tasks() -> list[dict]:
+    """Get the list of running async tool calls across all async toolsets."""
+    job_ctx = get_job_context(required=False)
+    return [
+        task.ctx.function_call.model_dump()
+        for (ctx, _), task in list(_RunningTasks.items())
+        if ctx is job_ctx
+    ]
+
+
+@function_tool
+async def cancel_task(call_id: str) -> str:
+    """Cancel a running async tool call by call_id."""
+    job_ctx = get_job_context(required=False)
+    task = _RunningTasks.get((job_ctx, call_id))
+    if task and await task.ctx._toolset.cancel(call_id):
+        return f"Task {call_id} cancelled successfully."
+    return f"Task {call_id} not found or already completed."
 
 
 UPDATE_TEMPLATE = """The tool `{function_name}` has updated, message: {message}
@@ -80,7 +107,7 @@ class AsyncRunContext(RunContext[Userdata_T]):
         self._step_idx += 1
 
         tool_output = self._make_tool_output(
-            message, call_id=f"{self.function_call.call_id}/update_{self._step_idx}"
+            message, call_id=f"{self.function_call.call_id}_update_{self._step_idx}"
         )
         if tool_output.fnc_call_out is None:
             return
@@ -158,6 +185,7 @@ class AsyncToolset(Toolset):
             self._wrap_tool(t) if isinstance(t, FunctionTool | RawFunctionTool) else t
             for t in self._tools
         ]
+        self._tools.extend([get_running_tasks, cancel_task])
 
         self._running_tasks: dict[str, _RunningTask] = {}
 
@@ -165,23 +193,13 @@ class AsyncToolset(Toolset):
         self._pending_updates: list[_PendingUpdate] = []
         self._reply_task: asyncio.Task[None] | None = None
 
-    @function_tool
-    async def get_running_tasks(self) -> list[dict]:
-        """Get the list of running async tool calls."""
-        return [task.ctx.function_call.model_dump() for task in self._running_tasks.values()]
-
-    @function_tool
-    async def cancel_task(self, call_id: str) -> str:
-        """Cancel a running async tool call by call_id."""
-        success = await self.cancel(call_id)
-        if success:
-            return f"Task {call_id} cancelled successfully."
-        else:
-            return f"Task {call_id} not found or already completed."
-
     async def cancel(self, call_id: str) -> bool:
         task = self._running_tasks.get(call_id)
         if task is not None:
+            if not task.ctx.speech_handle.allow_interruptions:
+                raise ToolError(
+                    f"Tool call {call_id} is not cancellable because interruptions are disallowed"
+                )
             await utils.aio.cancel_and_wait(task.exe_task)
             return True
         return False
@@ -263,7 +281,7 @@ class AsyncToolset(Toolset):
                 if output is None:
                     return
 
-                tool_output = async_ctx._make_tool_output(output, call_id=f"{call_id}/finished")
+                tool_output = async_ctx._make_tool_output(output, call_id=f"{call_id}_finished")
                 if tool_output.fnc_call_out is None:
                     return
 
@@ -274,8 +292,18 @@ class AsyncToolset(Toolset):
             exe_task = asyncio.create_task(_execute_tool(), name=f"async_tool_{fnc_name}")
             _pass_through_activity_task_info(exe_task)
 
-            self._running_tasks[call_id] = _RunningTask(ctx=async_ctx, exe_task=exe_task)
-            exe_task.add_done_callback(lambda _: self._running_tasks.pop(call_id, None))
+            running_task = _RunningTask(ctx=async_ctx, exe_task=exe_task)
+            self._running_tasks[call_id] = running_task
+
+            # register in the module-level registry
+            task_key = (get_job_context(required=False), call_id)
+            _RunningTasks[task_key] = running_task
+
+            def _on_done(_: asyncio.Task[Any]) -> None:
+                self._running_tasks.pop(call_id, None)
+                _RunningTasks.pop(task_key, None)
+
+            exe_task.add_done_callback(_on_done)
 
             return await async_ctx._pending_fut
 
@@ -342,7 +370,14 @@ class AsyncToolset(Toolset):
             return None
 
         if self._on_duplicate_call == "replace":
-            await asyncio.gather(*[self.cancel(fnc_call.call_id) for fnc_call in running_fnc_calls])
+            results = await asyncio.gather(
+                *[self.cancel(fnc_call.call_id) for fnc_call in running_fnc_calls],
+                return_exceptions=True,
+            )
+            exceptions = [result for result in results if isinstance(result, Exception)]
+            if exceptions:
+                error_messages = "\n".join([str(e) for e in exceptions])
+                raise ToolError(f"Failed to cancel duplicate tool calls: {error_messages}")
             return None
 
         if self._on_duplicate_call == "reject":

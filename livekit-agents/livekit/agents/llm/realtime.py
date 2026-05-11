@@ -12,7 +12,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from livekit import rtc
 
+from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
+from ..utils import is_given
 from .chat_context import ChatContext, ChatItem, FunctionCall
 from .tool_context import Tool, ToolChoice, ToolContext
 
@@ -57,12 +59,31 @@ class RealtimeModelError(BaseModel):
 @dataclass
 class RealtimeCapabilities:
     message_truncation: bool
+    """Whether generated assistant messages can be truncated after interruption"""
     turn_detection: bool
+    """Whether the model emits server-side speech start and stop events for turn taking"""
     user_transcription: bool
+    """Whether the model emits user audio transcription events"""
     auto_tool_reply_generation: bool
+    """Whether the model automatically generates a reply after receiving tool results"""
     audio_output: bool
+    """Whether the model can produce audio output directly"""
     manual_function_calls: bool
-    per_response_tool_choice: bool
+    """Whether function call items already in the chat context can be resumed"""
+    mutable_chat_context: bool = False
+    """Whether the chat context can be updated mid-session"""
+    mutable_instructions: bool = False
+    """Whether the instructions can be updated mid-session"""
+    mutable_tools: bool = False
+    """Whether the tools can be updated mid-session"""
+    per_response_tool_choice: bool = False
+    """Whether the tool and tool choice can be specified per response"""
+    supports_say: bool = False
+    """Whether session.say() can use the realtime session directly, without TTS.
+
+    When used through a RealtimeModel, add_to_chat_ctx=False is ignored and the
+    message is still added to the chat context.
+    """
 
 
 class RealtimeError(Exception):
@@ -208,6 +229,7 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
         *,
         instructions: NotGivenOr[str] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
     ) -> asyncio.Future[GenerationCreatedEvent]: ...  # can raise RealtimeError on Timeout
 
     # commit the input audio buffer to the server
@@ -236,6 +258,39 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
     @abstractmethod
     async def aclose(self) -> None: ...
 
+    async def _update_session(
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
+        tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
+    ) -> None:
+        if is_given(instructions):
+            try:
+                await self.update_instructions(instructions)
+            except RealtimeError:
+                logger.exception("failed to update the instructions")
+
+        if is_given(chat_ctx):
+            try:
+                await self.update_chat_ctx(chat_ctx)
+            except RealtimeError:
+                logger.exception("failed to update the chat_ctx")
+
+        if is_given(tools):
+            try:
+                await self.update_tools(tools)
+            except RealtimeError:
+                logger.exception("failed to update the tools")
+
     def start_user_activity(self) -> None:
         """notifies the model that user activity has started"""
         pass
+
+    def say(
+        self,
+        text: str | AsyncIterable[str],
+    ) -> asyncio.Future[GenerationCreatedEvent]:
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement say(). use a TTS model instead"
+        )

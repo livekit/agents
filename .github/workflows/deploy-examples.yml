@@ -1,0 +1,78 @@
+name: Deploy Examples
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch or ref to deploy from (default: main)"
+        type: string
+        required: false
+        default: "main"
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy ${{ matrix.example }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        example: [healthcare, survey, frontdesk, drive-thru]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ inputs.ref || 'main' }}
+
+      - name: Install LiveKit CLI
+        run: |
+          curl -sSL https://get.livekit.io/cli | bash
+          lk --version
+
+      - name: Add LiveKit Cloud project
+        env:
+          LIVEKIT_URL: ${{ secrets.LIVEKIT_EXAMPLES_URL }}
+          LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_EXAMPLES_API_KEY }}
+          LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_EXAMPLES_API_SECRET }}
+        run: |
+          lk project add examples \
+            --url "$LIVEKIT_URL" \
+            --api-key "$LIVEKIT_API_KEY" \
+            --api-secret "$LIVEKIT_API_SECRET" \
+            --default
+
+      - name: Build secrets file
+        working-directory: examples/${{ matrix.example }}
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          : > .env.deploy
+          case "${{ matrix.example }}" in
+            healthcare)
+              keys="OPENAI_API_KEY"
+              ;;
+            *)
+              keys=""
+              ;;
+          esac
+          for k in $keys; do
+            val="${!k}"
+            if [ -n "$val" ]; then
+              echo "${k}=${val}" >> .env.deploy
+            fi
+          done
+
+      - name: Deploy ${{ matrix.example }}
+        working-directory: examples/${{ matrix.example }}
+        run: |
+          args=()
+          if [ -s .env.deploy ]; then
+            args+=(--secrets-file .env.deploy)
+          fi
+          lk agent deploy "${args[@]}" .

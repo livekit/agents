@@ -76,6 +76,35 @@ class Instructions(str):
         """
         return self._text_variant if self._text_variant is not None else self._audio_variant
 
+    def format(self, *args: object, **kwargs: object) -> Instructions:
+        """Format the instructions with the given keyword arguments."""
+
+        any_instructions = any(isinstance(arg, Instructions) for arg in args) or any(
+            isinstance(v, Instructions) for v in kwargs.values()
+        )
+        if any_instructions:
+            audio_args = tuple(arg.audio if isinstance(arg, Instructions) else arg for arg in args)
+            text_args = tuple(arg.text if isinstance(arg, Instructions) else arg for arg in args)
+            audio_kwargs = {
+                k: v.audio if isinstance(v, Instructions) else v for k, v in kwargs.items()
+            }
+            text_kwargs = {
+                k: v.text if isinstance(v, Instructions) else v for k, v in kwargs.items()
+            }
+        else:
+            audio_args = text_args = args
+            audio_kwargs = text_kwargs = kwargs
+
+        return Instructions(
+            audio=self.audio.format(*audio_args, **audio_kwargs),
+            text=(
+                self.text.format(*text_args, **text_kwargs)
+                if any_instructions or self._text_variant is not None
+                else None
+            ),
+            _represent=str(self).format(*args, **kwargs),
+        )
+
     def as_modality(self, modality: Literal["audio", "text"]) -> Instructions:
         """Return a copy whose ``str`` value is the correct variant for *modality*.
 
@@ -258,6 +287,16 @@ class MetricsReport(TypedDict, total=False):
 
     tts_node_ttfb: float
     """Time taken for the `tts_node` to return the first chunk of audio (after the first text token has been sent)
+
+    Assistant `ChatMessage` only
+    """
+
+    playback_latency: float
+    """Delay between forwarding the first audio frame and the `AudioOutput` reporting
+    playback started. Near-zero for the default room output (self-reported when the frame
+    is pushed to the track, so it doesn't account for network delivery to the client);
+    meaningful when a remote avatar worker is in the chain and reports playback via
+    the `lk.playback_started` RPC.
 
     Assistant `ChatMessage` only
     """
@@ -634,8 +673,8 @@ class ChatContext:
 
     @overload
     def to_provider_format(
-        self, format: Literal["mistralai"], *, inject_dummy_user_message: bool = True
-    ) -> tuple[list[dict], Literal[None]]: ...
+        self, format: Literal["mistralai"]
+    ) -> tuple[list[dict], _provider_format.mistralai.MistralFormatData]: ...
 
     @overload
     def to_provider_format(self, format: str, **kwargs: Any) -> tuple[list[dict], Any]: ...
@@ -669,7 +708,7 @@ class ChatContext:
         elif format == "anthropic":
             return _provider_format.anthropic.to_chat_ctx(self, **kwargs)
         elif format == "mistralai":
-            return _provider_format.mistralai.to_chat_ctx(self, **kwargs)
+            return _provider_format.mistralai.to_conversations_ctx(self)
         else:
             raise ValueError(f"Unsupported provider format: {format}")
 
