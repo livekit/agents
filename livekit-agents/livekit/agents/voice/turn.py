@@ -60,12 +60,17 @@ class EndpointingOptions(TypedDict, total=False):
     max_delay: float
     """Maximum time (s) the agent waits before terminating the turn.
     Defaults to ``3.0``."""
+    alpha: float
+    """Exponential moving average coefficient for dynamic endpointing.
+    The higher the value, the more weight is given to the history.
+    Defaults to ``0.9``. Only applies when mode is ``dynamic``."""
 
 
 _ENDPOINTING_DEFAULTS: EndpointingOptions = {
     "mode": "fixed",
     "min_delay": 0.5,
     "max_delay": 3.0,
+    "alpha": 0.9,
 }
 
 
@@ -100,6 +105,12 @@ class InterruptionOptions(TypedDict, total=False):
     false_interruption_timeout: float | None
     """Seconds of silence after an interruption before it is
     classified as false. ``None`` disables. Defaults to ``2.0``."""
+    backchannel_boundary: float | tuple[float, float] | None
+    """Seconds to suppress adaptive interruption handling when the agent
+    starts or stops speaking each turn to allow for easier turn correction.
+    Use tuple to apply different values for start and end separately.
+    ``None`` disables. Defaults to ``(1.0, 3.5)``. End value should be higher
+    to account for STT transcript timestamp inaccuracy."""
 
 
 _INTERRUPTION_DEFAULTS: InterruptionOptions = {
@@ -109,6 +120,10 @@ _INTERRUPTION_DEFAULTS: InterruptionOptions = {
     "min_words": 0,
     "resume_false_interruption": True,
     "false_interruption_timeout": 2.0,
+    "backchannel_boundary": (
+        1.0,
+        3.5,  # higher value for the end as STT timestamps aren't very reliable
+    ),
 }
 
 

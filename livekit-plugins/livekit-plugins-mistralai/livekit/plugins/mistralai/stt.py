@@ -124,10 +124,18 @@ class STT(stt.STT):
 
     async def _connect_ws(self, timeout: float) -> RealtimeConnection:
         rt = RealtimeTranscription(self._client.sdk_configuration)
+        http_headers = None
+        cfg = self._client.sdk_configuration
+        client_headers = getattr(cfg.async_client, "headers", None) or getattr(
+            cfg.client, "headers", None
+        )
+        if client_headers:
+            http_headers = dict(client_headers)
         return await asyncio.wait_for(
             rt.connect(
                 model=self._opts.model,
                 target_streaming_delay_ms=self._opts.target_streaming_delay_ms,
+                http_headers=http_headers,
             ),
             timeout=timeout,
         )

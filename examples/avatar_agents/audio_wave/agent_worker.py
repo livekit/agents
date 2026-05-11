@@ -6,7 +6,15 @@ import httpx
 from dotenv import load_dotenv
 
 from livekit import api, rtc
-from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli, inference
+from livekit.agents import (
+    Agent,
+    AgentServer,
+    AgentSession,
+    ConversationItemAddedEvent,
+    JobContext,
+    cli,
+    inference,
+)
 from livekit.agents.voice.avatar import DataStreamAudioOutput
 from livekit.agents.voice.io import PlaybackFinishedEvent, PlaybackStartedEvent
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
@@ -102,6 +110,14 @@ async def entrypoint(ctx: JobContext):
             "playback_started",
             extra={"created_at": ev.created_at},
         )
+
+    @session.on("conversation_item_added")
+    def on_conversation_item_added(ev: ConversationItemAddedEvent) -> None:
+        if ev.item.type == "message" and ev.item.role == "assistant":
+            logger.info(
+                "agent response metrics",
+                extra={"metrics": ev.item.metrics},
+            )
 
     await session.generate_reply(instructions="say hello to the user")
 

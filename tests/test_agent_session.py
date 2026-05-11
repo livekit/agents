@@ -1,22 +1,30 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
 
 from livekit.agents import (
     Agent,
+    AgentFalseInterruptionEvent,
     AgentStateChangedEvent,
     ConversationItemAddedEvent,
+    LanguageCode,
     MetricsCollectedEvent,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
     function_tool,
+    inference,
 )
 from livekit.agents.llm import (
     FunctionToolCall,
 )
 from livekit.agents.llm.chat_context import ChatContext, ChatMessage
+from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
+from livekit.agents.utils import aio
+from livekit.agents.voice.audio_recognition import AudioRecognition, _EndOfTurnInfo
+from livekit.agents.voice.endpointing import BaseEndpointing
 from livekit.agents.voice.events import FunctionToolsExecutedEvent
 from livekit.agents.voice.io import PlaybackFinishedEvent
 
@@ -666,6 +674,122 @@ async def test_aec_warmup() -> None:
     check_timestamp(speaking_to_listening.created_at - t_origin, 5.5, speed_factor=speed)
 
 
+async def test_start_boundary_does_not_block_vad_interruption() -> None:
+    """backchannel boundary should not interfere with VAD-based interruption when adaptive
+    detection is not active. The cooldown timer runs but has no effect on the VAD path.
+
+    This validates that the backchannel_boundary config is properly handled and doesn't
+    regress normal interruption behavior.
+    """
+    speed = 5.0
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Tell me a story.")
+    actions.add_llm("Here is a long story for you ... the end.")
+    actions.add_tts(15.0)  # playout starts at ~3.5s
+    # user speaks at 4.0-5.0s — within the 1s warmup window (3.5 + 1.0 = 4.5s expiry)
+    # VAD interruption at 4.0 + 0.5 = 4.5s (warmup does NOT block VAD)
+    actions.add_user_speech(4.0, 5.0, "Stop!", stt_delay=0.2)
+
+    session = create_session(
+        actions,
+        speed_factor=speed,
+        extra_kwargs={"aec_warmup_duration": None},
+    )
+    agent = MyAgent()
+
+    agent_state_events: list[AgentStateChangedEvent] = []
+    playback_finished_events: list[PlaybackFinishedEvent] = []
+    session.on("agent_state_changed", agent_state_events.append)
+    session.output.audio.on("playback_finished", playback_finished_events.append)
+
+    t_origin = await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    assert len(playback_finished_events) == 1
+    assert playback_finished_events[0].interrupted is True
+
+    assert agent_state_events[0].new_state == "listening"
+    assert agent_state_events[1].new_state == "thinking"
+    assert agent_state_events[2].new_state == "speaking"
+    # VAD interruption fires normally at ~4.5s (warmup doesn't block VAD path)
+    speaking_to_listening = next(e for e in agent_state_events[3:] if e.new_state == "listening")
+    check_timestamp(speaking_to_listening.created_at - t_origin, 4.5, speed_factor=speed)
+
+
+async def test_backchannel_boundary_suppresses_start_boundary_interruption() -> None:
+    actions = FakeActions()
+    session = create_session(
+        actions,
+        turn_handling={"interruption": {"backchannel_boundary": (0.05, 0.0)}},
+    )
+    hooks = _TestRecognitionHooks()
+    recognition = AudioRecognition(
+        session,
+        hooks=hooks,
+        endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
+        stt=None,
+        vad=None,
+        interruption_detection=None,
+        turn_detection="vad",
+    )
+
+    try:
+        recognition.on_start_of_agent_speech(started_at=time.time())
+        await recognition._on_overlap_speech_event(_interruption_event())
+
+        assert hooks.interruptions == []
+
+        await asyncio.sleep(0.06)
+        await recognition._on_overlap_speech_event(_interruption_event())
+
+        assert len(hooks.interruptions) == 1
+    finally:
+        await _close_test_session(session)
+
+
+async def test_backchannel_boundary_releases_end_boundary_transcript() -> None:
+    actions = FakeActions()
+    session = create_session(
+        actions,
+        turn_handling={"interruption": {"backchannel_boundary": (0.0, 0.5)}},
+    )
+    recognition = AudioRecognition(
+        session,
+        hooks=_TestRecognitionHooks(),
+        endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
+        stt=None,
+        vad=None,
+        interruption_detection=None,
+        turn_detection="vad",
+    )
+    recognition._interruption_enabled = True
+    recognition._interruption_ch = aio.Chan[inference.InterruptionDataFrameType]()
+    input_started_at = time.time() - 10.0
+    recognition._input_started_at = input_started_at
+
+    try:
+        recognition.on_start_of_agent_speech(started_at=time.time())
+        speech_ended_at = time.time()
+        recognition.on_end_of_agent_speech(ignore_user_transcript_until=speech_ended_at)
+
+        assert not recognition._should_hold_stt_event(
+            _final_transcript_event(
+                text="near the boundary",
+                start_time=speech_ended_at - input_started_at - 0.25,
+                end_time=speech_ended_at - input_started_at,
+            )
+        )
+        assert recognition._should_hold_stt_event(
+            _final_transcript_event(
+                text="before the boundary",
+                start_time=speech_ended_at - input_started_at - 0.75,
+                end_time=speech_ended_at - input_started_at - 0.5,
+            )
+        )
+    finally:
+        recognition._interruption_ch.close()
+        await _close_test_session(session)
+
+
 @pytest.mark.parametrize(
     "preemptive_generation, expected_latency",
     [
@@ -829,17 +953,156 @@ async def test_unknown_function_call() -> None:
 # helpers
 
 
+class _TestRecognitionHooks:
+    def __init__(self) -> None:
+        self.interruptions: list[inference.OverlappingSpeechEvent] = []
+
+    def on_interruption(self, ev: inference.OverlappingSpeechEvent) -> None:
+        self.interruptions.append(ev)
+
+    def on_start_of_speech(self, ev: object, speech_start_time: float) -> None:
+        pass
+
+    def on_vad_inference_done(self, ev: object) -> None:
+        pass
+
+    def on_end_of_speech(self, ev: object) -> None:
+        pass
+
+    def on_interim_transcript(self, ev: SpeechEvent, *, speaking: bool | None) -> None:
+        pass
+
+    def on_final_transcript(self, ev: SpeechEvent, *, speaking: bool | None = None) -> None:
+        pass
+
+    def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool:
+        return True
+
+    def on_preemptive_generation(self, info: object) -> None:
+        pass
+
+    def retrieve_chat_ctx(self) -> ChatContext:
+        return ChatContext.empty()
+
+
+def _interruption_event() -> inference.OverlappingSpeechEvent:
+    return inference.OverlappingSpeechEvent(
+        type="overlapping_speech",
+        is_interruption=True,
+        overlap_started_at=time.time(),
+        detected_at=time.time(),
+    )
+
+
+def _final_transcript_event(*, text: str, start_time: float, end_time: float) -> SpeechEvent:
+    return SpeechEvent(
+        type=SpeechEventType.FINAL_TRANSCRIPT,
+        alternatives=[
+            SpeechData(
+                text=text,
+                language=LanguageCode(""),
+                start_time=start_time,
+                end_time=end_time,
+            )
+        ],
+    )
+
+
+async def _close_test_session(session: object) -> None:
+    await session.aclose()
+    audio_output = session.output.audio
+    synchronizer = getattr(audio_output, "_synchronizer", None)
+    if synchronizer is not None:
+        await synchronizer.aclose()
+
+
 def check_timestamp(
-    t_event: float, t_target: float, *, speed_factor: float = 1.0, max_abs_diff: float = 0.75
+    t_event: float,
+    t_target: float,
+    *,
+    speed_factor: float = 1.0,
+    max_abs_diff: float = 0.75,
+    min_real_time_diff: float = 0.3,
 ) -> None:
     """
     Check if the event timestamp is within the target timestamp +/- max_abs_diff.
     The event timestamp is scaled by the speed factor.
+
+    ``max_abs_diff`` is expressed in scaled time. A real-time floor of
+    ``min_real_time_diff`` (wallclock seconds) is also applied so high
+    ``speed_factor`` values don't compress the effective tolerance below the
+    scheduling-jitter noise floor on CI runners — without this, the real-time
+    tolerance is ``max_abs_diff / speed_factor``, which at speed=5 is only
+    150 ms and routinely flakes.
     """
-    t_event = t_event * speed_factor
+    t_event_scaled = t_event * speed_factor
+    effective_diff = max(max_abs_diff, min_real_time_diff * speed_factor)
     print(
-        f"check_timestamp: t_event: {t_event}, t_target: {t_target}, max_abs_diff: {max_abs_diff}"
+        f"check_timestamp: t_event={t_event_scaled} (real {t_event:.3f}s), "
+        f"t_target={t_target}, effective_diff={effective_diff} "
+        f"(max_abs_diff={max_abs_diff}, min_real_time_diff={min_real_time_diff})"
     )
-    assert abs(t_event - t_target) <= max_abs_diff, (
-        f"event timestamp {t_event} is not within {max_abs_diff} of target {t_target}"
+    assert abs(t_event_scaled - t_target) <= effective_diff, (
+        f"event timestamp {t_event_scaled} is not within {effective_diff} of target {t_target} "
+        f"(real-time tolerance {effective_diff / speed_factor:.3f}s)"
     )
+
+
+async def test_silent_tool_call_pause_state_does_not_leak_into_tool_reply() -> None:
+    speed = 5.0
+    actions = FakeActions()
+    actions.add_user_speech(0.1, 0.2, "What's the weather in Tokyo?", stt_delay=0.05)
+
+    # Silent tool-call step: no spoken preamble/audio before the function call.
+    actions.add_llm(
+        content="",
+        tool_calls=[
+            FunctionToolCall(
+                name="get_weather",
+                arguments='{"location": "Tokyo"}',
+                call_id="1",
+            )
+        ],
+        ttft=0.05,
+        duration=1.0,
+    )
+
+    # VAD-only speech starts during the silent tool-call generation and remains
+    # active after the tool reply starts.
+    actions.add_user_speech(0.85, 2.0, "", stt_delay=0.05)
+
+    actions.add_llm(
+        content="The weather in Tokyo is sunny today.",
+        input="The weather in Tokyo is sunny today.",
+        ttft=0.0,
+        duration=0.0,
+    )
+    actions.add_tts(0.5, ttfb=0.0, duration=0.0)
+
+    session = create_session(
+        actions,
+        speed_factor=speed,
+        can_pause_audio=True,
+        turn_handling={"interruption": {"false_interruption_timeout": 0.2 / speed}},
+    )
+    agent = MyAgent()
+
+    agent_state_events: list[AgentStateChangedEvent] = []
+    false_interruption_events: list[AgentFalseInterruptionEvent] = []
+
+    session.on("agent_state_changed", agent_state_events.append)
+    session.on("agent_false_interruption", false_interruption_events.append)
+
+    await asyncio.wait_for(
+        run_session(session, agent, drain_delay=0.8 / speed),
+        timeout=SESSION_TIMEOUT,
+    )
+
+    transitions = [(ev.old_state, ev.new_state) for ev in agent_state_events]
+    silent_step_finished = transitions.index(("speaking", "listening"))
+
+    # Before the fix this is ("listening", "thinking") because the pause state
+    # captured during the silent tool-call step leaks into the tool reply.
+    assert transitions[silent_step_finished + 1] == ("listening", "speaking")
+    assert false_interruption_events
+    assert false_interruption_events[-1].resumed is True

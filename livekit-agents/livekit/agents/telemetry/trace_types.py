@@ -3,6 +3,12 @@ ATTR_AGENT_LABEL = "lk.agent_label"
 ATTR_START_TIME = "lk.start_time"
 ATTR_END_TIME = "lk.end_time"
 ATTR_RETRY_COUNT = "lk.retry_count"
+ATTR_PROVIDER_REQUEST_IDS = "lk.provider_request_ids"
+"""Provider-known correlation ids associated with this span (list[str]).
+
+Populated by STT/TTS plugins when the id is either sent to the provider
+(e.g. WS context_id) or returned by it (e.g. response request_id / session_id),
+so it can be cross-referenced with the provider's logs for debugging."""
 
 
 ATTR_PARTICIPANT_ID = "lk.participant_id"

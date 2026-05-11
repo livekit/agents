@@ -89,6 +89,7 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
 - `LIVEKIT_URL`: WebSocket URL of LiveKit server
 - `LIVEKIT_API_KEY`: API key for authentication
 - `LIVEKIT_API_SECRET`: API secret for authentication
+- `LIVEKIT_AGENT_NAME`: Agent name for explicit dispatch (optional)
 - Provider-specific keys: `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`, `ANTHROPIC_API_KEY`, etc.
 
 ## Code Style

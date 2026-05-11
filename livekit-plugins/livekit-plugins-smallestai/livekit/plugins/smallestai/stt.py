@@ -280,9 +280,10 @@ class STT(stt.STT):
 
 
 class SpeechStream(stt.SpeechStream):
-    # Tells the server to flush remaining audio and close the session gracefully.
-    # After sending this, the server will respond with a final message (is_last=True).
-    _FINALIZE_MSG: str = json.dumps({"type": "finalize"})
+    # Signals end of stream: server flushes remaining audio, emits final transcripts,
+    # and responds with is_last=True before closing the session.
+    # Use {"type": "finalize"} mid-session to force is_final without closing.
+    _CLOSE_STREAM_MSG: str = json.dumps({"type": "close_stream"})
 
     def __init__(
         self,
@@ -353,9 +354,10 @@ class SpeechStream(stt.SpeechStream):
                         await ws.send_bytes(frame.data.tobytes())
                     self._audio_duration_collector.flush()
 
-            # Input channel closed: tell the server we are done and let it flush.
+            # Input channel closed: close the stream so the server flushes remaining
+            # audio, emits final transcripts, and sends is_last=True.
             closing_ws = True
-            await ws.send_str(SpeechStream._FINALIZE_MSG)
+            await ws.send_str(SpeechStream._CLOSE_STREAM_MSG)
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -480,7 +482,7 @@ class SpeechStream(stt.SpeechStream):
         #   "session_id":   str,
         #   "transcript":   str,        # partial or final text for this utterance
         #   "is_final":     bool,       # True when the utterance is complete
-        #   "is_last":      bool,       # True when the session itself is done (after finalize)
+        #   "is_last":      bool,       # True when the session itself is done (after close_stream)
         #   "language":     str,        # present when is_final=True (detected or echoed)
         #   "words":        [           # present when word_timestamps=True
         #     {"word": str, "start": float, "end": float,

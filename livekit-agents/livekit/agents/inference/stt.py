@@ -147,7 +147,7 @@ STTLanguages = Literal["multi", "en", "de", "es", "fr", "ja", "pt", "zh", "hi"]
 
 
 class FallbackModel(TypedDict, total=False):
-    """A fallback model with optional extra configuration.
+    """Inference Fallback Adapter: configuration for a fallback STT model that runs server-side in LiveKit Inference, providing automatic fallback between providers.
 
     Extra fields are passed through to the provider.
 
@@ -662,10 +662,6 @@ class SpeechStream(stt.SpeechStream):
                         status_code=data.get("code", -1),
                         body=data,
                     )
-                else:
-                    logger.warning(
-                        "received unexpected message from LiveKit Inference STT: %s", data
-                    )
 
         ws: aiohttp.ClientWebSocketResponse | None = None
         try:
@@ -740,6 +736,10 @@ class SpeechStream(stt.SpeechStream):
     def _build_speech_data(self, data: dict) -> stt.SpeechData:
         language = LanguageCode(data.get("language", self._opts.language or "en"))
         words = data.get("words", []) or []
+        # The gateway carries provider-specific data on the `extra` field
+        # of the transcript message. We surface it on SpeechData.metadata
+        extra = data.get("extra")
+        metadata = extra if isinstance(extra, dict) and extra else None
         return stt.SpeechData(
             language=language,
             start_time=self.start_time_offset + data.get("start", 0),
@@ -758,6 +758,7 @@ class SpeechStream(stt.SpeechStream):
                 )
                 for word in words
             ],
+            metadata=metadata,
         )
 
     def _process_preflight_transcript(self, data: dict) -> None:

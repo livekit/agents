@@ -7,6 +7,7 @@ import json
 import time
 from collections.abc import AsyncIterable, Coroutine, Sequence
 from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from opentelemetry import context as otel_context, trace
@@ -334,6 +335,7 @@ class AgentActivity(RecognitionHooks):
             mode=agent_endpointing.get("mode", session_endpointing["mode"]),
             min_delay=agent_endpointing.get("min_delay", session_endpointing["min_delay"]),
             max_delay=agent_endpointing.get("max_delay", session_endpointing["max_delay"]),
+            alpha=agent_endpointing.get("alpha", session_endpointing["alpha"]),
         )
 
     @property
@@ -387,6 +389,7 @@ class AgentActivity(RecognitionHooks):
             agent_id=self._agent.id,
         )
         self._agent._chat_ctx.insert(config_update)
+        self._session._chat_ctx.insert(config_update)
 
         if self._rt_session is not None:
             await self._rt_session.update_instructions(instructions)
@@ -405,15 +408,16 @@ class AgentActivity(RecognitionHooks):
         tools = list({tool.id: tool for tool in tools}.values())
         self._agent._tools = tools
 
-        # Record the configuration change
-        config_update = llm.AgentConfigUpdate(
-            tools_added=tools_added,
-            tools_removed=tools_removed,
-            agent_id=self._agent.id,
-        )
-        # Store full tool definitions in-memory (not serialized)
-        config_update._tools = llm.ToolContext(tools).flatten()
-        self._agent._chat_ctx.insert(config_update)
+        # Record the configuration change (skip if no visible diff)
+        if tools_added or tools_removed:
+            config_update = llm.AgentConfigUpdate(
+                tools_added=tools_added,
+                tools_removed=tools_removed,
+                agent_id=self._agent.id,
+            )
+            config_update._tools = llm.ToolContext(tools).flatten()
+            self._agent._chat_ctx.insert(config_update)
+            self._session._chat_ctx.insert(config_update)
 
         if self._rt_session is not None:
             await self._rt_session.update_tools(llm.ToolContext(self.tools).flatten())
@@ -458,6 +462,7 @@ class AgentActivity(RecognitionHooks):
                 max_delay=max_endpointing_delay
                 if is_given(max_endpointing_delay)
                 else self.endpointing_opts["max_delay"],
+                alpha=self.endpointing_opts["alpha"],
             )
 
         if utils.is_given(tool_choice):
@@ -763,14 +768,17 @@ class AgentActivity(RecognitionHooks):
             except ValueError:
                 logger.exception("failed to update the instructions")
 
-        # Record initial agent configuration
-        initial_config = llm.AgentConfigUpdate(
-            instructions=self._agent.instructions,
-            tools_added=get_fnc_tool_names(self.tools) or None,
-            agent_id=self._agent.id,
-        )
-        initial_config._tools = llm.ToolContext(self.tools).flatten()
-        self._agent._chat_ctx.insert(initial_config)
+        # Record initial agent configuration (skip if empty)
+        initial_tools = get_fnc_tool_names(self.tools) or None
+        if self._agent.instructions or initial_tools:
+            initial_config = llm.AgentConfigUpdate(
+                instructions=self._agent.instructions,
+                tools_added=initial_tools,
+                agent_id=self._agent.id,
+            )
+            initial_config._tools = llm.ToolContext(self.tools).flatten()
+            self._agent._chat_ctx.insert(initial_config)
+            self._session._chat_ctx.insert(initial_config)
 
         await self._resume_scheduling_task()
         self._audio_recognition = AudioRecognition(
@@ -1359,6 +1367,15 @@ class AgentActivity(RecognitionHooks):
                         continue
                 speech._authorize_generation()
                 await speech._wait_for_generation()
+
+                if self._paused_speech and self._paused_speech.handle is self._current_speech:
+                    # clear paused speech after generation done
+                    self._paused_speech = None
+                    if self._false_interruption_timer is not None:
+                        self._false_interruption_timer.cancel()
+                        self._false_interruption_timer = None
+                    if (audio_output := self._session.output.audio) and audio_output.can_pause:
+                        audio_output.resume()
                 self._current_speech = None
                 last_playout_ts = time.time()
 
@@ -1878,6 +1895,7 @@ class AgentActivity(RecognitionHooks):
                     content=[info.new_transcript],
                     transcript_confidence=info.transcript_confidence,
                 )
+                user_message.metrics = self._init_metrics_from_end_of_turn(info)
                 self._agent._chat_ctx.items.append(user_message)
                 self._session._conversation_item_added(user_message)
 
@@ -1933,6 +1951,11 @@ class AgentActivity(RecognitionHooks):
             content=[info.new_transcript],
             transcript_confidence=info.transcript_confidence,
         )
+
+        metrics_report: llm.MetricsReport = self._init_metrics_from_end_of_turn(info)
+
+        if user_message is not None:
+            user_message.metrics = metrics_report
 
         if isinstance(self.llm, llm.RealtimeModel):
             if self.llm.capabilities.turn_detection:
@@ -1993,6 +2016,7 @@ class AgentActivity(RecognitionHooks):
             return
 
         on_user_turn_completed_delay = time.perf_counter() - start_time
+        metrics_report["on_user_turn_completed_delay"] = on_user_turn_completed_delay
 
         if isinstance(self.llm, llm.RealtimeModel):
             # ignore stt transcription for realtime model
@@ -2009,29 +2033,6 @@ class AgentActivity(RecognitionHooks):
                 self._agent._chat_ctx.items.append(user_message)
                 self._session._conversation_item_added(user_message)
             return
-
-        metrics_report: llm.MetricsReport = {}
-        if self.stt:
-            metrics_report["stt_metadata"] = {
-                "model_name": self.stt.model,
-                "model_provider": self.stt.provider,
-            }
-        if info.started_speaking_at is not None:
-            metrics_report["started_speaking_at"] = info.started_speaking_at
-
-        if info.stopped_speaking_at is not None:
-            metrics_report["stopped_speaking_at"] = info.stopped_speaking_at
-
-        if info.transcription_delay is not None:
-            metrics_report["transcription_delay"] = info.transcription_delay
-
-        if info.end_of_turn_delay is not None:
-            metrics_report["end_of_turn_delay"] = info.end_of_turn_delay
-
-        metrics_report["on_user_turn_completed_delay"] = on_user_turn_completed_delay
-
-        if user_message is not None:
-            user_message.metrics = metrics_report
 
         speech_handle: SpeechHandle | None = None
         if preemptive := self._preemptive_generation:
@@ -2189,6 +2190,7 @@ class AgentActivity(RecognitionHooks):
         forward_text_task: asyncio.Task[Any] | None = None
         started_speaking_at: float | None = None
         stopped_speaking_at: float | None = None
+        started_forwarding_at: float | None = None
 
         def _on_first_frame(fut: asyncio.Future[float] | asyncio.Future[None]) -> None:
             """
@@ -2196,9 +2198,14 @@ class AgentActivity(RecognitionHooks):
             1. _AudioOutput.first_frame_fut (float)
             2. _TextOutput.first_text_fut (None)
             """
-            nonlocal started_speaking_at
+            nonlocal started_speaking_at, started_forwarding_at
             try:
                 started_speaking_at = fut.result() or time.time()
+                started_forwarding_at = (
+                    audio_out.started_forwarding_at
+                    if audio_out and audio_out.started_forwarding_at is not None
+                    else started_speaking_at
+                )
             except BaseException:
                 return
 
@@ -2210,7 +2217,7 @@ class AgentActivity(RecognitionHooks):
             if self._audio_recognition:
                 self._audio_recognition.on_start_of_agent_speech(started_at=started_speaking_at)
             if self.interruption_enabled:
-                self._interruption_by_audio_activity_enabled = False
+                self._disable_vad_interruption_soon()
 
         audio_out: _AudioOutput | None = None
         tts_gen_data: _TTSGenerationData | None = None
@@ -2310,6 +2317,11 @@ class AgentActivity(RecognitionHooks):
             if stopped_speaking_at and started_speaking_at:
                 assistant_metrics["started_speaking_at"] = started_speaking_at
                 assistant_metrics["stopped_speaking_at"] = stopped_speaking_at
+
+                if started_forwarding_at is not None:
+                    assistant_metrics["playback_latency"] = (
+                        started_speaking_at - started_forwarding_at
+                    )
 
             msg = self._agent._chat_ctx.add_message(
                 role="assistant",
@@ -2520,6 +2532,7 @@ class AgentActivity(RecognitionHooks):
 
         started_speaking_at: float | None = None
         stopped_speaking_at: float | None = None
+        started_forwarding_at: float | None = None
 
         def _on_first_frame(fut: asyncio.Future[float] | asyncio.Future[None]) -> None:
             """
@@ -2527,9 +2540,14 @@ class AgentActivity(RecognitionHooks):
             1. _AudioOutput.first_frame_fut (float)
             2. _TextOutput.first_text_fut (None)
             """
-            nonlocal started_speaking_at
+            nonlocal started_speaking_at, started_forwarding_at
             try:
                 started_speaking_at = fut.result() or time.time()
+                started_forwarding_at = (
+                    audio_out.started_forwarding_at
+                    if audio_out and audio_out.started_forwarding_at is not None
+                    else started_speaking_at
+                )
             except BaseException:
                 return
 
@@ -2540,6 +2558,7 @@ class AgentActivity(RecognitionHooks):
                 early_metrics["llm_node_ttft"] = llm_gen_data.ttft
             if tts_gen_data and tts_gen_data.ttfb is not None:
                 early_metrics["tts_node_ttfb"] = tts_gen_data.ttfb
+            early_metrics["playback_latency"] = started_speaking_at - started_forwarding_at
             if user_metrics and "stopped_speaking_at" in user_metrics:
                 early_metrics["e2e_latency"] = (
                     started_speaking_at - user_metrics["stopped_speaking_at"]
@@ -2555,7 +2574,7 @@ class AgentActivity(RecognitionHooks):
             if self._audio_recognition:
                 self._audio_recognition.on_start_of_agent_speech(started_at=started_speaking_at)
             if self.interruption_enabled:
-                self._interruption_by_audio_activity_enabled = False
+                self._disable_vad_interruption_soon()
 
         audio_out: _AudioOutput | None = None
         if audio_output is not None:
@@ -2623,6 +2642,9 @@ class AgentActivity(RecognitionHooks):
         if stopped_speaking_at and started_speaking_at:
             assistant_metrics["started_speaking_at"] = started_speaking_at
             assistant_metrics["stopped_speaking_at"] = stopped_speaking_at
+
+            if started_forwarding_at is not None:
+                assistant_metrics["playback_latency"] = started_speaking_at - started_forwarding_at
 
             if user_metrics and "stopped_speaking_at" in user_metrics:
                 e2e_latency = started_speaking_at - user_metrics["stopped_speaking_at"]
@@ -2984,16 +3006,24 @@ class AgentActivity(RecognitionHooks):
 
         started_speaking_at: float | None = None
         stopped_speaking_at: float | None = None
+        started_forwarding_at: float | None = None
 
-        def _on_first_frame(fut: asyncio.Future[float] | asyncio.Future[None]) -> None:
+        def _on_first_frame(
+            fut: asyncio.Future[float] | asyncio.Future[None], audio_out: _AudioOutput | None = None
+        ) -> None:
             """
             Callback to update the agent state when the first frame is captured:
             1. _AudioOutput.first_frame_fut (float)
             2. _TextOutput.first_text_fut (None)
             """
-            nonlocal started_speaking_at
+            nonlocal started_speaking_at, started_forwarding_at
             try:
                 started_speaking_at = fut.result() or time.time()
+                started_forwarding_at = (
+                    audio_out.started_forwarding_at
+                    if audio_out and audio_out.started_forwarding_at is not None
+                    else started_speaking_at
+                )
             except BaseException:
                 return
 
@@ -3005,7 +3035,7 @@ class AgentActivity(RecognitionHooks):
             if self._audio_recognition:
                 self._audio_recognition.on_start_of_agent_speech(started_at=started_speaking_at)
             if self.interruption_enabled:
-                self._interruption_by_audio_activity_enabled = False
+                self._disable_vad_interruption_soon()
 
         tasks: list[asyncio.Task[Any]] = []
         tees: list[utils.aio.itertools.Tee[Any]] = []
@@ -3096,7 +3126,9 @@ class AgentActivity(RecognitionHooks):
                                 tts_output=realtime_audio_result,
                             )
                             forward_tasks.append(forward_task)
-                            audio_out.first_frame_fut.add_done_callback(_on_first_frame)
+                            audio_out.first_frame_fut.add_done_callback(
+                                partial(_on_first_frame, audio_out=audio_out)
+                            )
 
                     # text output
                     tr_node = self._agent.transcription_node(tr_text_input, model_settings)
@@ -3197,6 +3229,11 @@ class AgentActivity(RecognitionHooks):
             if stopped_speaking_at and started_speaking_at:
                 assistant_metrics["started_speaking_at"] = started_speaking_at
                 assistant_metrics["stopped_speaking_at"] = stopped_speaking_at
+
+                if started_forwarding_at is not None:
+                    assistant_metrics["playback_latency"] = (
+                        started_speaking_at - started_forwarding_at
+                    )
 
             msg = llm.ChatMessage(
                 role="assistant",
@@ -3435,7 +3472,7 @@ class AgentActivity(RecognitionHooks):
                 if self._audio_recognition and self._paused_speech.agent_state == "speaking":
                     self._audio_recognition.on_start_of_agent_speech(started_at=time.time())
                 if self.interruption_enabled:
-                    self._interruption_by_audio_activity_enabled = False
+                    self._disable_vad_interruption_soon()
                 audio_output.resume()
                 resumed = True
                 logger.debug("resumed false interrupted speech", extra={"timeout": timeout})
@@ -3489,7 +3526,27 @@ class AgentActivity(RecognitionHooks):
         ):
             self._session.output.audio.resume()
 
+    def _disable_vad_interruption_soon(self) -> None:
+        """Disable VAD interruption after the backchannel boundary expires."""
+        if self._audio_recognition and self._audio_recognition.backchannel_boundary_active:
+
+            def _disable_vad_interruption() -> None:
+                # only disable it if the agent is still speaking
+                if (
+                    self._session.agent_state == "speaking"
+                    and self._interruption_by_audio_activity_enabled
+                ):
+                    logger.trace("backchannel boundary expired")
+                    self._interruption_by_audio_activity_enabled = False
+
+            self._audio_recognition.backchannel_boundary_callback = _disable_vad_interruption
+        else:
+            self._interruption_by_audio_activity_enabled = False
+
     def _restore_interruption_by_audio_activity(self) -> None:
+        if self._audio_recognition:
+            self._audio_recognition._cancel_backchannel_boundary()
+
         self._interruption_by_audio_activity_enabled = (
             self._default_interruption_by_audio_activity_enabled
         )
@@ -3519,6 +3576,27 @@ class AgentActivity(RecognitionHooks):
             "adaptive interruption disabled due to unrecoverable error, "
             "falling back to VAD-based interruption"
         )
+
+    def _init_metrics_from_end_of_turn(self, info: _EndOfTurnInfo) -> llm.MetricsReport:
+        metrics_report: llm.MetricsReport = {}
+        if self.stt:
+            metrics_report["stt_metadata"] = {
+                "model_name": self.stt.model,
+                "model_provider": self.stt.provider,
+            }
+        if info.started_speaking_at is not None:
+            metrics_report["started_speaking_at"] = info.started_speaking_at
+
+        if info.stopped_speaking_at is not None:
+            metrics_report["stopped_speaking_at"] = info.stopped_speaking_at
+
+        if info.transcription_delay is not None:
+            metrics_report["transcription_delay"] = info.transcription_delay
+
+        if info.end_of_turn_delay is not None:
+            metrics_report["end_of_turn_delay"] = info.end_of_turn_delay
+
+        return metrics_report
 
     # move them to the end to avoid shadowing the same named modules for mypy
     @property

@@ -181,6 +181,7 @@ class LLMStream(ABC):
         self._tee_aiter = aio.itertools.tee(self._event_ch, 2)
         self._event_aiter, monitor_aiter = self._tee_aiter
         self._current_attempt_has_error = False
+        self._provider_request_ids: list[str] = []
         self._metrics_task = asyncio.create_task(
             self._metrics_monitor_task(monitor_aiter), name="LLM._metrics_task"
         )
@@ -215,11 +216,20 @@ class LLMStream(ABC):
             try:
                 with tracer.start_as_current_span("llm_request_run") as attempt_span:
                     attempt_span.set_attribute(trace_types.ATTR_RETRY_COUNT, i)
+                    # Reset per-attempt context ids; the monitor task populates
+                    # this as ChatChunks arrive.
+                    self._provider_request_ids = []
                     try:
-                        return await self._run()
+                        await self._run()
                     except Exception as e:
                         telemetry_utils.record_exception(attempt_span, e)
                         raise
+                    finally:
+                        if self._provider_request_ids:
+                            attempt_span.set_attribute(
+                                trace_types.ATTR_PROVIDER_REQUEST_IDS, self._provider_request_ids
+                            )
+                    return
             except APIError as e:
                 # 499 (Client Closed Request) - close gracefully without raising
                 if isinstance(e, APIStatusError) and e.status_code == 499:
@@ -281,6 +291,8 @@ class LLMStream(ABC):
 
         async for ev in event_aiter:
             request_id = ev.id
+            if request_id and request_id not in self._provider_request_ids:
+                self._provider_request_ids.append(request_id)
             if ttft == -1.0:
                 ttft = time.perf_counter() - start_time
                 completion_start_time = datetime.now(timezone.utc).isoformat()
