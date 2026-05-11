@@ -37,6 +37,7 @@ Test-only adjustment (not a documented practice, but worth flagging):
 
 Run with::
 
+    uv add --dev aiocsv aiofiles
     uv run pytest examples/survey/test_survey_agent.py
 """
 
