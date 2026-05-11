@@ -72,12 +72,7 @@ class VADEvent:
 class VADCapabilities:
     update_interval: float
     supports_reset: bool = False
-    """Whether `VADStream.reset()` is honored by the implementation.
-
-    When True, callers may use `reset()` to clear per-segment state in-place
-    without having to recreate the stream. When False, `reset()` is a no-op
-    on the audio side; callers should recreate the stream instead.
-    """
+    """Whether the VAD Stream supports mid-session reset"""
 
 
 class VAD(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
@@ -171,13 +166,14 @@ class VADStream(ABC):
         self._input_ch.send_nowait(self._FlushSentinel())
 
     def reset(self) -> None:
-        """Reset per-segment state without closing the stream.
+        """Reset vad state without closing the stream."""
+        if not self._vad.capabilities.supports_reset:
+            raise RuntimeError(
+                f"{self._vad._label} does not support mid-session reset "
+                f"({type(self).__module__}.{type(self).__name__}.reset requires "
+                "VADCapabilities.supports_reset=True); create a new VAD stream instead."
+            )
 
-        Only effective when the underlying VAD advertises
-        `VADCapabilities.supports_reset`. For implementations that do not
-        support reset, the sentinel is silently dropped; callers that need a
-        guaranteed reset should recreate the stream instead.
-        """
         self._check_input_not_ended()
         self._check_not_closed()
         self._input_ch.send_nowait(self._ResetSentinel())
