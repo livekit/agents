@@ -221,8 +221,6 @@ class AgentActivity(RecognitionHooks):
 
         # placeholder used to hold a RunResult open while waiting for a realtime
         # model to auto-generate a tool reply (auto_tool_reply_generation=True).
-        # Resolved by _on_generation_created when the reply arrives, or cleared
-        # on the failure path of update_chat_ctx.
         self._pending_auto_tool_reply_fut: asyncio.Future[None] | None = None
 
     def _validate_turn_detection(
@@ -1592,44 +1590,13 @@ class AgentActivity(RecognitionHooks):
             name="AgentActivity.realtime_generation",
         )
 
-        # If a RunResult was awaiting an auto tool reply, attach this handle to
-        # it and release the placeholder so the run waits for the new speech.
-        fut = self._pending_auto_tool_reply_fut
-        if fut is not None and not fut.done():
-            self._pending_auto_tool_reply_fut = None
-            run_state = self._session._global_run_state
-            if run_state is not None and not run_state.done():
+        if (fut := self._pending_auto_tool_reply_fut) and not fut.done():
+            if (run_state := self._session._global_run_state) is not None and not run_state.done():
                 run_state._watch_handle(handle)
+            self._pending_auto_tool_reply_fut = None
             fut.set_result(None)
 
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
-
-    def _track_auto_tool_reply(self, fut: asyncio.Future[None], *, timeout: float = 30.0) -> None:
-        """Hold the active RunResult open until ``fut`` resolves or times out.
-
-        Registers a placeholder task with ``RunResult`` so it doesn't complete
-        before the realtime model's auto-generated tool reply arrives via
-        ``_on_generation_created`` (which resolves ``fut`` and attaches the new
-        ``SpeechHandle`` to the run). The timeout is a safety net for cases
-        where the model never generates a reply.
-        """
-        run_state = self._session._global_run_state
-        if run_state is None or run_state.done():
-            return
-
-        llm_label = self.llm._label if self.llm is not None else "<unknown>"
-
-        async def _wait() -> None:
-            try:
-                await asyncio.wait_for(asyncio.shield(fut), timeout)
-            except asyncio.TimeoutError:
-                logger.warning(
-                    "timed out waiting for realtime auto tool reply from %s",
-                    llm_label,
-                )
-
-        task = asyncio.create_task(_wait(), name="auto_tool_reply_waiter")
-        run_state._watch_handle(task)
 
     def _interrupt_by_audio_activity(
         self, *, ignore_user_transcript_until: float | None = None
@@ -3422,19 +3389,31 @@ class AgentActivity(RecognitionHooks):
                     else:
                         await asyncio.sleep(0)
 
-                # If the realtime model auto-generates the tool reply, install a
-                # placeholder so the active RunResult waits for that reply. Must
-                # be done before update_chat_ctx because the model can emit the
-                # new generation_created event during/right after that await.
+                # if the realtime model auto-generates the tool reply, install a
+                # placeholder so the active RunResult waits for that reply
                 auto_reply_fut: asyncio.Future[None] | None = None
                 if (
                     self.llm.capabilities.auto_tool_reply_generation
                     and fnc_executed_ev._reply_required
                     and self._pending_auto_tool_reply_fut is None
+                    and (run_state := self._session._global_run_state) is not None
+                    and not run_state.done()
                 ):
                     auto_reply_fut = asyncio.get_event_loop().create_future()
                     self._pending_auto_tool_reply_fut = auto_reply_fut
-                    self._track_auto_tool_reply(auto_reply_fut)
+                    llm_label = self.llm._label
+
+                    async def _wait_for_auto_tool_reply() -> None:
+                        try:
+                            await asyncio.wait_for(asyncio.shield(auto_reply_fut), 5.0)
+                        except asyncio.TimeoutError:
+                            logger.warning(
+                                "timed out waiting for realtime auto tool reply from %s",
+                                llm_label,
+                            )
+
+                    task = asyncio.create_task(_wait_for_auto_tool_reply())
+                    run_state._watch_handle(task)
 
                 chat_ctx = self._rt_session.chat_ctx.copy()
                 chat_ctx.items.extend(new_fnc_outputs)
@@ -3445,8 +3424,6 @@ class AgentActivity(RecognitionHooks):
                         "failed to update chat context before generating the function calls results",  # noqa: E501
                         extra={"error": str(e)},
                     )
-                    # No auto reply will arrive — release the placeholder so the
-                    # RunResult doesn't hang for the full timeout.
                     if auto_reply_fut is not None and not auto_reply_fut.done():
                         if self._pending_auto_tool_reply_fut is auto_reply_fut:
                             self._pending_auto_tool_reply_fut = None
