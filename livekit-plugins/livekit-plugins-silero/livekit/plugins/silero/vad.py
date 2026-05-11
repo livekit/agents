@@ -322,7 +322,7 @@ class VADStream(agents.vad.VADStream):
             nonlocal input_copy_remaining_fract, extra_inference_time
 
             self._model.reset()
-            self._exp_filter.reset()
+            self._exp_filter = utils.ExpFilter(alpha=0.35)
 
             speech_buffer_index = 0
             self._speech_buffer_max_reached = False
