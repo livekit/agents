@@ -63,6 +63,11 @@ class SupportAgent(Agent):
                 sip_trunk_id=SIP_TRUNK_ID,
                 sip_number=SIP_NUMBER,
                 chat_ctx=self.chat_ctx,
+                # to reach an extension behind an IVR, pass DTMF tones to send once
+                # answered, e.g. dtmf="wwww1234#" (each `w` pauses ~0.5s):
+                # dtmf=SUPERVISOR_EXTENSION,
+                # give up if the supervisor doesn't pick up within 25s:
+                # ringing_timeout=25,
                 # add extra instructions for summarization
                 # you can also customize the entire instructions by overriding the `get_instructions` method
                 extra_instructions=SUMMARY_INSTRUCTIONS,
