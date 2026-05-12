@@ -444,8 +444,8 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        target_language_code: SarvamTTSLanguages | str,
-        model: SarvamTTSModels | str = "bulbul:v2",
+        target_language_code: SarvamTTSLanguages | str = "en-IN",
+        model: SarvamTTSModels | str = "bulbul:v3",
         speaker: SarvamTTSSpeakers | str | None = None,
         speech_sample_rate: int = 22050,
         num_channels: int = 1,  # Sarvam output is mono WAV
