@@ -25,14 +25,19 @@ from ..voice.generation import ToolExecutionOutput, make_tool_output
 if TYPE_CHECKING:
     from ..voice.agent_session import AgentSession
 
+
+DuplicateMode = Literal["allow", "replace", "reject", "confirm"]
+
 # Module-level registry of running async tasks, keyed by (JobContext | None, call_id).
-# Registered when a task starts in _wrap_tool, auto-removed via done callback.
+# Registered when a task starts; auto-removed via done callback. Shared across all managers
+# so `get_running_tasks` / `cancel_task` work uniformly whether the task came from an
+# AsyncToolset's manager or from an AgentActivity's manager.
 _RunningTasks: dict[tuple[JobContext | None, str], _RunningTask] = {}
 
 
 @function_tool
 async def get_running_tasks() -> list[dict]:
-    """Get the list of running async tool calls across all async toolsets."""
+    """Get the list of running async tool calls."""
     job_ctx = get_job_context(required=False)
     return [
         task.ctx.function_call.model_dump()
@@ -46,7 +51,7 @@ async def cancel_task(call_id: str) -> str:
     """Cancel a running async tool call by call_id."""
     job_ctx = get_job_context(required=False)
     task = _RunningTasks.get((job_ctx, call_id))
-    if task and await task.ctx._toolset.cancel(call_id):
+    if task and await task.ctx._manager.cancel(call_id):
         return f"Task {call_id} cancelled successfully."
     return f"Task {call_id} not found or already completed."
 
@@ -70,13 +75,13 @@ Summarize these results to the user naturally. Do NOT repeat information you hav
 class AsyncRunContext(RunContext[Userdata_T]):
     """Run context for async tool functions."""
 
-    def __init__(self, *, run_ctx: RunContext[Userdata_T], toolset: AsyncToolset) -> None:
+    def __init__(self, *, run_ctx: RunContext[Userdata_T], manager: _AsyncToolManager) -> None:
         super().__init__(
             session=run_ctx.session,
             speech_handle=run_ctx.speech_handle,
             function_call=run_ctx.function_call,
         )
-        self._toolset = toolset
+        self._manager = manager
         self._pending_fut = asyncio.Future[Any]()
         self._step_idx: int = 0
 
@@ -84,7 +89,7 @@ class AsyncRunContext(RunContext[Userdata_T]):
         """Push an intermediate progress update into the conversation.
 
         Updates the chat context immediately and enqueues a speech delivery
-        at the toolset level. Multiple updates from different tools are
+        at the manager level. Multiple updates from different tools are
         coalesced — only the latest pending update triggers a reply.
 
         Args:
@@ -113,7 +118,7 @@ class AsyncRunContext(RunContext[Userdata_T]):
             return
 
         tool_items: list[ChatItem] = [tool_output.fnc_call, tool_output.fnc_call_out]
-        await self._toolset._enqueue_reply(self, tool_items)
+        await self._manager._enqueue_reply(self, tool_items)
 
     def _make_tool_output(
         self, output: Any | BaseException, call_id: str | None
@@ -144,54 +149,108 @@ class _PendingUpdate:
     items: list[ChatItem]
 
 
-class AsyncToolset(Toolset):
-    """A toolset for running long-running functions in the background.
+class _AsyncToolManager:
+    """Lifecycle manager for in-flight async tool calls.
 
-    Tools with an :class:`AsyncRunContext` parameter are wrapped to run in the background.
-    Each ``ctx.update()`` and the final ``return`` inject a tool output into the conversation;
-    the agent then generates a natural-language reply to the user based on that output.
-
-    Example::
-
-        @function_tool
-        async def book_flight(ctx: AsyncRunContext, origin: str, destination: str) -> dict:
-            await ctx.update(f"Looking up flights from {origin} to {destination}...")
-            # → agent says: "Sure, let me look up flights from NYC to Tokyo for you!"
-
-            flights = await search_flights(origin, destination)
-            await ctx.update(f"Found {len(flights)} flights, picking the best one...")
-            # → agent says: "I found 3 flights — picking the best option for you now."
-
-            booking = await book_best_flight(flights)
-            return {"confirmation": booking.id}
-            # → agent says: "All set! Your booking confirmation number is FL-847293."
-
-        async_tools = AsyncToolset(id="booking", tools=[book_flight])
+    Owns the running-task registry for one scope, the duplicate-call policy, and the
+    progress-reply coalescer. Used internally by :class:`AsyncToolset` (toolset-scoped
+    lifetime — survives agent handoff) and by :class:`~livekit.agents.voice.AgentActivity`
+    (activity-scoped lifetime — tasks are cancelled on handoff).
     """
 
-    DuplicateMode = Literal["allow", "replace", "reject", "confirm"]
-
-    def __init__(
-        self,
-        *,
-        id: str,
-        tools: list[Tool] | None = None,
-        on_duplicate_call: DuplicateMode = "confirm",
-    ) -> None:
-        super().__init__(id=id, tools=tools)
-
-        self._on_duplicate_call = on_duplicate_call
-        self._tools = [
-            self._wrap_tool(t) if isinstance(t, FunctionTool | RawFunctionTool) else t
-            for t in self._tools
-        ]
-        self._tools.extend([get_running_tasks, cancel_task])
-
+    def __init__(self, *, on_duplicate_call: DuplicateMode = "confirm") -> None:
+        self._on_duplicate_call: DuplicateMode = on_duplicate_call
         self._running_tasks: dict[str, _RunningTask] = {}
 
-        # speech delivery — shared across all tools in this toolset
+        # speech delivery — shared across all tools in this manager
         self._pending_updates: list[_PendingUpdate] = []
         self._reply_task: asyncio.Task[None] | None = None
+
+    @property
+    def has_running_tasks(self) -> bool:
+        return bool(self._running_tasks)
+
+    async def spawn(
+        self,
+        *,
+        tool: FunctionTool | RawFunctionTool,
+        run_ctx: RunContext,
+        raw_arguments: dict[str, Any],
+        confirm_duplicate: bool | None = None,
+    ) -> Any:
+        """Run ``tool`` in the background. Returns when the first ``ctx.update()`` lands
+        or the tool returns (whichever comes first)."""
+        call_id = run_ctx.function_call.call_id
+        fnc_name = run_ctx.function_call.name
+
+        duplicate_result = await self._check_duplicate(fnc_name, confirm_duplicate)
+        if duplicate_result is not None:
+            logger.debug(
+                "duplicate tool call rejected",
+                extra={"call_id": call_id, "function": fnc_name},
+            )
+            return duplicate_result
+
+        if call_id in self._running_tasks:
+            raise ValueError(f"Task already running for call_id: {call_id}")
+
+        async_ctx = AsyncRunContext(run_ctx=run_ctx, manager=self)
+
+        async def _execute_tool() -> Any:
+            try:
+                fnc_args, fnc_kwargs = prepare_function_arguments(
+                    fnc=tool, json_arguments=raw_arguments, call_ctx=async_ctx
+                )
+                output = await tool(*fnc_args, **fnc_kwargs)
+            except asyncio.CancelledError:
+                logger.debug(
+                    "async tool cancelled",
+                    extra={"call_id": call_id, "function": fnc_name},
+                )
+                if not async_ctx._pending_fut.done():
+                    async_ctx._pending_fut.set_result(None)
+                return
+            except Exception as e:
+                output = e
+                logger.exception(
+                    "error in async tool",
+                    extra={"call_id": call_id, "function": fnc_name},
+                )
+
+            if not async_ctx._pending_fut.done():
+                # pending() was never called — return output directly
+                if isinstance(output, BaseException):
+                    async_ctx._pending_fut.set_exception(output)
+                else:
+                    async_ctx._pending_fut.set_result(output)
+                return
+
+            if output is None:
+                return
+
+            tool_output = async_ctx._make_tool_output(output, call_id=f"{call_id}_finished")
+            if tool_output.fnc_call_out is None:
+                return
+
+            await self._enqueue_reply(async_ctx, [tool_output.fnc_call, tool_output.fnc_call_out])
+
+        exe_task = asyncio.create_task(_execute_tool(), name=f"async_tool_{fnc_name}")
+        _pass_through_activity_task_info(exe_task)
+
+        running_task = _RunningTask(ctx=async_ctx, exe_task=exe_task)
+        self._running_tasks[call_id] = running_task
+
+        # register in the module-level registry
+        task_key = (get_job_context(required=False), call_id)
+        _RunningTasks[task_key] = running_task
+
+        def _on_done(_: asyncio.Task[Any]) -> None:
+            self._running_tasks.pop(call_id, None)
+            _RunningTasks.pop(task_key, None)
+
+        exe_task.add_done_callback(_on_done)
+
+        return await async_ctx._pending_fut
 
     async def cancel(self, call_id: str) -> bool:
         task = self._running_tasks.get(call_id)
@@ -205,109 +264,12 @@ class AsyncToolset(Toolset):
         return False
 
     async def aclose(self) -> None:
-        """Cancel all tasks."""
-        await super().aclose()
+        """Cancel all running tasks."""
         tasks = [task.exe_task for task in self._running_tasks.values()]
         if self._reply_task is not None:
             tasks.append(self._reply_task)
         await utils.aio.cancel_and_wait(*tasks)
         self._running_tasks.clear()
-
-    def _wrap_tool(self, tool: FunctionTool | RawFunctionTool) -> FunctionTool | RawFunctionTool:
-        if not _has_async_context_param(tool):
-            return tool
-
-        raw_schema = _build_raw_schema(tool)
-
-        # inject confirm_duplicate parameter for confirm mode
-        confirm_duplicate_param = "_lk_agents_confirm_duplicate"
-        if self._on_duplicate_call == "confirm":
-            props = raw_schema["parameters"].setdefault("properties", {})
-            props[confirm_duplicate_param] = {
-                "type": ["boolean"],
-                "description": (
-                    "Set this to True to confirm you want to run a duplicate. "
-                    "Only do this when user confirms the duplication is needed."
-                ),
-                "default": False,
-            }
-
-        @function_tool(raw_schema=raw_schema, flags=tool.info.flags)
-        async def wrapper(ctx: RunContext, raw_arguments: dict[str, Any]) -> Any:
-            call_id = ctx.function_call.call_id
-            fnc_name = ctx.function_call.name
-
-            # duplicate detection
-            confirm_duplicate = raw_arguments.pop(confirm_duplicate_param, None)
-            duplicate_result = await self._check_duplicate(fnc_name, confirm_duplicate)
-            if duplicate_result is not None:
-                logger.debug(
-                    "duplicate tool call rejected", extra={"call_id": call_id, "function": fnc_name}
-                )
-                return duplicate_result
-
-            if call_id in self._running_tasks:
-                raise ValueError(f"Task already running for call_id: {call_id}")
-
-            async_ctx = AsyncRunContext(run_ctx=ctx, toolset=self)
-
-            async def _execute_tool() -> Any:
-                try:
-                    fnc_args, fnc_kwargs = prepare_function_arguments(
-                        fnc=tool, json_arguments=raw_arguments, call_ctx=async_ctx
-                    )
-                    output = await tool(*fnc_args, **fnc_kwargs)
-                except asyncio.CancelledError:
-                    logger.debug(
-                        "async tool cancelled", extra={"call_id": call_id, "function": fnc_name}
-                    )
-                    if not async_ctx._pending_fut.done():
-                        async_ctx._pending_fut.set_result(None)
-                    return
-                except Exception as e:
-                    output = e
-                    logger.exception(
-                        "error in async tool", extra={"call_id": call_id, "function": fnc_name}
-                    )
-
-                if not async_ctx._pending_fut.done():
-                    # pending() was never called — return output directly
-                    if isinstance(output, BaseException):
-                        async_ctx._pending_fut.set_exception(output)
-                    else:
-                        async_ctx._pending_fut.set_result(output)
-                    return
-
-                if output is None:
-                    return
-
-                tool_output = async_ctx._make_tool_output(output, call_id=f"{call_id}_finished")
-                if tool_output.fnc_call_out is None:
-                    return
-
-                await self._enqueue_reply(
-                    async_ctx, [tool_output.fnc_call, tool_output.fnc_call_out]
-                )
-
-            exe_task = asyncio.create_task(_execute_tool(), name=f"async_tool_{fnc_name}")
-            _pass_through_activity_task_info(exe_task)
-
-            running_task = _RunningTask(ctx=async_ctx, exe_task=exe_task)
-            self._running_tasks[call_id] = running_task
-
-            # register in the module-level registry
-            task_key = (get_job_context(required=False), call_id)
-            _RunningTasks[task_key] = running_task
-
-            def _on_done(_: asyncio.Task[Any]) -> None:
-                self._running_tasks.pop(call_id, None)
-                _RunningTasks.pop(task_key, None)
-
-            exe_task.add_done_callback(_on_done)
-
-            return await async_ctx._pending_fut
-
-        return wrapper
 
     async def _enqueue_reply(self, ctx: AsyncRunContext, items: list[ChatItem]) -> None:
         """Enqueue a reply for delivery. Coalesces with pending replies."""
@@ -320,7 +282,7 @@ class AsyncToolset(Toolset):
 
         if self._reply_task is None or self._reply_task.done():
             self._reply_task = asyncio.create_task(
-                self._deliver_reply(ctx.session), name="async_toolset_deliver_reply"
+                self._deliver_reply(ctx.session), name="async_tool_manager_deliver_reply"
             )
 
     async def _deliver_reply(self, session: AgentSession) -> None:
@@ -329,7 +291,6 @@ class AsyncToolset(Toolset):
 
         # no await after this line
 
-        # snapshot and clear pending updates
         updates = self._pending_updates[:]
         self._pending_updates.clear()
 
@@ -344,8 +305,7 @@ class AsyncToolset(Toolset):
         # (e.g. user asked something and got a reply)
         agent_chat_items = session.current_agent.chat_ctx.items
         if agent_chat_items and agent_chat_items[-1].created_at > pending_items[-1].created_at:
-            logger.debug("skipping async toolset reply — agent already spoke after updates")
-            # TODO: use a LLM to verify if another reply is needed?
+            logger.debug("skipping async tool reply — agent already spoke after updates")
             return
 
         pending_call_ids = [
@@ -356,7 +316,7 @@ class AsyncToolset(Toolset):
             tool_choice="none",
         )
 
-    async def _check_duplicate(self, fnc_name: str, confirm_duplicate: bool) -> str | None:
+    async def _check_duplicate(self, fnc_name: str, confirm_duplicate: bool | None) -> str | None:
         """Check for duplicate running tasks. Returns a message if blocked, None otherwise."""
         if self._on_duplicate_call == "allow":
             return None
@@ -397,6 +357,88 @@ class AsyncToolset(Toolset):
             )
 
         return None
+
+
+class AsyncToolset(Toolset):
+    """A toolset for running long-running functions in the background.
+
+    Tools with an :class:`AsyncRunContext` parameter are wrapped to run in the background.
+    Each ``ctx.update()`` and the final ``return`` inject a tool output into the conversation;
+    the agent then generates a natural-language reply to the user based on that output.
+
+    Example::
+
+        @function_tool
+        async def book_flight(ctx: AsyncRunContext, origin: str, destination: str) -> dict:
+            await ctx.update(f"Looking up flights from {origin} to {destination}...")
+            # → agent says: "Sure, let me look up flights from NYC to Tokyo for you!"
+
+            flights = await search_flights(origin, destination)
+            await ctx.update(f"Found {len(flights)} flights, picking the best one...")
+            # → agent says: "I found 3 flights — picking the best option for you now."
+
+            booking = await book_best_flight(flights)
+            return {"confirmation": booking.id}
+            # → agent says: "All set! Your booking confirmation number is FL-847293."
+
+        async_tools = AsyncToolset(id="booking", tools=[book_flight])
+    """
+
+    def __init__(
+        self,
+        *,
+        id: str,
+        tools: list[Tool] | None = None,
+        on_duplicate_call: DuplicateMode = "confirm",
+    ) -> None:
+        super().__init__(id=id, tools=tools)
+
+        self._manager = _AsyncToolManager(on_duplicate_call=on_duplicate_call)
+        self._tools = [
+            self._wrap_tool(t) if isinstance(t, FunctionTool | RawFunctionTool) else t
+            for t in self._tools
+        ]
+        self._tools.extend([get_running_tasks, cancel_task])
+
+    async def cancel(self, call_id: str) -> bool:
+        return await self._manager.cancel(call_id)
+
+    async def aclose(self) -> None:
+        await super().aclose()
+        await self._manager.aclose()
+
+    def _wrap_tool(self, tool: FunctionTool | RawFunctionTool) -> FunctionTool | RawFunctionTool:
+        if not _has_async_context_param(tool):
+            return tool
+
+        raw_schema = _build_raw_schema(tool)
+
+        # inject confirm_duplicate parameter for confirm mode
+        confirm_duplicate_param = "_lk_agents_confirm_duplicate"
+        if self._manager._on_duplicate_call == "confirm":
+            props = raw_schema["parameters"].setdefault("properties", {})
+            props[confirm_duplicate_param] = {
+                "type": ["boolean"],
+                "description": (
+                    "Set this to True to confirm you want to run a duplicate. "
+                    "Only do this when user confirms the duplication is needed."
+                ),
+                "default": False,
+            }
+
+        manager = self._manager
+
+        @function_tool(raw_schema=raw_schema, flags=tool.info.flags)
+        async def wrapper(ctx: RunContext, raw_arguments: dict[str, Any]) -> Any:
+            confirm_duplicate = raw_arguments.pop(confirm_duplicate_param, None)
+            return await manager.spawn(
+                tool=tool,
+                run_ctx=ctx,
+                raw_arguments=raw_arguments,
+                confirm_duplicate=confirm_duplicate,
+            )
+
+        return wrapper
 
 
 def _is_async_context_type(ty: type) -> bool:

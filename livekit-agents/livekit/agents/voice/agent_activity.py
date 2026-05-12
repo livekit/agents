@@ -17,6 +17,11 @@ from livekit.agents.llm.realtime import MessageGeneration
 from livekit.agents.metrics.base import Metadata
 
 from .. import inference, llm, stt, tts, utils, vad
+from ..llm.async_toolset import (
+    _AsyncToolManager,
+    cancel_task as _cancel_task_tool,
+    get_running_tasks as _get_running_tasks_tool,
+)
 from ..llm.chat_context import Instructions
 from ..llm.tool_context import (
     StopResponse,
@@ -177,6 +182,11 @@ class AgentActivity(RecognitionHooks):
 
         self._drain_blocked_tasks: list[asyncio.Task[Any]] = []
         self._mcp_tools: list[mcp.MCPToolset] = []
+
+        # activity-scoped manager for async tools placed outside an AsyncToolset.
+        # `reject` avoids the schema mutation that `confirm` needs — the LLM can still
+        # cancel via `cancel_task` (surfaced via `tools` while a task is live).
+        self._async_tool_manager = _AsyncToolManager(on_duplicate_call="reject")
 
         self._on_enter_task: asyncio.Task | None = None
         self._on_exit_task: asyncio.Task | None = None
@@ -360,7 +370,16 @@ class AgentActivity(RecognitionHooks):
     def tools(
         self,
     ) -> list[llm.Tool | llm.Toolset]:
-        return self._session.tools + self._agent.tools + self._mcp_tools
+        tools: list[llm.Tool | llm.Toolset] = [
+            *self._session.tools,
+            *self._agent.tools,
+            *self._mcp_tools,
+        ]
+        # surface async runtime tools only when at least one activity-managed task is live.
+        # AsyncToolset always carries its own copies; ToolContext dedupes by name.
+        if self._async_tool_manager.has_running_tasks:
+            tools.extend([_get_running_tasks_tool, _cancel_task_tool])
+        return tools
 
     @property
     def min_consecutive_speech_delay(self) -> float:
@@ -1001,6 +1020,8 @@ class AgentActivity(RecognitionHooks):
 
             if self._scheduling_atask is not None:
                 await utils.aio.cancel_and_wait(self._scheduling_atask)
+
+            await self._async_tool_manager.aclose()
 
             self._agent._activity = None
 
@@ -2609,6 +2630,7 @@ class AgentActivity(RecognitionHooks):
             function_stream=llm_gen_data.function_ch,
             tool_execution_started_cb=_tool_execution_started_cb,
             tool_execution_completed_cb=_tool_execution_completed_cb,
+            async_tool_manager=self._async_tool_manager,
         )
 
         await speech_handle.wait_if_not_interrupted([*tasks])
@@ -3194,6 +3216,7 @@ class AgentActivity(RecognitionHooks):
             function_stream=fnc_stream,
             tool_execution_started_cb=_tool_execution_started_cb,
             tool_execution_completed_cb=_tool_execution_completed_cb,
+            async_tool_manager=self._async_tool_manager,
         )
 
         await speech_handle.wait_if_not_interrupted([*tasks])

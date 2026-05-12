@@ -34,6 +34,7 @@ from .speech_handle import SpeechHandle
 from .transcription.text_transforms import _apply_text_transforms
 
 if TYPE_CHECKING:
+    from ..llm.async_toolset import _AsyncToolManager
     from .agent import Agent, ModelSettings
     from .agent_session import AgentSession
     from .transcription.text_transforms import TextTransforms
@@ -462,6 +463,7 @@ def perform_tool_executions(
     function_stream: AsyncIterable[llm.FunctionCall],
     tool_execution_started_cb: Callable[[llm.FunctionCall], Any],
     tool_execution_completed_cb: Callable[[ToolExecutionOutput], Any],
+    async_tool_manager: _AsyncToolManager | None = None,
 ) -> tuple[asyncio.Task[None], _ToolOutput]:
     tool_output = _ToolOutput(output=[], first_tool_started_fut=asyncio.Future())
     task = asyncio.create_task(
@@ -474,6 +476,7 @@ def perform_tool_executions(
             tool_output=tool_output,
             tool_execution_started_cb=tool_execution_started_cb,
             tool_execution_completed_cb=tool_execution_completed_cb,
+            async_tool_manager=async_tool_manager,
         ),
         name="execute_tools_task",
     )
@@ -491,9 +494,11 @@ async def _execute_tools_task(
     tool_execution_started_cb: Callable[[llm.FunctionCall], Any],
     tool_execution_completed_cb: Callable[[ToolExecutionOutput], Any],
     tool_output: _ToolOutput,
+    async_tool_manager: _AsyncToolManager | None = None,
 ) -> None:
     """execute tools, when cancelled, stop executing new tools but wait for the pending ones"""
 
+    from ..llm.async_toolset import _has_async_context_param
     from .agent import _set_activity_task_info
     from .events import RunContext
 
@@ -550,17 +555,31 @@ async def _execute_tools_task(
                 )
                 continue
 
+            run_ctx = RunContext(
+                session=session,
+                speech_handle=speech_handle,
+                function_call=fnc_call,
+            )
+            # tools with AsyncRunContext that came in bare (not pre-wrapped by an
+            # AsyncToolset) are dispatched through the activity's manager, which
+            # creates the AsyncRunContext and spawns the background task.
+            use_async_manager = async_tool_manager is not None and _has_async_context_param(
+                function_tool
+            )
+
+            fnc_args: tuple[Any, ...] = ()
+            fnc_kwargs: dict[str, Any] = {}
+            raw_arguments: dict[str, Any] = {}
             try:
                 json_args = fnc_call.arguments or "{}"
-                fnc_args, fnc_kwargs = llm_utils.prepare_function_arguments(
-                    fnc=function_tool,
-                    json_arguments=json_args,
-                    call_ctx=RunContext(
-                        session=session,
-                        speech_handle=speech_handle,
-                        function_call=fnc_call,
-                    ),
-                )
+                if use_async_manager:
+                    raw_arguments = json.loads(json_args)
+                else:
+                    fnc_args, fnc_kwargs = llm_utils.prepare_function_arguments(
+                        fnc=function_tool,
+                        json_arguments=json_args,
+                        call_ctx=run_ctx,
+                    )
 
             except (ValidationError, ValueError) as e:
                 logger.exception(
@@ -585,7 +604,23 @@ async def _execute_tools_task(
                     type(session.current_agent), {}
                 )
 
-                if mock := mock_tools.get(fnc_call.name):
+                if use_async_manager:
+                    logger.debug(
+                        "executing async tool via activity manager",
+                        extra={
+                            "function": fnc_call.name,
+                            "arguments": fnc_call.arguments,
+                            "speech_id": speech_handle.id,
+                        },
+                    )
+                    assert async_tool_manager is not None
+                    function_callable = functools.partial(
+                        async_tool_manager.spawn,
+                        tool=function_tool,
+                        run_ctx=run_ctx,
+                        raw_arguments=raw_arguments,
+                    )
+                elif mock := mock_tools.get(fnc_call.name):
                     logger.debug(
                         "executing mock tool",
                         extra={

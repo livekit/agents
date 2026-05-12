@@ -1,3 +1,4 @@
+from ..llm.async_toolset import AsyncRunContext
 from . import io, run_result
 from .agent import Agent, AgentTask, ModelSettings
 from .agent_session import AgentSession, RecordingOptions, VoiceActivityVideoSampler
@@ -34,6 +35,7 @@ __all__ = [
     "AgentTask",
     "SpeechHandle",
     "RunContext",
+    "AsyncRunContext",
     "UserInputTranscribedEvent",
     "AgentEvent",
     "MetricsCollectedEvent",

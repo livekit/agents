@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from dotenv import load_dotenv
@@ -6,6 +7,7 @@ from livekit.agents import (
     Agent,
     AgentServer,
     AgentSession,
+    AsyncRunContext,
     JobContext,
     JobProcess,
     MetricsCollectedEvent,
@@ -50,7 +52,7 @@ class MyAgent(Agent):
     # agent is active
     @function_tool
     async def lookup_weather(
-        self, context: RunContext, location: str, latitude: str, longitude: str
+        self, ctx: RunContext, location: str, latitude: str, longitude: str
     ) -> str:
         """Called when the user asks for weather related information.
         Ensure the user's location (city or region) is provided.
@@ -66,6 +68,22 @@ class MyAgent(Agent):
         logger.info(f"Looking up weather for {location}")
 
         return "sunny with a temperature of 70 degrees."
+
+    # tools that take an AsyncRunContext run in the background. The agent can
+    # acknowledge the user immediately via ctx.update() while the work continues,
+    # then narrate the final result when the tool returns.
+    # See more at https://docs.livekit.io/agents/logic/tools/async/
+    @function_tool
+    async def search_news(self, ctx: AsyncRunContext, topic: str) -> str:
+        """Look up recent news headlines on a topic. Don't generate a message alongside the tool call.
+
+        Args:
+            topic: What the user wants news about
+        """
+        await ctx.update(f"searching the news for {topic}...")
+
+        await asyncio.sleep(10)
+        return f"Top story on {topic}: nothing dramatic happened today."
 
 
 server = AgentServer()
