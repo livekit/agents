@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import enum
 import json
 import os
@@ -51,6 +52,10 @@ USER_AGENT = f"Livekit/{livekit_version} Python/{platform.python_version()}"
 
 SARVAM_TTS_BASE_URL = "https://api.sarvam.ai/text-to-speech"
 SARVAM_TTS_WS_URL = "wss://api.sarvam.ai/text-to-speech/ws"
+
+# Sarvam TTS WebSocket connections idle out after 60 seconds. Send a ping every
+# 30 seconds to keep pooled connections alive between requests.
+_KEEPALIVE_INTERVAL: float = 30.0
 
 # Sarvam TTS specific models and speakers
 SarvamTTSModels = Literal["bulbul:v2", "bulbul:v3-beta", "bulbul:v3"]
@@ -540,6 +545,10 @@ class TTS(tts.TTS):
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
+        # Maps id(ws) -> background keepalive task that pings the server while
+        # the connection sits idle in the pool. Sarvam closes idle connections
+        # after 60 s; pinging every 30 s keeps them alive for reuse.
+        self._ws_keepalive_tasks: dict[int, asyncio.Task[None]] = {}
 
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
             connect_cb=self._connect_ws,
@@ -562,7 +571,7 @@ class TTS(tts.TTS):
         logger.info("Connecting to Sarvam TTS WebSocket")
 
         try:
-            return await asyncio.wait_for(
+            ws = await asyncio.wait_for(
                 session.ws_connect(
                     ws_url,
                     headers=headers,
@@ -577,8 +586,50 @@ class TTS(tts.TTS):
             )
             raise APIConnectionError(f"WebSocket connection failed: {e}") from e
 
+        self._start_keepalive(ws)
+        return ws
+
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        await self._stop_keepalive(ws)
         await ws.close()
+
+    def _start_keepalive(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        """Spawn a background task that keeps ``ws`` alive with periodic pings."""
+        if _KEEPALIVE_INTERVAL <= 0:
+            return
+        task = asyncio.create_task(self._keepalive_loop(ws), name="sarvam-tts-ws-keepalive")
+        self._ws_keepalive_tasks[id(ws)] = task
+
+    async def _stop_keepalive(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        """Cancel the keepalive task associated with ``ws`` (if any)."""
+        task = self._ws_keepalive_tasks.pop(id(ws), None)
+        if task is None or task.done():
+            return
+        task.cancel()
+        with contextlib.suppress(BaseException):
+            await task
+
+    async def _keepalive_loop(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        """Send a ping every ``_KEEPALIVE_INTERVAL`` seconds while ``ws`` is open."""
+        try:
+            while not ws.closed:
+                await asyncio.sleep(_KEEPALIVE_INTERVAL)
+                if ws.closed:
+                    return
+                try:
+                    await ws.send_str(json.dumps({"type": "ping"}))
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    # Connection is no longer writable; let the pool discover
+                    # this on the next checkout and replace it.
+                    logger.debug(
+                        "Sarvam TTS keepalive ping failed; connection will be replaced on next use",
+                        extra={"error": str(e)},
+                    )
+                    return
+        except asyncio.CancelledError:
+            pass
 
     @property
     def model(self) -> str:
