@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     from ..agent_session import AgentSession
 
 EVALUATED_LLM_MODELS: set[str] = {
-    "google/gemini-3.1-flash-lite-preview",
+    "google/gemini-3.1-flash-lite",
     "google/gemini-3-flash-preview",
     "openai/gpt-4.1",
     "openai/gpt-5.2",
