@@ -6,7 +6,7 @@ from .bounded_dict import BoundedDict
 from .connection_pool import ConnectionPool
 from .exp_filter import ExpFilter
 from .log import log_exceptions
-from .misc import is_dev_mode, is_given, is_hosted, nodename, shortuuid, time_ms
+from .misc import is_dev_mode, is_given, is_hosted, is_using_cloud, nodename, shortuuid, time_ms
 from .moving_average import MovingAverage
 from .participant import wait_for_agent, wait_for_participant, wait_for_track_publication
 
@@ -35,6 +35,7 @@ __all__ = [
     "is_dev_mode",
     "is_given",
     "is_hosted",
+    "is_using_cloud",
     "ConnectionPool",
     "wait_for_agent",
     "wait_for_participant",
