@@ -281,6 +281,10 @@ class TTS(tts.TTS):
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
+        if self._use_websocket:
+            raise RuntimeError(
+                "Rime TTS one-shot synthesize requires use_websocket=False at construction time"
+            )
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
     def update_options(
