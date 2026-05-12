@@ -124,8 +124,7 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        base_url: str = RIME_BASE_URL,
-        ws_base_url: str = RIME_WS_BASE_URL,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
         model: TTSModels | str = "arcana",
         speaker: NotGivenOr[ArcanaVoices | str] = NOT_GIVEN,
         lang: TTSLangs | str = "eng",
@@ -146,6 +145,13 @@ class TTS(tts.TTS):
         segment: NotGivenOr[str] = NOT_GIVEN,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
     ) -> None:
+        if is_given(base_url):
+            # Infer streaming mode from URL prefix; an explicit use_websocket=True still wins.
+            use_websocket = use_websocket or base_url.startswith(("ws://", "wss://"))
+            resolved_base_url = base_url
+        else:
+            resolved_base_url = RIME_WS_BASE_URL if use_websocket else RIME_BASE_URL
+
         super().__init__(
             capabilities=tts.TTSCapabilities(
                 streaming=use_websocket,
@@ -186,8 +192,7 @@ class TTS(tts.TTS):
                 phonemize_between_brackets=phonemize_between_brackets,
             )
         self._session = http_session
-        self._base_url = base_url
-        self._ws_base_url = ws_base_url
+        self._base_url = resolved_base_url
         self._use_websocket = use_websocket
         self._segment = segment if is_given(segment) else "bySentence"
 
@@ -230,7 +235,7 @@ class TTS(tts.TTS):
         encoded = {
             k: ("true" if v else "false") if isinstance(v, bool) else v for k, v in params.items()
         }
-        return f"{self._ws_base_url}/ws3?{urlencode(encoded)}"
+        return f"{self._base_url}/ws3?{urlencode(encoded)}"
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()

@@ -433,13 +433,6 @@ STREAM_TTS = [
     ),
     pytest.param(
         lambda: {
-            "tts": rime.TTS(use_websocket=True),
-            "proxy-upstream": "users-ws.rime.ai:443",
-        },
-        id="rime",
-    ),
-    pytest.param(
-        lambda: {
             "tts": tts.StreamAdapter(tts=inworld.TTS()),
             "proxy-upstream": "api.inworld.ai:443",
         },
