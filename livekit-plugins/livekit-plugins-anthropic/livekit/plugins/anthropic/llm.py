@@ -75,7 +75,7 @@ class LLM(llm.LLM):
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         caching: NotGivenOr[Literal["ephemeral"]] = NOT_GIVEN,
-        timeout: httpx.Timeout | None = None,
+        timeout: NotGivenOr[httpx.Timeout] = NOT_GIVEN
         _strict_tool_schema: bool = True,
     ) -> None:
         """
