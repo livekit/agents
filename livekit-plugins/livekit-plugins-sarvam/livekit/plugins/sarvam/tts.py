@@ -53,8 +53,19 @@ USER_AGENT = f"Livekit/{livekit_version} Python/{platform.python_version()}"
 SARVAM_TTS_BASE_URL = "https://api.sarvam.ai/text-to-speech"
 SARVAM_TTS_WS_URL = "wss://api.sarvam.ai/text-to-speech/ws"
 
-# Sarvam TTS WebSocket connections idle out after 60 seconds. Send a ping every
-# 30 seconds to keep pooled connections alive between requests.
+# Sarvam TTS WebSocket connections idle out after 60 seconds. We defend against
+# this on two layers:
+#
+# 1. Protocol-level: aiohttp ``heartbeat`` sends WebSocket PING frames every
+#    ``_WS_HEARTBEAT_INTERVAL`` seconds and auto-handles PONGs even while no
+#    application-level ``receive()`` is in flight. This is what actually keeps
+#    the TCP connection alive while it sits idle in the pool.
+# 2. Application-level: ``_keepalive_loop`` sends a Sarvam-defined
+#    ``{"type": "ping"}`` JSON message every ``_KEEPALIVE_INTERVAL`` seconds.
+#    This guards against a server-side application idle timer that may not be
+#    reset by protocol-level pings, and serves as a fast detector for stale
+#    pooled connections.
+_WS_HEARTBEAT_INTERVAL: float = 20.0
 _KEEPALIVE_INTERVAL: float = 30.0
 
 # Sarvam TTS specific models and speakers
@@ -575,6 +586,13 @@ class TTS(tts.TTS):
                 session.ws_connect(
                     ws_url,
                     headers=headers,
+                    # Send protocol-level WebSocket PING frames every
+                    # ``_WS_HEARTBEAT_INTERVAL`` seconds. aiohttp handles the
+                    # PONG accounting on its own and will close the connection
+                    # locally if the server stops responding -- this is what
+                    # actually keeps the TCP connection alive while it sits
+                    # idle in the pool (no ``receive()`` call to auto-pong).
+                    heartbeat=_WS_HEARTBEAT_INTERVAL,
                 ),
                 timeout,
             )
@@ -594,8 +612,16 @@ class TTS(tts.TTS):
         await ws.close()
 
     def _start_keepalive(self, ws: aiohttp.ClientWebSocketResponse) -> None:
-        """Spawn a background task that keeps ``ws`` alive with periodic pings."""
+        """Spawn a background task that keeps ``ws`` alive with periodic pings.
+
+        Idempotent: if a live keepalive task is already registered for ``ws``
+        the call is a no-op. Callers that need a fresh task must invoke
+        ``_stop_keepalive`` first.
+        """
         if _KEEPALIVE_INTERVAL <= 0:
+            return
+        existing = self._ws_keepalive_tasks.get(id(ws))
+        if existing is not None and not existing.done():
             return
         task = asyncio.create_task(self._keepalive_loop(ws), name="sarvam-tts-ws-keepalive")
         self._ws_keepalive_tasks[id(ws)] = task
@@ -610,24 +636,71 @@ class TTS(tts.TTS):
             await task
 
     async def _keepalive_loop(self, ws: aiohttp.ClientWebSocketResponse) -> None:
-        """Send a ping every ``_KEEPALIVE_INTERVAL`` seconds while ``ws`` is open."""
+        """Keep a pooled WebSocket alive while it sits idle.
+
+        This loop does two things in lockstep:
+
+        1. Actively calls ``ws.receive()`` so that aiohttp can process
+           server-initiated PONG frames (and any other messages). aiohttp
+           only resets its internal "PONG not received" timer when a PONG
+           is read via ``receive()`` -- without an active reader, the
+           protocol-level heartbeat will tear the connection down even
+           though the server is happily replying.
+
+        2. Sends a Sarvam-defined ``{"type": "ping"}`` JSON message
+           whenever ``receive()`` times out (i.e. nothing has come in for
+           ``_KEEPALIVE_INTERVAL`` seconds). This resets Sarvam's
+           server-side application idle timer (documented as 60 s).
+
+        Any CLOSE/CLOSED/CLOSING/ERROR message from the server, or any
+        write failure, evicts the connection from the pool so the next
+        checkout creates a fresh one instead of handing the dead one out.
+        """
         try:
             while not ws.closed:
-                await asyncio.sleep(_KEEPALIVE_INTERVAL)
-                if ws.closed:
-                    return
                 try:
-                    await ws.send_str(json.dumps({"type": "ping"}))
-                except asyncio.CancelledError:
-                    raise
-                except Exception as e:
-                    # Connection is no longer writable; let the pool discover
-                    # this on the next checkout and replace it.
+                    msg = await asyncio.wait_for(ws.receive(), timeout=_KEEPALIVE_INTERVAL)
+                except asyncio.TimeoutError:
+                    # No incoming message within the interval -- send our
+                    # app-level ping to reset Sarvam's idle timer.
+                    if ws.closed:
+                        return
+                    try:
+                        await ws.send_str(json.dumps({"type": "ping"}))
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        logger.debug(
+                            "Sarvam TTS keepalive ping failed; evicting connection from pool",
+                            extra={"error": str(e)},
+                        )
+                        with contextlib.suppress(Exception):
+                            self._pool.remove(ws)
+                        return
+                    continue
+
+                # We received something. CLOSE/CLOSED/CLOSING/ERROR means
+                # the server tore the connection down -- evict and exit.
+                if msg.type in (
+                    aiohttp.WSMsgType.CLOSE,
+                    aiohttp.WSMsgType.CLOSED,
+                    aiohttp.WSMsgType.CLOSING,
+                    aiohttp.WSMsgType.ERROR,
+                ):
                     logger.debug(
-                        "Sarvam TTS keepalive ping failed; connection will be replaced on next use",
-                        extra={"error": str(e)},
+                        "Sarvam TTS WebSocket closed while idle in pool; evicting connection",
+                        extra={
+                            "msg_type": str(msg.type),
+                            "close_code": ws.close_code,
+                        },
                     )
+                    with contextlib.suppress(Exception):
+                        self._pool.remove(ws)
                     return
+                # Otherwise -- PONG, TEXT, BINARY, etc. -- discard. We are
+                # idle in the pool so any unsolicited TTS traffic from a
+                # previous request is no longer relevant. The act of
+                # receiving has already reset aiohttp's heartbeat.
         except asyncio.CancelledError:
             pass
 
@@ -1013,11 +1086,20 @@ class SynthesizeStream(tts.SynthesizeStream):
             except (ConnectionResetError, RuntimeError) as e:
                 err_str = str(e).lower()
                 if "closing" in err_str or "closed" in err_str:
+                    # The transport is dead -- almost always a stale pooled
+                    # connection that the server already closed (60s idle
+                    # timeout). Raise so the pool evicts it via the
+                    # ``async with`` __aexit__; the framework will retry
+                    # against a fresh connection. Real user interruptions
+                    # propagate as ``CancelledError``, not this branch.
                     logger.debug(
-                        "WebSocket transport closing during send (likely interruption)",
+                        "Sarvam TTS WebSocket transport closed before send "
+                        "completed; pool will replace this connection",
                         extra=self._build_log_context(),
                     )
-                    return
+                    raise APIConnectionError(
+                        "Sarvam TTS WebSocket transport closed before send completed"
+                    ) from e
                 logger.error(
                     f"Error in send task: {e}", extra=self._build_log_context(), exc_info=True
                 )
@@ -1094,11 +1176,19 @@ class SynthesizeStream(tts.SynthesizeStream):
             except ConnectionResetError as e:
                 err_str = str(e).lower()
                 if "closing" in err_str or "closed" in err_str:
+                    # Same reasoning as ``send_task``: the transport is dead
+                    # (typically a stale pooled connection). Raise so the
+                    # pool evicts it and the framework retries against a
+                    # fresh connection. Real interruptions surface as
+                    # ``CancelledError``.
                     logger.debug(
-                        "WebSocket transport closing during receive (likely interruption)",
+                        "Sarvam TTS WebSocket transport closed during"
+                        " receive; pool will replace this connection",
                         extra=self._build_log_context(),
                     )
-                    return
+                    raise APIConnectionError(
+                        "Sarvam TTS WebSocket transport closed during receive"
+                    ) from e
                 logger.error(
                     f"Error in receive task: {e}", extra=self._build_log_context(), exc_info=True
                 )
@@ -1111,28 +1201,47 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         try:
             async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
-                self._acquire_time = self._tts._pool.last_acquire_time
-                self._connection_reused = self._tts._pool.last_connection_reused
-                self._ws_conn = ws
-                self._connection_state = ConnectionState.CONNECTED
-
-                logger.info("WebSocket connected successfully", extra=self._build_log_context())
-
-                self._send_task = asyncio.create_task(send_task(ws))
-                self._recv_task = asyncio.create_task(recv_task(ws))
-
-                tasks = [self._send_task, self._recv_task]
+                # Pause the keepalive task while we own the connection so its
+                # ping frames don't interleave with config / text / flush
+                # traffic. The task was started either by ``_connect_ws`` (for
+                # a fresh connection) or by the previous ``_run_ws`` invocation
+                # that returned this connection to the pool.
+                await self._tts._stop_keepalive(ws)
+                keepalive_should_resume = False
 
                 try:
-                    await asyncio.gather(*tasks)
-                    logger.info(
-                        "WebSocket session completed successfully", extra=self._build_log_context()
-                    )
+                    self._acquire_time = self._tts._pool.last_acquire_time
+                    self._connection_reused = self._tts._pool.last_connection_reused
+                    self._ws_conn = ws
+                    self._connection_state = ConnectionState.CONNECTED
+
+                    logger.info("WebSocket connected successfully", extra=self._build_log_context())
+
+                    self._send_task = asyncio.create_task(send_task(ws))
+                    self._recv_task = asyncio.create_task(recv_task(ws))
+
+                    tasks = [self._send_task, self._recv_task]
+
+                    try:
+                        await asyncio.gather(*tasks)
+                        logger.info(
+                            "WebSocket session completed successfully",
+                            extra=self._build_log_context(),
+                        )
+                        keepalive_should_resume = True
+                    finally:
+                        input_sent_event.set()
+                        await utils.aio.gracefully_cancel(*tasks)
+                        self._send_task = None
+                        self._recv_task = None
                 finally:
-                    input_sent_event.set()
-                    await utils.aio.gracefully_cancel(*tasks)
-                    self._send_task = None
-                    self._recv_task = None
+                    # Resume the keepalive only when the session completed
+                    # cleanly. On exception the pool will discard the
+                    # connection via ``remove(conn)`` and ``_close_ws`` will
+                    # run, so restarting here would be wasted work (and the
+                    # task would be cancelled immediately anyway).
+                    if keepalive_should_resume:
+                        self._tts._start_keepalive(ws)
 
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
             self._connection_state = ConnectionState.FAILED
