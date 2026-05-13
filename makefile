@@ -118,7 +118,8 @@ unit-tests:
 		tests/test_endpointing.py \
 		tests/test_amd_classifier.py \
 		tests/test_session_host.py \
-		tests/test_async_tool.py
+		tests/test_async_tool.py \
+		tests/test_http_context_helper.py
 
 # ============================================
 # Development Workflows
