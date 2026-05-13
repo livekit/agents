@@ -707,7 +707,10 @@ class _Connection:
                 ):
                     if not self._closed and len(self._context_data) > 0:
                         # websocket will be closed after all contexts are closed
-                        logger.warning("websocket closed unexpectedly")
+                        raise APIStatusError(
+                            "ElevenLabs websocket connection closed unexpectedly",
+                            status_code=self._ws.close_code or -1,
+                        )
                     break
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
