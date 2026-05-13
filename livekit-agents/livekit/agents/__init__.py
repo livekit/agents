@@ -116,6 +116,7 @@ from .voice.turn import (
     InterruptionOptions,
     PreemptiveGenerationOptions,
     TurnHandlingOptions,
+    UserStateSource,
 )
 from .worker import (
     AgentServer,
@@ -234,6 +235,7 @@ __all__ = [
     "AMDCategory",
     "AMDPredictionEvent",
     "TurnHandlingOptions",
+    "UserStateSource",
     "EndpointingOptions",
     "InterruptionOptions",
     "PreemptiveGenerationOptions",
