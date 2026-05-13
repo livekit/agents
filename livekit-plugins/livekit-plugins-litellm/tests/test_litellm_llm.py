@@ -4,33 +4,32 @@
 
 """Tests for LiteLLM LLM plugin."""
 
+import asyncio
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
+import openai
+
 from livekit.plugins.litellm import LLM
-from livekit.plugins.litellm.llm import _LiteLLMClientShim
+from livekit.plugins.litellm.llm import _is_openai_sentinel, _LiteLLMClientShim
 
 
-def _make_response(content="Hello!", finish_reason="stop", prompt_tokens=10, completion_tokens=5):
+def _make_response(content="Hello!"):
     resp = MagicMock()
     resp.choices = [MagicMock()]
-    resp.choices[0].delta = MagicMock()
-    resp.choices[0].delta.content = content
-    resp.choices[0].message = MagicMock()
     resp.choices[0].message.content = content
-    resp.choices[0].finish_reason = finish_reason
+    resp.choices[0].finish_reason = "stop"
     resp.usage = MagicMock()
-    resp.usage.prompt_tokens = prompt_tokens
-    resp.usage.completion_tokens = completion_tokens
-    resp.usage.total_tokens = prompt_tokens + completion_tokens
+    resp.usage.prompt_tokens = 10
+    resp.usage.completion_tokens = 5
+    resp.usage.total_tokens = 15
     return resp
 
 
 class TestLiteLLMShim(unittest.TestCase):
     @patch("litellm.acompletion", new_callable=AsyncMock, return_value=_make_response())
     def test_shim_dispatches_to_litellm(self, mock_acompletion):
-        import asyncio
-
         shim = _LiteLLMClientShim()
         asyncio.get_event_loop().run_until_complete(
             shim.chat.completions.create(model="anthropic/claude-sonnet-4-6", messages=[])
@@ -42,8 +41,6 @@ class TestLiteLLMShim(unittest.TestCase):
 
     @patch("litellm.acompletion", new_callable=AsyncMock, return_value=_make_response())
     def test_drop_params_default_true(self, mock_acompletion):
-        import asyncio
-
         shim = _LiteLLMClientShim()
         asyncio.get_event_loop().run_until_complete(
             shim.chat.completions.create(model="openai/gpt-4o", messages=[])
@@ -52,38 +49,78 @@ class TestLiteLLMShim(unittest.TestCase):
 
     @patch("litellm.acompletion", new_callable=AsyncMock, return_value=_make_response())
     def test_drop_params_can_be_overridden(self, mock_acompletion):
-        import asyncio
-
         shim = _LiteLLMClientShim()
         asyncio.get_event_loop().run_until_complete(
             shim.chat.completions.create(model="openai/gpt-4o", messages=[], drop_params=False)
         )
         self.assertFalse(mock_acompletion.call_args.kwargs["drop_params"])
 
+    @patch("litellm.acompletion", new_callable=AsyncMock, return_value=_make_response())
+    def test_openai_omit_sentinel_stripped(self, mock_acompletion):
+        shim = _LiteLLMClientShim()
+        asyncio.get_event_loop().run_until_complete(
+            shim.chat.completions.create(
+                model="openai/gpt-4o",
+                messages=[],
+                tools=openai.NOT_GIVEN,
+            )
+        )
+        self.assertNotIn("tools", mock_acompletion.call_args.kwargs)
+
+    @patch("litellm.acompletion", new_callable=AsyncMock, return_value=_make_response())
+    def test_httpx_timeout_converted_to_float(self, mock_acompletion):
+        shim = _LiteLLMClientShim()
+        asyncio.get_event_loop().run_until_complete(
+            shim.chat.completions.create(
+                model="openai/gpt-4o",
+                messages=[],
+                timeout=httpx.Timeout(connect=15.0, read=30.0, write=5.0, pool=5.0),
+            )
+        )
+        timeout_val = mock_acompletion.call_args.kwargs["timeout"]
+        self.assertIsInstance(timeout_val, float)
+        self.assertEqual(timeout_val, 30.0)
+
+    @patch("litellm.acompletion", new_callable=AsyncMock, return_value=_make_response())
+    def test_extra_headers_stripped(self, mock_acompletion):
+        shim = _LiteLLMClientShim()
+        asyncio.get_event_loop().run_until_complete(
+            shim.chat.completions.create(
+                model="openai/gpt-4o",
+                messages=[],
+                extra_headers={"X-LiveKit-Something": "value"},
+            )
+        )
+        self.assertNotIn("extra_headers", mock_acompletion.call_args.kwargs)
+
     def test_shim_has_base_url(self):
         shim = _LiteLLMClientShim()
         self.assertEqual(shim._base_url.netloc, b"litellm")
 
     def test_shim_close_is_noop(self):
-        import asyncio
-
         shim = _LiteLLMClientShim()
         asyncio.get_event_loop().run_until_complete(shim.close())
+
+    def test_openai_sentinel_detection(self):
+        self.assertTrue(_is_openai_sentinel(openai.NOT_GIVEN))
+        self.assertFalse(_is_openai_sentinel("hello"))
+        self.assertFalse(_is_openai_sentinel(42))
+        self.assertFalse(_is_openai_sentinel(None))
 
 
 class TestLiteLLMLLM(unittest.TestCase):
     def test_llm_instantiates(self):
-        llm = LLM(model="anthropic/claude-sonnet-4-6")
-        self.assertEqual(llm.model, "anthropic/claude-sonnet-4-6")
-        self.assertIsInstance(llm._client, _LiteLLMClientShim)
+        llm_inst = LLM(model="anthropic/claude-sonnet-4-6")
+        self.assertEqual(llm_inst.model, "anthropic/claude-sonnet-4-6")
+        self.assertIsInstance(llm_inst._client, _LiteLLMClientShim)
 
     def test_default_model(self):
-        llm = LLM()
-        self.assertEqual(llm.model, "openai/gpt-4o")
+        llm_inst = LLM()
+        self.assertEqual(llm_inst.model, "openai/gpt-4o")
 
     def test_provider_is_litellm(self):
-        llm = LLM(model="anthropic/claude-sonnet-4-6")
-        self.assertEqual(llm.provider, "litellm")
+        llm_inst = LLM(model="anthropic/claude-sonnet-4-6")
+        self.assertEqual(llm_inst.provider, "litellm")
 
 
 if __name__ == "__main__":

@@ -21,6 +21,12 @@ from livekit.agents.utils import is_given
 from livekit.plugins.openai import LLM as OpenAILLM
 
 
+def _is_openai_sentinel(value: Any) -> bool:
+    """Check if a value is an OpenAI SDK sentinel (omit, NOT_GIVEN, etc.)."""
+    type_name = type(value).__name__
+    return type_name in ("Omit", "NotGiven", "_Omit")
+
+
 class _LiteLLMCompletions:
     """Shim mapping ``chat.completions.create(**kw)`` to ``litellm.acompletion(**kw)``."""
 
@@ -32,8 +38,20 @@ class _LiteLLMCompletions:
                 "litellm is required for livekit-plugins-litellm. "
                 "Install with: pip install 'livekit-plugins-litellm'"
             ) from err
-        kwargs.setdefault("drop_params", True)
-        return await litellm.acompletion(**kwargs)
+
+        # Strip OpenAI sentinel values (omit, NOT_GIVEN) that litellm doesn't understand
+        cleaned = {k: v for k, v in kwargs.items() if not _is_openai_sentinel(v)}
+
+        # Convert httpx.Timeout to float for litellm
+        timeout = cleaned.get("timeout")
+        if isinstance(timeout, httpx.Timeout):
+            cleaned["timeout"] = timeout.read or timeout.connect or 30.0
+
+        # Strip LiveKit-specific headers that litellm doesn't need
+        cleaned.pop("extra_headers", None)
+
+        cleaned.setdefault("drop_params", True)
+        return await litellm.acompletion(**cleaned)
 
 
 class _LiteLLMChat:
@@ -99,14 +117,13 @@ class LLM(OpenAILLM):
             timeout: HTTP timeout configuration.
             max_retries: Maximum number of retries on transient errors.
         """
-        # If api_key provided, set it as env var for the provider litellm will resolve
         if is_given(api_key) and api_key:
             os.environ.setdefault("LITELLM_API_KEY", api_key)
 
         super().__init__(
             model=model,
             api_key="unused",
-            client=_LiteLLMClientShim(),
+            client=_LiteLLMClientShim(),  # type: ignore[arg-type]
             temperature=temperature,
             top_p=top_p,
             parallel_tool_calls=parallel_tool_calls,
