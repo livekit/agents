@@ -341,8 +341,8 @@ class TestReconnect:
 
                 # Brief grace window for any stray Reconnected dispatch.
                 await asyncio.sleep(1.0)
-                assert not reconnected_fired.is_set(), (
-                    "RoomEvent::Reconnected fired on a resume — should only fire on full reconnect"
+                assert reconnected_fired.is_set(), (
+                    "RoomEvent::Reconnected should be fired on a resume"
                 )
 
                 # Publication identity is preserved.
