@@ -140,6 +140,7 @@ class _RealtimeOptions:
     image_encode_options: NotGivenOr[images.EncodeOptions]
     conn_options: APIConnectOptions
     http_options: NotGivenOr[types.HttpOptions]
+    media_resolution: NotGivenOr[types.MediaResolution] = NOT_GIVEN
     enable_affective_dialog: NotGivenOr[bool] = NOT_GIVEN
     proactivity: NotGivenOr[bool] = NOT_GIVEN
     realtime_input_config: NotGivenOr[types.RealtimeInputConfig] = NOT_GIVEN
@@ -216,6 +217,7 @@ class RealtimeModel(llm.RealtimeModel):
         api_version: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         http_options: NotGivenOr[types.HttpOptions] = NOT_GIVEN,
+        media_resolution: NotGivenOr[types.MediaResolution] = NOT_GIVEN,
         thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN,
         credentials: google.auth.credentials.Credentials | None = None,
     ) -> None:
@@ -248,6 +250,7 @@ class RealtimeModel(llm.RealtimeModel):
             input_audio_transcription (AudioTranscriptionConfig | None, optional): The configuration for input audio transcription. Defaults to None.)
             output_audio_transcription (AudioTranscriptionConfig | None, optional): The configuration for output audio transcription. Defaults to AudioTranscriptionConfig().
             image_encode_options (images.EncodeOptions, optional): The configuration for image encoding. Defaults to DEFAULT_ENCODE_OPTIONS.
+            media_resolution (MediaResolution, optional): The media resolution for the session. Defaults to None.
             enable_affective_dialog (bool, optional): Whether to enable affective dialog. Defaults to False.
             proactivity (bool, optional): Whether to enable proactive audio. Defaults to False.
             realtime_input_config (RealtimeInputConfig, optional): The configuration for realtime input. Defaults to None.
@@ -371,6 +374,7 @@ class RealtimeModel(llm.RealtimeModel):
             tool_response_scheduling=tool_response_scheduling,
             conn_options=conn_options,
             http_options=http_options,
+            media_resolution=media_resolution,
             thinking_config=thinking_config,
             session_resumption=session_resumption,
             credentials=credentials,
@@ -1081,6 +1085,9 @@ class RealtimeSession(llm.RealtimeSession):
                 else None,
                 thinking_config=self._opts.thinking_config
                 if is_given(self._opts.thinking_config)
+                else None,
+                media_resolution=self._opts.media_resolution
+                if is_given(self._opts.media_resolution)
                 else None,
             ),
             system_instruction=types.Content(parts=[types.Part(text=self._opts.instructions)])

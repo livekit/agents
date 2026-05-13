@@ -422,7 +422,7 @@ def prepare_function_arguments(
                         args_dict[param_name] = param.default
                     else:
                         raise ValueError(
-                            f"Received None for required parameter '{param_name} ;"
+                            f"Received no value for required parameter '{param_name}': "
                             "this argument cannot be None and no default is available."
                         )
 

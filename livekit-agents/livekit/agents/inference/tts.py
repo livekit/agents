@@ -52,6 +52,7 @@ RimeModels = Literal[
 ]
 InworldModels = Literal[
     "inworld",
+    "inworld/inworld-tts-2",
     "inworld/inworld-tts-1.5-max",
     "inworld/inworld-tts-1.5-mini",
     "inworld/inworld-tts-1-max",
@@ -76,7 +77,7 @@ def _parse_model_string(model: str) -> tuple[str, str | None]:
 
 
 class FallbackModel(TypedDict):
-    """A fallback model with optional extra configuration.
+    """Inference Fallback Adapter: configuration for a fallback TTS model that runs server-side in LiveKit Inference, providing automatic fallback between providers.
 
     Extra fields are passed through to the provider.
 
