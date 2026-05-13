@@ -3411,6 +3411,9 @@ class AgentActivity(RecognitionHooks):
                                 "timed out waiting for realtime auto tool reply from %s",
                                 llm_label,
                             )
+                        finally:
+                            if self._pending_auto_tool_reply_fut is auto_reply_fut:
+                                self._pending_auto_tool_reply_fut = None
 
                     task = asyncio.create_task(_wait_for_auto_tool_reply())
                     run_state._watch_handle(task)
