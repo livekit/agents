@@ -223,9 +223,9 @@ class AgentActivity(RecognitionHooks):
         self, turn_detection: TurnDetectionMode | None
     ) -> TurnDetectionMode | None:
         if turn_detection is not None and not isinstance(turn_detection, str):
-            if isinstance(turn_detection, inference.MultimodalTurnDetector) and self.vad is None:
+            if isinstance(turn_detection, inference.AudioTurnDetector) and self.vad is None:
                 raise ValueError(
-                    "MultimodalTurnDetector requires a VAD model; pass vad=silero.VAD.load() "
+                    "AudioTurnDetector requires a VAD model; pass vad=silero.VAD.load() "
                     "(or another VAD) to AgentSession/Agent."
                 )
             # return directly if turn_detection is _TurnDetector

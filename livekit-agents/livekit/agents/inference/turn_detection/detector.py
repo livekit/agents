@@ -17,7 +17,7 @@ from ...types import (
 from .languages import LANGUAGES
 
 if TYPE_CHECKING:
-    from .stream import TurnDetectionStream
+    from .base import BaseAudioTurnDetectionStream
 
 
 DEFAULT_SAMPLE_RATE: int = 16000
@@ -30,7 +30,6 @@ class TurnDetectionEvent:
     end_of_turn_probability: float
     last_speaking_time: float
     detection_delay: float | None = None
-    backend: Literal["multimodal", "text"] = "multimodal"
 
 
 @dataclass
@@ -42,7 +41,7 @@ class TurnDetectorOptions:
     conn_options: APIConnectOptions
 
 
-class MultimodalTurnDetector:
+class AudioTurnDetector:
     def __init__(
         self,
         *,
@@ -80,11 +79,11 @@ class MultimodalTurnDetector:
         )
 
         self._session = http_session
-        self._streams: weakref.WeakSet[TurnDetectionStream] = weakref.WeakSet()
+        self._streams: weakref.WeakSet[BaseAudioTurnDetectionStream] = weakref.WeakSet()
 
     @property
     def model(self) -> str:
-        return "eot-multimodal"
+        return "eot-audio"
 
     @property
     def provider(self) -> str:
@@ -99,10 +98,10 @@ class MultimodalTurnDetector:
         self,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> TurnDetectionStream:
-        from .stream import TurnDetectionStream
+    ) -> BaseAudioTurnDetectionStream:
+        from .stream import AudioTurnDetectionStream
 
-        stream: TurnDetectionStream = TurnDetectionStream(
+        stream: BaseAudioTurnDetectionStream = AudioTurnDetectionStream(
             detector=self,
             opts=self._opts,
             conn_options=conn_options,
@@ -110,23 +109,12 @@ class MultimodalTurnDetector:
         self._streams.add(stream)
         return stream
 
-    async def unlikely_threshold(
-        self, language: LanguageCode | None, modality: Literal["multimodal", "text"] = "multimodal"
-    ) -> float | None:
-        thresholds = LANGUAGES.get(
-            language.language if language is not None else "en", (0.35, 0.011)
-        )
-        if modality == "multimodal":
-            return thresholds[0]
-        else:
-            return thresholds[1]
+    async def unlikely_threshold(self, language: LanguageCode | None) -> float | None:
+        lang_key = language.language if language is not None else "en"
+        return LANGUAGES.get(lang_key)
 
-    async def supports_language(
-        self, language: LanguageCode | None, modality: Literal["multimodal", "text"] = "multimodal"
-    ) -> bool:
-        # default to english if no language is provided
-        lang = language.language if language is not None else "en"
-        return lang in LANGUAGES
+    async def supports_language(self, language: LanguageCode | None) -> bool:
+        return await self.unlikely_threshold(language) is not None
 
     async def aclose(self) -> None:
         for stream in list(self._streams):

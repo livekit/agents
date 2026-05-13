@@ -19,7 +19,7 @@ See https://docs.livekit.io/agents/build/turns/turn-detector/ for more informati
 
 from .version import __version__
 
-__all__ = ["english", "multilingual", "__version__"]
+__all__ = ["audio", "english", "multilingual", "__version__"]
 
 
 # Cleanup docs of unexported modules

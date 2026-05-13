@@ -1,0 +1,28 @@
+# CMake artifacts
+CMakeLists.txt.user
+CMakeCache.txt
+CMakeFiles
+CMakeScripts
+Testing
+Makefile
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+CTestTestfile.cmake
+_deps
+/build
+
+# Setuptools build outputs
+/build/
+*.egg-info/
+*.egg
+dist/
+
+# Audio EOT native artifacts (built locally or fetched from PyPI; never checked in)
+/_fetched/
+/livekit/plugins/turn_detector/_audio_eot.so
+/livekit/plugins/turn_detector/_audio_eot.dylib
+/livekit/plugins/turn_detector/_audio_eot.dll
+/livekit/plugins/turn_detector/_audio_eot.*.so
+/livekit/plugins/turn_detector/_audio_eot.*.dylib
+/livekit/plugins/turn_detector/_audio_eot.*.pyd

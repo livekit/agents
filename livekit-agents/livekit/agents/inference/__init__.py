@@ -9,9 +9,9 @@ from .stt import STT, STTModels
 from .tts import TTS, TTSModels
 from .turn_detection import (
     MIN_SILENCE_DURATION_MS,
-    MultimodalTurnDetector,
+    AudioTurnDetectionStream,
+    AudioTurnDetector,
     TurnDetectionEvent,
-    TurnDetectionStream,
 )
 
 __all__ = [
@@ -22,8 +22,8 @@ __all__ = [
     "STTModels",
     "TTSModels",
     "LLMModels",
-    "MultimodalTurnDetector",
-    "TurnDetectionStream",
+    "AudioTurnDetector",
+    "AudioTurnDetectionStream",
     "TurnDetectionEvent",
     "AdaptiveInterruptionDetector",
     "InterruptionDetectionError",

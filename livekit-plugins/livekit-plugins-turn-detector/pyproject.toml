@@ -1,5 +1,14 @@
 [build-system]
-requires = ["hatchling"]
+requires = [
+    "hatchling",
+    "tomli; python_version < '3.11'",
+    # Pulled in by the native-build path invoked by hatch_build.py
+    # during a wheel build. Only matters when the native lib actually
+    # gets compiled (local sources OR pinned versions available);
+    # harmless otherwise.
+    "onnx>=1.15",
+    "numpy>=1.26",
+]
 build-backend = "hatchling.build"
 
 [project]
@@ -13,7 +22,6 @@ authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
 keywords = ["voice", "ai", "realtime", "audio", "video", "livekit", "webrtc"]
 classifiers = [
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: Apache Software License",
     "Topic :: Multimedia :: Sound/Audio",
     "Topic :: Multimedia :: Video",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
@@ -40,8 +48,25 @@ path = "livekit/plugins/turn_detector/version.py"
 [tool.hatch.build.targets.wheel]
 packages = ["livekit"]
 
+[tool.hatch.build.targets.wheel.hooks.custom]
+path = "hatch_build.py"
+
 [tool.hatch.build.targets.sdist]
-include = ["/livekit"]
+include = ["/livekit", "/hatch_build.py"]
+
+[tool.livekit-audio-eot]
+# Pin the source release in `open-access-audio-turn-detector` (GitHub tag).
+# Weights ship inside that repo via git-LFS, so a single pin covers both
+# sources and weights atomically. Optional during local dev — set
+# LK_AUDIO_EOT_SOURCES_DIR to override with a checkout.
+sources-version = ""   # e.g. "v0.1.0"
+
+[tool.cibuildwheel]
+build = "cp310-* cp311-* cp312-* cp313-* cp314-*"
+skip = "*-musllinux_*"
+
+[tool.cibuildwheel.macos]
+repair-wheel-command = "" # avoid issues with unresolved files
 
 [tool.uv]
 exclude-newer = "7 days"
