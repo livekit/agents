@@ -20,16 +20,12 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 from livekit.plugins.openai import LLM as OpenAILLM
 
-_OPENAI_SENTINEL_TYPES = (type(_openai.NOT_GIVEN),)
-try:
-    _OPENAI_SENTINEL_TYPES = (type(_openai.NOT_GIVEN), type(_openai.OMIT))
-except AttributeError:
-    pass
+_NOT_GIVEN_TYPE = type(_openai.NOT_GIVEN)
 
 
 def _is_openai_sentinel(value: Any) -> bool:
     """Check if a value is an OpenAI SDK sentinel (omit, NOT_GIVEN, etc.)."""
-    return isinstance(value, _OPENAI_SENTINEL_TYPES)
+    return isinstance(value, _NOT_GIVEN_TYPE) or type(value).__name__ in ("Omit", "_Omit")
 
 
 class _LiteLLMCompletions:
