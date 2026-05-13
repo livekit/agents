@@ -485,6 +485,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                         "Rime ws closed unexpectedly",
                         request_id=request_id,
                     )
+                if msg.type == aiohttp.WSMsgType.ERROR:
+                    raise APIConnectionError(
+                        f"Rime ws error: {ws.exception()}"
+                    )
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected Rime ws message type %s", msg.type)
                     continue
