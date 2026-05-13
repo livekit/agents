@@ -259,7 +259,8 @@ class TTS(tts.TTS):
             await ws.close()
 
     def prewarm(self) -> None:
-        self._pool.prewarm()
+        if self._use_websocket:
+            self._pool.prewarm()
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
