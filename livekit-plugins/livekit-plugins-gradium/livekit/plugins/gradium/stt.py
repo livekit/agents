@@ -71,7 +71,7 @@ class STT(stt.STT):
         self,
         *,
         api_key: str | None = None,
-        model_endpoint: str | None = "wss://eu.api.gradium.ai/api/speech/asr",
+        model_endpoint: str | None = "wss://api.gradium.ai/api/speech/asr",
         model_name: str = "default",
         sample_rate: int = SUPPORTED_SAMPLE_RATE,
         encoding: NotGivenOr[STTEncoding] = NOT_GIVEN,

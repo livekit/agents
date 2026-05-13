@@ -95,7 +95,7 @@ from .voice import (
 from .voice.amd import (
     AMD,
     AMDCategory,
-    AMDResult,
+    AMDPredictionEvent,
 )
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
 from .voice.room_io import RoomInputOptions, RoomIO, RoomOutputOptions
@@ -232,7 +232,7 @@ __all__ = [
     "AgentHandoffEvent",
     "AMD",
     "AMDCategory",
-    "AMDResult",
+    "AMDPredictionEvent",
     "TurnHandlingOptions",
     "EndpointingOptions",
     "InterruptionOptions",

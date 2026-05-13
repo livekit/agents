@@ -25,6 +25,7 @@ def create_mock_room() -> Any:
     mock_remote_participant.identity = "mock_user"
     mock_remote_participant.sid = "PA_mock_user"
     mock_remote_participant.kind = rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD
+    mock_remote_participant.state = rtc.ParticipantState.PARTICIPANT_STATE_ACTIVE
     MockRoom.remote_participants = {mock_remote_participant.sid: mock_remote_participant}
     return MockRoom
 
