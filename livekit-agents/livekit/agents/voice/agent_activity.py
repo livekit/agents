@@ -2905,7 +2905,7 @@ class AgentActivity(RecognitionHooks):
                 return
 
             try:
-                generation_ev = generate_reply_fut.result()
+                generation_ev = await generate_reply_fut
             except llm.RealtimeError as e:
                 logger.error(
                     "failed to generate a reply%s: %s",
