@@ -117,7 +117,8 @@ unit-tests:
 		tests/test_tool_proxy.py \
 		tests/test_endpointing.py \
 		tests/test_amd_classifier.py \
-		tests/test_session_host.py
+		tests/test_session_host.py \
+		tests/test_async_tool.py
 
 # ============================================
 # Development Workflows

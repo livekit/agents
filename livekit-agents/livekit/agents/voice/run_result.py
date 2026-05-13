@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import contextvars
 import functools
+import inspect
 import json
 import os
 from collections.abc import Callable, Generator
@@ -1047,6 +1048,46 @@ def mock_tools(agent: type[Agent], mocks: dict[str, Callable]) -> Generator[None
         yield
     finally:
         _MockToolsContextVar.reset(token)
+
+
+async def _run_mock(mock: Callable, *fnc_args: Any, **fnc_kwargs: Any) -> Any:
+    """Invoke a mock with the args/kwargs the real tool would have received, trimmed
+    to fit the mock's signature.
+
+    Mock authors can declare any subset of the real tool's parameters — including
+    ``ctx: AsyncRunContext`` if they want to exercise the async lifecycle. Anything
+    not present in the mock's signature is silently dropped."""
+    sig = inspect.signature(mock)
+
+    pos_param_names = [
+        name
+        for name, param in sig.parameters.items()
+        if param.kind
+        in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        )
+    ]
+    max_positional = len(pos_param_names)
+    trimmed_args = fnc_args[:max_positional]
+    kw_param_names = [
+        name
+        for name, param in sig.parameters.items()
+        if param.kind
+        in (
+            inspect.Parameter.KEYWORD_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        )
+    ]
+    trimmed_kwargs = {k: v for k, v in fnc_kwargs.items() if k in kw_param_names}
+
+    bound = sig.bind_partial(*trimmed_args, **trimmed_kwargs)
+    bound.apply_defaults()
+
+    if inspect.iscoroutinefunction(mock):
+        return await mock(*bound.args, **bound.kwargs)
+    else:
+        return mock(*bound.args, **bound.kwargs)
 
 
 def _format_events(events: list[RunEvent], *, selected_index: int | None = None) -> list[str]:

@@ -996,10 +996,7 @@ class AgentActivity(RecognitionHooks):
                 *(toolset.aclose() for toolset in toolsets), return_exceptions=True
             )
 
-        # cancel bare async tool tasks. They share the activity's lifetime — if we
-        # leave them running here, a late ctx.update() / return would touch the
-        # next agent's chat context. AsyncToolset tasks (cancelled above via the
-        # toolset.aclose() loop) get the same treatment.
+        # cancel bare async tool tasks, they share the activity's lifetime
         await self._async_tool_manager.aclose()
 
         await self._cancel_speech_pause(

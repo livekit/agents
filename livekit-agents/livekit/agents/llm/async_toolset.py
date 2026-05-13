@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, get_origin, get_type_hints
 
@@ -173,13 +174,17 @@ class _AsyncToolManager:
     async def spawn(
         self,
         *,
-        tool: FunctionTool | RawFunctionTool,
+        function_callable: Callable[[AsyncRunContext], Awaitable[Any]],
         run_ctx: RunContext,
-        raw_arguments: dict[str, Any],
         confirm_duplicate: bool | None = None,
     ) -> Any:
-        """Run ``tool`` in the background. Returns when the first ``ctx.update()`` lands
-        or the tool returns (whichever comes first)."""
+        """Run ``function_callable`` in the background. Returns when the first
+        ``ctx.update()`` lands or the callable returns (whichever comes first).
+
+        The manager creates the :class:`AsyncRunContext` and hands it to the callable.
+        Everything inside the callable — argument prep, mock substitution, real tool
+        invocation — is the caller's concern; the manager only owns the async lifecycle
+        (background task, duplicate detection, registry, reply coalescing)."""
         call_id = run_ctx.function_call.call_id
         fnc_name = run_ctx.function_call.name
 
@@ -198,10 +203,7 @@ class _AsyncToolManager:
 
         async def _execute_tool() -> Any:
             try:
-                fnc_args, fnc_kwargs = prepare_function_arguments(
-                    fnc=tool, json_arguments=raw_arguments, call_ctx=async_ctx
-                )
-                output = await tool(*fnc_args, **fnc_kwargs)
+                output = await function_callable(async_ctx)
             except asyncio.CancelledError:
                 logger.debug(
                     "async tool cancelled",
@@ -431,13 +433,31 @@ class AsyncToolset(Toolset):
         @function_tool(raw_schema=raw_schema, flags=tool.info.flags)
         async def wrapper(ctx: RunContext, raw_arguments: dict[str, Any]) -> Any:
             confirm_duplicate = raw_arguments.pop(confirm_duplicate_param, None)
+
+            # mock lookup happens at call time, so mocks of AsyncToolset-wrapped
+            # tools run through this toolset's manager — same async lifecycle as
+            # the real tool.
+            from ..voice.run_result import _MockToolsContextVar, _run_mock
+
+            mock_tools = _MockToolsContextVar.get({}).get(type(ctx.session.current_agent), {})
+            mock = mock_tools.get(tool.info.name)
+
+            async def _call_tool(async_ctx: AsyncRunContext) -> Any:
+                fnc_args, fnc_kwargs = prepare_function_arguments(
+                    fnc=tool, json_arguments=raw_arguments, call_ctx=async_ctx
+                )
+                if mock is not None:
+                    return await _run_mock(mock, *fnc_args, **fnc_kwargs)
+                return await tool(*fnc_args, **fnc_kwargs)
+
             return await manager.spawn(
-                tool=tool,
+                function_callable=_call_tool,
                 run_ctx=ctx,
-                raw_arguments=raw_arguments,
                 confirm_duplicate=confirm_duplicate,
             )
 
+        # marker so _execute_tools_task knows this wrapper does its own mock dispatch
+        wrapper._lk_async_wrapper = True  # type: ignore[attr-defined]
         return wrapper
 
 
@@ -452,6 +472,10 @@ def _has_async_context_param(tool: FunctionTool | RawFunctionTool) -> bool:
     except Exception:
         return False
     return any(_is_async_context_type(h) for h in type_hints.values())
+
+
+def _is_async_toolset_wrapper(tool: object) -> bool:
+    return getattr(tool, "_lk_async_wrapper", False) is True
 
 
 def _build_raw_schema(tool: FunctionTool | RawFunctionTool) -> dict[str, Any]:
