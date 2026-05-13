@@ -15,6 +15,7 @@ from opentelemetry.sdk.trace import ReadableSpan
 from livekit import rtc
 
 from .. import inference, llm, stt, utils, vad
+from .._exceptions import APIError
 from ..inference.interruption import (
     _AgentSpeechEndedSentinel,
     _AgentSpeechStartedSentinel,
@@ -390,15 +391,32 @@ class AudioRecognition:
             _OverlapSpeechEndedSentinel(ended_at=ended_at or time.time())
         )
 
-    async def _flush_held_transcripts(self, cooldown: float) -> None:
-        """Flush held transcripts whose *end time* is after the ignore_user_transcript_until - cooldown timestamp.
+    @utils.log_exceptions(logger=logger)
+    async def _flush_held_transcripts(self, cooldown: float, force: bool = False) -> None:
+        """Flush held transcripts.
 
-        If the event has no timestamps, we assume it is the same as the next valid event.
+        When ``force`` is True, all buffered events are emitted unconditionally; this
+        is used during interruption-detector teardown when the ignore-window gating
+        can no longer be trusted.
+
+        Otherwise, drop transcripts whose *end time* falls before
+        ``ignore_user_transcript_until - cooldown`` and re-emit the rest. Events
+        without timestamps are treated as the next valid event.
         """
+        if not self._transcript_buffer:
+            self._reset_interruption_detection()
+            return
+
+        if force:
+            events_to_emit = list(self._transcript_buffer)
+            self._reset_interruption_detection()
+            for ev in events_to_emit:
+                await self._on_stt_event(ev)
+            return
+
         if (
             not self._interruption_enabled
             or not is_given(self._ignore_user_transcript_until)
-            or not self._transcript_buffer
             or self._input_started_at is None
         ):
             self._reset_interruption_detection()
@@ -643,6 +661,9 @@ class AudioRecognition:
             self._interruption_atask = None
             self._interruption_ch = None
             self._cancel_backchannel_boundary()
+            flush_task = asyncio.create_task(self._flush_held_transcripts(cooldown=0.0, force=True))
+            flush_task.add_done_callback(lambda _: self._tasks.discard(flush_task))
+            self._tasks.add(flush_task)
 
         self._interruption_enabled = (
             self._interruption_detection is not None and self._vad is not None
@@ -1259,6 +1280,9 @@ class AudioRecognition:
         try:
             async for ev in stream:
                 await self._on_overlap_speech_event(ev)
+        except APIError:
+            # avoid already emitted error from the stream
+            return
         finally:
             await aio.cancel_and_wait(forward_task)
             await stream.aclose()

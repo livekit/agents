@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
+from unittest.mock import MagicMock, Mock
 
 import pytest
 
@@ -16,6 +18,7 @@ from livekit.agents import (
     UserStateChangedEvent,
     function_tool,
     inference,
+    vad,
 )
 from livekit.agents.llm import (
     FunctionToolCall,
@@ -23,6 +26,7 @@ from livekit.agents.llm import (
 from livekit.agents.llm.chat_context import ChatContext, ChatMessage
 from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
 from livekit.agents.utils import aio
+from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.audio_recognition import AudioRecognition, _EndOfTurnInfo
 from livekit.agents.voice.endpointing import BaseEndpointing
 from livekit.agents.voice.events import FunctionToolsExecutedEvent
@@ -790,6 +794,128 @@ async def test_backchannel_boundary_releases_end_boundary_transcript() -> None:
         await _close_test_session(session)
 
 
+async def test_interruption_detection_error_is_not_session_error() -> None:
+    actions = FakeActions()
+    session = create_session(actions)
+    activity = AgentActivity(MyAgent(), session)
+    fallback = Mock()
+    activity._fallback_to_vad_interruption = fallback
+    error_events: list[object] = []
+    session.on("error", error_events.append)
+
+    try:
+        recoverable = inference.InterruptionDetectionError(
+            label="test",
+            error=RuntimeError("temporary failure"),
+            recoverable=True,
+        )
+        activity._on_error(recoverable)
+
+        unrecoverable = inference.InterruptionDetectionError(
+            label="test",
+            error=RuntimeError("adaptive unavailable"),
+            recoverable=False,
+        )
+        activity._on_error(unrecoverable)
+
+        assert error_events == []
+        fallback.assert_called_once_with(unrecoverable)
+    finally:
+        await _close_test_session(session)
+
+
+async def test_vad_fallback_uses_next_vad_inference_event(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    actions = FakeActions()
+    session = create_session(actions)
+    activity = AgentActivity(MyAgent(), session)
+    error = inference.InterruptionDetectionError(
+        label="test",
+        error=RuntimeError("adaptive unavailable"),
+        recoverable=False,
+    )
+
+    audio_recognition = MagicMock()
+    current_speech = MagicMock()
+    current_speech.interrupted = False
+    current_speech.allow_interruptions = True
+
+    activity._audio_recognition = audio_recognition
+    activity._current_speech = current_speech
+    activity._interruption_detection_enabled = True
+    activity._interruption_by_audio_activity_enabled = False
+    activity._default_interruption_by_audio_activity_enabled = True
+
+    caplog.set_level(logging.INFO, logger="livekit.agents")
+
+    try:
+        activity._fallback_to_vad_interruption(error)
+
+        audio_recognition.update_interruption_detection.assert_called_once_with(None)
+        current_speech.interrupt.assert_not_called()
+        assert activity._interruption_detection_enabled is False
+        assert activity._interruption_by_audio_activity_enabled is True
+
+        activity.on_vad_inference_done(
+            vad.VADEvent(
+                type=vad.VADEventType.INFERENCE_DONE,
+                samples_index=0,
+                timestamp=time.time(),
+                speech_duration=session.options.interruption["min_duration"] - 0.01,
+                silence_duration=0.0,
+                speaking=True,
+            )
+        )
+        current_speech.interrupt.assert_not_called()
+
+        activity.on_vad_inference_done(
+            vad.VADEvent(
+                type=vad.VADEventType.INFERENCE_DONE,
+                samples_index=0,
+                timestamp=time.time(),
+                speech_duration=session.options.interruption["min_duration"],
+                silence_duration=0.0,
+                speaking=True,
+            )
+        )
+        current_speech.interrupt.assert_called_once_with()
+        assert any(
+            record.levelno == logging.INFO
+            and "falling back to VAD-based interruption" in record.message
+            for record in caplog.records
+        )
+        assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
+    finally:
+        await _close_test_session(session)
+
+
+async def test_force_flush_held_transcripts_emits_buffered_events() -> None:
+    actions = FakeActions()
+    session = create_session(actions)
+    hooks = _TestRecognitionHooks()
+    recognition = AudioRecognition(
+        session,
+        hooks=hooks,
+        endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
+        stt=None,
+        vad=None,
+        interruption_detection=None,
+        turn_detection="manual",
+    )
+    recognition._transcript_buffer.append(
+        _final_transcript_event(text="held transcript", start_time=0.0, end_time=1.0)
+    )
+
+    try:
+        await recognition._flush_held_transcripts(cooldown=0.0, force=True)
+
+        assert hooks.final_transcripts == ["held transcript"]
+        assert not recognition._transcript_buffer
+    finally:
+        await _close_test_session(session)
+
+
 @pytest.mark.parametrize(
     "preemptive_generation, expected_latency",
     [
@@ -956,6 +1082,7 @@ async def test_unknown_function_call() -> None:
 class _TestRecognitionHooks:
     def __init__(self) -> None:
         self.interruptions: list[inference.OverlappingSpeechEvent] = []
+        self.final_transcripts: list[str] = []
 
     def on_interruption(self, ev: inference.OverlappingSpeechEvent) -> None:
         self.interruptions.append(ev)
@@ -973,7 +1100,7 @@ class _TestRecognitionHooks:
         pass
 
     def on_final_transcript(self, ev: SpeechEvent, *, speaking: bool | None = None) -> None:
-        pass
+        self.final_transcripts.append(ev.alternatives[0].text)
 
     def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool:
         return True
