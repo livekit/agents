@@ -3,7 +3,7 @@
 Support for [Perplexity](https://www.perplexity.ai/) LLMs via the OpenAI-compatible
 chat completions endpoint at `https://api.perplexity.ai`.
 
-See [https://docs.livekit.io/agents/integrations/llm/](https://docs.livekit.io/agents/integrations/llm/) for more information.
+See [https://docs.livekit.io/agents/models/llm/perplexity/](https://docs.livekit.io/agents/models/llm/perplexity/) for more information.
 
 ## Installation
 
