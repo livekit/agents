@@ -115,9 +115,7 @@ def _mock_request_info() -> MagicMock:
 
 class TestHttpTimeout:
     @pytest.mark.asyncio
-    async def test_retries_then_emits_unrecoverable(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_retries_then_emits_unrecoverable(self, caplog: pytest.LogCaptureFixture) -> None:
         caplog.set_level(logging.WARNING, logger="livekit.agents")
         mock_session = AsyncMock(spec=aiohttp.ClientSession)
         mock_ctx = AsyncMock()
