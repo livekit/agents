@@ -56,18 +56,3 @@ def is_dev_mode() -> bool:
 def is_hosted() -> bool:
     """Return whether the agent is hosted on LiveKit Cloud."""
     return os.getenv("LIVEKIT_REMOTE_EOT_URL") is not None
-
-
-def is_using_cloud() -> bool:
-    """Return whether the agent is connected to LiveKit Cloud with inference credentials.
-
-    True when ``LIVEKIT_URL`` points to a ``*.livekit.cloud`` or ``*.livekit.run``
-    host **and** inference API credentials are available (``LIVEKIT_INFERENCE_API_KEY``
-    falling back to ``LIVEKIT_API_KEY``, plus the corresponding secret).
-    """
-    lk_url = os.getenv("LIVEKIT_URL", "")
-    if not is_cloud(lk_url):
-        return False
-    api_key = os.getenv("LIVEKIT_INFERENCE_API_KEY") or os.getenv("LIVEKIT_API_KEY")
-    api_secret = os.getenv("LIVEKIT_INFERENCE_API_SECRET") or os.getenv("LIVEKIT_API_SECRET")
-    return bool(api_key and api_secret)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from types import TracebackType
 from typing import TYPE_CHECKING, Literal, TypedDict
 
@@ -15,7 +16,8 @@ from ...log import logger
 from ...stt import STT as _STT
 from ...telemetry import trace_types, tracer
 from ...types import NOT_GIVEN, NotGivenOr
-from ...utils import EventEmitter, aio, is_given, is_using_cloud
+from ...utils import EventEmitter, aio, is_given
+from ...utils.misc import is_cloud
 from ...utils.participant import wait_for_track_publication
 from .classifier import (
     AMD_PROMPT,
@@ -147,11 +149,17 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         super().__init__()
 
         if not is_given(llm) or not is_given(stt):
-            has_creds = is_using_cloud()
+            api_key = os.getenv("LIVEKIT_INFERENCE_API_KEY") or os.getenv("LIVEKIT_API_KEY")
+            api_secret = os.getenv("LIVEKIT_INFERENCE_API_SECRET") or os.getenv(
+                "LIVEKIT_API_SECRET"
+            )
+            auto_select = (
+                is_cloud(os.getenv("LIVEKIT_URL", "")) and bool(api_key) and bool(api_secret)
+            )
             if not is_given(llm):
-                llm = self._DEFAULT_LLM_MODEL if has_creds else NOT_GIVEN
+                llm = self._DEFAULT_LLM_MODEL if auto_select else NOT_GIVEN
             if not is_given(stt):
-                stt = self._DEFAULT_STT_MODEL if has_creds else NOT_GIVEN
+                stt = self._DEFAULT_STT_MODEL if auto_select else NOT_GIVEN
 
         self._llm_config: NotGivenOr[LLM | LLMModels | str] = llm
         self._session: AgentSession = session
