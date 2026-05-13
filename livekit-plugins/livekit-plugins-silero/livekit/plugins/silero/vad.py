@@ -36,6 +36,7 @@ from . import onnx_model
 from .log import logger
 
 SLOW_INFERENCE_THRESHOLD = 0.2  # late by 200ms
+WARNING_THROTTLE_S = 1.0  # throttle warnings to 1 second
 
 
 @dataclass
@@ -68,6 +69,7 @@ class VAD(agents.vad.VAD):
         sample_rate: Literal[8000, 16000] = 16000,
         force_cpu: bool = True,
         onnx_file_path: NotGivenOr[Path | str] = NOT_GIVEN,
+        warmup: int = 0,
         deactivation_threshold: NotGivenOr[float] = NOT_GIVEN,
         # deprecated
         padding_duration: NotGivenOr[float] = NOT_GIVEN,
@@ -86,7 +88,7 @@ class VAD(agents.vad.VAD):
 
             ```python
             def prewarm(proc: JobProcess):
-                proc.userdata["vad"] = silero.VAD.load()
+                proc.userdata["vad"] = silero.VAD.load(warmup=3)
 
 
             async def entrypoint(ctx: JobContext):
@@ -107,6 +109,7 @@ class VAD(agents.vad.VAD):
             sample_rate (Literal[8000, 16000]): Sample rate for the inference (only 8KHz and 16KHz are supported).
             onnx_file_path (Path | str | None): Path to the ONNX model file. If not provided, the default model will be loaded. This can be helpful if you want to use a previous version of the silero model.
             force_cpu (bool): Force the use of CPU for inference.
+            warmup (int): Number of dry inference calls to run during startup to reduce latency spikes. Use 0 to disable warmup.
             deactivation_threshold (float): Negative threshold (noise or exit threshold). If model's current state is SPEECH, values BELOW this value are considered as NON-SPEECH. Default is max(activation_threshold - 0.15, 0.01).
             padding_duration (float | None): **Deprecated**. Use `prefix_padding_duration` instead.
 
@@ -115,6 +118,8 @@ class VAD(agents.vad.VAD):
 
         Raises:
             ValueError: If an unsupported sample rate is provided.
+            ValueError: If warmup is negative.
+            TypeError: If warmup is not an integer.
         """  # noqa: E501
         if sample_rate not in onnx_model.SUPPORTED_SAMPLE_RATES:
             raise ValueError("Silero VAD only supports 8KHz and 16KHz sample rates")
@@ -128,6 +133,11 @@ class VAD(agents.vad.VAD):
         if is_given(deactivation_threshold) and deactivation_threshold <= 0:
             raise ValueError("deactivation_threshold must be greater than 0")
 
+        if isinstance(warmup, bool) or not isinstance(warmup, int):
+            raise TypeError("warmup must be an integer")
+        if warmup < 0:
+            raise ValueError("warmup must be greater than or equal to 0")
+
         session = onnx_model.new_inference_session(force_cpu, onnx_file_path=onnx_file_path or None)
         opts = _VADOptions(
             min_speech_duration=min_speech_duration,
@@ -138,6 +148,13 @@ class VAD(agents.vad.VAD):
             deactivation_threshold=deactivation_threshold or max(activation_threshold - 0.15, 0.01),
             sample_rate=sample_rate,
         )
+
+        if warmup > 0:
+            model = onnx_model.OnnxModel(onnx_session=session, sample_rate=sample_rate)
+            inference_f32_data = np.zeros(model.window_size_samples, dtype=np.float32)
+            for _ in range(warmup):
+                model(inference_f32_data)
+
         return cls(session=session, opts=opts)
 
     def __init__(
@@ -310,6 +327,7 @@ class VADStream(agents.vad.VADStream):
         input_copy_remaining_fract = 0.0
 
         extra_inference_time = 0.0
+        last_slow_inference_warning = 0.0
 
         async for input_frame in self._input_ch:
             if not isinstance(input_frame, rtc.AudioFrame):
@@ -409,10 +427,13 @@ class VADStream(agents.vad.VADStream):
                     extra_inference_time + inference_duration - window_duration,
                 )
                 if inference_duration > SLOW_INFERENCE_THRESHOLD:
-                    logger.warning(
-                        "inference is slower than realtime",
-                        extra={"delay": extra_inference_time},
-                    )
+                    now = time.perf_counter()
+                    if now - last_slow_inference_warning >= WARNING_THROTTLE_S:
+                        last_slow_inference_warning = now
+                        logger.warning(
+                            "inference is slower than realtime",
+                            extra={"delay": extra_inference_time},
+                        )
 
                 def _reset_write_cursor() -> None:
                     nonlocal speech_buffer_index
