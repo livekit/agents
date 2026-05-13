@@ -52,7 +52,10 @@ async def entrypoint(ctx: JobContext):
                     # book_flight takes ~70s; bump the per-request timeout above that.
                     client_session_timeout_seconds=120,
                 ),
-                async_mode=True,
+                # Only book_flight is long-running; get_weather can block the reply.
+                # Pass `True` (the default) to make every MCP tool non-blocking, or
+                # `False` to fall back to fully blocking execution.
+                nonblocking_tools=["book_flight"],
             )
         ],
     )

@@ -53,56 +53,90 @@ def test_mcp_tool_async_mode_signature_has_async_context_param():
     assert _has_async_context_param(tool)
 
 
-def test_mcp_toolset_default_does_not_expose_helper_tools():
+def test_mcp_toolset_blocking_does_not_expose_helper_tools():
     server = _FakeMCPServer()
-    ts = MCPToolset(id="m", mcp_server=server)
+    ts = MCPToolset(id="m", mcp_server=server, nonblocking_tools=False)
 
     exposed = list(ts.tools)
     assert get_running_tasks not in exposed
     assert cancel_task not in exposed
 
 
-def test_mcp_toolset_async_mode_exposes_helper_tools():
+def test_mcp_toolset_default_exposes_helper_tools():
+    """Default is nonblocking_tools=True — helpers should be exposed."""
     server = _FakeMCPServer()
-    ts = MCPToolset(id="m", mcp_server=server, async_mode=True)
+    ts = MCPToolset(id="m", mcp_server=server)
 
     exposed = list(ts.tools)
     assert get_running_tasks in exposed
     assert cancel_task in exposed
 
 
-def test_mcp_toolset_stores_async_mode_flag():
+def test_mcp_toolset_nonblocking_list_exposes_helper_tools():
+    """A non-empty list also enables async helpers."""
+    server = _FakeMCPServer()
+    ts = MCPToolset(id="m", mcp_server=server, nonblocking_tools=["book_flight"])
+
+    exposed = list(ts.tools)
+    assert get_running_tasks in exposed
+    assert cancel_task in exposed
+
+
+def test_mcp_toolset_empty_list_hides_helper_tools():
+    """An empty list is equivalent to False — no tools are non-blocking."""
+    server = _FakeMCPServer()
+    ts = MCPToolset(id="m", mcp_server=server, nonblocking_tools=[])
+
+    exposed = list(ts.tools)
+    assert get_running_tasks not in exposed
+    assert cancel_task not in exposed
+
+
+def test_mcp_toolset_stores_nonblocking_tools_flag():
     server = _FakeMCPServer()
 
-    assert MCPToolset(id="a", mcp_server=server)._async_mode is False
-    assert MCPToolset(id="b", mcp_server=server, async_mode=True)._async_mode is True
+    assert MCPToolset(id="a", mcp_server=server)._nonblocking_tools is True
+    assert (
+        MCPToolset(id="b", mcp_server=server, nonblocking_tools=False)._nonblocking_tools is False
+    )
+    assert MCPToolset(
+        id="c", mcp_server=server, nonblocking_tools=["book_flight", "search"]
+    )._nonblocking_tools == frozenset({"book_flight", "search"})
 
 
-def test_mcp_server_list_tools_cache_keyed_by_async_mode():
-    """Switching async_mode should rebuild the tool list (cache miss)."""
+def test_mcp_server_list_tools_cache_keyed_by_nonblocking_tools():
+    """Switching nonblocking_tools should rebuild the tool list (cache miss)."""
     server = _FakeMCPServer()
 
-    # Seed the cache as if a prior list_tools call ran with async_mode=False
+    # Seed the cache as if a prior list_tools call ran with nonblocking_tools=False
     legacy_tool = _build_mcp_tool(server, async_mode=False)
     server._lk_tools = [legacy_tool]
-    server._lk_tools_async_mode = False
+    server._lk_tools_nonblocking = False
     server._cache_dirty = False
 
-    # Same mode — cache hit, returns the seeded list
-    assert server._lk_tools_async_mode is False
+    # Same key — cache hit
+    assert server._lk_tools_nonblocking is False
 
-    # Switching mode invalidates: simulate cache-miss check
-    cache_hit_for_async = (
+    # Switching to True invalidates: simulate cache-miss check
+    cache_hit_for_true = (
         not server._cache_dirty
         and server._lk_tools is not None
-        and server._lk_tools_async_mode is True
+        and server._lk_tools_nonblocking == True  # noqa: E712
     )
-    assert cache_hit_for_async is False
+    assert cache_hit_for_true is False
+
+    # A different frozenset also invalidates
+    cache_hit_for_set = (
+        not server._cache_dirty
+        and server._lk_tools is not None
+        and server._lk_tools_nonblocking == frozenset({"book_flight"})
+    )
+    assert cache_hit_for_set is False
 
 
 @pytest.mark.asyncio
-async def test_mcp_toolset_setup_wraps_async_mode_tools():
-    """After setup with async_mode=True, MCP tools are wrapped — their outer
+async def test_mcp_toolset_setup_wraps_nonblocking_tools():
+    """With nonblocking_tools=True, MCP tools are wrapped — their outer
     signature is the AsyncToolset wrapper (RunContext, raw_arguments), not the
     inner AsyncRunContext signature."""
     server = _FakeMCPServer()
@@ -110,7 +144,7 @@ async def test_mcp_toolset_setup_wraps_async_mode_tools():
     # Pre-populate the server's cache so setup() bypasses real I/O
     raw_tool = _build_mcp_tool(server, async_mode=True)
     server._lk_tools = [raw_tool]
-    server._lk_tools_async_mode = True
+    server._lk_tools_nonblocking = True
     server._cache_dirty = False
 
     class _DummyClient:
@@ -118,7 +152,7 @@ async def test_mcp_toolset_setup_wraps_async_mode_tools():
 
     server._client = _DummyClient()  # type: ignore[assignment]
 
-    ts = MCPToolset(id="m", mcp_server=server, async_mode=True)
+    ts = MCPToolset(id="m", mcp_server=server)
     await ts.setup()
 
     # _tools holds the wrapped tools — outer signature is RunContext
@@ -127,13 +161,13 @@ async def test_mcp_toolset_setup_wraps_async_mode_tools():
 
 
 @pytest.mark.asyncio
-async def test_mcp_toolset_setup_passes_through_non_async_tools():
-    """Without async_mode, tools are not wrapped (no AsyncRunContext to wrap)."""
+async def test_mcp_toolset_setup_passes_through_blocking_tools():
+    """With nonblocking_tools=False, tools are not wrapped (no AsyncRunContext to wrap)."""
     server = _FakeMCPServer()
 
     raw_tool = _build_mcp_tool(server, async_mode=False)
     server._lk_tools = [raw_tool]
-    server._lk_tools_async_mode = False
+    server._lk_tools_nonblocking = False
     server._cache_dirty = False
 
     class _DummyClient:
@@ -141,7 +175,7 @@ async def test_mcp_toolset_setup_passes_through_non_async_tools():
 
     server._client = _DummyClient()  # type: ignore[assignment]
 
-    ts = MCPToolset(id="m", mcp_server=server)
+    ts = MCPToolset(id="m", mcp_server=server, nonblocking_tools=False)
     await ts.setup()
 
     # _wrap_tool is a no-op for tools without AsyncRunContext, so identity holds
