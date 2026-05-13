@@ -567,12 +567,24 @@ async def _execute_tools_task(
                 function_tool
             )
 
+            from .run_result import _MockToolsContextVar
+
+            mock_tools: dict[str, Callable] = _MockToolsContextVar.get({}).get(
+                type(session.current_agent), {}
+            )
+            mock = mock_tools.get(fnc_call.name)
+
             fnc_args: tuple[Any, ...] = ()
             fnc_kwargs: dict[str, Any] = {}
             raw_arguments: dict[str, Any] = {}
             try:
                 json_args = fnc_call.arguments or "{}"
-                if use_async_manager:
+                if mock is not None and use_async_manager:
+                    # mocks of async tools won't expect AsyncRunContext in their signature;
+                    # skip pydantic validation and pass the raw JSON kwargs straight through.
+                    # `_run_mock` trims to the mock's actual signature.
+                    fnc_kwargs = json.loads(json_args)
+                elif use_async_manager:
                     raw_arguments = json.loads(json_args)
                 else:
                     fnc_args, fnc_kwargs = llm_utils.prepare_function_arguments(
@@ -598,29 +610,7 @@ async def _execute_tools_task(
 
             tool_execution_started_cb(fnc_call)
             try:
-                from .run_result import _MockToolsContextVar
-
-                mock_tools: dict[str, Callable] = _MockToolsContextVar.get({}).get(
-                    type(session.current_agent), {}
-                )
-
-                if use_async_manager:
-                    logger.debug(
-                        "executing async tool via activity manager",
-                        extra={
-                            "function": fnc_call.name,
-                            "arguments": fnc_call.arguments,
-                            "speech_id": speech_handle.id,
-                        },
-                    )
-                    assert async_tool_manager is not None
-                    function_callable = functools.partial(
-                        async_tool_manager.spawn,
-                        tool=function_tool,
-                        run_ctx=run_ctx,
-                        raw_arguments=raw_arguments,
-                    )
-                elif mock := mock_tools.get(fnc_call.name):
+                if mock is not None:
                     logger.debug(
                         "executing mock tool",
                         extra={
@@ -666,6 +656,22 @@ async def _execute_tools_task(
                             return mock(*bound.args, **bound.kwargs)
 
                     function_callable = functools.partial(_run_mock, mock, *fnc_args, **fnc_kwargs)
+                elif use_async_manager:
+                    logger.debug(
+                        "executing async tool via activity manager",
+                        extra={
+                            "function": fnc_call.name,
+                            "arguments": fnc_call.arguments,
+                            "speech_id": speech_handle.id,
+                        },
+                    )
+                    assert async_tool_manager is not None
+                    function_callable = functools.partial(
+                        async_tool_manager.spawn,
+                        tool=function_tool,
+                        run_ctx=run_ctx,
+                        raw_arguments=raw_arguments,
+                    )
                 else:
                     logger.debug(
                         "executing tool",
