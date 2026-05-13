@@ -6,7 +6,7 @@ import pytest
 from pydantic import BaseModel, Field
 
 from livekit.agents import Agent
-from livekit.agents.llm import ProviderTool, Tool, ToolContext, Toolset, function_tool
+from livekit.agents.llm import ProviderTool, Tool, ToolContext, ToolError, Toolset, function_tool
 from livekit.agents.llm._strict import to_strict_json_schema
 from livekit.agents.llm.utils import (
     build_legacy_openai_schema,
@@ -390,17 +390,17 @@ class TestToolExecution:
         assert output == {"arg1": "test", "opt_arg2": None}
 
     def test_unexpected_arguments(self):
-        with pytest.raises(ValueError, match="validation error"):
+        with pytest.raises(ToolError, match="validation error"):
             prepare_function_arguments(fnc=mock_tool_1, json_arguments='{"opt_arg2": "test2"}')
 
-        with pytest.raises(ValueError, match="Received no value for required parameter"):
+        with pytest.raises(ToolError, match="Received no value for required parameter"):
             prepare_function_arguments(fnc=mock_tool_2, json_arguments='{"arg1": null}')
 
-        with pytest.raises(ValueError, match="validation error"):
+        with pytest.raises(ToolError, match="validation error"):
             prepare_function_arguments(fnc=mock_tool_2, json_arguments='{"arg1": "d"}')
 
         agent = DummyAgent()
-        with pytest.raises(ValueError, match="validation error"):
+        with pytest.raises(ToolError, match="validation error"):
             prepare_function_arguments(
                 fnc=agent.mock_tool_in_agent, json_arguments='{"opt_arg2": "test2"}'
             )
