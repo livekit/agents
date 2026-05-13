@@ -672,8 +672,9 @@ async def execute_function_call(
         return make_function_call_output(fnc_call=fnc_call, output=result, exception=None)
 
     except Exception as e:
-        logger.exception(
-            f"exception executing AI function `{tool_call.name}`",
-            extra={"call_id": tool_call.call_id, "arguments": tool_call.arguments},
-        )
+        if not isinstance(e, ToolError):
+            logger.exception(
+                f"exception executing AI function `{tool_call.name}`",
+                extra={"call_id": tool_call.call_id, "arguments": tool_call.arguments},
+            )
         return make_function_call_output(fnc_call=fnc_call, output=None, exception=e)
