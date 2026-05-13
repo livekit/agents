@@ -306,7 +306,7 @@ async def _wait_back_to_connected(room: rtc.Room, *, timeout: float = 15.0) -> N
 )
 class TestReconnect:
     async def test_resume_preserves_publication_and_audio(self):
-        """Resume must NOT churn the publication set, must NOT fire
+        """Resume must NOT churn the publication set, should fire
         `reconnected`, and audio must keep flowing."""
         room_name = _e2e_room_name("resume")
 
@@ -329,7 +329,6 @@ class TestReconnect:
                 assert len(publications_before) == 1, publications_before
                 sid_before = publications_before[0].sid
 
-                # `Reconnected` MUST NOT fire on resume — register a tripwire.
                 reconnected_fired = asyncio.Event()
                 agent_room.on("reconnected", lambda: reconnected_fired.set())
 
@@ -339,7 +338,7 @@ class TestReconnect:
                 # the second transition.
                 await _wait_back_to_connected(agent_room, timeout=15.0)
 
-                # Brief grace window for any stray Reconnected dispatch.
+                # Brief grace window for any Reconnected dispatch.
                 await asyncio.sleep(1.0)
                 assert reconnected_fired.is_set(), (
                     "RoomEvent::Reconnected should be fired on a resume"
