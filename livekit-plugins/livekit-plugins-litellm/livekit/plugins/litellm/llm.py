@@ -10,25 +10,33 @@ responses across 100+ LLM providers into a single OpenAI-compatible interface.
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 import httpx
+import openai as _openai
 
 from livekit.agents.llm import ToolChoice
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 from livekit.plugins.openai import LLM as OpenAILLM
 
+_OPENAI_SENTINEL_TYPES = (type(_openai.NOT_GIVEN),)
+try:
+    _OPENAI_SENTINEL_TYPES = (type(_openai.NOT_GIVEN), type(_openai.OMIT))
+except AttributeError:
+    pass
+
 
 def _is_openai_sentinel(value: Any) -> bool:
     """Check if a value is an OpenAI SDK sentinel (omit, NOT_GIVEN, etc.)."""
-    type_name = type(value).__name__
-    return type_name in ("Omit", "NotGiven", "_Omit")
+    return isinstance(value, _OPENAI_SENTINEL_TYPES)
 
 
 class _LiteLLMCompletions:
     """Shim mapping ``chat.completions.create(**kw)`` to ``litellm.acompletion(**kw)``."""
+
+    def __init__(self, api_key: str | None = None) -> None:
+        self._api_key = api_key
 
     async def create(self, **kwargs: Any) -> Any:
         try:
@@ -50,18 +58,24 @@ class _LiteLLMCompletions:
         # Strip LiveKit-specific headers that litellm doesn't need
         cleaned.pop("extra_headers", None)
 
+        # Forward api_key if provided at construction time
+        if self._api_key:
+            cleaned.setdefault("api_key", self._api_key)
+
         cleaned.setdefault("drop_params", True)
         return await litellm.acompletion(**cleaned)
 
 
 class _LiteLLMChat:
-    completions = _LiteLLMCompletions()
+    def __init__(self, api_key: str | None = None) -> None:
+        self.completions = _LiteLLMCompletions(api_key=api_key)
 
 
 class _LiteLLMClientShim:
     """AsyncOpenAI-shaped facade that routes through the LiteLLM SDK."""
 
-    chat = _LiteLLMChat()
+    def __init__(self, api_key: str | None = None) -> None:
+        self.chat = _LiteLLMChat(api_key=api_key)
 
     class _BaseURL:
         netloc = b"litellm"
@@ -107,8 +121,9 @@ class LLM(OpenAILLM):
         Args:
             model: LiteLLM model identifier (e.g. "anthropic/claude-sonnet-4-6",
                 "openai/gpt-4o", "vertex_ai/gemini-2.5-flash").
-            api_key: Optional API key. When omitted, LiteLLM resolves credentials
-                from provider-specific env vars.
+            api_key: Optional API key. Forwarded to litellm.acompletion() on every
+                call. When omitted, LiteLLM resolves credentials from
+                provider-specific env vars.
             temperature: Sampling temperature.
             top_p: Top-p (nucleus) sampling parameter.
             parallel_tool_calls: Whether to allow parallel tool calls.
@@ -117,13 +132,12 @@ class LLM(OpenAILLM):
             timeout: HTTP timeout configuration.
             max_retries: Maximum number of retries on transient errors.
         """
-        if is_given(api_key) and api_key:
-            os.environ.setdefault("LITELLM_API_KEY", api_key)
+        resolved_key = api_key if is_given(api_key) else None
 
         super().__init__(
             model=model,
             api_key="unused",
-            client=_LiteLLMClientShim(),  # type: ignore[arg-type]
+            client=_LiteLLMClientShim(api_key=resolved_key),  # type: ignore[arg-type]
             temperature=temperature,
             top_p=top_p,
             parallel_tool_calls=parallel_tool_calls,

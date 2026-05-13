@@ -93,6 +93,22 @@ class TestLiteLLMShim(unittest.TestCase):
         )
         self.assertNotIn("extra_headers", mock_acompletion.call_args.kwargs)
 
+    @patch("litellm.acompletion", new_callable=AsyncMock, return_value=_make_response())
+    def test_api_key_forwarded_to_litellm(self, mock_acompletion):
+        shim = _LiteLLMClientShim(api_key="sk-test-123")
+        asyncio.get_event_loop().run_until_complete(
+            shim.chat.completions.create(model="openai/gpt-4o", messages=[])
+        )
+        self.assertEqual(mock_acompletion.call_args.kwargs["api_key"], "sk-test-123")
+
+    @patch("litellm.acompletion", new_callable=AsyncMock, return_value=_make_response())
+    def test_no_api_key_when_not_provided(self, mock_acompletion):
+        shim = _LiteLLMClientShim()
+        asyncio.get_event_loop().run_until_complete(
+            shim.chat.completions.create(model="openai/gpt-4o", messages=[])
+        )
+        self.assertNotIn("api_key", mock_acompletion.call_args.kwargs)
+
     def test_shim_has_base_url(self):
         shim = _LiteLLMClientShim()
         self.assertEqual(shim._base_url.netloc, b"litellm")
@@ -121,6 +137,10 @@ class TestLiteLLMLLM(unittest.TestCase):
     def test_provider_is_litellm(self):
         llm_inst = LLM(model="anthropic/claude-sonnet-4-6")
         self.assertEqual(llm_inst.provider, "litellm")
+
+    def test_api_key_reaches_shim(self):
+        llm_inst = LLM(model="openai/gpt-4o", api_key="sk-test-456")
+        self.assertEqual(llm_inst._client.chat.completions._api_key, "sk-test-456")
 
 
 if __name__ == "__main__":
