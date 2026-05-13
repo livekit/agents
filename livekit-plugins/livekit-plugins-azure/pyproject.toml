@@ -23,7 +23,7 @@ classifiers = [
 ]
 dependencies = [
     "livekit-agents>=1.5.8",
-    "azure-cognitiveservices-speech>=1.43.0",
+    "azure-cognitiveservices-speech>=1.48.2",
 ]
 
 [project.urls]
