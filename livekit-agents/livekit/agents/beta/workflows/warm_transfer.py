@@ -45,6 +45,8 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         sip_connection: NotGivenOr[api.SIPOutboundConfig] = NOT_GIVEN,
         sip_number: NotGivenOr[str] = NOT_GIVEN,
         sip_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
+        dtmf: NotGivenOr[str | None] = NOT_GIVEN,
+        ringing_timeout: NotGivenOr[float | None] = NOT_GIVEN,
         hold_audio: NotGivenOr[AudioSource | AudioConfig | list[AudioConfig] | None] = NOT_GIVEN,
         instructions: NotGivenOr[InstructionParts | Instructions | str] = NOT_GIVEN,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
@@ -72,6 +74,13 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
                 saved trunk. Use this when you need to specify a custom hostname,
                 transport, or authentication credentials directly, bypassing the
                 trunk-based configuration.
+            dtmf: DTMF tones to send once the human agent's call is answered, e.g. to dial
+                an extension or navigate an IVR menu (``"1234#"``). Insert ``w`` characters
+                to pause ~0.5s each before/between digits (``"wwww1234#"`` waits ~2s, useful
+                when the destination plays a greeting before accepting input).
+            ringing_timeout: How long to wait, in seconds, for the human agent to answer
+                before giving up on the call. When the timeout elapses the task completes
+                with a ``ToolError`` and the caller conversation resumes.
             hold_audio: Audio played to the caller while they are on hold during the
                     transfer.
             extra_instructions: Extra instructions to append to the base instructions
@@ -136,6 +145,8 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
             sip_number if is_given(sip_number) else os.getenv("LIVEKIT_SIP_NUMBER", "")
         )
         self._sip_headers = sip_headers if is_given(sip_headers) else {}
+        self._dtmf = dtmf if is_given(dtmf) else None
+        self._ringing_timeout = ringing_timeout if is_given(ringing_timeout) else None
 
         # background audio and io
         self._background_audio = BackgroundAudioPlayer()
@@ -327,7 +338,10 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
             wait_until_answered=True,
             sip_number=self._sip_number or None,
             headers=self._sip_headers,
+            dtmf=self._dtmf or "",
         )
+        if self._ringing_timeout is not None:
+            sip_request.ringing_timeout.FromNanoseconds(int(self._ringing_timeout * 1e9))
         if self._sip_connection is not None:
             sip_request.trunk.CopyFrom(self._sip_connection)
         await job_ctx.api.sip.create_sip_participant(sip_request)
