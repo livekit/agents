@@ -26,16 +26,14 @@ lk.test('backchannel: agent resumes, no interruption') {
 
   fakes: {
     llm: lk.llm.responses(['Once upon a time there was a small village.']),
-    // STT script: per speech segment, the interim stream and the committed
-    // final transcript. Interims are auto-spaced through the audio
-    // duration; final fires at end_of_speech + stt_delay. Second segment
-    // has no entry — FakeSTT mirrors real STT yielding nothing on an
-    // unintelligible chunk.
-    stt: lk.stt.responses([
-      {
-        interim: ['tell', 'tell me', 'tell me a story'],
-        final:   'tell me a story',
-      },
+    // Second segment has no entry — FakeSTT mirrors real STT yielding
+    // nothing on an unintelligible chunk.
+    stt: lk.stt.script([
+      { events: [
+        { type: 'interim', text: 'tell',            at_ms: 200 },
+        { type: 'interim', text: 'tell me a story', at_ms: 600 },
+        { type: 'final',   text: 'tell me a story', at_ms: 800 },
+      ] },
     ]),
   },
 
