@@ -1,17 +1,17 @@
 // Backchannel: short utterance during agent speech that should NOT be
 // classified as an interruption. After false_interruption_timeout the
-// agent resumes and the original message completes normally.
+// agent resumes; the original message completes normally; the
+// held-transcript machinery suppresses the backchannel transcript so
+// only one final reaches chat context.
 
 local lk = import 'livekit/test.libsonnet';
 
-// ── Audio fixtures ────────────────────────────────────────────────────
 local STORY_REQ = lk.audio.fixture('tell_me_a_story');
 local MM_HMM    = lk.audio.fixture('mm_hmm');
 
-// ── Timing model ──────────────────────────────────────────────────────
-local BACKCHANNEL_AT    = 2000;  // backchannel starts (after agent.speaking)
-local FALSE_INT_TIMEOUT = 1500;  // wait after overlap end to resume
-local MIN_INTERRUPT_DUR = 500;   // threshold for "real" interruption
+local BACKCHANNEL_AT    = 2000;
+local FALSE_INT_TIMEOUT = 1500;
+local MIN_INTERRUPT_DUR = 500;
 
 lk.test('backchannel: agent resumes, no interruption') {
   agent: 'examples.echo:EchoAgent',
@@ -20,20 +20,18 @@ lk.test('backchannel: agent resumes, no interruption') {
     interruption: {
       min_duration_ms:               MIN_INTERRUPT_DUR,
       false_interruption_timeout_ms: FALSE_INT_TIMEOUT,
-      backchannel_boundary:          [0, 0],   // override default (1.0, 3.5)
+      backchannel_boundary:          [0, 0],
     },
   },
 
   fakes: {
     llm: lk.llm.responses(['Once upon a time there was a small village.']),
-    // Second segment has no entry — FakeSTT mirrors real STT yielding
-    // nothing on an unintelligible chunk.
     stt: lk.stt.script([
       { events: [
         { type: 'interim', text: 'tell',            at_ms: 200 },
-        { type: 'interim', text: 'tell me a story', at_ms: 600 },
         { type: 'final',   text: 'tell me a story', at_ms: 800 },
       ] },
+      // Second segment intentionally absent.
     ]),
   },
 
@@ -43,12 +41,36 @@ lk.test('backchannel: agent resumes, no interruption') {
   ],
 
   expect: {
-    'vad.start_of_speech':         { count: 2 },
-    'overlap.detected[0]':         { is_interruption: false },
-    'agent.false_interruption[0]': { resumed: true,
-                                     after_overlap_ms: lk.ms.approx(FALSE_INT_TIMEOUT, 100) },
-    'assistant_messages[0]':       { interrupted: false, contains: 'small village' },
-    'stt.final':                   { count: 1 },
+    // VAD detected both audio segments — real signal-level evidence the
+    // backchannel reached the SDK, despite STT yielding nothing for it.
+    'vad.start_of_speech': { count: 2 },
+
+    // Classifier correctly rejected the second segment as a backchannel.
+    'overlap.detected':    { count: 1 },
+    'overlap.detected[0]': { is_interruption: false },
+
+    // False-interrupt fired with resumed=true at the expected timing.
+    'agent.false_interruption':    { count: 1 },
+    'agent.false_interruption[0]': {
+      resumed:          true,
+      after_overlap_ms: lk.ms.approx(FALSE_INT_TIMEOUT, 100),
+    },
+
+    // Original message completes — not interrupted, and audio actually
+    // finished playing (catches a class of bugs where the resume marks
+    // the flag right but the audio playback was already aborted).
+    'assistant_messages':    { count: 1 },
+    'assistant_messages[0]': {
+      interrupted:     false,
+      audio_played_ms: lk.ms.gt(1000),
+    },
+
+    // Held-transcript machinery suppressed the backchannel: 2 VAD segments
+    // but only 1 final transcript reached the chat context.
+    'stt.final':     { count: 1 },
+
+    // No second LLM call — agent didn't generate a response for the backchannel.
+    'llm.requested': { count: 1 },
   },
 
   invariants: [
