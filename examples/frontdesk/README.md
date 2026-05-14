@@ -23,7 +23,7 @@ The slots are also cached as a lookup table for `schedule_appointment`.
 https://github.com/livekit/agents/blob/8283a5a5c9863a07bcf030ee90e8ab780e1e569b/examples/frontdesk/frontdesk_agent.py#L184
 
 
-This prevents the LLM from passing a hallucinated answer.
+If the slot is invalid, we raise a `ToolError` to allow the LLM to self correct, which prevents the LLM from passing a hallucinated answer.
 
 https://github.com/livekit/agents/blob/8283a5a5c9863a07bcf030ee90e8ab780e1e569b/examples/frontdesk/frontdesk_agent.py#L94-L95
 
