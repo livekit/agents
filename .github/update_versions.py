@@ -125,7 +125,7 @@ def update_plugins_pyproject_agents_version(new_agents_version: str) -> None:
         pyproject = pdir / "pyproject.toml"
         if pyproject.exists():
             old_text = pyproject.read_text()
-            pattern = r'("livekit-agents(?:\[.*?\])?[=><!~]+)([\w\.\-]+)(?=")'
+            pattern = r'("livekit-agents(?:\[.*?\])?\s*[=><!~]+\s*)([\w\.\-]+)(?=")'
 
             def replacer(m: re.Match) -> str:
                 return f"{m.group(1)}{new_agents_version}"

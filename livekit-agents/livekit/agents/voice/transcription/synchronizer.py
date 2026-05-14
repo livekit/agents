@@ -13,7 +13,7 @@ from livekit import rtc
 
 from ... import tokenize, utils
 from ...log import logger
-from ...types import NOT_GIVEN, NotGivenOr
+from ...types import NOT_GIVEN, NotGivenOr, TimedString
 from ...utils import is_given
 from .. import io
 from ._speaking_rate import SpeakingRateDetector, SpeakingRateStream
@@ -148,7 +148,7 @@ class _SegmentSynchronizerImpl:
         self._speed_on_speaking_unit: float | None = None  # hyphens per speaking unit
         # a speaking unit is defined by the speaking rate estimation method, it's a relative unit
 
-        self._out_ch = utils.aio.Chan[str]()
+        self._out_ch = utils.aio.Chan[TimedString]()
         self._close_future = asyncio.Future[None]()
 
         self._main_atask = asyncio.create_task(self._main_task())
@@ -171,16 +171,24 @@ class _SegmentSynchronizerImpl:
     def text_input_ended(self) -> bool:
         return self._text_data.done
 
+    def on_playback_started(self, start_time: float) -> None:
+        if self.closed:
+            logger.warning("_SegmentSynchronizerImpl.on_playback_started called after close")
+            return
+
+        if self._start_fut.is_set():
+            logger.warning(
+                "_SegmentSynchronizerImpl.on_playback_started called after start_fut is set"
+            )
+            return
+
+        self._start_wall_time = start_time
+        self._start_fut.set()
+
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         if self.closed:
             logger.warning("_SegmentSynchronizerImpl.push_audio called after close")
             return
-
-        # the first audio frame we receive marks the start of the sync
-        # see `TranscriptSynchronizer` docstring
-        if self._start_wall_time is None and frame.duration > 0:
-            self._start_wall_time = time.time()
-            self._start_fut.set()
 
         self._audio_data.sr_stream.push_frame(frame)
         self._audio_data.pushed_duration += frame.duration
@@ -328,7 +336,9 @@ class _SegmentSynchronizerImpl:
                 return
 
             if self._playback_completed:
-                self._out_ch.send_nowait(word)
+                self._out_ch.send_nowait(
+                    TimedString(word, end_time=time.time() - self._start_wall_time)
+                )
                 continue
 
             word_hyphens = len(self._opts.hyphenate_word(word))
@@ -361,7 +371,9 @@ class _SegmentSynchronizerImpl:
                 delay = 0
 
             await self._sleep_if_not_closed(delay / 2.0)
-            self._out_ch.send_nowait(word)
+            self._out_ch.send_nowait(
+                TimedString(word, end_time=time.time() - self._start_wall_time)
+            )
             await self._sleep_if_not_closed(delay / 2.0)
 
             self._text_data.forwarded_hyphens += word_hyphens
@@ -384,6 +396,9 @@ class _SegmentSynchronizerImpl:
             return
 
         self._close_future.set_result(None)
+        if self._start_wall_time is None:
+            # avoid assertion error in _main_task if playback completed
+            self._start_wall_time = time.time()
         self._start_fut.set()  # avoid deadlock of main_task in case it never started
         self._output_enabled_ev.set()
         await self._text_data.word_stream.aclose()
@@ -397,7 +412,7 @@ class TranscriptSynchronizer:
     Synchronizes text with audio playback timing.
 
     This class is responsible for synchronizing text with audio playback timing.
-    It currently assumes that the first push_audio is starting the audio playback of a segment.
+    It starts sending transcription when AudioOutput.on_playback_started is called.
     """
 
     def __init__(
@@ -431,6 +446,10 @@ class TranscriptSynchronizer:
         # track pause state at the synchronizer level to apply to new impls after rotation
         self._paused = False
 
+        # warn once per enabled cycle when only one of audio/text is detached; reset when
+        # the synchronizer transitions back to enabled
+        self._warned_asymmetric_detach = False
+
         # initial segment/first segment, recreated for each new segment
         self._impl = _SegmentSynchronizerImpl(options=self._opts, next_in_chain=next_in_chain_text)
         self._rotate_segment_atask: asyncio.Task[None] | None = None
@@ -457,6 +476,8 @@ class TranscriptSynchronizer:
             return
 
         self._enabled = enabled
+        if enabled:
+            self._warned_asymmetric_detach = False
         if not self._rotate_segment_atask or self._rotate_segment_atask.done():
             # avoid calling rotate_segment twice when closing the session during agent speaking
             # first time when speech interrupted, second time here when output detached
@@ -541,6 +562,17 @@ class _SyncedAudioOutput(io.AudioOutput):
         self._pushed_duration += frame.duration
 
         if not self._synchronizer.enabled:
+            if (
+                self._synchronizer._audio_attached
+                and not self._synchronizer._text_attached
+                and not self._synchronizer._warned_asymmetric_detach
+            ):
+                self._synchronizer._warned_asymmetric_detach = True
+                logger.warning(
+                    "TranscriptSynchronizer text output was detached while audio output is "
+                    "still active; transcription sync is disabled. This usually means "
+                    "session.output.transcription was replaced after AgentSession.start()."
+                )
             return
 
         if self._synchronizer._impl.audio_input_ended:
@@ -571,6 +603,11 @@ class _SyncedAudioOutput(io.AudioOutput):
         self._next_in_chain.clear_buffer()
 
     # this is going to be automatically called by the next_in_chain
+    def on_playback_started(self, *, created_at: float) -> None:
+        super().on_playback_started(created_at=created_at)
+        if self._synchronizer.enabled:
+            self._synchronizer._impl.on_playback_started(start_time=created_at)
+
     def on_playback_finished(
         self,
         *,
@@ -634,6 +671,17 @@ class _SyncedTextOutput(io.TextOutput):
         await self._synchronizer.barrier()
 
         if not self._synchronizer.enabled:  # passthrough text if the synchronizer is disabled
+            if (
+                self._synchronizer._text_attached
+                and not self._synchronizer._audio_attached
+                and not self._synchronizer._warned_asymmetric_detach
+            ):
+                self._synchronizer._warned_asymmetric_detach = True
+                logger.warning(
+                    "TranscriptSynchronizer audio output was detached while text output is "
+                    "still active; transcription sync is disabled. This usually means "
+                    "session.output.audio was replaced after AgentSession.start()."
+                )
             if self._next_in_chain:
                 await self._next_in_chain.capture_text(text)
             return

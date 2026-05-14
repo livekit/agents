@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
+from google.protobuf.duration_pb2 import Duration
 from google.protobuf.timestamp_pb2 import Timestamp
 
 from livekit import rtc
@@ -32,6 +33,7 @@ from ..metrics import (
     TTSModelUsage,
 )
 from ..version import __version__
+from ..voice.amd import AMDCategory, AMDPredictionEvent
 from .events import (
     AgentState,
     AgentStateChangedEvent,
@@ -248,6 +250,14 @@ _METRICS_FIELDS = (
     "e2e_latency",
 )
 
+_AMD_CATEGORY_MAP: dict[AMDCategory, agent_pb.AmdCategory] = {
+    AMDCategory.HUMAN: agent_pb.AmdCategory.AMD_HUMAN,
+    AMDCategory.MACHINE_IVR: agent_pb.AmdCategory.AMD_MACHINE_IVR,
+    AMDCategory.MACHINE_VM: agent_pb.AmdCategory.AMD_MACHINE_VM,
+    AMDCategory.MACHINE_UNAVAILABLE: agent_pb.AmdCategory.AMD_MACHINE_UNAVAILABLE,
+    AMDCategory.UNCERTAIN: agent_pb.AmdCategory.AMD_UNCERTAIN,
+}
+
 
 def _tool_names(tools: Sequence[llm.Tool | Toolset]) -> list[str]:
     result: list[str] = []
@@ -328,7 +338,7 @@ def _serialize_options(opts: AgentSessionOptions) -> dict[str, str]:
         "interruption": str(dict(opts.interruption)),
         "max_tool_steps": str(opts.max_tool_steps),
         "user_away_timeout": str(opts.user_away_timeout),
-        "preemptive_generation": str(opts.preemptive_generation),
+        "preemptive_generation": str(dict(opts.preemptive_generation)),
         "min_consecutive_speech_delay": str(opts.min_consecutive_speech_delay),
         "use_tts_aligned_transcript": str(opts.use_tts_aligned_transcript),
         "ivr_detection": str(opts.ivr_detection),
@@ -523,6 +533,27 @@ class SessionHost:
             pb.overlap_started_at.CopyFrom(overlap_started_at)
 
         self._send_event(agent_pb.AgentSessionEvent(overlapping_speech=pb))
+
+    def _on_amd_prediction(self, event: AMDPredictionEvent) -> None:
+        speech_duration = Duration()
+        speech_duration.FromNanoseconds(int(event.speech_duration * 1e9))
+
+        delay = Duration()
+        delay.FromNanoseconds(int(event.delay * 1e9))
+
+        self._send_event(
+            agent_pb.AgentSessionEvent(
+                amd_prediction=agent_pb.AgentSessionEvent.AmdPrediction(
+                    speech_duration=speech_duration,
+                    delay=delay,
+                    category=_AMD_CATEGORY_MAP[event.category],
+                    reason=event.reason,
+                    transcript=event.transcript,
+                )
+            )
+        )
+
+    # TODO: @chenghao-mou add EOT prediction event
 
     def _on_session_usage_updated(self, event: SessionUsageUpdatedEvent) -> None:
         self._send_event(

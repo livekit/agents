@@ -64,7 +64,7 @@ class LLM(llm.LLM):
     def __init__(
         self,
         *,
-        model: str | ChatModels = "claude-3-5-sonnet-20241022",
+        model: str | ChatModels = "claude-sonnet-4-6",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         user: NotGivenOr[str] = NOT_GIVEN,
@@ -75,6 +75,7 @@ class LLM(llm.LLM):
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         caching: NotGivenOr[Literal["ephemeral"]] = NOT_GIVEN,
+        timeout: NotGivenOr[httpx.Timeout] = NOT_GIVEN,
         _strict_tool_schema: bool = True,
     ) -> None:
         """
@@ -83,11 +84,17 @@ class LLM(llm.LLM):
         ``api_key`` must be set to your Anthropic API key, either using the argument or by setting
         the ``ANTHROPIC_API_KEY`` environmental variable.
 
-        model (str | ChatModels): The model to use. Defaults to "claude-3-5-sonnet-20241022".
+        model (str | ChatModels): The model to use. Defaults to "claude-sonnet-4-6".
         api_key (str, optional): The Anthropic API key. Defaults to the ANTHROPIC_API_KEY environment variable.
         base_url (str, optional): The base URL for the Anthropic API. Defaults to None.
         user (str, optional): The user for the Anthropic API. Defaults to None.
         client (anthropic.AsyncClient | None): The Anthropic client to use. Defaults to None.
+        timeout (httpx.Timeout | None): HTTP timeout configuration for the underlying httpx client.
+            Defaults to ``httpx.Timeout(5.0, read=30.0)``, which keeps a tight connect timeout
+            while allowing up to 30 s between streamed chunks — long enough for Claude's
+            adaptive-thinking phases without masking genuine network stalls.
+            Pass a custom ``httpx.Timeout`` to override (e.g. ``httpx.Timeout(5.0, read=60.0)``
+            for very large contexts or extended thinking budgets).
         temperature (float, optional): The temperature for the Anthropic API. Defaults to None.
         parallel_tool_calls (bool, optional): Whether to parallelize tool calls. Defaults to None.
         tool_choice (ToolChoice, optional): The tool choice for the Anthropic API. Defaults to "auto".
@@ -118,7 +125,7 @@ class LLM(llm.LLM):
             api_key=anthropic_api_key,
             base_url=base_url if is_given(base_url) else None,
             http_client=httpx.AsyncClient(
-                timeout=5.0,
+                timeout=timeout or httpx.Timeout(5.0, read=30.0),
                 follow_redirects=True,
                 limits=httpx.Limits(
                     max_connections=1000,

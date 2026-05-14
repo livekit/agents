@@ -14,7 +14,7 @@ from livekit.agents import (
     get_job_context,
     utils,
 )
-from livekit.agents.voice.avatar import DataStreamAudioOutput
+from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
 from .api import DIDAPI
@@ -26,7 +26,7 @@ _AVATAR_AGENT_IDENTITY = "d-id-avatar-agent"
 _AVATAR_AGENT_NAME = "d-id-avatar-agent"
 
 
-class AvatarSession:
+class AvatarSession(BaseAvatarSession):
     """A D-ID avatar session"""
 
     def __init__(
@@ -79,6 +79,8 @@ class AvatarSession:
         livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
         livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
+        await super().start(agent_session, room)
+
         _livekit_url = livekit_url if utils.is_given(livekit_url) else os.getenv("LIVEKIT_URL")
         _livekit_api_key = (
             livekit_api_key if utils.is_given(livekit_api_key) else os.getenv("LIVEKIT_API_KEY")

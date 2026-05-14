@@ -11,6 +11,7 @@ import aiohttp
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     tokenize,
@@ -291,6 +292,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             await asyncio.gather(*tasks)
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
+        except APIError:
+            raise
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
                 message=e.message, status_code=e.status, request_id=request_id, body=None
@@ -344,10 +347,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                         break
                     elif mtype == "Warning":
                         logger.warning("Deepgram warning: %s", resp.get("warn_msg"))
+                    elif mtype in ("Error", "error"):
+                        raise APIError(message="Deepgram TTS returned error", body=resp)
                     elif mtype == "Metadata":
                         pass
                     else:
-                        logger.debug("Unknown message type: %s", resp)
+                        logger.warning("Unknown Deepgram message type: %s", resp)
 
         async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
             self._acquire_time = self._tts._pool.last_acquire_time

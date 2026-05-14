@@ -509,8 +509,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             self._mark_started()
 
             # Synthesize
-            request_id = str(uuid.uuid4())
-            audio_queue = await self._tts._client.synthesize(full_text, request_id)
+            audio_queue = await self._tts._client.synthesize(full_text, segment_id)
 
             # Stream audio
             while True:
