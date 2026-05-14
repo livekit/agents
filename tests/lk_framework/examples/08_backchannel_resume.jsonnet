@@ -1,20 +1,30 @@
 // Backchannel: short utterance during agent speech that should NOT be
-// classified as an interruption. The adaptive detector marks it
-// is_interruption=false; after false_interruption_timeout the agent
-// resumes; the original message completes normally.
+// classified as an interruption. After false_interruption_timeout the
+// agent resumes and the original message completes normally.
 
 local lk = import 'livekit/test.libsonnet';
 
-lk.test('backchannel does not interrupt: agent resumes after false-interrupt timeout') {
+// ── Timing model ──────────────────────────────────────────────────────
+local BACKCHANNEL_AT        = 2000;  // backchannel starts (after agent.speaking)
+local BACKCHANNEL_DUR       = 300;   // duration — below MIN_INTERRUPT_DUR
+local MIN_INTERRUPT_DUR     = 500;   // threshold for "real" interruption
+local FALSE_INT_TIMEOUT     = 1500;  // wait after overlap end to resume
+local TOLERANCE             = 100;   // tolerance for timeout assertions
+
+// Derived: BACKCHANNEL_DUR < MIN_INTERRUPT_DUR → classified as backchannel.
+// Resume fires FALSE_INT_TIMEOUT after the overlap ends.
+
+lk.test('backchannel does not interrupt: agent resumes after timeout') {
   agent: 'examples.echo:EchoAgent',
   clock: 'virtual',
+
   session: {
     interruption: {
-      mode:                       'adaptive',
-      min_duration:               0.5,
-      resume_false_interruption:  true,
-      false_interruption_timeout: 1.5,
-      backchannel_boundary:       [0, 0],
+      mode:                           'adaptive',
+      min_duration_ms:                MIN_INTERRUPT_DUR,
+      resume_false_interruption:      true,
+      false_interruption_timeout_ms:  FALSE_INT_TIMEOUT,
+      backchannel_boundary:           [0, 0],
     },
   },
 
@@ -23,42 +33,39 @@ lk.test('backchannel does not interrupt: agent resumes after false-interrupt tim
       'Once upon a time there was a small village by a river. ' +
       'The villagers lived peacefully for many years.',
     ]),
-    tts: { audio_duration_per_char: 50, ttfb_ms: 300 },
+    tts: { audio_duration_per_char_ms: 50, ttfb_ms: 300 },
   },
 
   scenario: lk.user.timeline([
     lk.user.says('tell me a story', duration_ms=700, at='t=0'),
-
-    // Short "mm-hmm" — below min_duration. Should be a backchannel.
-    lk.user.says('mm-hmm',          duration_ms=300,
-                 at='agent.speaking + 2000ms'),
+    lk.user.says('mm-hmm',          duration_ms=BACKCHANNEL_DUR,
+                 at='agent.speaking + %dms' % BACKCHANNEL_AT),
   ]),
 
   expect: {
-    // Overlap was detected but classified as NOT an interruption
+    // Duration (300ms) < threshold (500ms) → not an interruption
     'overlap.detected[0]': { is_interruption: false },
 
-    // False interruption event fires with resumed=true after timeout
+    // Resume fires exactly FALSE_INT_TIMEOUT after overlap ends
     'agent.false_interruption[0]': {
       resumed:          true,
-      after_overlap_ms: lk.ms.approx(1500, tolerance=100),
+      after_overlap_ms: lk.ms.approx(FALSE_INT_TIMEOUT, tolerance=TOLERANCE),
     },
 
-    // The original assistant message completes normally — NOT interrupted
+    // Original message completes normally — never marked interrupted
     'messages[0]': {
       role:        'assistant',
       interrupted: false,
       contains:    'peacefully for many years',
     },
 
-    // The held STT transcript for the backchannel was suppressed; only one
-    // final transcript made it through (the original user request).
+    // Held-transcript machinery suppressed the backchannel transcript
     'stt.final': { count: lk.count.eq(1) },
   },
 
   budgets: {
-    // Resume timing aligns with false_interruption_timeout
-    false_interruption_resume: lk.ms.approx(1500, tolerance=100),
+    false_interruption_resume:
+      lk.ms.approx(FALSE_INT_TIMEOUT, tolerance=TOLERANCE),
   },
 
   invariants: [

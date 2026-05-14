@@ -1,17 +1,29 @@
-// Barge-in: user starts speaking 1500ms into the agent's response. The
-// adaptive interruption detector should classify this as a true
-// interruption, the agent must stop within budget, and audio played should
-// be bounded — only what was heard before the cut.
+// Barge-in: user starts speaking 1500ms into the agent's response.
+// Tests adaptive interruption + cancellation propagation through the
+// entire LLM → TTS → audio pipeline.
 
 local lk = import 'livekit/test.libsonnet';
+
+// ── Timing model ──────────────────────────────────────────────────────
+local BARGE_AT          = 1500;  // user starts barging in (after agent.speaking)
+local VAD_DETECT        = 50;    // FakeVAD start_of_speech detection latency
+local CANCEL_TAIL_MAX   = 200;   // cumulative LLM+TTS+flush after barge-in
+local MIN_INTERRUPT_DUR = 500;   // session.interruption.min_duration
+
+// Derived: how much audio could legitimately have played
+// Low bound: barge-in time minus the VAD latency before detection registers
+// High bound: barge-in time plus the maximum cancel-tail allowed
+local AUDIO_FLOOR = BARGE_AT - VAD_DETECT;        // 1450
+local AUDIO_CEIL  = BARGE_AT + CANCEL_TAIL_MAX;   // 1700
 
 lk.test('barge-in: user cuts agent off mid-speech, agent stops fast') {
   agent: 'examples.echo:EchoAgent',
   clock: 'virtual',
+
   session: {
     interruption: {
       mode:                 'adaptive',
-      min_duration:         0.5,
+      min_duration_ms:      MIN_INTERRUPT_DUR,
       backchannel_boundary: [0, 0],   // cooldowns off — deterministic
     },
   },
@@ -21,30 +33,25 @@ lk.test('barge-in: user cuts agent off mid-speech, agent stops fast') {
       'I am about to give a very long and detailed explanation that takes time.',
       'Sure, what is your question?',
     ]),
-    tts: { audio_duration_per_char: 50, ttfb_ms: 300 },
+    tts: { audio_duration_per_char_ms: 50, ttfb_ms: 300 },
   },
 
   scenario: lk.user.timeline([
     lk.user.says('tell me about yourself', duration_ms=900, at='t=0'),
-
-    // User barges in 1500ms after the agent starts speaking
     lk.user.says('actually, wait',         duration_ms=700,
-                 at='agent.speaking + 1500ms'),
+                 at='agent.speaking + %dms' % BARGE_AT),
   ]),
 
   expect: {
-    // Adaptive detector classified the overlap as a real interruption
     'overlap.detected[0]': { is_interruption: true },
 
-    // First message is marked interrupted; audio played is bounded — only
-    // what was heard before VAD+cancel propagation cut the playback.
     'messages[0]': {
       role:            'assistant',
       interrupted:     true,
-      audio_played_ms: lk.ms.between(1200, 1800),
+      // Audio heard ≈ barge-in time, bounded by VAD latency and cancel tail
+      audio_played_ms: lk.ms.between(AUDIO_FLOOR, AUDIO_CEIL),
     },
 
-    // Second message comes through normally
     'messages[1]': {
       role:        'assistant',
       interrupted: false,
@@ -52,8 +59,8 @@ lk.test('barge-in: user cuts agent off mid-speech, agent stops fast') {
     },
   },
 
+  // Per-stage cancellation budgets — each stage of the pipeline
   budgets: {
-    // Cancellation propagates across the pipeline within tight budgets
     llm_cancel_latency:  lk.ms.lt(50),
     tts_cancel_latency:  lk.ms.lt(50),
     audio_flush_latency: lk.ms.lt(50),
