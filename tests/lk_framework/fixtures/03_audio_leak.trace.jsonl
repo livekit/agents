@@ -1,0 +1,33 @@
+{"t":    0, "ev":"scenario.start"}
+{"t":    0, "ev":"user.audio_start",       "speech_id":"u1"}
+{"t":   50, "ev":"vad.start_of_speech",    "speech_id":"u1"}
+{"t":   50, "ev":"user.state_changed",     "to":"speaking"}
+{"t":  400, "ev":"user.speech_end",        "speech_id":"u1"}
+{"t":  400, "ev":"vad.end_of_speech"}
+{"t":  410, "ev":"stt.final",              "text":"hello"}
+{"t":  650, "ev":"eou.fired",              "delay_ms":250}
+{"t":  650, "ev":"agent.state_changed",    "to":"thinking"}
+{"t":  650, "ev":"llm.requested",          "id":"l1"}
+{"t":  650, "ev":"user.audio_start",       "speech_id":"u2"}
+{"t":  700, "ev":"vad.start_of_speech",    "speech_id":"u2"}
+{"t":  700, "ev":"user.state_changed",     "to":"speaking"}
+{"t":  700, "ev":"overlap.detected",       "is_interruption":true}
+{"t":  710, "ev":"llm.cancel_requested",   "id":"l1"}
+{"t":  720, "ev":"llm.cancelled",          "id":"l1", "tokens_produced":0}
+{"t":  720, "ev":"agent.state_changed",    "to":"listening"}
+{"t":  720, "ev":"message.committed",      "idx":0, "role":"assistant", "interrupted":true,  "audio_played_ms":0}
+{"t": 1400, "ev":"user.speech_end",        "speech_id":"u2"}
+{"t": 1410, "ev":"stt.final",              "text":"actually no"}
+{"t": 1650, "ev":"eou.fired",              "delay_ms":250}
+{"t": 1650, "ev":"llm.requested",          "id":"l2"}
+{"t": 1800, "ev":"llm.first_token",        "id":"l2"}
+{"t": 2050, "ev":"llm.last_token",         "id":"l2"}
+{"t": 2050, "ev":"tts.requested",          "id":"t2"}
+{"t": 2350, "ev":"tts.first_byte",         "id":"t2"}
+{"t": 2350, "ev":"audio.first_sample",     "speech_id":"a2"}
+{"t": 2350, "ev":"agent.state_changed",    "to":"speaking"}
+{"t": 4350, "ev":"tts.last_byte",          "id":"t2"}
+{"t": 4350, "ev":"audio.played",           "speech_id":"a2", "ms":2000}
+{"t": 4350, "ev":"agent.state_changed",    "to":"listening"}
+{"t": 4350, "ev":"message.committed",      "idx":1, "role":"assistant", "interrupted":false, "audio_played_ms":2000}
+{"t": 4350, "ev":"scenario.end"}

@@ -1,0 +1,54 @@
+{
+  "_comment": "What 03_audio_leak.jsonnet compiles to. This is the wire format both Python and JS runners consume. Note: no jsonnet-specific features survive; just data.",
+
+  "name": "no audio leak on false EOU",
+  "spec_version": 1,
+  "clock": "virtual",
+  "providers": "fake",
+
+  "agent": "examples.echo:EchoAgent",
+  "session": { "endpointing": { "min_delay": 0.25 } },
+
+  "fakes": {
+    "llm": {
+      "type": "serial",
+      "responses": [
+        { "text": "I should never be heard.", "ttft_ms": 200, "gen_ms": 800 },
+        { "text": "Okay, go on.",             "ttft_ms": 150, "gen_ms": 400 }
+      ]
+    },
+    "tts": { "audio_duration_per_char": 50, "ttfb_ms": 300 },
+    "vad": { "detection_latency_ms": 50 }
+  },
+
+  "scenario": {
+    "type": "user_timeline",
+    "steps": [
+      { "type": "user_says", "text": "hello",       "duration_ms": 400, "at": "t=0" },
+      { "type": "user_says", "text": "actually no", "duration_ms": 700, "at": "eou + 0ms" }
+    ]
+  },
+
+  "expect": {
+    "messages[0]": {
+      "role":            "assistant",
+      "interrupted":     true,
+      "audio_played_ms": { "kind": "eq", "value": 0, "unit": "ms" }
+    },
+    "messages[1]": {
+      "role":            "assistant",
+      "interrupted":     false,
+      "audio_played_ms": { "kind": "gt", "value": 0, "unit": "ms" }
+    }
+  },
+
+  "budgets": {
+    "llm_cancel_latency": { "kind": "lt", "value": 50, "unit": "ms" },
+    "tts_cancel_latency": { "kind": "lt", "value": 50, "unit": "ms" }
+  },
+
+  "invariants": [
+    { "id": "no_audio_while_user_speaking" },
+    { "id": "no_errors" }
+  ]
+}
