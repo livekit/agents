@@ -301,15 +301,19 @@ class _RecordingSession:
     """Stub session capturing generate_reply calls for _deliver_reply tests."""
 
     def __init__(self, agent: _RecordingAgent) -> None:
+        from livekit.agents.llm.chat_context import ChatContext
+
         self.agent = agent
         self.generate_reply_calls: list[dict] = []
+        self.history = ChatContext.empty()
+        self._global_run_state: Any = None
 
     @property
     def current_agent(self) -> _RecordingAgent:
         return self.agent
 
-    def generate_reply(self, *, instructions: str, tool_choice: str) -> None:
-        self.generate_reply_calls.append({"instructions": instructions, "tool_choice": tool_choice})
+    def generate_reply(self, **kwargs: Any) -> None:
+        self.generate_reply_calls.append(kwargs)
 
 
 class TestDeferredDelivery:

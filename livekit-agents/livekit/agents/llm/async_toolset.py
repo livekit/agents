@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, Literal, get_origin, get_type_hints
 
 from .. import utils
 from ..job import JobContext, get_job_context
-from ..llm.chat_context import ChatItem, FunctionCall
+from ..llm.chat_context import ChatContext, ChatItem, FunctionCall
 from ..llm.tool_context import (
     FunctionTool,
     RawFunctionTool,
@@ -19,6 +19,7 @@ from ..llm.tool_context import (
 )
 from ..llm.utils import function_arguments_to_pydantic_model, prepare_function_arguments
 from ..log import logger
+from ..types import NOT_GIVEN, NotGivenOr
 from ..voice.agent import _pass_through_activity_task_info
 from ..voice.events import RunContext, Userdata_T
 from ..voice.generation import ToolExecutionOutput, make_tool_output
@@ -305,6 +306,8 @@ class _AsyncToolManager:
         chat_ctx = target.chat_ctx.copy()
         chat_ctx.insert(items)
         await target.update_chat_ctx(chat_ctx)
+        # match normal tool dispatch: items go on session history too
+        ctx.session.history.insert(items)
 
         self._pending_updates.append(_PendingUpdate(ctx=ctx, items=items, target=target))
 
@@ -346,13 +349,21 @@ class _AsyncToolManager:
             return
 
         # only insert again if delivery target differs (session-scoped handoff)
+        chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN
         items_to_insert = [
             item for u in updates for item in u.items if u.target is not target_agent
         ]
         if items_to_insert:
+            logger.warning(
+                "agent handoff happened while async tool waiting for reply delivering",
+                extra={
+                    "tools": [
+                        u.ctx.function_call.name for u in updates if u.target is not target_agent
+                    ],
+                },
+            )
             chat_ctx = target_agent.chat_ctx.copy()
             chat_ctx.insert(items_to_insert)
-            await target_agent.update_chat_ctx(chat_ctx)
 
         # always fire, asks the LLM to return an empty response if these results were already conveyed
         pending_call_ids = [
@@ -361,6 +372,7 @@ class _AsyncToolManager:
         session.generate_reply(
             instructions=REPLY_INSTRUCTIONS.format(pending_call_ids=pending_call_ids),
             tool_choice="none",
+            chat_ctx=chat_ctx,
         )
 
     async def _check_duplicate(self, fnc_name: str, confirm_duplicate: bool | None) -> str | None:
