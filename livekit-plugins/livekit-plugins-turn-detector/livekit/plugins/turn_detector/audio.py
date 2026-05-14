@@ -3,10 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import ctypes
-import os
 import sys
-import time
-import wave
 import weakref
 from pathlib import Path
 

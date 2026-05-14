@@ -200,20 +200,12 @@ class AudioTurnDetectionStream(BaseAudioTurnDetectionStream):
         return ws
 
     def _process_message(self, msg: ServerMessage) -> None:
-        case = msg.WhichOneof("message")
-        match case:
+        match msg.WhichOneof("message"):
             case "eot_prediction":
                 prediction: EotPrediction = msg.eot_prediction
                 request_id = msg.request_id
                 if request_id != self._active_request_id:
-                    logger.debug(
-                        "stale request id received",
-                        extra={
-                            "incoming_request_id": request_id,
-                            "active_request_id": self._active_request_id,
-                            "status": self._status.value,
-                        },
-                    )
+                    logger.trace("stale request id received: %s", request_id)
                     return
 
                 probability = prediction.probability
@@ -222,7 +214,7 @@ class AudioTurnDetectionStream(BaseAudioTurnDetectionStream):
                 request_sent_at_ms = inference_stats.latest_client_created_at.ToMilliseconds()
 
                 if window_started_at_ms is not None and request_sent_at_ms < window_started_at_ms:
-                    logger.debug(
+                    logger.trace(
                         "ignoring stale eot prediction",
                         extra={
                             "request_id": request_id,
