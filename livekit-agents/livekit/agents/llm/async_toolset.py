@@ -24,6 +24,8 @@ from ..voice.events import RunContext, Userdata_T
 from ..voice.generation import ToolExecutionOutput, make_tool_output
 
 if TYPE_CHECKING:
+    from ..voice.agent import Agent
+    from ..voice.agent_activity import AgentActivity
     from ..voice.agent_session import AgentSession
 
 
@@ -58,7 +60,8 @@ async def cancel_task(call_id: str) -> str:
 
 
 UPDATE_TEMPLATE = """The tool `{function_name}` has updated, message: {message}
-The task is still running, so DON'T make up or give information not included in the message above."""
+The task is still running, so DON'T make up or give information not included in the message above.
+In your next reply to the user, naturally include this update (e.g. "by the way, ...") if you haven't already."""
 
 DUPLICATE_REJECT = """Same tool `{function_name}` is already running:
 {running_fnc_calls}
@@ -70,7 +73,10 @@ Re-call with confirm duplicate True to run a duplicate if needed,
 or if you want to cancel the existing one, call `cancel_task` with call_id."""
 
 REPLY_INSTRUCTIONS = """New results arrived from background tool calls (call_ids: {pending_call_ids}).
-Summarize these results to the user naturally. Do NOT repeat information you have already told the user."""
+Review your most recent assistant messages.
+- If your previous messages already conveyed these results to the user, return an empty response (no text at all).
+- Otherwise, summarize the results naturally with a transition like "by the way, ...".
+Do NOT repeat information you have already told the user."""
 
 
 class AsyncRunContext(RunContext[Userdata_T]):
@@ -87,7 +93,7 @@ class AsyncRunContext(RunContext[Userdata_T]):
         self._step_idx: int = 0
 
     async def update(self, message: str | Any, *, _template: str = UPDATE_TEMPLATE) -> None:
-        """Push an intermediate progress update into the conversation.
+        """Push a progress update into the conversation.
 
         Updates the chat context immediately and enqueues a speech delivery
         at the manager level. Multiple updates from different tools are
@@ -148,6 +154,8 @@ class _RunningTask:
 class _PendingUpdate:
     ctx: AsyncRunContext
     items: list[ChatItem]
+    # agent that received the eager chat_ctx insert
+    target: Agent
 
 
 class _AsyncToolManager:
@@ -159,13 +167,26 @@ class _AsyncToolManager:
     (activity-scoped lifetime — tasks are cancelled on handoff).
     """
 
-    def __init__(self, *, on_duplicate_call: DuplicateMode = "confirm") -> None:
+    def __init__(
+        self,
+        *,
+        on_duplicate_call: DuplicateMode = "confirm",
+        owning_activity: AgentActivity | None = None,
+    ) -> None:
         self._on_duplicate_call: DuplicateMode = on_duplicate_call
         self._running_tasks: dict[str, _RunningTask] = {}
 
         # speech delivery — shared across all tools in this manager
         self._pending_updates: list[_PendingUpdate] = []
         self._reply_task: asyncio.Task[None] | None = None
+
+        # owning_activity determines which agent gets the reply and when:
+        # if set, wait for this activity to be idle; if None, deliver to
+        # the current activity at reply time (session-scoped toolsets).
+        self._owning_activity: AgentActivity | None = owning_activity
+
+    def set_owning_activity(self, activity: AgentActivity | None) -> None:
+        self._owning_activity = activity
 
     @property
     def has_running_tasks(self) -> bool:
@@ -266,7 +287,8 @@ class _AsyncToolManager:
         return False
 
     async def aclose(self) -> None:
-        """Cancel all running tasks."""
+        """Cancel all running tasks and drop any buffered replies."""
+        self._pending_updates.clear()
         tasks = [task.exe_task for task in self._running_tasks.values()]
         if self._reply_task is not None:
             tasks.append(self._reply_task)
@@ -274,22 +296,42 @@ class _AsyncToolManager:
         self._running_tasks.clear()
 
     async def _enqueue_reply(self, ctx: AsyncRunContext, items: list[ChatItem]) -> None:
-        """Enqueue a reply for delivery. Coalesces with pending replies."""
-        agent = ctx.session.current_agent
-        chat_ctx = agent.chat_ctx.copy()
+        # eager insert so any reply before delivery sees the items
+        target = (
+            self._owning_activity.agent
+            if self._owning_activity is not None
+            else ctx.session.current_agent
+        )
+        chat_ctx = target.chat_ctx.copy()
         chat_ctx.insert(items)
-        await agent.update_chat_ctx(chat_ctx)
+        await target.update_chat_ctx(chat_ctx)
 
-        self._pending_updates.append(_PendingUpdate(ctx=ctx, items=items))
+        self._pending_updates.append(_PendingUpdate(ctx=ctx, items=items, target=target))
 
         if self._reply_task is None or self._reply_task.done():
             self._reply_task = asyncio.create_task(
                 self._deliver_reply(ctx.session), name="async_tool_manager_deliver_reply"
             )
+            # let an active run wait for the deferred reply to land
+            run_state = ctx.session._global_run_state
+            if run_state is not None:
+                run_state._watch_handle(self._reply_task)
 
     async def _deliver_reply(self, session: AgentSession) -> None:
-        """Wait for the agent to be idle, then generate a reply."""
-        await session.wait_for_inactive()
+        from ..voice.agent_activity import ActivityClosedError
+
+        target_agent: Agent
+        try:
+            if self._owning_activity is not None:
+                await self._owning_activity.wait_for_idle()
+                target_agent = self._owning_activity.agent
+            else:
+                target_activity = await session.wait_for_idle()
+                target_agent = target_activity.agent
+        except ActivityClosedError:
+            logger.debug("dropping async tool reply — owning activity closed")
+            self._pending_updates.clear()
+            return
 
         # no await after this line
 
@@ -303,13 +345,16 @@ class _AsyncToolManager:
         if not pending_items:
             return
 
-        # skip if the agent already spoke after our updates
-        # (e.g. user asked something and got a reply)
-        agent_chat_items = session.current_agent.chat_ctx.items
-        if agent_chat_items and agent_chat_items[-1].created_at > pending_items[-1].created_at:
-            logger.debug("skipping async tool reply — agent already spoke after updates")
-            return
+        # only insert again if delivery target differs (session-scoped handoff)
+        items_to_insert = [
+            item for u in updates for item in u.items if u.target is not target_agent
+        ]
+        if items_to_insert:
+            chat_ctx = target_agent.chat_ctx.copy()
+            chat_ctx.insert(items_to_insert)
+            await target_agent.update_chat_ctx(chat_ctx)
 
+        # always fire, asks the LLM to return an empty response if these results were already conveyed
         pending_call_ids = [
             item.call_id for item in pending_items if item.type == "function_call_output"
         ]
@@ -404,6 +449,11 @@ class AsyncToolset(Toolset):
 
     async def cancel(self, call_id: str) -> bool:
         return await self._manager.cancel(call_id)
+
+    def bind_activity(self, activity: AgentActivity | None) -> None:
+        # set when the toolset lives on Agent.tools (activity-scoped reply);
+        # None when it lives on AgentSession.tools (session-scoped reply).
+        self._manager.set_owning_activity(activity)
 
     async def aclose(self) -> None:
         await super().aclose()

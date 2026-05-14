@@ -40,6 +40,7 @@ from livekit.agents.llm.async_toolset import (
     _is_async_toolset_wrapper,
 )
 from livekit.agents.llm.utils import prepare_function_arguments
+from livekit.agents.voice.agent_activity import ActivityClosedError
 from livekit.agents.voice.events import RunContext
 from livekit.agents.voice.run_result import _run_mock, mock_tools
 from livekit.agents.voice.speech_handle import SpeechHandle
@@ -264,6 +265,131 @@ class TestManagerCancel:
     async def test_cancel_unknown_call_id(self) -> None:
         manager = _AsyncToolManager(on_duplicate_call="allow")
         assert await manager.cancel("does-not-exist") is False
+
+
+class _RecordingAgent:
+    def __init__(self) -> None:
+        from livekit.agents.llm.chat_context import ChatContext
+
+        self._chat_ctx = ChatContext.empty()
+        self.update_calls: list[Any] = []
+
+    @property
+    def chat_ctx(self) -> Any:
+        return self._chat_ctx
+
+    async def update_chat_ctx(self, chat_ctx: Any) -> None:
+        self.update_calls.append(chat_ctx)
+        self._chat_ctx = chat_ctx
+
+
+class _StubActivity:
+    """Stub for AgentActivity used as ``owning_activity`` on _AsyncToolManager."""
+
+    def __init__(self) -> None:
+        self.agent = _RecordingAgent()
+        self.gate = asyncio.Event()
+        self.closed = False
+
+    async def wait_for_idle(self) -> None:
+        await self.gate.wait()
+        if self.closed:
+            raise ActivityClosedError("simulated close")
+
+
+class _RecordingSession:
+    """Stub session capturing generate_reply calls for _deliver_reply tests."""
+
+    def __init__(self, agent: _RecordingAgent) -> None:
+        self.agent = agent
+        self.generate_reply_calls: list[dict] = []
+
+    @property
+    def current_agent(self) -> _RecordingAgent:
+        return self.agent
+
+    def generate_reply(self, *, instructions: str, tool_choice: str) -> None:
+        self.generate_reply_calls.append({"instructions": instructions, "tool_choice": tool_choice})
+
+
+class TestDeferredDelivery:
+    """Chat_ctx insert is eager so mid-flight replies see context; generate_reply is gated on idle."""
+
+    async def test_chat_ctx_eager_generate_reply_gated_on_idle(self) -> None:
+        activity = _StubActivity()
+        manager = _AsyncToolManager(on_duplicate_call="allow", owning_activity=activity)  # type: ignore[arg-type]
+
+        session = _RecordingSession(activity.agent)
+
+        @function_tool
+        async def quick(ctx: AsyncRunContext, value: str) -> str:
+            # ctx.update marks pending_fut so the post-update path triggers
+            # _enqueue_reply with the final return value.
+            await ctx.update("starting")
+            return value
+
+        ctx = RunContext(
+            session=cast(AgentSession, session),
+            speech_handle=SpeechHandle.create(),
+            function_call=FunctionCall(call_id="c1", name="quick", arguments='{"value": "x"}'),
+        )
+        await manager.spawn(
+            function_callable=_make_call(quick, {"value": "x"}),
+            run_ctx=ctx,
+        )
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+        # eager insert: chat_ctx was written immediately at enqueue time so
+        # any reply before the gated generate_reply can see the message.
+        assert len(activity.agent.update_calls) == 1, (
+            "chat_ctx should be eagerly written at enqueue time"
+        )
+        # generate_reply must still wait for the activity to be idle.
+        assert session.generate_reply_calls == []
+
+        activity.gate.set()
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+        # delivery target == eager target → no duplicate insert
+        assert len(activity.agent.update_calls) == 1
+        assert len(session.generate_reply_calls) == 1
+        await manager.aclose()
+
+    async def test_activity_closed_drops_pending_reply(self) -> None:
+        activity = _StubActivity()
+        manager = _AsyncToolManager(on_duplicate_call="allow", owning_activity=activity)  # type: ignore[arg-type]
+
+        session = _RecordingSession(activity.agent)
+
+        @function_tool
+        async def quick(ctx: AsyncRunContext, value: str) -> str:
+            await ctx.update("starting")
+            return value
+
+        ctx = RunContext(
+            session=cast(AgentSession, session),
+            speech_handle=SpeechHandle.create(),
+            function_call=FunctionCall(call_id="c1", name="quick", arguments='{"value": "x"}'),
+        )
+        await manager.spawn(
+            function_callable=_make_call(quick, {"value": "x"}),
+            run_ctx=ctx,
+        )
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+        activity.closed = True
+        activity.gate.set()
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+        # eager insert happened at enqueue, before close was detected. the
+        # drop only kills the generate_reply.
+        assert len(activity.agent.update_calls) == 1
+        assert session.generate_reply_calls == []
+        await manager.aclose()
 
 
 class TestMockThroughManager:

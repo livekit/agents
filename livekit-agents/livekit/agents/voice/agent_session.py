@@ -434,6 +434,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._agent: Agent | None = None
         self._activity: AgentActivity | None = None
         self._next_activity: AgentActivity | None = None
+
+        # fired whenever self._activity is reassigned (handoff, resume, start).
+        # lets wait_for_idle re-target a session-scoped reply onto the new
+        # current activity instead of blocking on a paused/closed one.
+        self._activity_changed_event: asyncio.Event = asyncio.Event()
         self._user_state: UserState = "listening"
         self._agent_state: AgentState = "initializing"
         self._user_away_timer: asyncio.TimerHandle | None = None
@@ -1268,9 +1273,48 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 # (used to make sure we're correctly adding the AgentHandoffResult before completion)  # noqa: E501
                 run_state._watch_handle(task)
 
+    async def wait_for_idle(self) -> AgentActivity:
+        """Wait until some activity is current, unpaused, and idle, then return it.
+
+        Re-targets if the current activity is paused or closed mid-wait.
+        """
+        from .agent_activity import ActivityClosedError
+
+        while True:
+            activity = self._activity
+            if activity is None:
+                self._activity_changed_event.clear()
+                await self._activity_changed_event.wait()
+                continue
+
+            self._activity_changed_event.clear()
+            idle_task = asyncio.create_task(
+                activity.wait_for_idle(), name="session_wait_for_idle_activity"
+            )
+            change_task = asyncio.create_task(
+                self._activity_changed_event.wait(), name="session_wait_for_idle_change"
+            )
+            try:
+                done, _ = await asyncio.wait(
+                    (idle_task, change_task), return_when=asyncio.FIRST_COMPLETED
+                )
+
+                if idle_task in done:
+                    exc = idle_task.exception()
+                    if isinstance(exc, ActivityClosedError):
+                        continue
+                    if exc is not None:
+                        raise exc
+
+                    if self._activity is activity:
+                        return activity
+
+            finally:
+                await utils.aio.cancel_and_wait(idle_task, change_task)
+
     async def wait_for_inactive(self) -> None:
-        if self._activity is not None:
-            await self._activity._wait_for_inactive()
+        logger.warning("`wait_for_inactive` is deprecated, use `wait_for_idle` instead")
+        await self.wait_for_idle()
 
     async def _update_activity(
         self,
@@ -1331,6 +1375,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 self._activity = self._next_activity
                 self._next_activity = None
+                self._activity_changed_event.set()
 
                 run_state = self._global_run_state
                 handoff_item = AgentHandoff(
