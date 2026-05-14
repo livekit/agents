@@ -29,15 +29,32 @@ from .log import logger
 GNANI_TTS_BASE_URL = "https://api.vachana.ai"
 
 GnaniTTSVoices = Literal[
-    "sia", "raju", "kanika", "nikita", "ravan", "simran", "karan", "neha",
+    "sia",
+    "raju",
+    "kanika",
+    "nikita",
+    "ravan",
+    "simran",
+    "karan",
+    "neha",
 ]
 
 SUPPORTED_VOICES: set[str] = {
-    "sia", "raju", "kanika", "nikita", "ravan", "simran", "karan", "neha",
+    "sia",
+    "raju",
+    "kanika",
+    "nikita",
+    "ravan",
+    "simran",
+    "karan",
+    "neha",
 }
 
 GnaniTTSEncodings = Literal["linear_pcm", "oggopus"]
 GnaniTTSContainers = Literal["raw", "mp3", "wav", "mulaw", "ogg"]
+
+
+SUPPORTED_SAMPLE_RATES = (8000, 16000, 22050, 44100)
 
 
 @dataclass
@@ -45,7 +62,7 @@ class GnaniTTSOptions:
     api_key: str
     voice: str = "sia"
     model: str = "vachana-voice-v2"
-    sample_rate: int = 24000
+    sample_rate: int = 16000
     encoding: str = "linear_pcm"
     container: str = "wav"
     num_channels: int = 1
@@ -76,7 +93,7 @@ class TTS(tts.TTS):
         *,
         voice: GnaniTTSVoices | str = "sia",
         model: str = "vachana-voice-v2",
-        sample_rate: int = 24000,
+        sample_rate: int = 16000,
         num_channels: int = 1,
         encoding: GnaniTTSEncodings | str = "linear_pcm",
         container: GnaniTTSContainers | str = "wav",
@@ -84,8 +101,13 @@ class TTS(tts.TTS):
         base_url: str = GNANI_TTS_BASE_URL,
         language: str = "IND-IN",
     ) -> None:
+        if sample_rate not in SUPPORTED_SAMPLE_RATES:
+            raise ValueError(
+                f"sample_rate must be one of {SUPPORTED_SAMPLE_RATES}, got {sample_rate}"
+            )
+
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=True),
+            capabilities=tts.TTSCapabilities(streaming=False),
             sample_rate=sample_rate,
             num_channels=num_channels,
         )
@@ -168,9 +190,7 @@ class ChunkedStream(tts.ChunkedStream):
     Uses POST /api/v1/tts/inference to synthesize text in a single request.
     """
 
-    def __init__(
-        self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions
-    ) -> None:
+    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
@@ -252,9 +272,9 @@ class SynthesizeStream(tts.SynthesizeStream):
     def _build_ws_url(self) -> str:
         base = self._opts.base_url
         if base.startswith("https://"):
-            ws_base = "wss://" + base[len("https://"):]
+            ws_base = "wss://" + base[len("https://") :]
         elif base.startswith("http://"):
-            ws_base = "ws://" + base[len("http://"):]
+            ws_base = "ws://" + base[len("http://") :]
         else:
             ws_base = "wss://" + base
         return f"{ws_base}/api/v1/tts"
@@ -289,9 +309,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             with utils.aio.suppress(asyncio.CancelledError):
                 await input_task
 
-    async def _synthesize_segment(
-        self, text: str, output_emitter: tts.AudioEmitter
-    ) -> None:
+    async def _synthesize_segment(self, text: str, output_emitter: tts.AudioEmitter) -> None:
         import websockets
 
         ws_url = self._build_ws_url()
@@ -363,13 +381,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                         )
 
         except websockets.exceptions.ConnectionClosed as e:
-            raise APIConnectionError(
-                f"Gnani TTS WebSocket closed: {e}"
-            ) from e
+            raise APIConnectionError(f"Gnani TTS WebSocket closed: {e}") from e
         except asyncio.TimeoutError as e:
-            raise APITimeoutError(
-                "Gnani TTS WebSocket timed out"
-            ) from e
+            raise APITimeoutError("Gnani TTS WebSocket timed out") from e
         except (APIStatusError, APIConnectionError, APITimeoutError):
             raise
         except Exception as e:
