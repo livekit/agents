@@ -3,14 +3,17 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import ctypes
+import os
 import sys
+import time
+import wave
 import weakref
 from pathlib import Path
 
 from livekit import rtc
 from livekit.agents import Plugin
 from livekit.agents.inference.turn_detection import (
-    AudioTurnDetector,
+    AudioTurnDetector as _CloudAudioTurnDetector,
     BaseAudioTurnDetectionStream,
 )
 from livekit.agents.inference.turn_detection.detector import (
@@ -114,7 +117,7 @@ LANGUAGES = {
 }
 
 
-class AudioModel(AudioTurnDetector):
+class AudioTurnDetector(_CloudAudioTurnDetector):
     """Local audio EOT model exposed by livekit-plugins-turn-detector.
 
     Runs entirely in-process via ctypes. The native library is loaded at
@@ -132,9 +135,6 @@ class AudioModel(AudioTurnDetector):
         sample_rate: int = DEFAULT_SAMPLE_RATE,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
-        # Bypass the cloud `AudioTurnDetector.__init__` (which requires
-        # API keys for the inference gateway). We don't need an HTTP
-        # session, API keys, or retry options.
         self._opts = TurnDetectorOptions(
             sample_rate=sample_rate,
             base_url="",
@@ -177,7 +177,7 @@ class _LocalAudioTurnDetectionStream(BaseAudioTurnDetectionStream):
     def __init__(
         self,
         *,
-        detector: AudioModel,
+        detector: AudioTurnDetector,
         opts: TurnDetectorOptions,
     ) -> None:
         self._buf: bytearray = bytearray()

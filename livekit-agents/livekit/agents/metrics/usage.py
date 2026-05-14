@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from .base import (
     AgentMetrics,
+    AudioEOTMetrics,
     InterruptionMetrics,
     LLMMetrics,
     RealtimeModelMetrics,
@@ -108,7 +109,21 @@ class InterruptionModelUsage(_BaseModelUsage):
     """Total number of requests sent to the interruption detection model."""
 
 
-ModelUsage = LLMModelUsage | TTSModelUsage | STTModelUsage | InterruptionModelUsage
+class AudioEOTModelUsage(_BaseModelUsage):
+    """Usage summary for audio end-of-turn (EOT) detection models."""
+
+    type: Literal["audio_eot_usage"] = "audio_eot_usage"
+    provider: str
+    """The provider name (e.g., 'livekit')."""
+    model: str
+    """The model name (e.g., 'eot-audio')."""
+    total_requests: int = 0
+    """Total number of inference requests sent to the audio EOT model."""
+
+
+ModelUsage = (
+    LLMModelUsage | TTSModelUsage | STTModelUsage | InterruptionModelUsage | AudioEOTModelUsage
+)
 """Union type for all model usage types."""
 
 
@@ -125,13 +140,19 @@ class ModelUsageCollector:
         self._tts_usage: dict[tuple[str, str], TTSModelUsage] = {}
         self._stt_usage: dict[tuple[str, str], STTModelUsage] = {}
         self._interruption_usage: dict[tuple[str, str], InterruptionModelUsage] = {}
+        self._audio_eot_usage: dict[tuple[str, str], AudioEOTModelUsage] = {}
 
     def __call__(self, metrics: AgentMetrics) -> None:
         self.collect(metrics)
 
     def _extract_provider_model(
         self,
-        metrics: LLMMetrics | STTMetrics | TTSMetrics | RealtimeModelMetrics | InterruptionMetrics,
+        metrics: LLMMetrics
+        | STTMetrics
+        | TTSMetrics
+        | RealtimeModelMetrics
+        | InterruptionMetrics
+        | AudioEOTMetrics,
     ) -> tuple[str, str]:
         """Extract provider and model from metrics metadata."""
         provider = ""
@@ -168,6 +189,13 @@ class ModelUsageCollector:
         if key not in self._interruption_usage:
             self._interruption_usage[key] = InterruptionModelUsage(provider=provider, model=model)
         return self._interruption_usage[key]
+
+    def _get_audio_eot_usage(self, provider: str, model: str) -> AudioEOTModelUsage:
+        """Get or create an AudioEOTModelUsage for the given provider/model combination."""
+        key = (provider, model)
+        if key not in self._audio_eot_usage:
+            self._audio_eot_usage[key] = AudioEOTModelUsage(provider=provider, model=model)
+        return self._audio_eot_usage[key]
 
     def collect(self, metrics: AgentMetrics) -> None:
         if isinstance(metrics, LLMMetrics):
@@ -225,6 +253,10 @@ class ModelUsageCollector:
             provider, model = self._extract_provider_model(metrics)
             interruption_usage = self._get_interruption_usage(provider, model)
             interruption_usage.total_requests += metrics.num_requests
+        elif isinstance(metrics, AudioEOTMetrics):
+            provider, model = self._extract_provider_model(metrics)
+            audio_eot_usage = self._get_audio_eot_usage(provider, model)
+            audio_eot_usage.total_requests += metrics.num_requests
 
     def flatten(self) -> list[ModelUsage]:
         """Returns a list of usage summaries, one per model/provider combination."""
@@ -233,4 +265,5 @@ class ModelUsageCollector:
         result.extend(u.model_copy(deep=True) for u in self._tts_usage.values())
         result.extend(u.model_copy(deep=True) for u in self._stt_usage.values())
         result.extend(u.model_copy(deep=True) for u in self._interruption_usage.values())
+        result.extend(u.model_copy(deep=True) for u in self._audio_eot_usage.values())
         return result

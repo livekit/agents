@@ -693,6 +693,9 @@ class AgentActivity(RecognitionHooks):
             self._interruption_detector.on("error", self._on_error)
             self._interruption_detector.on("overlapping_speech", self._on_overlap_speech_ended)
 
+        if isinstance(self._turn_detection, inference.AudioTurnDetector):
+            self._turn_detection.on("metrics_collected", self._on_metrics_collected)
+
         if self.mcp_servers:
             from ..llm.mcp import MCPToolset
 
@@ -966,6 +969,9 @@ class AgentActivity(RecognitionHooks):
             self._interruption_detector.off("metrics_collected", self._on_metrics_collected)
             self._interruption_detector.off("error", self._on_error)
             self._interruption_detector.off("overlapping_speech", self._on_overlap_speech_ended)
+
+        if isinstance(self._turn_detection, inference.AudioTurnDetector):
+            self._turn_detection.off("metrics_collected", self._on_metrics_collected)
 
         if self._rt_session is not None:
             await self._rt_session.aclose()

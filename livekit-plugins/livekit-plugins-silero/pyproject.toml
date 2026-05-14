@@ -23,7 +23,8 @@ classifiers = [
 ]
 dependencies = [
     "livekit-agents>=1.5.8",
-    "onnxruntime>=1.18",
+    "onnxruntime>=1.18; python_version >= '3.11'",
+    "onnxruntime>=1.18,<1.24; python_version < '3.11'",
     "numpy>=1.26",
 ]
 

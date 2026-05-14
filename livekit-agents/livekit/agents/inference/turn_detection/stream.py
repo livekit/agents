@@ -2,15 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from typing import TYPE_CHECKING
 
 import aiohttp
 from google.protobuf.timestamp_pb2 import Timestamp
 
 from livekit import rtc
-
-# TODO(audio-eot): once the inference gateway drops EotInputChatContext and
-# AUDIO_ENCODING_OPUS from agent_inference.proto, prune these imports too.
 from livekit.protocol.agent_pb.agent_inference import (
     AUDIO_ENCODING_PCM_S16LE,
     ClientMessage,
@@ -34,6 +32,8 @@ from ..._exceptions import (
     create_api_error_from_http,
 )
 from ...log import logger
+from ...metrics import AudioEOTMetrics
+from ...metrics.base import Metadata
 from ...types import APIConnectOptions
 from ...utils import aio
 from .._utils import create_access_token, get_inference_headers
@@ -85,6 +85,7 @@ class AudioTurnDetectionStream(BaseAudioTurnDetectionStream):
         self._session = detector._ensure_session()
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._num_retries = 0
+        self._held_probability: float | None = None
         super().__init__(detector=detector, opts=opts)
 
     # region: transport hooks
@@ -107,6 +108,12 @@ class AudioTurnDetectionStream(BaseAudioTurnDetectionStream):
         created_at.GetCurrentTime()
         msg = ClientMessage(inference_stop=InferenceStop(), created_at=created_at)
         self._send_message_sync(msg)
+
+    def _on_activate(self) -> None:
+        if self._held_probability is not None:
+            prob = self._held_probability
+            self._held_probability = None
+            self._emit_prediction(prob)
 
     async def _on_audio_chunk(self, frame: rtc.AudioFrame) -> None:
         # `frame.data` is a memoryview over int16 little-endian PCM samples.
@@ -132,6 +139,7 @@ class AudioTurnDetectionStream(BaseAudioTurnDetectionStream):
         # SessionFlush gains a keep_tail_ms field, so cloud preserves the same
         # VAD-onset pre-roll as the local backend.
         await self._send_message_async(ClientMessage(session_flush=SessionFlush()))
+        self._held_probability = None
 
     # endregion
 
@@ -192,12 +200,20 @@ class AudioTurnDetectionStream(BaseAudioTurnDetectionStream):
         return ws
 
     def _process_message(self, msg: ServerMessage) -> None:
-        match msg.WhichOneof("message"):
+        case = msg.WhichOneof("message")
+        match case:
             case "eot_prediction":
                 prediction: EotPrediction = msg.eot_prediction
                 request_id = msg.request_id
                 if request_id != self._active_request_id:
-                    logger.trace("stale request id received: %s", request_id)
+                    logger.debug(
+                        "stale request id received",
+                        extra={
+                            "incoming_request_id": request_id,
+                            "active_request_id": self._active_request_id,
+                            "status": self._status.value,
+                        },
+                    )
                     return
 
                 probability = prediction.probability
@@ -206,7 +222,7 @@ class AudioTurnDetectionStream(BaseAudioTurnDetectionStream):
                 request_sent_at_ms = inference_stats.latest_client_created_at.ToMilliseconds()
 
                 if window_started_at_ms is not None and request_sent_at_ms < window_started_at_ms:
-                    logger.trace(
+                    logger.debug(
                         "ignoring stale eot prediction",
                         extra={
                             "request_id": request_id,
@@ -233,7 +249,7 @@ class AudioTurnDetectionStream(BaseAudioTurnDetectionStream):
                 detection_delay_ms = current_time.ToMilliseconds() - request_sent_at_ms
                 inference_duration_ms = inference_stats.server_e2e_latency.ToMilliseconds()
 
-                logger.debug(
+                logger.trace(
                     "turn detection result received",
                     extra={
                         "probability": probability,
@@ -244,8 +260,29 @@ class AudioTurnDetectionStream(BaseAudioTurnDetectionStream):
                     },
                 )
 
-                self._emit_prediction(probability)
+                if self.is_active:
+                    self._emit_prediction(probability)
+                else:
+                    # FSM: in WARMING_UP, predictions are delayed until activation.
+                    # _on_activate replays the latest held prediction.
+                    self._held_probability = probability
                 self._active_request_fut = asyncio.Future[float]()
+
+                client_e2e_ms = inference_stats.client_e2e_latency.ToMilliseconds()
+                self._detector.emit(
+                    "metrics_collected",
+                    AudioEOTMetrics(
+                        timestamp=time.time(),
+                        total_duration=client_e2e_ms / 1000.0,
+                        prediction_duration=inference_duration_ms / 1000.0,
+                        detection_delay=detection_delay_ms / 1000.0,
+                        num_requests=1,
+                        metadata=Metadata(
+                            model_name=self._detector.model,
+                            model_provider=self._detector.provider,
+                        ),
+                    ),
+                )
             case "session_created" | "session_closed" | "inference_started" | "inference_stopped":
                 current_time = Timestamp()
                 current_time.GetCurrentTime()

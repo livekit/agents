@@ -221,6 +221,11 @@ class AudioRecognition:
             | None
         ) = None
         self._turn_detection_atask: asyncio.Task[None] | None = None
+        # most recent prediction emitted by the audio turn detector stream for the
+        # current inference window; reused by stt/manual-triggered EOU runs so we
+        # don't issue a redundant predict_end_of_turn that would just wait for the
+        # next prediction and time out.
+        self._latest_eou_prediction: TurnDetectionEvent | None = None
         # make sure the turn detection is cancelled when the user starts to speak again
         self._silence_guard_event = asyncio.Event()
 
@@ -706,6 +711,7 @@ class AudioRecognition:
         self._last_speaking_time = None
         self._vad_speech_started = False
         self._user_turn_committed = False
+        self._latest_eou_prediction = None
 
         # end any in-progress user_turn span so the next speech starts a fresh one
         if self._user_turn_span is not None and self._user_turn_span.is_recording():
@@ -792,7 +798,12 @@ class AudioRecognition:
             transcript = self._audio_transcript
             self._audio_interim_transcript = ""
             chat_ctx = self._hooks.retrieve_chat_ctx().copy()
-            self._run_eou_detection(chat_ctx, skip_reply=skip_reply, trigger="manual")
+            self._run_eou_detection(
+                chat_ctx,
+                skip_reply=skip_reply,
+                latest_eou_prediction=self._latest_eou_prediction,
+                trigger="manual",
+            )
             self._user_turn_committed = True
             if not fut.done():
                 fut.set_result(transcript)
@@ -927,7 +938,11 @@ class AudioRecognition:
 
                 if not self._speaking:
                     chat_ctx = self._hooks.retrieve_chat_ctx().copy()
-                    self._run_eou_detection(chat_ctx, trigger="stt")
+                    self._run_eou_detection(
+                        chat_ctx,
+                        latest_eou_prediction=self._latest_eou_prediction,
+                        trigger="stt",
+                    )
 
         elif ev.type == stt.SpeechEventType.PREFLIGHT_TRANSCRIPT:
             self._hooks.on_interim_transcript(
@@ -1004,7 +1019,11 @@ class AudioRecognition:
                 self._last_speaking_time = time.time()
 
             chat_ctx = self._hooks.retrieve_chat_ctx().copy()
-            self._run_eou_detection(chat_ctx, trigger="stt")
+            self._run_eou_detection(
+                chat_ctx,
+                latest_eou_prediction=self._latest_eou_prediction,
+                trigger="stt",
+            )
 
         elif ev.type == stt.SpeechEventType.START_OF_SPEECH and self._turn_detection_mode == "stt":
             # If the plugin provided a server onset timestamp, use it;
@@ -1028,6 +1047,9 @@ class AudioRecognition:
             if not self._vad_speech_started:
                 self._speech_start_time = speech_start_time
                 self._vad_speech_started = True
+
+            # new utterance: drop any cached prediction from the previous turn or utterance
+            self._latest_eou_prediction = None
 
             with trace.use_span(self._ensure_user_turn_span(start_time=speech_start_time)):
                 self._hooks.on_start_of_speech(ev, speech_start_time=speech_start_time)
@@ -1071,21 +1093,6 @@ class AudioRecognition:
                         },
                     )
 
-            if ev.raw_accumulated_silence == 0 and self._speaking:
-                if (
-                    self._turn_detector_stream is not None
-                    and self._turn_detector_stream.is_inference_running
-                ):
-                    logger.debug(
-                        "turn detection warmup stopped",
-                        extra={
-                            "raw_accumulated_silence": ev.raw_accumulated_silence,
-                            "speech_duration": ev.speech_duration,
-                            "request_id": self._turn_detector_stream._active_request_id,
-                        },
-                    )
-                    self._turn_detector_stream.stop_warmup()
-
         elif ev.type == vad.VADEventType.END_OF_SPEECH:
             with trace.use_span(self._ensure_user_turn_span()):
                 self._hooks.on_end_of_speech(ev)
@@ -1093,7 +1100,7 @@ class AudioRecognition:
             self._vad_speech_started = False
             self._speaking = False
             self._silence_guard_event.clear()
-            self._last_speaking_time = time.time()
+            self._last_speaking_time = time.time() - ev.silence_duration - ev.inference_duration
 
             if self._turn_detection_ch is not None:
                 self._turn_detection_ch.send_nowait(ev)
@@ -1317,6 +1324,7 @@ class AudioRecognition:
                 # is not a safe anchor because backchannels fire SOS too.
                 if self._turn_detector_stream is not None:
                     self._turn_detector_stream.flush(reason="turn committed")
+                self._latest_eou_prediction = None
 
             self._user_turn_committed = False
 
@@ -1461,13 +1469,14 @@ class AudioRecognition:
 
         try:
             async for ev in stream:
-                # results are only permitted when inference is running (warming up or active)
-                # non-active results will be cancelled by _bounce_eou_task_with_silence_guard
+                # user is still speaking, skip the event
                 if not stream.is_inference_running:
                     logger.debug(
                         "received stale turn detection event, skipping", extra={"event": ev}
                     )
                     continue
+
+                self._latest_eou_prediction = ev
                 self._run_eou_detection(
                     self._hooks.retrieve_chat_ctx().copy(),
                     latest_eou_prediction=ev,
@@ -1475,7 +1484,7 @@ class AudioRecognition:
                 )
                 threshold = await stream.unlikely_threshold(self._last_language)
                 if threshold is not None and ev.end_of_turn_probability >= threshold:
-                    stream.flush("positive eou prediction")
+                    stream.set_active(False, trigger="positive eou prediction")
         finally:
             await aio.cancel_and_wait(forward_task)
             await stream.aclose()

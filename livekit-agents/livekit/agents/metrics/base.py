@@ -181,6 +181,20 @@ class InterruptionMetrics(_BaseMetrics):
     metadata: Metadata | None = None
 
 
+class AudioEOTMetrics(_BaseMetrics):
+    type: Literal["audio_eot_metrics"] = "audio_eot_metrics"
+    timestamp: float
+    total_duration: float
+    """Latest RTT (Round Trip Time) for the inference, in seconds."""
+    prediction_duration: float
+    """Latest time taken to perform the inference from the model side, in seconds."""
+    detection_delay: float
+    """Latest time from the inference request being sent to the prediction being received, in seconds."""
+    num_requests: int
+    """Number of inference requests sent to the audio EOT model, incrementally counted."""
+    metadata: Metadata | None = None
+
+
 AgentMetrics = (
     STTMetrics
     | LLMMetrics
@@ -189,4 +203,5 @@ AgentMetrics = (
     | EOUMetrics
     | RealtimeModelMetrics
     | InterruptionMetrics
+    | AudioEOTMetrics
 )

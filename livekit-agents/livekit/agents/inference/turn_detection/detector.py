@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING, Literal
 
 import aiohttp
 
+from livekit import rtc
+
 from ... import utils
 from ...language import LanguageCode
 from ...types import (
@@ -41,7 +43,7 @@ class TurnDetectorOptions:
     conn_options: APIConnectOptions
 
 
-class AudioTurnDetector:
+class AudioTurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
     def __init__(
         self,
         *,
@@ -52,6 +54,7 @@ class AudioTurnDetector:
         http_session: aiohttp.ClientSession | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
+        super().__init__()
         lk_base_url = utils.resolve_env_var(
             base_url, "LIVEKIT_INFERENCE_URL", default=DEFAULT_BASE_URL
         )
