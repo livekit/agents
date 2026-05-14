@@ -964,6 +964,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 await activity.aclose()
             self._activity = None
+            # unblock any wait_for_idle waiters so they can see _closing and bail
+            self._activity_changed_event.set()
 
             if self._agent_speaking_span:
                 self._agent_speaking_span.end()
@@ -1276,13 +1278,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     async def wait_for_idle(self) -> AgentActivity:
         """Wait until some activity is current, unpaused, and idle, then return it.
 
-        Re-targets if the current activity is paused or closed mid-wait.
+        Re-targets if the current activity is paused or closed mid-wait. Raises
+        ``ActivityClosedError`` if the session is closing and there is no
+        activity left to wait on.
         """
         from .agent_activity import ActivityClosedError
 
         while True:
             activity = self._activity
             if activity is None:
+                if self._closing:
+                    raise ActivityClosedError("session is closing")
                 self._activity_changed_event.clear()
                 await self._activity_changed_event.wait()
                 continue
