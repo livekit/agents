@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
-
-from livekit.agents.stt import SpeechEventType
 
 
 def test_stt_requires_api_key():
@@ -150,7 +147,7 @@ def test_stt_org_from_env():
 def test_speech_stream_ws_url_https():
     """SpeechStream builds wss:// URL from https:// base."""
     from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
-    from livekit.plugins.gnani.stt import GnaniSTTOptions, SpeechStream, STT
+    from livekit.plugins.gnani.stt import STT, GnaniSTTOptions, SpeechStream
 
     stt = STT(api_key="test-key")
     opts = GnaniSTTOptions(
@@ -177,7 +174,7 @@ def test_speech_stream_ws_url_https():
 def test_speech_stream_ws_url_http():
     """SpeechStream builds ws:// URL from http:// base."""
     from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
-    from livekit.plugins.gnani.stt import GnaniSTTOptions, SpeechStream, STT
+    from livekit.plugins.gnani.stt import STT, GnaniSTTOptions, SpeechStream
 
     stt = STT(api_key="test-key")
     opts = GnaniSTTOptions(
