@@ -314,6 +314,11 @@ class FallbackRecognizeStream(RecognizeStream):
                             main_stream.push_frame(data)
                         elif isinstance(data, self._FlushSentinel):
                             main_stream.flush()
+                    except RuntimeError as e:
+                        if "input ended" not in str(e):
+                            logger.exception(
+                                "error happened in forwarding input", extra={"streamed": True}
+                            )
                     except Exception:
                         logger.exception(
                             "error happened in forwarding input", extra={"streamed": True}
