@@ -177,6 +177,7 @@ class AsyncToolset(Toolset):
         id: str,
         tools: list[Tool] | None = None,
         on_duplicate_call: DuplicateMode = "confirm",
+        reply_instructions: str = REPLY_INSTRUCTIONS,
     ) -> None:
         super().__init__(id=id, tools=tools)
 
@@ -192,6 +193,9 @@ class AsyncToolset(Toolset):
         # speech delivery — shared across all tools in this toolset
         self._pending_updates: list[_PendingUpdate] = []
         self._reply_task: asyncio.Task[None] | None = None
+
+        # instructions to use when delivering a reply from tool updates
+        self._reply_instructions = reply_instructions
 
     async def cancel(self, call_id: str) -> bool:
         task = self._running_tasks.get(call_id)
@@ -352,7 +356,7 @@ class AsyncToolset(Toolset):
             item.call_id for item in pending_items if item.type == "function_call_output"
         ]
         session.generate_reply(
-            instructions=REPLY_INSTRUCTIONS.format(pending_call_ids=pending_call_ids),
+            instructions=self._reply_instructions.format(pending_call_ids=pending_call_ids),
             tool_choice="none",
         )
 
