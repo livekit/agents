@@ -7,10 +7,8 @@ supporting both batch recognition (REST) and real-time streaming (WebSocket).
 from __future__ import annotations
 
 import asyncio
-import io
 import json
 import os
-import wave
 from dataclasses import dataclass
 from typing import Literal
 
@@ -33,17 +31,34 @@ from .log import logger
 GNANI_STT_BASE_URL = "https://api.vachana.ai"
 
 GnaniSTTLanguages = Literal[
-    "bn-IN", "en-IN", "gu-IN", "hi-IN", "kn-IN",
-    "ml-IN", "mr-IN", "pa-IN", "ta-IN", "te-IN",
+    "bn-IN",
+    "en-IN",
+    "gu-IN",
+    "hi-IN",
+    "kn-IN",
+    "ml-IN",
+    "mr-IN",
+    "pa-IN",
+    "ta-IN",
+    "te-IN",
 ]
 
 SUPPORTED_LANGUAGES: set[str] = {
-    "bn-IN", "en-IN", "gu-IN", "hi-IN", "kn-IN",
-    "ml-IN", "mr-IN", "pa-IN", "ta-IN", "te-IN",
+    "bn-IN",
+    "en-IN",
+    "gu-IN",
+    "hi-IN",
+    "kn-IN",
+    "ml-IN",
+    "mr-IN",
+    "pa-IN",
+    "ta-IN",
+    "te-IN",
 }
 
 STREAM_SUPPORTED_LANGUAGES: set[str] = SUPPORTED_LANGUAGES | {
-    "en-hi-IN-latn", "en-hi-in-cm",
+    "en-hi-IN-latn",
+    "en-hi-in-cm",
 }
 
 SAMPLE_RATE_16K = 16000
@@ -163,9 +178,7 @@ class STT(stt.STT):
         wav_bytes = rtc.combine_audio_frames(buffer).to_wav_bytes()
 
         form_data = aiohttp.FormData()
-        form_data.add_field(
-            "audio_file", wav_bytes, filename="audio.wav", content_type="audio/wav"
-        )
+        form_data.add_field("audio_file", wav_bytes, filename="audio.wav", content_type="audio/wav")
         form_data.add_field("language_code", lang)
 
         headers: dict[str, str] = {
@@ -266,9 +279,9 @@ class SpeechStream(stt.RecognizeStream):
     def _build_ws_url(self) -> str:
         base = self._opts.base_url
         if base.startswith("https://"):
-            ws_base = "wss://" + base[len("https://"):]
+            ws_base = "wss://" + base[len("https://") :]
         elif base.startswith("http://"):
-            ws_base = "ws://" + base[len("http://"):]
+            ws_base = "ws://" + base[len("http://") :]
         else:
             ws_base = "wss://" + base
         return f"{ws_base}/stt/v3/stream"
@@ -293,16 +306,10 @@ class SpeechStream(stt.RecognizeStream):
                 connected_msg = await asyncio.wait_for(ws.recv(), timeout=10)
                 connected_data = json.loads(connected_msg)
                 if connected_data.get("type") != "connected":
-                    logger.warning(
-                        f"Unexpected first message from Gnani STT: {connected_data}"
-                    )
+                    logger.warning(f"Unexpected first message from Gnani STT: {connected_data}")
 
-                send_task = asyncio.create_task(
-                    self._send_audio(ws), name="gnani-stt-send"
-                )
-                recv_task = asyncio.create_task(
-                    self._recv_messages(ws), name="gnani-stt-recv"
-                )
+                send_task = asyncio.create_task(self._send_audio(ws), name="gnani-stt-send")
+                recv_task = asyncio.create_task(self._recv_messages(ws), name="gnani-stt-recv")
 
                 try:
                     await asyncio.gather(send_task, recv_task)
@@ -315,9 +322,7 @@ class SpeechStream(stt.RecognizeStream):
                         await recv_task
 
         except websockets.exceptions.ConnectionClosed as e:
-            raise APIConnectionError(
-                f"Gnani STT WebSocket closed unexpectedly: {e}"
-            ) from e
+            raise APIConnectionError(f"Gnani STT WebSocket closed unexpectedly: {e}") from e
         except asyncio.TimeoutError as e:
             raise APITimeoutError("Gnani STT WebSocket connection timed out") from e
         except (APIConnectionError, APIStatusError, APITimeoutError):
@@ -407,6 +412,4 @@ class SpeechStream(stt.RecognizeStream):
         except (APIStatusError, APIConnectionError):
             raise
         except Exception as e:
-            raise APIConnectionError(
-                f"Error receiving Gnani STT messages: {e}"
-            ) from e
+            raise APIConnectionError(f"Error receiving Gnani STT messages: {e}") from e

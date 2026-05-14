@@ -194,9 +194,10 @@ def test_tts_base_url_default():
 
 def test_tts_ws_url_from_https():
     """SynthesizeStream builds wss:// from https:// base."""
-    from livekit.plugins.gnani.tts import SynthesizeStream, TTS
-    from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
     from unittest.mock import MagicMock, patch
+
+    from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
+    from livekit.plugins.gnani.tts import TTS, SynthesizeStream
 
     tts = TTS(api_key="test-key")
 
@@ -212,9 +213,10 @@ def test_tts_ws_url_from_https():
 
 def test_tts_ws_url_from_http():
     """SynthesizeStream builds ws:// from http:// base."""
-    from livekit.plugins.gnani.tts import SynthesizeStream, TTS
-    from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
     from unittest.mock import MagicMock, patch
+
+    from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
+    from livekit.plugins.gnani.tts import TTS, SynthesizeStream
 
     tts = TTS(api_key="test-key", base_url="http://localhost:9090")
 
