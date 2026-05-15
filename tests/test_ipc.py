@@ -185,6 +185,34 @@ async def _job_entrypoint(job_ctx: JobContext) -> None:
         start_args.update_ev.notify()
 
 
+async def _job_entrypoint_raises_after_shutdown(job_ctx: JobContext) -> None:
+    """Reproduces the room-disconnect race: _shutdown_fut is set before the
+    entrypoint task unwinds, then the entrypoint raises while _run_job_task
+    is awaiting it. The shutdown callback must still run."""
+    start_args: _StartArgs = job_ctx.proc.user_arguments
+
+    async def _job_shutdown() -> None:
+        with start_args.shutdown_counter.get_lock():
+            start_args.shutdown_counter.value += 1
+
+    job_ctx.add_shutdown_callback(_job_shutdown)
+
+    with start_args.entrypoint_counter.get_lock():
+        start_args.entrypoint_counter.value += 1
+
+    # set _shutdown_fut first (mimics the room "disconnected" handler), then
+    # raise from a pending await (mimics wait_for_participant's RuntimeError).
+    fut: asyncio.Future[None] = asyncio.Future()
+
+    async def _trigger() -> None:
+        job_ctx.shutdown("simulated room disconnect")
+        await asyncio.sleep(0)
+        fut.set_exception(RuntimeError("room disconnected while waiting for participant"))
+
+    asyncio.create_task(_trigger())
+    await fut
+
+
 async def _poll_until(
     condition_fn: Callable[[], bool], *, timeout: float = 10.0, poll_interval: float = 0.05
 ) -> None:
@@ -347,12 +375,13 @@ def _create_proc(
     close_timeout: float,
     mp_ctx: BaseContext,
     initialize_timeout: float = 20.0,
+    job_entrypoint_fnc: Callable[[JobContext], object] = _job_entrypoint,
 ) -> tuple[ipc.job_proc_executor.ProcJobExecutor, _StartArgs]:
     start_args = _new_start_args(mp_ctx)
     loop = asyncio.get_running_loop()
     proc = ipc.job_proc_executor.ProcJobExecutor(
         initialize_process_fnc=_initialize_proc,
-        job_entrypoint_fnc=_job_entrypoint,
+        job_entrypoint_fnc=job_entrypoint_fnc,
         session_end_fnc=None,
         initialize_timeout=initialize_timeout,
         close_timeout=close_timeout,
@@ -399,6 +428,31 @@ async def test_job_slow_shutdown():
     # process is killed when there is a job with slow timeout
     assert proc.exitcode != 0, "process should have been killed"
     assert proc.killed
+
+
+async def test_shutdown_callback_runs_when_entrypoint_raises():
+    """Regression test: when the entrypoint raises after _shutdown_fut is
+    already set (as happens on room disconnect mid-wait_for_participant),
+    registered shutdown callbacks must still run."""
+    mp_ctx = mp.get_context("spawn")
+    proc, start_args = _create_proc(
+        close_timeout=10.0,
+        mp_ctx=mp_ctx,
+        job_entrypoint_fnc=_job_entrypoint_raises_after_shutdown,
+    )
+    await proc.start()
+    await proc.initialize()
+
+    fake_job = _generate_fake_job()
+    await proc.launch_job(fake_job)
+    await _poll_until(lambda: start_args.entrypoint_counter.value >= 1)
+    await proc.aclose()
+
+    assert proc.exitcode == 0, "process should have exited cleanly"
+    assert not proc.killed
+    assert start_args.shutdown_counter.value == 1, (
+        "shutdown callback must run even when entrypoint raises"
+    )
 
 
 async def test_job_graceful_shutdown():
