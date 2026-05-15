@@ -2308,7 +2308,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "bithuman", specifier = ">=0.5.25" },
+    { name = "bithuman", specifier = ">=0.5.25,<1.12" },
     { name = "livekit-agents", editable = "livekit-agents" },
 ]
 
