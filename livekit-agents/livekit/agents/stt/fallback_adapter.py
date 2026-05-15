@@ -308,17 +308,16 @@ class FallbackRecognizeStream(RecognizeStream):
                     except Exception:
                         pass
 
-                if main_stream is not None:
+                if (
+                    main_stream is not None
+                    and not main_stream._input_ch.closed
+                    and not main_stream._event_ch.closed
+                ):
                     try:
                         if isinstance(data, rtc.AudioFrame):
                             main_stream.push_frame(data)
                         elif isinstance(data, self._FlushSentinel):
                             main_stream.flush()
-                    except RuntimeError as e:
-                        if "input ended" not in str(e):
-                            logger.exception(
-                                "error happened in forwarding input", extra={"streamed": True}
-                            )
                     except Exception:
                         logger.exception(
                             "error happened in forwarding input", extra={"streamed": True}
