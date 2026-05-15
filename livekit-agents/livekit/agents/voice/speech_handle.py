@@ -230,6 +230,34 @@ class SpeechHandle:
 
         return self
 
+    def _reset_interrupt_for_next_step(self) -> None:
+        """Re-arms the interrupt future so a subsequent step on this
+        SpeechHandle can run without inheriting an interrupt flag from a
+        prior step.
+
+        A SpeechHandle represents a single logical turn that may span multiple
+        steps (initial reply, tool execution, tool reply, another tool, ...).
+        The interrupt flag is meaningful at the granularity of one playout
+        step; carrying it across steps causes the pipeline's per-step
+        interrupt check to short-circuit fresh work the framework just decided
+        to schedule (e.g. the LLM's reply to a tool output). Callers in
+        AgentActivity invoke this right before scheduling the next step.
+        Tools that want to suppress the LLM tool reply intentionally should
+        raise StopResponse rather than relying on SpeechHandle.interrupt.
+
+        No-op once the handle is fully done.
+        """
+        if self._done_fut.done():
+            return
+
+        if not self._interrupt_fut.done():
+            return
+
+        self._interrupt_fut = asyncio.Future[None]()
+        if self._interrupt_timeout_handle is not None:
+            self._interrupt_timeout_handle.cancel()
+            self._interrupt_timeout_handle = None
+
     def _add_item_added_callback(self, callback: Callable[[llm.ChatItem], Any]) -> None:
         self._item_added_callbacks.add(callback)
 

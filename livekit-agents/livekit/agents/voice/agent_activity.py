@@ -2809,6 +2809,20 @@ class AgentActivity(RecognitionHooks):
                     add_if_missing=False,
                 )
 
+                # The interrupt flag is scoped to a single playout step. If the
+                # prior step (initial reply or earlier tool reply) was
+                # interrupted — either by user code calling
+                # `ctx.speech_handle.interrupt()` inside the tool or by
+                # `session.interrupt()` hitting this handle while it was in
+                # `_background_speeches` — clear it before scheduling the tool
+                # reply. Otherwise the scheduling task skips the handle when
+                # popping it from the queue (interrupted check in
+                # `_scheduling_task`) and the new reply task aborts on its own
+                # interrupted check after invoking the LLM, silently dropping
+                # the tool reply. To intentionally suppress the tool reply,
+                # tools should raise `StopResponse`.
+                speech_handle._reset_interrupt_for_next_step()
+
                 tool_response_task = self._create_speech_task(
                     self._pipeline_reply_task(
                         speech_handle=speech_handle,
