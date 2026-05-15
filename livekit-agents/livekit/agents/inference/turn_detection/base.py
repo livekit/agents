@@ -158,11 +158,14 @@ class BaseAudioTurnDetectionStream(ABC):
                 self._activate()
             return
 
-        if not self.is_active:
+        if not self.is_inference_running:
             return
 
         logger.trace("turn detection deactivated", extra={"trigger": trigger})
-        self._deactivate()
+        if self._status == _InferenceStatus.WARMING_UP:
+            self.stop_warmup()
+        else:
+            self._deactivate()
         self._on_inference_stop(reason=trigger)
 
     def flush(self, reason: str | None = None, *, keep_tail_ms: int = 0) -> None:
