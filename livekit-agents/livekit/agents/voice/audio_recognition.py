@@ -409,6 +409,7 @@ class AudioRecognition:
 
         if force:
             events_to_emit = list(self._transcript_buffer)
+            # reset before emitting to avoid recursive calls
             self._reset_interruption_detection()
             for ev in events_to_emit:
                 await self._on_stt_event(ev)
@@ -446,14 +447,13 @@ class AudioRecognition:
                 should_flush = True
                 break
 
-        # extract events to emit and reset BEFORE iterating
-        # to prevent recursive calls
         events_to_emit = (
             list(self._transcript_buffer)[int(emit_from_index) :]
             if emit_from_index is not None and should_flush
             else []
         )
         _ignore_user_transcript_until = self._ignore_user_transcript_until
+        # reset before emitting to avoid recursive calls
         self._reset_interruption_detection()
 
         for ev in events_to_emit:
