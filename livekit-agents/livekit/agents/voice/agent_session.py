@@ -1370,12 +1370,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         await self._update_activity(agent)
 
     def _on_error(
-        self,
-        error: llm.LLMError
-        | stt.STTError
-        | tts.TTSError
-        | llm.RealtimeModelError
-        | inference.InterruptionDetectionError,
+        self, error: llm.LLMError | stt.STTError | tts.TTSError | llm.RealtimeModelError
     ) -> None:
         if self._closing_task or error.recoverable:
             return
@@ -1388,10 +1383,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._tts_error_counts += 1
             if self._tts_error_counts <= self.conn_options.max_unrecoverable_errors:
                 return
-        elif error.type == "interruption_detection_error":
-            # interruption detection errors are handled by AgentActivity via VAD fallback,
-            # they should never close the session
-            return
 
         if isinstance(error.error, APIError):
             logger.error(f"AgentSession is closing due to unrecoverable error: {error.error}")
