@@ -365,6 +365,10 @@ class _JobProc:
             except asyncio.TimeoutError:
                 logger.warning("entrypoint did not exit in time, cancelling")
                 await aio.cancel_and_wait(job_entry_task)
+            except Exception:
+                # entrypoint raised; already logged via _on_entry_done.
+                # swallow so shutdown callbacks still run.
+                pass
 
         if session := self._job_ctx._primary_agent_session:
             await session.aclose()

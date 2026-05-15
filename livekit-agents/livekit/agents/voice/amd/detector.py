@@ -389,6 +389,16 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
 
     def _on_amd_prediction(self, result: AMDPredictionEvent) -> None:
         self._result = result
+        logger.info(
+            "amd prediction",
+            extra={
+                "category": result.category.value,
+                "reason": result.reason,
+                "speech_duration": result.speech_duration,
+                "delay": result.delay,
+                "transcript": result.transcript,
+            },
+        )
         if self._classifier:
             self._classifier.end_input()
         if self._audio_ch:

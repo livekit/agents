@@ -52,6 +52,10 @@ AssemblyAIModels = Literal[
 ]
 ElevenlabsModels = Literal["elevenlabs/scribe_v2_realtime",]
 XaiModels = Literal["xai/stt-1",]
+SpeechmaticsModels = Literal[
+    "speechmatics/enhanced",
+    "speechmatics/standard",
+]
 
 
 class CartesiaOptions(TypedDict, total=False):
@@ -119,6 +123,24 @@ class ElevenlabsOptions(TypedDict, total=False):
     language_code: str
 
 
+class SpeechmaticsOptions(TypedDict, total=False):
+    domain: str  # e.g. "finance"
+    output_locale: str  # BCP-47 locale for output formatting
+    max_delay: float  # 0.7-4.0 seconds, default 1.0
+    max_delay_mode: str  # "flexible" | "fixed"
+    diarization: str  # "none" | "speaker" | "channel" | "channel_and_speaker_change" | "speaker_change"; non-"none" enables diarization
+    speaker_sensitivity: float  # 0.0-1.0
+    max_speakers: int
+    prefer_current_speaker: bool
+    enable_partials: bool  # default True (overridden by gateway)
+    enable_entities: bool
+    punctuation_overrides: dict[str, Any]
+    additional_vocab: list[dict[str, Any]]
+    end_of_utterance_silence_trigger: float  # seconds of silence before final
+    audio_filtering_config: dict[str, Any]
+    transcript_filtering_config: dict[str, Any]
+
+
 class XaiOptions(TypedDict, total=False):
     diarize: bool  # when True, enables speaker diarization (default off)
     endpointing: int  # silence duration in ms before utterance-final (0-5000)
@@ -133,6 +155,7 @@ class XaiOptions(TypedDict, total=False):
 _DIARIZATION_EXTRA_KEYS: tuple[str, ...] = (
     "diarize",  # Deepgram, xAI
     "speaker_labels",  # AssemblyAI
+    "diarization",  # Speechmatics
 )
 
 
@@ -140,7 +163,15 @@ def _diarization_enabled(extra_kwargs: dict[str, Any] | None) -> bool:
     """Return True if any known provider diarization flag is truthy."""
     if not extra_kwargs:
         return False
-    return any(bool(extra_kwargs.get(key)) for key in _DIARIZATION_EXTRA_KEYS)
+    for key in _DIARIZATION_EXTRA_KEYS:
+        value = extra_kwargs.get(key)
+        if not value:
+            continue
+        # Speechmatics' "diarization" accepts the string "none" to mean off.
+        if isinstance(value, str) and value.lower() == "none":
+            continue
+        return True
+    return False
 
 
 STTLanguages = Literal["multi", "en", "de", "es", "fr", "ja", "pt", "zh", "hi"]
@@ -195,6 +226,7 @@ STTModels = (
     | AssemblyAIModels
     | ElevenlabsModels
     | XaiModels
+    | SpeechmaticsModels
     | Literal["auto"]  # automatically select a provider based on the language
 )
 STTEncoding = Literal["pcm_s16le"]
@@ -324,6 +356,23 @@ class STT(stt.STT):
     @overload
     def __init__(
         self,
+        model: SpeechmaticsModels,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        encoding: NotGivenOr[STTEncoding] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        extra_kwargs: NotGivenOr[SpeechmaticsOptions] = NOT_GIVEN,
+        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self,
         model: str,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
@@ -357,6 +406,7 @@ class STT(stt.STT):
             | AssemblyaiOptions
             | ElevenlabsOptions
             | XaiOptions
+            | SpeechmaticsOptions
         ] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,

@@ -312,6 +312,28 @@ async def test_interrupt(rt_session: llm.RealtimeSession):
     assert got_chunk
 
 
+@pytest.mark.parametrize("rt_session", OPENAI_AND_AZURE, indirect=True)
+async def test_generate_reply_cancellation(rt_session: llm.RealtimeSession):
+    """Cancelling the generate_reply future before response.created arrives
+    should cancel the in-flight response server-side so a subsequent
+    generate_reply does not conflict with an active response."""
+    fut = rt_session.generate_reply(
+        instructions="Write a very long essay about the history of computing."
+    )
+    fut.cancel()
+    assert fut.cancelled()
+
+    # Brief wait so the response.cancel reaches the server before the next call.
+    await asyncio.sleep(1.0)
+
+    gen_ev = await asyncio.wait_for(
+        rt_session.generate_reply(instructions="Say exactly: pineapple"),
+        timeout=15,
+    )
+    text = await asyncio.wait_for(_collect_text(gen_ev), timeout=15)
+    assert "pineapple" in text.lower()
+
+
 # -- Function tools --
 
 

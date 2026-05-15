@@ -1023,15 +1023,21 @@ class AgentActivity(RecognitionHooks):
         if not self._started:
             return
 
-        should_discard = (
-            self._current_speech
-            and not self._current_speech.allow_interruptions
-            and self._session.options.interruption["discard_audio_if_uninterruptible"]
-        ) or (
+        aec_warmup_active: bool = (
             self._session.agent_state == "speaking"
             and self._session._aec_warmup_remaining > 0
             and self._session._aec_warmup_timer is not None
         )
+
+        uninterruptible_speech_active: bool = (
+            self._current_speech is not None
+            and not self._current_speech.done()
+            and not self._current_speech.interrupted
+            and not self._current_speech.allow_interruptions
+            and self._session.options.interruption["discard_audio_if_uninterruptible"]
+        )
+
+        should_discard: bool = aec_warmup_active or uninterruptible_speech_active
 
         if not should_discard:
             if self._rt_session is not None:
@@ -2910,18 +2916,24 @@ class AgentActivity(RecognitionHooks):
                     ori_tools = self._rt_session.tools.flatten()
                     await self._rt_session.update_tools(llm.ToolContext(tools).flatten())
 
+            generate_reply_fut = self._rt_session.generate_reply(
+                instructions=instructions or NOT_GIVEN,
+                tool_choice=(model_settings.tool_choice if per_response_tool_choice else NOT_GIVEN),
+                tools=(
+                    llm.ToolContext(tools).flatten()
+                    if per_response_tool_choice and tools is not None
+                    else NOT_GIVEN
+                ),
+            )
+            await speech_handle.wait_if_not_interrupted([generate_reply_fut])
+            if speech_handle.interrupted:
+                # cancel the pending generation; the plugin emits response.cancel
+                if not generate_reply_fut.done():
+                    generate_reply_fut.cancel()
+                return
+
             try:
-                generation_ev = await self._rt_session.generate_reply(
-                    instructions=instructions or NOT_GIVEN,
-                    tool_choice=(
-                        model_settings.tool_choice if per_response_tool_choice else NOT_GIVEN
-                    ),
-                    tools=(
-                        llm.ToolContext(tools).flatten()
-                        if per_response_tool_choice and tools is not None
-                        else NOT_GIVEN
-                    ),
-                )
+                generation_ev = await generate_reply_fut
             except llm.RealtimeError as e:
                 logger.error(
                     "failed to generate a reply%s: %s",
@@ -3422,6 +3434,9 @@ class AgentActivity(RecognitionHooks):
                                 "timed out waiting for realtime auto tool reply from %s",
                                 llm_label,
                             )
+                        finally:
+                            if self._pending_auto_tool_reply_fut is auto_reply_fut:
+                                self._pending_auto_tool_reply_fut = None
 
                     task = asyncio.create_task(_wait_for_auto_tool_reply())
                     run_state._watch_handle(task)
