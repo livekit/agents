@@ -25,6 +25,8 @@ Skip the work entirely if the `.so` is already present.
 
 from __future__ import annotations
 
+import io
+import json
 import os
 import subprocess
 import sys
@@ -101,8 +103,6 @@ def _path_b_pypi_wheel() -> int:
         with urllib.request.urlopen(
             "https://pypi.org/pypi/livekit-plugins-turn-detector/json", timeout=10
         ) as resp:
-            import json
-
             data = json.loads(resp.read())
     except Exception as e:
         print(f"[fetch-audio-eot] Path B: failed to query PyPI: {e}", file=sys.stderr)
@@ -131,11 +131,11 @@ def _path_b_pypi_wheel() -> int:
 
     url = matching[0]["url"]
     print(f"[fetch-audio-eot] Path B: downloading {url}")
-    with urllib.request.urlopen(url) as resp:
+    with urllib.request.urlopen(url, timeout=60) as resp:
         wheel_bytes = resp.read()
 
     canonical = PACKAGE_DIR / _lib_filename()
-    with zipfile.ZipFile(__import__("io").BytesIO(wheel_bytes)) as zf:
+    with zipfile.ZipFile(io.BytesIO(wheel_bytes)) as zf:
         for name in zf.namelist():
             base = name.rsplit("/", 1)[-1]
             if base == _lib_filename():

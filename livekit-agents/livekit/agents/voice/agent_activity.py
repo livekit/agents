@@ -76,7 +76,7 @@ from .generation import (
     update_instructions,
 )
 from .speech_handle import DEFAULT_INPUT_DETAILS, InputDetails, SpeechHandle
-from .turn import EndpointingOptions, TurnDetectionMode
+from .turn import EndpointingOptions, TurnDetectionMode, _AudioTurnDetector
 
 if TYPE_CHECKING:
     from ..llm import mcp
@@ -227,7 +227,7 @@ class AgentActivity(RecognitionHooks):
         self, turn_detection: TurnDetectionMode | None
     ) -> TurnDetectionMode | None:
         if turn_detection is not None and not isinstance(turn_detection, str):
-            if isinstance(turn_detection, inference.AudioTurnDetector) and self.vad is None:
+            if isinstance(turn_detection, _AudioTurnDetector) and self.vad is None:
                 raise ValueError(
                     "AudioTurnDetector requires a VAD model; pass vad=silero.VAD.load() "
                     "(or another VAD) to AgentSession/Agent."
@@ -693,7 +693,7 @@ class AgentActivity(RecognitionHooks):
             self._interruption_detector.on("error", self._on_error)
             self._interruption_detector.on("overlapping_speech", self._on_overlap_speech_ended)
 
-        if isinstance(self._turn_detection, inference.AudioTurnDetector):
+        if isinstance(self._turn_detection, _AudioTurnDetector):
             self._turn_detection.on("metrics_collected", self._on_metrics_collected)
 
         if self.mcp_servers:
@@ -970,7 +970,7 @@ class AgentActivity(RecognitionHooks):
             self._interruption_detector.off("error", self._on_error)
             self._interruption_detector.off("overlapping_speech", self._on_overlap_speech_ended)
 
-        if isinstance(self._turn_detection, inference.AudioTurnDetector):
+        if isinstance(self._turn_detection, _AudioTurnDetector):
             self._turn_detection.off("metrics_collected", self._on_metrics_collected)
 
         if self._rt_session is not None:

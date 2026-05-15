@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 from time import perf_counter
-from typing import Literal
 
 import aiohttp
 
@@ -35,13 +34,11 @@ class MultilingualModel(EOUModelBase):
     def _inference_method(self) -> str:
         return _EUORunnerMultilingual.INFERENCE_METHOD
 
-    async def unlikely_threshold(
-        self, language: LanguageCode | None, modality: Literal["multimodal", "text"] = "text"
-    ) -> float | None:
+    async def unlikely_threshold(self, language: LanguageCode | None) -> float | None:
         if not language:
             return None
 
-        threshold = await super().unlikely_threshold(language, modality)
+        threshold = await super().unlikely_threshold(language)
         if threshold is None:
             try:
                 if url := _remote_inference_url():

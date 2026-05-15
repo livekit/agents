@@ -1,178 +1,210 @@
+"""Unified audio EOT detector.
+
+One public class ``AudioTurnDetector`` selects between two backends:
+
+- ``eot-audio-cloud`` — WebSocket transport to the LiveKit inference gateway
+  (auto-selected when ``LIVEKIT_REMOTE_EOT_URL`` is set in the environment).
+- ``eot-audio-mini`` — in-process ctypes inference using the bundled native lib.
+
+When started in cloud mode, any transport failure or `predict_end_of_turn`
+timeout swaps the session to local for the remainder of the stream lifetime.
+A single warning per failure mode is logged per session. Local failures
+emit the default 1.0 prediction and retry on the next turn (no permanent
+disable).
+"""
+
 from __future__ import annotations
 
 import asyncio
 import contextlib
-import ctypes
-import sys
+import os
 import weakref
-from pathlib import Path
+from typing import Literal
 
-from livekit import rtc
-from livekit.agents import Plugin
-from livekit.agents.inference.turn_detection import (
-    AudioTurnDetector as _CloudAudioTurnDetector,
-    BaseAudioTurnDetectionStream,
-)
-from livekit.agents.inference.turn_detection.detector import (
-    DEFAULT_SAMPLE_RATE,
-    TurnDetectorOptions,
-)
+import aiohttp
+
+from livekit.agents import Plugin, utils
+from livekit.agents._exceptions import APIConnectionError, APIError, APITimeoutError
 from livekit.agents.language import LanguageCode
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
     APIConnectOptions,
+    NotGivenOr,
+)
+from livekit.agents.voice.turn import (
+    DEFAULT_SAMPLE_RATE,
+    TurnDetectorOptions,
+    _AudioTurnDetector,
+    _AudioTurnDetectorStream,
 )
 
+from .languages import CLOUD_LANGUAGES, LOCAL_LANGUAGES
 from .log import logger
+from .transports import (
+    AudioTurnDetectionTransport,
+    _CloudTransport,
+    _LocalTransport,
+    lib_available,
+    lib_load_error,
+)
 from .version import __version__
 
-# Rolling buffer cap on the Python side. The native lib expects up to
-# `_CLIENT_BUFFER_SECONDS` of 16 kHz s16le PCM per predict; it will pad
-# or truncate internally to its fixed receptive window.
-_CLIENT_BUFFER_SECONDS = 1.2
-_BYTES_PER_SECOND = DEFAULT_SAMPLE_RATE * 2  # 16 kHz * int16
-_CLIENT_BUFFER_BYTES = int(_CLIENT_BUFFER_SECONDS * _BYTES_PER_SECOND)
-
-_LIB_BASENAME = "_audio_eot"
+__all__ = ["AudioTurnDetector"]
 
 
-def _native_lib_path() -> Path | None:
-    pkg_dir = Path(__file__).resolve().parent
-    if sys.platform == "darwin":
-        ext = ".dylib"
-    elif sys.platform == "win32":
-        ext = ".dll"
-    else:
-        ext = ".so"
-    candidate = pkg_dir / f"{_LIB_BASENAME}{ext}"
-    return candidate if candidate.exists() else None
+_AudioBackend = Literal["eot-audio-cloud", "eot-audio-mini"]
 
 
-_lib: ctypes.CDLL | None = None
-_lib_load_error: BaseException | None = None
+def _resolve_mode(model: _AudioBackend | None) -> tuple[_AudioBackend, bool]:
+    """Return (mode, auto). ``auto`` is True iff the caller did not specify."""
+    if model is not None:
+        return model, False
+    if os.environ.get("LIVEKIT_REMOTE_EOT_URL"):
+        return "eot-audio-cloud", True
+    return "eot-audio-mini", True
 
 
-def _load_lib() -> None:
-    """Load the native shared library and bind `audio_eot_predict`.
+class AudioTurnDetector(_AudioTurnDetector):
+    """Audio end-of-turn detector.
 
-    Errors are captured rather than raised: anyone who actually tries to
-    use the local backend gets a clear error at use-time; merely
-    importing the package on a host without the .so does not crash.
-    """
-    global _lib, _lib_load_error
-
-    lib_path = _native_lib_path()
-    if lib_path is None:
-        _lib_load_error = RuntimeError(
-            f"audio EOT native library not found next to livekit.plugins.turn_detector "
-            f"(expected `{_LIB_BASENAME}.{{so,dylib,dll}}`). "
-            f"Run `make fetch-audio-eot` or set LK_AUDIO_EOT_SOURCES_DIR + "
-            f"LK_AUDIO_EOT_WEIGHTS_FILE and rebuild the plugin."
-        )
-        return
-
-    try:
-        lib = ctypes.CDLL(str(lib_path))
-        lib.audio_eot_predict.argtypes = (ctypes.POINTER(ctypes.c_int16), ctypes.c_size_t)
-        lib.audio_eot_predict.restype = ctypes.c_float
-    except OSError as e:
-        _lib_load_error = RuntimeError(
-            f"failed to load audio EOT native library at {lib_path}: {e}"
-        )
-        return
-
-    _lib = lib
-
-    # Force any lazy table init (FFT twiddles, mel filterbank) in this
-    # process so children forked from the worker forkserver inherit them
-    # via COW. Cheap zeros-buffer warmup — result discarded.
-    try:
-        _predict(b"\x00\x00" * 16)
-    except Exception as e:
-        logger.warning("audio EOT lib warmup predict failed: %s", e)
-
-
-def _predict(pcm_bytes: bytes) -> float:
-    if _lib is None:
-        raise _lib_load_error or RuntimeError("audio EOT native library not loaded")
-    n = len(pcm_bytes) // 2
-    buf = (ctypes.c_int16 * n).from_buffer_copy(pcm_bytes[: n * 2])
-    return float(_lib.audio_eot_predict(buf, ctypes.c_size_t(n)))
-
-
-_load_lib()
-
-LANGUAGES = {
-    "en": 0.3,
-    "fr": 0.3,
-    "de": 0.3,
-    "hi": 0.3,
-    "ja": 0.3,
-    "ko": 0.3,
-    "zh": 0.3,
-    "es": 0.3,
-}
-
-
-class AudioTurnDetector(_CloudAudioTurnDetector):
-    """Local audio EOT model exposed by livekit-plugins-turn-detector.
-
-    Runs entirely in-process via ctypes. The native library is loaded at
-    module import and its weights/feature tables are resident pages
-    inherited via COW by all forked job processes (when the worker
-    start method is `forkserver`).
-
-    Users wanting the cloud-backed model can import
-    `livekit.agents.inference.AudioTurnDetector` directly instead.
+    Parameters
+    ----------
+    model:
+        Pin a backend explicitly. ``None`` (default) auto-selects:
+        ``"eot-audio-cloud"`` when ``LIVEKIT_REMOTE_EOT_URL`` is set,
+        ``"eot-audio-mini"`` otherwise.
+    unlikely_threshold:
+        Override the per-language threshold. Anchored on the cloud
+        defaults (0.4 across languages); a custom value is scaled
+        multiplicatively onto the local table when fallback engages, so
+        a user-tuned operating point survives a cloud → local swap.
+    base_url / api_key / api_secret:
+        Cloud credentials. ``base_url`` defaults to
+        ``LIVEKIT_REMOTE_EOT_URL``; ``api_key`` / ``api_secret`` default
+        to ``LIVEKIT_INFERENCE_API_*`` then ``LIVEKIT_API_*``. Only used
+        when the resolved backend is cloud.
     """
 
     def __init__(
         self,
         *,
+        model: _AudioBackend | None = None,
+        unlikely_threshold: float | None = None,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: int = DEFAULT_SAMPLE_RATE,
+        http_session: aiohttp.ClientSession | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
-        # Bypass _CloudAudioTurnDetector.__init__ (which requires API keys)
-        # but still initialize the EventEmitter base class.
-        rtc.EventEmitter.__init__(self)
+        resolved_model, auto = _resolve_mode(model)
 
-        self._opts = TurnDetectorOptions(
+        # Resolve cloud config eagerly so we can downgrade in auto-mode if the
+        # creds aren't present. In explicit-cloud mode, missing creds raises.
+        lk_base_url = utils.resolve_env_var(base_url, "LIVEKIT_REMOTE_EOT_URL", default="")
+        lk_api_key = utils.resolve_env_var(
+            api_key, "LIVEKIT_INFERENCE_API_KEY", "LIVEKIT_API_KEY", default=""
+        )
+        lk_api_secret = utils.resolve_env_var(
+            api_secret, "LIVEKIT_INFERENCE_API_SECRET", "LIVEKIT_API_SECRET", default=""
+        )
+
+        if resolved_model == "eot-audio-cloud":
+            missing: list[str] = []
+            if not lk_base_url:
+                missing.append("LIVEKIT_REMOTE_EOT_URL")
+            if not lk_api_key:
+                missing.append("LIVEKIT_API_KEY")
+            if not lk_api_secret:
+                missing.append("LIVEKIT_API_SECRET")
+            if missing:
+                if auto:
+                    logger.warning(
+                        "LIVEKIT_REMOTE_EOT_URL is set but %s missing; "
+                        "falling back to eot-audio-mini",
+                        ", ".join(missing),
+                    )
+                    resolved_model = "eot-audio-mini"
+                else:
+                    raise ValueError(
+                        f"AudioTurnDetector(model='eot-audio-cloud') requires "
+                        f"{', '.join(missing)} (env or constructor argument)."
+                    )
+
+        if resolved_model == "eot-audio-mini" and not lib_available():
+            # Only raise for explicit local — auto-fallback (env present, lib
+            # missing) is implausible since the lib ships with the plugin, but
+            # we raise loudly either way to surface the install problem.
+            err = lib_load_error() or RuntimeError("audio EOT native library not loaded")
+            raise err
+
+        opts = TurnDetectorOptions(
             sample_rate=sample_rate,
-            base_url="",
-            api_key="",
-            api_secret="",
+            base_url=lk_base_url,
+            api_key=lk_api_key,
+            api_secret=lk_api_secret,
             conn_options=conn_options,
         )
-        self._session = None
-        self._streams: weakref.WeakSet[BaseAudioTurnDetectionStream] = weakref.WeakSet()
+        super().__init__(opts=opts)
+
+        self._mode: _AudioBackend = resolved_model
+        self._user_threshold: float | None = unlikely_threshold
+        self._http_session = http_session
+        self._stream_ref: weakref.ref[_AudioTurnDetectorStreamImpl] | None = None
 
     @property
     def model(self) -> str:
-        return "eot-audio-mini"
+        # Reflects the *effective* mode — flips after a fallback so metrics
+        # and span attributes reflect the actual model serving the request.
+        return self._effective_mode()
+
+    def _effective_mode(self) -> _AudioBackend:
+        if self._stream_ref is not None:
+            stream = self._stream_ref()
+            if stream is not None:
+                return stream.mode
+        return self._mode
+
+    async def unlikely_threshold(self, language: LanguageCode | None) -> float | None:
+        lang_key = language.language if language is not None else "en"
+        mode = self._effective_mode()
+        table = LOCAL_LANGUAGES if mode == "eot-audio-mini" else CLOUD_LANGUAGES
+        default = table.get(lang_key)
+        if default is None:
+            return None
+        if self._user_threshold is None:
+            return default
+        # Multiplicative scaling: anchor on cloud_default. If the user picked
+        # 0.5 on a 0.4 cloud default, the local fallback uses 0.3 * (0.5/0.4)
+        # = 0.375 — same proportional perturbation from each model's default.
+        cloud_default = CLOUD_LANGUAGES.get(lang_key, default)
+        if cloud_default == 0:
+            return default
+        return default * (self._user_threshold / cloud_default)
 
     def stream(
         self,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> BaseAudioTurnDetectionStream:
-        if _lib is None:
-            raise _lib_load_error or RuntimeError("audio EOT native library not loaded")
-        stream = _LocalAudioTurnDetectionStream(detector=self, opts=self._opts)
+    ) -> _AudioTurnDetectorStream:
+        stream = _AudioTurnDetectorStreamImpl(
+            detector=self,
+            opts=self._opts,
+            mode=self._mode,
+            http_session=self._http_session,
+            conn_options=conn_options,
+        )
         self._streams.add(stream)
+        self._stream_ref = weakref.ref(stream)
         return stream
 
-    async def unlikely_threshold(self, language: LanguageCode | None) -> float | None:
-        lang_key = language.language if language is not None else "en"
-        return LANGUAGES.get(lang_key)
 
-
-class _LocalAudioTurnDetectionStream(BaseAudioTurnDetectionStream):
-    """In-process audio EOT stream.
-
-    Drains the audio channel into a rolling 1.2 s s16le @ 16 kHz buffer,
-    fires a single `audio_eot_predict` call on `warmup()` via
-    `asyncio.to_thread`, and emits the held probability when
-    `set_active(True)` is called before the inference completes.
+class _AudioTurnDetectorStreamImpl(_AudioTurnDetectorStream):
+    """Single concrete stream class that dispatches all FSM hooks to the
+    currently-bound transport. On cloud failure (transport raise or predict
+    timeout) the cloud transport is closed and replaced with a local one for
+    the rest of the session.
     """
 
     def __init__(
@@ -180,75 +212,130 @@ class _LocalAudioTurnDetectionStream(BaseAudioTurnDetectionStream):
         *,
         detector: AudioTurnDetector,
         opts: TurnDetectorOptions,
+        mode: _AudioBackend,
+        http_session: aiohttp.ClientSession | None,
+        conn_options: APIConnectOptions,
     ) -> None:
-        self._buf: bytearray = bytearray()
-        self._held_probability: float | None = None
-        super().__init__(detector=detector, opts=opts)
+        self._detector_typed = detector  # narrowed type so we can call cloud-only attrs
+        self._mode: _AudioBackend = mode
+        self._http_session = http_session
+        self._conn_options = conn_options
+        self._fell_back = False
+        self._warned_cloud_failure = False
+        self._warned_local_failure = False
 
-    # region: transport hooks
+        self._transport: AudioTurnDetectionTransport
+        if mode == "eot-audio-cloud":
+            self._transport = _CloudTransport(
+                detector=detector,
+                opts=opts,
+                http_session=http_session,
+                conn_options=conn_options,
+            )
+        else:
+            self._transport = _LocalTransport(opts=opts)
+
+        # super().__init__ kicks off `_main_task` which calls `_run_transport`,
+        # so the transport must be bound before that runs.
+        super().__init__(detector=detector, opts=opts)
+        self._transport.bind(self)
+
+    @property
+    def mode(self) -> _AudioBackend:
+        return self._mode
+
+    # region: FSM hook dispatch
+
+    def _transport_ready(self) -> bool:
+        return self._transport.transport_ready()
 
     def _on_warmup_start(self, request_id: str) -> None:
-        snapshot = bytes(self._buf)
-        fut = self._active_request_fut
-        task = asyncio.create_task(self._run_predict(request_id, snapshot, fut))
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        self._transport.on_warmup_start(request_id)
 
-    async def _run_predict(
-        self,
-        request_id: str,
-        pcm_snapshot: bytes,
-        fut: asyncio.Future[float] | None,
-    ) -> None:
-        prob = 0.0
-        try:
-            prob = await asyncio.to_thread(_predict, pcm_snapshot)
-        except Exception:
-            logger.exception("local audio EOT prediction failed")
-
-        if request_id != self._active_request_id:
-            return
-
-        if fut is not None:
-            with contextlib.suppress(asyncio.InvalidStateError):
-                fut.set_result(prob)
-
-        if self.is_active:
-            self._emit_prediction(prob)
-        else:
-            self._held_probability = prob
+    def _on_inference_stop(self, *, reason: str | None) -> None:
+        self._transport.on_inference_stop(reason=reason)
 
     def _on_activate(self) -> None:
-        if self._held_probability is not None:
-            prob = self._held_probability
-            self._held_probability = None
-            self._emit_prediction(prob)
+        self._transport.on_activate()
 
-    async def _on_audio_chunk(self, frame: rtc.AudioFrame) -> None:
-        data = bytes(frame.data)
-        if not data:
-            return
-        self._buf.extend(data)
-        overflow = len(self._buf) - _CLIENT_BUFFER_BYTES
-        if overflow > 0:
-            del self._buf[:overflow]
+    async def _on_audio_chunk(self, frame) -> None:  # type: ignore[no-untyped-def]
+        await self._transport.on_audio_chunk(frame)
 
-    async def _on_flush_sentinel(
-        self, sentinel: BaseAudioTurnDetectionStream._FlushSentinel
-    ) -> None:
-        keep_bytes = sentinel.keep_tail_ms * _BYTES_PER_SECOND // 1000
-        if keep_bytes < len(self._buf):
-            del self._buf[: len(self._buf) - keep_bytes]
-        self._held_probability = None
-
-    async def _run_transport(self) -> None:
-        await self._drain_audio_channel()
+    async def _on_flush_sentinel(self, sentinel: _AudioTurnDetectorStream._FlushSentinel) -> None:
+        await self._transport.on_flush_sentinel(sentinel)
 
     # endregion
 
+    async def _run_transport(self) -> None:
+        if self._mode == "eot-audio-cloud":
+            try:
+                await self._transport.run()
+            except (APIConnectionError, APITimeoutError, APIError) as e:
+                self._fall_back_to_local(reason=e)
+            except Exception as e:  # noqa: BLE001
+                # Any unexpected cloud error is also a fallback trigger —
+                # we'd rather degrade to local than tear down the session.
+                self._fall_back_to_local(reason=e)
+        # After fall-back (or if started local), drain via local; survive its raises.
+        if self._mode == "eot-audio-mini":
+            try:
+                await self._transport.run()
+            except Exception as e:  # noqa: BLE001
+                self._on_local_failure(reason=e)
+
+    def _fall_back_to_local(self, *, reason: BaseException) -> None:
+        if not lib_available():
+            # Lib missing — can't promote. Emit 1.0 for this request and let
+            # the cloud transport try again on the next turn.
+            if not self._warned_cloud_failure:
+                logger.warning(
+                    "cloud audio EOT failed (%s) and local mini lib is unavailable; "
+                    "defaulting to 1.0 for current and future failures",
+                    reason,
+                )
+                self._warned_cloud_failure = True
+            self._emit_default_for_inflight()
+            return
+
+        if not self._warned_cloud_failure:
+            logger.warning(
+                "cloud audio EOT failed (%s); falling back to local mini model",
+                reason,
+            )
+            self._warned_cloud_failure = True
+
+        self._emit_default_for_inflight()
+        self._transport.close_nowait()
+        self._transport = _LocalTransport(opts=self._opts)
+        self._transport.bind(self)
+        self._mode = "eot-audio-mini"
+        self._fell_back = True
+
+    def _on_local_failure(self, *, reason: BaseException) -> None:
+        if not self._warned_local_failure:
+            logger.warning(
+                "local audio EOT mini failed (%s); defaulting to 1.0 and retrying on next turn",
+                reason,
+            )
+            self._warned_local_failure = True
+        self._emit_default_for_inflight()
+
+    def _emit_default_for_inflight(self) -> None:
+        if self._active_request_fut is not None and not self._active_request_fut.done():
+            with contextlib.suppress(asyncio.InvalidStateError):
+                self._active_request_fut.set_result(1.0)
+        self._emit_prediction(1.0)
+
+    def _on_predict_timeout(self) -> None:
+        # Treat a predict_end_of_turn timeout while in cloud mode as a
+        # transport-level failure: emit was already 1.0 (by base FSM), now
+        # promote local for the rest of the session.
+        if self._mode == "eot-audio-cloud":
+            self._fall_back_to_local(reason=asyncio.TimeoutError("predict_end_of_turn"))
+
     async def aclose(self) -> None:
+        self._transport.close_nowait()
         await super().aclose()
-        self._held_probability = None
 
 
 class _AudioEotPlugin(Plugin):
@@ -256,8 +343,13 @@ class _AudioEotPlugin(Plugin):
         super().__init__(__name__, __version__, __package__, logger)
 
     def download_files(self) -> None:
-        # Weights are embedded in the native library; nothing to download.
-        pass
+        # Weights are embedded in the native library, which ships inside
+        # the wheel (or is dropped in place by `make fetch-audio-eot`).
+        # Nothing to download at runtime.
+        logger.info(
+            "audio EOT model is bundled with the plugin (no download step). "
+            "If the native lib is missing, run `make fetch-audio-eot`."
+        )
 
 
 Plugin.register_plugin(_AudioEotPlugin())

@@ -21,12 +21,6 @@ from ..inference.interruption import (
     _OverlapSpeechEndedSentinel,
     _OverlapSpeechStartedSentinel,
 )
-from ..inference.turn_detection import (
-    MIN_SILENCE_DURATION_MS,
-    AudioTurnDetector,
-    BaseAudioTurnDetectionStream,
-    TurnDetectionEvent,
-)
 from ..language import LanguageCode
 from ..log import logger
 from ..stt import SpeechEvent
@@ -37,7 +31,14 @@ from ..vad import VADEvent, VADEventType
 from . import io
 from ._utils import _set_participant_attributes
 from .endpointing import BaseEndpointing
-from .turn import TurnDetectionMode as TurnDetectionMode, _TurnDetector
+from .turn import (
+    MIN_SILENCE_DURATION_MS,
+    TurnDetectionEvent,
+    TurnDetectionMode as TurnDetectionMode,
+    _AudioTurnDetector,
+    _AudioTurnDetectorStream,
+    _TurnDetector,
+)
 
 if TYPE_CHECKING:
     from .agent_session import AgentSession
@@ -215,9 +216,9 @@ class AudioRecognition:
         self._vad_speech_started: bool = False
 
         # audio streaming turn detection
-        self._turn_detector_stream: BaseAudioTurnDetectionStream | None = None
+        self._turn_detector_stream: _AudioTurnDetectorStream | None = None
         self._turn_detection_ch: (
-            aio.Chan[rtc.AudioFrame | VADEvent | bool | BaseAudioTurnDetectionStream._FlushSentinel]
+            aio.Chan[rtc.AudioFrame | VADEvent | bool | _AudioTurnDetectorStream._FlushSentinel]
             | None
         ) = None
         self._turn_detection_atask: asyncio.Task[None] | None = None
@@ -226,8 +227,9 @@ class AudioRecognition:
         # don't issue a redundant predict_end_of_turn that would just wait for the
         # next prediction and time out.
         self._latest_eou_prediction: TurnDetectionEvent | None = None
-        # make sure the turn detection is cancelled when the user starts to speak again
-        self._silence_guard_event = asyncio.Event()
+        # set on VAD START_OF_SPEECH, cleared on END_OF_SPEECH. Lets an
+        # in-flight EOU wait abort if the user starts speaking again.
+        self._user_speaking_event = asyncio.Event()
 
     def update_options(
         self,
@@ -263,7 +265,7 @@ class AudioRecognition:
         self.update_stt(self._stt, pipeline=stt_pipeline)
         self.update_vad(self._vad)
         self.update_interruption_detection(self._interruption_detection)
-        if isinstance(self._turn_detector, AudioTurnDetector) or self._turn_detector is None:
+        if isinstance(self._turn_detector, _AudioTurnDetector) or self._turn_detector is None:
             self.update_turn_detector(self._turn_detector)
 
     def stop(self) -> None:
@@ -679,15 +681,15 @@ class AudioRecognition:
             self._interruption_detection is not None and self._vad is not None
         )
 
-    def update_turn_detector(self, detector: _TurnDetector | AudioTurnDetector | None) -> None:
+    def update_turn_detector(self, detector: _TurnDetector | _AudioTurnDetector | None) -> None:
         """Update the turn detector and turn detector stream if possible."""
         self._turn_detector = detector
         self._turn_detector_stream = (
-            detector.stream() if isinstance(detector, AudioTurnDetector) else None
+            detector.stream() if isinstance(detector, _AudioTurnDetector) else None
         )
         if self._turn_detector_stream is not None:
             self._turn_detection_ch = aio.Chan[
-                rtc.AudioFrame | VADEvent | bool | BaseAudioTurnDetectionStream._FlushSentinel
+                rtc.AudioFrame | VADEvent | bool | _AudioTurnDetectorStream._FlushSentinel
             ]()
             self._turn_detection_atask = asyncio.create_task(
                 self._turn_detection_task(
@@ -1055,7 +1057,7 @@ class AudioRecognition:
                 self._hooks.on_start_of_speech(ev, speech_start_time=speech_start_time)
 
             self._speaking = True
-            self._silence_guard_event.set()
+            self._user_speaking_event.set()
 
             if self._turn_detection_ch is not None:
                 self._turn_detection_ch.send_nowait(ev)
@@ -1075,7 +1077,7 @@ class AudioRecognition:
 
                 if self._speech_start_time is None:
                     self._speech_start_time = time.time() - ev.raw_accumulated_speech
-                self._silence_guard_event.set()
+                self._user_speaking_event.set()
 
             if ev.raw_accumulated_silence >= MIN_SILENCE_DURATION_MS / 1000 and self._speaking:
                 if (
@@ -1089,7 +1091,7 @@ class AudioRecognition:
                         extra={
                             "raw_accumulated_silence": ev.raw_accumulated_silence,
                             "speech_duration": ev.speech_duration,
-                            "request_id": self._turn_detector_stream._active_request_id,
+                            "request_id": self._turn_detector_stream.active_request_id,
                         },
                     )
 
@@ -1099,7 +1101,7 @@ class AudioRecognition:
 
             self._vad_speech_started = False
             self._speaking = False
-            self._silence_guard_event.clear()
+            self._user_speaking_event.clear()
             self._last_speaking_time = time.time() - ev.silence_duration - ev.inference_duration
 
             if self._turn_detection_ch is not None:
@@ -1107,7 +1109,7 @@ class AudioRecognition:
 
             if (
                 self._vad_base_turn_detection
-                and not isinstance(self._turn_detector, AudioTurnDetector)
+                and not isinstance(self._turn_detector, _AudioTurnDetector)
             ) or (self._turn_detection_mode == "stt" and self._user_turn_committed):
                 chat_ctx = self._hooks.retrieve_chat_ctx().copy()
                 self._run_eou_detection(chat_ctx, trigger="vad")
@@ -1126,11 +1128,10 @@ class AudioRecognition:
     def _run_eou_detection(
         self,
         chat_ctx: llm.ChatContext,
+        *,
+        trigger: Literal["vad", "turn_detector", "stt", "manual"],
         skip_reply: bool = False,
         latest_eou_prediction: TurnDetectionEvent | None = None,
-        trigger: Literal[
-            "vad", "vad_preemptive", "turn_detector", "stt", "manual", "unknown"
-        ] = "unknown",
     ) -> None:
         """
         Run endpointing delay arbitrage. Turn detection might have been decided already by the vad, manual, or stt.
@@ -1153,11 +1154,11 @@ class AudioRecognition:
         turn_detector = (
             (
                 self._turn_detector_stream
-                if isinstance(self._turn_detector, AudioTurnDetector)
+                if isinstance(self._turn_detector, _AudioTurnDetector)
                 else self._turn_detector
             )
             if self._turn_detection_mode != "manual"
-            and (self._audio_transcript or isinstance(self._turn_detector, AudioTurnDetector))
+            and (self._audio_transcript or isinstance(self._turn_detector, _AudioTurnDetector))
             else None  # disable EOU model if manual turn detection enabled
         )
 
@@ -1187,7 +1188,7 @@ class AudioRecognition:
                                 end_of_turn_probability = (
                                     latest_eou_prediction.end_of_turn_probability
                                 )
-                            elif isinstance(turn_detector, BaseAudioTurnDetectionStream):
+                            elif isinstance(turn_detector, _AudioTurnDetectorStream):
                                 end_of_turn_probability = await turn_detector.predict_end_of_turn(
                                     timeout=endpointing_delay,
                                 )
@@ -1232,6 +1233,14 @@ class AudioRecognition:
                                 trace_types.ATTR_EOU_SOURCE: trigger,
                             }
                         )
+                        if (
+                            latest_eou_prediction is not None
+                            and latest_eou_prediction.detection_delay is not None
+                        ):
+                            eou_detection_span.set_attribute(
+                                trace_types.ATTR_EOU_DETECTION_DELAY,
+                                latest_eou_prediction.detection_delay,
+                            )
 
             extra_sleep = endpointing_delay
             if last_speaking_time:
@@ -1328,12 +1337,12 @@ class AudioRecognition:
 
             self._user_turn_committed = False
 
-        async def _bounce_eou_task_with_silence_guard(
+        async def _bounce_eou_task_with_speaking_guard(
             last_speaking_time: float | None = None,
             last_final_transcript_time: float | None = None,
             speech_start_time: float | None = None,
         ) -> None:
-            if self._speaking and trigger != "vad_preemptive":
+            if self._speaking:
                 logger.debug(
                     "user is still speaking, skipping end of turn task",
                     extra={
@@ -1345,7 +1354,7 @@ class AudioRecognition:
                 return
 
             tasks = [
-                (silence_guard_task := asyncio.create_task(self._silence_guard_event.wait())),
+                (speaking_task := asyncio.create_task(self._user_speaking_event.wait())),
                 asyncio.create_task(
                     _bounce_eou_task(
                         last_speaking_time, last_final_transcript_time, speech_start_time
@@ -1354,7 +1363,7 @@ class AudioRecognition:
             ]
             try:
                 done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-                if silence_guard_task in done:
+                if speaking_task in done:
                     logger.debug(
                         "user spoke during endpointing, cancelling end of turn task",
                         extra={
@@ -1371,11 +1380,10 @@ class AudioRecognition:
             # TODO(theomonnom): disallow cancel if the extra sleep is done
             self._end_of_turn_task.cancel()
 
-        # TODO: @chenghao-mou extend the silence guard to normal eou detection as well if needed
         task_func = (
-            _bounce_eou_task_with_silence_guard
+            _bounce_eou_task_with_speaking_guard
             if self._turn_detector is not None
-            and isinstance(self._turn_detector, AudioTurnDetector)
+            and isinstance(self._turn_detector, _AudioTurnDetector)
             else _bounce_eou_task
         )
         # copy the last_speaking_time before awaiting (the value can change)
@@ -1441,10 +1449,8 @@ class AudioRecognition:
     @utils.log_exceptions(logger=logger)
     async def _turn_detection_task(
         self,
-        stream: BaseAudioTurnDetectionStream,
-        ch: aio.Chan[
-            rtc.AudioFrame | VADEvent | bool | BaseAudioTurnDetectionStream._FlushSentinel
-        ],
+        stream: _AudioTurnDetectorStream,
+        ch: aio.Chan[rtc.AudioFrame | VADEvent | bool | _AudioTurnDetectorStream._FlushSentinel],
         task: asyncio.Task[None] | None,
     ) -> None:
         if task is not None:
@@ -1462,7 +1468,7 @@ class AudioRecognition:
                         stream.set_active(True, trigger="vad eos")
                 elif isinstance(msg, bool):
                     stream.set_active(msg, trigger="manual")
-                elif isinstance(msg, BaseAudioTurnDetectionStream._FlushSentinel):
+                elif isinstance(msg, _AudioTurnDetectorStream._FlushSentinel):
                     stream.flush(msg.reason)
 
         forward_task = asyncio.create_task(_forward())

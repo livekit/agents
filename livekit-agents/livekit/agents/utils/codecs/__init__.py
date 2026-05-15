@@ -13,13 +13,10 @@
 # limitations under the License.
 
 from .decoder import AudioStreamDecoder, StreamBuffer
-from .encoder import AudioStreamEncoder, EncodedAudioData
 
 __all__ = [
     "AudioStreamDecoder",
     "StreamBuffer",
-    "AudioStreamEncoder",
-    "EncodedAudioData",
 ]
 
 # Cleanup docs of unexported modules

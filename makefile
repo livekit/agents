@@ -136,6 +136,8 @@ unit-tests:
 		tests/test_tool_proxy.py \
 		tests/test_endpointing.py \
 		tests/test_amd_classifier.py \
+		tests/test_turn_detection_fsm.py \
+		tests/test_turn_detection_cloud_stream.py \
 		tests/test_session_host.py \
 		tests/test_http_context_helper.py
 
