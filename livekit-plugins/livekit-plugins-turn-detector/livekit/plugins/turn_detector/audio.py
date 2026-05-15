@@ -132,6 +132,10 @@ class AudioTurnDetector(_CloudAudioTurnDetector):
         sample_rate: int = DEFAULT_SAMPLE_RATE,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
+        # Bypass _CloudAudioTurnDetector.__init__ (which requires API keys)
+        # but still initialize the EventEmitter base class.
+        rtc.EventEmitter.__init__(self)
+
         self._opts = TurnDetectorOptions(
             sample_rate=sample_rate,
             base_url="",
