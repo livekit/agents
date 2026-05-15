@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 import copy
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, get_origin, get_type_hints
@@ -177,7 +178,7 @@ class AsyncToolset(Toolset):
         id: str,
         tools: list[Tool] | None = None,
         on_duplicate_call: DuplicateMode = "confirm",
-        reply_instructions: str = REPLY_INSTRUCTIONS,
+        reply_instructions: str | Callable[[list[ChatItem]], str] = REPLY_INSTRUCTIONS,
     ) -> None:
         super().__init__(id=id, tools=tools)
 
@@ -352,11 +353,17 @@ class AsyncToolset(Toolset):
             # TODO: use a LLM to verify if another reply is needed?
             return
 
-        pending_call_ids = [
-            item.call_id for item in pending_items if item.type == "function_call_output"
-        ]
+        # format the reply instructions from the pending chat items
+        if callable(self._reply_instructions):
+            instructions = self._reply_instructions(pending_items)
+        else:
+            pending_call_ids = [
+                item.call_id for item in pending_items if item.type == "function_call_output"
+            ]
+            instructions = self._reply_instructions.format(pending_call_ids=pending_call_ids)
+
         session.generate_reply(
-            instructions=self._reply_instructions.format(pending_call_ids=pending_call_ids),
+            instructions=instructions,
             tool_choice="none",
         )
 
