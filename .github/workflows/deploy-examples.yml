@@ -47,6 +47,27 @@ jobs:
             --api-secret "$LIVEKIT_API_SECRET" \
             --default
 
+      - name: Regenerate livekit.toml from playground.yaml
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 <<'PY'
+          import yaml
+          from pathlib import Path
+          data = yaml.safe_load(Path("examples/playground.yaml").read_text())
+          subdomain = data["project"]["subdomain"]
+          slug = "${{ matrix.example }}"
+          entry = next(e for e in data["examples"] if e["slug"] == slug)
+          toml = (
+              "[project]\n"
+              f'  subdomain = "{subdomain}"\n'
+              "\n"
+              "[agent]\n"
+              f'  id = "{entry["agent_id"]}"\n'
+          )
+          Path(f"examples/{slug}/livekit.toml").write_text(toml)
+          print(f"wrote examples/{slug}/livekit.toml")
+          PY
+
       - name: Build secrets file
         working-directory: examples/${{ matrix.example }}
         env:

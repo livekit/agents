@@ -7,12 +7,20 @@
 # Pixel art icons use `1` for the accent color and `0` for transparent.
 
 version: 1
+
+# All examples deploy to this LiveKit Cloud project. The CI regenerates
+# each example's livekit.toml from this subdomain + the per-example
+# agent_id below before invoking `lk agent deploy`.
+project:
+  subdomain: examples-wfxyig8v
+
 examples:
   - slug: healthcare
     title: Healthcare
     description: Secure patient intake with authentication, appointment scheduling, and lab result retrieval. Demonstrates dynamic tool building and structured workflows with task callbacks.
     accent: "#10B981"   # emerald — calm, medical
     agent_name: healthcare
+    agent_id: CA_uFGnwowV2PMS
     entry: healthcare_agent.py
     tags: [voice, multi-agent, tools, healthcare]
     order: 10
@@ -43,6 +51,7 @@ examples:
     description: Screen software engineer candidates through a flexible interview flow. Maintains structured sequence while allowing the user to revisit previous topics naturally via TaskGroup.
     accent: "#F59E0B"   # amber — paper, clipboard
     agent_name: survey
+    agent_id: CA_APDyCSXwMUNS
     entry: survey_agent.py
     tags: [voice, multi-agent, structured-flow, recruiting]
     order: 20
@@ -73,6 +82,7 @@ examples:
     description: Customer service agent with cal.com calendar integration and appointment management. Showcases JudgeGroup evaluations and self-correcting tool calls via ToolError.
     accent: "#6366F1"   # indigo — corporate, hospitality
     agent_name: frontdesk
+    agent_id: CA_9TqkLsnwhjmE
     entry: frontdesk_agent.py
     tags: [voice, tools, calendar, customer-service]
     order: 30
@@ -103,6 +113,7 @@ examples:
     description: Complete fast-food drive-thru ordering system with menu injection, dynamically constructed Pydantic-validated tools, and Happy Meal customization.
     accent: "#F43F5E"   # rose — warm, food
     agent_name: drive-thru
+    agent_id: CA_cn3jfgKTxXDL
     entry: agent.py
     tags: [voice, tools, ordering, dynamic-tools]
     order: 40
