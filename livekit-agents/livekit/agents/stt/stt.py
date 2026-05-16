@@ -112,6 +112,7 @@ class STTCapabilities:
     aligned_transcript: Literal["word", "chunk", False] = False
     offline_recognize: bool = True
     """Whether the STT supports batch recognition via recognize() method"""
+    server_endpointing: bool = True
 
 
 class STTError(BaseModel):

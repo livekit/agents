@@ -13,7 +13,7 @@ from typing_extensions import Required
 
 from livekit import rtc
 
-from .. import stt, utils
+from .. import stt, utils, vad
 from .._exceptions import (
     APIConnectionError,
     APIStatusError,
@@ -204,6 +204,31 @@ def _parse_model_string(model: str) -> tuple[str, NotGivenOr[LanguageCode]]:
     return model, language
 
 
+def _resolve_vad_for_model(
+    model: NotGivenOr[STTModels | str],
+    vad_instance: vad.VAD | None,
+) -> tuple[bool, vad.VAD | None]:
+    is_speechmatics = (
+        is_given(model) and isinstance(model, str) and model.startswith("speechmatics/")
+    )
+    if vad_instance is not None and not is_speechmatics:
+        logger.warning(
+            "`vad` will be ignored: model %r handles endpointing server-side.",
+            model,
+        )
+        vad_instance = None
+    if is_speechmatics and vad_instance is None:
+        try:
+            from livekit.plugins.silero import VAD as SileroVAD
+        except ImportError as e:
+            raise ImportError(
+                "livekit-plugins-silero is required: model "
+                f"{model!r} does not handle endpointing server-side."
+            ) from e
+        vad_instance = SileroVAD.load()
+    return is_speechmatics, vad_instance
+
+
 def _normalize_fallback(
     fallback: list[FallbackModelType] | FallbackModelType,
 ) -> list[FallbackModel]:
@@ -368,6 +393,7 @@ class STT(stt.STT):
         extra_kwargs: NotGivenOr[SpeechmaticsOptions] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+        vad: vad.VAD | None = None,
     ) -> None: ...
 
     @overload
@@ -410,6 +436,7 @@ class STT(stt.STT):
         ] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+        vad: vad.VAD | None = None,
     ) -> None:
         """Livekit Cloud Inference STT
 
@@ -426,6 +453,9 @@ class STT(stt.STT):
             fallback (FallbackModelType, optional): Fallback models - either a list of model names,
                 a list of FallbackModel instances.
             conn_options (APIConnectOptions, optional): Connection options for request attempts.
+            vad (VAD, optional): External Voice Activity Detector. When provided, each audio
+                frame is forwarded to the VAD and `session.finalize` is sent to the inference
+                gateway on end of speech. Only applicable to Speechmatics models.
         """
         # Infer diarization capability from provider-specific extra_kwargs
         # keys (see _DIARIZATION_EXTRA_KEYS). xAI uses "diarize" (same as
@@ -434,6 +464,15 @@ class STT(stt.STT):
             dict(extra_kwargs) if is_given(extra_kwargs) else None
         )
 
+        # Parse language from model string if provided: "provider/model:language"
+        if is_given(model) and isinstance(model, str):
+            parsed_model, parsed_language = _parse_model_string(model)
+            model = parsed_model
+            if is_given(parsed_language) and not is_given(language):
+                language = parsed_language
+
+        is_speechmatics, vad = _resolve_vad_for_model(model, vad)
+
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
@@ -441,15 +480,9 @@ class STT(stt.STT):
                 diarization=diarization_enabled,
                 aligned_transcript="word",
                 offline_recognize=False,
+                server_endpointing=not is_speechmatics,
             ),
         )
-
-        # Parse language from model string if provided: "provider/model:language"
-        if is_given(model) and isinstance(model, str):
-            parsed_model, parsed_language = _parse_model_string(model)
-            model = parsed_model
-            if is_given(parsed_language) and not is_given(language):
-                language = parsed_language
 
         lk_base_url = base_url if is_given(base_url) else get_default_inference_url()
 
@@ -490,6 +523,7 @@ class STT(stt.STT):
         )
 
         self._session = http_session
+        self._vad = vad
         self._streams = weakref.WeakSet[SpeechStream]()
 
     @classmethod
@@ -537,7 +571,12 @@ class STT(stt.STT):
     ) -> SpeechStream:
         """Create a streaming transcription session."""
         options = self._sanitize_options(language=language)
-        stream = SpeechStream(stt=self, opts=options, conn_options=conn_options)
+        stream = SpeechStream(
+            stt=self,
+            opts=options,
+            conn_options=conn_options,
+            vad_instance=self._vad,
+        )
         self._streams.add(stream)
         return stream
 
@@ -550,7 +589,19 @@ class STT(stt.STT):
     ) -> None:
         """Update STT configuration options."""
         if is_given(model):
+            # Mirror __init__: strip ":language" suffix and apply if not overridden.
+            if isinstance(model, str):
+                parsed_model, parsed_language = _parse_model_string(model)
+                model = parsed_model
+                if is_given(parsed_language) and not is_given(language):
+                    language = parsed_language
+
             self._opts.model = model
+            is_speechmatics, self._vad = _resolve_vad_for_model(model, self._vad)
+            self._capabilities = replace(
+                self._capabilities,
+                server_endpointing=not is_speechmatics,
+            )
         if is_given(language):
             self._opts.language = LanguageCode(language)
         if is_given(extra):
@@ -583,6 +634,7 @@ class SpeechStream(stt.SpeechStream):
         stt: STT,
         opts: STTOptions,
         conn_options: APIConnectOptions,
+        vad_instance: vad.VAD | None = None,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._stt: STT = stt
@@ -592,6 +644,7 @@ class SpeechStream(stt.SpeechStream):
         self._speaking = False
         self._speech_duration: float = 0
         self._ws: aiohttp.ClientWebSocketResponse | None = None
+        self._vad: vad.VAD | None = vad_instance
 
     def update_options(
         self,
@@ -639,6 +692,7 @@ class SpeechStream(stt.SpeechStream):
         """Main loop for streaming transcription."""
         closing_ws = False
         http_session = self._stt._ensure_session()
+        vad_stream: vad.VADStream | None = self._vad.stream() if self._vad is not None else None
 
         @utils.log_exceptions(logger=logger)
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -653,6 +707,8 @@ class SpeechStream(stt.SpeechStream):
             async for ev in self._input_ch:
                 frames: list[rtc.AudioFrame] = []
                 if isinstance(ev, rtc.AudioFrame):
+                    if vad_stream is not None:
+                        vad_stream.push_frame(ev)
                     frames.extend(audio_bstream.push(ev.data))
                 elif isinstance(ev, self._FlushSentinel):
                     frames.extend(audio_bstream.flush())
@@ -667,11 +723,27 @@ class SpeechStream(stt.SpeechStream):
                     }
                     await ws.send_str(json.dumps(audio_msg))
 
+            if vad_stream is not None:
+                vad_stream.end_input()
+
             closing_ws = True
             finalize_msg = {
                 "type": "session.finalize",
             }
             await ws.send_str(json.dumps(finalize_msg))
+
+        @utils.log_exceptions(logger=logger)
+        async def vad_task(ws: aiohttp.ClientWebSocketResponse, stream: vad.VADStream) -> None:
+            async for ev in stream:
+                if ev.type != vad.VADEventType.END_OF_SPEECH:
+                    continue
+                if ws.closed:
+                    return
+                try:
+                    await ws.send_str(json.dumps({"type": "session.finalize"}))
+                except Exception:
+                    logger.debug("failed to send session.finalize from VAD, ws may be closing")
+                    return
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -722,6 +794,8 @@ class SpeechStream(stt.SpeechStream):
                 asyncio.create_task(send_task(ws)),
                 asyncio.create_task(recv_task(ws)),
             ]
+            if vad_stream is not None:
+                tasks.append(asyncio.create_task(vad_task(ws, vad_stream)))
             try:
                 await asyncio.gather(*tasks)
             finally:
@@ -730,6 +804,8 @@ class SpeechStream(stt.SpeechStream):
             self._ws = None
             if ws is not None:
                 await ws.close()
+            if vad_stream is not None:
+                await vad_stream.aclose()
 
     async def _connect_ws(
         self, http_session: aiohttp.ClientSession

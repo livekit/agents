@@ -22,6 +22,7 @@ class StreamAdapter(STT):
                 streaming=True,
                 interim_results=False,
                 diarization=False,  # diarization requires streaming STT
+                server_endpointing=False,  # VAD drives turn boundaries
             )
         )
         self._vad = vad
