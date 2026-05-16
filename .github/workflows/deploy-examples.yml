@@ -53,6 +53,9 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           : > .env.deploy
+          # Register the agent under a deterministic name so the playground
+          # can dispatch to it explicitly. Matches the slug in playground.yaml.
+          echo "LIVEKIT_AGENT_NAME=${{ matrix.example }}" >> .env.deploy
           case "${{ matrix.example }}" in
             healthcare)
               keys="OPENAI_API_KEY"

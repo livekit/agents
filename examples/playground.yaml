@@ -12,6 +12,7 @@ examples:
     title: Healthcare
     description: Secure patient intake with authentication, appointment scheduling, and lab result retrieval. Demonstrates dynamic tool building and structured workflows with task callbacks.
     accent: "#10B981"   # emerald — calm, medical
+    agent_name: healthcare
     entry: healthcare_agent.py
     tags: [voice, multi-agent, tools, healthcare]
     order: 10
@@ -41,6 +42,7 @@ examples:
     title: Survey
     description: Screen software engineer candidates through a flexible interview flow. Maintains structured sequence while allowing the user to revisit previous topics naturally via TaskGroup.
     accent: "#F59E0B"   # amber — paper, clipboard
+    agent_name: survey
     entry: survey_agent.py
     tags: [voice, multi-agent, structured-flow, recruiting]
     order: 20
@@ -70,6 +72,7 @@ examples:
     title: Front Desk
     description: Customer service agent with cal.com calendar integration and appointment management. Showcases JudgeGroup evaluations and self-correcting tool calls via ToolError.
     accent: "#6366F1"   # indigo — corporate, hospitality
+    agent_name: frontdesk
     entry: frontdesk_agent.py
     tags: [voice, tools, calendar, customer-service]
     order: 30
@@ -99,6 +102,7 @@ examples:
     title: Drive Thru
     description: Complete fast-food drive-thru ordering system with menu injection, dynamically constructed Pydantic-validated tools, and Happy Meal customization.
     accent: "#F43F5E"   # rose — warm, food
+    agent_name: drive-thru
     entry: agent.py
     tags: [voice, tools, ordering, dynamic-tools]
     order: 40
