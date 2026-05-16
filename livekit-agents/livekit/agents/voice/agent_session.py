@@ -327,6 +327,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             else VoiceActivityVideoSampler(speaking_fps=1.0, silent_fps=0.3)
         )
 
+        _user_provided_turn_handling = is_given(turn_handling)
         turn_handling = (
             _migrate_turn_handling(
                 # backward compatibility for deprecated parameters that had default values
@@ -403,7 +404,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._stt is not None
             and self._stt.capabilities.server_endpointing
             and not is_given(min_endpointing_delay)
-            and not is_given(turn_handling)
+            and not _user_provided_turn_handling
         ):
             endpointing["min_delay"] = 0.0
         self._turn_detection = raw_turn_detection
