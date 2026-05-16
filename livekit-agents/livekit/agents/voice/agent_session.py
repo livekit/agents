@@ -407,6 +407,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             and not _user_provided_turn_handling
         ):
             endpointing["min_delay"] = 0.0
+            # Pin the intra-utterance silence grace independently so it doesn't
+            # degenerate to `min_delay / 2 == 0` and cause the agent to speak
+            # over natural micro-pauses during user utterances.
+            endpointing["intra_utterance_silence_grace"] = 0.25
         self._turn_detection = raw_turn_detection
         self._interruption_detection = interruption.get("mode", NOT_GIVEN)
         self._mcp_servers = mcp_servers or None

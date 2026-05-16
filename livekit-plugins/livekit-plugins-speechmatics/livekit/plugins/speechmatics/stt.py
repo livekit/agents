@@ -148,7 +148,7 @@ class STT(stt.STT):
         known_speakers: NotGivenOr[list[SpeakerIdentifier]] = NOT_GIVEN,
         sample_rate: int = 16000,
         audio_encoding: AudioEncoding = AudioEncoding.PCM_S16LE,
-        vad: vad.VAD | None = None,
+        vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         **kwargs: Any,
     ):
         """Create a new instance of Speechmatics STT using the Voice SDK.
@@ -253,15 +253,18 @@ class STT(stt.STT):
             vad: Optional external Voice Activity Detector. When provided, the STT
                 engine's endpointing is replaced by the VAD: each audio frame is
                 forwarded to the VAD, and `finalize()` is called whenever the VAD
-                reports end of speech. Providing `vad` implicitly sets
-                `turn_detection_mode` to `EXTERNAL`. Defaults to None.
+                reports end of speech. Providing a VAD implicitly sets
+                `turn_detection_mode` to `EXTERNAL`. When `turn_detection_mode` is
+                `EXTERNAL` and `vad` is not provided, Silero is auto-loaded to drive
+                finalize. Pass `vad=None` to opt out of the auto-load if you intend
+                to call `finalize()` from your own logic. Defaults to NOT_GIVEN.
 
             **kwargs: Catches deprecated parameters. A warning is logged for any
                 recognised deprecated name.
         """
 
-        # Resolve final turn_detection_mode — `vad=` forces EXTERNAL.
-        if vad is not None and turn_detection_mode != TurnDetectionMode.EXTERNAL:
+        # Resolve final turn_detection_mode — a real `vad` forces EXTERNAL.
+        if is_given(vad) and vad is not None and turn_detection_mode != TurnDetectionMode.EXTERNAL:
             logger.info(
                 "External `vad` provided; overriding turn_detection_mode "
                 f"{turn_detection_mode.value!r} -> 'external'"
@@ -269,18 +272,21 @@ class STT(stt.STT):
             turn_detection_mode = TurnDetectionMode.EXTERNAL
 
         # In EXTERNAL mode the STT does not endpoint on its own. Auto-load Silero
-        # if the user didn't provide one so finalize() is always wired up.
-        if turn_detection_mode == TurnDetectionMode.EXTERNAL and vad is None:
+        # so finalize() is wired up, unless the caller explicitly passed `vad=None`
+        # to opt out (they'll drive finalize() themselves).
+        if turn_detection_mode == TurnDetectionMode.EXTERNAL and not is_given(vad):
             try:
                 from livekit.plugins.silero import VAD as SileroVAD
             except ImportError as e:
                 raise ImportError(
                     "livekit-plugins-silero is required for Speechmatics with "
-                    "turn_detection_mode=EXTERNAL (no server-side endpointing)."
+                    "turn_detection_mode=EXTERNAL (no server-side endpointing). "
+                    "Pass `vad=None` to opt out and drive finalize() manually."
                 ) from e
             vad = SileroVAD.load()
 
-        self._vad = vad
+        # Normalize NOT_GIVEN -> None for downstream storage.
+        self._vad = vad if is_given(vad) else None
 
         # Set default values for optional parameters
         super().__init__(

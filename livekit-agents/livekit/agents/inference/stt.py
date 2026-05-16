@@ -393,7 +393,7 @@ class STT(stt.STT):
         extra_kwargs: NotGivenOr[SpeechmaticsOptions] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
-        vad: vad.VAD | None = None,
+        vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
     ) -> None: ...
 
     @overload
@@ -436,7 +436,7 @@ class STT(stt.STT):
         ] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
-        vad: vad.VAD | None = None,
+        vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
     ) -> None:
         """Livekit Cloud Inference STT
 
@@ -471,7 +471,7 @@ class STT(stt.STT):
             if is_given(parsed_language) and not is_given(language):
                 language = parsed_language
 
-        is_speechmatics, vad = _resolve_vad_for_model(model, vad)
+        is_speechmatics, vad = _resolve_vad_for_model(model, vad if is_given(vad) else None)
 
         super().__init__(
             capabilities=stt.STTCapabilities(
