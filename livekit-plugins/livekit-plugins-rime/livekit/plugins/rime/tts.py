@@ -44,7 +44,7 @@ from livekit.agents.voice.io import TimedString
 
 from .langs import TTSLangs
 from .log import logger
-from .models import ArcanaVoices, DefaultMistVoice, TTSModels
+from .models import ArcanaVoices, DefaultCodaVoice, DefaultMistVoice, TTSModels
 
 # arcana can take as long as 80% of the total duration of the audio it's synthesizing.
 ARCANA_MODEL_TIMEOUT = 60 * 4
@@ -59,6 +59,7 @@ class _TTSOptions:
     model: TTSModels | str
     speaker: str
     arcana_options: _ArcanaOptions | None = None
+    coda_options: _CodaOptions | None = None
     mist_options: _MistOptions | None = None
 
 
@@ -67,6 +68,13 @@ class _ArcanaOptions:
     repetition_penalty: NotGivenOr[float] = NOT_GIVEN
     temperature: NotGivenOr[float] = NOT_GIVEN
     top_p: NotGivenOr[float] = NOT_GIVEN
+    max_tokens: NotGivenOr[int] = NOT_GIVEN
+    lang: NotGivenOr[TTSLangs | str] = NOT_GIVEN
+    sample_rate: NotGivenOr[int] = NOT_GIVEN
+
+
+@dataclass
+class _CodaOptions:
     max_tokens: NotGivenOr[int] = NOT_GIVEN
     lang: NotGivenOr[TTSLangs | str] = NOT_GIVEN
     sample_rate: NotGivenOr[int] = NOT_GIVEN
@@ -87,7 +95,7 @@ def _is_mist_model(model: TTSModels | str) -> bool:
 
 
 def _timeout_for_model(model: TTSModels | str) -> int:
-    if model == "arcana":
+    if model == "arcana" or model == "coda":
         return ARCANA_MODEL_TIMEOUT
     return MIST_MODEL_TIMEOUT
 
@@ -107,6 +115,12 @@ def _model_params(opts: _TTSOptions) -> dict[str, object]:
             params["top_p"] = ao.top_p
         if is_given(ao.max_tokens):
             params["max_tokens"] = ao.max_tokens
+    elif opts.model == "coda" and opts.coda_options is not None:
+        co = opts.coda_options
+        if is_given(co.lang):
+            params["lang"] = co.lang
+        if is_given(co.max_tokens):
+            params["max_tokens"] = co.max_tokens
     elif _is_mist_model(opts.model) and opts.mist_options is not None:
         mo = opts.mist_options
         if is_given(mo.lang):
@@ -167,7 +181,12 @@ class TTS(tts.TTS):
             )
 
         if not is_given(speaker):
-            speaker = DefaultMistVoice if _is_mist_model(model) else "astra"
+            if _is_mist_model(model):
+                speaker = DefaultMistVoice
+            elif model == "coda":
+                speaker = DefaultCodaVoice
+            else:
+                speaker = "astra"
 
         self._opts = _TTSOptions(
             model=model,
@@ -178,6 +197,12 @@ class TTS(tts.TTS):
                 repetition_penalty=repetition_penalty,
                 temperature=temperature,
                 top_p=top_p,
+                max_tokens=max_tokens,
+                lang=lang,
+                sample_rate=sample_rate,
+            )
+        elif model == "coda":
+            self._opts.coda_options = _CodaOptions(
                 max_tokens=max_tokens,
                 lang=lang,
                 sample_rate=sample_rate,
@@ -317,6 +342,8 @@ class TTS(tts.TTS):
 
             if model == "arcana" and self._opts.arcana_options is None:
                 self._opts.arcana_options = _ArcanaOptions()
+            elif model == "coda" and self._opts.coda_options is None:
+                self._opts.coda_options = _CodaOptions()
             elif _is_mist_model(model) and self._opts.mist_options is None:
                 self._opts.mist_options = _MistOptions()
 
@@ -336,6 +363,14 @@ class TTS(tts.TTS):
                 self._opts.arcana_options.lang = lang
             if is_given(sample_rate):
                 self._opts.arcana_options.sample_rate = sample_rate
+
+        elif self._opts.model == "coda" and self._opts.coda_options is not None:
+            if is_given(max_tokens):
+                self._opts.coda_options.max_tokens = max_tokens
+            if is_given(lang):
+                self._opts.coda_options.lang = lang
+            if is_given(sample_rate):
+                self._opts.coda_options.sample_rate = sample_rate
 
         elif _is_mist_model(self._opts.model) and self._opts.mist_options is not None:
             if is_given(lang):
@@ -374,6 +409,9 @@ class ChunkedStream(tts.ChunkedStream):
         if self._opts.model == "arcana" and self._opts.arcana_options is not None:
             if is_given(self._opts.arcana_options.sample_rate):
                 payload["samplingRate"] = self._opts.arcana_options.sample_rate
+        elif self._opts.model == "coda" and self._opts.coda_options is not None:
+            if is_given(self._opts.coda_options.sample_rate):
+                payload["samplingRate"] = self._opts.coda_options.sample_rate
         elif _is_mist_model(self._opts.model) and self._opts.mist_options is not None:
             mist_opts = self._opts.mist_options
             if is_given(mist_opts.sample_rate):
