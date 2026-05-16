@@ -772,11 +772,12 @@ class SpeechStream(stt.RecognizeStream):
             pass
 
     async def _process_vad(self, vad_stream: vad.VADStream) -> None:
-        """Call the STT's `finalize()` whenever the external VAD reports end of speech."""
+        """Call `client.finalize()` whenever the external VAD reports end of speech."""
         try:
             async for ev in vad_stream:
                 if ev.type == vad.VADEventType.END_OF_SPEECH:
-                    self._stt.finalize()
+                    if self._client and self._client._is_connected:
+                        self._client.finalize()
         except asyncio.CancelledError:
             pass
 
