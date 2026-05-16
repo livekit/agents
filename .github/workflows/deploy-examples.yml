@@ -94,12 +94,27 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
-        run: python -m pip install --quiet pyyaml
+      - run: python -m pip install --quiet pyyaml
 
       - name: Build manifest
-        working-directory: agents
-        run: python scripts/build_examples_manifest.py --root . --out ../examples-manifest.json
+        run: |
+          python <<'PY' > examples-manifest.json
+          import json, tomllib, yaml
+          from pathlib import Path
+          root = Path("agents/examples")
+          m = yaml.safe_load((root / "playground.yaml").read_text())
+          for e in m.get("examples", []):
+              d = root / e["slug"]
+              r = d / e.get("readme", "README.md")
+              if r.is_file():
+                  e["readme"] = r.read_text()
+              t = d / "livekit.toml"
+              if t.is_file():
+                  td = tomllib.loads(t.read_text())
+                  e["agent_id"] = td.get("agent", {}).get("id", "")
+                  e["subdomain"] = td.get("project", {}).get("subdomain", "")
+          print(json.dumps(m, indent=2, ensure_ascii=False))
+          PY
 
       - name: Checkout agents-jukebox
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -108,14 +123,11 @@ jobs:
           ssh-key: ${{ secrets.JUKEBOX_DEPLOY_KEY }}
           path: jukebox
 
-      - name: Sync manifest into jukebox
-        run: |
-          mkdir -p jukebox/next/data
-          cp examples-manifest.json jukebox/next/data/examples-manifest.json
-
       - name: Commit and push if changed
         working-directory: jukebox
         run: |
+          mkdir -p next/data
+          cp ../examples-manifest.json next/data/examples-manifest.json
           git config user.name "livekit-examples-bot"
           git config user.email "examples-bot@livekit.io"
           git add next/data/examples-manifest.json
@@ -124,7 +136,6 @@ jobs:
             exit 0
           fi
           git commit -m "chore: refresh examples manifest [skip ci]"
-          # Retry once on race conditions with concurrent pushes
           for i in 1 2; do
             if git push origin HEAD; then
               echo "Pushed manifest update."
