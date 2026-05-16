@@ -76,3 +76,62 @@ jobs:
             args+=(--secrets-file .env.deploy)
           fi
           lk agent deploy "${args[@]}" .
+
+  publish-manifest:
+    name: Publish examples manifest to agents-jukebox
+    runs-on: ubuntu-latest
+    needs: deploy
+    if: ${{ always() && !cancelled() }}
+    steps:
+      - name: Checkout agents
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ inputs.ref || 'main' }}
+          path: agents
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install --quiet pyyaml
+
+      - name: Build manifest
+        working-directory: agents
+        run: python scripts/build_examples_manifest.py --root . --out ../examples-manifest.json
+
+      - name: Checkout agents-jukebox
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          repository: livekit/agents-jukebox
+          ssh-key: ${{ secrets.JUKEBOX_DEPLOY_KEY }}
+          path: jukebox
+
+      - name: Sync manifest into jukebox
+        run: |
+          mkdir -p jukebox/next/data
+          cp examples-manifest.json jukebox/next/data/examples-manifest.json
+
+      - name: Commit and push if changed
+        working-directory: jukebox
+        run: |
+          git config user.name "livekit-examples-bot"
+          git config user.email "examples-bot@livekit.io"
+          git add next/data/examples-manifest.json
+          if git diff --cached --quiet; then
+            echo "Manifest unchanged, nothing to commit."
+            exit 0
+          fi
+          git commit -m "chore: refresh examples manifest [skip ci]"
+          # Retry once on race conditions with concurrent pushes
+          for i in 1 2; do
+            if git push origin HEAD; then
+              echo "Pushed manifest update."
+              exit 0
+            fi
+            echo "Push failed (attempt $i), pulling and retrying..."
+            git pull --rebase origin HEAD
+          done
+          echo "Failed to push manifest after retries." >&2
+          exit 1
