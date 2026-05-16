@@ -49,7 +49,7 @@ COPY requirements.txt ./
 
 # Install Python dependencies using pip
 # --no-cache-dir ensures we don't use the system cache
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --user --no-cache-dir -r requirements.txt
 
 # Pre-download any ML models or files the agent needs
 # This ensures the container is ready to run immediately without downloading
