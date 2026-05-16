@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import importlib
 import logging
 import pkgutil
@@ -7,7 +8,7 @@ import sys
 
 from .plugin import Plugin
 
-logger = logging.getLogger("livekit.agents.download")
+logger = logging.getLogger("livekit.agents")
 
 
 def _discover_and_import_plugins() -> list[str]:
@@ -29,9 +30,7 @@ def _discover_and_import_plugins() -> list[str]:
     return attempted
 
 
-def main() -> int:
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
-
+def _download_files() -> int:
     attempted = _discover_and_import_plugins()
     logger.info(
         "discovered %d plugin package(s): %s",
@@ -50,6 +49,28 @@ def main() -> int:
         else:
             logger.info("finished downloading files for %s", plugin.package)
     return exit_code
+
+
+def main(argv: list[str] | None = None) -> int:
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+    parser = argparse.ArgumentParser(
+        prog="python -m livekit.agents",
+        description="LiveKit Agents utilities.",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser(
+        "download-files",
+        help="Discover installed livekit-plugins-* packages and run their download_files step.",
+    )
+
+    args = parser.parse_args(argv)
+
+    if args.command == "download-files":
+        return _download_files()
+
+    parser.error(f"unknown command: {args.command}")
+    return 2
 
 
 if __name__ == "__main__":
