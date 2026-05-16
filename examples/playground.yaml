@@ -1,8 +1,8 @@
 # Examples metadata consumed by livekit/agents-jukebox.
 #
-# Each entry's `slug` must match a directory under examples/. The README
-# (defaults to README.md) and livekit.toml (for agent_id/subdomain) are
-# loaded automatically by scripts/build_examples_manifest.py.
+# Each top-level key under `examples` is the example's slug — must match
+# a directory under examples/. The README (defaults to README.md) is
+# loaded automatically by the deploy-examples workflow.
 #
 # Pixel art icons use `1` for the accent color and `0` for transparent.
 
@@ -15,7 +15,7 @@ project:
   subdomain: examples-wfxyig8v
 
 examples:
-  - slug: healthcare
+  healthcare:
     title: Healthcare
     description: Secure patient intake with authentication, appointment scheduling, and lab result retrieval. Demonstrates dynamic tool building and structured workflows with task callbacks.
     accent: "#10B981"   # emerald — calm, medical
@@ -46,7 +46,7 @@ examples:
         0000000000000000
         0000000000000000
 
-  - slug: survey
+  survey:
     title: Survey
     description: Screen software engineer candidates through a flexible interview flow. Maintains structured sequence while allowing the user to revisit previous topics naturally via TaskGroup.
     accent: "#F59E0B"   # amber — paper, clipboard
@@ -77,7 +77,7 @@ examples:
         0001111111111000
         0000000000000000
 
-  - slug: frontdesk
+  frontdesk:
     title: Front Desk
     description: Customer service agent with cal.com calendar integration and appointment management. Showcases JudgeGroup evaluations and self-correcting tool calls via ToolError.
     accent: "#6366F1"   # indigo — corporate, hospitality
@@ -108,7 +108,7 @@ examples:
         0001111111111000
         0000000000000000
 
-  - slug: drive-thru
+  drive-thru:
     title: Drive Thru
     description: Complete fast-food drive-thru ordering system with menu injection, dynamically constructed Pydantic-validated tools, and Happy Meal customization.
     accent: "#F43F5E"   # rose — warm, food
@@ -123,18 +123,18 @@ examples:
       size: 16
       pixels: |
         0000000000000000
+        0000000000000000
+        0000011111100000
         0000111111110000
         0001111111111000
         0011111111111100
-        0111111111111110
-        0001111111111000
         0011111111111100
         0111111111111110
+        0111111111111110
         0011111111111100
-        0001111111111000
-        0011111111111100
-        0001111111111000
-        0000111111110000
+        0001100000011000
+        0000110000110000
+        0000110000110000
         0000000000000000
         0000000000000000
         0000000000000000

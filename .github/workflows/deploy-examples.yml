@@ -56,7 +56,7 @@ jobs:
           data = yaml.safe_load(Path("examples/playground.yaml").read_text())
           subdomain = data["project"]["subdomain"]
           slug = "${{ matrix.example }}"
-          entry = next(e for e in data["examples"] if e["slug"] == slug)
+          entry = data["examples"][slug]
           toml = (
               "[project]\n"
               f'  subdomain = "{subdomain}"\n'
@@ -127,8 +127,8 @@ jobs:
           from pathlib import Path
           root = Path("agents/examples")
           m = yaml.safe_load((root / "playground.yaml").read_text())
-          for e in m.get("examples", []):
-              r = root / e["slug"] / e.get("readme", "README.md")
+          for slug, e in m.get("examples", {}).items():
+              r = root / slug / e.get("readme", "README.md")
               if r.is_file():
                   e["readme"] = r.read_text()
           print(json.dumps(m, indent=2, ensure_ascii=False))
