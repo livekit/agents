@@ -40,6 +40,10 @@ RUN apt-get update && apt-get install -y \
 # And set it as the working directory
 WORKDIR /app
 
+# Switch to the non-privileged user for all subsequent operations
+# This improves security by not running as root
+USER appuser
+
 # Copy just the dependency files first, for more efficient layer caching
 COPY requirements.txt ./
 
@@ -56,14 +60,6 @@ RUN python -m livekit.agents download-files
 # This includes source code, configuration files, and dependency specifications
 # (Excludes files specified in .dockerignore)
 COPY . .
-
-# Change ownership of all app files to the non-privileged user
-# This ensures the application can read/write files as needed
-RUN chown -R appuser:appuser /app
-
-# Switch to the non-privileged user for all subsequent operations
-# This improves security by not running as root
-USER appuser
 
 # Run the application
 # The "start" command tells the worker to connect to LiveKit and begin waiting for jobs.
