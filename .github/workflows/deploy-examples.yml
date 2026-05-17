@@ -207,6 +207,13 @@ jobs:
                   # at zero indent in the README, the way it should.
                   snippet = textwrap.dedent("\n".join(src_lines[s:ePos])).rstrip()
                   fence_lang = src["language"] if src["language"] != "text" else ""
+                  # Pack the source coordinates into the fence info string
+                  # so the in-app renderer can show a gutter with the
+                  # original line numbers + a "view on github" pill.
+                  # Format: ```python file=path start=N end=M
+                  info = (
+                      f"{fence_lang} file={fp} start={start} end={end}"
+                  ).strip()
                   # Split the line around the URL so inline references
                   # ("set up here: <url>") render as prose + code block,
                   # not as a bare URL. Trailing punctuation on the prose
@@ -217,7 +224,7 @@ jobs:
                   after = line[m.end():].lstrip()
                   if before:
                       out.append(before)
-                  out.append("```" + fence_lang)
+                  out.append("```" + info)
                   out.append(snippet)
                   out.append("```")
                   if after:
