@@ -204,11 +204,11 @@ jobs:
                   ePos = min(len(src_lines), end)
                   snippet = "\n".join(src_lines[s:ePos])
                   fence_lang = src["language"] if src["language"] != "text" else ""
+                  # Snippet replaces the URL outright — the code is here,
+                  # the attribution line was just noise.
                   out.append("```" + fence_lang)
                   out.append(snippet)
                   out.append("```")
-                  out.append("")
-                  out.append(f"_From [{fp} L{start}-{end}]({line.strip()})_")
               return "\n".join(out)
 
           root = Path("agents/examples")
