@@ -19,123 +19,95 @@ examples:
   healthcare:
     title: Healthcare
     description: Medical intake & scheduling
-    accent: "#10B981"   # emerald — calm, medical
+    # LiveKit brand palette (raw-colors.ts) — green-500
+    accent: "#009E4F"
     agent_id: CA_uFGnwowV2PMS
     entry: healthcare_agent.py
     github: "https://github.com/livekit/agents/tree/main/examples/healthcare"
-    tags: [voice, multi-agent, tools, healthcare]
+    tags: [multi-agent, scheduling]
     order: 10
     deploy: true
     icon:
-      # Medical cross
-      size: 16
+      # Medical cross — 8x8 reads cleaner at card scale than 16x16.
+      size: 8
       pixels: |
-        0000000000000000
-        0000000000000000
-        0000011111100000
-        0000011111100000
-        0000011111100000
-        0011111111111100
-        0011111111111100
-        0011111111111100
-        0011111111111100
-        0000011111100000
-        0000011111100000
-        0000011111100000
-        0000011111100000
-        0000011111100000
-        0000000000000000
-        0000000000000000
+        00011000
+        00011000
+        00111100
+        11111111
+        11111111
+        00111100
+        00011000
+        00011000
 
   survey:
     title: Survey
     description: Engineering candidate screening
-    accent: "#F59E0B"   # amber — paper, clipboard
+    # brand palette — amber-500
+    accent: "#EF8B01"
     agent_id: CA_APDyCSXwMUNS
     entry: survey_agent.py
     github: "https://github.com/livekit/agents/tree/main/examples/survey"
-    tags: [voice, multi-agent, structured-flow, recruiting]
+    tags: [multi-agent]
     order: 20
     deploy: true
     icon:
-      # Clipboard with form lines
-      size: 16
+      # Clipboard
+      size: 8
       pixels: |
-        0000011111100000
-        0000010000100000
-        0000011111100000
-        0001111111111000
-        0001100000011000
-        0001101111011000
-        0001100000011000
-        0001101111011000
-        0001100000011000
-        0001101111011000
-        0001100000011000
-        0001101111011000
-        0001100000011000
-        0001100000011000
-        0001111111111000
-        0000000000000000
+        00111100
+        00100100
+        01111110
+        11011011
+        11000011
+        11011011
+        11000011
+        11111111
 
   frontdesk:
     title: Front Desk
     description: Calendar-integrated reception
-    accent: "#6366F1"   # indigo — corporate, hospitality
+    # brand palette — indigo-500
+    accent: "#1F44F9"
     agent_id: CA_9TqkLsnwhjmE
     entry: frontdesk_agent.py
     github: "https://github.com/livekit/agents/tree/main/examples/frontdesk"
-    tags: [voice, tools, calendar, customer-service]
+    tags: [tools, scheduling]
     order: 30
     deploy: true
     icon:
       # Reception bell
-      size: 16
+      size: 8
       pixels: |
-        0000000110000000
-        0000000110000000
-        0000011111100000
-        0000111111110000
-        0001111111111000
-        0011111111111100
-        0011111111111100
-        0111111111111110
-        0111111111111110
-        0111111111111110
-        0111111111111110
-        1111111111111111
-        1111111111111111
-        0000000000000000
-        0001111111111000
-        0000000000000000
+        00011000
+        01111110
+        11111111
+        11111111
+        11111111
+        00000000
+        11111111
+        00000000
 
   drive-thru:
     title: Drive Thru
     description: Fast food ordering
-    accent: "#F43F5E"   # rose — warm, food
+    # brand palette — red-500
+    accent: "#FA4C39"
     agent_id: CA_cn3jfgKTxXDL
     entry: agent.py
     github: "https://github.com/livekit/agents/tree/main/examples/drive-thru"
-    tags: [voice, tools, ordering, dynamic-tools]
+    tags: [tools]
     order: 40
     deploy: true
     icon:
       # Burger
-      size: 16
+      size: 8
       pixels: |
-        0000000000000000
-        0000000000000000
-        0000011111100000
-        0000111111110000
-        0001111111111000
-        0011111111111100
-        0011111111111100
-        0111111111111110
-        0111111111111110
-        0011111111111100
-        0001100000011000
-        0000110000110000
-        0000110000110000
-        0000000000000000
-        0000000000000000
-        0000000000000000
+        00111100
+        01111110
+        11111111
+        01111110
+        11111111
+        00111100
+        00000000
+        00000000
