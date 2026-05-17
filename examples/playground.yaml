@@ -15,6 +15,13 @@ version: 1
 project:
   subdomain: examples-wfxyig8v
 
+# Repo URL templates used by the playground's code browser (GitHub button)
+# and by CI when inlining #L permalink snippets in READMEs. `{slug}` is the
+# example dir name; `{path}` is the file path relative to that dir.
+repo:
+  tree_url: "https://github.com/livekit/agents/tree/main/examples/{slug}"
+  file_url: "https://github.com/livekit/agents/blob/main/examples/{slug}/{path}"
+
 examples:
   healthcare:
     title: Healthcare

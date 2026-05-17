@@ -187,7 +187,7 @@ jobs:
               by_path = {f["path"]: f for f in files}
               out = []
               for line in content.split("\n"):
-                  m = GH_LINK.fullmatch(line.strip())
+                  m = GH_LINK.search(line)
                   if not m or m.group("slug") != slug:
                       out.append(line)
                       continue
@@ -207,9 +207,21 @@ jobs:
                   # at zero indent in the README, the way it should.
                   snippet = textwrap.dedent("\n".join(src_lines[s:ePos])).rstrip()
                   fence_lang = src["language"] if src["language"] != "text" else ""
+                  # Split the line around the URL so inline references
+                  # ("set up here: <url>") render as prose + code block,
+                  # not as a bare URL. Trailing punctuation on the prose
+                  # (": ", " -") is preserved; an "and here:" tail stays
+                  # on its own line so the markdown renderer doesn't fold
+                  # it into the fence.
+                  before = line[:m.start()].rstrip()
+                  after = line[m.end():].lstrip()
+                  if before:
+                      out.append(before)
                   out.append("```" + fence_lang)
                   out.append(snippet)
                   out.append("```")
+                  if after:
+                      out.append(after)
               return "\n".join(out)
 
           root = Path("agents/examples")
