@@ -144,11 +144,11 @@ jobs:
       - name: Commit and push if changed
         working-directory: jukebox
         run: |
-          mkdir -p next/data
-          cp ../examples-manifest.json next/data/examples-manifest.json
+          mkdir -p next/public
+          cp ../examples-manifest.json next/public/examples-manifest.json
           git config user.name "livekit-examples-bot"
           git config user.email "examples-bot@livekit.io"
-          git add next/data/examples-manifest.json
+          git add next/public/examples-manifest.json
           if git diff --cached --quiet; then
             echo "Manifest unchanged, nothing to commit."
             exit 0
