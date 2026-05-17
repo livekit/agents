@@ -723,11 +723,7 @@ class SpeechStream(stt.RecognizeStream):
                 self._vad_stream = None
 
             if vad_task is not None:
-                vad_task.cancel()
-                try:
-                    await vad_task
-                except asyncio.CancelledError:
-                    pass
+                await utils.aio.cancel_and_wait(vad_task)
 
             # Disconnect flushes final messages from the STT engine
             await self._client.disconnect()
