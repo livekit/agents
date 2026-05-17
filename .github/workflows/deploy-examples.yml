@@ -125,12 +125,64 @@ jobs:
           python <<'PY' > examples-manifest.json
           import json, yaml
           from pathlib import Path
+
+          # Which file types we ship for the in-app code explorer. Skip
+          # binaries (.pdf, .mp3, etc.) and lockfiles.
+          TEXT_EXTS = {
+              ".py": "python",
+              ".toml": "toml",
+              ".md": "markdown",
+              ".txt": "text",
+              ".yaml": "yaml",
+              ".yml": "yaml",
+              ".json": "json",
+              ".sh": "bash",
+              ".env": "env",
+          }
+          SPECIAL = {
+              "Dockerfile": "dockerfile",
+              "Makefile": "makefile",
+              "requirements.txt": "text",
+          }
+          SKIP = {".dockerignore", ".gitignore", ".DS_Store"}
+          MAX_BYTES = 200_000  # cap any single file to keep the manifest sane
+
+          def detect_lang(name: str) -> str | None:
+              if name in SPECIAL:
+                  return SPECIAL[name]
+              for ext, lang in TEXT_EXTS.items():
+                  if name.endswith(ext):
+                      return lang
+              return None
+
+          def collect_files(dir_path: Path) -> list[dict]:
+              out = []
+              for p in sorted(dir_path.rglob("*")):
+                  if not p.is_file():
+                      continue
+                  rel = p.relative_to(dir_path).as_posix()
+                  if any(part in SKIP for part in p.parts):
+                      continue
+                  lang = detect_lang(p.name)
+                  if not lang:
+                      continue
+                  try:
+                      content = p.read_text(encoding="utf-8")
+                  except UnicodeDecodeError:
+                      continue
+                  if len(content.encode("utf-8")) > MAX_BYTES:
+                      content = content[:MAX_BYTES] + "\n\n# [file truncated]\n"
+                  out.append({"path": rel, "language": lang, "content": content})
+              return out
+
           root = Path("agents/examples")
           m = yaml.safe_load((root / "playground.yaml").read_text())
           for slug, e in m.get("examples", {}).items():
-              r = root / slug / e.get("readme", "README.md")
+              ex_dir = root / slug
+              r = ex_dir / e.get("readme", "README.md")
               if r.is_file():
                   e["readme"] = r.read_text()
+              e["files"] = collect_files(ex_dir)
           print(json.dumps(m, indent=2, ensure_ascii=False))
           PY
 
