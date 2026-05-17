@@ -175,7 +175,7 @@ jobs:
                   out.append({"path": rel, "language": lang, "content": content})
               return out
 
-          import re
+          import re, textwrap
           GH_LINK = re.compile(
               r"https://github\.com/livekit/agents/blob/[^/\s]+/examples/"
               r"(?P<slug>[\w-]+)/(?P<path>[\w./-]+)"
@@ -202,10 +202,11 @@ jobs:
                   # Clamp + extract; GitHub line numbers are 1-indexed.
                   s = max(1, start) - 1
                   ePos = min(len(src_lines), end)
-                  snippet = "\n".join(src_lines[s:ePos])
+                  # textwrap.dedent strips the common leading whitespace so
+                  # a snippet pulled from inside a class/function reads
+                  # at zero indent in the README, the way it should.
+                  snippet = textwrap.dedent("\n".join(src_lines[s:ePos])).rstrip()
                   fence_lang = src["language"] if src["language"] != "text" else ""
-                  # Snippet replaces the URL outright — the code is here,
-                  # the attribution line was just noise.
                   out.append("```" + fence_lang)
                   out.append(snippet)
                   out.append("```")
