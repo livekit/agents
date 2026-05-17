@@ -28,17 +28,17 @@ examples:
     order: 10
     deploy: true
     icon:
-      # Medical cross — 8x8 reads cleaner at card scale than 16x16.
+      # Heart — universal medical/health symbol, reads instantly at 8x8.
       size: 8
       pixels: |
-        00011000
-        00011000
-        00111100
+        01100110
         11111111
         11111111
+        11111111
+        01111110
         00111100
         00011000
-        00011000
+        00000000
 
   survey:
     title: Survey
@@ -52,17 +52,17 @@ examples:
     order: 20
     deploy: true
     icon:
-      # Clipboard
+      # Clipboard with form lines.
       size: 8
       pixels: |
         00111100
         00100100
         01111110
-        11011011
-        11000011
-        11011011
-        11000011
-        11111111
+        01011010
+        01000010
+        01011010
+        01000010
+        01111110
 
   frontdesk:
     title: Front Desk
@@ -76,17 +76,17 @@ examples:
     order: 30
     deploy: true
     icon:
-      # Reception bell
+      # Reception bell — handle on top, domed body, base tray below.
       size: 8
       pixels: |
         00011000
+        00111100
         01111110
         11111111
         11111111
-        11111111
         00000000
         11111111
-        00000000
+        00011000
 
   drive-thru:
     title: Drive Thru
@@ -100,14 +100,14 @@ examples:
     order: 40
     deploy: true
     icon:
-      # Burger
+      # Burger — sesame bun, lettuce, patty, bottom bun.
       size: 8
       pixels: |
         00111100
         01111110
+        11011011
+        00000000
         11111111
+        00000000
         01111110
-        11111111
         00111100
-        00000000
-        00000000
