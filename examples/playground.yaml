@@ -52,17 +52,18 @@ examples:
     order: 20
     deploy: true
     icon:
-      # Clipboard with form lines.
+      # Speech bubble — survey is a voice interview, so the bubble
+      # reads more directly than a paper clipboard.
       size: 8
       pixels: |
-        00111100
-        00100100
-        01111110
-        01011010
-        01000010
-        01011010
-        01000010
-        01111110
+        01111100
+        11111110
+        11111110
+        11111110
+        01111100
+        00011000
+        00001000
+        00000000
 
   frontdesk:
     title: Front Desk
@@ -76,17 +77,18 @@ examples:
     order: 30
     deploy: true
     icon:
-      # Reception bell — handle on top, domed body, base tray below.
+      # Reception bell — handle, pear-shaped body that flares out at
+      # the bottom, gap, then tray.
       size: 8
       pixels: |
         00011000
         00111100
+        00111100
         01111110
-        11111111
+        01111110
         11111111
         00000000
         11111111
-        00011000
 
   drive-thru:
     title: Drive Thru
@@ -100,14 +102,14 @@ examples:
     order: 40
     deploy: true
     icon:
-      # Burger — sesame bun, lettuce, patty, bottom bun.
+      # Burger — sesame bun on top, lettuce, patty, bottom bun.
       size: 8
       pixels: |
         00111100
         01111110
         11011011
-        00000000
-        11111111
-        00000000
-        01111110
         00111100
+        11111111
+        00111100
+        01111110
+        00000000
