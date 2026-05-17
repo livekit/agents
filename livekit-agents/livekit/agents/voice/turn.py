@@ -6,7 +6,7 @@ import time
 import weakref
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal, Protocol
 
@@ -25,16 +25,6 @@ from ..types import (
     NotGivenOr,
 )
 from ..utils import aio, is_given
-
-# ---------------------------------------------------------------------------
-# Audio turn detection scaffolding
-#
-# The abstract `_AudioTurnDetector` / `_AudioTurnDetectorStream` pair owns the
-# FSM and protocol surface. Concrete cloud + local implementations live in the
-# `livekit-plugins-turn-detector` plugin (a single unified `AudioTurnDetector`
-# that dispatches to one of two transports). Tests subclass the stream FSM
-# directly via `_FakeBackend`.
-# ---------------------------------------------------------------------------
 
 DEFAULT_SAMPLE_RATE: int = 16000
 MIN_SILENCE_DURATION_MS = 200
@@ -62,23 +52,23 @@ class TurnDetectorOptions:
     api_key: str
     api_secret: str
     conn_options: APIConnectOptions
+    # Materialized per-language thresholds keyed by base ISO code.
+    thresholds: dict[str, float] = field(default_factory=dict)
+
+
+def _normalize_user_threshold(
+    value: NotGivenOr[float | dict[LanguageCode | str, float]],
+) -> float | dict[str, float] | None:
+    # Dict keys go through `LanguageCode(k).language` so "English"/"en"/"en-US"
+    # all collapse to "en" — matches the table key shape used in lookups.
+    if isinstance(value, dict):
+        return {LanguageCode(k).language: float(v) for k, v in value.items()}
+    if not is_given(value):
+        return None
+    return float(value)
 
 
 class _AudioTurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
-    """Shared scaffold for audio EOT detectors (cloud + local).
-
-    Owns `_opts`, the per-detector stream weakset, the language threshold
-    table, and the protocol surface (`model` / `provider` /
-    `unlikely_threshold` / `supports_language`). Subclasses provide
-    `model` and `stream()`, and override `LANGUAGES` if their model has a
-    different calibration. Underscore-prefixed because it's a
-    plugin-facing primitive — users instantiate the concrete plugin
-    class, not this base.
-    """
-
-    # Subclasses override with their language → unlikely-threshold table.
-    LANGUAGES: dict[str, float] = {}
-
     def __init__(self, *, opts: TurnDetectorOptions) -> None:
         super().__init__()
         self._opts = opts
@@ -101,7 +91,7 @@ class _AudioTurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
 
     async def unlikely_threshold(self, language: LanguageCode | None) -> float | None:
         lang_key = language.language if language is not None else "en"
-        return self.LANGUAGES.get(lang_key)
+        return self._opts.thresholds.get(lang_key)
 
     async def supports_language(self, language: LanguageCode | None) -> bool:
         return await self.unlikely_threshold(language) is not None
@@ -113,20 +103,11 @@ class _AudioTurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
 
 
 class _AudioTurnDetectorStream(ABC):
-    """Shared scaffolding for audio EOT streams.
-
-    Owns the audio resampler, audio/event channels, status FSM, and the
-    protocol surface (`model`, `provider`, `predict_end_of_turn`,
-    `unlikely_threshold`, `supports_language`). Subclasses implement
-    transport-specific hooks for the actual inference dispatch.
-    """
-
     @dataclass
     class _FlushSentinel:
         reason: str | None = None
-        # Number of milliseconds of trailing audio to retain on flush. 0 clears
-        # the entire buffer. Used to anchor turn isolation on VAD SOS while
-        # preserving a small pre-roll covering VAD onset latency.
+        # Trailing audio (ms) to retain on flush — preserves VAD-onset pre-roll
+        # so the next turn starts with a few frames of context.
         keep_tail_ms: int = 0
 
     def __init__(
@@ -164,10 +145,13 @@ class _AudioTurnDetectorStream(ABC):
         return self._detector.provider
 
     async def unlikely_threshold(self, language: LanguageCode | None) -> float | None:
-        return await self._detector.unlikely_threshold(language)
+        # Read from the stream's own opts — on fallback the stream rebinds
+        # `_opts` to a derived instance with the local-mode thresholds.
+        lang_key = language.language if language is not None else "en"
+        return self._opts.thresholds.get(lang_key)
 
     async def supports_language(self, language: LanguageCode | None) -> bool:
-        return await self._detector.supports_language(language)
+        return await self.unlikely_threshold(language) is not None
 
     # endregion
 
@@ -183,7 +167,6 @@ class _AudioTurnDetectorStream(ABC):
 
     @property
     def active_request_id(self) -> str | None:
-        """Server-correlated id of the in-flight inference request, if any."""
         return self._active_request_id
 
     def warmup(self) -> asyncio.Future[float]:
@@ -239,14 +222,12 @@ class _AudioTurnDetectorStream(ABC):
                 if self._status != _InferenceStatus.WARMING_UP:
                     logger.warning("eot detector not warmed up before activation")
                     self.warmup()
-                logger.trace("turn detection activated", extra={"trigger": trigger})
                 self._activate()
             return
 
         if not self.is_inference_running:
             return
 
-        logger.trace("turn detection deactivated", extra={"trigger": trigger})
         if self._status == _InferenceStatus.WARMING_UP:
             self.stop_warmup()
         else:
@@ -262,7 +243,6 @@ class _AudioTurnDetectorStream(ABC):
         self._audio_ch.send_nowait(
             _AudioTurnDetectorStream._FlushSentinel(reason=reason, keep_tail_ms=keep_tail_ms)
         )
-        logger.trace("turn detection audio flushed", extra={"reason": reason})
         self._deactivate()
         self._status = _InferenceStatus.FLUSHED
         self._on_inference_stop(reason=reason)
@@ -336,12 +316,7 @@ class _AudioTurnDetectorStream(ABC):
         )
 
     async def predict_end_of_turn(self, *, timeout: float | None = None) -> float:
-        """Run a warmup inference and wait for a prediction within `timeout`.
-
-        Used purely as a timeout shim around the warmup/activate path:
-        - time to first prediction
-        - time to next prediction since last prediction
-        """
+        """Run a warmup inference and wait for a prediction within `timeout`."""
         timeout = timeout if timeout is not None else 0.5
         fut: asyncio.Future[float] | None = None
         try:
@@ -363,15 +338,11 @@ class _AudioTurnDetectorStream(ABC):
             if fut is not None:
                 with contextlib.suppress(asyncio.InvalidStateError):
                     fut.set_result(1.0)
-            # Reset the FSM so the next warmup() doesn't see a stale ACTIVE
-            # status with cleared request_fut (which would raise RuntimeError).
-            # Also tell the server to drop the in-flight inference.
+            # Reset FSM so next warmup() doesn't see a stale ACTIVE status.
             self._deactivate()
             self._on_inference_stop(reason="predict_end_of_turn timeout")
-            # Notify concrete streams so they can react (e.g. swap to a
-            # fallback transport). Base no-ops; defaults stay 1.0.
             self._on_predict_timeout()
-            # default to a positive prediction so min_endpointing_delay is used
+            # Positive default so min_endpointing_delay applies.
             return 1.0
 
     # endregion
@@ -411,8 +382,6 @@ class _AudioTurnDetectorStream(ABC):
         await self._run_transport()
 
     async def _drain_audio_channel(self) -> None:
-        """Helper subclasses can call from `_run_transport` to dispatch
-        audio frames and flush sentinels through the per-event hooks."""
         async for item in self._audio_ch:
             if isinstance(item, _AudioTurnDetectorStream._FlushSentinel):
                 await self._on_flush_sentinel(item)
@@ -424,44 +393,30 @@ class _AudioTurnDetectorStream(ABC):
     # region: subclass hooks
 
     def _transport_ready(self) -> bool:
-        """Return False to short-circuit `set_active` (e.g. transport closed)."""
         return True
 
     @abstractmethod
-    async def _run_transport(self) -> None:
-        """Long-running main-task body. Cloud runs the WS retry+send/recv
-        loop here; local drains the audio channel into a rolling buffer."""
-        ...
+    async def _run_transport(self) -> None: ...
 
     def _on_warmup_start(self, request_id: str) -> None:  # noqa: B027
-        """Called when the FSM transitions to WARMING_UP. Cloud sends an
-        `inference_start` over WS; local snapshots the buffer and spawns
-        an in-process predict task."""
+        pass
 
     def _on_inference_stop(self, *, reason: str | None) -> None:  # noqa: B027
-        """Called after `set_active(False)` or `flush()`. Cloud sends an
-        `inference_stop`; local does nothing (in-flight predicts are
-        cheap and can complete)."""
+        pass
 
     async def _on_audio_chunk(self, frame: rtc.AudioFrame) -> None:  # noqa: B027
-        """Called per resampled frame drained from `_audio_ch`. Cloud
-        sends `input_audio` over WS; local appends bytes to the rolling
-        buffer with overflow trim."""
+        pass
 
     async def _on_flush_sentinel(  # noqa: B027
         self, sentinel: _AudioTurnDetectorStream._FlushSentinel
     ) -> None:
-        """Called when a flush sentinel is drained from `_audio_ch`.
-        Cloud sends `session_flush`; local clears the rolling buffer."""
+        pass
 
     def _on_activate(self) -> None:  # noqa: B027
-        """Called on FSM transition to ACTIVE. Cloud no-op; local
-        replays any prediction that completed during WARMING_UP."""
+        pass
 
     def _on_predict_timeout(self) -> None:  # noqa: B027
-        """Called after a `predict_end_of_turn` timeout. Concrete streams
-        can override to swap transports (e.g. cloud → local fallback)
-        or record telemetry. Base no-op."""
+        pass
 
     # endregion
 

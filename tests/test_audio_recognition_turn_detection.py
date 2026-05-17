@@ -38,6 +38,10 @@ def _make_opts() -> TurnDetectorOptions:
         api_key="",
         api_secret="",
         conn_options=DEFAULT_API_CONNECT_OPTIONS,
+        # Materialized table — the stream reads `self._opts.thresholds.get(lang)`
+        # for the deactivate-on-positive-prediction check, so a populated entry
+        # is required to exercise that branch.
+        thresholds={"en": 0.5},
     )
 
 

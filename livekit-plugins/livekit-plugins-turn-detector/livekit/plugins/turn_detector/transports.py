@@ -1,14 +1,7 @@
-"""Audio EOT transports: protocol contract + cloud (WS) + local (ctypes).
-
-The unified ``AudioTurnDetector`` (in ``audio.py``) constructs a stream whose
-FSM is owned by ``_AudioTurnDetectorStream`` (in ``livekit-agents``); the stream
-delegates every audio/lifecycle event to a transport via the
-``AudioTurnDetectionTransport`` Protocol. Cloud and local both satisfy the
-protocol structurally — no shared base class, no isinstance checks.
+"""Audio EOT transports: protocol + cloud (WS) + local (ctypes).
 
 The native ``_audio_eot`` library is loaded at module import so its weight
-pages are resident in the worker process and inherited via COW by forked
-job processes.
+pages are inherited via COW by forked job processes.
 """
 
 from __future__ import annotations
@@ -66,28 +59,16 @@ if TYPE_CHECKING:
 
 
 __all__ = [
-    "AudioTurnDetectionTransport",
+    "_AudioTurnDetectionTransport",
     "_CloudTransport",
     "_LocalTransport",
 ]
 
 
-# ---------------------------------------------------------------------------
-# Transport protocol
-# ---------------------------------------------------------------------------
-
-
 @runtime_checkable
-class AudioTurnDetectionTransport(Protocol):
-    """Per-mode transport bound to an ``_AudioTurnDetectorStream``.
-
-    The stream owns the FSM and dispatches every audio/lifecycle event
-    through these hooks; sync vs async per method matches the
-    ``_AudioTurnDetectorStream`` hook signatures exactly. Implementations
-    hold a weak reference to the parent stream (set via ``bind``) and
-    call back via ``stream._emit_prediction(...)``,
-    ``stream._active_request_id``, etc.
-    """
+class _AudioTurnDetectionTransport(Protocol):
+    """Transport bound to an `_AudioTurnDetectorStream` via `bind`.
+    Implementations call back through `stream._emit_prediction(...)` etc."""
 
     def bind(self, stream: _AudioTurnDetectorStream) -> None: ...
     async def run(self) -> None: ...
@@ -102,15 +83,9 @@ class AudioTurnDetectionTransport(Protocol):
     def transport_ready(self) -> bool: ...
 
 
-# ---------------------------------------------------------------------------
-# Native lib loader (local transport)
-# ---------------------------------------------------------------------------
-
-# Rolling buffer cap on the Python side. The native lib expects up to
-# `_CLIENT_BUFFER_SECONDS` of 16 kHz s16le PCM per predict; it will pad
-# or truncate internally to its fixed receptive window.
+# Native lib expects up to 1.2 s of 16 kHz s16le PCM per predict.
 _CLIENT_BUFFER_SECONDS = 1.2
-_BYTES_PER_SECOND = DEFAULT_SAMPLE_RATE * 2  # 16 kHz * int16
+_BYTES_PER_SECOND = DEFAULT_SAMPLE_RATE * 2
 _CLIENT_BUFFER_BYTES = int(_CLIENT_BUFFER_SECONDS * _BYTES_PER_SECOND)
 
 _LIB_BASENAME = "_audio_eot"
@@ -133,12 +108,8 @@ _lib_load_error: BaseException | None = None
 
 
 def _load_lib() -> None:
-    """Load the native shared library and bind ``audio_eot_predict``.
-
-    Errors are captured rather than raised: anyone who actually tries to
-    use the local backend gets a clear error at use-time; merely
-    importing the package on a host without the .so does not crash.
-    """
+    # Errors are captured (not raised) so importing the package on a host
+    # without the .so doesn't crash — only `_predict` callers see the failure.
     global _lib, _lib_load_error
 
     lib_path = _native_lib_path()
@@ -163,17 +134,11 @@ def _load_lib() -> None:
 
     _lib = lib
 
-    # Force any lazy table init (FFT twiddles, mel filterbank) in this
-    # process so children forked from the worker forkserver inherit them
-    # via COW. Cheap zeros-buffer warmup — result discarded. Do NOT defer
-    # this to first `stream()`: workers would each pay the init cost and
-    # lose the COW benefit.
+    # Force lazy table init (FFT twiddles, mel filterbank) here so forkserver
+    # children inherit them via COW instead of each paying the init cost.
     try:
         _predict(b"\x00\x00" * 16)
     except Exception as e:
-        # Lib loaded but is in an unusable state; surface a clear error at
-        # first real use rather than letting the next predict fail with a
-        # cryptic native trace.
         logger.warning("audio EOT lib warmup predict failed: %s", e)
         _lib_load_error = RuntimeError(f"audio EOT native library failed during warmup: {e}")
         _lib = None
@@ -187,23 +152,19 @@ def _predict(pcm_bytes: bytes) -> float:
     return float(_lib.audio_eot_predict(buf, ctypes.c_size_t(n)))
 
 
-def lib_available() -> bool:
-    """True iff the native lib loaded successfully and is callable."""
+def _lib_available() -> bool:
     return _lib is not None
 
 
-def lib_load_error() -> BaseException | None:
-    """The captured load-time error, or None if the lib loaded."""
+def _get_lib_load_error() -> BaseException | None:
     return _lib_load_error
 
 
 _load_lib()
 
 if _lib is None and _lib_load_error is not None:
-    # Fail loud at import time. Importing this submodule signals intent to
-    # use the local backend; without a warning, the missing-lib failure
-    # only surfaces when `.stream()` is called deep inside session
-    # bring-up. The deferred `RuntimeError` still fires there.
+    # Surface the load failure at import — the deferred RuntimeError at first
+    # use is otherwise easy to miss deep inside session bring-up.
     warnings.warn(
         f"livekit.plugins.turn_detector: {_lib_load_error}. "
         f"Local AudioTurnDetector will raise on first use.",
@@ -211,17 +172,8 @@ if _lib is None and _lib_load_error is not None:
     )
 
 
-# ---------------------------------------------------------------------------
-# Cloud transport (WS + protobuf)
-# ---------------------------------------------------------------------------
-
-
 class _CloudTransport:
-    """WebSocket transport for the cloud `eot-audio` model.
-
-    Connect (with retry) → send + recv loops → forward predictions to the
-    bound stream. Structurally satisfies ``AudioTurnDetectionTransport``.
-    """
+    """WebSocket transport for `eot-audio`."""
 
     def __init__(
         self,
@@ -234,18 +186,14 @@ class _CloudTransport:
         self._detector_ref: weakref.ref[AudioTurnDetector] = weakref.ref(detector)
         self._opts = opts
         self._conn_options = conn_options
-        self._session_holder = http_session  # may be None until _ensure_session
+        self._session_holder = http_session
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._num_retries = 0
         self._held_probability: float | None = None
-        # FIFO outbound queue. All WS sends go through here so a control
-        # message scheduled from sync code (e.g. inference_start) can't be
-        # overtaken by audio chunks awaiting `ws.send_bytes` on a different
-        # task. Allocated per connection in `run`; cleared on disconnect.
+        # FIFO outbound queue so sync-scheduled sends (e.g. inference_start)
+        # aren't overtaken by awaited audio chunks. Allocated per connection.
         self._send_ch: aio.Chan[ClientMessage] | None = None
         self._stream_ref: weakref.ref[_AudioTurnDetectorStream] | None = None
-
-    # region: transport protocol
 
     def bind(self, stream: _AudioTurnDetectorStream) -> None:
         self._stream_ref = weakref.ref(stream)
@@ -280,7 +228,6 @@ class _CloudTransport:
                 stream._emit_prediction(prob)
 
     async def on_audio_chunk(self, frame: rtc.AudioFrame) -> None:
-        # `frame.data` is a memoryview over int16 little-endian PCM samples.
         pcm_bytes = bytes(frame.data)
         if not pcm_bytes:
             return
@@ -297,24 +244,16 @@ class _CloudTransport:
         )
 
     async def on_flush_sentinel(self, sentinel: _AudioTurnDetectorStream._FlushSentinel) -> None:
-        # TODO(audio-eot): forward sentinel.keep_tail_ms to the gateway once
-        # SessionFlush gains a keep_tail_ms field, so cloud preserves the same
-        # VAD-onset pre-roll as the local backend.
+        # TODO(audio-eot): forward sentinel.keep_tail_ms once SessionFlush
+        # supports it server-side (local backend already honors it).
         self._send_message(ClientMessage(session_flush=SessionFlush()))
         self._held_probability = None
 
     def close_nowait(self) -> None:
-        """Tear down outbound channel without awaiting WS close. Called by the
-        unified stream on cloud→local fallback."""
+        # Detach send_ch + ws ref; the actual ws.close() awaits in run()'s finally.
         if self._send_ch is not None:
             self._send_ch.close()
-        # Best-effort: detach the ws ref so further `_send_message` calls
-        # short-circuit. The ws-close await is left to the run-task's finally.
         self._ws = None
-
-    # endregion
-
-    # region: WS plumbing
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if self._session_holder is None:
@@ -328,12 +267,8 @@ class _CloudTransport:
         }
 
     def _send_message(self, msg: ClientMessage) -> None:
-        """Enqueue a message for FIFO delivery to the WS by the sender task.
-
-        Dropped if there is no active connection. Caller may pre-stamp
-        ``created_at`` (the sender preserves it); otherwise the sender
-        stamps "now" before writing the bytes.
-        """
+        # Dropped silently when no active connection. Caller may pre-stamp
+        # `created_at` (sender preserves it); otherwise sender stamps "now".
         ch = self._send_ch
         if ch is None or ch.closed or self._ws is None or self._ws.closed:
             return
@@ -387,7 +322,6 @@ class _CloudTransport:
                 prediction: EotPrediction = msg.eot_prediction
                 request_id = msg.request_id
                 if request_id != stream._active_request_id:
-                    logger.trace("stale request id received: %s", request_id)
                     return
 
                 probability = prediction.probability
@@ -396,21 +330,7 @@ class _CloudTransport:
                 request_sent_at_ms = inference_stats.latest_client_created_at.ToMilliseconds()
 
                 if window_started_at_ms is not None and request_sent_at_ms < window_started_at_ms:
-                    logger.trace(
-                        "ignoring stale eot prediction",
-                        extra={
-                            "request_id": request_id,
-                            "request_sent_at_ms": request_sent_at_ms,
-                            "window_started_at_ms": window_started_at_ms,
-                            "probability": probability,
-                            "stats": {
-                                "client_e2e_latency_ms": inference_stats.client_e2e_latency.ToMilliseconds(),
-                                "server_e2e_latency_ms": inference_stats.server_e2e_latency.ToMilliseconds(),
-                                "preprocessing_duration_ms": inference_stats.preprocessing_duration.ToMilliseconds(),
-                                "inference_duration_ms": inference_stats.inference_duration.ToMilliseconds(),
-                            },
-                        },
-                    )
+                    # Prediction belongs to a prior active-window — drop it.
                     return
 
                 fut = stream._active_request_fut
@@ -423,27 +343,12 @@ class _CloudTransport:
                 detection_delay_ms = current_time.ToMilliseconds() - request_sent_at_ms
                 inference_duration_ms = inference_stats.server_e2e_latency.ToMilliseconds()
 
-                logger.trace(
-                    "turn detection result received",
-                    extra={
-                        "probability": probability,
-                        "detection_delay_ms": detection_delay_ms or 0.0,
-                        "inference_duration_ms": inference_duration_ms or 0.0,
-                        "request_id": request_id,
-                        "queued": not stream.is_active,
-                    },
-                )
-
                 if stream.is_active:
                     stream._emit_prediction(
                         probability, detection_delay=detection_delay_ms / 1000.0
                     )
                 else:
-                    # FSM: in WARMING_UP, predictions are delayed until activation.
-                    # `on_activate` replays the latest held prediction. The
-                    # detection_delay attr isn't meaningful for a replay (the
-                    # actual latency was the network roundtrip, not the
-                    # held-then-released gap), so it stays None on that path.
+                    # WARMING_UP: hold until on_activate replays it.
                     self._held_probability = probability
                 stream._active_request_fut = asyncio.Future[float]()
 
@@ -485,10 +390,6 @@ class _CloudTransport:
             case _:
                 logger.warning("unexpected turn detector message: %s", msg.WhichOneof("message"))
 
-    # endregion
-
-    # region: main run loop
-
     async def run(self) -> None:
         max_retries = self._conn_options.max_retry
         while self._num_retries <= max_retries:
@@ -528,7 +429,6 @@ class _CloudTransport:
             await stream._drain_audio_channel()
             closing_ws = True
             self._send_message(ClientMessage(session_close=SessionClose()))
-            # Signal the sender to drain queued messages and exit.
             send_ch.close()
 
         @utils.log_exceptions(logger=logger)
@@ -536,9 +436,8 @@ class _CloudTransport:
             async for msg in send_ch:
                 if ws.closed:
                     return
-                # Preserve a caller-stamped `created_at` (e.g. `on_warmup_start`
-                # reads it back into stream._active_window_min_client_created_at_ms
-                # for the stale-prediction filter). Stamp here only if unset.
+                # Preserve caller-stamped `created_at` (e.g. on_warmup_start
+                # caches it for the stale-prediction filter). Stamp only if unset.
                 if not msg.HasField("created_at"):
                     created_at = Timestamp()
                     created_at.GetCurrentTime()
@@ -596,21 +495,9 @@ class _CloudTransport:
             if ws is not None:
                 await ws.close()
 
-    # endregion
-
-
-# ---------------------------------------------------------------------------
-# Local transport (ctypes)
-# ---------------------------------------------------------------------------
-
 
 class _LocalTransport:
-    """In-process ctypes transport for the local ``eot-audio-mini`` model.
-
-    Drains the audio channel into a rolling 1.2 s s16le @ 16 kHz buffer,
-    fires a single ``audio_eot_predict`` call on warmup via
-    ``asyncio.to_thread``, and emits the held probability when activated.
-    """
+    """In-process ctypes transport for `eot-audio-mini`."""
 
     def __init__(self, *, opts: TurnDetectorOptions) -> None:
         self._opts = opts
@@ -688,9 +575,7 @@ class _LocalTransport:
         self._held_probability = None
 
     def on_inference_stop(self, *, reason: str | None) -> None:
-        # No outbound state to flush — in-flight predicts are cheap and
-        # complete on their own; stale-id check inside `_run_predict`
-        # discards their result.
+        # In-flight predicts run to completion; `_run_predict` drops stale results.
         return
 
     def close_nowait(self) -> None:

@@ -125,11 +125,11 @@ def make_stream(
     stream = _AudioTurnDetectorStreamImpl.__new__(_AudioTurnDetectorStreamImpl)
     # Manually wire the impl so we can inject the controlled transport
     # before super().__init__ kicks off the main task.
-    stream._detector_typed = detector
-    stream._mode = "eot-audio-cloud"
+    stream._backend = "cloud"
+    stream._user_threshold = None
     stream._http_session = session_mock
     stream._conn_options = conn_options
-    stream._fell_back = False
+    stream._is_fallback = False
     stream._warned_cloud_failure = False
     stream._warned_local_failure = False
     stream._transport = transport
