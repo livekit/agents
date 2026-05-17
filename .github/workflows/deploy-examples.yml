@@ -153,7 +153,7 @@ jobs:
             echo "Manifest unchanged, nothing to commit."
             exit 0
           fi
-          git commit -m "chore: refresh examples manifest [skip ci]"
+          git commit -m "chore: refresh examples manifest"
           for i in 1 2; do
             if git push origin HEAD; then
               echo "Pushed manifest update."
