@@ -175,12 +175,52 @@ jobs:
                   out.append({"path": rel, "language": lang, "content": content})
               return out
 
+          import re
+          GH_LINK = re.compile(
+              r"https://github\.com/livekit/agents/blob/[^/\s]+/examples/"
+              r"(?P<slug>[\w-]+)/(?P<path>[\w./-]+)"
+              r"#L(?P<start>\d+)(?:-L(?P<end>\d+))?"
+          )
+
+          def inline_links(content: str, slug: str, files: list[dict]) -> str:
+              # Map path -> content for cheap lookup
+              by_path = {f["path"]: f for f in files}
+              out = []
+              for line in content.split("\n"):
+                  m = GH_LINK.fullmatch(line.strip())
+                  if not m or m.group("slug") != slug:
+                      out.append(line)
+                      continue
+                  fp = m.group("path")
+                  src = by_path.get(fp)
+                  if not src:
+                      out.append(line)
+                      continue
+                  start = int(m.group("start"))
+                  end = int(m.group("end") or start)
+                  src_lines = src["content"].split("\n")
+                  # Clamp + extract; GitHub line numbers are 1-indexed.
+                  s = max(1, start) - 1
+                  ePos = min(len(src_lines), end)
+                  snippet = "\n".join(src_lines[s:ePos])
+                  fence_lang = src["language"] if src["language"] != "text" else ""
+                  out.append("```" + fence_lang)
+                  out.append(snippet)
+                  out.append("```")
+                  out.append("")
+                  out.append(f"_From [{fp} L{start}-{end}]({line.strip()})_")
+              return "\n".join(out)
+
           root = Path("agents/examples")
           m = yaml.safe_load((root / "playground.yaml").read_text())
           for slug, e in m.get("examples", {}).items():
-              # The README is just one of the files in collect_files — no
-              # separate readme blob anymore.
-              e["files"] = collect_files(root / slug)
+              files = collect_files(root / slug)
+              # Inline GitHub permalink references in every .md file so the
+              # in-app viewer shows the actual snippet instead of a bare URL.
+              for f in files:
+                  if f["language"] == "markdown":
+                      f["content"] = inline_links(f["content"], slug, files)
+              e["files"] = files
           print(json.dumps(m, indent=2, ensure_ascii=False))
           PY
 
