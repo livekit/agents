@@ -64,10 +64,6 @@ class EndpointingOptions(TypedDict, total=False):
     """Exponential moving average coefficient for dynamic endpointing.
     The higher the value, the more weight is given to the history.
     Defaults to ``0.9``. Only applies when mode is ``dynamic``."""
-    intra_utterance_silence_grace: float
-    """Silence (s) tolerated during active user speech before treating the user
-    as paused (gates agent-speech authorization). When unset, falls back to
-    ``min_delay / 2`` for backward compatibility."""
 
 
 _ENDPOINTING_DEFAULTS: EndpointingOptions = {

@@ -296,7 +296,6 @@ class STT(stt.STT):
                 diarization=enable_diarization if is_given(enable_diarization) else True,
                 aligned_transcript="chunk",
                 offline_recognize=False,
-                server_endpointing=turn_detection_mode != TurnDetectionMode.EXTERNAL,
             ),
         )
 

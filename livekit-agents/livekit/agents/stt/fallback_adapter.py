@@ -84,7 +84,6 @@ class FallbackAdapter(
                 interim_results=all(t.capabilities.interim_results for t in stt),
                 diarization=all(t.capabilities.diarization for t in stt),
                 aligned_transcript=aligned_transcript,
-                server_endpointing=all(t.capabilities.server_endpointing for t in stt),
             )
         )
 

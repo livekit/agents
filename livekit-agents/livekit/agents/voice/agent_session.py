@@ -327,7 +327,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             else VoiceActivityVideoSampler(speaking_fps=1.0, silent_fps=0.3)
         )
 
-        _user_provided_turn_handling = is_given(turn_handling)
         turn_handling = (
             _migrate_turn_handling(
                 # backward compatibility for deprecated parameters that had default values
@@ -397,20 +396,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._llm = llm or None
         self._tts = tts or None
 
-        # If the STT does its own endpointing, the FINAL_TRANSCRIPT is the turn
-        # boundary — no additional `min_delay` buffer is needed. Only apply when
-        # the user didn't explicitly pin `min_endpointing_delay` or `turn_handling`.
-        if (
-            self._stt is not None
-            and self._stt.capabilities.server_endpointing
-            and not is_given(min_endpointing_delay)
-            and not _user_provided_turn_handling
-        ):
-            endpointing["min_delay"] = 0.0
-            # Pin the intra-utterance silence grace independently so it doesn't
-            # degenerate to `min_delay / 2 == 0` and cause the agent to speak
-            # over natural micro-pauses during user utterances.
-            endpointing["intra_utterance_silence_grace"] = 0.25
         self._turn_detection = raw_turn_detection
         self._interruption_detection = interruption.get("mode", NOT_GIVEN)
         self._mcp_servers = mcp_servers or None

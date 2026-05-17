@@ -90,7 +90,6 @@ class STT(stt.STT):
                 interim_results=is_realtime,
                 aligned_transcript=False,
                 offline_recognize=not is_realtime,
-                server_endpointing=not is_realtime,
             )
         )
         self._opts = _STTOptions(

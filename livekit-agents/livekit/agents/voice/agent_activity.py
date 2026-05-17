@@ -1756,11 +1756,7 @@ class AgentActivity(RecognitionHooks):
         if (
             ev.speaking
             # allow some silence between utterances during active speech
-            and ev.raw_accumulated_silence
-            <= self._session.options.endpointing.get(
-                "intra_utterance_silence_grace",
-                self._session.options.endpointing["min_delay"] / 2,
-            )
+            and ev.raw_accumulated_silence <= self._session.options.endpointing["min_delay"] / 2
         ):
             self._user_silence_event.clear()
         else:

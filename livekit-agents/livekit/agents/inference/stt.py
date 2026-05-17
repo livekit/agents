@@ -207,7 +207,7 @@ def _parse_model_string(model: str) -> tuple[str, NotGivenOr[LanguageCode]]:
 def _resolve_vad_for_model(
     model: NotGivenOr[STTModels | str],
     vad_instance: vad.VAD | None,
-) -> tuple[bool, vad.VAD | None]:
+) -> vad.VAD | None:
     is_speechmatics = (
         is_given(model) and isinstance(model, str) and model.startswith("speechmatics/")
     )
@@ -216,7 +216,7 @@ def _resolve_vad_for_model(
             "`vad` will be ignored: model %r handles endpointing server-side.",
             model,
         )
-        vad_instance = None
+        return None
     if is_speechmatics and vad_instance is None:
         try:
             from livekit.plugins.silero import VAD as SileroVAD
@@ -226,7 +226,7 @@ def _resolve_vad_for_model(
                 f"{model!r} does not handle endpointing server-side."
             ) from e
         vad_instance = SileroVAD.load()
-    return is_speechmatics, vad_instance
+    return vad_instance
 
 
 def _normalize_fallback(
@@ -471,7 +471,7 @@ class STT(stt.STT):
             if is_given(parsed_language) and not is_given(language):
                 language = parsed_language
 
-        is_speechmatics, vad = _resolve_vad_for_model(model, vad if is_given(vad) else None)
+        vad = _resolve_vad_for_model(model, vad if is_given(vad) else None)
 
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -480,7 +480,6 @@ class STT(stt.STT):
                 diarization=diarization_enabled,
                 aligned_transcript="word",
                 offline_recognize=False,
-                server_endpointing=not is_speechmatics,
             ),
         )
 
@@ -597,11 +596,7 @@ class STT(stt.STT):
                     language = parsed_language
 
             self._opts.model = model
-            is_speechmatics, self._vad = _resolve_vad_for_model(model, self._vad)
-            self._capabilities = replace(
-                self._capabilities,
-                server_endpointing=not is_speechmatics,
-            )
+            self._vad = _resolve_vad_for_model(model, self._vad)
         if is_given(language):
             self._opts.language = LanguageCode(language)
         if is_given(extra):
