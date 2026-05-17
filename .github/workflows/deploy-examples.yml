@@ -178,11 +178,9 @@ jobs:
           root = Path("agents/examples")
           m = yaml.safe_load((root / "playground.yaml").read_text())
           for slug, e in m.get("examples", {}).items():
-              ex_dir = root / slug
-              r = ex_dir / e.get("readme", "README.md")
-              if r.is_file():
-                  e["readme"] = r.read_text()
-              e["files"] = collect_files(ex_dir)
+              # The README is just one of the files in collect_files — no
+              # separate readme blob anymore.
+              e["files"] = collect_files(root / slug)
           print(json.dumps(m, indent=2, ensure_ascii=False))
           PY
 
