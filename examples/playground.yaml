@@ -18,7 +18,7 @@ project:
 examples:
   healthcare:
     title: Healthcare
-    description: Medical intake & scheduling
+    description: A medical front-desk agent that handles intake, authenticates returning patients, books appointments, and hands the conversation off to a human when it needs to.
     # LiveKit brand palette (raw-colors.ts) — green-500
     accent: "#009E4F"
     agent_id: CA_uFGnwowV2PMS
@@ -42,7 +42,7 @@ examples:
 
   survey:
     title: Survey
-    description: Engineering candidate screening
+    description: A structured interview agent that walks candidates through a software engineer screening flow, captures answers as they go, and writes a graded summary to disk.
     # brand palette — amber-500
     accent: "#EF8B01"
     agent_id: CA_APDyCSXwMUNS
@@ -67,7 +67,7 @@ examples:
 
   frontdesk:
     title: Front Desk
-    description: Calendar-integrated reception
+    description: A receptionist agent wired up to a live calendar — answers questions about availability, books appointments in real time, and confirms back to the caller.
     # brand palette — indigo-500
     accent: "#1F44F9"
     agent_id: CA_9TqkLsnwhjmE
@@ -92,7 +92,7 @@ examples:
 
   drive-thru:
     title: Drive Thru
-    description: Fast food ordering
+    description: A drive-thru ordering agent that takes the order over voice, builds a structured cart with dynamically-generated tools per menu item, and reads back the total.
     # brand palette — red-500
     accent: "#FA4C39"
     agent_id: CA_cn3jfgKTxXDL
