@@ -15,13 +15,6 @@ version: 1
 project:
   subdomain: examples-wfxyig8v
 
-# Repo URL templates used by the playground's code browser (GitHub button)
-# and by CI when inlining #L permalink snippets in READMEs. `{slug}` is the
-# example dir name; `{path}` is the file path relative to that dir.
-repo:
-  tree_url: "https://github.com/livekit/agents/tree/main/examples/{slug}"
-  file_url: "https://github.com/livekit/agents/blob/main/examples/{slug}/{path}"
-
 examples:
   healthcare:
     title: Healthcare
@@ -29,6 +22,7 @@ examples:
     accent: "#10B981"   # emerald — calm, medical
     agent_id: CA_uFGnwowV2PMS
     entry: healthcare_agent.py
+    github: "https://github.com/livekit/agents/tree/main/examples/healthcare"
     tags: [voice, multi-agent, tools, healthcare]
     order: 10
     deploy: true
@@ -59,6 +53,7 @@ examples:
     accent: "#F59E0B"   # amber — paper, clipboard
     agent_id: CA_APDyCSXwMUNS
     entry: survey_agent.py
+    github: "https://github.com/livekit/agents/tree/main/examples/survey"
     tags: [voice, multi-agent, structured-flow, recruiting]
     order: 20
     deploy: true
@@ -89,6 +84,7 @@ examples:
     accent: "#6366F1"   # indigo — corporate, hospitality
     agent_id: CA_9TqkLsnwhjmE
     entry: frontdesk_agent.py
+    github: "https://github.com/livekit/agents/tree/main/examples/frontdesk"
     tags: [voice, tools, calendar, customer-service]
     order: 30
     deploy: true
@@ -119,6 +115,7 @@ examples:
     accent: "#F43F5E"   # rose — warm, food
     agent_id: CA_cn3jfgKTxXDL
     entry: agent.py
+    github: "https://github.com/livekit/agents/tree/main/examples/drive-thru"
     tags: [voice, tools, ordering, dynamic-tools]
     order: 40
     deploy: true
