@@ -57,15 +57,15 @@ async def entrypoint(ctx: JobContext) -> None:
         except Exception:
             return fallback
 
-    @ctx.room.local_participant.register_rpc_method("stt")
-    async def set_stt(data: RpcInvocationData) -> str:
+    @ctx.room.local_participant.register_rpc_method("set_stt_model")
+    async def set_stt_model(data: RpcInvocationData) -> str:
         model = parse_value(data.payload, DEFAULT_STT)
         logger.info("switching STT → %s", model)
         session.stt.update_options(model=model)
         return ""
 
-    @ctx.room.local_participant.register_rpc_method("llm")
-    async def set_llm(data: RpcInvocationData) -> str:
+    @ctx.room.local_participant.register_rpc_method("set_llm_model")
+    async def set_llm_model(data: RpcInvocationData) -> str:
         model = parse_value(data.payload, DEFAULT_LLM)
         logger.info("switching LLM → %s", model)
         # inference.LLM has no update_options; _opts.model is read on
@@ -73,8 +73,8 @@ async def entrypoint(ctx: JobContext) -> None:
         session.llm._opts.model = model
         return ""
 
-    @ctx.room.local_participant.register_rpc_method("tts")
-    async def set_tts(data: RpcInvocationData) -> str:
+    @ctx.room.local_participant.register_rpc_method("set_tts_model")
+    async def set_tts_model(data: RpcInvocationData) -> str:
         model = parse_value(data.payload, DEFAULT_TTS)
         logger.info("switching TTS → %s", model)
         session.tts.update_options(model=model)

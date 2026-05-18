@@ -129,6 +129,17 @@ examples:
         000000000000
         000000000000
         000000000000
+    # The playground reads these `views` and renders a read-only
+    # markdown card per entry on the right of the orb. The agent fills
+    # them at runtime by RPC'ing the matching `id` with a markdown
+    # payload — the card stays hidden until the first payload arrives.
+    # The agent fills these `views` at runtime by RPC'ing the
+    # declared method name (e.g. `set_cart_content`) with a markdown
+    # payload. Each entry renders as a card on the right of the orb,
+    # hidden until the first non-empty payload, re-hidden on empty.
+    views:
+      - rpc: set_cart_content
+        title: Current order
 
   inference:
     title: Inference
@@ -156,12 +167,12 @@ examples:
         011111111110
         000000000000
         000000000000
-    # The playground reads these `controls` and renders a labeled pill
-    # dropdown per control. Picking an option fires an RPC on the agent
-    # participant — `id` is the method name, payload is `{"value": "…"}`.
-    # Defaults match the agent's DEFAULT_STT/LLM/TTS constants.
+    # The playground reads these `controls` and renders a labeled
+    # pill dropdown per control. Picking an option fires an RPC on
+    # the agent participant — `rpc` is the method name, payload is
+    # `{"value": "…"}`. Defaults match the agent's DEFAULT_* constants.
     controls:
-      - id: stt
+      - rpc: set_stt_model
         label: STT
         default: deepgram/nova-3
         options:
@@ -177,7 +188,7 @@ examples:
           - { value: speechmatics/enhanced, label: Speechmatics Enhanced }
           - { value: speechmatics/standard, label: Speechmatics Standard }
           - { value: xai/stt-1, label: xAI Speech-to-Text }
-      - id: llm
+      - rpc: set_llm_model
         label: LLM
         default: openai/gpt-4o-mini
         options:
@@ -218,7 +229,7 @@ examples:
           - { value: deepseek-ai/deepseek-v3.2, label: DeepSeek-V3.2 }
           - { value: moonshotai/kimi-k2-instruct, label: Kimi K2 Instruct }
           - { value: moonshotai/kimi-k2.5, label: Kimi K2.5 }
-      - id: tts
+      - rpc: set_tts_model
         label: TTS
         default: cartesia/sonic-2
         options:

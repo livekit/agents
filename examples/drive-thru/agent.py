@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -379,6 +380,44 @@ class DriveThruAgent(Agent):
         return "\n".join(item.model_dump_json() for item in items)
 
 
+def _name_for(items: list[MenuItem], id: str, size=None) -> str:
+    found = find_items_by_id(items, id, size)
+    return found[0].name if found else id
+
+
+def format_cart(userdata: Userdata) -> str:
+    """Render the current order as markdown for the playground card.
+
+    Returns an empty string when the cart is empty, which signals the
+    UI to hide the card.
+    """
+    if not userdata.order.items:
+        return ""
+    lines: list[str] = []
+    for item in userdata.order.items.values():
+        if isinstance(item, OrderedCombo):
+            meal = _name_for(userdata.combo_items, item.meal_id)
+            drink = _name_for(userdata.drink_items, item.drink_id, item.drink_size)
+            parts = [f"fries {item.fries_size}", drink]
+            if item.sauce_id:
+                parts.append(_name_for(userdata.sauce_items, item.sauce_id))
+            lines.append(f"- **{meal}** — {', '.join(parts)}")
+        elif isinstance(item, OrderedHappy):
+            meal = _name_for(userdata.happy_items, item.meal_id)
+            drink = _name_for(userdata.drink_items, item.drink_id, item.drink_size)
+            parts = [drink]
+            if item.sauce_id:
+                parts.append(_name_for(userdata.sauce_items, item.sauce_id))
+            lines.append(f"- **{meal}** — {', '.join(parts)}")
+        elif isinstance(item, OrderedRegular):
+            name = _name_for(userdata.regular_items, item.item_id, item.size)
+            lines.append(f"- **{name}**")
+    n = len(userdata.order.items)
+    lines.append("")
+    lines.append(f"*{n} item{'s' if n != 1 else ''}*")
+    return "\n".join(lines)
+
+
 async def new_userdata() -> Userdata:
     fake_db = FakeDB()
     drink_items = await fake_db.list_drinks()
@@ -441,6 +480,27 @@ async def drive_thru_agent(ctx: JobContext) -> None:
             volume=1.0,
         ),
     )
+
+    # Push the cart as markdown to the playground's cart view
+    # whenever it changes. Fire-and-forget — the function tool that
+    # mutated the order shouldn't be blocked on round-tripping the
+    # RPC, and slow/dropped peers shouldn't stall each other.
+    async def _push_to(identity: str, payload: str) -> None:
+        try:
+            await ctx.room.local_participant.perform_rpc(
+                destination_identity=identity,
+                method="set_cart_content",
+                payload=payload,
+            )
+        except Exception:
+            logger.exception("cart push to %s failed", identity)
+
+    async def push_cart() -> None:
+        payload = format_cart(userdata)
+        for p in list(ctx.room.remote_participants.values()):
+            asyncio.create_task(_push_to(p.identity, payload))
+
+    userdata.order.on_change = push_cart
 
     await session.start(agent=DriveThruAgent(userdata=userdata), room=ctx.room)
     await background_audio.start(room=ctx.room, agent_session=session)
