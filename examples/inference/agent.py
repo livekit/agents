@@ -84,9 +84,7 @@ async def entrypoint(ctx: JobContext) -> None:
             return ""
         logger.info("switching LLM → %s", model)
         session.llm.update_options(model=model)
-        session.generate_reply(
-            instructions=_SWAP_PROMPT.format(modality="language", model=model)
-        )
+        session.generate_reply(instructions=_SWAP_PROMPT.format(modality="language", model=model))
         return ""
 
     @ctx.room.local_participant.register_rpc_method("set_tts_model")

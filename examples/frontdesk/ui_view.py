@@ -73,16 +73,12 @@ class UIView:
         last = max(s.start_time for s in slots).astimezone(tz)
         span = f"{now.strftime('%b %d')} – {last.strftime('%b %d')}"
         plural = "slot" if len(slots) == 1 else "slots"
-        self._push(
-            f"**{window}**\n\n"
-            f"[[{len(slots)}]] available {plural} · *{span}*"
-        )
+        self._push(f"**{window}**\n\n[[{len(slots)}]] available {plural} · *{span}*")
 
     def appointment_booked(self, slot: AvailableSlot, tz: ZoneInfo) -> None:
         local = slot.start_time.astimezone(tz)
         self._push(
-            f"**Booked: {local.strftime('%A, %B %d, %Y')}**\n\n"
-            f"at [[{local.strftime('%H:%M %Z')}]]"
+            f"**Booked: {local.strftime('%A, %B %d, %Y')}**\n\nat [[{local.strftime('%H:%M %Z')}]]"
         )
 
     # ---- internals ----
