@@ -63,6 +63,8 @@ async def entrypoint(ctx: JobContext) -> None:
         except Exception:
             return fallback
 
+    await session.start(agent=InferenceAgent(), room=ctx.room)
+
     @ctx.room.local_participant.register_rpc_method("set_stt_model")
     async def set_stt_model(data: RpcInvocationData) -> str:
         model = parse_value(data.payload, DEFAULT_STT)
@@ -98,8 +100,6 @@ async def entrypoint(ctx: JobContext) -> None:
             instructions=_SWAP_PROMPT.format(modality="text-to-speech", model=model)
         )
         return ""
-
-    await session.start(agent=InferenceAgent(), room=ctx.room)
 
 
 if __name__ == "__main__":
