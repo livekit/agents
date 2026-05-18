@@ -24,9 +24,6 @@ from livekit.agents import JobContext
 
 logger = logging.getLogger("frontdesk.ui")
 
-_FA_CALENDAR = "\uf073"  # FontAwesome solid: calendar
-_FA_CHECK = "\uf058"     # FontAwesome solid: circle-check
-
 # The playground reads `views[].rpc` from playground.yaml and registers
 # an RPC handler with this exact method name. Keep both in sync.
 _VIEW_METHOD = "set_appointment_status"
@@ -63,7 +60,9 @@ class UIView:
         if not slots:
             self._push("")
             return
-        lines = [f"# {_FA_CALENDAR} Available slots", ""]
+        # The card title in playground.yaml is already "Schedule", so
+        # the body goes straight into the list without a heading.
+        lines: list[str] = []
         for slot in slots:
             local = slot.start_time.astimezone(tz)
             rel = _relative(local, now)
@@ -75,8 +74,7 @@ class UIView:
     def appointment_booked(self, slot: AvailableSlot, tz: ZoneInfo) -> None:
         local = slot.start_time.astimezone(tz)
         self._push(
-            f"# {_FA_CHECK} Booked\n\n"
-            f"**{local.strftime('%A, %B %d, %Y')}**\n\n"
+            f"**Booked: {local.strftime('%A, %B %d, %Y')}**\n\n"
             f"at [[{local.strftime('%H:%M %Z')}]]"
         )
 

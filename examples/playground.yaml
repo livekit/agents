@@ -102,7 +102,7 @@ examples:
         000000000000
     views:
       - rpc: set_appointment_status
-        title: Schedule
+        title: "\uf073 Schedule"
 
   drive-thru:
     title: Drive Thru
@@ -142,7 +142,10 @@ examples:
     # hidden until the first non-empty payload, re-hidden on empty.
     views:
       - rpc: set_cart_content
-        title: Current order
+        # Card title is rendered in the body font, which has the
+        # FA Solid range merged in — so YAML `\u` escapes for any
+        # FA codepoint render inline. `\uf07a` is shopping-cart.
+        title: "\uf07a Current order"
 
   inference:
     title: Inference
