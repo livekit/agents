@@ -395,6 +395,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._vad = vad or None
         self._llm = llm or None
         self._tts = tts or None
+
         self._turn_detection = raw_turn_detection
         self._interruption_detection = interruption.get("mode", NOT_GIVEN)
         self._mcp_servers = mcp_servers or None
