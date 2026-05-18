@@ -15,7 +15,6 @@ from opentelemetry.sdk.trace import ReadableSpan
 from livekit import rtc
 
 from .. import inference, llm, stt, tokenize, utils, vad
-from .. import inference, llm, stt, utils, vad
 from .._exceptions import APIError
 from ..inference.interruption import (
     _AgentSpeechEndedSentinel,
