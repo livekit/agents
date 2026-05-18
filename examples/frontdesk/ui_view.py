@@ -24,8 +24,8 @@ from livekit.agents import JobContext
 
 logger = logging.getLogger("frontdesk.ui")
 
-_FA_CALENDAR = ""  # FontAwesome solid: calendar
-_FA_CHECK = ""     # FontAwesome solid: circle-check
+_FA_CALENDAR = ""  # FontAwesome solid: calendar
+_FA_CHECK = ""     # FontAwesome solid: circle-check
 
 # The playground reads `views[].rpc` from playground.yaml and registers
 # an RPC handler with this exact method name. Keep both in sync.
