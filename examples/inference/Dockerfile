@@ -26,11 +26,6 @@ USER appuser
 COPY requirements.txt ./
 RUN pip install --user --no-cache-dir -r requirements.txt
 
-# Pre-download any model weights plugins ship with a download_files
-# hook (e.g. the turn detector ONNX), so the container is ready to
-# take traffic without a first-request download stall.
-RUN python -m livekit.agents download-files
-
 COPY . .
 
 CMD ["python", "agent.py", "start"]

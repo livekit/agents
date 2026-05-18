@@ -26,8 +26,6 @@ examples:
     entry: healthcare_agent.py
     github: "https://github.com/livekit/agents/tree/main/examples/healthcare"
     tags: [multi-agent, scheduling]
-    order: 10
-    deploy: true
     icon:
       # Heart with a top-left specular highlight on the left lobe.
       size: 12
@@ -54,8 +52,6 @@ examples:
     entry: survey_agent.py
     github: "https://github.com/livekit/agents/tree/main/examples/survey"
     tags: [multi-agent]
-    order: 20
-    deploy: true
     icon:
       # Speech bubble outline with two highlight "text lines" inside.
       size: 12
@@ -82,8 +78,6 @@ examples:
     entry: frontdesk_agent.py
     github: "https://github.com/livekit/agents/tree/main/examples/frontdesk"
     tags: [tools, scheduling]
-    order: 30
-    deploy: true
     icon:
       # Calendar with the top header strip in the highlight tone.
       size: 12
@@ -113,8 +107,6 @@ examples:
     entry: agent.py
     github: "https://github.com/livekit/agents/tree/main/examples/drive-thru"
     tags: [tools]
-    order: 40
-    deploy: true
     icon:
       # Side-view car: cabin pillars in accent, windshield + side
       # windows in the lighter tone, body and wheels in accent.
@@ -152,7 +144,7 @@ examples:
     description: A voice agent powered end-to-end by LiveKit Inference. Pick the STT, LLM, and TTS provider live to hear how each one feels in the same conversation.
     # brand palette — purple-500
     accent: "#9B5CFF"
-    agent_id: CA_inFeReN5wT9q
+    agent_id: CA_K9e3yQ3RPNKQ
     entry: agent.py
     github: "https://github.com/livekit/agents/tree/main/examples/inference"
     tags: [inference]
