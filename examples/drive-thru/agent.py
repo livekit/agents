@@ -380,7 +380,7 @@ class DriveThruAgent(Agent):
         return "\n".join(item.model_dump_json() for item in items)
 
 
-FA_CART = ""  # FontAwesome solid: shopping-cart
+FA_CART = "\uf07a"  # FontAwesome solid: shopping-cart
 
 def _find(items: list[MenuItem], id: str, size=None) -> MenuItem | None:
     found = find_items_by_id(items, id, size)
