@@ -250,6 +250,23 @@ class LLM(llm.LLM):
         """Create a LLM instance from a model string"""
         return cls(model)
 
+    def update_options(
+        self,
+        *,
+        model: NotGivenOr[LLMModels | str] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[ChatCompletionOptions | dict[str, Any]] = NOT_GIVEN,
+    ) -> None:
+        """Update LLM configuration options.
+
+        Each option is read on the next ``chat()`` call, so a swap
+        takes effect on the agent's next turn without recreating the
+        LLM.
+        """
+        if is_given(model):
+            self._opts.model = model
+        if is_given(extra_kwargs):
+            self._opts.extra_kwargs.update(extra_kwargs)  # type: ignore[arg-type]
+
     @property
     def model(self) -> str:
         """Get the model name for this LLM instance."""
