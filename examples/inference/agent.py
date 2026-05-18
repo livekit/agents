@@ -33,6 +33,18 @@ INSTRUCTIONS = (
     "picks new ones in the playground."
 )
 
+# Pronunciation guide for the model-switch announcements. The LLM is
+# asked to acknowledge the swap in one short, natural sentence and to
+# pronounce the model id like a brand name (e.g. "Deepgram Nova 3"
+# instead of "deepgram-slash-nova-dash-three").
+_SWAP_PROMPT = (
+    "The user just switched the {modality} model to '{model}'. "
+    "Acknowledge it in one short, natural sentence — say the model's "
+    "name like a brand (e.g. 'Deepgram Nova 3', not 'deepgram slash "
+    "nova dash three'). Skip hyphens, slashes, version dots, and any "
+    "abbreviations that aren't pronounceable. Don't ask a follow-up."
+)
+
 
 class InferenceAgent(Agent):
     def __init__(self) -> None:
@@ -40,11 +52,6 @@ class InferenceAgent(Agent):
 
 
 server = AgentServer()
-
-
-def _pretty(model: str) -> str:
-    """`deepgram/nova-3` → `nova-3` for a cleaner spoken form."""
-    return model.split("/", 1)[-1] if "/" in model else model
 
 
 @server.rtc_session()
@@ -63,16 +70,6 @@ async def entrypoint(ctx: JobContext) -> None:
         except Exception:
             return fallback
 
-    def announce(modality: str, model: str) -> None:
-        # Fire-and-forget: say() returns a SpeechHandle that queues
-        # behind the current turn (or plays immediately if idle). For
-        # TTS swaps the announcement is voiced by the new model, which
-        # doubles as an audible confirmation that the swap took.
-        session.say(
-            f"Switched to {_pretty(model)} for {modality}.",
-            allow_interruptions=True,
-        )
-
     @ctx.room.local_participant.register_rpc_method("set_stt_model")
     async def set_stt_model(data: RpcInvocationData) -> str:
         model = parse_value(data.payload, DEFAULT_STT)
@@ -80,7 +77,9 @@ async def entrypoint(ctx: JobContext) -> None:
             return ""
         logger.info("switching STT → %s", model)
         session.stt.update_options(model=model)
-        announce("speech-to-text", model)
+        session.generate_reply(
+            instructions=_SWAP_PROMPT.format(modality="speech-to-text", model=model)
+        )
         return ""
 
     @ctx.room.local_participant.register_rpc_method("set_llm_model")
@@ -90,7 +89,10 @@ async def entrypoint(ctx: JobContext) -> None:
             return ""
         logger.info("switching LLM → %s", model)
         session.llm.update_options(model=model)
-        announce("the language model", model)
+        # The new LLM voices its own arrival, which is a fitting demo.
+        session.generate_reply(
+            instructions=_SWAP_PROMPT.format(modality="language", model=model)
+        )
         return ""
 
     @ctx.room.local_participant.register_rpc_method("set_tts_model")
@@ -100,7 +102,10 @@ async def entrypoint(ctx: JobContext) -> None:
             return ""
         logger.info("switching TTS → %s", model)
         session.tts.update_options(model=model)
-        announce("text-to-speech", model)
+        # Voiced by the new TTS — doubles as an audible swap confirmation.
+        session.generate_reply(
+            instructions=_SWAP_PROMPT.format(modality="text-to-speech", model=model)
+        )
         return ""
 
     await session.start(agent=InferenceAgent(), room=ctx.room)
