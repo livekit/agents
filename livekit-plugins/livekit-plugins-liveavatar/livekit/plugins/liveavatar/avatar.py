@@ -7,7 +7,7 @@ import json
 import os
 import uuid
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, Literal
 
 import aiohttp
 
@@ -23,7 +23,11 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.utils import is_given
-from livekit.agents.voice.avatar import AudioSegmentEnd, QueueAudioOutput
+from livekit.agents.voice.avatar import (
+    AudioSegmentEnd,
+    AvatarSession as BaseAvatarSession,
+    QueueAudioOutput,
+)
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
 from .api import LiveAvatarAPI, LiveAvatarException
@@ -34,8 +38,10 @@ KEEP_ALIVE_INTERVAL = 60
 _AVATAR_AGENT_IDENTITY = "liveavatar-avatar-agent"
 _AVATAR_AGENT_NAME = "liveavatar-avatar-agent"
 
+VideoQuality = Literal["very_high", "high", "medium", "low"]
 
-class AvatarSession:
+
+class AvatarSession(BaseAvatarSession):
     """A LiveAvatar avatar session"""
 
     def __init__(
@@ -45,6 +51,7 @@ class AvatarSession:
         api_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         is_sandbox: NotGivenOr[bool] = NOT_GIVEN,
+        video_quality: NotGivenOr[VideoQuality] = NOT_GIVEN,
         avatar_participant_identity: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
@@ -65,11 +72,12 @@ class AvatarSession:
                 conn_options=conn_options,
             )
         self._is_sandbox = is_sandbox if is_given(is_sandbox) else False
+        self._video_quality = video_quality if is_given(video_quality) else None
 
         self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
         self._tasks: set[asyncio.Task[Any]] = set()
-        self._main_atask: asyncio.Task | None
+        self._main_atask: asyncio.Task | None = None
         self._audio_resampler: rtc.AudioResampler | None = None
         self._session_data = None
         self._msg_ch = utils.aio.Chan[dict]()
@@ -89,6 +97,7 @@ class AvatarSession:
         livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
         livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
+        await super().start(agent_session, room)
         self._agent_session = agent_session
         self._room = room
         livekit_url = livekit_url or (os.getenv("LIVEKIT_URL") or NOT_GIVEN)
@@ -131,6 +140,7 @@ class AvatarSession:
             room=self._room,
             avatar_id=self._avatar_id,
             is_sandbox=self._is_sandbox,
+            video_quality=self._video_quality,
         )
         self._session_id = session_config_data["data"]["session_id"]
         self._session_token = session_config_data["data"]["session_token"]
@@ -153,7 +163,7 @@ class AvatarSession:
         def on_agent_session_close(ev: Any) -> None:
             self._msg_ch.close()
 
-        self._audio_buffer = QueueAudioOutput(sample_rate=SAMPLE_RATE)
+        self._audio_buffer = QueueAudioOutput(sample_rate=SAMPLE_RATE, wait_playback_start=True)
         await self._audio_buffer.start()
         self._audio_buffer.on("clear_buffer", self._on_clear_buffer)  # type: ignore[arg-type]
 
@@ -367,3 +377,4 @@ class AvatarSession:
     def _handle_agent_speak_started(self, event: dict) -> None:
         self._avatar_speaking = True
         self._avatar_interrupted = False
+        self._audio_buffer.notify_playback_started()

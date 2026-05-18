@@ -99,6 +99,8 @@ class TextOutputOptions:
     Only effective if `sync_transcription` is True."""
     next_in_chain: TextOutput | None = None
     """The next text output in the chain for the agent. If provided, the agent's transcription will be passed to it."""
+    json_format: bool = False
+    """Send the transcription as JSON dict for each chunk, including start and end timestamps if it's a TimedString."""
 
 
 @dataclass

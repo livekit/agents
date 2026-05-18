@@ -156,6 +156,7 @@ class RoomIO:
                 is_delta_stream=True,
                 participant=None,
                 next_in_chain=output_text_options.next_in_chain,
+                json_format=output_text_options.json_format,
             )
 
             # use the RoomIO's audio output if available, otherwise use the agent's audio output

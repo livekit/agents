@@ -22,8 +22,8 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents>=1.5.4",
-    "azure-cognitiveservices-speech>=1.43.0",
+    "livekit-agents>=1.5.10",
+    "azure-cognitiveservices-speech>=1.48.2",
 ]
 
 [project.urls]

@@ -174,6 +174,16 @@ class ConversationItemAddedEvent(BaseModel):
 
 
 class FunctionToolsExecutedEvent(BaseModel):
+    """Emitted after a batch of function tools finishes executing.
+
+    ``function_calls`` and ``function_call_outputs`` are parallel lists: the
+    output at a given index belongs to the call at the same index. When an
+    output is present, its ``call_id`` matches the paired function call's
+    ``call_id``. A ``None`` output means the function call did not produce a
+    value that should be sent back to the LLM, such as when a tool raises
+    ``StopResponse`` or returns an invalid output.
+    """
+
     type: Literal["function_tools_executed"] = "function_tools_executed"
     function_calls: list[FunctionCall]
     function_call_outputs: list[FunctionCallOutput | None]
@@ -182,6 +192,7 @@ class FunctionToolsExecutedEvent(BaseModel):
     _handoff_required: bool = PrivateAttr(default=False)
 
     def zipped(self) -> list[tuple[FunctionCall, FunctionCallOutput | None]]:
+        """Return calls paired with outputs by list position."""
         return list(zip(self.function_calls, self.function_call_outputs, strict=False))
 
     def cancel_tool_reply(self) -> None:

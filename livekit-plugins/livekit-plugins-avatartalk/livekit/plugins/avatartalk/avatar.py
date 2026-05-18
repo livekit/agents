@@ -3,7 +3,7 @@ import os
 from livekit import api, rtc
 from livekit.agents import NOT_GIVEN, AgentSession, NotGivenOr, get_job_context
 from livekit.agents.types import ATTRIBUTE_PUBLISH_ON_BEHALF
-from livekit.agents.voice.avatar import DataStreamAudioOutput
+from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
 
 from .api import AvatarTalkAPI, AvatarTalkException
 from .log import logger
@@ -15,7 +15,7 @@ DEFAULT_AVATAR_EMOTION = "expressive"
 SAMPLE_RATE = 16000
 
 
-class AvatarSession:
+class AvatarSession(BaseAvatarSession):
     """AvatarTalkAPI avatar session"""
 
     def __init__(
@@ -67,6 +67,8 @@ class AvatarSession:
         livekit_api_key: NotGivenOr[str | None] = NOT_GIVEN,
         livekit_api_secret: NotGivenOr[str | None] = NOT_GIVEN,
     ) -> None:
+        await super().start(agent_session, room)
+
         livekit_url = livekit_url or (os.getenv("LIVEKIT_URL") or NOT_GIVEN)
         livekit_api_key = livekit_api_key or (os.getenv("LIVEKIT_API_KEY") or NOT_GIVEN)
         livekit_api_secret = livekit_api_secret or (os.getenv("LIVEKIT_API_SECRET") or NOT_GIVEN)

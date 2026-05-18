@@ -82,10 +82,26 @@ from livekit.plugins import mistralai
 
 llm = mistralai.LLM()
 
-# With custom temperature/max. tokens
+# With all available options
 llm = mistralai.LLM(
     model="mistral-large-latest",
     temperature=0.7,
-    max_completion_tokens=150
+    top_p=0.9,
+    max_completion_tokens=150,
+    presence_penalty=0.1,
+    frequency_penalty=0.1,
+    random_seed=42,
+    tool_choice="auto",
+)
+
+# With provider tools
+agent = Agent(
+    llm=llm,
+    tools=[
+        mistralai.tools.WebSearch(),
+        mistralai.tools.CodeInterpreter(),
+        mistralai.tools.DocumentLibrary(library_ids=["<your-library-id>"]),
+        mistralai.tools.Connector(connector_id="<your_connector_id>")
+    ]
 )
 ```

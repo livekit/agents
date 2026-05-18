@@ -206,6 +206,13 @@ SYNTHESIZE_TTS = [
     ),
     pytest.param(
         lambda: {
+            "tts": rime.TTS(model="coda"),
+            "proxy-upstream": "users.rime.ai:443",
+        },
+        id="rime-coda",
+    ),
+    pytest.param(
+        lambda: {
             "tts": speechify.TTS(),
             "proxy-upstream": "api.sws.speechify.com:443",
         },

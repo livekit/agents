@@ -32,6 +32,7 @@ from livekit.agents.voice.avatar import (
     AudioSegmentEnd,
     AvatarOptions,
     AvatarRunner,
+    AvatarSession as BaseAvatarSession,
     DataStreamAudioOutput,
     QueueAudioOutput,
     VideoGenerator,
@@ -93,7 +94,7 @@ class BitHumanException(Exception):
     """Exception for BitHuman errors"""
 
 
-class AvatarSession:
+class AvatarSession(BaseAvatarSession):
     """A Beyond Presence avatar session"""
 
     def __init__(
@@ -220,6 +221,7 @@ class AvatarSession:
         livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
         livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
+        await super().start(agent_session, room)
         if self._mode == "local":
             await self._start_local(agent_session, room)
         elif self._mode == "cloud":
@@ -258,16 +260,6 @@ class AvatarSession:
 
         video_generator = BithumanGenerator(runtime)
 
-        try:
-            job_ctx = get_job_context()
-
-            async def _on_shutdown() -> None:
-                runtime.cleanup()
-
-            job_ctx.add_shutdown_callback(_on_shutdown)
-        except RuntimeError:
-            pass
-
         output_width, output_height = video_generator.video_resolution
         avatar_options = AvatarOptions(
             video_width=output_width,
@@ -277,7 +269,10 @@ class AvatarSession:
             audio_channels=1,
         )
 
-        audio_buffer = QueueAudioOutput(sample_rate=runtime.settings.INPUT_SAMPLE_RATE)
+        audio_buffer = QueueAudioOutput(
+            sample_rate=runtime.settings.INPUT_SAMPLE_RATE,
+            wait_playback_start=True,
+        )
         # create avatar runner
         self._avatar_runner = AvatarRunner(
             room=room,
@@ -344,6 +339,7 @@ class AvatarSession:
         agent_session.output.audio = DataStreamAudioOutput(
             room=room,
             destination_identity=self._avatar_participant_identity,
+            wait_playback_start=False,
         )
 
     async def _start_cloud_agent(
@@ -610,6 +606,10 @@ class AvatarSession:
         if self._runtime is None:
             raise BitHumanException("Runtime not initialized")
         return self._runtime
+
+    async def aclose(self) -> None:
+        if self._mode == "local" and utils.is_given(self._runtime) and self._runtime is not None:
+            self._runtime.cleanup()
 
 
 class BithumanGenerator(VideoGenerator):

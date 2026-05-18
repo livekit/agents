@@ -47,7 +47,6 @@ class Agent:
         turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
-        mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
         min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         # deprecated
@@ -55,6 +54,7 @@ class Agent:
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+        mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
     ) -> None:
         tools = tools or []
         if type(self) is Agent:
@@ -110,6 +110,11 @@ class Agent:
             mcp_servers = None  # treat empty list as None (but keep NOT_GIVEN)
 
         self._mcp_servers = mcp_servers
+        if self._mcp_servers:
+            logger.warning(
+                "passing MCP servers to AgentSession or Agent is deprecated "
+                "and will be removed in a future version. Use `MCPToolset` instead."
+            )
         self._activity: AgentActivity | None = None
 
     @property
@@ -720,13 +725,13 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
-        mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
         preserve_function_call_history: bool = False,
         # deprecated
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
+        mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
     ) -> None:
         tools = tools or []
         turn_handling = (

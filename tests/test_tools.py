@@ -393,7 +393,7 @@ class TestToolExecution:
         with pytest.raises(ValueError, match="validation error"):
             prepare_function_arguments(fnc=mock_tool_1, json_arguments='{"opt_arg2": "test2"}')
 
-        with pytest.raises(ValueError, match="Received None for required parameter"):
+        with pytest.raises(ValueError, match="Received no value for required parameter"):
             prepare_function_arguments(fnc=mock_tool_2, json_arguments='{"arg1": null}')
 
         with pytest.raises(ValueError, match="validation error"):

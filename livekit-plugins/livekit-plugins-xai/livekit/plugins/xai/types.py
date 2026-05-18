@@ -36,6 +36,11 @@ GrokVoices = Literal[
     "Sal",
 ]
 
+GrokRealtimeModels = Literal[
+    "grok-voice-think-fast-1.0",
+    "grok-voice-fast-1.0",
+]
+
 TTSLanguages = Literal[
     "auto",
     "en",

@@ -138,7 +138,7 @@ class TTS(tts.TTS):
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
         url = self._opts.get_ws_url(
-            f"/speak/en?api_key={self._opts.api_key}&speed={self._opts.speed}&lang_code={self._opts.lang_code.language}&sampling_rate={self._opts.sample_rate}&voice_id={self._opts.voice_id}"
+            f"/speak/en?speed={self._opts.speed}&lang_code={self._opts.lang_code.language}&sampling_rate={self._opts.sample_rate}&voice_id={self._opts.voice_id}"
         )
         if self._opts.jwt_token:
             url += f"&jwt_token={self._opts.jwt_token}"
