@@ -3,7 +3,7 @@
 Covers two concerns the FSM-level tests can't reach:
 
 1. ``_turn_detection_task`` — VAD events forward to the stream's
-   ``set_active`` / ``push_audio`` / ``flush`` calls in the right shape, and
+   ``activate`` / ``deactivate`` / ``push_audio`` / ``flush`` calls in the right shape, and
    the stream's emitted predictions trigger ``_run_eou_detection`` plus
    deactivate the stream on a positive prediction.
 
@@ -69,7 +69,8 @@ class _RecordingStream(_AudioTurnDetectorStream):
     and lets tests inject predictions via ``emit``."""
 
     def __init__(self, *, detector: Any, opts: TurnDetectorOptions) -> None:
-        self.set_active_calls: list[tuple[bool, str | None]] = []
+        self.activate_calls: list[str | None] = []
+        self.deactivate_calls: list[str | None] = []
         self.push_audio_calls: list[rtc.AudioFrame] = []
         self.flush_calls: list[str | None] = []
         super().__init__(detector=detector, opts=opts)
@@ -81,9 +82,13 @@ class _RecordingStream(_AudioTurnDetectorStream):
         # Park forever; aclose cancels.
         await asyncio.Future()
 
-    def set_active(self, active: bool, trigger: str | None = None) -> None:
-        self.set_active_calls.append((active, trigger))
-        super().set_active(active, trigger)
+    def activate(self, trigger: str | None = None) -> None:
+        self.activate_calls.append(trigger)
+        super().activate(trigger)
+
+    def deactivate(self, trigger: str | None = None) -> None:
+        self.deactivate_calls.append(trigger)
+        super().deactivate(trigger)
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         self.push_audio_calls.append(frame)
@@ -133,7 +138,7 @@ class TestTurnDetectionTaskForwarding:
     """VAD events / audio frames / sentinels round-trip through the channel
     into the right stream call."""
 
-    async def test_vad_sos_calls_set_active_false(self) -> None:
+    async def test_vad_sos_calls_deactivate(self) -> None:
         recognition = _make_recognition_shell()
         stream = _RecordingStream(detector=_make_detector_stub(), opts=_make_opts())
         ch: aio.Chan[Any] = aio.Chan()
@@ -142,12 +147,12 @@ class TestTurnDetectionTaskForwarding:
             ch.send_nowait(_vad_event(VADEventType.START_OF_SPEECH))
             for _ in range(5):
                 await asyncio.sleep(0)
-            assert (False, "vad sos") in stream.set_active_calls
+            assert "vad sos" in stream.deactivate_calls
         finally:
             ch.close()
             await aio.cancel_and_wait(task)
 
-    async def test_vad_eos_calls_set_active_true(self) -> None:
+    async def test_vad_eos_calls_activate(self) -> None:
         recognition = _make_recognition_shell()
         stream = _RecordingStream(detector=_make_detector_stub(), opts=_make_opts())
         ch: aio.Chan[Any] = aio.Chan()
@@ -156,7 +161,7 @@ class TestTurnDetectionTaskForwarding:
             ch.send_nowait(_vad_event(VADEventType.END_OF_SPEECH))
             for _ in range(5):
                 await asyncio.sleep(0)
-            assert (True, "vad eos") in stream.set_active_calls
+            assert "vad eos" in stream.activate_calls
         finally:
             ch.close()
             await aio.cancel_and_wait(task)
@@ -190,7 +195,7 @@ class TestTurnDetectionTaskForwarding:
             ch.close()
             await aio.cancel_and_wait(task)
 
-    async def test_manual_bool_calls_set_active(self) -> None:
+    async def test_manual_bool_dispatches_to_activate_deactivate(self) -> None:
         recognition = _make_recognition_shell()
         stream = _RecordingStream(detector=_make_detector_stub(), opts=_make_opts())
         ch: aio.Chan[Any] = aio.Chan()
@@ -200,8 +205,8 @@ class TestTurnDetectionTaskForwarding:
             ch.send_nowait(False)
             for _ in range(5):
                 await asyncio.sleep(0)
-            assert (True, "manual") in stream.set_active_calls
-            assert (False, "manual") in stream.set_active_calls
+            assert "manual" in stream.activate_calls
+            assert "manual" in stream.deactivate_calls
         finally:
             ch.close()
             await aio.cancel_and_wait(task)
@@ -219,7 +224,7 @@ class TestTurnDetectionTaskPredictions:
         try:
             # FSM must be running so the event isn't filtered as stale.
             stream.warmup()
-            stream.set_active(True, trigger="test")
+            stream.activate(trigger="test")
             stream.emit(0.3)  # below threshold 0.5 → no deactivate
             for _ in range(5):
                 await asyncio.sleep(0)
@@ -229,7 +234,7 @@ class TestTurnDetectionTaskPredictions:
             assert kwargs["trigger"] == "turn_detector"
             assert kwargs["latest_eou_prediction"].end_of_turn_probability == 0.3
             # Stream wasn't deactivated for sub-threshold prediction.
-            assert (False, "positive eou prediction") not in stream.set_active_calls
+            assert "positive eou prediction" not in stream.deactivate_calls
         finally:
             ch.close()
             await aio.cancel_and_wait(task)
@@ -243,25 +248,25 @@ class TestTurnDetectionTaskPredictions:
         task = asyncio.create_task(recognition._turn_detection_task(stream, ch, None))
         try:
             stream.warmup()
-            stream.set_active(True, trigger="test")
+            stream.activate(trigger="test")
             stream.emit(0.9)  # >= 0.5 threshold
             for _ in range(5):
                 await asyncio.sleep(0)
 
-            assert (False, "positive eou prediction") in stream.set_active_calls
+            assert "positive eou prediction" in stream.deactivate_calls
         finally:
             ch.close()
             await aio.cancel_and_wait(task)
 
     async def test_prediction_skipped_when_inference_not_running(self) -> None:
-        """An event delivered while the FSM is DEACTIVATED (no active turn)
-        is treated as stale and must NOT trigger `_run_eou_detection`."""
+        """An event delivered while the FSM is idle (no active turn) is
+        treated as stale and must NOT trigger `_run_eou_detection`."""
         recognition = _make_recognition_shell()
         stream = _RecordingStream(detector=_make_detector_stub(), opts=_make_opts())
         ch: aio.Chan[Any] = aio.Chan()
         task = asyncio.create_task(recognition._turn_detection_task(stream, ch, None))
         try:
-            # No warmup → FSM is DEACTIVATED; emit anyway.
+            # No warmup → no pending request; emit anyway.
             stream.emit(0.9)
             for _ in range(5):
                 await asyncio.sleep(0)

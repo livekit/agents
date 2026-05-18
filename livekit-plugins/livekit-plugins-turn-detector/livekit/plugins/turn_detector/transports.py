@@ -77,7 +77,6 @@ class _AudioTurnDetectionTransport(Protocol):
     async def on_flush_sentinel(
         self, sentinel: _AudioTurnDetectorStream._FlushSentinel
     ) -> None: ...
-    def on_activate(self) -> None: ...
     def on_inference_stop(self, *, reason: str | None) -> None: ...
     def close_nowait(self) -> None: ...
     def transport_ready(self) -> bool: ...
@@ -189,7 +188,6 @@ class _CloudTransport:
         self._session_holder = http_session
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._num_retries = 0
-        self._held_probability: float | None = None
         # FIFO outbound queue so sync-scheduled sends (e.g. inference_start)
         # aren't overtaken by awaited audio chunks. Allocated per connection.
         self._send_ch: aio.Chan[ClientMessage] | None = None
@@ -211,21 +209,13 @@ class _CloudTransport:
         )
         self._send_message(msg)
         if stream is not None:
-            stream._active_window_min_client_created_at_ms = msg.created_at.ToMilliseconds()
+            stream._preemptive_window_min_client_created_at_ms = msg.created_at.ToMilliseconds()
 
     def on_inference_stop(self, *, reason: str | None) -> None:
         created_at = Timestamp()
         created_at.GetCurrentTime()
         msg = ClientMessage(inference_stop=InferenceStop(), created_at=created_at)
         self._send_message(msg)
-
-    def on_activate(self) -> None:
-        if self._held_probability is not None:
-            stream = self._stream_ref() if self._stream_ref is not None else None
-            prob = self._held_probability
-            self._held_probability = None
-            if stream is not None:
-                stream._emit_prediction(prob)
 
     async def on_audio_chunk(self, frame: rtc.AudioFrame) -> None:
         pcm_bytes = bytes(frame.data)
@@ -247,7 +237,6 @@ class _CloudTransport:
         # TODO(audio-eot): forward sentinel.keep_tail_ms once SessionFlush
         # supports it server-side (local backend already honors it).
         self._send_message(ClientMessage(session_flush=SessionFlush()))
-        self._held_probability = None
 
     def close_nowait(self) -> None:
         # Detach send_ch + ws ref; the actual ws.close() awaits in run()'s finally.
@@ -321,19 +310,19 @@ class _CloudTransport:
             case "eot_prediction":
                 prediction: EotPrediction = msg.eot_prediction
                 request_id = msg.request_id
-                if request_id != stream._active_request_id:
+                if request_id != stream._preemptive_request_id:
                     return
 
                 probability = prediction.probability
                 inference_stats = prediction.inference_stats
-                window_started_at_ms = stream._active_window_min_client_created_at_ms
+                window_started_at_ms = stream._preemptive_window_min_client_created_at_ms
                 request_sent_at_ms = inference_stats.latest_client_created_at.ToMilliseconds()
 
                 if window_started_at_ms is not None and request_sent_at_ms < window_started_at_ms:
-                    # Prediction belongs to a prior active-window — drop it.
+                    # Prediction belongs to a prior preemptive window — drop it.
                     return
 
-                fut = stream._active_request_fut
+                fut = stream._preemptive_request_fut
                 if fut is not None:
                     with contextlib.suppress(asyncio.InvalidStateError):
                         fut.set_result(probability)
@@ -348,9 +337,8 @@ class _CloudTransport:
                         probability, detection_delay=detection_delay_ms / 1000.0
                     )
                 else:
-                    # WARMING_UP: hold until on_activate replays it.
-                    self._held_probability = probability
-                stream._active_request_fut = asyncio.Future[float]()
+                    # Held until activate() releases it.
+                    stream._preemptive_prediction = probability
 
                 client_e2e_ms = inference_stats.client_e2e_latency.ToMilliseconds()
                 detector = self._detector_ref()
@@ -502,7 +490,6 @@ class _LocalTransport:
     def __init__(self, *, opts: TurnDetectorOptions) -> None:
         self._opts = opts
         self._buf: bytearray = bytearray()
-        self._held_probability: float | None = None
         self._stream_ref: weakref.ref[_AudioTurnDetectorStream] | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
 
@@ -517,7 +504,7 @@ class _LocalTransport:
         if stream is None:
             return
         snapshot = bytes(self._buf)
-        fut = stream._active_request_fut
+        fut = stream._preemptive_request_fut
         task = asyncio.create_task(self._run_predict(request_id, snapshot, fut))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
@@ -538,7 +525,7 @@ class _LocalTransport:
         except Exception:
             logger.exception("local audio EOT prediction failed")
 
-        if request_id != stream._active_request_id:
+        if request_id != stream._preemptive_request_id:
             return
 
         if fut is not None:
@@ -548,16 +535,7 @@ class _LocalTransport:
         if stream.is_active:
             stream._emit_prediction(prob)
         else:
-            self._held_probability = prob
-
-    def on_activate(self) -> None:
-        if self._held_probability is None:
-            return
-        stream = self._stream_ref() if self._stream_ref is not None else None
-        prob = self._held_probability
-        self._held_probability = None
-        if stream is not None:
-            stream._emit_prediction(prob)
+            stream._preemptive_prediction = prob
 
     async def on_audio_chunk(self, frame: rtc.AudioFrame) -> None:
         data = bytes(frame.data)
@@ -572,7 +550,6 @@ class _LocalTransport:
         keep_bytes = sentinel.keep_tail_ms * _BYTES_PER_SECOND // 1000
         if keep_bytes < len(self._buf):
             del self._buf[: len(self._buf) - keep_bytes]
-        self._held_probability = None
 
     def on_inference_stop(self, *, reason: str | None) -> None:
         # In-flight predicts run to completion; `_run_predict` drops stale results.

@@ -1,10 +1,13 @@
-"""Tests for the audio turn-detection FSM in ``_AudioTurnDetectorStream``.
+"""FSM tests for ``_AudioTurnDetectorStream``.
 
-Covers state transitions and hook dispatch, with regression coverage for the
-``WARMING_UP`` / ``set_active(False)`` interaction that previously allowed an
-in-flight warmup to leak a stale prediction into the next active window
-(``is_active`` only matched ``ACTIVE``, so the deactivation path no-op'd on
-WARMING_UP and the cached request id was never cleared).
+Covers the warmup → activate → deactivate / flush lifecycle and the
+regression cases:
+
+- ``deactivate()`` from a pre-active state (the historical ``set_active(False)``
+  during WARMING_UP) must stop the inference cleanly so a late prediction
+  for the cancelled request isn't replayed on the next activate.
+- ``predict_end_of_turn`` timeout must leave the FSM consistent so the next
+  ``warmup()`` can proceed.
 """
 
 from __future__ import annotations
@@ -16,23 +19,21 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 from livekit.agents.voice.turn import (
     TurnDetectorOptions,
     _AudioTurnDetectorStream,
-    _InferenceStatus,
+    _Status,
 )
 
 
 class _FakeBackend(_AudioTurnDetectorStream):
     """In-memory backend that records hook events for FSM testing.
 
-    Mirrors the cloud/local pattern: predictions arriving while the stream
-    is not ACTIVE are stashed in ``_held_probability`` and replayed by
-    ``_on_activate`` on the next activation; predictions whose request id
-    no longer matches ``_active_request_id`` are discarded as stale.
+    Predictions arriving while the stream is not ACTIVE write to the
+    stream's ``_preemptive_prediction`` field; predictions whose request
+    id no longer matches ``_preemptive_request_id`` are discarded.
     """
 
     def __init__(self, *, detector: Any, opts: TurnDetectorOptions) -> None:
         self.events: list[tuple[str, ...]] = []
         self.emitted: list[float] = []
-        self._held_probability: float | None = None
         super().__init__(detector=detector, opts=opts)
 
     def _transport_ready(self) -> bool:
@@ -44,13 +45,6 @@ class _FakeBackend(_AudioTurnDetectorStream):
     def _on_warmup_start(self, request_id: str) -> None:
         self.events.append(("warmup_start", request_id))
 
-    def _on_activate(self) -> None:
-        self.events.append(("activate",))
-        if self._held_probability is not None:
-            prob = self._held_probability
-            self._held_probability = None
-            self._emit_prediction(prob)
-
     def _on_inference_stop(self, *, reason: str | None) -> None:
         self.events.append(("inference_stop", reason or ""))
 
@@ -60,12 +54,12 @@ class _FakeBackend(_AudioTurnDetectorStream):
 
     def simulate_prediction(self, request_id: str, probability: float) -> None:
         """Mirror the transport recv-loop: drop stale, hold or emit otherwise."""
-        if request_id != self._active_request_id:
+        if request_id != self._preemptive_request_id:
             return
         if self.is_active:
             self._emit_prediction(probability)
         else:
-            self._held_probability = probability
+            self._preemptive_prediction = probability
 
 
 def _make_opts() -> TurnDetectorOptions:
@@ -85,14 +79,15 @@ def _make_stream() -> _FakeBackend:
 class TestAudioTurnDetectionFSM:
     """State transitions and hook dispatch for ``_AudioTurnDetectorStream``."""
 
-    async def test_warmup_transitions_to_warming_up(self) -> None:
+    async def test_warmup_starts_inference(self) -> None:
         s = _make_stream()
         try:
             fut = s.warmup()
-            assert s._status == _InferenceStatus.WARMING_UP
-            assert s._active_request_id is not None
+            assert s._status == _Status.IDLE
+            assert s.is_inference_running
+            assert s._preemptive_request_id is not None
             assert not fut.done()
-            assert s.events == [("warmup_start", s._active_request_id)]
+            assert s.events == [("warmup_start", s._preemptive_request_id)]
         finally:
             await s.aclose()
 
@@ -100,126 +95,141 @@ class TestAudioTurnDetectionFSM:
         s = _make_stream()
         try:
             s.warmup()
-            first_id = s._active_request_id
+            first_id = s._preemptive_request_id
             s.warmup()
-            assert s._active_request_id == first_id
+            assert s._preemptive_request_id == first_id
             assert sum(1 for e in s.events if e[0] == "warmup_start") == 1
         finally:
             await s.aclose()
 
-    async def test_set_active_true_activates_from_warming_up(self) -> None:
+    async def test_activate_from_warmed_up(self) -> None:
         s = _make_stream()
         try:
             s.warmup()
-            s.set_active(True, trigger="vad eos")
-            assert s._status == _InferenceStatus.ACTIVE
-            assert ("activate",) in s.events
+            s.activate(trigger="vad eos")
+            assert s._status == _Status.ACTIVE
+            assert s.is_inference_running
         finally:
             await s.aclose()
 
-    async def test_set_active_true_from_deactivated_auto_warmsup(self) -> None:
+    async def test_activate_without_warmup_auto_warmsup(self) -> None:
         s = _make_stream()
         try:
-            s.set_active(True, trigger="manual")
-            assert s._status == _InferenceStatus.ACTIVE
+            s.activate(trigger="manual")
+            assert s._status == _Status.ACTIVE
             warmups = [e for e in s.events if e[0] == "warmup_start"]
             assert len(warmups) == 1
         finally:
             await s.aclose()
 
-    async def test_set_active_false_during_warmup_stops_inference(self) -> None:
-        """Regression: ``set_active(False)`` previously no-op'd in WARMING_UP
-        because ``is_active`` only matched ACTIVE, leaving the warmup running."""
+    async def test_deactivate_during_preemptive_phase_stops_inference(self) -> None:
+        """Regression: previously ``set_active(False)`` no-op'd while warming
+        up because ``is_active`` only matched ACTIVE; the warmup kept running
+        and a late prediction got cached for replay on the next activate."""
         s = _make_stream()
         try:
             s.warmup()
-            s.set_active(False, trigger="vad sos")
+            s.deactivate(trigger="vad sos")
 
-            assert s._status == _InferenceStatus.DEACTIVATED
-            assert s._active_request_id is None
+            assert s._status == _Status.IDLE
+            assert s._preemptive_request_id is None
+            assert not s.is_inference_running
             assert ("inference_stop", "vad sos") in s.events
         finally:
             await s.aclose()
 
-    async def test_warmup_prediction_after_sos_is_not_replayed(self) -> None:
-        """Regression: a late prediction for the cancelled warmup request id
-        must be dropped, not stashed for replay by ``_on_activate`` on the
-        next activation."""
+    async def test_late_prediction_after_deactivate_not_replayed(self) -> None:
+        """Regression: a late prediction for the cancelled request id must be
+        dropped, not stashed for replay by the next activate()."""
         s = _make_stream()
         try:
             s.warmup()
-            cancelled_request_id = s._active_request_id
+            cancelled_request_id = s._preemptive_request_id
             assert cancelled_request_id is not None
 
-            s.set_active(False, trigger="vad sos")
+            s.deactivate(trigger="vad sos")
 
             s.simulate_prediction(cancelled_request_id, probability=0.9)
-            assert s._held_probability is None
+            assert s._preemptive_prediction is None
 
             s.warmup()
-            s.set_active(True, trigger="vad eos")
+            s.activate(trigger="vad eos")
             assert s.emitted == []
         finally:
             await s.aclose()
 
-    async def test_set_active_false_when_deactivated_is_noop(self) -> None:
+    async def test_deactivate_when_idle_is_noop(self) -> None:
         s = _make_stream()
         try:
-            s.set_active(False, trigger="vad sos")
+            s.deactivate(trigger="vad sos")
             assert s.events == []
-            assert s._status == _InferenceStatus.DEACTIVATED
+            assert s._status == _Status.IDLE
         finally:
             await s.aclose()
 
-    async def test_stop_warmup_resolves_future_with_zero(self) -> None:
+    async def test_deactivate_during_warmup_resolves_future_with_zero(self) -> None:
         s = _make_stream()
         try:
             fut = s.warmup()
-            s.stop_warmup()
+            s.deactivate()
             assert fut.done()
             assert fut.result() == 0.0
-            assert s._status == _InferenceStatus.DEACTIVATED
-            assert s._active_request_id is None
+            assert s._status == _Status.IDLE
+            assert s._preemptive_request_id is None
         finally:
             await s.aclose()
 
     async def test_predict_end_of_turn_timeout_leaves_fsm_consistent(self) -> None:
-        """Regression: timeout previously cleared ``_active_request_fut`` /
-        ``_active_request_id`` but left ``_status`` at ACTIVE, an inconsistent
-        state that the next ``warmup()`` could not recover from."""
+        """Regression: timeout previously cleared the fut/id but left status
+        at ACTIVE, an inconsistent state that the next ``warmup()`` couldn't
+        recover from."""
         s = _make_stream()
         try:
             prob = await s.predict_end_of_turn(timeout=0.01)
             assert prob == 1.0
-            assert s._status == _InferenceStatus.DEACTIVATED
-            assert s._active_request_id is None
-            assert s._active_request_fut is None
+            assert s._status == _Status.IDLE
+            assert s._preemptive_request_id is None
+            assert s._preemptive_request_fut is None
             assert ("inference_stop", "predict_end_of_turn timeout") in s.events
         finally:
             await s.aclose()
 
     async def test_predict_end_of_turn_timeout_allows_next_warmup(self) -> None:
-        """Regression: post-timeout FSM must allow a fresh warmup(). Previously
-        status stayed ACTIVE with ``_active_request_fut = None``, so the next
-        ``warmup()`` short-circuited the ``_warmup()`` call and raised
-        ``RuntimeError("eot detection warmup failed, no request future")``."""
         s = _make_stream()
         try:
             await s.predict_end_of_turn(timeout=0.01)
             fut = s.warmup()
-            assert s._status == _InferenceStatus.WARMING_UP
-            assert s._active_request_id is not None
+            assert s._preemptive_request_id is not None
             assert not fut.done()
         finally:
             await s.aclose()
 
-    async def test_flush_transitions_to_flushed_and_emits_stop(self) -> None:
+    async def test_flush_deactivates_and_emits_inference_stop(self) -> None:
         s = _make_stream()
         try:
             s.warmup()
-            s.set_active(True)
+            s.activate()
             s.flush(reason="turn committed")
-            assert s._status == _InferenceStatus.FLUSHED
+            assert s._status == _Status.IDLE
+            assert not s.is_inference_running
             assert ("inference_stop", "turn committed") in s.events
+        finally:
+            await s.aclose()
+
+    async def test_activate_releases_preemptive_prediction(self) -> None:
+        """Predictions arriving before activate are held and released on activate."""
+        s = _make_stream()
+        try:
+            s.warmup()
+            request_id = s._preemptive_request_id
+            assert request_id is not None
+            s.simulate_prediction(request_id, probability=0.7)
+            # Held — not emitted yet.
+            assert s.emitted == []
+            assert s._preemptive_prediction == 0.7
+
+            s.activate()
+            assert s.emitted == [0.7]
+            assert s._preemptive_prediction is None
         finally:
             await s.aclose()

@@ -7,7 +7,7 @@ deterministically. Covers:
 - Retry counter resets after a successful connect (so transient drops across
   the session lifetime don't accumulate toward ``max_retry``).
 - Caller-stamped ``created_at`` is preserved by the sender (so the stream's
-  ``_active_window_min_client_created_at_ms`` stays consistent with the
+  ``_preemptive_window_min_client_created_at_ms`` stays consistent with the
   timestamp the server actually receives).
 - All outbound messages are FIFO-ordered on the wire, even when control
   hooks fire synchronously between two awaited audio frames.
@@ -61,7 +61,7 @@ class TestCloudStreamSendOrdering:
 
     async def test_caller_stamped_created_at_is_preserved(self) -> None:
         """Regression: the sender's ``HasField`` gate keeps the timestamp
-        ``on_warmup_start`` cached into ``stream._active_window_min_client_created_at_ms``
+        ``on_warmup_start`` cached into ``stream._preemptive_window_min_client_created_at_ms``
         consistent with the timestamp the server actually receives."""
         stream, fake_ws, transport = make_stream(connect_script=[None])
         try:
@@ -74,7 +74,7 @@ class TestCloudStreamSendOrdering:
             ]
             assert len(inference_starts) == 1
             sent_ms = inference_starts[0].created_at.ToMilliseconds()
-            cached_ms = stream._active_window_min_client_created_at_ms
+            cached_ms = stream._preemptive_window_min_client_created_at_ms
             assert cached_ms == sent_ms
         finally:
             await stream.aclose()
@@ -108,7 +108,7 @@ class TestCloudStreamSendOrdering:
         try:
             await wait_until_connected(transport)
             stream.warmup()
-            stream.set_active(False, trigger="vad sos")
+            stream.deactivate(trigger="vad sos")
             await drain_send_queue(transport)
 
             kinds = [m.WhichOneof("message") for m in fake_ws.sent]

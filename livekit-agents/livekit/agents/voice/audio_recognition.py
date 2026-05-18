@@ -1107,14 +1107,6 @@ class AudioRecognition:
                     and not self._agent_speaking
                 ):
                     self._turn_detector_stream.warmup()
-                    logger.debug(
-                        "turn detection warmup started",
-                        extra={
-                            "raw_accumulated_silence": ev.raw_accumulated_silence,
-                            "speech_duration": ev.speech_duration,
-                            "request_id": self._turn_detector_stream.active_request_id,
-                        },
-                    )
 
         elif ev.type == vad.VADEventType.END_OF_SPEECH:
             with trace.use_span(self._ensure_user_turn_span()):
@@ -1253,6 +1245,16 @@ class AudioRecognition:
                                 trace_types.ATTR_EOU_LANGUAGE: self._last_language or "",
                                 trace_types.ATTR_EOU_SOURCE: trigger,
                             }
+                        )
+                        logger.debug(
+                            "eot prediction",
+                            extra={
+                                "probability": end_of_turn_probability,
+                                "unlikely_threshold": unlikely_threshold,
+                                "endpointing_delay": endpointing_delay,
+                                "language": self._last_language or "",
+                                "trigger": trigger,
+                            },
                         )
                         if (
                             latest_eou_prediction is not None
@@ -1484,11 +1486,11 @@ class AudioRecognition:
                     stream.push_audio(msg)
                 elif isinstance(msg, VADEvent):
                     if msg.type == VADEventType.START_OF_SPEECH:
-                        stream.set_active(False, trigger="vad sos")
+                        stream.deactivate(trigger="vad sos")
                     elif msg.type == VADEventType.END_OF_SPEECH:
-                        stream.set_active(True, trigger="vad eos")
+                        stream.activate(trigger="vad eos")
                 elif isinstance(msg, bool):
-                    stream.set_active(msg, trigger="manual")
+                    (stream.activate if msg else stream.deactivate)(trigger="manual")
                 elif isinstance(msg, _AudioTurnDetectorStream._FlushSentinel):
                     stream.flush(msg.reason)
 
@@ -1496,11 +1498,9 @@ class AudioRecognition:
 
         try:
             async for ev in stream:
-                # user is still speaking, skip the event
+                # Stale event: arrived after deactivate(); inference no longer
+                # running for this turn.
                 if not stream.is_inference_running:
-                    logger.debug(
-                        "received stale turn detection event, skipping", extra={"event": ev}
-                    )
                     continue
 
                 self._latest_eou_prediction = ev
@@ -1511,7 +1511,7 @@ class AudioRecognition:
                 )
                 threshold = await stream.unlikely_threshold(self._last_language)
                 if threshold is not None and ev.end_of_turn_probability >= threshold:
-                    stream.set_active(False, trigger="positive eou prediction")
+                    stream.deactivate(trigger="positive eou prediction")
         finally:
             await aio.cancel_and_wait(forward_task)
             await stream.aclose()

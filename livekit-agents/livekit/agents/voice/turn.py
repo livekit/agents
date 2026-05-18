@@ -30,11 +30,9 @@ DEFAULT_SAMPLE_RATE: int = 16000
 MIN_SILENCE_DURATION_MS = 200
 
 
-class _InferenceStatus(str, Enum):
-    DEACTIVATED = "deactivated"
-    WARMING_UP = "warming_up"
+class _Status(str, Enum):
+    IDLE = "idle"
     ACTIVE = "active"
-    FLUSHED = "flushed"
 
 
 @dataclass
@@ -125,10 +123,13 @@ class _AudioTurnDetectorStream(ABC):
         self._audio_ch = aio.Chan[rtc.AudioFrame | _AudioTurnDetectorStream._FlushSentinel]()
         self._event_ch = aio.Chan[TurnDetectionEvent]()
 
-        self._status: _InferenceStatus = _InferenceStatus.DEACTIVATED
-        self._active_request_id: str | None = None
-        self._active_request_fut: asyncio.Future[float] | None = None
-        self._active_window_min_client_created_at_ms: int | None = None
+        self._status: _Status = _Status.IDLE
+        self._preemptive_request_id: str | None = None
+        self._preemptive_request_fut: asyncio.Future[float] | None = None
+        # Prediction that arrived before activate(); released by activate()
+        # or discarded by deactivate() / flush().
+        self._preemptive_prediction: float | None = None
+        self._preemptive_window_min_client_created_at_ms: int | None = None
 
         self._tasks: set[asyncio.Task[None]] = set()
         self._task = asyncio.create_task(self._main_task())
@@ -159,83 +160,57 @@ class _AudioTurnDetectorStream(ABC):
 
     @property
     def is_active(self) -> bool:
-        return self._status == _InferenceStatus.ACTIVE
+        return self._status == _Status.ACTIVE
 
     @property
     def is_inference_running(self) -> bool:
-        return self._status in (_InferenceStatus.WARMING_UP, _InferenceStatus.ACTIVE)
+        return self._preemptive_request_id is not None
 
     @property
-    def active_request_id(self) -> str | None:
-        return self._active_request_id
+    def preemptive_request_id(self) -> str | None:
+        return self._preemptive_request_id
 
     def warmup(self) -> asyncio.Future[float]:
-        if not self.is_inference_running:
-            self._warmup()
-        if self._active_request_fut is None:
+        if self._preemptive_request_id is None:
+            request_id = utils.shortuuid("turn_request_")
+            self._preemptive_request_id = request_id
+            self._preemptive_request_fut = asyncio.Future[float]()
+            self._on_warmup_start(request_id)
+        if self._preemptive_request_fut is None:
             raise RuntimeError("eot detection warmup failed, no request future")
-        return self._active_request_fut
+        return self._preemptive_request_fut
 
-    def stop_warmup(self) -> None:
-        if not self.is_inference_running:
+    def activate(self, trigger: str | None = None) -> None:
+        if not self._transport_ready() or self._status == _Status.ACTIVE:
             return
-        self._status = _InferenceStatus.DEACTIVATED
-        self._active_request_id = None
-        self._active_window_min_client_created_at_ms = None
-        if self._active_request_fut is not None:
-            with contextlib.suppress(asyncio.InvalidStateError):
-                self._active_request_fut.set_result(0.0)
-            self._active_request_fut = None
+        if self._preemptive_request_id is None:
+            logger.warning("eot detector not warmed up before activation")
+            self.warmup()
+        self._status = _Status.ACTIVE
+        if self._preemptive_prediction is not None:
+            prob = self._preemptive_prediction
+            self._preemptive_prediction = None
+            self._emit_prediction(prob)
 
-    def _warmup(self) -> None:
-        if self._status == _InferenceStatus.WARMING_UP:
-            return
-        self._status = _InferenceStatus.WARMING_UP
-        request_id = utils.shortuuid("turn_request_")
-        self._active_request_id = request_id
-        self._active_request_fut = asyncio.Future[float]()
-        self._on_warmup_start(request_id)
-
-    def _activate(self) -> None:
-        if self._status == _InferenceStatus.ACTIVE:
-            return
-        self._status = _InferenceStatus.ACTIVE
-        self._on_activate()
-
-    def _deactivate(self) -> None:
-        if self._status == _InferenceStatus.DEACTIVATED:
-            return
-        self._active_request_id = None
-        self._active_window_min_client_created_at_ms = None
-        if self._active_request_fut is not None:
-            with contextlib.suppress(asyncio.InvalidStateError):
-                self._active_request_fut.set_result(0.0)
-            self._active_request_fut = None
-        self._status = _InferenceStatus.DEACTIVATED
-
-    def set_active(self, active: bool, trigger: str | None = None) -> None:
+    def deactivate(self, trigger: str | None = None) -> None:
         if not self._transport_ready():
             return
-
-        if active:
-            if not self.is_active:
-                if self._status != _InferenceStatus.WARMING_UP:
-                    logger.warning("eot detector not warmed up before activation")
-                    self.warmup()
-                self._activate()
+        if self._preemptive_request_id is None and self._status == _Status.IDLE:
             return
-
-        if not self.is_inference_running:
-            return
-
-        if self._status == _InferenceStatus.WARMING_UP:
-            self.stop_warmup()
-        else:
-            self._deactivate()
+        self._preemptive_request_id = None
+        self._preemptive_prediction = None
+        self._preemptive_window_min_client_created_at_ms = None
+        if self._preemptive_request_fut is not None:
+            with contextlib.suppress(asyncio.InvalidStateError):
+                self._preemptive_request_fut.set_result(0.0)
+            self._preemptive_request_fut = None
+        self._status = _Status.IDLE
         self._on_inference_stop(reason=trigger)
 
     def flush(self, reason: str | None = None, *, keep_tail_ms: int = 0) -> None:
-        if self._audio_ch.closed or self._status == _InferenceStatus.FLUSHED:
+        # Idempotent: a second call sends another sentinel that transports
+        # treat as a no-op (cloud: redundant session_flush; local: empty trim).
+        if self._audio_ch.closed:
             return
 
         for resampled_frame in self._flush_audio_resampler():
@@ -243,9 +218,7 @@ class _AudioTurnDetectorStream(ABC):
         self._audio_ch.send_nowait(
             _AudioTurnDetectorStream._FlushSentinel(reason=reason, keep_tail_ms=keep_tail_ms)
         )
-        self._deactivate()
-        self._status = _InferenceStatus.FLUSHED
-        self._on_inference_stop(reason=reason)
+        self.deactivate(trigger=reason)
 
     # endregion
 
@@ -321,7 +294,7 @@ class _AudioTurnDetectorStream(ABC):
         fut: asyncio.Future[float] | None = None
         try:
             fut = self.warmup()
-            self._activate()
+            self.activate()
             done, _ = await asyncio.wait([fut], timeout=timeout)
             if not done:
                 raise asyncio.TimeoutError()
@@ -331,16 +304,14 @@ class _AudioTurnDetectorStream(ABC):
                 "eot prediction timed out, returning a default value",
                 extra={
                     "timeout": timeout,
-                    "request_id": self._active_request_id,
+                    "request_id": self._preemptive_request_id,
                     "default": 1.0,
                 },
             )
             if fut is not None:
                 with contextlib.suppress(asyncio.InvalidStateError):
                     fut.set_result(1.0)
-            # Reset FSM so next warmup() doesn't see a stale ACTIVE status.
-            self._deactivate()
-            self._on_inference_stop(reason="predict_end_of_turn timeout")
+            self.deactivate(trigger="predict_end_of_turn timeout")
             self._on_predict_timeout()
             # Positive default so min_endpointing_delay applies.
             return 1.0
@@ -366,13 +337,14 @@ class _AudioTurnDetectorStream(ABC):
         self.end_input()
         await aio.cancel_and_wait(self._task)
         await aio.cancel_and_wait(*self._tasks)
-        if self._active_request_fut is not None:
+        if self._preemptive_request_fut is not None:
             with contextlib.suppress(asyncio.InvalidStateError):
-                self._active_request_fut.set_result(0.0)
-        self._active_request_fut = None
-        self._active_request_id = None
-        self._active_window_min_client_created_at_ms = None
-        self._status = _InferenceStatus.DEACTIVATED
+                self._preemptive_request_fut.set_result(0.0)
+        self._preemptive_request_fut = None
+        self._preemptive_request_id = None
+        self._preemptive_prediction = None
+        self._preemptive_window_min_client_created_at_ms = None
+        self._status = _Status.IDLE
 
     # endregion
 
@@ -410,9 +382,6 @@ class _AudioTurnDetectorStream(ABC):
     async def _on_flush_sentinel(  # noqa: B027
         self, sentinel: _AudioTurnDetectorStream._FlushSentinel
     ) -> None:
-        pass
-
-    def _on_activate(self) -> None:  # noqa: B027
         pass
 
     def _on_predict_timeout(self) -> None:  # noqa: B027

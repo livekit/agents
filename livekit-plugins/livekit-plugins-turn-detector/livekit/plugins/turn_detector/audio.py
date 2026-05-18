@@ -239,9 +239,6 @@ class _AudioTurnDetectorStreamImpl(_AudioTurnDetectorStream):
     def _on_inference_stop(self, *, reason: str | None) -> None:
         self._transport.on_inference_stop(reason=reason)
 
-    def _on_activate(self) -> None:
-        self._transport.on_activate()
-
     async def _on_audio_chunk(self, frame) -> None:  # type: ignore[no-untyped-def]
         await self._transport.on_audio_chunk(frame)
 
@@ -306,9 +303,9 @@ class _AudioTurnDetectorStreamImpl(_AudioTurnDetectorStream):
         self._emit_default_for_inflight()
 
     def _emit_default_for_inflight(self) -> None:
-        if self._active_request_fut is not None and not self._active_request_fut.done():
+        if self._preemptive_request_fut is not None and not self._preemptive_request_fut.done():
             with contextlib.suppress(asyncio.InvalidStateError):
-                self._active_request_fut.set_result(1.0)
+                self._preemptive_request_fut.set_result(1.0)
         self._emit_prediction(1.0)
 
     def _on_predict_timeout(self) -> None:
