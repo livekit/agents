@@ -342,6 +342,9 @@ class _StreamData:
     emitter: tts.AudioEmitter
     waiter: asyncio.Future[None]
     audio_ended: bool = False
+    # Client cancel and server abort produce identical `terminated` messages.
+    # This flag is how recv loop tells them apart.
+    cancel_sent: bool = False
 
 
 class _Connection:
@@ -441,6 +444,7 @@ class _Connection:
     def cancel_stream(self, stream_id: str) -> None:
         if self._closed or stream_id not in self._streams:
             return
+        self._streams[stream_id].cancel_sent = True
         self._input_queue.send_nowait(_CancelStream(stream_id=stream_id))
 
     async def _send_loop(self) -> None:
@@ -526,12 +530,17 @@ class _Connection:
                         extra={"stream_id": stream_id},
                     )
                     if not stream.waiter.done():
+                        code: int = resp.get("error_code", 500)
+                        # 408/429 are transient (timeout, rate limit); 5xx is
+                        # server-side. Other 4xx (400/401/402) is config/auth
+                        # and retrying won't help.
+                        retryable = code in (408, 429) or code >= 500
                         stream.waiter.set_exception(
                             APIStatusError(
                                 message=resp.get("error_message", "Unknown error"),
-                                status_code=resp.get("error_code", 500),
-                                request_id=None,
+                                status_code=code,
                                 body=f"stream_id={stream_id} {msg.data}",
+                                retryable=retryable,
                             )
                         )
                     continue
@@ -546,13 +555,29 @@ class _Connection:
                     # block (covers cancel/error paths too).
 
                 if resp.get("terminated"):
-                    if not stream.audio_ended:
-                        logger.debug(
-                            "Soniox TTS stream terminated without audio_end",
-                            extra={"stream_id": stream_id},
-                        )
+                    # Don't clobber an exception already raised on the error_code path.
                     if not stream.waiter.done():
-                        stream.waiter.set_result(None)
+                        # Server aborted on its own - no audio_end, no cancel from us.
+                        server_error = not stream.audio_ended and not stream.cancel_sent
+                        if server_error:
+                            # Raise so the framework retries, otherwise the
+                            # turn completes with no audio (silent muteness).
+                            logger.warning(
+                                "Soniox TTS stream terminated without audio_end",
+                                extra={"stream_id": stream_id},
+                            )
+                            stream.waiter.set_exception(
+                                APIStatusError(
+                                    message=(
+                                        "Soniox TTS stream terminated without producing audio"
+                                    ),
+                                    body=f"stream_id={stream_id}",
+                                    retryable=True,
+                                )
+                            )
+                        else:
+                            # Normal end: audio_end seen, or our own cancel landed.
+                            stream.waiter.set_result(None)
                     self._streams.pop(stream_id, None)
         except Exception as e:
             logger.warning("Soniox TTS recv loop error", exc_info=e)
