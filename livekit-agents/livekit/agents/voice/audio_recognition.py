@@ -875,12 +875,19 @@ class AudioRecognition:
             self._audio_interim_transcript = ""
             self._audio_preflight_transcript = ""
 
-            if not self._vad or self._last_speaking_time is None:
-                # vad disabled, use stt timestamp
-                # TODO: this would screw up transcription latency metrics
-                # but we'll live with it for now.
-                # the correct way is to ensure STT fires SpeechEventType.END_OF_SPEECH
-                # and using that timestamp for _last_speaking_time
+            if self._last_speaking_time is None or (
+                not self._vad and self._turn_detection_mode != "stt"
+            ):
+                # No external VAD and the STT plugin is not providing speech
+                # boundaries (turn_detection != "stt"); fall back to the STT
+                # transcript-arrival timestamp.
+                #
+                # When turn_detection_mode == "stt", the STT plugin's
+                # SpeechEventType.END_OF_SPEECH event has already populated
+                # _last_speaking_time with the actual end-of-speech moment.
+                # Overwriting it here with `time.time()` would zero out
+                # transcription_delay / end_of_utterance_delay metrics, so we
+                # preserve the STT-provided timestamp.
                 self._last_speaking_time = time.time()
 
             if self._vad_base_turn_detection or self._user_turn_committed:
@@ -932,8 +939,14 @@ class AudioRecognition:
             self._audio_preflight_transcript = (self._audio_transcript + " " + transcript).lstrip()
             self._audio_interim_transcript = transcript
 
-            if not self._vad or self._last_speaking_time is None:
-                # vad disabled, use stt timestamp
+            if self._last_speaking_time is None or (
+                not self._vad and self._turn_detection_mode != "stt"
+            ):
+                # vad disabled, use stt timestamp.
+                # Same rationale as in the FINAL_TRANSCRIPT handler above:
+                # when turn_detection_mode == "stt", the STT plugin's
+                # END_OF_SPEECH timestamp is preserved instead of being
+                # overwritten by the transcript arrival time.
                 self._last_speaking_time = time.time()
 
             if self._turn_detection_mode != "manual" or self._user_turn_committed:
