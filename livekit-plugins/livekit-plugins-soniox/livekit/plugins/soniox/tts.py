@@ -433,6 +433,9 @@ class _Connection:
     def send_text(self, stream_id: str, text: str, *, text_end: bool = False) -> None:
         if self._closed or stream_id not in self._streams:
             return
+        # Skip sending empty text to avoid getting bogus audio back.
+        if not text and not text_end:
+            return
         self._input_queue.send_nowait(_SendText(stream_id=stream_id, text=text, text_end=text_end))
 
     def cancel_stream(self, stream_id: str) -> None:
@@ -460,15 +463,12 @@ class _Connection:
                         config["bitrate"] = msg.opts.bitrate
                     await self._ws.send_str(json.dumps(config))
                 elif isinstance(msg, _SendText):
-                    await self._ws.send_str(
-                        json.dumps(
-                            {
-                                "stream_id": msg.stream_id,
-                                "text": msg.text,
-                                "text_end": msg.text_end,
-                            }
-                        )
-                    )
+                    payload: dict[str, Any] = {"stream_id": msg.stream_id}
+                    if msg.text:
+                        payload["text"] = msg.text
+                    if msg.text_end:
+                        payload["text_end"] = True
+                    await self._ws.send_str(json.dumps(payload))
                 elif isinstance(msg, _CancelStream):
                     await self._ws.send_str(
                         json.dumps({"stream_id": msg.stream_id, "cancel": True})
