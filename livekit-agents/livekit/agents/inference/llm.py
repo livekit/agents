@@ -265,7 +265,7 @@ class LLM(llm.LLM):
         if is_given(model):
             self._opts.model = model
         if is_given(extra_kwargs):
-            self._opts.extra_kwargs.update(extra_kwargs)  # type: ignore[arg-type]
+            cast(dict[str, Any], self._opts.extra_kwargs).update(extra_kwargs)
 
     @property
     def model(self) -> str:
