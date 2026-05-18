@@ -275,6 +275,6 @@ class AvatarSession(BaseAvatarSession):
             )
 
     async def aclose(self) -> None:
-        await super().aclose()
         if end_session_task := self._ensure_end_session_task():
             await asyncio.shield(end_session_task)
+        await super().aclose()
