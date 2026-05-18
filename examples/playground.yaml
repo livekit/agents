@@ -5,7 +5,8 @@
 #   - the LIVEKIT_AGENT_NAME injected at deploy time
 #   - the dispatch target in the jukebox's token endpoint
 #
-# Pixel art icons use `1` for the accent color and `0` for transparent.
+# Pixel art icons: `1` = accent color, `2` = lighter accent (highlight
+# / secondary detail), `0` = transparent.
 
 version: 1
 
@@ -28,17 +29,21 @@ examples:
     order: 10
     deploy: true
     icon:
-      # Heart — universal medical/health symbol, reads instantly at 8x8.
-      size: 8
+      # Heart with a top-left specular highlight on the left lobe.
+      size: 12
       pixels: |
-        01100110
-        11111111
-        11111111
-        11111111
-        01111110
-        00111100
-        00011000
-        00000000
+        000000000000
+        002100011000
+        022210111100
+        211111111110
+        111111111110
+        111111111110
+        011111111100
+        001111111000
+        000111110000
+        000011100000
+        000001000000
+        000000000000
 
   survey:
     title: Survey
@@ -52,22 +57,25 @@ examples:
     order: 20
     deploy: true
     icon:
-      # Speech bubble — survey is a voice interview, so the bubble
-      # reads more directly than a paper clipboard.
-      size: 8
+      # Speech bubble outline with two highlight "text lines" inside.
+      size: 12
       pixels: |
-        01111100
-        11111110
-        11111110
-        11111110
-        01111100
-        00011000
-        00001000
-        00000000
+        000000000000
+        001111111100
+        010000000010
+        010000000010
+        010222200010
+        010000000010
+        010220000010
+        010000000010
+        010111111100
+        011000000000
+        010000000000
+        000000000000
 
   frontdesk:
     title: Front Desk
-    description: A receptionist agent wired up to a live calendar — answers questions about availability, books appointments in real time, and confirms back to the caller.
+    description: A receptionist agent wired up to a live calendar. Answers questions about availability, books appointments in real time, and confirms back to the caller.
     # brand palette — indigo-500
     accent: "#1F44F9"
     agent_id: CA_9TqkLsnwhjmE
@@ -77,18 +85,21 @@ examples:
     order: 30
     deploy: true
     icon:
-      # Reception bell — handle, pear-shaped body that flares out at
-      # the bottom, gap, then tray.
-      size: 8
+      # Calendar with the top header strip in the highlight tone.
+      size: 12
       pixels: |
-        00011000
-        00111100
-        00111100
-        01111110
-        01111110
-        11111111
-        00000000
-        11111111
+        000000000000
+        000100010000
+        001111111000
+        012222222100
+        011111111100
+        010000000100
+        010000000100
+        010000000100
+        010000000100
+        010000000100
+        001111111000
+        000000000000
 
   drive-thru:
     title: Drive Thru
@@ -102,29 +113,32 @@ examples:
     order: 40
     deploy: true
     icon:
-      # Burger — sesame bun on top, lettuce, patty, bottom bun.
-      size: 8
+      # Side-view car: cabin pillars in accent, windshield + side
+      # windows in the lighter tone, body and wheels in accent.
+      size: 12
       pixels: |
-        00111100
-        01111110
-        11011011
-        00111100
-        11111111
-        00111100
-        01111110
-        00000000
+        000000000000
+        000000000000
+        001111110000
+        012221221000
+        012222111110
+        100000000001
+        101110011101
+        011011110110
+        001110011100
+        000000000000
+        000000000000
+        000000000000
 
   inference:
     title: Inference
     description: A voice agent powered end-to-end by LiveKit Inference. Pick the STT, LLM, and TTS provider live to hear how each one feels in the same conversation.
     # brand palette — purple-500
     accent: "#9B5CFF"
-    agent_id: ""
+    agent_id: CA_inFeReN5wT9q
     entry: agent.py
     github: "https://github.com/livekit/agents/tree/main/examples/inference"
     tags: [inference]
-    order: 50
-    deploy: false
     icon:
       # Three stacked bars: the STT → LLM → TTS pipeline, with the
       # middle bar in the highlight tone.
