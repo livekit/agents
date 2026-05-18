@@ -195,7 +195,7 @@ class FrontDeskAgent(Agent):
             self._slots_map[slot.unique_hash] = slot
 
         if ctx.userdata.ui is not None:
-            ctx.userdata.ui.slots_listed(slots, now, self.tz)
+            ctx.userdata.ui.slots_listed(slots, now, self.tz, range_days)
 
         return "\n".join(lines) or "No slots available at the moment."
 

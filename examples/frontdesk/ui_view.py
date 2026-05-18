@@ -55,21 +55,28 @@ class UIView:
         slots: list[AvailableSlot],
         now: datetime.datetime,
         tz: ZoneInfo,
+        range_days: int,
     ) -> None:
-        """Render the available-slots list. Empty input hides the card."""
+        """Render the search range + slot count. Empty input hides the card."""
         if not slots:
             self._push("")
             return
-        # The card title in playground.yaml is already "Schedule", so
-        # the body goes straight into the list without a heading.
-        lines: list[str] = []
-        for slot in slots:
-            local = slot.start_time.astimezone(tz)
-            rel = _relative(local, now)
-            lines.append(
-                f"- **{local.strftime('%a, %b %d')}** at [[{local:%H:%M}]] · *{rel}*"
-            )
-        self._push("\n".join(lines))
+        # The agent's tool reply already walks the LLM through specific
+        # options; the card just summarises the window it searched so
+        # the caller has a visual anchor without an overwhelming list.
+        if range_days <= 14:
+            window = "Next 2 weeks"
+        elif range_days <= 30:
+            window = "Next month"
+        else:
+            window = f"Next {range_days // 30} months"
+        last = max(s.start_time for s in slots).astimezone(tz)
+        span = f"{now.strftime('%b %d')} – {last.strftime('%b %d')}"
+        plural = "slot" if len(slots) == 1 else "slots"
+        self._push(
+            f"**{window}**\n\n"
+            f"[[{len(slots)}]] available {plural} · *{span}*"
+        )
 
     def appointment_booked(self, slot: AvailableSlot, tz: ZoneInfo) -> None:
         local = slot.start_time.astimezone(tz)
