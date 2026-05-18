@@ -42,6 +42,11 @@ class InferenceAgent(Agent):
 server = AgentServer()
 
 
+def _pretty(model: str) -> str:
+    """`deepgram/nova-3` → `nova-3` for a cleaner spoken form."""
+    return model.split("/", 1)[-1] if "/" in model else model
+
+
 @server.rtc_session()
 async def entrypoint(ctx: JobContext) -> None:
     session = AgentSession(
@@ -58,27 +63,44 @@ async def entrypoint(ctx: JobContext) -> None:
         except Exception:
             return fallback
 
+    def announce(modality: str, model: str) -> None:
+        # Fire-and-forget: say() returns a SpeechHandle that queues
+        # behind the current turn (or plays immediately if idle). For
+        # TTS swaps the announcement is voiced by the new model, which
+        # doubles as an audible confirmation that the swap took.
+        session.say(
+            f"Switched to {_pretty(model)} for {modality}.",
+            allow_interruptions=True,
+        )
+
     @ctx.room.local_participant.register_rpc_method("set_stt_model")
     async def set_stt_model(data: RpcInvocationData) -> str:
         model = parse_value(data.payload, DEFAULT_STT)
+        if isinstance(session.stt, inference.STT) and session.stt.model == model:
+            return ""
         logger.info("switching STT → %s", model)
         session.stt.update_options(model=model)
+        announce("speech-to-text", model)
         return ""
 
     @ctx.room.local_participant.register_rpc_method("set_llm_model")
     async def set_llm_model(data: RpcInvocationData) -> str:
         model = parse_value(data.payload, DEFAULT_LLM)
+        if isinstance(session.llm, inference.LLM) and session.llm.model == model:
+            return ""
         logger.info("switching LLM → %s", model)
-        # inference.LLM has no update_options; _opts.model is read on
-        # every chat() call so this swaps in for the next reply.
-        session.llm._opts.model = model
+        session.llm.update_options(model=model)
+        announce("the language model", model)
         return ""
 
     @ctx.room.local_participant.register_rpc_method("set_tts_model")
     async def set_tts_model(data: RpcInvocationData) -> str:
         model = parse_value(data.payload, DEFAULT_TTS)
+        if isinstance(session.tts, inference.TTS) and session.tts.model == model:
+            return ""
         logger.info("switching TTS → %s", model)
         session.tts.update_options(model=model)
+        announce("text-to-speech", model)
         return ""
 
     await session.start(agent=InferenceAgent(), room=ctx.room)
