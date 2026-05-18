@@ -77,6 +77,10 @@ jobs:
           # Register the agent under a deterministic name so the playground
           # can dispatch to it explicitly. Matches the slug in playground.yaml.
           echo "LIVEKIT_AGENT_NAME=${{ matrix.example }}" >> .env.deploy
+          # Tell the shared Dockerfile which file to launch — examples have
+          # different entry script names (agent.py vs <slug>_agent.py).
+          entry=$(python3 -c "import yaml; print(yaml.safe_load(open('../playground.yaml'))['examples']['${{ matrix.example }}']['entry'])")
+          echo "LIVEKIT_AGENT_ENTRY=$entry" >> .env.deploy
           case "${{ matrix.example }}" in
             healthcare)
               keys="OPENAI_API_KEY"
