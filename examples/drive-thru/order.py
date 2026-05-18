@@ -3,8 +3,9 @@ from __future__ import annotations
 import logging
 import secrets
 import string
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Annotated, Awaitable, Callable, Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 

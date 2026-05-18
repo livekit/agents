@@ -5,8 +5,9 @@ import datetime
 import logging
 import os
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable, Literal
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
