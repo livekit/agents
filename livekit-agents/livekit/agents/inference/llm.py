@@ -260,12 +260,13 @@ class LLM(llm.LLM):
 
         Each option is read on the next ``chat()`` call, so a swap
         takes effect on the agent's next turn without recreating the
-        LLM.
+        LLM. ``extra_kwargs`` *replaces* the persistent kwargs dict
+        rather than merging — pass ``{}`` to clear it.
         """
         if is_given(model):
             self._opts.model = model
         if is_given(extra_kwargs):
-            cast(dict[str, Any], self._opts.extra_kwargs).update(extra_kwargs)
+            self._opts.extra_kwargs = dict(extra_kwargs)
 
     @property
     def model(self) -> str:
