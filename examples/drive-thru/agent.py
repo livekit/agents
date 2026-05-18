@@ -380,9 +380,11 @@ class DriveThruAgent(Agent):
         return "\n".join(item.model_dump_json() for item in items)
 
 
-def _name_for(items: list[MenuItem], id: str, size=None) -> str:
+FA_CART = ""  # FontAwesome solid: shopping-cart
+
+def _find(items: list[MenuItem], id: str, size=None) -> MenuItem | None:
     found = find_items_by_id(items, id, size)
-    return found[0].name if found else id
+    return found[0] if found else None
 
 
 def format_cart(userdata: Userdata) -> str:
@@ -393,28 +395,44 @@ def format_cart(userdata: Userdata) -> str:
     """
     if not userdata.order.items:
         return ""
-    lines: list[str] = []
+    lines: list[str] = [f"# {FA_CART} Order", ""]
+    total = 0.0
     for item in userdata.order.items.values():
         if isinstance(item, OrderedCombo):
-            meal = _name_for(userdata.combo_items, item.meal_id)
-            drink = _name_for(userdata.drink_items, item.drink_id, item.drink_size)
-            parts = [f"fries {item.fries_size}", drink]
+            meal = _find(userdata.combo_items, item.meal_id)
+            drink = _find(userdata.drink_items, item.drink_id, item.drink_size)
+            extras = [f"fries {item.fries_size}"]
+            if drink:
+                extras.append(f"{drink.name} ({item.drink_size})")
             if item.sauce_id:
-                parts.append(_name_for(userdata.sauce_items, item.sauce_id))
-            lines.append(f"- **{meal}** — {', '.join(parts)}")
+                sauce = _find(userdata.sauce_items, item.sauce_id)
+                if sauce:
+                    extras.append(sauce.name)
+            name = meal.name if meal else item.meal_id
+            price = meal.price if meal else 0.0
         elif isinstance(item, OrderedHappy):
-            meal = _name_for(userdata.happy_items, item.meal_id)
-            drink = _name_for(userdata.drink_items, item.drink_id, item.drink_size)
-            parts = [drink]
+            meal = _find(userdata.happy_items, item.meal_id)
+            drink = _find(userdata.drink_items, item.drink_id, item.drink_size)
+            extras = []
+            if drink:
+                extras.append(f"{drink.name} ({item.drink_size})")
             if item.sauce_id:
-                parts.append(_name_for(userdata.sauce_items, item.sauce_id))
-            lines.append(f"- **{meal}** — {', '.join(parts)}")
-        elif isinstance(item, OrderedRegular):
-            name = _name_for(userdata.regular_items, item.item_id, item.size)
-            lines.append(f"- **{name}**")
-    n = len(userdata.order.items)
+                sauce = _find(userdata.sauce_items, item.sauce_id)
+                if sauce:
+                    extras.append(sauce.name)
+            name = meal.name if meal else item.meal_id
+            price = meal.price if meal else 0.0
+        else:
+            assert isinstance(item, OrderedRegular)
+            reg = _find(userdata.regular_items, item.item_id, item.size)
+            name = reg.name if reg else item.item_id
+            price = reg.price if reg else 0.0
+            extras = [f"size {item.size}"] if item.size else []
+        total += price
+        extras_str = f" · {', '.join(extras)}" if extras else ""
+        lines.append(f"- **{name}**{extras_str} · [[${price:.2f}]]")
     lines.append("")
-    lines.append(f"*{n} item{'s' if n != 1 else ''}*")
+    lines.append(f"**Total · [[${total:.2f}]]**")
     return "\n".join(lines)
 
 

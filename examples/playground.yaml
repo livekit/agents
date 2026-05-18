@@ -100,6 +100,9 @@ examples:
         010000000100
         001111111000
         000000000000
+    views:
+      - rpc: set_appointment_status
+        title: Schedule
 
   drive-thru:
     title: Drive Thru
