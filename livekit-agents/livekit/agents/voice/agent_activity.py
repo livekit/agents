@@ -691,10 +691,6 @@ class AgentActivity(RecognitionHooks):
         if self.mcp_servers:
             from ..llm.mcp import MCPToolset
 
-            logger.warning(
-                "passing MCP servers to AgentSession or Agent is deprecated "
-                "and will be removed in a future version. Use `MCPToolset` instead."
-            )
             self._mcp_tools = [
                 MCPToolset(id=utils.shortuuid("mcp_toolset_"), mcp_server=server)
                 for server in self.mcp_servers
