@@ -65,8 +65,8 @@ class TurnDetectionMode(str, Enum):
     The `TurnDetectionMode.FIXED` mode uses a fixed amount of silence, as determined by the
     `end_of_utterance_silence_trigger` parameter.
 
-    The default is `TurnDetectionMode.ADAPTIVE` which uses voice activity detection to determine
-    end of speech.
+    The default is `TurnDetectionMode.EXTERNAL` which delegates endpointing to an external VAD
+    (Silero is auto-loaded if no `vad` is provided).
     """
 
     EXTERNAL = "external"
@@ -85,7 +85,7 @@ class STTOptions:
     domain: str | None = None
 
     # Endpointing mode
-    turn_detection_mode: TurnDetectionMode = TurnDetectionMode.ADAPTIVE
+    turn_detection_mode: TurnDetectionMode = TurnDetectionMode.EXTERNAL
 
     # Output formatting
     speaker_active_format: str | None = None
@@ -125,7 +125,7 @@ class STT(stt.STT):
         *,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
-        turn_detection_mode: TurnDetectionMode = TurnDetectionMode.ADAPTIVE,
+        turn_detection_mode: TurnDetectionMode = TurnDetectionMode.EXTERNAL,
         operating_point: NotGivenOr[OperatingPoint] = NOT_GIVEN,
         domain: NotGivenOr[str] = NOT_GIVEN,
         language: str = "en",
@@ -166,7 +166,7 @@ class STT(stt.STT):
                 `ADAPTIVE` for simple VAD or `SMART_TURN` for ML-based endpointing.
                 `FIXED` uses a fixed amount of silence, as determined by the
                 `end_of_utterance_silence_trigger` parameter.
-                Defaults to `TurnDetectionMode.ADAPTIVE`.
+                Defaults to `TurnDetectionMode.EXTERNAL`.
 
             operating_point: Operating point for transcription accuracy vs. latency
                 tradeoff. Overrides preset if provided. Optional.
