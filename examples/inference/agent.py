@@ -19,9 +19,6 @@ logger.setLevel(logging.INFO)
 
 load_dotenv()
 
-# Match the defaults declared in examples/playground.yaml so the agent
-# boots with the same models the playground initially shows in the
-# control pills.
 DEFAULT_STT = "deepgram/nova-3"
 DEFAULT_LLM = "openai/gpt-4o-mini"
 DEFAULT_TTS = "cartesia/sonic-2"
@@ -33,10 +30,6 @@ INSTRUCTIONS = (
     "picks new ones in the playground."
 )
 
-# Pronunciation guide for the model-switch announcements. The LLM is
-# asked to acknowledge the swap in one short, natural sentence and to
-# pronounce the model id like a brand name (e.g. "Deepgram Nova 3"
-# instead of "deepgram-slash-nova-dash-three").
 _SWAP_PROMPT = (
     "The user just switched the {modality} model to '{model}'. "
     "Acknowledge it in one short, natural sentence — say the model's "
@@ -89,7 +82,6 @@ async def entrypoint(ctx: JobContext) -> None:
             return ""
         logger.info("switching LLM → %s", model)
         session.llm.update_options(model=model)
-        # The new LLM voices its own arrival, which is a fitting demo.
         session.generate_reply(
             instructions=_SWAP_PROMPT.format(modality="language", model=model)
         )
@@ -102,7 +94,6 @@ async def entrypoint(ctx: JobContext) -> None:
             return ""
         logger.info("switching TTS → %s", model)
         session.tts.update_options(model=model)
-        # Voiced by the new TTS — doubles as an audible swap confirmation.
         session.generate_reply(
             instructions=_SWAP_PROMPT.format(modality="text-to-speech", model=model)
         )
