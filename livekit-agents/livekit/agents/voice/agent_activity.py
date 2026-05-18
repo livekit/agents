@@ -3338,11 +3338,6 @@ class AgentActivity(RecognitionHooks):
             if msg_interrupted and entry.synchronized_transcript is not None:
                 forwarded_text = entry.synchronized_transcript
 
-            if not forwarded_text:
-                continue
-
-            trace_text_parts.append(forwarded_text)
-
             if msg_interrupted and self.llm.capabilities.message_truncation:
                 msg_modalities = await entry.msg.modalities
                 self._rt_session.truncate(
@@ -3352,6 +3347,10 @@ class AgentActivity(RecognitionHooks):
                     audio_transcript=forwarded_text,
                 )
 
+            if not forwarded_text:
+                continue
+
+            trace_text_parts.append(forwarded_text)
             chat_msg = _create_assistant_message(
                 message_id=entry.msg.message_id,
                 forwarded_text=forwarded_text,
