@@ -380,8 +380,6 @@ class DriveThruAgent(Agent):
         return "\n".join(item.model_dump_json() for item in items)
 
 
-FA_CART = "\uf07a"  # FontAwesome solid: shopping-cart
-
 def _find(items: list[MenuItem], id: str, size=None) -> MenuItem | None:
     found = find_items_by_id(items, id, size)
     return found[0] if found else None
@@ -391,11 +389,13 @@ def format_cart(userdata: Userdata) -> str:
     """Render the current order as markdown for the playground card.
 
     Returns an empty string when the cart is empty, which signals the
-    UI to hide the card.
+    UI to hide the card. The card itself already shows "Current order"
+    in its title bar, so the body skips a heading and goes straight to
+    the line items.
     """
     if not userdata.order.items:
         return ""
-    lines: list[str] = [f"# {FA_CART} Order", ""]
+    lines: list[str] = []
     total = 0.0
     for item in userdata.order.items.values():
         if isinstance(item, OrderedCombo):
@@ -500,9 +500,16 @@ async def drive_thru_agent(ctx: JobContext) -> None:
     )
 
     # Push the cart as markdown to the playground's cart view
-    # whenever it changes. Fire-and-forget — the function tool that
-    # mutated the order shouldn't be blocked on round-tripping the
-    # RPC, and slow/dropped peers shouldn't stall each other.
+    # whenever it changes. Coalesced + serialized: rapid changes
+    # (e.g. batch-remove that pops items one at a time) collapse
+    # into a single trailing push of the *latest* cart state, so
+    # an empty-cart payload can't get reordered behind a stale
+    # mid-state push. Fire-and-forget at the call site — the
+    # function tool that mutated the order shouldn't block on the
+    # RPC round-trip.
+    push_pending = False
+    push_running = False
+
     async def _push_to(identity: str, payload: str) -> None:
         try:
             await ctx.room.local_participant.perform_rpc(
@@ -513,10 +520,30 @@ async def drive_thru_agent(ctx: JobContext) -> None:
         except Exception:
             logger.exception("cart push to %s failed", identity)
 
+    async def _push_runner() -> None:
+        nonlocal push_pending, push_running
+        push_running = True
+        try:
+            while push_pending:
+                push_pending = False
+                payload = format_cart(userdata)
+                logger.info("push_cart: %d chars", len(payload))
+                peers = list(ctx.room.remote_participants.values())
+                if not peers:
+                    continue
+                await asyncio.gather(
+                    *(_push_to(p.identity, payload) for p in peers),
+                    return_exceptions=True,
+                )
+        finally:
+            push_running = False
+
     async def push_cart() -> None:
-        payload = format_cart(userdata)
-        for p in list(ctx.room.remote_participants.values()):
-            asyncio.create_task(_push_to(p.identity, payload))
+        nonlocal push_pending
+        push_pending = True
+        if push_running:
+            return
+        asyncio.create_task(_push_runner())
 
     userdata.order.on_change = push_cart
 
