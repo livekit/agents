@@ -325,7 +325,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             await input_sent_event.wait()
             while True:
-                msg = await ws.receive()
+                msg = await ws.receive(timeout=self._conn_options.timeout)
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSED,

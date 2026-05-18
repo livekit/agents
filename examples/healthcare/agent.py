@@ -700,7 +700,7 @@ class HealthcareAgent(Agent):
             pdf_path = os.path.join(os.path.dirname(__file__), "mock_checkup_report.pdf")
             if not os.path.isfile(pdf_path):
                 logger.warning(
-                    "To try out this task, 'mock_checkup_report.pdf' must be in the same directory as healthcare_agent.py."
+                    "To try out this task, 'mock_checkup_report.pdf' must be in the same directory as agent.py."
                 )
                 return "No report was found"
             await self.session.generate_reply(
