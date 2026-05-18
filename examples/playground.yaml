@@ -23,7 +23,7 @@ examples:
     # LiveKit brand palette (raw-colors.ts) — green-500
     accent: "#009E4F"
     agent_id: CA_uFGnwowV2PMS
-    entry: healthcare_agent.py
+    entry: agent.py
     github: "https://github.com/livekit/agents/tree/main/examples/healthcare"
     tags: [multi-agent, scheduling]
     icon:
@@ -49,7 +49,7 @@ examples:
     # brand palette — amber-500
     accent: "#EF8B01"
     agent_id: CA_APDyCSXwMUNS
-    entry: survey_agent.py
+    entry: agent.py
     github: "https://github.com/livekit/agents/tree/main/examples/survey"
     tags: [multi-agent]
     icon:
@@ -75,7 +75,7 @@ examples:
     # brand palette — indigo-500
     accent: "#1F44F9"
     agent_id: CA_9TqkLsnwhjmE
-    entry: frontdesk_agent.py
+    entry: agent.py
     github: "https://github.com/livekit/agents/tree/main/examples/frontdesk"
     tags: [tools, scheduling]
     icon:

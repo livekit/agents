@@ -1,15 +1,13 @@
 # syntax=docker/dockerfile:1
 #
 # Shared Dockerfile for every example under examples/. Byte-identical
-# across the directory tree — the per-example entry script is supplied
-# at deploy time via the LIVEKIT_AGENT_ENTRY env var (the deploy CI
-# pulls it from playground.yaml's `entry:` field).
+# across the tree — each example's entry script is named `agent.py`,
+# so there's no per-example variation left.
 ARG PYTHON_VERSION=3.13
 FROM python:${PYTHON_VERSION}-slim AS base
 
 ENV PYTHONUNBUFFERED=1
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
-ENV LIVEKIT_AGENT_ENTRY=agent.py
 
 ARG UID=10001
 RUN adduser \
@@ -38,4 +36,4 @@ RUN python -m livekit.agents download-files
 
 COPY . .
 
-CMD ["sh", "-c", "exec python \"${LIVEKIT_AGENT_ENTRY}\" start"]
+CMD ["python", "agent.py", "start"]
