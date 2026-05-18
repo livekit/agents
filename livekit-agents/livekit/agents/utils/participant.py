@@ -153,6 +153,7 @@ async def wait_for_track_publication(
     identity: str | None = None,
     kind: list[rtc.TrackKind.ValueType] | rtc.TrackKind.ValueType | None = None,
     include_local: Literal[False] = False,
+    wait_for_subscription: bool = False,
 ) -> rtc.RemoteTrackPublication: ...
 
 
@@ -163,6 +164,7 @@ async def wait_for_track_publication(
     identity: str | None = None,
     kind: list[rtc.TrackKind.ValueType] | rtc.TrackKind.ValueType | None = None,
     include_local: Literal[True],
+    wait_for_subscription: bool = False,
 ) -> rtc.TrackPublication: ...
 
 
@@ -172,12 +174,15 @@ async def wait_for_track_publication(
     identity: str | None = None,
     kind: list[rtc.TrackKind.ValueType] | rtc.TrackKind.ValueType | None = None,
     include_local: bool = False,
+    wait_for_subscription: bool = False,
 ) -> rtc.TrackPublication:
     """Returns a track publication matching the given identity and kind.
     If identity is None, the first track matching the kind will be returned.
-    If the track has already been published, the function will return immediately.
+    If a matching track is already published (and subscribed when
+    ``wait_for_subscription`` is set), the function returns immediately.
 
-    When `include_local` is True, tracks published by the local participant are also considered.
+    When `include_local` is True, tracks published by the local participant are also considered;
+    local publications resolve on publish and ignore ``wait_for_subscription``.
     """
     if not room.isconnected():
         raise RuntimeError("room is not connected")
@@ -193,13 +198,29 @@ async def wait_for_track_publication(
 
         return k == kind
 
+    def _matches(
+        publication: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant
+    ) -> bool:
+        if not (identity is None or participant.identity == identity):
+            return False
+        if not kind_match(publication.kind):
+            return False
+        if wait_for_subscription and not (publication.subscribed and publication.track is not None):
+            return False
+        return True
+
     def _on_track_published(
         publication: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant
     ) -> None:
-        if fut.done():
-            return
+        if not fut.done() and _matches(publication, participant):
+            fut.set_result(publication)
 
-        if (identity is None or participant.identity == identity) and kind_match(publication.kind):
+    def _on_track_subscribed(
+        track: rtc.Track,
+        publication: rtc.RemoteTrackPublication,
+        participant: rtc.RemoteParticipant,
+    ) -> None:
+        if not fut.done() and _matches(publication, participant):
             fut.set_result(publication)
 
     def _on_local_track_published(
@@ -216,9 +237,13 @@ async def wait_for_track_publication(
         if state == rtc.ConnectionState.CONN_DISCONNECTED and not fut.done():
             fut.set_exception(RuntimeError("room disconnected while waiting for track publication"))
 
-    room.on("track_published", _on_track_published)
+    if wait_for_subscription:
+        room.on("track_subscribed", _on_track_subscribed)
+    else:
+        room.on("track_published", _on_track_published)
     if include_local:
         room.on("local_track_published", _on_local_track_published)
+
     room.on("connection_state_changed", _on_connection_state_changed)
 
     try:
@@ -231,13 +256,18 @@ async def wait_for_track_publication(
 
         for p in room.remote_participants.values():
             for publication in p.track_publications.values():
-                _on_track_published(publication, p)
-                if fut.done():
+                if _matches(publication, p):
+                    fut.set_result(publication)
                     break
+            if fut.done():
+                break
 
         return await fut
     finally:
-        room.off("track_published", _on_track_published)
+        if wait_for_subscription:
+            room.off("track_subscribed", _on_track_subscribed)
+        else:
+            room.off("track_published", _on_track_published)
         if include_local:
             room.off("local_track_published", _on_local_track_published)
         room.off("connection_state_changed", _on_connection_state_changed)

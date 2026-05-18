@@ -13,7 +13,6 @@ Ends the current call and disconnects immediately.
 
 Call when:
 - The user clearly indicates they are done (e.g., “that’s all, bye”).
-- The agent determines the conversation is complete and should end.
 
 Do not call when:
 - The user asks to pause, hold, or transfer.

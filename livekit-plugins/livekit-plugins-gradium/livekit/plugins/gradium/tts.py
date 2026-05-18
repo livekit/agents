@@ -54,7 +54,7 @@ class TTS(tts.TTS):
         self,
         *,
         api_key: str | None = None,
-        model_endpoint: str | None = "wss://eu.api.gradium.ai/api/speech/tts",
+        model_endpoint: str | None = "wss://api.gradium.ai/api/speech/tts",
         model_name: str = "default",
         voice: str | None = None,
         voice_id: str | None = "YTpq7expH9539ERJ",

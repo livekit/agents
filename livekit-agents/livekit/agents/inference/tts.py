@@ -52,6 +52,7 @@ RimeModels = Literal[
 ]
 InworldModels = Literal[
     "inworld",
+    "inworld/inworld-tts-2",
     "inworld/inworld-tts-1.5-max",
     "inworld/inworld-tts-1.5-mini",
     "inworld/inworld-tts-1-max",
@@ -76,7 +77,7 @@ def _parse_model_string(model: str) -> tuple[str, str | None]:
 
 
 class FallbackModel(TypedDict):
-    """A fallback model with optional extra configuration.
+    """Inference Fallback Adapter: configuration for a fallback TTS model that runs server-side in LiveKit Inference, providing automatic fallback between providers.
 
     Extra fields are passed through to the provider.
 
@@ -648,7 +649,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 elif data.get("type") == "output_audio":
                     b64data = base64.b64decode(data["audio"])
                     output_emitter.push(b64data)
-                elif data.get("type") == "output_timestamps":
+                elif data.get("type") == "output_alignment":
                     from ..voice.io import TimedString
 
                     if words := data.get("words"):
@@ -674,8 +675,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     break
                 elif data.get("type") == "error":
                     raise APIError(f"LiveKit Inference TTS returned error: {msg.data}")
-                else:
-                    logger.warning("unexpected message %s", data)
 
         try:
             async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:

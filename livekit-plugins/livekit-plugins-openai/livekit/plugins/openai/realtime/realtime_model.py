@@ -1532,7 +1532,15 @@ class RealtimeSession(
                 fut.set_exception(llm.RealtimeError("generate_reply timed out."))
 
         handle = asyncio.get_event_loop().call_later(10.0, _on_timeout)
-        fut.add_done_callback(lambda _: handle.cancel())
+
+        def _on_fut_done(f: asyncio.Future[llm.GenerationCreatedEvent]) -> None:
+            handle.cancel()
+            self._response_created_futures.pop(event_id, None)
+            if f.cancelled():
+                # response.create was already sent; cancel the response server-side
+                self.send_event(ResponseCancelEvent(type="response.cancel"))
+
+        fut.add_done_callback(_on_fut_done)
         return fut
 
     @property
@@ -1993,6 +2001,14 @@ class RealtimeSession(
             f"{provider_label} returned an error: {event.error}",
             extra={"error": event.error},
         )
+
+        if (event_id := event.error.event_id) and (
+            fut := self._response_created_futures.pop(event_id, None)
+        ):
+            # set exception for the response future if it exists
+            if not fut.done():
+                fut.set_exception(llm.RealtimeError(event.error.message))
+
         self._emit_error(
             APIError(
                 message=f"{provider_label} returned an error",
@@ -2001,8 +2017,6 @@ class RealtimeSession(
             ),
             recoverable=True,
         )
-
-        # TODO: set exception for the response future if it exists
 
     def _emit_error(self, error: Exception, recoverable: bool) -> None:
         self.emit(

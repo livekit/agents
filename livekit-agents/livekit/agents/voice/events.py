@@ -174,6 +174,16 @@ class ConversationItemAddedEvent(BaseModel):
 
 
 class FunctionToolsExecutedEvent(BaseModel):
+    """Emitted after a batch of function tools finishes executing.
+
+    ``function_calls`` and ``function_call_outputs`` are parallel lists: the
+    output at a given index belongs to the call at the same index. When an
+    output is present, its ``call_id`` matches the paired function call's
+    ``call_id``. A ``None`` output means the function call did not produce a
+    value that should be sent back to the LLM, such as when a tool raises
+    ``StopResponse`` or returns an invalid output.
+    """
+
     type: Literal["function_tools_executed"] = "function_tools_executed"
     function_calls: list[FunctionCall]
     function_call_outputs: list[FunctionCallOutput | None]
@@ -182,6 +192,7 @@ class FunctionToolsExecutedEvent(BaseModel):
     _handoff_required: bool = PrivateAttr(default=False)
 
     def zipped(self) -> list[tuple[FunctionCall, FunctionCallOutput | None]]:
+        """Return calls paired with outputs by list position."""
         return list(zip(self.function_calls, self.function_call_outputs, strict=False))
 
     def cancel_tool_reply(self) -> None:
@@ -216,6 +227,20 @@ class SpeechCreatedEvent(BaseModel):
     """Source indicating how the speech handle was created"""
     speech_handle: SpeechHandle = Field(..., exclude=True)
     """The speech handle that was created"""
+    created_at: float = Field(default_factory=time.time)
+
+
+class UserTurnExceededEvent(BaseModel):
+    type: Literal["user_turn_exceeded"] = "user_turn_exceeded"
+    transcript: str
+    """Transcript from the current (uncommitted) user turn only.
+    Previous turns in the accumulation window are already in the chat context."""
+    accumulated_transcript: str
+    """Full transcript since the start of user speaking."""
+    accumulated_word_count: int
+    """Total word count since the start of user speaking."""
+    duration: float
+    """Duration of the user turn in seconds."""
     created_at: float = Field(default_factory=time.time)
 
 

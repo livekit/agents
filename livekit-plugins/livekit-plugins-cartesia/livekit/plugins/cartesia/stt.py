@@ -205,8 +205,8 @@ class SpeechStream(stt.SpeechStream):
         conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
+        self._stt: STT = stt
         self._opts = opts
-        self._session = stt._ensure_session()
         self._request_id = str(uuid.uuid4())
         self._reconnect_event = asyncio.Event()
         self._speaking = False
@@ -230,6 +230,7 @@ class SpeechStream(stt.SpeechStream):
     async def _run(self) -> None:
         """Main loop for streaming transcription."""
         closing_ws = False
+        http_session = self._stt._ensure_session()
 
         async def keepalive_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             try:
@@ -275,7 +276,7 @@ class SpeechStream(stt.SpeechStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if closing_ws or self._session.closed:
+                    if closing_ws or http_session.closed:
                         return
                     raise APIStatusError(message="Cartesia STT connection closed unexpectedly")
 
@@ -292,7 +293,7 @@ class SpeechStream(stt.SpeechStream):
 
         while True:
             try:
-                ws = await self._connect_ws()
+                ws = await self._connect_ws(http_session)
                 tasks = [
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
@@ -323,7 +324,9 @@ class SpeechStream(stt.SpeechStream):
                 if ws is not None:
                     await ws.close()
 
-    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(
+        self, http_session: aiohttp.ClientSession
+    ) -> aiohttp.ClientWebSocketResponse:
         """Connect to the Cartesia STT WebSocket."""
         params = {
             "model": self._opts.model,
@@ -342,7 +345,7 @@ class SpeechStream(stt.SpeechStream):
 
         try:
             ws = await asyncio.wait_for(
-                self._session.ws_connect(
+                http_session.ws_connect(
                     ws_url,
                     headers={
                         "User-Agent": USER_AGENT,

@@ -5,7 +5,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 from google.genai import types
 
-from livekit.plugins.google.llm import LLMStream
+from livekit.agents import llm
+from livekit.plugins.google.llm import LLM, LLMStream
+from livekit.plugins.google.realtime.realtime_api import RealtimeModel, RealtimeSession
 
 
 @pytest.fixture
@@ -63,3 +65,65 @@ class TestParsePartFunctionCall:
         chunk = llm_stream._parse_part("test-id", part)
 
         assert chunk is None
+
+
+class TestMediaResolution:
+    def test_llm_media_resolution_is_passed_to_stream_kwargs(self):
+        model = LLM(
+            api_key="test-api-key",
+            media_resolution=types.MediaResolution.MEDIA_RESOLUTION_LOW,
+        )
+
+        with patch.object(
+            LLMStream,
+            "__init__",
+            lambda self, *a, **kw: self.__dict__.update(_extra_kwargs=kw["extra_kwargs"]),
+        ):
+            stream = model.chat(chat_ctx=llm.ChatContext.empty())
+
+        assert (
+            stream._extra_kwargs["media_resolution"] == types.MediaResolution.MEDIA_RESOLUTION_LOW
+        )
+
+    def test_llm_media_resolution_is_omitted_by_default(self):
+        model = LLM(api_key="test-api-key")
+
+        with patch.object(
+            LLMStream,
+            "__init__",
+            lambda self, *a, **kw: self.__dict__.update(_extra_kwargs=kw["extra_kwargs"]),
+        ):
+            stream = model.chat(chat_ctx=llm.ChatContext.empty())
+
+        assert "media_resolution" not in stream._extra_kwargs
+
+    def test_realtime_media_resolution_is_passed_to_connect_config(self):
+        model = RealtimeModel(
+            api_key="test-api-key",
+            media_resolution=types.MediaResolution.MEDIA_RESOLUTION_LOW,
+        )
+        session = RealtimeSession.__new__(RealtimeSession)
+        session._opts = model._opts
+        session._tools = llm.ToolContext.empty()
+        session._realtime_model = model
+        session._session_resumption_handle = None
+
+        config = session._build_connect_config()
+
+        assert config.generation_config
+        assert (
+            config.generation_config.media_resolution == types.MediaResolution.MEDIA_RESOLUTION_LOW
+        )
+
+    def test_realtime_media_resolution_is_unset_by_default(self):
+        model = RealtimeModel(api_key="test-api-key")
+        session = RealtimeSession.__new__(RealtimeSession)
+        session._opts = model._opts
+        session._tools = llm.ToolContext.empty()
+        session._realtime_model = model
+        session._session_resumption_handle = None
+
+        config = session._build_connect_config()
+
+        assert config.generation_config
+        assert config.generation_config.media_resolution is None
