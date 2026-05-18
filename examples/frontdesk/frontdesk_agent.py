@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import asyncio
 import datetime
 import logging
 import os
 import sys
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal
 from zoneinfo import ZoneInfo
@@ -14,6 +12,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from calendar_api import AvailableSlot, CalComCalendar, Calendar, FakeCalendar, SlotUnavailableError
 from dotenv import load_dotenv
+from ui_view import UIView
 
 from livekit.agents import (
     Agent,
@@ -45,19 +44,15 @@ from livekit.plugins.turn_detector.multilingual import MultilingualModel
 load_dotenv()
 
 
-FA_CALENDAR = ""   # FontAwesome solid: calendar
-FA_CHECK = ""      # FontAwesome solid: circle-check
-
-
 @dataclass
 class Userdata:
     cal: Calendar
     booked_times: list[str] = field(default_factory=list)
     slot_unavailable_count: int = 0
-    # Pushes a markdown payload to the playground's
-    # `set_appointment_status` view. Wired up in the session
-    # entrypoint; tool handlers call it directly. Fire-and-forget.
-    push_status: Callable[[str], None] | None = None
+    # Optional UI for the LiveKit Playground. ``None`` when the agent
+    # is running anywhere else — the tool handlers no-op on it and
+    # the rest of the code stays oblivious to the playground.
+    ui: UIView | None = None
 
 
 logger = logging.getLogger("front-desk")
@@ -138,16 +133,8 @@ class FrontDeskAgent(Agent):
         except RuntimeError:
             pass
 
-        # Push a confirmation card into the playground.
-        if ctx.userdata.push_status:
-            md = (
-                f"# {FA_CHECK} Booked\n"
-                f"\n"
-                f"**{local.strftime('%A, %B %d, %Y')}**\n"
-                f"\n"
-                f"at [[{local.strftime('%H:%M %Z')}]]"
-            )
-            ctx.userdata.push_status(md)
+        if ctx.userdata.ui is not None:
+            ctx.userdata.ui.appointment_booked(slot, self.tz)
 
         return f"The appointment was successfully scheduled for {local.strftime('%A, %B %d, %Y at %H:%M %Z')}."
 
@@ -177,13 +164,11 @@ class FrontDeskAgent(Agent):
         elif range == "+3month":
             range_days = 90
 
-        # Pretty markdown for the playground card; the LLM gets the
-        # plain `lines` list as before.
-        card_lines: list[str] = [f"# {FA_CALENDAR} Available slots", ""]
-
-        for slot in await ctx.userdata.cal.list_available_slots(
+        slots = await ctx.userdata.cal.list_available_slots(
             start_time=now, end_time=now + datetime.timedelta(days=range_days)
-        ):
+        )
+
+        for slot in slots:
             local = slot.start_time.astimezone(self.tz)
             delta = local - now
             days = delta.days
@@ -207,17 +192,10 @@ class FrontDeskAgent(Agent):
                 f"{slot.unique_hash} – {local.strftime('%A, %B %d, %Y')} at "
                 f"{local:%H:%M} {local.tzname()} ({rel})"
             )
-            card_lines.append(
-                f"- **{local.strftime('%a, %b %d')}** at [[{local:%H:%M}]] · *{rel}*"
-            )
             self._slots_map[slot.unique_hash] = slot
 
-        if ctx.userdata.push_status:
-            if len(card_lines) > 2:
-                ctx.userdata.push_status("\n".join(card_lines))
-            else:
-                # No slots — hide the card.
-                ctx.userdata.push_status("")
+        if ctx.userdata.ui is not None:
+            ctx.userdata.ui.slots_listed(slots, now, self.tz)
 
         return "\n".join(lines) or "No slots available at the moment."
 
@@ -275,25 +253,7 @@ async def frontdesk_agent(ctx: JobContext):
 
     await cal.initialize()
 
-    userdata = Userdata(cal=cal)
-
-    # Fire-and-forget push to the playground's `set_appointment_status`
-    # view. Empty payload re-hides the card on the next disconnect.
-    async def _push_to(identity: str, payload: str) -> None:
-        try:
-            await ctx.room.local_participant.perform_rpc(
-                destination_identity=identity,
-                method="set_appointment_status",
-                payload=payload,
-            )
-        except Exception:
-            logger.exception("status push to %s failed", identity)
-
-    def push_status(payload: str) -> None:
-        for p in list(ctx.room.remote_participants.values()):
-            asyncio.create_task(_push_to(p.identity, payload))
-
-    userdata.push_status = push_status
+    userdata = Userdata(cal=cal, ui=UIView(ctx))
 
     session = AgentSession[Userdata](
         userdata=userdata,
