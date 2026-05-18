@@ -438,10 +438,20 @@ class _Connection:
     def send_text(self, stream_id: str, text: str, *, text_end: bool = False) -> None:
         if self._closed or stream_id not in self._streams:
             return
-        # Skip sending empty text to avoid getting bogus audio back.
-        if not text and not text_end:
-            return
+
         stream = self._streams[stream_id]
+
+        # Empty text would make the server hallucinate audio; handle the two cases locally.
+        if not text:
+            if not text_end:
+                return
+            if not stream.config_sent:
+                # Server doesn't know about this stream; resolve locally.
+                if not stream.waiter.done():
+                    stream.waiter.set_result(None)
+                self._streams.pop(stream_id, None)
+                return
+
         if not stream.config_sent:
             stream.config_sent = True
             self._input_queue.send_nowait(_StartConfig(stream_id=stream_id, opts=stream.opts))
