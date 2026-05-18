@@ -204,7 +204,13 @@ server = AgentServer()
 
 
 async def on_session_end(ctx: JobContext) -> None:
-    report = ctx.make_session_report()
+    # `on_session_end` runs even if the job crashed before the AgentSession
+    # started (e.g. a bad timezone, a calendar fault) — make_session_report
+    # raises in that case, and there's nothing to evaluate anyway.
+    try:
+        report = ctx.make_session_report()
+    except RuntimeError:
+        return
 
     # Skip evaluation for very short conversations
     chat = report.chat_history.copy(exclude_function_call=True, exclude_instructions=True)
@@ -240,7 +246,7 @@ async def on_session_end(ctx: JobContext) -> None:
 async def frontdesk_agent(ctx: JobContext):
     await ctx.connect()
 
-    timezone = "utc"
+    timezone = "UTC"
 
     if cal_api_key := os.getenv("CAL_API_KEY", None):
         logger.info("CAL_API_KEY detected, using cal.com calendar")
