@@ -164,7 +164,12 @@ jobs:
           # `main` is protected — push to a bot branch and open a PR.
           git checkout -B "$branch"
           git commit -m "chore: refresh examples manifest"
-          git push --force-with-lease origin "$branch"
+          # Plain `--force`: the bot branch is fully bot-managed and
+          # rewritten on every deploy. `--force-with-lease` aborts with
+          # "stale info" here because actions/checkout does a shallow
+          # clone of `main` only, so there's no remote-tracking ref for
+          # the bot branch for the lease check to compare against.
+          git push --force origin "$branch"
 
           # Open the PR if one doesn't already exist for this head; `gh pr view`
           # finds open *or* closed PRs, so filter by state.
