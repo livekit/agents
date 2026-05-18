@@ -9,12 +9,12 @@ The playground sends an RPC on every dropdown change:
 ```ts
 room.localParticipant.performRpc({
   destinationIdentity: agent.identity,
-  method: "stt" | "llm" | "tts",
+  method: "set_stt_model" | "set_llm_model" | "set_tts_model",
   payload: JSON.stringify({ value: "deepgram/nova-3" }),
 });
 ```
 
-The agent registers one handler per control. STT and TTS call `update_options(model=...)`; the inference LLM doesn't expose `update_options` so the agent mutates `session.llm._opts.model`, which is read on the next `chat()` call.
+The agent registers one handler per control. All three (STT, LLM, TTS) call `update_options(model=...)` to swap the active model without restarting the session.
 
 ## Run locally
 
