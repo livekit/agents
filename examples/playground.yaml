@@ -113,3 +113,121 @@ examples:
         00111100
         01111110
         00000000
+
+  inference:
+    title: Inference
+    description: A voice agent powered end-to-end by LiveKit Inference. Pick the STT, LLM, and TTS provider live to hear how each one feels in the same conversation.
+    # brand palette — purple-500
+    accent: "#9B5CFF"
+    agent_id: ""
+    entry: agent.py
+    github: "https://github.com/livekit/agents/tree/main/examples/inference"
+    tags: [inference]
+    order: 50
+    deploy: false
+    icon:
+      # Three stacked bars: the STT → LLM → TTS pipeline, with the
+      # middle bar in the highlight tone.
+      size: 12
+      pixels: |
+        000000000000
+        000000000000
+        011111111110
+        011111111110
+        000000000000
+        022222222220
+        022222222220
+        000000000000
+        011111111110
+        011111111110
+        000000000000
+        000000000000
+    # The playground reads these `controls` and renders a labeled pill
+    # dropdown per control. Picking an option fires an RPC on the agent
+    # participant — `id` is the method name, payload is `{"value": "…"}`.
+    # Defaults match the agent's DEFAULT_STT/LLM/TTS constants.
+    controls:
+      - id: stt
+        label: STT
+        default: deepgram/nova-3
+        options:
+          - { value: deepgram/nova-3, label: Deepgram Nova-3 }
+          - { value: deepgram/nova-3-medical, label: Deepgram Nova-3 Medical }
+          - { value: deepgram/flux-general-en, label: Deepgram Flux (English) }
+          - { value: deepgram/flux-general-multi, label: Deepgram Flux (Multilingual) }
+          - { value: assemblyai/u3-rt-pro, label: AssemblyAI Universal-3 Pro }
+          - { value: assemblyai/universal-streaming, label: AssemblyAI Universal-Streaming }
+          - { value: assemblyai/universal-streaming-multilingual, label: AssemblyAI Universal-Streaming Multilingual }
+          - { value: cartesia/ink-whisper, label: Cartesia Ink Whisper }
+          - { value: elevenlabs/scribe_v2_realtime, label: ElevenLabs Scribe v2 Realtime }
+          - { value: speechmatics/enhanced, label: Speechmatics Enhanced }
+          - { value: speechmatics/standard, label: Speechmatics Standard }
+          - { value: xai/stt-1, label: xAI Speech-to-Text }
+      - id: llm
+        label: LLM
+        default: openai/gpt-4o-mini
+        options:
+          - { value: openai/gpt-4.1, label: OpenAI GPT-4.1 }
+          - { value: openai/gpt-4.1-mini, label: OpenAI GPT-4.1 mini }
+          - { value: openai/gpt-4.1-nano, label: OpenAI GPT-4.1 nano }
+          - { value: openai/gpt-4o, label: OpenAI GPT-4o }
+          - { value: openai/gpt-4o-mini, label: OpenAI GPT-4o mini }
+          - { value: openai/gpt-5, label: OpenAI GPT-5 }
+          - { value: openai/gpt-5-mini, label: OpenAI GPT-5 mini }
+          - { value: openai/gpt-5-nano, label: OpenAI GPT-5 nano }
+          - { value: openai/gpt-5.1, label: OpenAI GPT-5.1 }
+          - { value: openai/gpt-5.1-chat-latest, label: OpenAI GPT-5.1 Chat }
+          - { value: openai/gpt-5.2, label: OpenAI GPT-5.2 }
+          - { value: openai/gpt-5.2-chat-latest, label: OpenAI GPT-5.2 Chat }
+          - { value: openai/gpt-5.3-chat-latest, label: OpenAI GPT-5.3 Chat }
+          - { value: openai/gpt-5.4, label: OpenAI GPT-5.4 }
+          - { value: openai/gpt-5.4-mini, label: OpenAI GPT-5.4 mini }
+          - { value: openai/gpt-5.4-nano, label: OpenAI GPT-5.4 nano }
+          - { value: openai/gpt-5.5, label: OpenAI GPT-5.5 }
+          - { value: openai/gpt-oss-120b, label: OpenAI GPT OSS 120B }
+          - { value: google/gemini-2.0-flash, label: Gemini 2.0 Flash }
+          - { value: google/gemini-2.0-flash-lite, label: Gemini 2.0 Flash-Lite }
+          - { value: google/gemini-2.5-flash, label: Gemini 2.5 Flash }
+          - { value: google/gemini-2.5-flash-lite, label: Gemini 2.5 Flash-Lite }
+          - { value: google/gemini-2.5-pro, label: Gemini 2.5 Pro }
+          - { value: google/gemini-3-flash-preview, label: Gemini 3 Flash }
+          - { value: google/gemini-3-pro-preview, label: Gemini 3 Pro }
+          - { value: google/gemini-3.1-flash-lite, label: Gemini 3.1 Flash Lite }
+          - { value: google/gemini-3.1-pro-preview, label: Gemini 3.1 Pro }
+          - { value: xai/grok-4-1-fast-non-reasoning, label: Grok 4.1 Fast }
+          - { value: xai/grok-4-1-fast-reasoning, label: Grok 4.1 Fast Reasoning }
+          - { value: xai/grok-4.20-0309-non-reasoning, label: Grok 4.20 }
+          - { value: xai/grok-4.20-0309-reasoning, label: Grok 4.20 Reasoning }
+          - { value: xai/grok-4.20-multi-agent-0309, label: Grok 4.20 Multi-Agent }
+          - { value: deepseek-ai/deepseek-v3, label: DeepSeek-V3 }
+          - { value: deepseek-ai/deepseek-v3.1, label: DeepSeek-V3.1 }
+          - { value: deepseek-ai/deepseek-v3.2, label: DeepSeek-V3.2 }
+          - { value: moonshotai/kimi-k2-instruct, label: Kimi K2 Instruct }
+          - { value: moonshotai/kimi-k2.5, label: Kimi K2.5 }
+      - id: tts
+        label: TTS
+        default: cartesia/sonic-2
+        options:
+          - { value: cartesia/sonic, label: Cartesia Sonic }
+          - { value: cartesia/sonic-2, label: Cartesia Sonic-2 }
+          - { value: cartesia/sonic-3, label: Cartesia Sonic-3 }
+          - { value: cartesia/sonic-3-latest, label: Cartesia Sonic-3 Latest }
+          - { value: cartesia/sonic-turbo, label: Cartesia Sonic Turbo }
+          - { value: deepgram/aura, label: Deepgram Aura }
+          - { value: deepgram/aura-2, label: Deepgram Aura-2 }
+          - { value: elevenlabs/eleven_flash_v2, label: ElevenLabs Flash v2 }
+          - { value: elevenlabs/eleven_flash_v2_5, label: ElevenLabs Flash v2.5 }
+          - { value: elevenlabs/eleven_multilingual_v2, label: ElevenLabs Multilingual v2 }
+          - { value: elevenlabs/eleven_turbo_v2, label: ElevenLabs Turbo v2 }
+          - { value: elevenlabs/eleven_turbo_v2_5, label: ElevenLabs Turbo v2.5 }
+          - { value: elevenlabs/eleven_v3, label: ElevenLabs v3 }
+          - { value: inworld/inworld-tts-1, label: Inworld TTS 1 }
+          - { value: inworld/inworld-tts-1-max, label: Inworld TTS 1 Max }
+          - { value: inworld/inworld-tts-1.5-mini, label: Inworld TTS 1.5 Mini }
+          - { value: inworld/inworld-tts-1.5-max, label: Inworld TTS 1.5 Max }
+          - { value: inworld/inworld-tts-2, label: Inworld TTS 2 }
+          - { value: rime/arcana, label: Rime Arcana }
+          - { value: rime/mist, label: Rime Mist }
+          - { value: rime/mistv2, label: Rime Mist v2 }
+          - { value: rime/mistv3, label: Rime Mist v3 }
+          - { value: xai/tts-1, label: xAI Text-to-Speech }
