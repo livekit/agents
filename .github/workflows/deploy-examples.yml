@@ -179,10 +179,13 @@ jobs:
           fi
 
           # Auto-merge once the branch protection's required checks (if any)
-          # pass. If nothing's required, this still queues the merge.
-          gh pr merge \
-            --repo livekit/agents-jukebox \
-            --auto \
-            --squash \
-            "$branch" \
-            || echo "Could not enable auto-merge (likely needs admin/approval). Manual merge required."
+          # pass. Best-effort: if the repo doesn't allow auto-merge, or a
+          # required review is missing, we keep the PR open for manual
+          # merge rather than failing the deploy.
+          if ! gh pr merge \
+                --repo livekit/agents-jukebox \
+                --auto \
+                --squash \
+                "$branch"; then
+            echo "::warning::Auto-merge could not be enabled on $branch — merge the PR manually."
+          fi
