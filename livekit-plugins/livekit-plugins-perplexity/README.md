@@ -30,3 +30,21 @@ llm = perplexity.LLM(
 The plugin reuses the OpenAI plugin's chat completions transport with
 `base_url="https://api.perplexity.ai"` and forwards an `X-Pplx-Integration`
 attribution header on every outgoing request.
+
+## Agent API usage
+
+Perplexity's Agent API is compatible with OpenAI's Responses API and is
+available through the `perplexity.responses` submodule.
+
+```python
+from livekit.plugins import perplexity
+
+llm = perplexity.responses.LLM(
+    model="sonar-pro",
+    # api_key picked up from PERPLEXITY_API_KEY if omitted
+)
+```
+
+The Responses LLM uses `base_url="https://api.perplexity.ai/v1"`, disables
+websocket transport, and sends the same `X-Pplx-Integration` attribution header
+on its OpenAI-compatible client.
