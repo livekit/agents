@@ -751,6 +751,30 @@ class SessionHost:
             )
             await self._transport.send_message(resp)
 
+        elif req.HasField("update_io"):
+            update = req.update_io
+            if update.HasField("input"):
+                if update.input.HasField("audio_enabled"):
+                    self._session.input.set_audio_enabled(update.input.audio_enabled)
+                if update.input.HasField("video_enabled"):
+                    self._session.input.set_video_enabled(update.input.video_enabled)
+            if update.HasField("output"):
+                if update.output.HasField("audio_enabled"):
+                    self._session.output.set_audio_enabled(update.output.audio_enabled)
+                if update.output.HasField("video_enabled"):
+                    self._session.output.set_video_enabled(update.output.video_enabled)
+                if update.output.HasField("transcription_enabled"):
+                    self._session.output.set_transcription_enabled(
+                        update.output.transcription_enabled
+                    )
+            resp = agent_pb.AgentSessionMessage(
+                response=agent_pb.SessionResponse(
+                    request_id=req.request_id,
+                    update_io=agent_pb.SessionResponse.UpdateIOResponse(),
+                )
+            )
+            await self._transport.send_message(resp)
+
 
 def _session_usage_to_proto(usage: AgentSessionUsage) -> agent_pb.AgentSessionUsage:
     model_usages: list[agent_pb.ModelUsage] = []
