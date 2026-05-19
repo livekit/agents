@@ -152,10 +152,8 @@ class TTS(tts.TTS):
         return self._session
 
     def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions | None = None
+        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
-        if conn_options is None:
-            conn_options = DEFAULT_API_CONNECT_OPTIONS
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
     def stream(
