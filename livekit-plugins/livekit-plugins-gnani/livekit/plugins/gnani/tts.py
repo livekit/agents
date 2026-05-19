@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import contextlib
 import json
 import os
 from dataclasses import dataclass, replace
@@ -22,7 +21,6 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
-    tokenize,
     tts,
     utils,
 )
@@ -281,55 +279,44 @@ class SynthesizeStream(tts.SynthesizeStream):
         return f"{ws_base}/api/v1/tts"
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        import websockets
+
         mime_type = f"audio/{self._opts.container}"
         if self._opts.container == "raw":
             mime_type = "audio/pcm"
 
+        request_id = utils.shortuuid()
         output_emitter.initialize(
-            request_id=utils.shortuuid(),
+            request_id=request_id,
             sample_rate=self._tts.sample_rate,
             num_channels=self._tts.num_channels,
             mime_type=mime_type,
             stream=True,
         )
 
-        word_stream = tokenize.basic.SentenceTokenizer().stream()
-        _flushing = False
+        segment_id = utils.shortuuid()
+        output_emitter.start_segment(segment_id=segment_id)
 
-        async def _input_task() -> None:
-            nonlocal _flushing
-            async for data in self._input_ch:
-                if isinstance(data, str):
-                    word_stream.push_text(data)
-                elif isinstance(data, self._FlushSentinel):
-                    word_stream.flush()
-                    _flushing = True
-            word_stream.end_input()
+        text_parts: list[str] = []
 
-        input_task = asyncio.create_task(_input_task(), name="gnani-tts-input")
+        async for data in self._input_ch:
+            if isinstance(data, str):
+                text_parts.append(data)
+            elif isinstance(data, self._FlushSentinel):
+                break
 
-        try:
-            async for ev in word_stream:
-                text = ev.token
-                if not text.strip():
-                    continue
-                await self._synthesize_segment(text, output_emitter)
-        finally:
-            input_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await input_task
+        full_text = "".join(text_parts).strip()
+        if not full_text:
+            output_emitter.end_segment()
+            return
 
-    async def _synthesize_segment(self, text: str, output_emitter: tts.AudioEmitter) -> None:
-        import websockets
+        self._mark_started()
 
         ws_url = self._build_ws_url()
         headers = {
             "Content-Type": "application/json",
             "X-API-Key-ID": self._opts.api_key,
         }
-
-        segment_id = utils.shortuuid()
-        output_emitter.start_segment(segment_id=segment_id)
 
         try:
             async with websockets.connect(
@@ -340,7 +327,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 close_timeout=10,
             ) as ws:
                 request_body = {
-                    "text": text,
+                    "text": full_text,
                     "voice": self._opts.voice,
                     "model": self._opts.model,
                     "language": self._opts.language,
