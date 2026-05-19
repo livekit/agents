@@ -17,8 +17,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 from dataclasses import asdict, dataclass
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 
 import aiohttp
 
@@ -582,6 +583,11 @@ def _merge_lang_segments(
     return result
 
 
+class _LangStats(NamedTuple):
+    num_chars: int
+    updated_at: float
+
+
 class _TokenAccumulator:
     """Accumulates token metadata (text, language, speaker, timing, confidence).
 
@@ -599,13 +605,28 @@ class _TokenAccumulator:
         self._confidence_count: int = 0
         self._has_start_time: bool = False
         self._lang_segments: list[tuple[str, str]] = []  # (language, text) pairs
+        self._lang_stats: dict[str, _LangStats] = {}
+
+    def _get_language(self) -> str:
+        """Language with the most characters; ties go to the one that reached the count first."""
+        if not self._lang_stats:
+            return ""
+        most_chars = max(s.num_chars for s in self._lang_stats.values())
+        tied = [
+            (lang_code, stats)
+            for lang_code, stats in self._lang_stats.items()
+            if stats.num_chars == most_chars
+        ]
+        return min(tied, key=lambda t: t[1].updated_at)[0]
 
     def update(self, token: dict[str, Any]) -> None:
         text = token["text"]
         lang = token.get("language", "")
         self.text += text
-        if lang and not self.language:
-            self.language = lang
+        if lang and text:
+            chars, _ = self._lang_stats.get(lang, (0, 0.0))
+            self._lang_stats[lang] = _LangStats(chars + len(text), time.monotonic())
+            self.language = self._get_language()
         if "speaker" in token and self.speaker_id is None:
             self.speaker_id = str(token["speaker"])
         if "start_ms" in token and not self._has_start_time:
@@ -639,6 +660,7 @@ class _TokenAccumulator:
         self._confidence_count = 0
         self._has_start_time = False
         self._lang_segments = []
+        self._lang_stats = {}
 
     def to_speech_data(
         self,
