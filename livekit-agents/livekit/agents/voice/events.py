@@ -135,9 +135,10 @@ class EotPredictionEvent(BaseModel):
     probability: float
     threshold: float
     inference_duration: float
-    """Time (s) the model took to produce the prediction."""
+    """Model compute time (s)."""
     delay: float
-    """Endpointing delay (s) applied to the turn based on this prediction."""
+    """End of user speech → prediction received latency (s), anchored on the
+    VAD-backdated last_speaking_time."""
     created_at: float = Field(default_factory=time.time)
 
 

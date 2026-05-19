@@ -29,7 +29,7 @@ from livekit.agents._exceptions import (
     create_api_error_from_http,
 )
 from livekit.agents.inference._utils import create_access_token, get_inference_headers
-from livekit.agents.metrics import AudioEOTMetrics
+from livekit.agents.metrics import EOTInferenceMetrics
 from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import APIConnectOptions
 from livekit.agents.utils import aio
@@ -355,7 +355,7 @@ class _CloudTransport:
                 if detector is not None:
                     detector.emit(
                         "metrics_collected",
-                        AudioEOTMetrics(
+                        EOTInferenceMetrics(
                             timestamp=time.time(),
                             total_duration=client_e2e_ms / 1000.0,
                             prediction_duration=inference_duration_ms / 1000.0,

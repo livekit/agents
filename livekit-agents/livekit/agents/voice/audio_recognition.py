@@ -1283,13 +1283,11 @@ class AudioRecognition:
                                 and latest_eou_prediction.inference_duration is not None
                                 else 0.0
                             )
-                            # `delay` is the client-observed request → response
-                            # latency for this prediction, not the endpointing
-                            # wait we'll apply afterwards.
+                            # `delay` = end-of-user-speech → prediction received,
+                            # anchored on the VAD-backdated `last_speaking_time`.
                             delay = (
-                                latest_eou_prediction.detection_delay
-                                if latest_eou_prediction is not None
-                                and latest_eou_prediction.detection_delay is not None
+                                time.time() - last_speaking_time
+                                if last_speaking_time is not None
                                 else 0.0
                             )
                             host._on_eot_prediction(

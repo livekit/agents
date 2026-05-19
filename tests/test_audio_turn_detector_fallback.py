@@ -32,6 +32,7 @@ from livekit.plugins.turn_detector.audio import (
     AudioTurnDetector,
     _AudioTurnDetectorStreamImpl,
 )
+from livekit.plugins.turn_detector.languages import CLOUD_LANGUAGES, LOCAL_LANGUAGES
 from livekit.plugins.turn_detector.transports import (
     _AudioTurnDetectionTransport,
     _LocalTransport,
@@ -332,8 +333,8 @@ class TestThresholdScaling:
                 assert value == pytest.approx(0.5)
 
     async def test_post_fallback_threshold_rescales_on_stream(self) -> None:
-        """Fallback-only multiplicative scaling: 0.5 user on 0.4 cloud
-        default → 0.3 * 0.5/0.4 = 0.375 on local after fallback."""
+        """Fallback-only multiplicative scaling: a uniform 0.5 user value gets
+        rescaled per-language as ``local_default[lang] * (0.5 / cloud_default[lang])``."""
         transport = _ScriptedTransport(run_behavior="raise", run_exc=APIConnectionError("boom"))
         with patch.object(audio_mod, "_lib_available", return_value=True):
             with patch.object(_LocalTransport, "run", new=lambda self: asyncio.sleep(0)):
@@ -343,7 +344,8 @@ class TestThresholdScaling:
                 assert stream.backend == "local"
                 assert stream.is_fallback is True
                 value = await stream.unlikely_threshold(LanguageCode("en"))
-                assert value == pytest.approx(0.375)
+                expected = LOCAL_LANGUAGES["en"] * (0.5 / CLOUD_LANGUAGES["en"])
+                assert value == pytest.approx(expected)
                 await stream.aclose()
 
     async def test_threshold_default_unchanged_when_user_not_set(self) -> None:
@@ -354,13 +356,13 @@ class TestThresholdScaling:
         ):
             detector = AudioTurnDetector()
             cloud_default = await detector.unlikely_threshold(LanguageCode("en"))
-            assert cloud_default == pytest.approx(0.4)
+            assert cloud_default == pytest.approx(CLOUD_LANGUAGES["en"])
 
         with _clean_env(LIVEKIT_REMOTE_EOT_URL=None):
             with patch.object(audio_mod, "_lib_available", return_value=True):
                 detector = AudioTurnDetector()
                 local_default = await detector.unlikely_threshold(LanguageCode("en"))
-                assert local_default == pytest.approx(0.3)
+                assert local_default == pytest.approx(LOCAL_LANGUAGES["en"])
 
 
 class TestThresholdDictOverride:
@@ -376,7 +378,9 @@ class TestThresholdDictOverride:
             assert await detector.unlikely_threshold(LanguageCode("en")) == pytest.approx(0.55)
             assert await detector.unlikely_threshold(LanguageCode("ja")) == pytest.approx(0.25)
             # `fr` not in the override dict — falls through to cloud default.
-            assert await detector.unlikely_threshold(LanguageCode("fr")) == pytest.approx(0.4)
+            assert await detector.unlikely_threshold(LanguageCode("fr")) == pytest.approx(
+                CLOUD_LANGUAGES["fr"]
+            )
 
     async def test_dict_keys_normalized_via_language_code(self) -> None:
         """``English`` / ``en-US`` / ``eng`` all normalize to ``en`` so the
@@ -391,13 +395,11 @@ class TestThresholdDictOverride:
                 assert await detector.unlikely_threshold(LanguageCode("en")) == pytest.approx(0.55)
 
     async def test_dict_override_rescaled_per_language_on_fallback(self) -> None:
-        """Each dict entry gets its own multiplicative rescale on fallback.
-        ``en`` override 0.55 + cloud 0.4 → local 0.3 * 0.55/0.4 ≈ 0.4125.
-        ``ja`` override 0.25 + cloud 0.4 → local 0.3 * 0.25/0.4 ≈ 0.1875."""
+        """Each dict entry gets its own multiplicative rescale on fallback —
+        ``local_default[lang] * (user[lang] / cloud_default[lang])``."""
         transport = _ScriptedTransport(run_behavior="raise", run_exc=APIConnectionError("boom"))
         with patch.object(audio_mod, "_lib_available", return_value=True):
             with patch.object(_LocalTransport, "run", new=lambda self: asyncio.sleep(0)):
-                # Use a dict override of multiple languages.
                 stream = _make_stream_with_transport(
                     transport, user_threshold={"en": 0.55, "ja": 0.25}
                 )
@@ -405,12 +407,14 @@ class TestThresholdDictOverride:
                 await asyncio.sleep(0)
                 assert stream.is_fallback is True
                 assert await stream.unlikely_threshold(LanguageCode("en")) == pytest.approx(
-                    0.3 * 0.55 / 0.4
+                    LOCAL_LANGUAGES["en"] * (0.55 / CLOUD_LANGUAGES["en"])
                 )
                 assert await stream.unlikely_threshold(LanguageCode("ja")) == pytest.approx(
-                    0.3 * 0.25 / 0.4
+                    LOCAL_LANGUAGES["ja"] * (0.25 / CLOUD_LANGUAGES["ja"])
                 )
                 # `fr` not in dict → falls through to plain local default
                 # (no rescaling because no user value).
-                assert await stream.unlikely_threshold(LanguageCode("fr")) == pytest.approx(0.3)
+                assert await stream.unlikely_threshold(LanguageCode("fr")) == pytest.approx(
+                    LOCAL_LANGUAGES["fr"]
+                )
                 await stream.aclose()

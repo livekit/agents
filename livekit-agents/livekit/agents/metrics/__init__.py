@@ -1,6 +1,7 @@
 from .base import (
     AgentMetrics,
-    AudioEOTMetrics,
+    EOTInferenceMetrics,
+    EOTMetrics,
     EOUMetrics,
     InterruptionMetrics,
     LLMMetrics,
@@ -11,7 +12,7 @@ from .base import (
 )
 from .usage import (
     AgentSessionUsage,
-    AudioEOTModelUsage,
+    EOTModelUsage,
     InterruptionModelUsage,
     LLMModelUsage,
     ModelUsage,
@@ -27,17 +28,18 @@ __all__ = [
     "AgentMetrics",
     "VADMetrics",
     "EOUMetrics",
+    "EOTMetrics",
+    "EOTInferenceMetrics",
     "STTMetrics",
     "TTSMetrics",
     "RealtimeModelMetrics",
     "InterruptionMetrics",
-    "AudioEOTMetrics",
     # New model usage classes
     "LLMModelUsage",
     "TTSModelUsage",
     "STTModelUsage",
     "InterruptionModelUsage",
-    "AudioEOTModelUsage",
+    "EOTModelUsage",
     "ModelUsage",
     "AgentSessionUsage",
     "ModelUsageCollector",

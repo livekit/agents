@@ -112,6 +112,28 @@ class EOUMetrics(_BaseMetrics):
     metadata: Metadata | None = None
 
 
+# Alias for symmetry with `EOTInferenceMetrics` / `EOTModelUsage`. New code
+# should prefer `EOTMetrics`; the original `EOUMetrics` name is kept for
+# backwards compatibility with existing public-API consumers.
+EOTMetrics = EOUMetrics
+
+
+class EOTInferenceMetrics(_BaseMetrics):
+    """Per-inference metrics emitted by the audio EOT model on each prediction."""
+
+    type: Literal["eot_inference_metrics"] = "eot_inference_metrics"
+    timestamp: float
+    total_duration: float
+    """Round-trip time (s) for the inference."""
+    prediction_duration: float
+    """Model compute time (s)."""
+    detection_delay: float
+    """Request-sent → response-received latency (s)."""
+    num_requests: int = 1
+    """Number of inference requests represented by this metric."""
+    metadata: Metadata | None = None
+
+
 class RealtimeModelMetrics(_BaseMetrics):
     class CachedTokenDetails(BaseModel):
         audio_tokens: int = 0
@@ -193,28 +215,14 @@ class AvatarMetrics(_BaseMetrics):
     metadata: Metadata | None = None
 
 
-class AudioEOTMetrics(_BaseMetrics):
-    type: Literal["audio_eot_metrics"] = "audio_eot_metrics"
-    timestamp: float
-    total_duration: float
-    """Latest RTT (Round Trip Time) for the inference, in seconds."""
-    prediction_duration: float
-    """Latest time taken to perform the inference from the model side, in seconds."""
-    detection_delay: float
-    """Latest time from the inference request being sent to the prediction being received, in seconds."""
-    num_requests: int
-    """Number of inference requests sent to the audio EOT model, incrementally counted."""
-    metadata: Metadata | None = None
-
-
 AgentMetrics = (
     STTMetrics
     | LLMMetrics
     | TTSMetrics
     | VADMetrics
     | EOUMetrics
+    | EOTInferenceMetrics
     | RealtimeModelMetrics
     | InterruptionMetrics
     | AvatarMetrics
-    | AudioEOTMetrics
 )
