@@ -281,6 +281,18 @@ class SynthesizeStream(tts.SynthesizeStream):
         return f"{ws_base}/api/v1/tts"
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        mime_type = f"audio/{self._opts.container}"
+        if self._opts.container == "raw":
+            mime_type = "audio/pcm"
+
+        output_emitter.initialize(
+            request_id=utils.shortuuid(),
+            sample_rate=self._tts.sample_rate,
+            num_channels=self._tts.num_channels,
+            mime_type=mime_type,
+            stream=True,
+        )
+
         word_stream = tokenize.basic.SentenceTokenizer().stream()
         _flushing = False
 
@@ -316,16 +328,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             "X-API-Key-ID": self._opts.api_key,
         }
 
-        mime_type = f"audio/{self._opts.container}"
-        if self._opts.container == "raw":
-            mime_type = "audio/pcm"
-
-        output_emitter.initialize(
-            request_id="gnani-tts-stream",
-            sample_rate=self._tts.sample_rate,
-            num_channels=self._tts.num_channels,
-            mime_type=mime_type,
-        )
+        segment_id = utils.shortuuid()
+        output_emitter.start_segment(segment_id=segment_id)
 
         try:
             async with websockets.connect(
@@ -389,3 +393,5 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise
         except Exception as e:
             raise APIConnectionError(f"Gnani TTS WebSocket error: {e}") from e
+        finally:
+            output_emitter.end_segment()
