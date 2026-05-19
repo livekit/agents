@@ -32,6 +32,7 @@ from ..vad import VADEvent, VADEventType
 from . import io
 from ._utils import _set_participant_attributes
 from .endpointing import BaseEndpointing
+from .events import EotPredictionEvent
 from .turn import (
     MIN_SILENCE_DURATION_MS,
     TurnDetectionEvent,
@@ -1256,6 +1257,31 @@ class AudioRecognition:
                                 "trigger": trigger,
                             },
                         )
+
+                        if (host := self._session._session_host) is not None:
+                            inference_duration = (
+                                latest_eou_prediction.inference_duration
+                                if latest_eou_prediction is not None
+                                and latest_eou_prediction.inference_duration is not None
+                                else 0.0
+                            )
+                            # `delay` is the client-observed request → response
+                            # latency for this prediction, not the endpointing
+                            # wait we'll apply afterwards.
+                            delay = (
+                                latest_eou_prediction.detection_delay
+                                if latest_eou_prediction is not None
+                                and latest_eou_prediction.detection_delay is not None
+                                else 0.0
+                            )
+                            host._on_eot_prediction(
+                                EotPredictionEvent(
+                                    probability=end_of_turn_probability or 0.0,
+                                    threshold=unlikely_threshold or 0.0,
+                                    inference_duration=inference_duration,
+                                    delay=delay,
+                                )
+                            )
                         if (
                             latest_eou_prediction is not None
                             and latest_eou_prediction.detection_delay is not None

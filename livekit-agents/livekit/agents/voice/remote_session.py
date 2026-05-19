@@ -38,6 +38,7 @@ from .events import (
     AgentState,
     AgentStateChangedEvent,
     ConversationItemAddedEvent,
+    EotPredictionEvent,
     ErrorEvent,
     FunctionToolsExecutedEvent,
     SessionUsageUpdatedEvent,
@@ -553,7 +554,23 @@ class SessionHost:
             )
         )
 
-    # TODO: @chenghao-mou add EOT prediction event
+    def _on_eot_prediction(self, event: EotPredictionEvent) -> None:
+        inference_duration = Duration()
+        inference_duration.FromNanoseconds(int(event.inference_duration * 1e9))
+
+        delay = Duration()
+        delay.FromNanoseconds(int(event.delay * 1e9))
+
+        self._send_event(
+            agent_pb.AgentSessionEvent(
+                eot_prediction=agent_pb.AgentSessionEvent.EotPrediction(
+                    probability=event.probability,
+                    threshold=event.threshold,
+                    inference_duration=inference_duration,
+                    delay=delay,
+                )
+            )
+        )
 
     def _on_session_usage_updated(self, event: SessionUsageUpdatedEvent) -> None:
         self._send_event(

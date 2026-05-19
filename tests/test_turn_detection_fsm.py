@@ -12,11 +12,13 @@ regression cases:
 
 from __future__ import annotations
 
+import time
 from typing import Any
 from unittest.mock import MagicMock
 
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 from livekit.agents.voice.turn import (
+    TurnDetectionEvent,
     TurnDetectorOptions,
     _AudioTurnDetectorStream,
     _Status,
@@ -48,9 +50,9 @@ class _FakeBackend(_AudioTurnDetectorStream):
     def _on_inference_stop(self, *, reason: str | None) -> None:
         self.events.append(("inference_stop", reason or ""))
 
-    def _emit_prediction(self, probability: float, *, detection_delay: float | None = None) -> None:
-        self.emitted.append(probability)
-        super()._emit_prediction(probability, detection_delay=detection_delay)
+    def _emit_event(self, event: TurnDetectionEvent) -> None:
+        self.emitted.append(event.end_of_turn_probability)
+        super()._emit_event(event)
 
     def simulate_prediction(self, request_id: str, probability: float) -> None:
         """Mirror the transport recv-loop: drop stale, hold or emit otherwise."""
@@ -59,7 +61,11 @@ class _FakeBackend(_AudioTurnDetectorStream):
         if self.is_active:
             self._emit_prediction(probability)
         else:
-            self._preemptive_prediction = probability
+            self._preemptive_prediction = TurnDetectionEvent(
+                type="eot_prediction",
+                last_speaking_time=time.time(),
+                end_of_turn_probability=probability,
+            )
 
 
 def _make_opts() -> TurnDetectorOptions:
@@ -226,7 +232,8 @@ class TestAudioTurnDetectionFSM:
             s.simulate_prediction(request_id, probability=0.7)
             # Held — not emitted yet.
             assert s.emitted == []
-            assert s._preemptive_prediction == 0.7
+            assert s._preemptive_prediction is not None
+            assert s._preemptive_prediction.end_of_turn_probability == 0.7
 
             s.activate()
             assert s.emitted == [0.7]

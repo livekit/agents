@@ -35,6 +35,7 @@ from livekit.agents.types import APIConnectOptions
 from livekit.agents.utils import aio
 from livekit.agents.voice.turn import (
     DEFAULT_SAMPLE_RATE,
+    TurnDetectionEvent,
     TurnDetectorOptions,
     _AudioTurnDetectorStream,
 )
@@ -334,11 +335,20 @@ class _CloudTransport:
 
                 if stream.is_active:
                     stream._emit_prediction(
-                        probability, detection_delay=detection_delay_ms / 1000.0
+                        probability,
+                        detection_delay=detection_delay_ms / 1000.0,
+                        inference_duration=inference_duration_ms / 1000.0,
                     )
                 else:
-                    # Held until activate() releases it.
-                    stream._preemptive_prediction = probability
+                    # Held until activate() releases it. Store the full event so
+                    # detection_delay + inference_duration survive the replay.
+                    stream._preemptive_prediction = TurnDetectionEvent(
+                        type="eot_prediction",
+                        last_speaking_time=time.time(),
+                        end_of_turn_probability=probability,
+                        detection_delay=detection_delay_ms / 1000.0,
+                        inference_duration=inference_duration_ms / 1000.0,
+                    )
 
                 client_e2e_ms = inference_stats.client_e2e_latency.ToMilliseconds()
                 detector = self._detector_ref()
@@ -520,10 +530,12 @@ class _LocalTransport:
             return
 
         prob = 0.0
+        t0 = time.monotonic()
         try:
             prob = await asyncio.to_thread(_predict, pcm_snapshot)
         except Exception:
             logger.exception("local audio EOT prediction failed")
+        inference_duration = time.monotonic() - t0
 
         if request_id != stream._preemptive_request_id:
             return
@@ -533,9 +545,14 @@ class _LocalTransport:
                 fut.set_result(prob)
 
         if stream.is_active:
-            stream._emit_prediction(prob)
+            stream._emit_prediction(prob, inference_duration=inference_duration)
         else:
-            stream._preemptive_prediction = prob
+            stream._preemptive_prediction = TurnDetectionEvent(
+                type="eot_prediction",
+                last_speaking_time=time.time(),
+                end_of_turn_probability=prob,
+                inference_duration=inference_duration,
+            )
 
     async def on_audio_chunk(self, frame: rtc.AudioFrame) -> None:
         data = bytes(frame.data)

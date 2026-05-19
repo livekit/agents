@@ -41,6 +41,11 @@ class TurnDetectionEvent:
     end_of_turn_probability: float
     last_speaking_time: float
     detection_delay: float | None = None
+    """Client-observed end-to-end latency (s) for this prediction —
+    request-sent → result-received. Cloud only; local sets None."""
+    inference_duration: float | None = None
+    """Model compute time (s). Cloud: server `server_e2e_latency`.
+    Local: wall-clock around the ctypes ``_predict`` call."""
 
 
 @dataclass
@@ -126,9 +131,11 @@ class _AudioTurnDetectorStream(ABC):
         self._status: _Status = _Status.IDLE
         self._preemptive_request_id: str | None = None
         self._preemptive_request_fut: asyncio.Future[float] | None = None
-        # Prediction that arrived before activate(); released by activate()
-        # or discarded by deactivate() / flush().
-        self._preemptive_prediction: float | None = None
+        # Event that arrived before activate(); released by activate() or
+        # discarded by deactivate() / flush(). Storing the full event (not
+        # just the probability) preserves detection_delay + inference_duration
+        # across the held → replay hop.
+        self._preemptive_prediction: TurnDetectionEvent | None = None
         self._preemptive_window_min_client_created_at_ms: int | None = None
 
         self._tasks: set[asyncio.Task[None]] = set()
@@ -188,9 +195,9 @@ class _AudioTurnDetectorStream(ABC):
             self.warmup()
         self._status = _Status.ACTIVE
         if self._preemptive_prediction is not None:
-            prob = self._preemptive_prediction
+            held = self._preemptive_prediction
             self._preemptive_prediction = None
-            self._emit_prediction(prob)
+            self._emit_event(held)
 
     def deactivate(self, trigger: str | None = None) -> None:
         if not self._transport_ready():
@@ -278,15 +285,25 @@ class _AudioTurnDetectorStream(ABC):
 
     # region: results
 
-    def _emit_prediction(self, probability: float, *, detection_delay: float | None = None) -> None:
-        self._event_ch.send_nowait(
+    def _emit_prediction(
+        self,
+        probability: float,
+        *,
+        detection_delay: float | None = None,
+        inference_duration: float | None = None,
+    ) -> None:
+        self._emit_event(
             TurnDetectionEvent(
                 type="eot_prediction",
                 last_speaking_time=time.time(),
                 end_of_turn_probability=probability,
                 detection_delay=detection_delay,
+                inference_duration=inference_duration,
             )
         )
+
+    def _emit_event(self, event: TurnDetectionEvent) -> None:
+        self._event_ch.send_nowait(event)
 
     async def predict_end_of_turn(self, *, timeout: float | None = None) -> float:
         """Run a warmup inference and wait for a prediction within `timeout`."""

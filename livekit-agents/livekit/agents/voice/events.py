@@ -130,6 +130,17 @@ class UserInputTranscribedEvent(BaseModel):
     created_at: float = Field(default_factory=time.time)
 
 
+class EotPredictionEvent(BaseModel):
+    type: Literal["eot_prediction"] = "eot_prediction"
+    probability: float
+    threshold: float
+    inference_duration: float
+    """Time (s) the model took to produce the prediction."""
+    delay: float
+    """Endpointing delay (s) applied to the turn based on this prediction."""
+    created_at: float = Field(default_factory=time.time)
+
+
 class AgentFalseInterruptionEvent(BaseModel):
     type: Literal["agent_false_interruption"] = "agent_false_interruption"
     resumed: bool
