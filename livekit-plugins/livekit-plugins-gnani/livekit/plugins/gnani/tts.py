@@ -107,7 +107,7 @@ class TTS(tts.TTS):
             )
 
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=False),
+            capabilities=tts.TTSCapabilities(streaming=True),
             sample_rate=sample_rate,
             num_channels=num_channels,
         )
@@ -357,22 +357,25 @@ class SynthesizeStream(tts.SynthesizeStream):
                         output_emitter.push(msg)
                         continue
 
-                    data = json.loads(msg)
-                    msg_type = data.get("type", "")
+                    payload = json.loads(msg)
+                    msg_type = payload.get("type", "")
 
                     if msg_type == "audio":
-                        audio_b64 = data.get("audio", "")
+                        inner = payload.get("data", {})
+                        audio_b64 = inner.get("audio", "")
                         if audio_b64:
                             output_emitter.push(base64.b64decode(audio_b64))
 
                     elif msg_type == "complete":
-                        audio_b64 = data.get("audio", "")
-                        if audio_b64:
-                            output_emitter.push(base64.b64decode(audio_b64))
+                        inner = payload.get("data")
+                        if inner is not None:
+                            audio_b64 = inner.get("audio", "")
+                            if audio_b64:
+                                output_emitter.push(base64.b64decode(audio_b64))
                         break
 
                     elif msg_type == "error":
-                        error_msg = data.get("message", "Unknown error")
+                        error_msg = payload.get("message", "Unknown error")
                         logger.error(f"Gnani TTS stream error: {error_msg}")
                         raise APIStatusError(
                             message=f"Gnani TTS stream error: {error_msg}",
