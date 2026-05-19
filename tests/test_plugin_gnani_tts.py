@@ -100,11 +100,11 @@ def test_tts_capabilities():
 
 
 def test_tts_default_sample_rate():
-    """TTS defaults to 24000 Hz sample rate."""
+    """TTS defaults to 16000 Hz sample rate."""
     from livekit.plugins.gnani import TTS
 
     tts = TTS(api_key="test-key")
-    assert tts.sample_rate == 24000
+    assert tts.sample_rate == 16000
 
 
 def test_tts_custom_sample_rate():

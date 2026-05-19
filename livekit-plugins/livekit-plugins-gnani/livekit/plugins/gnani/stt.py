@@ -7,10 +7,13 @@ supporting both batch recognition (REST) and real-time streaming (WebSocket).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
+
+import aiohttp
 
 from livekit import rtc
 from livekit.agents import (
@@ -19,6 +22,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    LanguageCode,
     stt,
     utils,
 )
@@ -130,7 +134,7 @@ class STT(stt.STT):
             organization_id=organization_id or os.environ.get("GNANI_ORGANIZATION_ID"),
             user_id=user_id or os.environ.get("GNANI_USER_ID"),
         )
-        self._session: utils.aiohttp.ClientSession | None = None
+        self._session: aiohttp.ClientSession | None = None
 
     @property
     def model(self) -> str:
@@ -140,7 +144,7 @@ class STT(stt.STT):
     def provider(self) -> str:
         return "Gnani"
 
-    def _ensure_session(self) -> utils.aiohttp.ClientSession:
+    def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()
         return self._session
@@ -173,8 +177,6 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
-        import aiohttp
-
         lang = language if is_given(language) else self._opts.language
 
         wav_bytes = rtc.combine_audio_frames(buffer).to_wav_bytes()
@@ -219,7 +221,7 @@ class STT(stt.STT):
                     request_id=request_id,
                     alternatives=[
                         stt.SpeechData(
-                            language=lang,
+                            language=LanguageCode(lang),
                             text=transcript,
                             confidence=1.0,
                         )
@@ -318,9 +320,9 @@ class SpeechStream(stt.RecognizeStream):
                 finally:
                     send_task.cancel()
                     recv_task.cancel()
-                    with utils.aio.suppress(asyncio.CancelledError):
+                    with contextlib.suppress(asyncio.CancelledError):
                         await send_task
-                    with utils.aio.suppress(asyncio.CancelledError):
+                    with contextlib.suppress(asyncio.CancelledError):
                         await recv_task
 
         except websockets.exceptions.ConnectionClosed as e:
@@ -332,7 +334,7 @@ class SpeechStream(stt.RecognizeStream):
         except Exception as e:
             raise APIConnectionError(f"Gnani STT WebSocket error: {e}") from e
 
-    async def _send_audio(self, ws) -> None:
+    async def _send_audio(self, ws: Any) -> None:
         audio_buffer = bytearray()
 
         async for data in self._input_ch:
@@ -356,7 +358,7 @@ class SpeechStream(stt.RecognizeStream):
 
         await ws.close()
 
-    async def _recv_messages(self, ws) -> None:
+    async def _recv_messages(self, ws: Any) -> None:
         try:
             async for msg in ws:
                 if isinstance(msg, bytes):
@@ -376,7 +378,7 @@ class SpeechStream(stt.RecognizeStream):
                             request_id=data.get("segment_id", ""),
                             alternatives=[
                                 stt.SpeechData(
-                                    language=self._opts.language,
+                                    language=LanguageCode(self._opts.language),
                                     text=text,
                                     confidence=1.0,
                                 )
