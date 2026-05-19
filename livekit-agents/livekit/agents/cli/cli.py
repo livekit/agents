@@ -1950,16 +1950,26 @@ def _build_cli(server: AgentServer) -> typer.Typer:
 
     @app.command()
     def download_files() -> None:
+        import warnings
+
         c = AgentsConsole.get_instance()
         c.enabled = True
 
         _configure_logger(c, logging.DEBUG)
 
-        try:
-            # import_data = get_import_data(path=path)
-            # c.print(f"Importing from {import_data.module_data.extra_sys_path}")
-            # c.print(" ")
+        c.print(
+            "[yellow]`download-files` via the agent CLI is deprecated. "
+            "Use `python -m livekit.agents download-files` instead — it discovers installed "
+            "plugins without loading your agent code.[/yellow]"
+        )
+        warnings.warn(
+            "`download-files` via the agent CLI is deprecated. "
+            "Use `python -m livekit.agents download-files` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
+        try:
             for plugin in Plugin.registered_plugins:
                 logger.info(f"Downloading files for {plugin.package}")
                 plugin.download_files()

@@ -54,12 +54,14 @@ from .endpointing import create_endpointing
 from .events import (
     AgentFalseInterruptionEvent,
     AgentState,
+    AgentStateChangedEvent,
     ErrorEvent,
     FunctionToolsExecutedEvent,
     MetricsCollectedEvent,
     SessionUsageUpdatedEvent,
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
+    UserTurnExceededEvent,
 )
 from .generation import (
     ToolExecutionOutput,
@@ -177,6 +179,9 @@ class AgentActivity(RecognitionHooks):
 
         self._drain_blocked_tasks: list[asyncio.Task[Any]] = []
         self._mcp_tools: list[mcp.MCPToolset] = []
+
+        self._user_turn_exceeded_atask: asyncio.Task[None] | None = None
+        self._user_turn_exceeded_locked: bool = False
 
         self._on_enter_task: asyncio.Task | None = None
         self._on_exit_task: asyncio.Task | None = None
@@ -691,10 +696,6 @@ class AgentActivity(RecognitionHooks):
         if self.mcp_servers:
             from ..llm.mcp import MCPToolset
 
-            logger.warning(
-                "passing MCP servers to AgentSession or Agent is deprecated "
-                "and will be removed in a future version. Use `MCPToolset` instead."
-            )
             self._mcp_tools = [
                 MCPToolset(id=utils.shortuuid("mcp_toolset_"), mcp_server=server)
                 for server in self.mcp_servers
@@ -1012,15 +1013,21 @@ class AgentActivity(RecognitionHooks):
         if not self._started:
             return
 
-        should_discard = (
-            self._current_speech
-            and not self._current_speech.allow_interruptions
-            and self._session.options.interruption["discard_audio_if_uninterruptible"]
-        ) or (
+        aec_warmup_active: bool = (
             self._session.agent_state == "speaking"
             and self._session._aec_warmup_remaining > 0
             and self._session._aec_warmup_timer is not None
         )
+
+        uninterruptible_speech_active: bool = (
+            self._current_speech is not None
+            and not self._current_speech.done()
+            and not self._current_speech.interrupted
+            and not self._current_speech.allow_interruptions
+            and self._session.options.interruption["discard_audio_if_uninterruptible"]
+        )
+
+        should_discard: bool = aec_warmup_active or uninterruptible_speech_active
 
         if not should_discard:
             if self._rt_session is not None:
@@ -1412,31 +1419,34 @@ class AgentActivity(RecognitionHooks):
             if self._scheduling_paused and len(to_wait) == 0:
                 break
 
-    async def _wait_for_inactive(self) -> None:
+    async def _wait_for_inactive(
+        self, *, wait_for_agent: bool = True, wait_for_user: bool = True
+    ) -> None:
         agent_active = True
         user_active = True
-        while agent_active or user_active:
-            if self._current_speech is None and not self._speech_q:
-                agent_active = False
-            else:
-                agent_active = True
-                if (speech := self._current_speech) and speech._generations:
-                    await speech._wait_for_generation()
-                await asyncio.sleep(0)
+        while (wait_for_agent and agent_active) or (wait_for_user and user_active):
+            if wait_for_agent:
+                if (
+                    self._audio_recognition
+                    and (eou_task := self._audio_recognition._end_of_turn_task)
+                    and not eou_task.done()
+                ):
+                    await eou_task
 
-            if self._user_silence_event.is_set():
-                user_active = False
-            else:
-                user_active = True
-                await self._user_silence_event.wait()
+                if self._current_speech is None and not self._speech_q:
+                    agent_active = False
+                else:
+                    agent_active = True
+                    if (speech := self._current_speech) and speech._generations:
+                        await speech._wait_for_generation()
+                    await asyncio.sleep(0)
 
-            if (
-                self._audio_recognition
-                and (eou_task := self._audio_recognition._end_of_turn_task)
-                and not eou_task.done()
-            ):
-                user_active = True
-                await eou_task
+            if wait_for_user:
+                if self._user_silence_event.is_set():
+                    user_active = False
+                else:
+                    user_active = True
+                    await self._user_silence_event.wait()
 
     # -- Realtime Session events --
 
@@ -1497,15 +1507,9 @@ class AgentActivity(RecognitionHooks):
             error_event = ErrorEvent(error=error, source=self.tts)
             self._session.emit("error", error_event)
         elif isinstance(error, inference.InterruptionDetectionError):
-            error_event = ErrorEvent(error=error, source=self._interruption_detector)
-            self._session.emit("error", error_event)
-
             if not error.recoverable:
-                # redundant no op, but keeping it for clarity
-                self._session._on_error(error)
-
-                self._fallback_to_vad_interruption()
-                return
+                self._fallback_to_vad_interruption(error)
+            return
 
         self._session._on_error(error)
 
@@ -2106,6 +2110,62 @@ class AgentActivity(RecognitionHooks):
             metadata=metadata,
         )
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=eou_metrics))
+
+    def on_user_turn_exceeded(self, ev: UserTurnExceededEvent) -> None:
+        if self._user_turn_exceeded_locked:
+            return  # user callback is executing, drop
+
+        # cancel previous wait phase (if still waiting for EOU result)
+        if self._user_turn_exceeded_atask is not None:
+            self._user_turn_exceeded_atask.cancel()
+
+        self._user_turn_exceeded_atask = self._create_speech_task(
+            self._user_turn_exceeded_task(ev),
+            name="AgentActivity._user_turn_exceeded_task",
+        )
+
+    @utils.log_exceptions(logger=logger)
+    async def _user_turn_exceeded_task(self, ev: UserTurnExceededEvent) -> None:
+        agent_speaking_fut = asyncio.Future[None]()
+
+        def _on_agent_state_changed(state_ev: AgentStateChangedEvent) -> None:
+            if state_ev.new_state == "speaking" and not agent_speaking_fut.done():
+                agent_speaking_fut.set_result(None)
+
+        if self._session.agent_state == "speaking":
+            agent_speaking_fut.set_result(None)
+        else:
+            self._session.on("agent_state_changed", _on_agent_state_changed)
+
+        # wait for the EOU-triggered agent response (cancellable by the new user turn exceeded event)
+        wait_inactive = asyncio.ensure_future(
+            self._wait_for_inactive(wait_for_agent=True, wait_for_user=False)
+        )
+        try:
+            done, _ = await asyncio.wait(
+                (agent_speaking_fut, wait_inactive), return_when=asyncio.FIRST_COMPLETED
+            )
+            if agent_speaking_fut in done:
+                # agent started speaking, skip the user turn exceeded event
+                return
+        finally:
+            self._session.off("agent_state_changed", _on_agent_state_changed)
+            if not wait_inactive.done():
+                wait_inactive.cancel()
+
+        # custom callback, locked - don't cancel user's callback
+        logger.debug(
+            "user turn limit exceeded",
+            extra={"num_words": ev.accumulated_word_count, "duration": ev.duration},
+        )
+        self._user_turn_exceeded_locked = True
+        try:
+            await self._agent.on_user_turn_exceeded(ev)
+        except Exception:
+            logger.exception("error in on_user_turn_exceeded callback")
+        finally:
+            self._user_turn_exceeded_locked = False
+            self._user_turn_exceeded_atask = None
 
     # AudioRecognition is calling this method to retrieve the chat context before running the TurnDetector model  # noqa: E501
     def retrieve_chat_ctx(self) -> llm.ChatContext:
@@ -2899,18 +2959,24 @@ class AgentActivity(RecognitionHooks):
                     ori_tools = self._rt_session.tools.flatten()
                     await self._rt_session.update_tools(llm.ToolContext(tools).flatten())
 
+            generate_reply_fut = self._rt_session.generate_reply(
+                instructions=instructions or NOT_GIVEN,
+                tool_choice=(model_settings.tool_choice if per_response_tool_choice else NOT_GIVEN),
+                tools=(
+                    llm.ToolContext(tools).flatten()
+                    if per_response_tool_choice and tools is not None
+                    else NOT_GIVEN
+                ),
+            )
+            await speech_handle.wait_if_not_interrupted([generate_reply_fut])
+            if speech_handle.interrupted:
+                # cancel the pending generation; the plugin emits response.cancel
+                if not generate_reply_fut.done():
+                    generate_reply_fut.cancel()
+                return
+
             try:
-                generation_ev = await self._rt_session.generate_reply(
-                    instructions=instructions or NOT_GIVEN,
-                    tool_choice=(
-                        model_settings.tool_choice if per_response_tool_choice else NOT_GIVEN
-                    ),
-                    tools=(
-                        llm.ToolContext(tools).flatten()
-                        if per_response_tool_choice and tools is not None
-                        else NOT_GIVEN
-                    ),
-                )
+                generation_ev = await generate_reply_fut
             except llm.RealtimeError as e:
                 logger.error(
                     "failed to generate a reply%s: %s",
@@ -3595,7 +3661,9 @@ class AgentActivity(RecognitionHooks):
             self._default_interruption_by_audio_activity_enabled
         )
 
-    def _fallback_to_vad_interruption(self) -> None:
+    def _fallback_to_vad_interruption(
+        self, error: inference.InterruptionDetectionError | None = None
+    ) -> None:
         """Degrade gracefully from adaptive interruption to VAD-based interruption.
 
         Called when the adaptive interruption detector encounters an unrecoverable error.
@@ -3614,11 +3682,16 @@ class AgentActivity(RecognitionHooks):
             self._interruption_detector.off("overlapping_speech", self._on_overlap_speech_ended)
 
         if self._audio_recognition:
+            # this also releases any held transcripts
             self._audio_recognition.update_interruption_detection(None)
 
-        logger.warning(
+        logger.info(
             "adaptive interruption disabled due to unrecoverable error, "
-            "falling back to VAD-based interruption"
+            "falling back to VAD-based interruption",
+            extra={
+                "error": str(error.error) if error is not None else None,
+                "label": error.label if error is not None else None,
+            },
         )
 
     def _init_metrics_from_end_of_turn(self, info: _EndOfTurnInfo) -> llm.MetricsReport:
