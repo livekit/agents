@@ -41,13 +41,25 @@ from .version import __version__
 
 
 def _is_gemini_3_model(model: str) -> bool:
-    """Check if model is Gemini 3 series"""
-    return "gemini-3" in model.lower() or model.lower().startswith("gemini-3")
+    """Check if model is Gemini 3.x series (including 3.5)."""
+    model_lower = model.lower()
+    return model_lower.startswith("gemini-3") or "gemini-3" in model_lower
 
 
 def _is_gemini_3_flash_model(model: str) -> bool:
-    """Check if model is Gemini 3 Flash"""
-    return "gemini-3-flash" in model.lower() or model.lower().startswith("gemini-3-flash")
+    """Check if model is a Gemini 3.x Flash variant (e.g. gemini-3-flash, gemini-3.5-flash)."""
+    model_lower = model.lower()
+    return (
+        "gemini-3-flash" in model_lower
+        or "gemini-3.5-flash" in model_lower
+        or model_lower.startswith("gemini-3-flash")
+        or model_lower.startswith("gemini-3.5-flash")
+    )
+
+
+def _supports_thinking_level(model: str) -> bool:
+    """Models that use the thinking_level string enum (Gemini 3.x and later)."""
+    return _is_gemini_3_model(model)
 
 
 def _requires_thought_signatures(model: str) -> bool:
@@ -204,9 +216,21 @@ class LLM(llm.LLM):
                 _thinking_budget = thinking_config.thinking_budget
                 _thinking_level = getattr(thinking_config, "thinking_level", None)
 
-            if _thinking_budget is not None:
-                if not isinstance(_thinking_budget, int):
-                    raise ValueError("thinking_budget inside thinking_config must be an integer")
+            if _supports_thinking_level(model):
+                if _thinking_budget is not None:
+                    raise ValueError(
+                        f"Model {model} no longer supports thinking_budget. "
+                        "Use thinking_level ('low', 'medium', or 'high') instead."
+                    )
+                if _thinking_level is not None and not isinstance(
+                    _thinking_level, (str, types.ThinkingLevel)
+                ):
+                    raise ValueError(
+                        "thinking_level must be a string enum value "
+                        "('low', 'medium', or 'high')."
+                    )
+            elif _thinking_budget is not None and not isinstance(_thinking_budget, int):
+                raise ValueError("thinking_budget inside thinking_config must be an integer")
 
         self._opts = _LLMOptions(
             model=model,
@@ -341,9 +365,8 @@ class LLM(llm.LLM):
             extra["seed"] = self._opts.seed
 
         # Handle thinking_config based on model version
+        supports_level = _supports_thinking_level(self._opts.model)
         if is_given(self._opts.thinking_config):
-            is_gemini_3 = _is_gemini_3_model(self._opts.model)
-            is_gemini_3_flash = _is_gemini_3_flash_model(self._opts.model)
             thinking_cfg = self._opts.thinking_config
 
             # Extract both parameters
@@ -356,20 +379,16 @@ class LLM(llm.LLM):
                 _budget = thinking_cfg.thinking_budget
                 _level = getattr(thinking_cfg, "thinking_level", None)
 
-            if is_gemini_3:
-                # Gemini 3: only support thinking_level
+            if supports_level:
+                # Gemini 3.x: only support thinking_level string enum
                 if _budget is not None and _level is None:
                     logger.warning(
-                        f"Model {self._opts.model} is Gemini 3 which does not support thinking_budget. "
-                        "Please use thinking_level ('low' or 'high') instead. Ignoring thinking_budget."
+                        f"Model {self._opts.model} does not support thinking_budget. "
+                        "Please use thinking_level ('low', 'medium', or 'high') instead. "
+                        "Ignoring thinking_budget."
                     )
                 if _level is None:
-                    # If no thinking_level is provided, use the fastest thinking level
-                    if is_gemini_3_flash:
-                        _level = "minimal"
-                    else:
-                        _level = "low"
-                # Use thinking_level only (pass as dict since SDK may not have this field yet)
+                    _level = "medium"
                 extra["thinking_config"] = {"thinking_level": _level}
 
             else:
@@ -385,6 +404,9 @@ class LLM(llm.LLM):
                 else:
                     # Pass through original config if no specific handling needed
                     extra["thinking_config"] = self._opts.thinking_config
+        elif supports_level:
+            # Default thinking_level to MEDIUM for Gemini 3.x models when not specified.
+            extra["thinking_config"] = {"thinking_level": "medium"}
 
         if is_given(self._opts.automatic_function_calling_config):
             extra["automatic_function_calling"] = self._opts.automatic_function_calling_config
@@ -562,22 +584,33 @@ class LLMStream(llm.LLMStream):
             ) from e
 
     def _parse_part(self, id: str, part: types.Part) -> llm.ChatChunk | None:
+        track_signatures = _requires_thought_signatures(self._model)
+        thought_signature: bytes | None = None
+        if (
+            track_signatures
+            and hasattr(part, "thought_signature")
+            and part.thought_signature
+        ):
+            thought_signature = part.thought_signature
+
         if part.function_call:
+            call_id = part.function_call.id or utils.shortuuid("function_call_")
+            tool_extra: dict[str, Any] | None = None
+            if thought_signature is not None:
+                # Persist signature both on the tool call itself (flows into
+                # FunctionCall.extra in chat_ctx) and on the LLM-level dict for
+                # backward compatibility with existing lookup paths.
+                tool_extra = {"google": {"thought_signature": thought_signature}}
+                self._llm._thought_signatures[call_id] = thought_signature
+
             tool_call = llm.FunctionToolCall(
                 arguments=json.dumps(part.function_call.args),
                 name=part.function_call.name,
-                call_id=part.function_call.id or utils.shortuuid("function_call_"),
+                call_id=call_id,
+                extra=tool_extra,
             )
 
-            # Store thought_signature for Gemini 2.5+ multi-turn function calling
-            if (
-                _requires_thought_signatures(self._model)
-                and hasattr(part, "thought_signature")
-                and part.thought_signature
-            ):
-                self._llm._thought_signatures[tool_call.call_id] = part.thought_signature
-
-            chat_chunk = llm.ChatChunk(
+            return llm.ChatChunk(
                 id=id,
                 delta=llm.ChoiceDelta(
                     role="assistant",
@@ -585,12 +618,17 @@ class LLMStream(llm.LLMStream):
                     content=None,
                 ),
             )
-            return chat_chunk
 
         if not part.text:
             return None
 
+        delta_extra: dict[str, Any] | None = None
+        if thought_signature is not None:
+            # Signatures on text parts flow into ChatMessage.extra via
+            # generated_extra so they can be re-emitted on subsequent turns.
+            delta_extra = {"google": {"thought_signature": thought_signature}}
+
         return llm.ChatChunk(
             id=id,
-            delta=llm.ChoiceDelta(content=part.text, role="assistant"),
+            delta=llm.ChoiceDelta(content=part.text, role="assistant", extra=delta_extra),
         )

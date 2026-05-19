@@ -29,6 +29,15 @@ def to_chat_ctx(
     current_role: str | None = None
     parts: list[dict] = []
 
+    # Build call_id -> function name map for strict function response matching.
+    # Gemini requires every function_response to carry the call's id and match
+    # the originating function_call's name. We trust the function_call as the
+    # source of truth and rewrite mismatched response names.
+    call_id_to_name: dict[str, str] = {}
+    for item in chat_ctx.items:
+        if item.type == "function_call" and item.call_id:
+            call_id_to_name[item.call_id] = item.name
+
     for msg in itertools.chain(*(group.flatten() for group in group_tool_calls(chat_ctx))):
         if msg.type == "message" and msg.role == "system" and (text := msg.text_content):
             system_messages.append(text)
@@ -50,6 +59,15 @@ def to_chat_ctx(
             current_role = role
 
         if msg.type == "message":
+            # On assistant turns Gemini benefits from receiving the thought
+            # signature of the previous response. Attach it to the first part
+            # of this assistant message so it travels alongside the text.
+            msg_signature: bytes | None = None
+            if msg.role == "assistant":
+                msg_signature = (
+                    (msg.extra or {}).get("google", {}).get("thought_signature")
+                )
+            first_part_idx = len(parts)
             for content in msg.content:
                 if content and isinstance(content, str):
                     parts.append({"text": content})
@@ -57,6 +75,8 @@ def to_chat_ctx(
                     parts.append({"text": json.dumps(content)})
                 elif isinstance(content, llm.ImageContent):
                     parts.append(_to_image_part(content))
+            if msg_signature is not None and first_part_idx < len(parts):
+                parts[first_part_idx]["thought_signature"] = msg_signature
         elif msg.type == "function_call":
             fc_part: dict[str, Any] = {
                 "function_call": {
@@ -65,17 +85,50 @@ def to_chat_ctx(
                     "args": json.loads(msg.arguments or "{}"),
                 }
             }
-            # Inject thought_signature if available (Gemini 3 multi-turn function calling)
-            if thought_signatures and (sig := thought_signatures.get(msg.call_id)):
+            # Inject thought_signature if available (Gemini 2.5+ multi-turn function calling).
+            # Prefer the signature stored on the item itself (extra["google"]), and fall back
+            # to the runtime dict for backward compatibility with older callers.
+            sig: bytes | None = (
+                (msg.extra or {}).get("google", {}).get("thought_signature")
+            )
+            if sig is None and thought_signatures:
+                sig = thought_signatures.get(msg.call_id)
+            if sig:
                 fc_part["thought_signature"] = sig
             parts.append(fc_part)
         elif msg.type == "function_call_output":
+            if not msg.call_id:
+                logger.warning(
+                    "skipping function_call_output without call_id; "
+                    "Gemini requires id on every function_response",
+                    extra={"tool_name": msg.name},
+                )
+                continue
+
+            expected_name = call_id_to_name.get(msg.call_id)
+            if expected_name is None:
+                logger.warning(
+                    "skipping function_call_output with no matching function_call",
+                    extra={"call_id": msg.call_id, "tool_name": msg.name},
+                )
+                continue
+            if expected_name != msg.name:
+                logger.warning(
+                    "function_call_output name does not match originating function_call; "
+                    "rewriting to match for strict Gemini function response matching",
+                    extra={
+                        "call_id": msg.call_id,
+                        "output_name": msg.name,
+                        "call_name": expected_name,
+                    },
+                )
+
             response = {"output": msg.output} if not msg.is_error else {"error": msg.output}
             parts.append(
                 {
                     "function_response": {
                         "id": msg.call_id,
-                        "name": msg.name,
+                        "name": expected_name,
                         "response": response,
                     }
                 }
