@@ -1,5 +1,6 @@
 import json
 import logging
+from urllib.parse import urlencode
 
 from dotenv import load_dotenv
 
@@ -104,6 +105,21 @@ async def entrypoint(ctx: JobContext) -> None:
             instructions=_SWAP_PROMPT.format(modality="text-to-speech", model=model)
         )
         return ""
+
+    @ctx.room.local_participant.register_rpc_method("open_in_builder")
+    async def open_in_builder(data: RpcInvocationData) -> str:
+        # Build the Cloud Builder deep-link agent-side so the
+        # frontend doesn't have to know the URL schema. `p_` is a
+        # placeholder project_id — Cloud routes the user through
+        # login if needed and preserves the params on redirect.
+        params = {
+            "modelMode": "pipeline",
+            "instructions": agent.instructions or "",
+            "llm": session.llm.model if isinstance(session.llm, inference.LLM) else DEFAULT_LLM,
+            "stt": session.stt.model if isinstance(session.stt, inference.STT) else DEFAULT_STT,
+            "tts": session.tts.model if isinstance(session.tts, inference.TTS) else DEFAULT_TTS,
+        }
+        return f"https://cloud.livekit.io/projects/p_/agents/builder/new?{urlencode(params)}"
 
     @ctx.room.local_participant.register_rpc_method("set_system_prompt")
     async def set_system_prompt(data: RpcInvocationData) -> str:

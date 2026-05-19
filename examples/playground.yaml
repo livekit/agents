@@ -175,12 +175,13 @@ examples:
     # Supported types:
     #   - dropdown (default): pill with options list
     #   - textarea: multiline string editor. Fires `rpc` with the
-    #     current text on every edit-commit (debounced by the FE) so
-    #     the agent can apply it live. Value is also exposed for URL
-    #     template substitution.
-    #   - link: a button-styled link. On click opens `href_template`
-    #     in a new tab with `{slug/rpc}` tokens substituted from the
-    #     current control values (URL-encoded). No RPC fired.
+    #     current text on every edit-commit (debounced by the FE)
+    #     so the agent can apply it live.
+    #   - link: a button-styled action. On click fires `rpc` on the
+    #     agent (no payload) and opens the returned string as a URL
+    #     in a new tab. The agent owns the URL — useful for deep
+    #     links into Builder, dashboards, etc. where the params
+    #     depend on the agent's current state.
     controls:
       - rpc: set_system_prompt
         type: textarea
@@ -272,24 +273,16 @@ examples:
           - { value: rime/mistv2, label: Rime Mist v2 }
           - { value: rime/mistv3, label: Rime Mist v3 }
           - { value: xai/tts-1, label: xAI Text-to-Speech }
-      # "Open in Builder" CTA. `type: link` is a click target that
-      # opens `href_template` in a new tab with `{slug/rpc}` tokens
-      # substituted from the current control values (URL-encoded). No
-      # agent RPC is fired. `modelMode` is hard-coded because this
-      # example is a pipeline session — if/when we add a realtime
-      # variant we'll flip this to `realtime`.
-      #
-      # `p_` is a placeholder project_id. Cloud requires a known
-      # project_id; if the user isn't logged in on cloud.livekit.io
-      # they'll be routed through login first and params will be
-      # preserved on the redirect. Param names match the verified
-      # Builder schema: `instructions` (not `prompt`), `llm`, `stt`,
-      # `tts`, `modelMode`.
+      # "Open in Builder" CTA. `type: link` fires `rpc` on the agent
+      # and opens the returned string as a URL in a new tab. The
+      # agent (examples/inference/agent.py :: open_in_builder) reads
+      # its current instructions + STT/LLM/TTS model strings and
+      # builds the Cloud Builder deep-link from there, so the
+      # frontend doesn't have to know the schema.
       - rpc: open_in_builder
         type: link
         label: "Open in Builder \u2192"
         primary: true
-        href_template: "https://cloud.livekit.io/projects/p_/agents/builder/new?modelMode=pipeline&instructions={inference/set_system_prompt}&llm={inference/set_llm_model}&stt={inference/set_stt_model}&tts={inference/set_tts_model}"
     # Live conversation transcript. The agent doesn't push to this view
     # by RPC the way other examples push markdown cards — the frontend
     # subscribes to LiveKit `TranscriptionReceived` events and renders
