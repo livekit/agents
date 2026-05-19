@@ -59,18 +59,6 @@ class TurnDetectorOptions:
     thresholds: dict[str, float] = field(default_factory=dict)
 
 
-def _normalize_user_threshold(
-    value: NotGivenOr[float | dict[LanguageCode | str, float]],
-) -> float | dict[str, float] | None:
-    # Dict keys go through `LanguageCode(k).language` so "English"/"en"/"en-US"
-    # all collapse to "en" — matches the table key shape used in lookups.
-    if isinstance(value, dict):
-        return {LanguageCode(k).language: float(v) for k, v in value.items()}
-    if not is_given(value):
-        return None
-    return float(value)
-
-
 class _AudioTurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
     def __init__(self, *, opts: TurnDetectorOptions) -> None:
         super().__init__()
@@ -136,7 +124,6 @@ class _AudioTurnDetectorStream(ABC):
         # just the probability) preserves detection_delay + inference_duration
         # across the held → replay hop.
         self._preemptive_prediction: TurnDetectionEvent | None = None
-        self._preemptive_window_min_client_created_at_ms: int | None = None
 
         self._tasks: set[asyncio.Task[None]] = set()
         self._task = asyncio.create_task(self._main_task())
@@ -206,7 +193,6 @@ class _AudioTurnDetectorStream(ABC):
             return
         self._preemptive_request_id = None
         self._preemptive_prediction = None
-        self._preemptive_window_min_client_created_at_ms = None
         if self._preemptive_request_fut is not None:
             with contextlib.suppress(asyncio.InvalidStateError):
                 self._preemptive_request_fut.set_result(0.0)
@@ -305,6 +291,33 @@ class _AudioTurnDetectorStream(ABC):
     def _emit_event(self, event: TurnDetectionEvent) -> None:
         self._event_ch.send_nowait(event)
 
+    def _handle_prediction(
+        self,
+        request_id: str,
+        probability: float,
+        *,
+        inference_duration: float | None = None,
+        detection_delay: float | None = None,
+    ) -> None:
+        """Accept a prediction from a transport. Stream owns dedup (by
+        request_id), future resolution, and active-vs-held event routing."""
+        if request_id != self._preemptive_request_id:
+            return
+        if self._preemptive_request_fut is not None:
+            with contextlib.suppress(asyncio.InvalidStateError):
+                self._preemptive_request_fut.set_result(probability)
+        event = TurnDetectionEvent(
+            type="eot_prediction",
+            last_speaking_time=time.time(),
+            end_of_turn_probability=probability,
+            detection_delay=detection_delay,
+            inference_duration=inference_duration,
+        )
+        if self.is_active:
+            self._emit_event(event)
+        else:
+            self._preemptive_prediction = event
+
     async def predict_end_of_turn(self, *, timeout: float | None = None) -> float:
         """Run a warmup inference and wait for a prediction within `timeout`."""
         timeout = timeout if timeout is not None else 0.5
@@ -360,7 +373,6 @@ class _AudioTurnDetectorStream(ABC):
         self._preemptive_request_fut = None
         self._preemptive_request_id = None
         self._preemptive_prediction = None
-        self._preemptive_window_min_client_created_at_ms = None
         self._status = _Status.IDLE
 
     # endregion

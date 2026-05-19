@@ -1,6 +1,13 @@
 # Per-language "unlikely" thresholds. Calibrated separately per checkpoint —
 # do NOT unify.
 
+from __future__ import annotations
+
+from typing import Literal
+
+from livekit.agents.language import LanguageCode
+from livekit.agents.types import NotGiven, NotGivenOr
+
 CLOUD_LANGUAGES: dict[str, float] = {
     "ar": 0.3500,
     "de": 0.4000,
@@ -34,3 +41,36 @@ LOCAL_LANGUAGES: dict[str, float] = {
     "tr": 0.2550,
     "zh": 0.3550,
 }
+
+_Backend = Literal["cloud", "local"]
+_BASE: dict[_Backend, dict[str, float]] = {"cloud": CLOUD_LANGUAGES, "local": LOCAL_LANGUAGES}
+
+
+def materialize_thresholds(
+    user_value: NotGivenOr[float | dict[LanguageCode | str, float]],
+    backend: _Backend,
+) -> dict[str, float]:
+    """Resolve user override + per-backend defaults into a complete per-language map.
+
+    - NOT_GIVEN: returns the bare backend table.
+    - scalar: fills every language with the same value.
+    - dict: overrides per-language (keys go through ``LanguageCode`` so
+      "English"/"en"/"en-US" collapse to "en"); unmapped languages keep the default.
+    """
+    base = _BASE[backend]
+    if isinstance(user_value, NotGiven):
+        return dict(base)
+    if isinstance(user_value, dict):
+        norm = {LanguageCode(k).language: float(v) for k, v in user_value.items()}
+        return {lang: norm.get(lang, default) for lang, default in base.items()}
+    return dict.fromkeys(base, float(user_value))
+
+
+def rescale_for_local_fallback(cloud_thresholds: dict[str, float]) -> dict[str, float]:
+    """Preserve the user's cloud-vs-default ratio when promoting local:
+    ``local = LOCAL[lang] * (cloud_t / CLOUD[lang])`` per language."""
+    return {
+        lang: LOCAL_LANGUAGES[lang] * (cloud_t / CLOUD_LANGUAGES[lang])
+        for lang, cloud_t in cloud_thresholds.items()
+        if lang in LOCAL_LANGUAGES and lang in CLOUD_LANGUAGES and CLOUD_LANGUAGES[lang] != 0
+    }

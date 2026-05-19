@@ -26,6 +26,7 @@ import pytest
 
 from livekit.agents._exceptions import APIConnectionError
 from livekit.agents.language import LanguageCode
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.voice.turn import TurnDetectorOptions, _AudioTurnDetectorStream
 from livekit.plugins.turn_detector import audio as audio_mod
 from livekit.plugins.turn_detector.audio import (
@@ -122,7 +123,7 @@ def _make_stream_with_transport(
     transport: _AudioTurnDetectionTransport,
     *,
     backend: str = "cloud",
-    user_threshold: float | dict[str, float] | None = None,
+    user_threshold: NotGivenOr[float | dict[str, float]] = NOT_GIVEN,
 ) -> _AudioTurnDetectorStreamImpl:
     """Construct a stream bypassing the constructor's transport allocation,
     so we can inject a scripted transport before the FSM main task starts.
@@ -131,13 +132,13 @@ def _make_stream_with_transport(
     the real constructor would — the stream's threshold lookup reads its own
     ``opts.thresholds``."""
     from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
-    from livekit.plugins.turn_detector.audio import _materialize_thresholds
+    from livekit.plugins.turn_detector.languages import materialize_thresholds
 
     detector = MagicMock()
     detector.model = "eot-audio" if backend == "cloud" else "eot-audio-mini"
     detector.provider = "livekit"
 
-    opts = _make_opts(_materialize_thresholds(backend, user_threshold))  # type: ignore[arg-type]
+    opts = _make_opts(materialize_thresholds(user_threshold, backend))  # type: ignore[arg-type]
     stream = _AudioTurnDetectorStreamImpl.__new__(_AudioTurnDetectorStreamImpl)
     stream._backend = backend  # type: ignore[assignment]
     stream._http_session = None

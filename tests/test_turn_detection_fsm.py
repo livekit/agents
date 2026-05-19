@@ -12,7 +12,6 @@ regression cases:
 
 from __future__ import annotations
 
-import time
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -55,17 +54,8 @@ class _FakeBackend(_AudioTurnDetectorStream):
         super()._emit_event(event)
 
     def simulate_prediction(self, request_id: str, probability: float) -> None:
-        """Mirror the transport recv-loop: drop stale, hold or emit otherwise."""
-        if request_id != self._preemptive_request_id:
-            return
-        if self.is_active:
-            self._emit_prediction(probability)
-        else:
-            self._preemptive_prediction = TurnDetectionEvent(
-                type="eot_prediction",
-                last_speaking_time=time.time(),
-                end_of_turn_probability=probability,
-            )
+        """Mirror what a transport would do: hand the prediction to the stream."""
+        self._handle_prediction(request_id, probability)
 
 
 def _make_opts() -> TurnDetectorOptions:

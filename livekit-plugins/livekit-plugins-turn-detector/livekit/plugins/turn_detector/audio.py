@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
-import weakref
 from dataclasses import replace
 from typing import Literal
 
@@ -26,10 +25,9 @@ from livekit.agents.voice.turn import (
     TurnDetectorOptions,
     _AudioTurnDetector,
     _AudioTurnDetectorStream,
-    _normalize_user_threshold,
 )
 
-from .languages import CLOUD_LANGUAGES, LOCAL_LANGUAGES
+from .languages import materialize_thresholds, rescale_for_local_fallback
 from .log import logger
 from .transports import (
     _AudioTurnDetectionTransport,
@@ -58,28 +56,6 @@ def _resolve_backend(backend: NotGivenOr[_Backend]) -> tuple[_Backend, bool]:
     if os.environ.get("LIVEKIT_REMOTE_EOT_URL"):
         return "cloud", True
     return "local", True
-
-
-def _materialize_thresholds(
-    backend: _Backend,
-    user_threshold: float | dict[str, float] | None,
-) -> dict[str, float]:
-    base = CLOUD_LANGUAGES if backend == "cloud" else LOCAL_LANGUAGES
-    if user_threshold is None:
-        return dict(base)
-    if isinstance(user_threshold, dict):
-        return {lang: user_threshold.get(lang, default) for lang, default in base.items()}
-    return dict.fromkeys(base, user_threshold)
-
-
-def _materialize_local_thresholds(cloud_thresholds: dict[str, float]) -> dict[str, float]:
-    # Per-language rescale: local = local_default * (cloud / cloud_default).
-    # Preserves the user's ratio across fallback.
-    return {
-        lang: LOCAL_LANGUAGES[lang] * (cloud_t / CLOUD_LANGUAGES[lang])
-        for lang, cloud_t in cloud_thresholds.items()
-        if lang in LOCAL_LANGUAGES and lang in CLOUD_LANGUAGES and CLOUD_LANGUAGES[lang] != 0
-    }
 
 
 class AudioTurnDetector(_AudioTurnDetector):
@@ -140,35 +116,28 @@ class AudioTurnDetector(_AudioTurnDetector):
             err = _get_lib_load_error() or RuntimeError("audio EOT native library not loaded")
             raise err
 
-        normalized = _normalize_user_threshold(unlikely_threshold)
         opts = TurnDetectorOptions(
             sample_rate=sample_rate,
             base_url=lk_base_url,
             api_key=lk_api_key,
             api_secret=lk_api_secret,
             conn_options=conn_options,
-            thresholds=_materialize_thresholds(resolved_backend, normalized),
+            thresholds=materialize_thresholds(unlikely_threshold, resolved_backend),
         )
         super().__init__(opts=opts)
 
         self._backend: _Backend = resolved_backend
         self._http_session = http_session
-        self._stream_ref: weakref.ref[_AudioTurnDetectorStreamImpl] | None = None
 
     @property
     def model(self) -> str:
-        # Effective backend, so post-fallback metrics report the real model.
-        return _WIRE_MODEL[self._effective_backend()]
+        # Reports the backend chosen at construction. After a session-scoped
+        # cloud→local fallback, the stream tracks the current backend on
+        # ``stream.backend``; the detector view is intentionally stable.
+        return _WIRE_MODEL[self._backend]
 
     @property
     def backend(self) -> _Backend:
-        return self._effective_backend()
-
-    def _effective_backend(self) -> _Backend:
-        if self._stream_ref is not None:
-            stream = self._stream_ref()
-            if stream is not None:
-                return stream.backend
         return self._backend
 
     def stream(
@@ -184,7 +153,6 @@ class AudioTurnDetector(_AudioTurnDetector):
             conn_options=conn_options,
         )
         self._streams.add(stream)
-        self._stream_ref = weakref.ref(stream)
         return stream
 
 
@@ -286,7 +254,7 @@ class _AudioTurnDetectorStreamImpl(_AudioTurnDetectorStream):
         self._transport.close_nowait()
         self._opts = replace(
             self._opts,
-            thresholds=_materialize_local_thresholds(self._opts.thresholds),
+            thresholds=rescale_for_local_fallback(self._opts.thresholds),
         )
         self._transport = _LocalTransport(opts=self._opts)
         self._transport.bind(self)

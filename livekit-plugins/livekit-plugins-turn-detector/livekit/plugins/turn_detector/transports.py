@@ -9,7 +9,6 @@ finishes importing and inherited via COW by forked job processes.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import time
 import warnings
 import weakref
@@ -35,7 +34,6 @@ from livekit.agents.types import APIConnectOptions
 from livekit.agents.utils import aio
 from livekit.agents.voice.turn import (
     DEFAULT_SAMPLE_RATE,
-    TurnDetectionEvent,
     TurnDetectorOptions,
     _AudioTurnDetectorStream,
 )
@@ -77,7 +75,7 @@ __all__ = [
 @runtime_checkable
 class _AudioTurnDetectionTransport(Protocol):
     """Transport bound to an `_AudioTurnDetectorStream` via `bind`.
-    Implementations call back through `stream._emit_prediction(...)` etc."""
+    Implementations report predictions via `stream._handle_prediction(...)`."""
 
     def bind(self, stream: _AudioTurnDetectorStream) -> None: ...
     async def run(self) -> None: ...
@@ -152,15 +150,7 @@ class _CloudTransport:
         return ws is not None and not ws.closed
 
     def on_warmup_start(self, request_id: str) -> None:
-        stream = self._stream_ref() if self._stream_ref is not None else None
-        created_at = Timestamp()
-        created_at.GetCurrentTime()
-        msg = ClientMessage(
-            inference_start=InferenceStart(request_id=request_id), created_at=created_at
-        )
-        self._send_message(msg)
-        if stream is not None:
-            stream._preemptive_window_min_client_created_at_ms = msg.created_at.ToMilliseconds()
+        self._send_message(ClientMessage(inference_start=InferenceStart(request_id=request_id)))
 
     def on_inference_stop(self, *, reason: str | None) -> None:
         created_at = Timestamp()
@@ -260,45 +250,19 @@ class _CloudTransport:
         match msg.WhichOneof("message"):
             case "eot_prediction":
                 prediction: EotPrediction = msg.eot_prediction
-                request_id = msg.request_id
-                if request_id != stream._preemptive_request_id:
-                    return
-
-                probability = prediction.probability
                 inference_stats = prediction.inference_stats
-                window_started_at_ms = stream._preemptive_window_min_client_created_at_ms
                 request_sent_at_ms = inference_stats.latest_client_created_at.ToMilliseconds()
-
-                if window_started_at_ms is not None and request_sent_at_ms < window_started_at_ms:
-                    # Prediction belongs to a prior preemptive window — drop it.
-                    return
-
-                fut = stream._preemptive_request_fut
-                if fut is not None:
-                    with contextlib.suppress(asyncio.InvalidStateError):
-                        fut.set_result(probability)
-
                 current_time = Timestamp()
                 current_time.GetCurrentTime()
                 detection_delay_ms = current_time.ToMilliseconds() - request_sent_at_ms
                 inference_duration_ms = inference_stats.server_e2e_latency.ToMilliseconds()
 
-                if stream.is_active:
-                    stream._emit_prediction(
-                        probability,
-                        detection_delay=detection_delay_ms / 1000.0,
-                        inference_duration=inference_duration_ms / 1000.0,
-                    )
-                else:
-                    # Held until activate() releases it. Store the full event so
-                    # detection_delay + inference_duration survive the replay.
-                    stream._preemptive_prediction = TurnDetectionEvent(
-                        type="eot_prediction",
-                        last_speaking_time=time.time(),
-                        end_of_turn_probability=probability,
-                        detection_delay=detection_delay_ms / 1000.0,
-                        inference_duration=inference_duration_ms / 1000.0,
-                    )
+                stream._handle_prediction(
+                    msg.request_id,
+                    prediction.probability,
+                    detection_delay=detection_delay_ms / 1000.0,
+                    inference_duration=inference_duration_ms / 1000.0,
+                )
 
                 client_e2e_ms = inference_stats.client_e2e_latency.ToMilliseconds()
                 detector = self._detector_ref()
@@ -384,8 +348,9 @@ class _CloudTransport:
             async for msg in send_ch:
                 if ws.closed:
                     return
-                # Preserve caller-stamped `created_at` (e.g. on_warmup_start
-                # caches it for the stale-prediction filter). Stamp only if unset.
+                # Preserve caller-stamped `created_at` (audio/inference_stop
+                # stamp at enqueue time so detection_delay reflects FIFO drain).
+                # Stamp only if unset (e.g. inference_start).
                 if not msg.HasField("created_at"):
                     created_at = Timestamp()
                     created_at.GetCurrentTime()
@@ -460,25 +425,12 @@ class _LocalTransport:
         return _audio_eot is not None
 
     def on_warmup_start(self, request_id: str) -> None:
-        stream = self._stream_ref() if self._stream_ref is not None else None
-        if stream is None:
-            return
         snapshot = bytes(self._buf)
-        fut = stream._preemptive_request_fut
-        task = asyncio.create_task(self._run_predict(request_id, snapshot, fut))
+        task = asyncio.create_task(self._run_predict(request_id, snapshot))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-    async def _run_predict(
-        self,
-        request_id: str,
-        pcm_snapshot: bytes,
-        fut: asyncio.Future[float] | None,
-    ) -> None:
-        stream = self._stream_ref() if self._stream_ref is not None else None
-        if stream is None:
-            return
-
+    async def _run_predict(self, request_id: str, pcm_snapshot: bytes) -> None:
         prob = 0.0
         t0 = time.monotonic()
         try:
@@ -487,22 +439,10 @@ class _LocalTransport:
             logger.exception("local audio EOT prediction failed")
         inference_duration = time.monotonic() - t0
 
-        if request_id != stream._preemptive_request_id:
+        stream = self._stream_ref() if self._stream_ref is not None else None
+        if stream is None:
             return
-
-        if fut is not None:
-            with contextlib.suppress(asyncio.InvalidStateError):
-                fut.set_result(prob)
-
-        if stream.is_active:
-            stream._emit_prediction(prob, inference_duration=inference_duration)
-        else:
-            stream._preemptive_prediction = TurnDetectionEvent(
-                type="eot_prediction",
-                last_speaking_time=time.time(),
-                end_of_turn_probability=prob,
-                inference_duration=inference_duration,
-            )
+        stream._handle_prediction(request_id, prob, inference_duration=inference_duration)
 
     async def on_audio_chunk(self, frame: rtc.AudioFrame) -> None:
         data = bytes(frame.data)

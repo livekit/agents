@@ -112,12 +112,6 @@ class EOUMetrics(_BaseMetrics):
     metadata: Metadata | None = None
 
 
-# Alias for symmetry with `EOTInferenceMetrics` / `EOTModelUsage`. New code
-# should prefer `EOTMetrics`; the original `EOUMetrics` name is kept for
-# backwards compatibility with existing public-API consumers.
-EOTMetrics = EOUMetrics
-
-
 class EOTInferenceMetrics(_BaseMetrics):
     """Per-inference metrics emitted by the audio EOT model on each prediction."""
 

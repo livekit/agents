@@ -1,7 +1,6 @@
 from .base import (
     AgentMetrics,
     EOTInferenceMetrics,
-    EOTMetrics,
     EOUMetrics,
     InterruptionMetrics,
     LLMMetrics,
@@ -28,7 +27,6 @@ __all__ = [
     "AgentMetrics",
     "VADMetrics",
     "EOUMetrics",
-    "EOTMetrics",
     "EOTInferenceMetrics",
     "STTMetrics",
     "TTSMetrics",
