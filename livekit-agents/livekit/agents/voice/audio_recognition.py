@@ -1441,7 +1441,7 @@ class AudioRecognition:
         task_func = (
             _bounce_eou_task_with_speaking_guard
             if self._turn_detector is not None
-            and isinstance(self._turn_detector, _AudioTurnDetector | _AudioTurnDetectorStream)
+            and isinstance(self._turn_detector, _AudioTurnDetector)
             else _bounce_eou_task
         )
         # copy the last_speaking_time before awaiting (the value can change)
