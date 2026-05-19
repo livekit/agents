@@ -200,10 +200,6 @@ class TTS(tts.TTS):
         self._streams.clear()
         await self._pool.aclose()
 
-        if self._session:
-            await self._session.close()
-            self._session = None
-
 
 class ChunkedStream(tts.ChunkedStream):
     """Synthesize text using Respeecher HTTPS endpoint"""
