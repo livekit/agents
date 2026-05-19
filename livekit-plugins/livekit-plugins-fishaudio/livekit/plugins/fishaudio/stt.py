@@ -218,9 +218,6 @@ class STT(stt.STT):
         return form
 
 
-FishAudioSTT = STT
-
-
 def _normalize_language(language: NotGivenOr[str | None]) -> LanguageCode | None:
     if not is_given(language) or language is None:
         return None
