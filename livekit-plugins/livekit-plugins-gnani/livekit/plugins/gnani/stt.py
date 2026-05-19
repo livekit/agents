@@ -408,7 +408,7 @@ class SpeechStream(stt.RecognizeStream):
 
         except asyncio.CancelledError:
             raise
-        except (APIStatusError, APIConnectionError):
+        except (APIStatusError, APIConnectionError, APITimeoutError):
             raise
         except Exception as e:
             raise APIConnectionError(f"Error receiving Gnani STT messages: {e}") from e
