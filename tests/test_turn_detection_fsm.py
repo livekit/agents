@@ -24,30 +24,51 @@ from livekit.agents.voice.turn import (
 )
 
 
-class _FakeBackend(_AudioTurnDetectorStream):
-    """In-memory backend that records hook events for FSM testing.
+class _FakeTransport:
+    """In-memory transport that records what the stream tells it to do."""
 
-    Predictions arriving while the stream is not ACTIVE write to the
-    stream's ``_preemptive_prediction`` field; predictions whose request
-    id no longer matches ``_preemptive_request_id`` are discarded.
-    """
-
-    def __init__(self, *, detector: Any, opts: TurnDetectorOptions) -> None:
+    def __init__(self) -> None:
         self.events: list[tuple[str, ...]] = []
-        self.emitted: list[float] = []
-        super().__init__(detector=detector, opts=opts)
+        self._stream: _AudioTurnDetectorStream | None = None
 
-    def _transport_ready(self) -> bool:
+    def bind(self, stream: _AudioTurnDetectorStream) -> None:
+        self._stream = stream
+
+    async def run(self) -> None:
+        assert self._stream is not None
+        await self._stream._drain_audio_channel()
+
+    def transport_ready(self) -> bool:
         return True
 
-    async def _run_transport(self) -> None:
-        await self._drain_audio_channel()
+    def start_inference(self, request_id: str) -> None:
+        self.events.append(("start_inference", request_id))
 
-    def _on_warmup_start(self, request_id: str) -> None:
-        self.events.append(("warmup_start", request_id))
+    def stop_inference(self, *, reason: str | None) -> None:
+        self.events.append(("stop_inference", reason or ""))
 
-    def _on_inference_stop(self, *, reason: str | None) -> None:
-        self.events.append(("inference_stop", reason or ""))
+    async def push_frame(self, frame: Any) -> None:
+        pass
+
+    async def flush(self, sentinel: Any) -> None:
+        pass
+
+    def detach(self) -> None:
+        pass
+
+
+class _FakeBackend(_AudioTurnDetectorStream):
+    """Stream + fake transport bundled for FSM testing. Wraps the events
+    list from the transport plus an `emitted` list of outbound probabilities."""
+
+    def __init__(self, *, detector: Any, opts: TurnDetectorOptions) -> None:
+        self._fake_transport = _FakeTransport()
+        self.emitted: list[float] = []
+        super().__init__(detector=detector, opts=opts, transport=self._fake_transport)
+
+    @property
+    def events(self) -> list[tuple[str, ...]]:
+        return self._fake_transport.events
 
     def _emit_event(self, event: TurnDetectionEvent) -> None:
         self.emitted.append(event.end_of_turn_probability)
@@ -83,7 +104,7 @@ class TestAudioTurnDetectionFSM:
             assert s.is_inference_running
             assert s._preemptive_request_id is not None
             assert not fut.done()
-            assert s.events == [("warmup_start", s._preemptive_request_id)]
+            assert s.events == [("start_inference", s._preemptive_request_id)]
         finally:
             await s.aclose()
 
@@ -94,7 +115,7 @@ class TestAudioTurnDetectionFSM:
             first_id = s._preemptive_request_id
             s.warmup()
             assert s._preemptive_request_id == first_id
-            assert sum(1 for e in s.events if e[0] == "warmup_start") == 1
+            assert sum(1 for e in s.events if e[0] == "start_inference") == 1
         finally:
             await s.aclose()
 
@@ -113,7 +134,7 @@ class TestAudioTurnDetectionFSM:
         try:
             s.activate(trigger="manual")
             assert s._status == _Status.ACTIVE
-            warmups = [e for e in s.events if e[0] == "warmup_start"]
+            warmups = [e for e in s.events if e[0] == "start_inference"]
             assert len(warmups) == 1
         finally:
             await s.aclose()
@@ -130,7 +151,7 @@ class TestAudioTurnDetectionFSM:
             assert s._status == _Status.IDLE
             assert s._preemptive_request_id is None
             assert not s.is_inference_running
-            assert ("inference_stop", "vad sos") in s.events
+            assert ("stop_inference", "vad sos") in s.events
         finally:
             await s.aclose()
 
@@ -186,7 +207,7 @@ class TestAudioTurnDetectionFSM:
             assert s._status == _Status.IDLE
             assert s._preemptive_request_id is None
             assert s._preemptive_request_fut is None
-            assert ("inference_stop", "predict_end_of_turn timeout") in s.events
+            assert ("stop_inference", "predict_end_of_turn timeout") in s.events
         finally:
             await s.aclose()
 
@@ -208,7 +229,7 @@ class TestAudioTurnDetectionFSM:
             s.flush(reason="turn committed")
             assert s._status == _Status.IDLE
             assert not s.is_inference_running
-            assert ("inference_stop", "turn committed") in s.events
+            assert ("stop_inference", "turn committed") in s.events
         finally:
             await s.aclose()
 

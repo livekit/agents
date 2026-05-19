@@ -132,12 +132,10 @@ def make_stream(
     stream._is_fallback = False
     stream._warned_cloud_failure = False
     stream._warned_local_failure = False
-    stream._transport = transport
-    # Now run the FSM base __init__ (kicks off _main_task → _run_transport).
+    # Now run the FSM base __init__ (kicks off _main_task → _run, also binds transport).
     from livekit.agents.voice.turn import _AudioTurnDetectorStream
 
-    _AudioTurnDetectorStream.__init__(stream, detector=detector, opts=opts)
-    transport.bind(stream)
+    _AudioTurnDetectorStream.__init__(stream, detector=detector, opts=opts, transport=transport)
     return stream, fake_ws, transport
 
 

@@ -87,23 +87,20 @@ class _ScriptedTransport:
         # idle — sleep until cancelled
         await asyncio.Future()
 
-    def on_warmup_start(self, request_id: str) -> None:
-        self.events.append(("warmup_start", request_id))
+    def start_inference(self, request_id: str) -> None:
+        self.events.append(("start_inference", request_id))
 
-    async def on_audio_chunk(self, frame: Any) -> None:
-        self.events.append(("audio_chunk", frame))
+    async def push_frame(self, frame: Any) -> None:
+        self.events.append(("push_frame", frame))
 
-    async def on_flush_sentinel(self, sentinel: Any) -> None:
-        self.events.append(("flush_sentinel", sentinel))
+    async def flush(self, sentinel: Any) -> None:
+        self.events.append(("flush", sentinel))
 
-    def on_activate(self) -> None:
-        self.events.append(("activate", None))
+    def stop_inference(self, *, reason: str | None) -> None:
+        self.events.append(("stop_inference", reason))
 
-    def on_inference_stop(self, *, reason: str | None) -> None:
-        self.events.append(("inference_stop", reason))
-
-    def close_nowait(self) -> None:
-        self.events.append(("close_nowait", None))
+    def detach(self) -> None:
+        self.events.append(("detach", None))
 
 
 def _make_opts(thresholds: dict[str, float] | None = None) -> TurnDetectorOptions:
@@ -146,9 +143,7 @@ def _make_stream_with_transport(
     stream._is_fallback = False
     stream._warned_cloud_failure = False
     stream._warned_local_failure = False
-    stream._transport = transport
-    _AudioTurnDetectorStream.__init__(stream, detector=detector, opts=opts)
-    transport.bind(stream)
+    _AudioTurnDetectorStream.__init__(stream, detector=detector, opts=opts, transport=transport)
     return stream
 
 
@@ -216,7 +211,7 @@ class TestFallback:
                 assert stream.backend == "local"
                 assert stream.is_fallback is True
                 assert stream._warned_cloud_failure is True
-                assert ("close_nowait", None) in transport.events
+                assert ("detach", None) in transport.events
                 await stream.aclose()
 
     async def test_fallback_on_predict_timeout(self) -> None:

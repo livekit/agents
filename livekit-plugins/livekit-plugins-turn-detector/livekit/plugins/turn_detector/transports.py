@@ -12,7 +12,7 @@ import asyncio
 import time
 import warnings
 import weakref
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any
 
 import aiohttp
 import numpy as np
@@ -35,6 +35,7 @@ from livekit.agents.utils import aio
 from livekit.agents.voice.turn import (
     DEFAULT_SAMPLE_RATE,
     TurnDetectorOptions,
+    _AudioTurnDetectionTransport,
     _AudioTurnDetectorStream,
 )
 
@@ -72,34 +73,9 @@ __all__ = [
 ]
 
 
-@runtime_checkable
-class _AudioTurnDetectionTransport(Protocol):
-    """Transport bound to an `_AudioTurnDetectorStream` via `bind`.
-    Implementations report predictions via `stream._handle_prediction(...)`."""
-
-    def bind(self, stream: _AudioTurnDetectorStream) -> None: ...
-    async def run(self) -> None: ...
-    def on_warmup_start(self, request_id: str) -> None: ...
-    async def on_audio_chunk(self, frame: rtc.AudioFrame) -> None: ...
-    async def on_flush_sentinel(
-        self, sentinel: _AudioTurnDetectorStream._FlushSentinel
-    ) -> None: ...
-    def on_inference_stop(self, *, reason: str | None) -> None: ...
-    def close_nowait(self) -> None: ...
-    def transport_ready(self) -> bool: ...
-
-
 # Native model operates on up to 1.2 s of 16 kHz s16le PCM per predict.
 _CLIENT_BUFFER_SECONDS = 1.2
-_BYTES_PER_SECOND = DEFAULT_SAMPLE_RATE * 2
-_CLIENT_BUFFER_BYTES = int(_CLIENT_BUFFER_SECONDS * _BYTES_PER_SECOND)
-
-
-def _predict(pcm_bytes: bytes) -> float:
-    if _audio_eot is None:
-        raise _audio_eot_import_error or RuntimeError("audio_eot package not installed")
-    arr = np.frombuffer(pcm_bytes, dtype=np.int16)
-    return float(_audio_eot.predict(arr))
+_CLIENT_BUFFER_SAMPLES = int(_CLIENT_BUFFER_SECONDS * DEFAULT_SAMPLE_RATE)
 
 
 def _lib_available() -> bool:
@@ -149,16 +125,16 @@ class _CloudTransport:
         ws = self._ws
         return ws is not None and not ws.closed
 
-    def on_warmup_start(self, request_id: str) -> None:
+    def start_inference(self, request_id: str) -> None:
         self._send_message(ClientMessage(inference_start=InferenceStart(request_id=request_id)))
 
-    def on_inference_stop(self, *, reason: str | None) -> None:
+    def stop_inference(self, *, reason: str | None) -> None:
         created_at = Timestamp()
         created_at.GetCurrentTime()
         msg = ClientMessage(inference_stop=InferenceStop(), created_at=created_at)
         self._send_message(msg)
 
-    async def on_audio_chunk(self, frame: rtc.AudioFrame) -> None:
+    async def push_frame(self, frame: rtc.AudioFrame) -> None:
         pcm_bytes = bytes(frame.data)
         if not pcm_bytes:
             return
@@ -174,13 +150,15 @@ class _CloudTransport:
             )
         )
 
-    async def on_flush_sentinel(self, sentinel: _AudioTurnDetectorStream._FlushSentinel) -> None:
-        # TODO(audio-eot): forward sentinel.keep_tail_ms once SessionFlush
+    async def flush(self, sentinel: _AudioTurnDetectorStream._FlushSentinel) -> None:
+        # TODO: @chenghao-mou forward sentinel.keep_tail_ms once SessionFlush
         # supports it server-side (local backend already honors it).
         self._send_message(ClientMessage(session_flush=SessionFlush()))
 
-    def close_nowait(self) -> None:
-        # Detach send_ch + ws ref; the actual ws.close() awaits in run()'s finally.
+    def detach(self) -> None:
+        # Signal close: detach send_ch + ws ref. The actual ws.close() awaits
+        # in run()'s finally clause, reached transitively via the FSM's
+        # cancel_and_wait on the main task.
         if self._send_ch is not None:
             self._send_ch.close()
         self._ws = None
@@ -197,8 +175,6 @@ class _CloudTransport:
         }
 
     def _send_message(self, msg: ClientMessage) -> None:
-        # Dropped silently when no active connection. Caller may pre-stamp
-        # `created_at` (sender preserves it); otherwise sender stamps "now".
         ch = self._send_ch
         if ch is None or ch.closed or self._ws is None or self._ws.closed:
             return
@@ -306,7 +282,7 @@ class _CloudTransport:
         max_retries = self._conn_options.max_retry
         while self._num_retries <= max_retries:
             try:
-                return await self._run_transport()
+                return await self._run_once()
             except APIError as e:
                 if max_retries == 0 or not e.retryable:
                     raise
@@ -326,7 +302,7 @@ class _CloudTransport:
                 await asyncio.sleep(retry_interval)
                 self._num_retries += 1
 
-    async def _run_transport(self) -> None:
+    async def _run_once(self) -> None:
         stream = self._stream_ref() if self._stream_ref is not None else None
         if stream is None:
             return
@@ -414,7 +390,9 @@ class _LocalTransport:
 
     def __init__(self, *, opts: TurnDetectorOptions) -> None:
         self._opts = opts
-        self._buf: bytearray = bytearray()
+        self._buf = utils.AudioArrayBuffer(
+            buffer_size=_CLIENT_BUFFER_SAMPLES, sample_rate=DEFAULT_SAMPLE_RATE
+        )
         self._stream_ref: weakref.ref[_AudioTurnDetectorStream] | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
 
@@ -424,17 +402,18 @@ class _LocalTransport:
     def transport_ready(self) -> bool:
         return _audio_eot is not None
 
-    def on_warmup_start(self, request_id: str) -> None:
-        snapshot = bytes(self._buf)
-        task = asyncio.create_task(self._run_predict(request_id, snapshot))
+    def start_inference(self, request_id: str) -> None:
+        task = asyncio.create_task(self._predict(request_id, self._buf.read()))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-    async def _run_predict(self, request_id: str, pcm_snapshot: bytes) -> None:
+    async def _predict(self, request_id: str, pcm_snapshot: np.ndarray) -> None:
         prob = 0.0
         t0 = time.monotonic()
         try:
-            prob = await asyncio.to_thread(_predict, pcm_snapshot)
+            if _audio_eot is None:
+                raise _audio_eot_import_error or RuntimeError("audio_eot package not installed")
+            prob = float(await asyncio.to_thread(_audio_eot.predict, pcm_snapshot))
         except Exception:
             logger.exception("local audio EOT prediction failed")
         inference_duration = time.monotonic() - t0
@@ -444,25 +423,19 @@ class _LocalTransport:
             return
         stream._handle_prediction(request_id, prob, inference_duration=inference_duration)
 
-    async def on_audio_chunk(self, frame: rtc.AudioFrame) -> None:
-        data = bytes(frame.data)
-        if not data:
-            return
-        self._buf.extend(data)
-        overflow = len(self._buf) - _CLIENT_BUFFER_BYTES
-        if overflow > 0:
-            del self._buf[:overflow]
+    async def push_frame(self, frame: rtc.AudioFrame) -> None:
+        self._buf.push_frame(frame)
 
-    async def on_flush_sentinel(self, sentinel: _AudioTurnDetectorStream._FlushSentinel) -> None:
-        keep_bytes = sentinel.keep_tail_ms * _BYTES_PER_SECOND // 1000
-        if keep_bytes < len(self._buf):
-            del self._buf[: len(self._buf) - keep_bytes]
+    async def flush(self, sentinel: _AudioTurnDetectorStream._FlushSentinel) -> None:
+        keep_samples = sentinel.keep_tail_ms * DEFAULT_SAMPLE_RATE // 1000
+        if len(self._buf) > keep_samples:
+            self._buf.shift(len(self._buf) - keep_samples)
 
-    def on_inference_stop(self, *, reason: str | None) -> None:
-        # In-flight predicts run to completion; `_run_predict` drops stale results.
+    def stop_inference(self, *, reason: str | None) -> None:
+        # In-flight predicts run to completion; `_predict` drops stale results.
         return
 
-    def close_nowait(self) -> None:
+    def detach(self) -> None:
         for task in list(self._tasks):
             task.cancel()
         self._tasks.clear()

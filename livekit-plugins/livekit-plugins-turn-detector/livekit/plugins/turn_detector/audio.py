@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import os
 from dataclasses import replace
 from typing import Literal
@@ -173,20 +172,18 @@ class _AudioTurnDetectorStreamImpl(_AudioTurnDetectorStream):
         self._warned_cloud_failure = False
         self._warned_local_failure = False
 
-        self._transport: _AudioTurnDetectionTransport
+        transport: _AudioTurnDetectionTransport
         if backend == "cloud":
-            self._transport = _CloudTransport(
+            transport = _CloudTransport(
                 detector=detector,
                 opts=opts,
                 http_session=http_session,
                 conn_options=conn_options,
             )
         else:
-            self._transport = _LocalTransport(opts=opts)
+            transport = _LocalTransport(opts=opts)
 
-        # super().__init__ starts _main_task → _run_transport, so bind first.
-        super().__init__(detector=detector, opts=opts)
-        self._transport.bind(self)
+        super().__init__(detector=detector, opts=opts, transport=transport)
 
     @property
     def backend(self) -> _Backend:
@@ -196,26 +193,7 @@ class _AudioTurnDetectorStreamImpl(_AudioTurnDetectorStream):
     def is_fallback(self) -> bool:
         return self._is_fallback
 
-    # region: FSM hook dispatch
-
-    def _transport_ready(self) -> bool:
-        return self._transport.transport_ready()
-
-    def _on_warmup_start(self, request_id: str) -> None:
-        self._transport.on_warmup_start(request_id)
-
-    def _on_inference_stop(self, *, reason: str | None) -> None:
-        self._transport.on_inference_stop(reason=reason)
-
-    async def _on_audio_chunk(self, frame) -> None:  # type: ignore[no-untyped-def]
-        await self._transport.on_audio_chunk(frame)
-
-    async def _on_flush_sentinel(self, sentinel: _AudioTurnDetectorStream._FlushSentinel) -> None:
-        await self._transport.on_flush_sentinel(sentinel)
-
-    # endregion
-
-    async def _run_transport(self) -> None:
+    async def _run(self) -> None:
         if self._backend == "cloud":
             try:
                 await self._transport.run()
@@ -251,7 +229,7 @@ class _AudioTurnDetectorStreamImpl(_AudioTurnDetectorStream):
             self._warned_cloud_failure = True
 
         self._emit_default_for_inflight()
-        self._transport.close_nowait()
+        self._transport.detach()
         self._opts = replace(
             self._opts,
             thresholds=rescale_for_local_fallback(self._opts.thresholds),
@@ -271,10 +249,9 @@ class _AudioTurnDetectorStreamImpl(_AudioTurnDetectorStream):
         self._emit_default_for_inflight()
 
     def _emit_default_for_inflight(self) -> None:
-        if self._preemptive_request_fut is not None and not self._preemptive_request_fut.done():
-            with contextlib.suppress(asyncio.InvalidStateError):
-                self._preemptive_request_fut.set_result(1.0)
-        self._emit_prediction(1.0)
+        request_id = self._preemptive_request_id
+        if request_id is not None:
+            self._handle_prediction(request_id, 1.0)
 
     def _on_predict_timeout(self) -> None:
         # Cloud predict timeout = transport failure; promote local for the session.
@@ -282,7 +259,7 @@ class _AudioTurnDetectorStreamImpl(_AudioTurnDetectorStream):
             self._fall_back_to_local(reason=asyncio.TimeoutError("predict_end_of_turn"))
 
     async def aclose(self) -> None:
-        self._transport.close_nowait()
+        self._transport.detach()
         await super().aclose()
 
 
@@ -291,10 +268,7 @@ class _AudioEotPlugin(Plugin):
         super().__init__(__name__, __version__, __package__, logger)
 
     def download_files(self) -> None:
-        logger.info(
-            "audio EOT model is bundled with the plugin (no download step). "
-            "If the local backend errors at construction, install the `audio-eot` package."
-        )
+        pass
 
 
 Plugin.register_plugin(_AudioEotPlugin())

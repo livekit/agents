@@ -23,7 +23,7 @@ classifiers = [
 dependencies = [
     "livekit-agents>=1.5.10",
     "aiohttp",
-    # TODO: add `audio-eot` once it ships on PyPI. For now, install locally
+    # TODO: @chenghao-mou add `audio-eot` once it ships on PyPI. For now, install locally
     # (`uv pip install <path-to-audio-eot-source>`) for the local backend.
     "livekit-protocol",
     "transformers>=4.47.1,!=4.57.2,!=4.57.3",  # 4.57.2-4.57.3 have a bug with local_files_only=True (huggingface/transformers#42369)

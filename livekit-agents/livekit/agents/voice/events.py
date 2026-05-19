@@ -135,7 +135,7 @@ class EotPredictionEvent(BaseModel):
     probability: float
     threshold: float
     inference_duration: float
-    """Model compute time (s)."""
+    """Server-side model inference time."""
     delay: float
     """End of user speech → prediction received latency (s), anchored on the
     VAD-backdated last_speaking_time."""

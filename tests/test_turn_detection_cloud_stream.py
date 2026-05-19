@@ -57,7 +57,7 @@ class TestCloudStreamSendOrdering:
     """FIFO delivery for the unified outbound channel."""
 
     async def test_inference_start_precedes_input_audio(self) -> None:
-        """Regression: ``on_warmup_start`` (sync hook) used to schedule its
+        """Regression: ``start_inference`` (sync hook) used to schedule its
         send via ``asyncio.create_task``, which could land on the wire after
         an awaited ``input_audio`` send. With the unified channel, the
         sender drains FIFO so ``inference_start`` always reaches the wire
@@ -77,8 +77,8 @@ class TestCloudStreamSendOrdering:
             await stream.aclose()
 
     async def test_inference_start_precedes_inference_stop(self) -> None:
-        """Regression: two sync hooks back-to-back (``on_warmup_start`` then
-        ``on_inference_stop``) used to race at the ``ws.send_bytes`` await
+        """Regression: two sync hooks back-to-back (``start_inference`` then
+        ``stop_inference``) used to race at the ``ws.send_bytes`` await
         because each ran in its own task. The unified channel serializes
         them in call order."""
         stream, fake_ws, transport = make_stream(connect_script=[None])

@@ -113,18 +113,18 @@ class EOUMetrics(_BaseMetrics):
 
 
 class EOTInferenceMetrics(_BaseMetrics):
-    """Per-inference metrics emitted by the audio EOT model on each prediction."""
+    """Per-inference metrics emitted by the EOT model on each prediction."""
 
     type: Literal["eot_inference_metrics"] = "eot_inference_metrics"
     timestamp: float
     total_duration: float
-    """Round-trip time (s) for the inference."""
-    prediction_duration: float
-    """Model compute time (s)."""
+    """Earliest audio creation time in an inference to response receive time."""
     detection_delay: float
-    """Request-sent → response-received latency (s)."""
+    """Latest audio creation time in an inference to response receive time."""
+    prediction_duration: float
+    """Server side model inference time."""
     num_requests: int = 1
-    """Number of inference requests represented by this metric."""
+    """Number of inference requests made during one inference."""
     metadata: Metadata | None = None
 
 

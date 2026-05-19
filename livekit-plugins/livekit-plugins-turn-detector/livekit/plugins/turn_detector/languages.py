@@ -3,10 +3,11 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, cast
 
 from livekit.agents.language import LanguageCode
-from livekit.agents.types import NotGiven, NotGivenOr
+from livekit.agents.types import NotGivenOr
+from livekit.agents.utils.misc import is_given
 
 CLOUD_LANGUAGES: dict[str, float] = {
     "ar": 0.3500,
@@ -58,12 +59,13 @@ def materialize_thresholds(
       "English"/"en"/"en-US" collapse to "en"); unmapped languages keep the default.
     """
     base = _BASE[backend]
-    if isinstance(user_value, NotGiven):
+    if not is_given(user_value):
         return dict(base)
     if isinstance(user_value, dict):
         norm = {LanguageCode(k).language: float(v) for k, v in user_value.items()}
         return {lang: norm.get(lang, default) for lang, default in base.items()}
-    return dict.fromkeys(base, float(user_value))
+    # mypy 2.1.0 doesn't narrow NotGivenOr[T | dict] through is_given() above.
+    return dict.fromkeys(base, float(cast(float, user_value)))
 
 
 def rescale_for_local_fallback(cloud_thresholds: dict[str, float]) -> dict[str, float]:

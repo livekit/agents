@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -25,6 +26,7 @@ from livekit.agents.utils import aio
 from livekit.agents.vad import VADEvent, VADEventType
 from livekit.agents.voice.audio_recognition import AudioRecognition
 from livekit.agents.voice.turn import (
+    TurnDetectionEvent,
     TurnDetectorOptions,
     _AudioTurnDetector,
     _AudioTurnDetectorStream,
@@ -64,6 +66,34 @@ def _pcm_frame(samples: int = 320) -> rtc.AudioFrame:
     )
 
 
+class _ParkingTransport:
+    """Transport that parks forever in `run()`; aclose cancels."""
+
+    def bind(self, stream: _AudioTurnDetectorStream) -> None:
+        pass
+
+    async def run(self) -> None:
+        await asyncio.Future()
+
+    def transport_ready(self) -> bool:
+        return True
+
+    def start_inference(self, request_id: str) -> None:
+        pass
+
+    def stop_inference(self, *, reason: str | None) -> None:
+        pass
+
+    async def push_frame(self, frame: Any) -> None:
+        pass
+
+    async def flush(self, sentinel: Any) -> None:
+        pass
+
+    def detach(self) -> None:
+        pass
+
+
 class _RecordingStream(_AudioTurnDetectorStream):
     """Records every public-surface call the wiring task is supposed to make,
     and lets tests inject predictions via ``emit``."""
@@ -73,14 +103,7 @@ class _RecordingStream(_AudioTurnDetectorStream):
         self.deactivate_calls: list[str | None] = []
         self.push_audio_calls: list[rtc.AudioFrame] = []
         self.flush_calls: list[str | None] = []
-        super().__init__(detector=detector, opts=opts)
-
-    def _transport_ready(self) -> bool:
-        return True
-
-    async def _run_transport(self) -> None:
-        # Park forever; aclose cancels.
-        await asyncio.Future()
+        super().__init__(detector=detector, opts=opts, transport=_ParkingTransport())
 
     def activate(self, trigger: str | None = None) -> None:
         self.activate_calls.append(trigger)
@@ -99,9 +122,16 @@ class _RecordingStream(_AudioTurnDetectorStream):
         super().flush(reason, keep_tail_ms=keep_tail_ms)
 
     def emit(self, probability: float) -> None:
-        """Push a prediction into the stream's event channel as a real
-        backend would."""
-        self._emit_prediction(probability)
+        """Push an event directly onto the stream's channel — bypasses
+        request_id dedup so tests can exercise the consumer-side
+        ``is_inference_running`` stale-event guard."""
+        self._emit_event(
+            TurnDetectionEvent(
+                type="eot_prediction",
+                last_speaking_time=time.time(),
+                end_of_turn_probability=probability,
+            )
+        )
 
 
 def _make_recognition_shell() -> AudioRecognition:
@@ -112,7 +142,7 @@ def _make_recognition_shell() -> AudioRecognition:
     ar._hooks.retrieve_chat_ctx.return_value = MagicMock(copy=MagicMock(return_value=MagicMock()))
     ar._closing = asyncio.Event()
     ar._tasks = set()
-    ar._latest_eou_prediction = None
+    ar._latest_eot_prediction = None
     ar._last_language = None
     ar._run_eou_detection = MagicMock()
     return ar
@@ -232,7 +262,7 @@ class TestTurnDetectionTaskPredictions:
             assert recognition._run_eou_detection.called
             kwargs = recognition._run_eou_detection.call_args.kwargs
             assert kwargs["trigger"] == "turn_detector"
-            assert kwargs["latest_eou_prediction"].end_of_turn_probability == 0.3
+            assert kwargs["latest_eot_prediction"].end_of_turn_probability == 0.3
             # Stream wasn't deactivated for sub-threshold prediction.
             assert "positive eou prediction" not in stream.deactivate_calls
         finally:
@@ -240,8 +270,10 @@ class TestTurnDetectionTaskPredictions:
             await aio.cancel_and_wait(task)
 
     async def test_positive_prediction_deactivates_stream(self) -> None:
-        """A prediction >= unlikely_threshold flips the stream off so the
-        next audio doesn't keep the warmup window open."""
+        """A prediction >= unlikely_threshold deactivates the stream so a
+        subsequent intra-speech silence can trigger a fresh warmup — letting
+        the bounce task re-evaluate on more recent audio if the user keeps
+        talking through the endpointing delay."""
         recognition = _make_recognition_shell()
         stream = _RecordingStream(detector=_make_detector_stub(), opts=_make_opts())
         ch: aio.Chan[Any] = aio.Chan()
@@ -324,7 +356,7 @@ def _make_full_recognition_for_eou() -> AudioRecognition:
     ar._vad_speech_started = False
     ar._end_of_turn_task = None
     ar._user_turn_committed = False
-    ar._latest_eou_prediction = None
+    ar._latest_eot_prediction = None
     ar._last_language = None
     ar._closing = asyncio.Event()
     return ar

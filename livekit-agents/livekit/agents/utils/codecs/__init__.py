@@ -14,10 +14,7 @@
 
 from .decoder import AudioStreamDecoder, StreamBuffer
 
-__all__ = [
-    "AudioStreamDecoder",
-    "StreamBuffer",
-]
+__all__ = ["AudioStreamDecoder", "StreamBuffer"]
 
 # Cleanup docs of unexported modules
 _module = dir()

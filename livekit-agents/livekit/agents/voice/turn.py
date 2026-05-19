@@ -4,11 +4,10 @@ import asyncio
 import contextlib
 import time
 import weakref
-from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Literal, Protocol
+from typing import Literal, Protocol, runtime_checkable
 
 from typing_extensions import TypedDict
 
@@ -41,11 +40,9 @@ class TurnDetectionEvent:
     end_of_turn_probability: float
     last_speaking_time: float
     detection_delay: float | None = None
-    """Client-observed end-to-end latency (s) for this prediction —
-    request-sent → result-received. Cloud only; local sets None."""
+    """Latest input audio creation time -> prediction receive time."""
     inference_duration: float | None = None
-    """Model compute time (s). Cloud: server `server_e2e_latency`.
-    Local: wall-clock around the ctypes ``_predict`` call."""
+    """Server-side model inference time."""
 
 
 @dataclass
@@ -55,7 +52,6 @@ class TurnDetectorOptions:
     api_key: str
     api_secret: str
     conn_options: APIConnectOptions
-    # Materialized per-language thresholds keyed by base ISO code.
     thresholds: dict[str, float] = field(default_factory=dict)
 
 
@@ -93,10 +89,29 @@ class _AudioTurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
         self._streams.clear()
 
 
-class _AudioTurnDetectorStream(ABC):
+@runtime_checkable
+class _AudioTurnDetectionTransport(Protocol):
+    """Transport adapter for ``_AudioTurnDetectorStream`` — owns the I/O
+    (WebSocket session, in-process predict, etc.). The stream calls these
+    methods directly; transports report predictions back via
+    ``stream._handle_prediction(request_id, probability, ...)``.
+    """
+
+    def bind(self, stream: _AudioTurnDetectorStream) -> None: ...
+    async def run(self) -> None: ...
+    def start_inference(self, request_id: str) -> None: ...
+    async def push_frame(self, frame: rtc.AudioFrame) -> None: ...
+    async def flush(self, sentinel: _AudioTurnDetectorStream._FlushSentinel) -> None: ...
+    def stop_inference(self, *, reason: str | None) -> None: ...
+    def detach(self) -> None: ...
+    def transport_ready(self) -> bool: ...
+
+
+class _AudioTurnDetectorStream:
     @dataclass
     class _FlushSentinel:
         reason: str | None = None
+        # TODO: @chenghao-mou wire this in
         # Trailing audio (ms) to retain on flush — preserves VAD-onset pre-roll
         # so the next turn starts with a few frames of context.
         keep_tail_ms: int = 0
@@ -106,9 +121,12 @@ class _AudioTurnDetectorStream(ABC):
         *,
         detector: _AudioTurnDetector,
         opts: TurnDetectorOptions,
+        transport: _AudioTurnDetectionTransport,
     ) -> None:
         self._detector = detector
         self._opts = opts
+        self._transport = transport
+        self._transport.bind(self)
 
         self._audio_input_sample_rate: int | None = None
         self._audio_input_num_channels: int | None = None
@@ -119,10 +137,6 @@ class _AudioTurnDetectorStream(ABC):
         self._status: _Status = _Status.IDLE
         self._preemptive_request_id: str | None = None
         self._preemptive_request_fut: asyncio.Future[float] | None = None
-        # Event that arrived before activate(); released by activate() or
-        # discarded by deactivate() / flush(). Storing the full event (not
-        # just the probability) preserves detection_delay + inference_duration
-        # across the held → replay hop.
         self._preemptive_prediction: TurnDetectionEvent | None = None
 
         self._tasks: set[asyncio.Task[None]] = set()
@@ -140,8 +154,6 @@ class _AudioTurnDetectorStream(ABC):
         return self._detector.provider
 
     async def unlikely_threshold(self, language: LanguageCode | None) -> float | None:
-        # Read from the stream's own opts — on fallback the stream rebinds
-        # `_opts` to a derived instance with the local-mode thresholds.
         lang_key = language.language if language is not None else "en"
         return self._opts.thresholds.get(lang_key)
 
@@ -169,13 +181,13 @@ class _AudioTurnDetectorStream(ABC):
             request_id = utils.shortuuid("turn_request_")
             self._preemptive_request_id = request_id
             self._preemptive_request_fut = asyncio.Future[float]()
-            self._on_warmup_start(request_id)
+            self._transport.start_inference(request_id)
         if self._preemptive_request_fut is None:
             raise RuntimeError("eot detection warmup failed, no request future")
         return self._preemptive_request_fut
 
     def activate(self, trigger: str | None = None) -> None:
-        if not self._transport_ready() or self._status == _Status.ACTIVE:
+        if not self._transport.transport_ready() or self._status == _Status.ACTIVE:
             return
         if self._preemptive_request_id is None:
             logger.warning("eot detector not warmed up before activation")
@@ -187,7 +199,7 @@ class _AudioTurnDetectorStream(ABC):
             self._emit_event(held)
 
     def deactivate(self, trigger: str | None = None) -> None:
-        if not self._transport_ready():
+        if not self._transport.transport_ready():
             return
         if self._preemptive_request_id is None and self._status == _Status.IDLE:
             return
@@ -198,7 +210,7 @@ class _AudioTurnDetectorStream(ABC):
                 self._preemptive_request_fut.set_result(0.0)
             self._preemptive_request_fut = None
         self._status = _Status.IDLE
-        self._on_inference_stop(reason=trigger)
+        self._transport.stop_inference(reason=trigger)
 
     def flush(self, reason: str | None = None, *, keep_tail_ms: int = 0) -> None:
         # Idempotent: a second call sends another sentinel that transports
@@ -270,23 +282,6 @@ class _AudioTurnDetectorStream(ABC):
     # endregion
 
     # region: results
-
-    def _emit_prediction(
-        self,
-        probability: float,
-        *,
-        detection_delay: float | None = None,
-        inference_duration: float | None = None,
-    ) -> None:
-        self._emit_event(
-            TurnDetectionEvent(
-                type="eot_prediction",
-                last_speaking_time=time.time(),
-                end_of_turn_probability=probability,
-                detection_delay=detection_delay,
-                inference_duration=inference_duration,
-            )
-        )
 
     def _emit_event(self, event: TurnDetectionEvent) -> None:
         self._event_ch.send_nowait(event)
@@ -380,48 +375,30 @@ class _AudioTurnDetectorStream(ABC):
     # region: main task scaffolding
 
     async def _main_task(self) -> None:
-        await self._run_transport()
+        await self._run()
 
     async def _drain_audio_channel(self) -> None:
         async for item in self._audio_ch:
             if isinstance(item, _AudioTurnDetectorStream._FlushSentinel):
-                await self._on_flush_sentinel(item)
+                await self._transport.flush(item)
             else:
-                await self._on_audio_chunk(item)
+                await self._transport.push_frame(item)
 
     # endregion
 
     # region: subclass hooks
 
-    def _transport_ready(self) -> bool:
-        return True
-
-    @abstractmethod
-    async def _run_transport(self) -> None: ...
-
-    def _on_warmup_start(self, request_id: str) -> None:  # noqa: B027
-        pass
-
-    def _on_inference_stop(self, *, reason: str | None) -> None:  # noqa: B027
-        pass
-
-    async def _on_audio_chunk(self, frame: rtc.AudioFrame) -> None:  # noqa: B027
-        pass
-
-    async def _on_flush_sentinel(  # noqa: B027
-        self, sentinel: _AudioTurnDetectorStream._FlushSentinel
-    ) -> None:
-        pass
+    async def _run(self) -> None:
+        """Default: hand control to the transport. Subclasses override for
+        cross-transport orchestration (e.g. cloud→local fallback)."""
+        await self._transport.run()
 
     def _on_predict_timeout(self) -> None:  # noqa: B027
+        """Genuine event: ``predict_end_of_turn`` timed out. Subclasses may
+        override to react (e.g. promote local on cloud timeout)."""
         pass
 
     # endregion
-
-
-# ---------------------------------------------------------------------------
-# Turn detection mode (session-level configuration)
-# ---------------------------------------------------------------------------
 
 
 class _TurnDetector(Protocol):
