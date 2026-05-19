@@ -241,7 +241,7 @@ class ChunkedStream(tts.ChunkedStream):
                 audio_bytes = await res.read()
 
                 output_emitter.initialize(
-                    request_id="gnani-tts",
+                    request_id=utils.shortuuid(),
                     sample_rate=self._tts.sample_rate,
                     num_channels=self._tts.num_channels,
                     mime_type=mime_type,
