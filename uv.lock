@@ -1840,6 +1840,9 @@ bey = [
 bithuman = [
     { name = "livekit-plugins-bithuman" },
 ]
+blaze = [
+    { name = "livekit-plugins-blaze" },
+]
 browser = [
     { name = "livekit-plugins-browser" },
 ]
@@ -2047,6 +2050,7 @@ requires-dist = [
     { name = "livekit-plugins-baseten", marker = "extra == 'baseten'", editable = "livekit-plugins/livekit-plugins-baseten" },
     { name = "livekit-plugins-bey", marker = "extra == 'bey'", editable = "livekit-plugins/livekit-plugins-bey" },
     { name = "livekit-plugins-bithuman", marker = "extra == 'bithuman'", editable = "livekit-plugins/livekit-plugins-bithuman" },
+    { name = "livekit-plugins-blaze", marker = "extra == 'blaze'", editable = "livekit-plugins/livekit-plugins-blaze" },
     { name = "livekit-plugins-browser", marker = "extra == 'browser'", editable = "livekit-plugins/livekit-plugins-browser" },
     { name = "livekit-plugins-cambai", marker = "extra == 'cambai'", editable = "livekit-plugins/livekit-plugins-cambai" },
     { name = "livekit-plugins-cartesia", marker = "extra == 'cartesia'", editable = "livekit-plugins/livekit-plugins-cartesia" },
