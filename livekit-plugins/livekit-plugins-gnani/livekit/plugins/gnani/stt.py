@@ -7,7 +7,6 @@ supporting both batch recognition (REST) and real-time streaming (WebSocket).
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import os
 from dataclasses import dataclass
@@ -318,12 +317,7 @@ class SpeechStream(stt.RecognizeStream):
                 try:
                     await asyncio.gather(send_task, recv_task)
                 finally:
-                    send_task.cancel()
-                    recv_task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await send_task
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await recv_task
+                    await utils.aio.gracefully_cancel(send_task, recv_task)
 
         except websockets.exceptions.ConnectionClosed as e:
             raise APIConnectionError(f"Gnani STT WebSocket closed unexpectedly: {e}") from e
