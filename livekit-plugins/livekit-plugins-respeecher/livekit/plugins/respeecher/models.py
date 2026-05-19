@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 TTSModels = Literal[
     # Respeecher's English model, multilanguage models will be added later
@@ -17,7 +17,7 @@ SamplingParams = dict[str, Any]
 class VoiceSettings:
     """Voice settings for Respeecher TTS"""
 
-    sampling_params: Optional[SamplingParams] = None
+    sampling_params: SamplingParams | None = None
 
 
 class Voice(dict):
@@ -33,5 +33,5 @@ class Voice(dict):
         return str(self["id"])
 
     @property
-    def sampling_params(self) -> Optional[SamplingParams]:
+    def sampling_params(self) -> SamplingParams | None:
         return self.get("sampling_params")
