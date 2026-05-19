@@ -165,11 +165,29 @@ examples:
         011111111110
         000000000000
         000000000000
-    # The playground reads these `controls` and renders a labeled
-    # pill dropdown per control. Picking an option fires an RPC on
-    # the agent participant — `rpc` is the method name, payload is
-    # `{"value": "…"}`. Defaults match the agent's DEFAULT_* constants.
+    # The playground reads these `controls` and renders one widget per
+    # entry. `type` selects the widget — defaults to `dropdown` for
+    # backwards-compat with the other examples. Picking an option fires
+    # an RPC on the agent participant: `rpc` is the method name,
+    # payload is `{"value": "…"}`. Defaults match the agent's
+    # DEFAULT_* constants in agent.py.
+    #
+    # Supported types:
+    #   - dropdown (default): pill with options list
+    #   - textarea: multiline string editor. Fires `rpc` with the
+    #     current text on every edit-commit (debounced by the FE) so
+    #     the agent can apply it live. Value is also exposed for URL
+    #     template substitution.
+    #   - link: a button-styled link. On click opens `href_template`
+    #     in a new tab with `{slug/rpc}` tokens substituted from the
+    #     current control values (URL-encoded). No RPC fired.
     controls:
+      - rpc: set_system_prompt
+        type: textarea
+        label: System prompt
+        # Keep in sync with INSTRUCTIONS in examples/inference/agent.py.
+        default: "You're a friendly agent in the LiveKit Playground. The person talking to you is prototyping their own voice agent — they can edit this prompt in the side panel and swap the STT / LLM / TTS models live. Keep replies short, natural, and conversational. If asked which models you're using, answer honestly."
+        rows: 8
       - rpc: set_stt_model
         label: STT
         default: deepgram/nova-3
@@ -188,7 +206,7 @@ examples:
           - { value: xai/stt-1, label: xAI Speech-to-Text }
       - rpc: set_llm_model
         label: LLM
-        default: openai/gpt-4o-mini
+        default: openai/gpt-4.1-mini
         options:
           - { value: openai/gpt-4.1, label: OpenAI GPT-4.1 }
           - { value: openai/gpt-4.1-mini, label: OpenAI GPT-4.1 mini }
@@ -229,7 +247,7 @@ examples:
           - { value: moonshotai/kimi-k2.5, label: Kimi K2.5 }
       - rpc: set_tts_model
         label: TTS
-        default: cartesia/sonic-2
+        default: cartesia/sonic-3
         options:
           - { value: cartesia/sonic, label: Cartesia Sonic }
           - { value: cartesia/sonic-2, label: Cartesia Sonic-2 }
@@ -254,3 +272,30 @@ examples:
           - { value: rime/mistv2, label: Rime Mist v2 }
           - { value: rime/mistv3, label: Rime Mist v3 }
           - { value: xai/tts-1, label: xAI Text-to-Speech }
+      # "Open in Builder" CTA. `type: link` is a click target that
+      # opens `href_template` in a new tab with `{slug/rpc}` tokens
+      # substituted from the current control values (URL-encoded). No
+      # agent RPC is fired. `modelMode` is hard-coded because this
+      # example is a pipeline session — if/when we add a realtime
+      # variant we'll flip this to `realtime`.
+      #
+      # `p_` is a placeholder project_id. Cloud requires a known
+      # project_id; if the user isn't logged in on cloud.livekit.io
+      # they'll be routed through login first and params will be
+      # preserved on the redirect. Param names match the verified
+      # Builder schema: `instructions` (not `prompt`), `llm`, `stt`,
+      # `tts`, `modelMode`.
+      - rpc: open_in_builder
+        type: link
+        label: "Open in Builder \u2192"
+        primary: true
+        href_template: "https://cloud.livekit.io/projects/p_/agents/builder/new?modelMode=pipeline&instructions={inference/set_system_prompt}&llm={inference/set_llm_model}&stt={inference/set_stt_model}&tts={inference/set_tts_model}"
+    # Live conversation transcript. The agent doesn't push to this view
+    # by RPC the way other examples push markdown cards — the frontend
+    # subscribes to LiveKit `TranscriptionReceived` events and renders
+    # both sides of the conversation as text. `source: transcript` is
+    # the trigger; `rpc` is a sentinel value and isn't actually called.
+    views:
+      - rpc: __transcript
+        source: transcript
+        title: "\uf075 Transcript"
