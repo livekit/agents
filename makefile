@@ -1,5 +1,5 @@
 .PHONY: help install format format-check lint lint-fix check type-check test test-unit test-docker clean build \
-        link-rtc link-rtc-local link-rtc-version unlink-rtc status doctor proto fetch-audio-eot
+        link-rtc link-rtc-local link-rtc-version unlink-rtc status doctor proto
 
 # Colors for output
 CYAN := \033[36m
@@ -38,12 +38,7 @@ help: ## Show this help message
 install: ## Install all dependencies with dev extras
 	@echo "$(BOLD)$(CYAN)Installing dependencies...$(RESET)"
 	@uv sync --all-extras --dev
-	@$(MAKE) --no-print-directory fetch-audio-eot || echo "$(YELLOW)⚠ audio EOT native library not installed (will error at use-time if needed)$(RESET)"
 	@echo "$(BOLD)$(GREEN)✓ Dependencies installed$(RESET)"
-
-fetch-audio-eot: ## Build or fetch the audio EOT native library for the turn-detector plugin
-	@echo "$(BOLD)$(CYAN)Fetching audio EOT native library...$(RESET)"
-	@uv run python scripts/fetch_audio_eot.py
 
 format: ## Format code with ruff
 	@echo "$(BOLD)$(CYAN)Formatting code...$(RESET)"

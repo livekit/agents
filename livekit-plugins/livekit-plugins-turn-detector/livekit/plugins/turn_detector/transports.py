@@ -1,22 +1,22 @@
-"""Audio EOT transports: protocol + cloud (WS) + local (ctypes).
+"""Audio EOT transports: protocol + cloud (WS) + local (audio_eot package).
 
-The native ``_audio_eot`` library is loaded at module import so its weight
-pages are inherited via COW by forked job processes.
+The local transport imports the ``audio_eot`` package (published separately
+from a private repo) at module load. The package's pybind11 module loads its
+native lib in a constructor, so weight pages are resident before this module
+finishes importing and inherited via COW by forked job processes.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-import ctypes
-import sys
 import time
 import warnings
 import weakref
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import aiohttp
+import numpy as np
 from google.protobuf.timestamp_pb2 import Timestamp
 
 from livekit import rtc
@@ -39,6 +39,14 @@ from livekit.agents.voice.turn import (
     TurnDetectorOptions,
     _AudioTurnDetectorStream,
 )
+
+try:
+    import audio_eot as _audio_eot  # type: ignore[import-not-found]
+except ImportError as _e:
+    _audio_eot = None
+    _audio_eot_import_error: BaseException | None = _e
+else:
+    _audio_eot_import_error = None
 from livekit.protocol.agent_pb.agent_inference import (
     AUDIO_ENCODING_PCM_S16LE,
     ClientMessage,
@@ -83,91 +91,33 @@ class _AudioTurnDetectionTransport(Protocol):
     def transport_ready(self) -> bool: ...
 
 
-# Native lib expects up to 1.2 s of 16 kHz s16le PCM per predict.
+# Native model operates on up to 1.2 s of 16 kHz s16le PCM per predict.
 _CLIENT_BUFFER_SECONDS = 1.2
 _BYTES_PER_SECOND = DEFAULT_SAMPLE_RATE * 2
 _CLIENT_BUFFER_BYTES = int(_CLIENT_BUFFER_SECONDS * _BYTES_PER_SECOND)
 
-_LIB_BASENAME = "_audio_eot"
-
-
-def _native_lib_path() -> Path | None:
-    pkg_dir = Path(__file__).resolve().parent
-    if sys.platform == "darwin":
-        ext = ".dylib"
-    elif sys.platform == "win32":
-        ext = ".dll"
-    else:
-        ext = ".so"
-    candidate = pkg_dir / f"{_LIB_BASENAME}{ext}"
-    return candidate if candidate.exists() else None
-
-
-_lib: ctypes.CDLL | None = None
-_lib_load_error: BaseException | None = None
-
-
-def _load_lib() -> None:
-    # Errors are captured (not raised) so importing the package on a host
-    # without the .so doesn't crash — only `_predict` callers see the failure.
-    global _lib, _lib_load_error
-
-    lib_path = _native_lib_path()
-    if lib_path is None:
-        _lib_load_error = RuntimeError(
-            f"audio EOT native library not found next to livekit.plugins.turn_detector "
-            f"(expected `{_LIB_BASENAME}.{{so,dylib,dll}}`). "
-            f"Run `make fetch-audio-eot` or set LK_AUDIO_EOT_SOURCES_DIR + "
-            f"LK_AUDIO_EOT_WEIGHTS_FILE and rebuild the plugin."
-        )
-        return
-
-    try:
-        lib = ctypes.CDLL(str(lib_path))
-        lib.audio_eot_predict.argtypes = (ctypes.POINTER(ctypes.c_int16), ctypes.c_size_t)
-        lib.audio_eot_predict.restype = ctypes.c_float
-    except OSError as e:
-        _lib_load_error = RuntimeError(
-            f"failed to load audio EOT native library at {lib_path}: {e}"
-        )
-        return
-
-    _lib = lib
-
-    # Force lazy table init (FFT twiddles, mel filterbank) here so forkserver
-    # children inherit them via COW instead of each paying the init cost.
-    try:
-        _predict(b"\x00\x00" * 16)
-    except Exception as e:
-        logger.warning("audio EOT lib warmup predict failed: %s", e)
-        _lib_load_error = RuntimeError(f"audio EOT native library failed during warmup: {e}")
-        _lib = None
-
 
 def _predict(pcm_bytes: bytes) -> float:
-    if _lib is None:
-        raise _lib_load_error or RuntimeError("audio EOT native library not loaded")
-    n = len(pcm_bytes) // 2
-    buf = (ctypes.c_int16 * n).from_buffer_copy(pcm_bytes[: n * 2])
-    return float(_lib.audio_eot_predict(buf, ctypes.c_size_t(n)))
+    if _audio_eot is None:
+        raise _audio_eot_import_error or RuntimeError("audio_eot package not installed")
+    arr = np.frombuffer(pcm_bytes, dtype=np.int16)
+    return float(_audio_eot.predict(arr))
 
 
 def _lib_available() -> bool:
-    return _lib is not None
+    return _audio_eot is not None
 
 
 def _get_lib_load_error() -> BaseException | None:
-    return _lib_load_error
+    return _audio_eot_import_error
 
 
-_load_lib()
-
-if _lib is None and _lib_load_error is not None:
-    # Surface the load failure at import — the deferred RuntimeError at first
-    # use is otherwise easy to miss deep inside session bring-up.
+if _audio_eot is None:
+    # Surface the import failure at module load — the deferred RuntimeError
+    # at first use is otherwise easy to miss deep inside session bring-up.
     warnings.warn(
-        f"livekit.plugins.turn_detector: {_lib_load_error}. "
-        f"Local AudioTurnDetector will raise on first use.",
+        f"livekit.plugins.turn_detector: `audio_eot` package not installed "
+        f"({_audio_eot_import_error}). Local AudioTurnDetector will raise on first use.",
         stacklevel=2,
     )
 
@@ -507,7 +457,7 @@ class _LocalTransport:
         self._stream_ref = weakref.ref(stream)
 
     def transport_ready(self) -> bool:
-        return _lib is not None
+        return _audio_eot is not None
 
     def on_warmup_start(self, request_id: str) -> None:
         stream = self._stream_ref() if self._stream_ref is not None else None

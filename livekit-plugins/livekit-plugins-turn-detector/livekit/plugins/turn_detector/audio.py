@@ -325,7 +325,7 @@ class _AudioEotPlugin(Plugin):
     def download_files(self) -> None:
         logger.info(
             "audio EOT model is bundled with the plugin (no download step). "
-            "If the native lib is missing, run `make fetch-audio-eot`."
+            "If the local backend errors at construction, install the `audio-eot` package."
         )
 
 
