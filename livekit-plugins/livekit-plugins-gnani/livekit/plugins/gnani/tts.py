@@ -8,10 +8,13 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import os
 from dataclasses import dataclass, replace
 from typing import Literal
+
+import aiohttp
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -135,7 +138,7 @@ class TTS(tts.TTS):
             base_url=base_url,
             language=language,
         )
-        self._session = None
+        self._session: aiohttp.ClientSession | None = None
 
     @property
     def model(self) -> str:
@@ -145,7 +148,7 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Gnani"
 
-    def _ensure_session(self):
+    def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()
         return self._session
@@ -196,8 +199,6 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        import aiohttp
-
         payload = {
             "text": self._input_text,
             "voice": self._opts.voice,
@@ -280,15 +281,12 @@ class SynthesizeStream(tts.SynthesizeStream):
         return f"{ws_base}/api/v1/tts"
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        import websockets
-
-        token_buf = ""
         word_stream = tokenize.basic.SentenceTokenizer().stream()
         _flushing = False
 
-        async def _input_task():
+        async def _input_task() -> None:
             nonlocal _flushing
-            async for data in self._input:
+            async for data in self._input_ch:
                 if isinstance(data, str):
                     word_stream.push_text(data)
                 elif isinstance(data, self._FlushSentinel):
@@ -306,7 +304,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 await self._synthesize_segment(text, output_emitter)
         finally:
             input_task.cancel()
-            with utils.aio.suppress(asyncio.CancelledError):
+            with contextlib.suppress(asyncio.CancelledError):
                 await input_task
 
     async def _synthesize_segment(self, text: str, output_emitter: tts.AudioEmitter) -> None:
