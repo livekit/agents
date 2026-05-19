@@ -2,8 +2,10 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 TTSModels = Literal[
-    # Respeecher's English model, multilanguage models will be added later
+    # Respeecher's public English model
     "/public/tts/en-rt",
+    # Respeecher's public Ukrainian model
+    "/public/tts/ua-rt",
 ]
 
 TTSEncoding = Literal["pcm_s16le",]

@@ -200,7 +200,7 @@ SYNTHESIZE_TTS = [
     ),
     pytest.param(
         lambda: {
-            "tts": respeecher.TTS(),
+            "tts": respeecher.TTS(voice_id="samantha"),
             "proxy-upstream": "api.respeecher.com:443",
         },
         id="respeecher",
@@ -441,7 +441,7 @@ STREAM_TTS = [
     ),
     pytest.param(
         lambda: {
-            "tts": respeecher.TTS(),
+            "tts": respeecher.TTS(voice_id="samantha"),
             "proxy-upstream": "api.respeecher.com:443",
         },
         id="respeecher",

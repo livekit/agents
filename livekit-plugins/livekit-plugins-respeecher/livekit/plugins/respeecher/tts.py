@@ -61,10 +61,10 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
+        voice_id: str,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         model: TTSModels | str = "/public/tts/en-rt",
         encoding: TTSEncoding = "pcm_s16le",
-        voice_id: str = "samantha",
         voice_settings: NotGivenOr[VoiceSettings] = NOT_GIVEN,
         sample_rate: int = 24000,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
@@ -75,10 +75,10 @@ class TTS(tts.TTS):
         Create a new instance of Respeecher TTS.
 
         Args:
+            voice_id: ID of the voice to use. Each model exposes a different set of voices; call list_voices() to discover the IDs available for the chosen model.
             api_key: Respeecher API key. If not provided, uses RESPEECHER_API_KEY env variable.
             model: The Respeecher TTS model to use.
             encoding: Audio encoding format.
-            voice_id: ID of the voice to use. Different set of voices is available for different models. Thus, update the value after getting list_voices() API.
             voice_settings: Optional voice settings including sampling parameters.
             sample_rate: Audio sample rate in Hz.
             http_session: Optional aiohttp session to use for requests.
