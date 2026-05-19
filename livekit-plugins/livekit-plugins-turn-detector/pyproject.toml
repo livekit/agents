@@ -30,10 +30,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents>=1.5.9",
-    # aiohttp + livekit-protocol are direct deps now that the cloud audio
-    # transport lives in this plugin. Both are already transitive via
-    # livekit-agents, but promote to direct to match actual usage.
+    "livekit-agents>=1.5.10",
     "aiohttp",
     "livekit-protocol",
     "transformers>=4.47.1,!=4.57.2,!=4.57.3",  # 4.57.2-4.57.3 have a bug with local_files_only=True (huggingface/transformers#42369)
