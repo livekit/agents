@@ -41,6 +41,7 @@ GnaniSTTLanguages = Literal[
     "pa-IN",
     "ta-IN",
     "te-IN",
+    "en-IN,hi-IN",
 ]
 
 SUPPORTED_LANGUAGES: set[str] = {
@@ -54,6 +55,7 @@ SUPPORTED_LANGUAGES: set[str] = {
     "pa-IN",
     "ta-IN",
     "te-IN",
+    "en-IN,hi-IN",
 }
 
 STREAM_SUPPORTED_LANGUAGES: set[str] = SUPPORTED_LANGUAGES | {
@@ -371,6 +373,7 @@ class SpeechStream(stt.RecognizeStream):
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(
                             type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                            request_id=data.get("segment_id", ""),
                             alternatives=[
                                 stt.SpeechData(
                                     language=self._opts.language,
