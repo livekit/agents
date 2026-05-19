@@ -116,6 +116,7 @@ class TTS(tts.TTS):
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
         )
+        self._retired_pools: list[utils.ConnectionPool[aiohttp.ClientWebSocketResponse]] = []
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
@@ -166,8 +167,12 @@ class TTS(tts.TTS):
         """Update TTS options"""
         if is_given(model) and model != self._opts.model:
             self._opts.model = model
-            # Clear the connection pool when model changes to force reconnection
-            asyncio.create_task(self._pool.aclose())
+            # The model is baked into the WebSocket URL, so existing pooled
+            # connections can't serve the new model. Retire the old pool
+            # (letting any in-flight stream finish using its connection) and
+            # route new requests through a fresh pool. The retired pool is
+            # closed during aclose().
+            self._retired_pools.append(self._pool)
             self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
                 connect_cb=self._connect_ws,
                 close_cb=self._close_ws,
@@ -199,6 +204,9 @@ class TTS(tts.TTS):
 
         self._streams.clear()
         await self._pool.aclose()
+        for pool in self._retired_pools:
+            await pool.aclose()
+        self._retired_pools.clear()
 
 
 class ChunkedStream(tts.ChunkedStream):

@@ -17,10 +17,10 @@
 Voice cloning and synthesis plugin for LiveKit Agents using Respeecher API.
 """
 
-from .tts import TTS, ChunkedStream
+from .tts import TTS, ChunkedStream, SynthesizeStream
 from .version import __version__
 
-__all__ = ["TTS", "ChunkedStream", "__version__"]
+__all__ = ["TTS", "ChunkedStream", "SynthesizeStream", "__version__"]
 
 from livekit.agents import Plugin
 
