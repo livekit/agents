@@ -721,7 +721,11 @@ class RealtimeSession(llm.RealtimeSession):
             logger.warning(
                 "generate_reply called while another generation is pending, cancelling previous."
             )
-            self._pending_generation_fut.cancel("Superseded by new generate_reply call")
+            # clear the slot before cancelling so the done callback doesn't treat it
+            # as an external cancellation and signal the server.
+            old_fut = self._pending_generation_fut
+            self._pending_generation_fut = None
+            old_fut.cancel("Superseded by new generate_reply call")
 
         fut = asyncio.Future[llm.GenerationCreatedEvent]()
         self._pending_generation_fut = fut
@@ -753,7 +757,17 @@ class RealtimeSession(llm.RealtimeSession):
                     self._pending_generation_fut = None
 
         timeout_handle = asyncio.get_event_loop().call_later(5.0, _on_timeout)
-        fut.add_done_callback(lambda _: timeout_handle.cancel())
+
+        def _on_fut_done(f: asyncio.Future[llm.GenerationCreatedEvent]) -> None:
+            timeout_handle.cancel()
+            is_current = self._pending_generation_fut is fut
+            if is_current:
+                self._pending_generation_fut = None
+            if f.cancelled() and is_current:
+                # external cancel: signal interrupt to Gemini via activity_start
+                self.interrupt()
+
+        fut.add_done_callback(_on_fut_done)
 
         return fut
 

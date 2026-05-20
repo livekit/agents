@@ -8,6 +8,7 @@ Covers:
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from unittest.mock import AsyncMock, MagicMock, Mock
 
@@ -114,7 +115,8 @@ def _mock_request_info() -> MagicMock:
 
 class TestHttpTimeout:
     @pytest.mark.asyncio
-    async def test_retries_then_emits_unrecoverable(self) -> None:
+    async def test_retries_then_emits_unrecoverable(self, caplog: pytest.LogCaptureFixture) -> None:
+        caplog.set_level(logging.WARNING, logger="livekit.agents")
         mock_session = AsyncMock(spec=aiohttp.ClientSession)
         mock_ctx = AsyncMock()
         mock_ctx.__aenter__ = AsyncMock(side_effect=asyncio.TimeoutError("test timeout"))
@@ -133,6 +135,7 @@ class TestHttpTimeout:
         unrecoverable_errors = [e for e in errors if not e.recoverable]
         assert len(recoverable_errors) == 0
         assert len(unrecoverable_errors) == 1
+        assert not [record for record in caplog.records if record.levelno >= logging.ERROR]
 
 
 # there is no 429 in HTTP when hosted on LiveKit Cloud, so this is actually redundant

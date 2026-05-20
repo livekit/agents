@@ -88,6 +88,7 @@ from .voice import (
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
+    UserTurnExceededEvent,
     avatar,
     io,
     room_io,
@@ -117,6 +118,7 @@ from .voice.turn import (
     InterruptionOptions,
     PreemptiveGenerationOptions,
     TurnHandlingOptions,
+    UserTurnLimitOptions,
 )
 from .worker import (
     AgentServer,
@@ -239,6 +241,8 @@ __all__ = [
     "EndpointingOptions",
     "InterruptionOptions",
     "PreemptiveGenerationOptions",
+    "UserTurnLimitOptions",
+    "UserTurnExceededEvent",
 ]
 
 # Cleanup docs of unexported modules

@@ -57,6 +57,7 @@ members = [
     "livekit-plugins-nltk",
     "livekit-plugins-nvidia",
     "livekit-plugins-openai",
+    "livekit-plugins-perplexity",
     "livekit-plugins-phonic",
     "livekit-plugins-resemble",
     "livekit-plugins-rime",
@@ -1582,7 +1583,7 @@ wheels = [
 
 [[package]]
 name = "langchain-core"
-version = "1.3.2"
+version = "1.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "jsonpatch" },
@@ -1595,9 +1596,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "uuid-utils" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a8/03/7219502e8ca728d65eb44d7a3eb60239230742a70dbfc9241b9bfd61c4ab/langchain_core-1.3.2.tar.gz", hash = "sha256:fd7a50b2f28ba561fd9d7f5d2760bc9e06cf00cdf820a3ccafe88a94ffa8d5b7", size = 911813, upload-time = "2026-04-24T15:49:23.699Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/59/de/679a53472c25860837e32c0442c962fa86e95317a36460e2c9d5c91b17c2/langchain_core-1.4.0.tar.gz", hash = "sha256:1dc341eed802ed9c117c0df3923c991e5e9e226571e5725c194eeb5bd93d1a7f", size = 920260, upload-time = "2026-05-11T18:42:35.919Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7d/d5/8fa4431007cbb7cfed7590f4d6a5dea3ad724f4174d248f6642ef5ce7d05/langchain_core-1.3.2-py3-none-any.whl", hash = "sha256:d44a66127f9f8db735bdfd0ab9661bccb47a97113cfd3f2d89c74864422b7274", size = 542390, upload-time = "2026-04-24T15:49:21.991Z" },
+    { url = "https://files.pythonhosted.org/packages/0f/1a/86c38c27b81913a1c6c12448cab55defb5a1097c7dc9a4cea83f55477a2d/langchain_core-1.4.0-py3-none-any.whl", hash = "sha256:23cbbdb46e38ddd1dd5247e6167e96013eae74bea4c5949c550809970a9e565c", size = 548120, upload-time = "2026-05-11T18:42:33.992Z" },
 ]
 
 [[package]]
@@ -1750,7 +1751,7 @@ wheels = [
 
 [[package]]
 name = "livekit"
-version = "1.1.7"
+version = "1.1.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiofiles" },
@@ -1758,13 +1759,13 @@ dependencies = [
     { name = "protobuf" },
     { name = "types-protobuf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e1/1e/3ad724abacb6514fc64c7b4a8c82a41780cbc82baee621b8dcc92dded005/livekit-1.1.7.tar.gz", hash = "sha256:29e5f13e2639c041f18e29d1066019a6380031391b6363509f06e3dbef8426a6", size = 332704, upload-time = "2026-04-27T13:49:48.432Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ce/d7/1fde055300c1f8338feec88bac55270ea5c20cac66ed3655cc60fb14f2b6/livekit-1.1.8.tar.gz", hash = "sha256:862100f479dc06b10cd1442d0a687126ac71930d3e003925449bcb8c2531bd53", size = 335048, upload-time = "2026-05-13T17:30:36.446Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/fd/f8/176fe3d5569ed03b2c60991f4a90edfd2421a5ad0c4a9a70974d409b3329/livekit-1.1.7-py3-none-macosx_10_15_x86_64.whl", hash = "sha256:26df0760e9b9d3eeb0d773614bc344b6aae7d37c60a9b0c93b1c58dcb6bb2f6b", size = 10127354, upload-time = "2026-04-27T13:49:35.805Z" },
-    { url = "https://files.pythonhosted.org/packages/29/f2/05bd6f3729ecb564ddc9052afc43c3b9e39a43d24f7821946bc78a5dddd2/livekit-1.1.7-py3-none-macosx_11_0_arm64.whl", hash = "sha256:e49e79d39b2c74104c377b6e3cb789d47dd92cb993327234966c41f19df28292", size = 8954208, upload-time = "2026-04-27T13:49:38.359Z" },
-    { url = "https://files.pythonhosted.org/packages/58/32/99f52a9c71dcc3b3370783ad427e5974b9491948b6d9beb5b3f933df8f1e/livekit-1.1.7-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:c3db851f510edac945b9bc402f6629d5969b4f3252e8d0b24dd158d9e9a5485d", size = 9962579, upload-time = "2026-04-27T13:49:40.28Z" },
-    { url = "https://files.pythonhosted.org/packages/bf/9e/53768dd73f1ce2d3eff7d6c1d87c3531f795c57880a3b51eb5cee1aec6fa/livekit-1.1.7-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:6c227e2f840aa547224e2fbd45f953c8a0b30939a18e1d56deca8c4268c95804", size = 11355003, upload-time = "2026-04-27T13:49:42.881Z" },
-    { url = "https://files.pythonhosted.org/packages/42/55/2c68732dbcdb3fc1a58592db27697c6d27e2f77ade7eaeb818e88637020b/livekit-1.1.7-py3-none-win_amd64.whl", hash = "sha256:3b0bcc48430cb2138eade01f6b59ddd3be1c1e90f6c251291d0dd4dc1623fc0d", size = 10696832, upload-time = "2026-04-27T13:49:46.362Z" },
+    { url = "https://files.pythonhosted.org/packages/5a/7c/1f609b57b46988a7696d49a6d3d8c19056950b7dc88552323fbd39403494/livekit-1.1.8-py3-none-macosx_10_15_x86_64.whl", hash = "sha256:e65732bd4e0b3625d8c32676cede90be45e06ab443b5c18127df6e89637d5269", size = 10027840, upload-time = "2026-05-13T17:30:24.853Z" },
+    { url = "https://files.pythonhosted.org/packages/42/1d/2af5a4fc85fe4a49e32432cbf37b1869cdb6e428b4858d0821703742cf01/livekit-1.1.8-py3-none-macosx_11_0_arm64.whl", hash = "sha256:b025e5881ae63674aa0ef193ce42b4cd98258fe098707142888e6a79f448f47d", size = 8860811, upload-time = "2026-05-13T17:30:27.156Z" },
+    { url = "https://files.pythonhosted.org/packages/69/80/919c2f291083f253cf37aafcbd8e727dac3e29a0e60ec63b5249b93ad025/livekit-1.1.8-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:080a3799bcf7075328f2921868646296a18e4ab1c613df6b313d723f99b5557b", size = 9852340, upload-time = "2026-05-13T17:30:29.274Z" },
+    { url = "https://files.pythonhosted.org/packages/50/11/44bebbb16d79c9026200f83c8d9695ea6976a53f1430b0ea3b15a41c4bd4/livekit-1.1.8-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:2746bbe611869994fbc42e3f8387f3a3d4a5f83e3fad8860c076742a4c0d943e", size = 11235966, upload-time = "2026-05-13T17:30:31.522Z" },
+    { url = "https://files.pythonhosted.org/packages/cd/08/9dca90dd3f9c5147ec0b1168d3410db1cc944d546c1d123343f81880b261/livekit-1.1.8-py3-none-win_amd64.whl", hash = "sha256:3942843f0c0072a3d973f3e45b60b1565833785bbe7890d64f7e5555ff61b9e2", size = 10598792, upload-time = "2026-05-13T17:30:34.195Z" },
 ]
 
 [[package]]
@@ -1937,6 +1938,9 @@ nvidia = [
 openai = [
     { name = "livekit-plugins-openai" },
 ]
+perplexity = [
+    { name = "livekit-plugins-perplexity" },
+]
 phonic = [
     { name = "livekit-plugins-phonic" },
 ]
@@ -2011,7 +2015,7 @@ requires-dist = [
     { name = "colorama", specifier = ">=0.4.6" },
     { name = "docstring-parser", specifier = ">=0.16" },
     { name = "eval-type-backport" },
-    { name = "livekit", specifier = "==1.1.7" },
+    { name = "livekit", specifier = "==1.1.8" },
     { name = "livekit-api", specifier = ">=1.0.7,<2" },
     { name = "livekit-blingfire", specifier = "~=1.1,<2" },
     { name = "livekit-plugins-anam", marker = "extra == 'anam'", editable = "livekit-plugins/livekit-plugins-anam" },
@@ -2056,6 +2060,7 @@ requires-dist = [
     { name = "livekit-plugins-nltk", marker = "extra == 'nltk'", editable = "livekit-plugins/livekit-plugins-nltk" },
     { name = "livekit-plugins-nvidia", marker = "extra == 'nvidia'", editable = "livekit-plugins/livekit-plugins-nvidia" },
     { name = "livekit-plugins-openai", marker = "extra == 'openai'", editable = "livekit-plugins/livekit-plugins-openai" },
+    { name = "livekit-plugins-perplexity", marker = "extra == 'perplexity'", editable = "livekit-plugins/livekit-plugins-perplexity" },
     { name = "livekit-plugins-phonic", marker = "extra == 'phonic'", editable = "livekit-plugins/livekit-plugins-phonic" },
     { name = "livekit-plugins-resemble", marker = "extra == 'resemble'", editable = "livekit-plugins/livekit-plugins-resemble" },
     { name = "livekit-plugins-rime", marker = "extra == 'rime'", editable = "livekit-plugins/livekit-plugins-rime" },
@@ -2098,7 +2103,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "google", "gradium", "groq", "hamming", "hedra", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "minimax", "mistralai", "murf", "neuphonic", "nltk", "nvidia", "openai", "phonic", "resemble", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "speechify", "speechmatics", "spitch", "tavus", "trugen", "turn-detector", "ultravox", "upliftai", "xai"]
+provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "google", "gradium", "groq", "hamming", "hedra", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "minimax", "mistralai", "murf", "neuphonic", "nltk", "nvidia", "openai", "perplexity", "phonic", "resemble", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "speechify", "speechmatics", "spitch", "tavus", "trugen", "turn-detector", "ultravox", "upliftai", "xai"]
 
 [[package]]
 name = "livekit-api"
@@ -2263,7 +2268,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "azure-cognitiveservices-speech", specifier = ">=1.43.0" },
+    { name = "azure-cognitiveservices-speech", specifier = ">=1.48.2" },
     { name = "livekit-agents", editable = "livekit-agents" },
 ]
 
@@ -2303,7 +2308,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "bithuman", specifier = ">=0.5.25" },
+    { name = "bithuman", specifier = ">=0.5.25,<1.12" },
     { name = "livekit-agents", editable = "livekit-agents" },
 ]
 
@@ -2751,6 +2756,16 @@ requires-dist = [
     { name = "openai", extras = ["realtime"], specifier = ">=2" },
 ]
 provides-extras = ["vertex"]
+
+[[package]]
+name = "livekit-plugins-perplexity"
+source = { editable = "livekit-plugins/livekit-plugins-perplexity" }
+dependencies = [
+    { name = "livekit-agents", extra = ["openai"] },
+]
+
+[package.metadata]
+requires-dist = [{ name = "livekit-agents", extras = ["openai"], editable = "livekit-agents" }]
 
 [[package]]
 name = "livekit-plugins-phonic"
@@ -4546,7 +4561,7 @@ name = "pyzmq"
 version = "26.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cffi", marker = "implementation_name == 'pypy'" },
+    { name = "cffi", marker = "python_full_version < '3.14' and implementation_name == 'pypy'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/b1/11/b9213d25230ac18a71b39b3723494e57adebe36e066397b961657b3b41c1/pyzmq-26.4.0.tar.gz", hash = "sha256:4bd13f85f80962f91a651a7356fe0472791a5f7a92f227822b5acf44795c626d", size = 278293, upload-time = "2025-04-04T12:05:44.049Z" }
 wheels = [

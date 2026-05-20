@@ -13,7 +13,7 @@ from typing_extensions import Required
 
 from livekit import rtc
 
-from .. import stt, utils
+from .. import stt, utils, vad
 from .._exceptions import (
     APIConnectionError,
     APIStatusError,
@@ -52,6 +52,10 @@ AssemblyAIModels = Literal[
 ]
 ElevenlabsModels = Literal["elevenlabs/scribe_v2_realtime",]
 XaiModels = Literal["xai/stt-1",]
+SpeechmaticsModels = Literal[
+    "speechmatics/enhanced",
+    "speechmatics/standard",
+]
 
 
 class CartesiaOptions(TypedDict, total=False):
@@ -119,6 +123,24 @@ class ElevenlabsOptions(TypedDict, total=False):
     language_code: str
 
 
+class SpeechmaticsOptions(TypedDict, total=False):
+    domain: str  # e.g. "finance"
+    output_locale: str  # BCP-47 locale for output formatting
+    max_delay: float  # 0.7-4.0 seconds, default 1.0
+    max_delay_mode: str  # "flexible" | "fixed"
+    diarization: str  # "none" | "speaker" | "channel" | "channel_and_speaker_change" | "speaker_change"; non-"none" enables diarization
+    speaker_sensitivity: float  # 0.0-1.0
+    max_speakers: int
+    prefer_current_speaker: bool
+    enable_partials: bool  # default True (overridden by gateway)
+    enable_entities: bool
+    punctuation_overrides: dict[str, Any]
+    additional_vocab: list[dict[str, Any]]
+    end_of_utterance_silence_trigger: float  # seconds of silence before final
+    audio_filtering_config: dict[str, Any]
+    transcript_filtering_config: dict[str, Any]
+
+
 class XaiOptions(TypedDict, total=False):
     diarize: bool  # when True, enables speaker diarization (default off)
     endpointing: int  # silence duration in ms before utterance-final (0-5000)
@@ -133,6 +155,7 @@ class XaiOptions(TypedDict, total=False):
 _DIARIZATION_EXTRA_KEYS: tuple[str, ...] = (
     "diarize",  # Deepgram, xAI
     "speaker_labels",  # AssemblyAI
+    "diarization",  # Speechmatics
 )
 
 
@@ -140,7 +163,15 @@ def _diarization_enabled(extra_kwargs: dict[str, Any] | None) -> bool:
     """Return True if any known provider diarization flag is truthy."""
     if not extra_kwargs:
         return False
-    return any(bool(extra_kwargs.get(key)) for key in _DIARIZATION_EXTRA_KEYS)
+    for key in _DIARIZATION_EXTRA_KEYS:
+        value = extra_kwargs.get(key)
+        if not value:
+            continue
+        # Speechmatics' "diarization" accepts the string "none" to mean off.
+        if isinstance(value, str) and value.lower() == "none":
+            continue
+        return True
+    return False
 
 
 STTLanguages = Literal["multi", "en", "de", "es", "fr", "ja", "pt", "zh", "hi"]
@@ -173,6 +204,31 @@ def _parse_model_string(model: str) -> tuple[str, NotGivenOr[LanguageCode]]:
     return model, language
 
 
+def _resolve_vad_for_model(
+    model: NotGivenOr[STTModels | str],
+    vad_instance: vad.VAD | None,
+) -> vad.VAD | None:
+    is_speechmatics = (
+        is_given(model) and isinstance(model, str) and model.startswith("speechmatics/")
+    )
+    if vad_instance is not None and not is_speechmatics:
+        logger.warning(
+            "`vad` will be ignored: model %r handles endpointing server-side.",
+            model,
+        )
+        return None
+    if is_speechmatics and vad_instance is None:
+        try:
+            from livekit.plugins.silero import VAD as SileroVAD
+        except ImportError as e:
+            raise ImportError(
+                "livekit-plugins-silero is required: model "
+                f"{model!r} does not handle endpointing server-side."
+            ) from e
+        vad_instance = SileroVAD.load()
+    return vad_instance
+
+
 def _normalize_fallback(
     fallback: list[FallbackModelType] | FallbackModelType,
 ) -> list[FallbackModel]:
@@ -195,6 +251,7 @@ STTModels = (
     | AssemblyAIModels
     | ElevenlabsModels
     | XaiModels
+    | SpeechmaticsModels
     | Literal["auto"]  # automatically select a provider based on the language
 )
 STTEncoding = Literal["pcm_s16le"]
@@ -324,6 +381,24 @@ class STT(stt.STT):
     @overload
     def __init__(
         self,
+        model: SpeechmaticsModels,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        encoding: NotGivenOr[STTEncoding] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        extra_kwargs: NotGivenOr[SpeechmaticsOptions] = NOT_GIVEN,
+        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+        vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self,
         model: str,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
@@ -357,9 +432,11 @@ class STT(stt.STT):
             | AssemblyaiOptions
             | ElevenlabsOptions
             | XaiOptions
+            | SpeechmaticsOptions
         ] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+        vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
     ) -> None:
         """Livekit Cloud Inference STT
 
@@ -376,6 +453,9 @@ class STT(stt.STT):
             fallback (FallbackModelType, optional): Fallback models - either a list of model names,
                 a list of FallbackModel instances.
             conn_options (APIConnectOptions, optional): Connection options for request attempts.
+            vad (VAD, optional): External Voice Activity Detector. When provided, each audio
+                frame is forwarded to the VAD and `session.finalize` is sent to the inference
+                gateway on end of speech. Only applicable to Speechmatics models.
         """
         # Infer diarization capability from provider-specific extra_kwargs
         # keys (see _DIARIZATION_EXTRA_KEYS). xAI uses "diarize" (same as
@@ -383,6 +463,15 @@ class STT(stt.STT):
         diarization_enabled = _diarization_enabled(
             dict(extra_kwargs) if is_given(extra_kwargs) else None
         )
+
+        # Parse language from model string if provided: "provider/model:language"
+        if is_given(model) and isinstance(model, str):
+            parsed_model, parsed_language = _parse_model_string(model)
+            model = parsed_model
+            if is_given(parsed_language) and not is_given(language):
+                language = parsed_language
+
+        vad = _resolve_vad_for_model(model, vad if is_given(vad) else None)
 
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -393,13 +482,6 @@ class STT(stt.STT):
                 offline_recognize=False,
             ),
         )
-
-        # Parse language from model string if provided: "provider/model:language"
-        if is_given(model) and isinstance(model, str):
-            parsed_model, parsed_language = _parse_model_string(model)
-            model = parsed_model
-            if is_given(parsed_language) and not is_given(language):
-                language = parsed_language
 
         lk_base_url = base_url if is_given(base_url) else get_default_inference_url()
 
@@ -440,6 +522,7 @@ class STT(stt.STT):
         )
 
         self._session = http_session
+        self._vad = vad
         self._streams = weakref.WeakSet[SpeechStream]()
 
     @classmethod
@@ -487,7 +570,12 @@ class STT(stt.STT):
     ) -> SpeechStream:
         """Create a streaming transcription session."""
         options = self._sanitize_options(language=language)
-        stream = SpeechStream(stt=self, opts=options, conn_options=conn_options)
+        stream = SpeechStream(
+            stt=self,
+            opts=options,
+            conn_options=conn_options,
+            vad_instance=self._vad,
+        )
         self._streams.add(stream)
         return stream
 
@@ -500,7 +588,15 @@ class STT(stt.STT):
     ) -> None:
         """Update STT configuration options."""
         if is_given(model):
+            # Mirror __init__: strip ":language" suffix and apply if not overridden.
+            if isinstance(model, str):
+                parsed_model, parsed_language = _parse_model_string(model)
+                model = parsed_model
+                if is_given(parsed_language) and not is_given(language):
+                    language = parsed_language
+
             self._opts.model = model
+            self._vad = _resolve_vad_for_model(model, self._vad)
         if is_given(language):
             self._opts.language = LanguageCode(language)
         if is_given(extra):
@@ -533,6 +629,7 @@ class SpeechStream(stt.SpeechStream):
         stt: STT,
         opts: STTOptions,
         conn_options: APIConnectOptions,
+        vad_instance: vad.VAD | None = None,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._stt: STT = stt
@@ -542,6 +639,7 @@ class SpeechStream(stt.SpeechStream):
         self._speaking = False
         self._speech_duration: float = 0
         self._ws: aiohttp.ClientWebSocketResponse | None = None
+        self._vad: vad.VAD | None = vad_instance
 
     def update_options(
         self,
@@ -589,6 +687,7 @@ class SpeechStream(stt.SpeechStream):
         """Main loop for streaming transcription."""
         closing_ws = False
         http_session = self._stt._ensure_session()
+        vad_stream: vad.VADStream | None = self._vad.stream() if self._vad is not None else None
 
         @utils.log_exceptions(logger=logger)
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -603,6 +702,8 @@ class SpeechStream(stt.SpeechStream):
             async for ev in self._input_ch:
                 frames: list[rtc.AudioFrame] = []
                 if isinstance(ev, rtc.AudioFrame):
+                    if vad_stream is not None:
+                        vad_stream.push_frame(ev)
                     frames.extend(audio_bstream.push(ev.data))
                 elif isinstance(ev, self._FlushSentinel):
                     frames.extend(audio_bstream.flush())
@@ -617,11 +718,27 @@ class SpeechStream(stt.SpeechStream):
                     }
                     await ws.send_str(json.dumps(audio_msg))
 
+            if vad_stream is not None:
+                vad_stream.end_input()
+
             closing_ws = True
             finalize_msg = {
                 "type": "session.finalize",
             }
             await ws.send_str(json.dumps(finalize_msg))
+
+        @utils.log_exceptions(logger=logger)
+        async def vad_task(ws: aiohttp.ClientWebSocketResponse, stream: vad.VADStream) -> None:
+            async for ev in stream:
+                if ev.type != vad.VADEventType.END_OF_SPEECH:
+                    continue
+                if ws.closed:
+                    return
+                try:
+                    await ws.send_str(json.dumps({"type": "session.finalize"}))
+                except Exception:
+                    logger.debug("failed to send session.finalize from VAD, ws may be closing")
+                    return
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -672,6 +789,8 @@ class SpeechStream(stt.SpeechStream):
                 asyncio.create_task(send_task(ws)),
                 asyncio.create_task(recv_task(ws)),
             ]
+            if vad_stream is not None:
+                tasks.append(asyncio.create_task(vad_task(ws, vad_stream)))
             try:
                 await asyncio.gather(*tasks)
             finally:
@@ -680,6 +799,8 @@ class SpeechStream(stt.SpeechStream):
             self._ws = None
             if ws is not None:
                 await ws.close()
+            if vad_stream is not None:
+                await vad_stream.aclose()
 
     async def _connect_ws(
         self, http_session: aiohttp.ClientSession
