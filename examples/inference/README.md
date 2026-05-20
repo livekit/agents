@@ -4,7 +4,7 @@ A minimal voice agent powered end-to-end by [LiveKit Inference](https://docs.liv
 
 ## How the live swap works
 
-The playground sends an RPC on every dropdown change:
+The playground sends an RPC when a control is changed. For the model-picker dropdowns:
 
 ```ts
 room.localParticipant.performRpc({
@@ -14,7 +14,7 @@ room.localParticipant.performRpc({
 });
 ```
 
-The agent registers one handler per control. All three (STT, LLM, TTS) call `update_options(model=...)` to swap the active model without restarting the session.
+The agent registers one handler per control. The three model-swap handlers (STT, LLM, TTS) call `update_options(model=...)` to swap the active model without restarting the session. The `set_system_prompt` handler calls `update_instructions(...)` to replace the agent's system prompt live. The `open_in_builder` handler returns a Cloud Builder URL that the playground opens in a new tab.
 
 ## Run locally
 
