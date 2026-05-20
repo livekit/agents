@@ -295,28 +295,27 @@ class SynthesizeStream(tts.SynthesizeStream):
         segment_id = utils.shortuuid()
         output_emitter.start_segment(segment_id=segment_id)
 
-        text_parts: list[str] = []
-
-        async for data in self._input_ch:
-            if isinstance(data, str):
-                text_parts.append(data)
-            elif isinstance(data, self._FlushSentinel):
-                break
-
-        full_text = "".join(text_parts).strip()
-        if not full_text:
-            output_emitter.end_segment()
-            return
-
-        self._mark_started()
-
-        ws_url = self._build_ws_url()
-        headers = {
-            "Content-Type": "application/json",
-            "X-API-Key-ID": self._opts.api_key,
-        }
-
         try:
+            text_parts: list[str] = []
+
+            async for data in self._input_ch:
+                if isinstance(data, str):
+                    text_parts.append(data)
+                elif isinstance(data, self._FlushSentinel):
+                    break
+
+            full_text = "".join(text_parts).strip()
+            if not full_text:
+                return
+
+            self._mark_started()
+
+            ws_url = self._build_ws_url()
+            headers = {
+                "Content-Type": "application/json",
+                "X-API-Key-ID": self._opts.api_key,
+            }
+
             async with websockets.connect(
                 ws_url,
                 additional_headers=headers,
