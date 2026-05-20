@@ -1958,7 +1958,7 @@ def _build_cli(server: AgentServer) -> typer.Typer:
         _configure_logger(c, logging.DEBUG)
 
         c.print(
-            "[yellow]Invoking the download-files command via your agent entrypoint is "
+            "[yellow]Invoking the download-files command via your agent script is "
             "deprecated as of 1.5.10. Run it directly against the livekit.agents module "
             "instead, e.g. `uv run -m livekit.agents download-files`.[/yellow]"
         )
