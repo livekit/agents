@@ -56,6 +56,7 @@ members = [
     "livekit-plugins-neuphonic",
     "livekit-plugins-nltk",
     "livekit-plugins-nvidia",
+    "livekit-plugins-ojin",
     "livekit-plugins-openai",
     "livekit-plugins-perplexity",
     "livekit-plugins-phonic",
@@ -313,6 +314,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/19/14/2c5dd9f512b66549ae92767a9c7b330ae88e1932ca57876909410251fe13/anyio-4.13.0.tar.gz", hash = "sha256:334b70e641fd2221c1505b3890c69882fe4a2df910cba14d97019b90b24439dc", size = 231622, upload-time = "2026-03-24T12:59:09.671Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/da/42/e921fccf5015463e32a3cf6ee7f980a6ed0f395ceeaa45060b61d86486c2/anyio-4.13.0-py3-none-any.whl", hash = "sha256:08b310f9e24a9594186fd75b4f73f4a4152069e3853f1ed8bfbf58369f4ad708", size = 114353, upload-time = "2026-03-24T12:59:08.246Z" },
+]
+
+[[package]]
+name = "async-lru"
+version = "2.3.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e8/1f/989ecfef8e64109a489fff357450cb73fa73a865a92bd8c272170a6922c2/async_lru-2.3.0.tar.gz", hash = "sha256:89bdb258a0140d7313cf8f4031d816a042202faa61d0ab310a0a538baa1c24b6", size = 16332, upload-time = "2026-03-19T01:04:32.413Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e5/e2/c2e3abf398f80732e58b03be77bde9022550d221dd8781bf586bd4d97cc1/async_lru-2.3.0-py3-none-any.whl", hash = "sha256:eea27b01841909316f2cc739807acea1c623df2be8c5cfad7583286397bb8315", size = 8403, upload-time = "2026-03-19T01:04:30.883Z" },
 ]
 
 [[package]]
@@ -756,6 +766,18 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/1e/75/a2e55f99c16fcac7b5d6c1eb19ad8e00799854d6be5ca845f9259eae1681/cryptography-48.0.0-cp39-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:a5da777e32ffed6f85a7b2b3f7c5cbc88c146bfcd0a1d7baf5fcc6c52ee35dd4", size = 4960575, upload-time = "2026-05-04T22:59:09.851Z" },
     { url = "https://files.pythonhosted.org/packages/b8/23/6e6f32143ab5d8b36ca848a502c4bcd477ae75b9e1677e3530d669062578/cryptography-48.0.0-cp39-abi3-win32.whl", hash = "sha256:77a2ccbbe917f6710e05ba9adaa25fb5075620bf3ea6fb751997875aff4ae4bd", size = 3279117, upload-time = "2026-05-04T22:59:12.019Z" },
     { url = "https://files.pythonhosted.org/packages/9d/9a/0fea98a70cf1749d41d738836f6349d97945f7c89433a259a6c2642eefeb/cryptography-48.0.0-cp39-abi3-win_amd64.whl", hash = "sha256:16cd65b9330583e4619939b3a3843eec1e6e789744bb01e7c7e2e62e33c239c8", size = 3792100, upload-time = "2026-05-04T22:59:14.884Z" },
+]
+
+[[package]]
+name = "deprecated"
+version = "1.3.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "wrapt" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/49/85/12f0a49a7c4ffb70572b6c2ef13c90c88fd190debda93b23f026b25f9634/deprecated-1.3.1.tar.gz", hash = "sha256:b1b50e0ff0c1fddaa5708a2c6b0a6588bb09b892825ab2b214ac9ea9d92a5223", size = 2932523, upload-time = "2025-10-30T08:19:02.757Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/84/d0/205d54408c08b13550c733c4b85429e7ead111c7f0014309637425520a9a/deprecated-1.3.1-py2.py3-none-any.whl", hash = "sha256:597bfef186b6f60181535a29fbe44865ce137a5079f295b479886c82729d5f3f", size = 11298, upload-time = "2025-10-30T08:19:00.758Z" },
 ]
 
 [[package]]
@@ -1935,6 +1957,9 @@ nltk = [
 nvidia = [
     { name = "livekit-plugins-nvidia" },
 ]
+ojin = [
+    { name = "livekit-plugins-ojin" },
+]
 openai = [
     { name = "livekit-plugins-openai" },
 ]
@@ -2059,6 +2084,7 @@ requires-dist = [
     { name = "livekit-plugins-neuphonic", marker = "extra == 'neuphonic'", editable = "livekit-plugins/livekit-plugins-neuphonic" },
     { name = "livekit-plugins-nltk", marker = "extra == 'nltk'", editable = "livekit-plugins/livekit-plugins-nltk" },
     { name = "livekit-plugins-nvidia", marker = "extra == 'nvidia'", editable = "livekit-plugins/livekit-plugins-nvidia" },
+    { name = "livekit-plugins-ojin", marker = "extra == 'ojin'", editable = "livekit-plugins/livekit-plugins-ojin" },
     { name = "livekit-plugins-openai", marker = "extra == 'openai'", editable = "livekit-plugins/livekit-plugins-openai" },
     { name = "livekit-plugins-perplexity", marker = "extra == 'perplexity'", editable = "livekit-plugins/livekit-plugins-perplexity" },
     { name = "livekit-plugins-phonic", marker = "extra == 'phonic'", editable = "livekit-plugins/livekit-plugins-phonic" },
@@ -2103,7 +2129,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "google", "gradium", "groq", "hamming", "hedra", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "minimax", "mistralai", "murf", "neuphonic", "nltk", "nvidia", "openai", "perplexity", "phonic", "resemble", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "speechify", "speechmatics", "spitch", "tavus", "trugen", "turn-detector", "ultravox", "upliftai", "xai"]
+provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "google", "gradium", "groq", "hamming", "hedra", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "minimax", "mistralai", "murf", "neuphonic", "nltk", "nvidia", "ojin", "openai", "perplexity", "phonic", "resemble", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "speechify", "speechmatics", "spitch", "tavus", "trugen", "turn-detector", "ultravox", "upliftai", "xai"]
 
 [[package]]
 name = "livekit-api"
@@ -2362,6 +2388,7 @@ dependencies = [
     { name = "livekit-agents", extra = ["codecs", "openai"] },
     { name = "msgpack" },
     { name = "msgpack-types" },
+    { name = "openai" },
 ]
 
 [package.metadata]
@@ -2369,6 +2396,7 @@ requires-dist = [
     { name = "livekit-agents", extras = ["codecs", "openai"], editable = "livekit-agents" },
     { name = "msgpack", specifier = ">=1.0" },
     { name = "msgpack-types", specifier = ">=0.7.0" },
+    { name = "openai", specifier = ">=2.16.0" },
 ]
 
 [[package]]
@@ -2735,6 +2763,22 @@ requires-dist = [
     { name = "sphn", marker = "extra == 'personaplex'", specifier = ">=0.2.0" },
 ]
 provides-extras = ["personaplex"]
+
+[[package]]
+name = "livekit-plugins-ojin"
+source = { editable = "livekit-plugins/livekit-plugins-ojin" }
+dependencies = [
+    { name = "livekit-agents" },
+    { name = "ojin-client" },
+    { name = "pillow" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "livekit-agents", editable = "livekit-agents" },
+    { name = "ojin-client", specifier = ">=0.6.3" },
+    { name = "pillow", specifier = ">=10.3.0" },
+]
 
 [[package]]
 name = "livekit-plugins-openai"
@@ -3632,6 +3676,22 @@ dependencies = [
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/9d/82/0484c225bebe7ed37334474fba5c6ac7228638e692b84da0a0e7f2395672/nvidia_riva_client-2.16.0-py3-none-any.whl", hash = "sha256:99ef37b8f487d75a70c053736848221e09b728e5c910fb476333d375bd4347a3", size = 45491, upload-time = "2024-07-02T14:54:22.63Z" },
+]
+
+[[package]]
+name = "ojin-client"
+version = "0.6.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "async-lru" },
+    { name = "deprecated" },
+    { name = "pydantic-settings" },
+    { name = "pyjwt" },
+    { name = "websockets" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/67/ec/f56f69904fdd657c300e1d6527c9b1171bce44c49949b6333cbf3db334d1/ojin_client-0.6.5.tar.gz", hash = "sha256:d3fdab18beed99072162953d9a80a52abb18e37a7e598dc17b55fc4d3e10b2ad", size = 143003, upload-time = "2026-05-20T10:55:44.22Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/07/59/bebcf6737add660636decac03f9f9959f4c94939ededdf9198f907035296/ojin_client-0.6.5-py3-none-any.whl", hash = "sha256:7018bdec8c52b86962b64e8c8ad85c8559618b77f2756ea0d250534f8d962803", size = 142099, upload-time = "2026-05-20T10:55:42.538Z" },
 ]
 
 [[package]]
