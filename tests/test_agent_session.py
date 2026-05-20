@@ -768,6 +768,7 @@ async def _make_stt_eos_recognition() -> AudioRecognition:
 async def test_stt_eos_resets_active_vad_stream_without_restarting_vad() -> None:
     recognition = await _make_stt_eos_recognition()
     recognition._speaking = True
+    recognition._vad_speech_started = True
     recognition._vad = _make_fake_vad(supports_flush=True)
     resettable_stream = MagicMock()
     recognition._vad_stream = resettable_stream
@@ -788,6 +789,7 @@ async def test_stt_eos_resets_active_vad_stream_without_restarting_vad() -> None
 async def test_stt_eos_falls_back_to_update_vad_when_no_active_stream() -> None:
     recognition = await _make_stt_eos_recognition()
     recognition._speaking = True
+    recognition._vad_speech_started = True
     recognition._vad = _make_fake_vad(supports_flush=True)
     recognition._vad_stream = None
 
@@ -805,6 +807,7 @@ async def test_stt_eos_falls_back_to_update_vad_when_no_active_stream() -> None:
 async def test_stt_eos_falls_back_to_update_vad_when_reset_unsupported() -> None:
     recognition = await _make_stt_eos_recognition()
     recognition._speaking = True
+    recognition._vad_speech_started = True
     recognition._vad = _make_fake_vad(supports_flush=False)
     resettable_stream = MagicMock()
     recognition._vad_stream = resettable_stream

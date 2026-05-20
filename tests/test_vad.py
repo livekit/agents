@@ -16,15 +16,6 @@ VAD = silero.VAD.load(
 )
 
 
-async def _next_reset_duration(caplog: pytest.LogCaptureFixture) -> float:
-    while True:
-        for record in caplog.records:
-            if record.getMessage() == "reset vad stream":
-                return float(record.__dict__["reset_duration_ms"])
-
-        await asyncio.sleep(0.01)
-
-
 @pytest.mark.parametrize("sample_rate", SAMPLE_RATES)
 async def test_chunks_vad(sample_rate) -> None:
     frames, *_ = await utils.make_test_speech(chunk_duration_ms=10, sample_rate=sample_rate)

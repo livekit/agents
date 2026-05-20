@@ -948,7 +948,7 @@ class AudioRecognition:
             # reset VAD so that incorrect end of turn from STT can be corrected by VAD interruption
             # if user is still speaking (an immediate VAD SOS will interrupt the agent)
             if self._vad:
-                if self._speaking:
+                if self._vad_speech_started:
                     _start_time = time.perf_counter()
                     if self._vad_stream is not None and self._vad.capabilities.supports_flush:
                         self._vad_stream.flush()
@@ -956,9 +956,11 @@ class AudioRecognition:
                         self.update_vad(self._vad)
 
                     logger.warning(
-                        "stt end of speech received while user is speaking, resetting vad",
+                        "stt end of speech received while vad is still in a speech segment, "
+                        "flushing vad",
                         extra={
-                            "reset_duration_ms": (time.perf_counter() - _start_time) * 1000,
+                            "flush_duration_ms": (time.perf_counter() - _start_time) * 1000,
+                            "vad_speech_start_time": self._speech_start_time,
                         },
                     )
 
