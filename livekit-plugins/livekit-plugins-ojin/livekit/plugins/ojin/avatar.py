@@ -13,6 +13,7 @@ from livekit.agents import (
     AgentSession,
     APIConnectOptions,
     NotGivenOr,
+    get_job_context,
     utils,
 )
 from livekit.agents.voice.avatar import (
@@ -225,6 +226,10 @@ class AvatarSession:
         Creates OjinClient, waits for sessionReady, creates the video generator,
         and wires up QueueAudioOutput + AvatarRunner.
         """
+        job_ctx = get_job_context(required=False)
+        if job_ctx is not None:
+            job_ctx.add_shutdown_callback(self.aclose)
+
         from ojin.ojin_client import OjinClient
 
         self._client = OjinClient(
