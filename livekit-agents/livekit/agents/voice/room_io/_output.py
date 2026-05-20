@@ -52,8 +52,6 @@ class _ParticipantAudioOutput(io.AudioOutput):
             sample_rate, num_channels, samples_per_channel=sample_rate // 20, progressive=True
         )
 
-        # used to republish track on reconnection
-        self._republish_task: asyncio.Task[None] | None = None
         self._flush_task: asyncio.Task[None] | None = None
         self._interrupted_event = asyncio.Event()
         self._forwarding_task: asyncio.Task[None] | None = None
@@ -81,12 +79,8 @@ class _ParticipantAudioOutput(io.AudioOutput):
     async def start(self) -> None:
         self._forwarding_task = asyncio.create_task(self._forward_audio())
         await self._publish_track()
-        self._room.on("reconnected", self._on_reconnected)
 
     async def aclose(self) -> None:
-        self._room.off("reconnected", self._on_reconnected)
-        if self._republish_task:
-            await utils.aio.cancel_and_wait(self._republish_task)
         if self._flush_task:
             await utils.aio.cancel_and_wait(self._flush_task)
         if self._forwarding_task:
@@ -197,11 +191,6 @@ class _ParticipantAudioOutput(io.AudioOutput):
                 self._first_frame_event.set()
                 self.on_playback_started(created_at=time.time())
             await self._audio_source.capture_frame(frame)
-
-    def _on_reconnected(self) -> None:
-        if self._republish_task:
-            self._republish_task.cancel()
-        self._republish_task = asyncio.create_task(self._publish_track())
 
 
 class _ParticipantLegacyTranscriptionOutput:

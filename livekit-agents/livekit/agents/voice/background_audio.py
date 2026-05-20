@@ -63,6 +63,7 @@ class AudioConfig(NamedTuple):
 # AudioSource.clear_queue() would abruptly cut off ambient sounds.
 # Instead, we remove the sound from the mixer, and it will get removed 400ms later.
 _AUDIO_SOURCE_BUFFER_MS = 400
+_TRACK_NAME = "background_audio"
 
 
 class BackgroundAudioPlayer:
@@ -109,7 +110,6 @@ class BackgroundAudioPlayer:
         self.publication: rtc.LocalTrackPublication | None = None
         self._lock = asyncio.Lock()
 
-        self._republish_task: asyncio.Task[None] | None = None  # republish the task on reconnect
         self._mixer_atask: asyncio.Task[None] | None = None
 
         self._play_tasks: list[asyncio.Task[None]] = []
@@ -262,7 +262,6 @@ class BackgroundAudioPlayer:
             await self._publish_track()
 
             self._mixer_atask = asyncio.create_task(self._run_mixer_task())
-            self._room.on("reconnected", self._on_reconnected)
 
             if self._agent_session:
                 self._agent_session.on("agent_state_changed", self._agent_state_changed)
@@ -288,9 +287,6 @@ class BackgroundAudioPlayer:
 
             await cancel_and_wait(*self._play_tasks)
 
-            if self._republish_task:
-                await cancel_and_wait(self._republish_task)
-
             await cancel_and_wait(self._mixer_atask)
             self._mixer_atask = None
 
@@ -300,18 +296,19 @@ class BackgroundAudioPlayer:
             if self._agent_session:
                 self._agent_session.off("agent_state_changed", self._agent_state_changed)
 
-            self._room.off("reconnected", self._on_reconnected)
-
             with contextlib.suppress(Exception):
-                if self.publication is not None:
-                    await self._room.local_participant.unpublish_track(self.publication.sid)
+                # The cached publication SID may be stale if the SDK
+                # republished it during a full reconnect; resolve the current
+                # publication by track name before unpublishing.
+                current = self._find_publication_by_name(_TRACK_NAME)
+                if current is not None:
+                    await self._room.local_participant.unpublish_track(current.sid)
 
-    def _on_reconnected(self) -> None:
-        if self._republish_task:
-            self._republish_task.cancel()
-
-        self.publication = None
-        self._republish_task = asyncio.create_task(self._republish_track_task())
+    def _find_publication_by_name(self, name: str) -> rtc.LocalTrackPublication | None:
+        for pub in self._room.local_participant.track_publications.values():
+            if pub.name == name:
+                return pub
+        return None
 
     def _agent_state_changed(self, ev: AgentStateChangedEvent) -> None:
         if not self._thinking_sound:
@@ -390,16 +387,10 @@ class BackgroundAudioPlayer:
         if self.publication is not None:
             return
 
-        track = rtc.LocalAudioTrack.create_audio_track("background_audio", self._audio_source)
+        track = rtc.LocalAudioTrack.create_audio_track(_TRACK_NAME, self._audio_source)
         self.publication = await self._room.local_participant.publish_track(
             track, self._track_publish_options or rtc.TrackPublishOptions()
         )
-
-    @log_exceptions(logger=logger)
-    async def _republish_track_task(self) -> None:
-        # used to republish the track on agent reconnect
-        async with self._lock:
-            await self._publish_track()
 
 
 class PlayHandle:
