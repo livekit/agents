@@ -147,7 +147,7 @@ class VAD(agents.vad.VAD):
         opts: _VADOptions,
     ) -> None:
         super().__init__(
-            capabilities=agents.vad.VADCapabilities(update_interval=0.032, supports_reset=True)
+            capabilities=agents.vad.VADCapabilities(update_interval=0.032, supports_flush=True)
         )
         self._onnx_session = session
         self._opts = opts
@@ -352,12 +352,14 @@ class VADStream(agents.vad.VADStream):
                 resampler = None
 
         async for input_frame in self._input_ch:
-            if isinstance(input_frame, self._ResetSentinel):
+            if isinstance(input_frame, self._FlushSentinel):
+                # treat flush as a segment boundary: drop accumulated state so the next
+                # input starts fresh. supports_flush=True advertises this behavior.
                 _reset_state()
                 continue
 
             if not isinstance(input_frame, rtc.AudioFrame):
-                continue  # ignore flush sentinel for now
+                continue
 
             if not self._input_sample_rate:
                 self._input_sample_rate = input_frame.sample_rate

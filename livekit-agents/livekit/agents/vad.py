@@ -71,8 +71,8 @@ class VADEvent:
 @dataclass
 class VADCapabilities:
     update_interval: float
-    supports_reset: bool = False
-    """Whether the VAD Stream supports mid-session reset"""
+    supports_flush: bool = False
+    """Whether flush() is honored as a segment boundary that clears accumulated state."""
 
 
 class VAD(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
@@ -101,15 +101,10 @@ class VADStream(ABC):
     class _FlushSentinel:
         pass
 
-    class _ResetSentinel:
-        pass
-
     def __init__(self, vad: VAD) -> None:
         self._vad = vad
         self._last_activity_time = time.perf_counter()
-        self._input_ch = aio.Chan[
-            rtc.AudioFrame | VADStream._FlushSentinel | VADStream._ResetSentinel
-        ]()
+        self._input_ch = aio.Chan[rtc.AudioFrame | VADStream._FlushSentinel]()
         self._event_ch = aio.Chan[VADEvent]()
 
         self._tee_aiter = aio.itertools.tee(self._event_ch, 2)
@@ -164,19 +159,6 @@ class VADStream(ABC):
         self._check_input_not_ended()
         self._check_not_closed()
         self._input_ch.send_nowait(self._FlushSentinel())
-
-    def reset(self) -> None:
-        """Reset vad state without closing the stream."""
-        if not self._vad.capabilities.supports_reset:
-            raise RuntimeError(
-                f"{self._vad._label} does not support mid-session reset "
-                f"({type(self).__module__}.{type(self).__name__}.reset requires "
-                "VADCapabilities.supports_reset=True); create a new VAD stream instead."
-            )
-
-        self._check_input_not_ended()
-        self._check_not_closed()
-        self._input_ch.send_nowait(self._ResetSentinel())
 
     def end_input(self) -> None:
         """Mark the end of input, no more audio will be pushed"""

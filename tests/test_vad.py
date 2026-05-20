@@ -119,7 +119,7 @@ async def test_reset_recovers_full_speech_segment() -> None:
         assert first_sos.type == vad.VADEventType.START_OF_SPEECH
         assert first_eos.type == vad.VADEventType.END_OF_SPEECH
 
-        stream.reset()
+        stream.flush()
 
         second_sos, second_eos = await _drain_speech_segment(stream, frames)
         assert second_sos.type == vad.VADEventType.START_OF_SPEECH
