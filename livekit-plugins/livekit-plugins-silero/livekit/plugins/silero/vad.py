@@ -61,7 +61,7 @@ class VAD(agents.vad.VAD):
         cls,
         *,
         min_speech_duration: float = 0.05,
-        min_silence_duration: float = 0.55,
+        min_silence_duration: float = 0.1,
         prefix_padding_duration: float = 0.5,
         max_buffered_speech: float = 60.0,
         activation_threshold: float = 0.5,
@@ -227,7 +227,6 @@ class VADStream(agents.vad.VADStream):
         super().__init__(vad)
         self._opts, self._model = opts, model
         self._loop = asyncio.get_event_loop()
-        self._exp_filter = utils.ExpFilter(alpha=0.35)
 
         self._input_sample_rate = 0
         self._speech_buffer: np.ndarray | None = None
@@ -374,7 +373,6 @@ class VADStream(agents.vad.VADStream):
 
                 # run the inference
                 p = await self._loop.run_in_executor(None, self._model, inference_f32_data)
-                p = self._exp_filter.apply(exp=1.0, sample=p)
 
                 window_duration = self._model.window_size_samples / self._opts.sample_rate
 
