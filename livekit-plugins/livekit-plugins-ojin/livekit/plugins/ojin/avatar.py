@@ -7,7 +7,14 @@ from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Any
 
 from livekit import rtc
-from livekit.agents import NOT_GIVEN, AgentSession, NotGivenOr, utils
+from livekit.agents import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    AgentSession,
+    APIConnectOptions,
+    NotGivenOr,
+    utils,
+)
 from livekit.agents.voice.avatar import (
     AudioSegmentEnd,
     AvatarOptions,
@@ -163,8 +170,7 @@ class AvatarSession:
         api_key: NotGivenOr[str] = NOT_GIVEN,
         config_id: NotGivenOr[str] = NOT_GIVEN,
         ws_url: NotGivenOr[str] = NOT_GIVEN,
-        reconnect_attempts: int = 3,
-        reconnect_delay: float = 1.0,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         session_ready_timeout: float = _SESSION_READY_TIMEOUT,
     ) -> None:
         self._api_key = api_key if utils.is_given(api_key) else os.environ.get("OJIN_API_KEY")
@@ -174,8 +180,7 @@ class AvatarSession:
         self._ws_url: str = (
             ws_url if utils.is_given(ws_url) else os.environ.get("OJIN_WS_URL", _DEFAULT_WS_URL)
         )
-        self._reconnect_attempts = reconnect_attempts
-        self._reconnect_delay = reconnect_delay
+        self._conn_options = conn_options
         self._session_ready_timeout = session_ready_timeout
 
         if not self._api_key:
@@ -226,12 +231,12 @@ class AvatarSession:
             self._ws_url,
             self._api_key,
             self._config_id,
-            reconnect_attempts=self._reconnect_attempts,
-            reconnect_delay=self._reconnect_delay,
+            reconnect_attempts=self._conn_options.max_retry,
+            reconnect_delay=self._conn_options.retry_interval,
         )
 
         try:
-            await self._client.connect()
+            await asyncio.wait_for(self._client.connect(), timeout=self._conn_options.timeout)
 
             session_ready = await asyncio.wait_for(
                 self._wait_session_ready(), timeout=self._session_ready_timeout
@@ -271,8 +276,10 @@ class AvatarSession:
             agent_session.output.audio = audio_buffer
         except asyncio.TimeoutError as e:
             await self.aclose()
+            timeout = self._conn_options.timeout
             raise OjinException(
-                f"Timed out waiting for Ojin sessionReady after {self._session_ready_timeout}s",
+                f"Timed out connecting to Ojin or waiting for sessionReady "
+                f"(connect_timeout={timeout}s, session_ready_timeout={self._session_ready_timeout}s)",
                 retryable=True,
                 code="SESSION_READY_TIMEOUT",
                 origin="start",
