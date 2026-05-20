@@ -658,6 +658,8 @@ class SpeechStream(stt.SpeechStream):
                             retryable=False,
                         )
 
+                except APIError:
+                    raise
                 except Exception:
                     logger.exception("failed to process OpenAI message")
 
