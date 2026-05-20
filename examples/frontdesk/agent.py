@@ -12,6 +12,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from calendar_api import AvailableSlot, CalComCalendar, Calendar, FakeCalendar, SlotUnavailableError
 from dotenv import load_dotenv
+from ui_view import UIView
 
 from livekit.agents import (
     Agent,
@@ -48,6 +49,10 @@ class Userdata:
     cal: Calendar
     booked_times: list[str] = field(default_factory=list)
     slot_unavailable_count: int = 0
+    # Optional UI for the LiveKit Playground. ``None`` when the agent
+    # is running anywhere else — the tool handlers no-op on it and
+    # the rest of the code stays oblivious to the playground.
+    ui: UIView | None = None
 
 
 logger = logging.getLogger("front-desk")
@@ -77,7 +82,7 @@ class FrontDeskAgent(Agent):
         self._slots_map: dict[str, AvailableSlot] = {}
 
     async def on_enter(self) -> None:
-        await self.session.say("hello, I can help you to schedule an appointment")
+        await self.session.say("Hello, I can help you schedule an appointment!")
 
     @function_tool
     async def schedule_appointment(
@@ -127,6 +132,10 @@ class FrontDeskAgent(Agent):
             )
         except RuntimeError:
             pass
+
+        if ctx.userdata.ui is not None:
+            ctx.userdata.ui.appointment_booked(slot, self.tz)
+
         return f"The appointment was successfully scheduled for {local.strftime('%A, %B %d, %Y at %H:%M %Z')}."
 
     @function_tool
@@ -155,9 +164,11 @@ class FrontDeskAgent(Agent):
         elif range == "+3month":
             range_days = 90
 
-        for slot in await ctx.userdata.cal.list_available_slots(
+        slots = await ctx.userdata.cal.list_available_slots(
             start_time=now, end_time=now + datetime.timedelta(days=range_days)
-        ):
+        )
+
+        for slot in slots:
             local = slot.start_time.astimezone(self.tz)
             delta = local - now
             days = delta.days
@@ -183,6 +194,9 @@ class FrontDeskAgent(Agent):
             )
             self._slots_map[slot.unique_hash] = slot
 
+        if ctx.userdata.ui is not None:
+            ctx.userdata.ui.slots_listed(slots, now, self.tz, range_days)
+
         return "\n".join(lines) or "No slots available at the moment."
 
 
@@ -190,7 +204,13 @@ server = AgentServer()
 
 
 async def on_session_end(ctx: JobContext) -> None:
-    report = ctx.make_session_report()
+    # `on_session_end` runs even if the job crashed before the AgentSession
+    # started (e.g. a bad timezone, a calendar fault) — make_session_report
+    # raises in that case, and there's nothing to evaluate anyway.
+    try:
+        report = ctx.make_session_report()
+    except RuntimeError:
+        return
 
     # Skip evaluation for very short conversations
     chat = report.chat_history.copy(exclude_function_call=True, exclude_instructions=True)
@@ -226,7 +246,7 @@ async def on_session_end(ctx: JobContext) -> None:
 async def frontdesk_agent(ctx: JobContext):
     await ctx.connect()
 
-    timezone = "utc"
+    timezone = "UTC"
 
     if cal_api_key := os.getenv("CAL_API_KEY", None):
         logger.info("CAL_API_KEY detected, using cal.com calendar")
@@ -239,8 +259,10 @@ async def frontdesk_agent(ctx: JobContext):
 
     await cal.initialize()
 
+    userdata = Userdata(cal=cal, ui=UIView(ctx))
+
     session = AgentSession[Userdata](
-        userdata=Userdata(cal=cal),
+        userdata=userdata,
         stt=inference.STT("deepgram/nova-3"),
         llm=inference.LLM("google/gemini-2.5-flash"),
         tts=inference.TTS("cartesia/sonic-3", voice="39b376fc-488e-4d0c-8b37-e00b72059fdd"),
