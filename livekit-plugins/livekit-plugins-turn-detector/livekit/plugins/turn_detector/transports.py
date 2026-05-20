@@ -40,6 +40,7 @@ from livekit.agents.voice.turn import (
 )
 
 try:
+    # TODO: @chenghao-mou update the import to use the released package
     import audio_eot as _audio_eot  # type: ignore[import-not-found]
 except ImportError as _e:
     _audio_eot = None
