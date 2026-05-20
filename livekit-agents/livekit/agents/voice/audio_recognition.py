@@ -171,6 +171,10 @@ class AudioRecognition:
         self._vad_base_turn_detection = self._turn_detection_mode in ("vad", None)
         self._user_turn_committed = False  # true if user turn ended but EOU task not done
 
+        # used for late final transcript after commit (audio EOT fires before all finals arrive)
+        self._last_commit_time: float | None = None
+        self._last_committed_speaking_time: float | None = None
+
         self._sample_rate: int | None = None
         self._speaking = False
 
@@ -1190,6 +1194,26 @@ class AudioRecognition:
             else None  # disable EOU model if manual turn detection enabled
         )
 
+        # Late STT final after an audio-EOT commit without any new speech started.
+        # The corresponding audio was already flushed, so an eou prediction would
+        # run on near-silence. Skip the predict and let the bounce commit after min_delay
+        if (
+            trigger == "stt"
+            and isinstance(self._turn_detector, _AudioTurnDetector)
+            and self._last_commit_time is not None
+            and self._vad is not None
+            and self._speech_start_time is None  # no new speech since last commit
+        ):
+            logger.warning(
+                "stt final arrived late, committing directly",
+                extra={
+                    "last_speaking_time": self._last_committed_speaking_time,
+                    "commit_time": self._last_commit_time,
+                    "received_at": time.time(),
+                },
+            )
+            turn_detector = None
+
         @utils.log_exceptions(logger=logger)
         async def _bounce_eou_task(
             last_speaking_time: float | None = None,
@@ -1381,6 +1405,7 @@ class AudioRecognition:
                 self._audio_transcript = ""
                 self._final_transcript_confidence = []
                 self._last_final_transcript_time = None
+                self._last_committed_speaking_time = last_speaking_time
                 # concurrent user speech might have changed it
                 # only reset if there is no new speech
                 if self._last_speaking_time == last_speaking_time:
@@ -1392,6 +1417,7 @@ class AudioRecognition:
                     self._turn_detector_stream.flush(reason="turn committed")
 
                 self._latest_eot_prediction = None
+                self._last_commit_time = time.time()
 
             self._user_turn_committed = False
 

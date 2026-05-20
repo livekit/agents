@@ -16,9 +16,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import time
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from livekit import rtc
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
@@ -357,6 +360,9 @@ def _make_full_recognition_for_eou() -> AudioRecognition:
     ar._end_of_turn_task = None
     ar._user_turn_committed = False
     ar._latest_eot_prediction = None
+    ar._last_commit_time = None
+    ar._last_committed_speaking_time = None
+    ar._vad = None
     ar._last_language = None
     ar._closing = asyncio.Event()
     return ar
@@ -408,3 +414,117 @@ class TestSpeakingGuardRace:
         # predict_end_of_turn should not have been awaited — the guard
         # bailed before the bounce task started.
         assert ar._turn_detector_stream.predict_end_of_turn.call_count == 0
+
+
+class TestLateSttAfterAudioCommit:
+    """STT finals can arrive after the audio EOT model has already committed
+    the turn. With the corresponding audio already flushed, running predict
+    would evaluate near-silence, so the bounce skips the predict in that
+    case. The guard is structural — gated on a prior commit, VAD presence,
+    and absence of a fresh VAD START_OF_SPEECH since commit."""
+
+    @staticmethod
+    def _arm_late_after_commit(ar: AudioRecognition) -> None:
+        """Set the state that marks 'we've committed, no fresh SOS since'."""
+        ar._last_commit_time = time.time() - 0.1
+        ar._last_committed_speaking_time = ar._last_commit_time
+        ar._vad = MagicMock()
+        ar._speech_start_time = None
+        ar._audio_transcript = "late text"
+
+    async def test_skips_predict_when_late_after_commit(self) -> None:
+        ar = _make_full_recognition_for_eou()
+        self._arm_late_after_commit(ar)
+        chat_ctx = _make_chat_ctx_stub()
+
+        ar._run_eou_detection(chat_ctx, trigger="stt")
+
+        assert ar._end_of_turn_task is not None
+        await ar._end_of_turn_task
+        assert ar._turn_detector_stream.predict_end_of_turn.call_count == 0
+
+    async def test_logs_warning_when_late_after_commit(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        ar = _make_full_recognition_for_eou()
+        self._arm_late_after_commit(ar)
+        chat_ctx = _make_chat_ctx_stub()
+
+        with caplog.at_level(logging.WARNING):
+            ar._run_eou_detection(chat_ctx, trigger="stt")
+
+        assert ar._end_of_turn_task is not None
+        await ar._end_of_turn_task
+        assert any("stt final arrived late" in record.message for record in caplog.records)
+
+    async def test_commits_via_bounce_after_min_delay(self) -> None:
+        """Skipping predict still goes through the existing bounce: sleep
+        min_delay then call on_end_of_turn."""
+        ar = _make_full_recognition_for_eou()
+        self._arm_late_after_commit(ar)
+        ar._hooks.on_end_of_turn.return_value = True  # actually commit
+        chat_ctx = _make_chat_ctx_stub()
+
+        ar._run_eou_detection(chat_ctx, trigger="stt")
+
+        assert ar._end_of_turn_task is not None
+        await ar._end_of_turn_task
+        ar._hooks.on_end_of_turn.assert_called_once()
+        # transcript cleared, stream flushed at commit
+        assert ar._audio_transcript == ""
+        ar._turn_detector_stream.flush.assert_called_once()
+
+    async def test_fresh_sos_after_commit_runs_normal_predict(self) -> None:
+        """A fresh VAD START_OF_SPEECH since the last commit clears the
+        'late' classification — predict runs as usual."""
+        ar = _make_full_recognition_for_eou()
+        self._arm_late_after_commit(ar)
+        ar._speech_start_time = time.time()  # fresh SOS happened
+        chat_ctx = _make_chat_ctx_stub()
+
+        ar._run_eou_detection(chat_ctx, trigger="stt")
+
+        assert ar._end_of_turn_task is not None
+        await ar._end_of_turn_task
+        assert ar._turn_detector_stream.predict_end_of_turn.call_count == 1
+
+    async def test_no_prior_commit_runs_normal_predict(self) -> None:
+        """Before the first commit, ``_last_commit_time`` is None — the gate
+        doesn't fire and predict runs."""
+        ar = _make_full_recognition_for_eou()
+        self._arm_late_after_commit(ar)
+        ar._last_commit_time = None
+        chat_ctx = _make_chat_ctx_stub()
+
+        ar._run_eou_detection(chat_ctx, trigger="stt")
+
+        assert ar._end_of_turn_task is not None
+        await ar._end_of_turn_task
+        assert ar._turn_detector_stream.predict_end_of_turn.call_count == 1
+
+    async def test_no_vad_runs_normal_predict(self) -> None:
+        """Without VAD there's no SOS signal to compare against — fall back
+        to the normal predict path."""
+        ar = _make_full_recognition_for_eou()
+        self._arm_late_after_commit(ar)
+        ar._vad = None
+        chat_ctx = _make_chat_ctx_stub()
+
+        ar._run_eou_detection(chat_ctx, trigger="stt")
+
+        assert ar._end_of_turn_task is not None
+        await ar._end_of_turn_task
+        assert ar._turn_detector_stream.predict_end_of_turn.call_count == 1
+
+    async def test_non_stt_trigger_runs_normal_predict(self) -> None:
+        """Other triggers (vad, turn_detector, manual) never take this
+        short-circuit even when the rest of the state matches."""
+        ar = _make_full_recognition_for_eou()
+        self._arm_late_after_commit(ar)
+        chat_ctx = _make_chat_ctx_stub()
+
+        ar._run_eou_detection(chat_ctx, trigger="turn_detector")
+
+        assert ar._end_of_turn_task is not None
+        await ar._end_of_turn_task
+        assert ar._turn_detector_stream.predict_end_of_turn.call_count == 1

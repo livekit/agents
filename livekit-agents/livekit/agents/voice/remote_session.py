@@ -27,6 +27,7 @@ from ..llm import (
 from ..log import logger
 from ..metrics import (
     AgentSessionUsage,
+    EOTModelUsage,
     InterruptionModelUsage,
     LLMModelUsage,
     STTModelUsage,
@@ -830,6 +831,16 @@ def _session_usage_to_proto(usage: AgentSessionUsage) -> agent_pb.AgentSessionUs
             model_usages.append(
                 agent_pb.ModelUsage(
                     interruption=agent_pb.InterruptionModelUsage(
+                        provider=mu.provider,
+                        model=mu.model,
+                        total_requests=mu.total_requests,
+                    )
+                )
+            )
+        elif isinstance(mu, EOTModelUsage):
+            model_usages.append(
+                agent_pb.ModelUsage(
+                    eot=agent_pb.EotModelUsage(
                         provider=mu.provider,
                         model=mu.model,
                         total_requests=mu.total_requests,
