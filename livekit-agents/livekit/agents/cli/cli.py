@@ -1963,7 +1963,7 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             "instead, e.g. `uv run -m livekit.agents download-files`.[/yellow]"
         )
         warnings.warn(
-            "Invoking the download-files command via your agent entrypoint is deprecated "
+            "Invoking the download-files command via your agent script is deprecated "
             "as of 1.5.10. Run it directly against the livekit.agents module instead, "
             "e.g. `uv run -m livekit.agents download-files`.",
             DeprecationWarning,
