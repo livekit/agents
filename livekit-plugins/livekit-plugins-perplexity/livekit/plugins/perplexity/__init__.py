@@ -24,10 +24,17 @@ from livekit.agents import Plugin
 from . import responses
 from .llm import LLM
 from .log import logger
-from .models import PerplexityChatModels
+from .models import PerplexityChatModels, PerplexityResponsesModels
 from .version import __version__
 
-__all__ = ["responses", "LLM", "PerplexityChatModels", "logger", "__version__"]
+__all__ = [
+    "responses",
+    "LLM",
+    "PerplexityChatModels",
+    "PerplexityResponsesModels",
+    "logger",
+    "__version__",
+]
 
 
 class PerplexityPlugin(Plugin):
