@@ -34,11 +34,11 @@ def test_tts_accepts_api_key_from_env():
 
 
 def test_tts_default_voice():
-    """TTS defaults to 'sia' voice."""
+    """TTS defaults to 'Karan' voice."""
     from livekit.plugins.gnani import TTS
 
     tts = TTS(api_key="test-key")
-    assert tts._opts.voice == "sia"
+    assert tts._opts.voice == "Karan"
 
 
 def test_tts_custom_voice():
@@ -50,11 +50,12 @@ def test_tts_custom_voice():
 
 
 def test_tts_all_voices_accepted():
-    """TTS accepts all documented voices."""
+    """TTS accepts all documented voices (both v2 legacy and v3)."""
     from livekit.plugins.gnani import TTS
 
-    voices = ["sia", "raju", "kanika", "nikita", "ravan", "simran", "karan", "neha"]
-    for voice in voices:
+    v2_voices = ["sia", "raju", "kanika", "nikita", "ravan", "simran", "karan", "neha"]
+    v3_voices = ["Karan", "Simran", "Nara", "Riya", "Viraj", "Raju"]
+    for voice in v2_voices + v3_voices:
         tts = TTS(api_key="test-key", voice=voice)
         assert tts._opts.voice == voice
 
@@ -68,11 +69,11 @@ def test_tts_rejects_invalid_voice():
 
 
 def test_tts_default_model():
-    """TTS defaults to vachana-voice-v2."""
+    """TTS defaults to vachana-voice-v3."""
     from livekit.plugins.gnani import TTS
 
     tts = TTS(api_key="test-key")
-    assert tts._opts.model == "vachana-voice-v2"
+    assert tts._opts.model == "vachana-voice-v3"
 
 
 def test_tts_model_property():
@@ -80,7 +81,7 @@ def test_tts_model_property():
     from livekit.plugins.gnani import TTS
 
     tts = TTS(api_key="test-key")
-    assert tts.model == "vachana-voice-v2"
+    assert tts.model == "vachana-voice-v3"
 
 
 def test_tts_provider_property():
@@ -141,11 +142,11 @@ def test_tts_custom_audio_config():
 
 
 def test_tts_default_language():
-    """TTS defaults to IND-IN language."""
+    """TTS defaults to 'hi' language."""
     from livekit.plugins.gnani import TTS
 
     tts = TTS(api_key="test-key")
-    assert tts._opts.language == "IND-IN"
+    assert tts._opts.language == "hi"
 
 
 def test_tts_update_options_voice():
