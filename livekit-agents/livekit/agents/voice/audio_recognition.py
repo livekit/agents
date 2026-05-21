@@ -808,13 +808,13 @@ class AudioRecognition:
                 # no return here to allow the new event to be processed normally
 
         has_stt_end_time = bool(
-            ev.alternatives
+            len(ev.alternatives) > 0
             and ev.alternatives[0].end_time > 0
             and self._input_started_at is not None
         )
         stt_last_speaking_time = (
             ev.alternatives[0].end_time + self._input_started_at
-            if has_stt_end_time
+            if has_stt_end_time and self._input_started_at is not None
             else time.time()
         )
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
@@ -853,8 +853,8 @@ class AudioRecognition:
             self._audio_interim_transcript = ""
             self._audio_preflight_transcript = ""
 
-            if self._last_speaking_time is None or (not self._vad and has_stt_end_time):
-                # vad disabled, use stt timestamp
+            if not self._vad or self._last_speaking_time is None:
+                # vad disabled or missed a speech, use stt timestamp
                 self._last_speaking_time = stt_last_speaking_time
 
             if self._vad_base_turn_detection or self._user_turn_committed:
@@ -906,8 +906,8 @@ class AudioRecognition:
             self._audio_preflight_transcript = (self._audio_transcript + " " + transcript).lstrip()
             self._audio_interim_transcript = transcript
 
-            if self._last_speaking_time is None or (not self._vad and has_stt_end_time):
-                # vad disabled, use stt timestamp
+            if not self._vad or self._last_speaking_time is None:
+                # vad disabled or missed a speech, use stt timestamp
                 self._last_speaking_time = stt_last_speaking_time
 
             if self._turn_detection_mode != "manual" or self._user_turn_committed:
@@ -947,8 +947,8 @@ class AudioRecognition:
 
             self._speaking = False
             self._user_turn_committed = True
-            if self._last_speaking_time is None or (not self._vad and has_stt_end_time):
-                # vad disabled, use stt timestamp
+            if not self._vad or self._last_speaking_time is None:
+                # vad disabled or missed a speech, use stt timestamp
                 self._last_speaking_time = stt_last_speaking_time
 
             chat_ctx = self._hooks.retrieve_chat_ctx().copy()
