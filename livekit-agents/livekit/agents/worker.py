@@ -39,7 +39,7 @@ from livekit import api, rtc
 from livekit.protocol import agent, models
 
 from . import ipc, telemetry, utils
-from ._exceptions import AssignmentTimeoutError
+from ._exceptions import APIStatusError, AssignmentTimeoutError
 from .inference_runner import _InferenceRunner
 from .job import (
     JobAcceptArguments,
@@ -1097,7 +1097,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 retry_count += 1
 
                 logger.warning(
-                    f"failed to connect to livekit, retrying in {retry_delay}s", exc_info=e
+                    f"failed to connect to livekit, retrying in {retry_delay}s",
+                    extra={"retry_count": retry_count, "max_retry": self._max_retry, "error": e},
                 )
                 await asyncio.sleep(retry_delay)
             finally:
@@ -1136,10 +1137,24 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     if closing_ws:
                         return
 
-                    raise Exception("worker connection closed unexpectedly")
+                    raise APIStatusError(
+                        message="worker connection closed unexpectedly",
+                        status_code=ws.close_code or -1,
+                        body=f"{msg.data=} {msg.extra=}",
+                    )
 
                 if msg.type != aiohttp.WSMsgType.BINARY:
-                    logger.warning("unexpected message type: %s", msg.type)
+                    ws_data = str(msg.data)
+                    if len(ws_data) > 128:
+                        ws_data = ws_data[:128] + f"...(+{len(ws_data) - 128} more)"
+                    logger.warning(
+                        "unexpected message type: %s",
+                        msg.type,
+                        extra={
+                            "type": msg.type.name,
+                            "ws_data": ws_data,
+                        },
+                    )
                     continue
 
                 data = msg.data
