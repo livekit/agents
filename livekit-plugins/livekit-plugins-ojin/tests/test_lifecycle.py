@@ -29,9 +29,8 @@ def _mock_ojin_client():
     client.connect = AsyncMock()
     client.close = AsyncMock()
     client.send_message = AsyncMock()
-    client.start_interaction = MagicMock()
+    client.start_interaction = AsyncMock()
 
-    # First receive_message returns sessionReady
     from ojin.ojin_client_messages import OjinSessionReadyMessage
 
     session_ready_msg = MagicMock(spec=OjinSessionReadyMessage)
@@ -54,14 +53,18 @@ async def test_start_sets_queue_audio_output():
     with (
         patch("ojin.ojin_client.OjinClient", return_value=client),
         patch("livekit.plugins.ojin.avatar.AvatarRunner") as MockRunner,
+        patch("livekit.plugins.ojin.avatar.OjinAudioInputMessage") as MockAudioMsg,
     ):
+        mock_audio_msg = MockAudioMsg.return_value
         mock_runner_instance = MockRunner.return_value
         mock_runner_instance.start = AsyncMock()
 
         await avatar.start(agent_session, room)
 
-        # agent_session.output.audio should now be a QueueAudioOutput
         assert isinstance(agent_session.output.audio, QueueAudioOutput)
+        MockAudioMsg.assert_called_once_with(audio_int16_bytes=b"\x00" * 1280)
+        client.start_interaction.assert_awaited_once()
+        client.send_message.assert_awaited_once_with(mock_audio_msg)
 
 
 @pytest.mark.asyncio
@@ -69,9 +72,7 @@ async def test_aclose_is_idempotent():
     """Double-close should not raise."""
     avatar = AvatarSession(api_key="test-key", config_id="test-config")
 
-    # aclose on a session that was never started
     await avatar.aclose()
-    # second aclose should also be safe
     await avatar.aclose()
 
 
