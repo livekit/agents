@@ -761,7 +761,8 @@ class TTS(tts.TTS):
 
     Args:
         voice: Voice to use for synthesis (Karan, Simran, Riya, etc.).
-        model: TTS model name (default: vachana-voice-v3).
+        model: TTS model name. Auto-detected from voice if not specified
+            (v2 voices use "vachana-voice-v2", v3 voices use "vachana-voice-v3").
         sample_rate: Audio output sample rate (8000-44100).
         encoding: Audio encoding (linear_pcm or oggopus).
         container: Audio container format (raw, mp3, wav, mulaw, ogg).
@@ -774,7 +775,7 @@ class TTS(tts.TTS):
         self,
         *,
         voice: GnaniTTSVoices | str = "Karan",
-        model: str = "vachana-voice-v3",
+        model: str | None = None,
         sample_rate: int = 16000,
         num_channels: int = 1,
         encoding: GnaniTTSEncodings | str = "linear_pcm",
@@ -808,6 +809,9 @@ class TTS(tts.TTS):
                 f"legacy v2 voices are lowercase (e.g. 'karan'). "
                 f"See SUPPORTED_VOICES for the full list."
             )
+
+        if model is None:
+            model = "vachana-voice-v2" if voice in LEGACY_V2_VOICES else "vachana-voice-v3"
 
         self._opts = GnaniTTSOptions(
             api_key=self._api_key,

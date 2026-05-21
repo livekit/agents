@@ -69,11 +69,37 @@ def test_tts_rejects_invalid_voice():
 
 
 def test_tts_default_model():
-    """TTS defaults to vachana-voice-v3."""
+    """TTS defaults to vachana-voice-v3 for the default v3 voice."""
     from livekit.plugins.gnani import TTS
 
     tts = TTS(api_key="test-key")
     assert tts._opts.model == "vachana-voice-v3"
+
+
+def test_tts_model_auto_v2():
+    """TTS auto-selects vachana-voice-v2 for legacy lowercase voices."""
+    from livekit.plugins.gnani import TTS
+
+    tts = TTS(api_key="test-key", voice="sia")
+    assert tts._opts.model == "vachana-voice-v2"
+    assert tts.model == "vachana-voice-v2"
+
+
+def test_tts_model_auto_v3():
+    """TTS auto-selects vachana-voice-v3 for capitalized v3 voices."""
+    from livekit.plugins.gnani import TTS
+
+    tts = TTS(api_key="test-key", voice="Simran")
+    assert tts._opts.model == "vachana-voice-v3"
+    assert tts.model == "vachana-voice-v3"
+
+
+def test_tts_model_explicit_override():
+    """Explicit model parameter overrides auto-detection."""
+    from livekit.plugins.gnani import TTS
+
+    tts = TTS(api_key="test-key", voice="sia", model="custom-model")
+    assert tts._opts.model == "custom-model"
 
 
 def test_tts_model_property():
