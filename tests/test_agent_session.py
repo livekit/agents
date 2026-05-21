@@ -750,12 +750,6 @@ async def test_backchannel_boundary_suppresses_start_boundary_interruption() -> 
         await _close_test_session(session)
 
 
-def _make_fake_vad(*, supports_flush: bool) -> MagicMock:
-    fake_vad = MagicMock()
-    fake_vad.capabilities = MagicMock(supports_flush=supports_flush)
-    return fake_vad
-
-
 async def _make_stt_eos_recognition() -> AudioRecognition:
     return AudioRecognition(
         create_session(FakeActions()),
@@ -772,7 +766,7 @@ async def test_stt_eos_resets_active_vad_stream_without_restarting_vad() -> None
     recognition = await _make_stt_eos_recognition()
     recognition._speaking = True
     recognition._vad_speech_started = True
-    recognition._vad = _make_fake_vad(supports_flush=True)
+    recognition._vad = MagicMock()
     resettable_stream = MagicMock()
     recognition._vad_stream = resettable_stream
 
@@ -793,7 +787,7 @@ async def test_stt_eos_falls_back_to_update_vad_when_no_active_stream() -> None:
     recognition = await _make_stt_eos_recognition()
     recognition._speaking = True
     recognition._vad_speech_started = True
-    recognition._vad = _make_fake_vad(supports_flush=True)
+    recognition._vad = MagicMock()
     recognition._vad_stream = None
 
     try:
@@ -801,26 +795,6 @@ async def test_stt_eos_falls_back_to_update_vad_when_no_active_stream() -> None:
             await recognition._on_stt_event(SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
 
         update_vad.assert_called_once_with(recognition._vad)
-    finally:
-        if recognition._end_of_turn_task is not None:
-            await aio.cancel_and_wait(recognition._end_of_turn_task)
-        await _close_test_session(recognition._session)
-
-
-async def test_stt_eos_falls_back_to_update_vad_when_reset_unsupported() -> None:
-    recognition = await _make_stt_eos_recognition()
-    recognition._speaking = True
-    recognition._vad_speech_started = True
-    recognition._vad = _make_fake_vad(supports_flush=False)
-    resettable_stream = MagicMock()
-    recognition._vad_stream = resettable_stream
-
-    try:
-        with patch.object(recognition, "update_vad") as update_vad:
-            await recognition._on_stt_event(SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
-
-        update_vad.assert_called_once_with(recognition._vad)
-        resettable_stream.flush.assert_not_called()
     finally:
         if recognition._end_of_turn_task is not None:
             await aio.cancel_and_wait(recognition._end_of_turn_task)

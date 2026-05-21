@@ -990,7 +990,7 @@ class AudioRecognition:
             if self._vad:
                 if self._vad_speech_started:
                     _start_time = time.perf_counter()
-                    if self._vad_stream is not None and self._vad.capabilities.supports_flush:
+                    if self._vad_stream is not None:
                         self._vad_stream.flush()
                     else:
                         self.update_vad(self._vad)

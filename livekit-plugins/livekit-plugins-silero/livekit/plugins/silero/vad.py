@@ -146,9 +146,7 @@ class VAD(agents.vad.VAD):
         session: onnxruntime.InferenceSession,
         opts: _VADOptions,
     ) -> None:
-        super().__init__(
-            capabilities=agents.vad.VADCapabilities(update_interval=0.032, supports_flush=True)
-        )
+        super().__init__(capabilities=agents.vad.VADCapabilities(update_interval=0.032))
         self._onnx_session = session
         self._opts = opts
         self._streams = weakref.WeakSet[VADStream]()
@@ -353,8 +351,6 @@ class VADStream(agents.vad.VADStream):
 
         async for input_frame in self._input_ch:
             if isinstance(input_frame, self._FlushSentinel):
-                # treat flush as a segment boundary: drop accumulated state so the next
-                # input starts fresh. supports_flush=True advertises this behavior.
                 _reset_state()
                 continue
 
