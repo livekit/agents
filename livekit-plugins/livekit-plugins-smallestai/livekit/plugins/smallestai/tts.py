@@ -58,7 +58,7 @@ class TTS(tts.TTS):
         self,
         *,
         api_key: str | None = None,
-        model: TTSModels | str = "lightning_v3.1",
+        model: TTSModels | str = "lightning_v3.1_pro",
         voice_id: str | None = None,
         sample_rate: int = 24000,
         speed: float = 1.0,
