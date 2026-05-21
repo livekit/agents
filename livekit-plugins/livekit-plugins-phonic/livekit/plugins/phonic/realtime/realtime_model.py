@@ -681,13 +681,9 @@ class RealtimeSession(llm.RealtimeSession):
                 elif msg_type == "error":
                     self._emit_error(Exception(message.error.message), recoverable=False)
                 elif msg_type == "assistant_ended_conversation":
-                    self._emit_error(
-                        Exception(
-                            "assistant_ended_conversation is not supported by "
-                            "the Phonic realtime model with LiveKit Agents."
-                        ),
-                        recoverable=False,
-                    )
+                    logger.info(f"Phonic Conversation {self._conversation_id} ended by assistant")
+                    await self._close_active_session()
+                    self._close_current_generation(interrupted=False)
                 elif msg_type == "conversation_created":
                     self._conversation_id = message.conversation_id
                     logger.info(f"Phonic Conversation began with ID: {self._conversation_id}")
