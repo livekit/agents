@@ -48,9 +48,6 @@ class _TTSOptions:
     voice_id: str
     sample_rate: int
     speed: float
-    consistency: float
-    similarity: float
-    enhancement: float
     language: LanguageCode
     output_format: TTSEncoding | str
     base_url: str
@@ -61,13 +58,10 @@ class TTS(tts.TTS):
         self,
         *,
         api_key: str | None = None,
-        model: TTSModels | str = "lightning-v3.1",
+        model: TTSModels | str = "lightning_v3.1",
         voice_id: str = "sophia",
         sample_rate: int = 24000,
         speed: float = 1.0,
-        consistency: float = 0.5,
-        similarity: float = 0,
-        enhancement: float = 1,
         language: str = "en",
         output_format: TTSEncoding | str = "pcm",
         base_url: str = SMALLEST_BASE_URL,
@@ -77,17 +71,17 @@ class TTS(tts.TTS):
         Create a new instance of Smallest AI Lightning TTS.
         Args:
             api_key: Your Smallest AI API key.
-            model: The TTS model to use. Use "lightning-v3.1" (default) for the latest
-                model with 80+ voices and ~100ms latency, or "lightning-v2" for the
-                previous generation.
-            voice_id: The voice ID to use for synthesis.
-            sample_rate: Sample rate for the audio output.
-            speed: Speed of the speech synthesis.
-            consistency: Consistency of the speech synthesis.
-            similarity: Similarity of the speech synthesis.
-            enhancement: Enhancement level for the speech synthesis.
-            language: Language of the text to be synthesized.
-            output_format: Output format of the audio.
+            model: The TTS model to use. Use "lightning_v3.1" (default) for the standard
+                model with 217 voices across 12 languages, or "lightning_v3.1_pro" for the
+                premium pool with curated American, British, and Indian voices at 44.1 kHz.
+            voice_id: The voice ID to use for synthesis. Pro voices must be paired with
+                "lightning_v3.1_pro"; standard voices with "lightning_v3.1".
+            sample_rate: Sample rate for the audio output. Both models are natively 44.1 kHz;
+                supported rates are 8000, 16000, 24000, and 44100.
+            speed: Speed of the speech synthesis (0.5–2.0).
+            language: Language of the text to be synthesized. Use "auto" for automatic
+                detection and code-switching. Pro supports "en", "hi", and "auto" only.
+            output_format: Output format of the audio ("pcm", "mp3", "wav", "ulaw", "alaw").
             base_url: Base URL for the Smallest AI API.
             http_session: An existing aiohttp ClientSession to use.
         """
@@ -111,9 +105,6 @@ class TTS(tts.TTS):
             voice_id=voice_id,
             sample_rate=sample_rate,
             speed=speed,
-            consistency=consistency,
-            similarity=similarity,
-            enhancement=enhancement,
             language=LanguageCode(language),
             output_format=output_format,
             base_url=base_url,
@@ -141,9 +132,6 @@ class TTS(tts.TTS):
         voice_id: NotGivenOr[str] = NOT_GIVEN,
         speed: NotGivenOr[float] = NOT_GIVEN,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
-        consistency: NotGivenOr[float] = NOT_GIVEN,
-        similarity: NotGivenOr[float] = NOT_GIVEN,
-        enhancement: NotGivenOr[float] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
         output_format: NotGivenOr[TTSEncoding | str] = NOT_GIVEN,
     ) -> None:
@@ -156,12 +144,6 @@ class TTS(tts.TTS):
             self._opts.speed = speed
         if is_given(sample_rate):
             self._opts.sample_rate = sample_rate
-        if is_given(consistency):
-            self._opts.consistency = consistency
-        if is_given(similarity):
-            self._opts.similarity = similarity
-        if is_given(enhancement):
-            self._opts.enhancement = enhancement
         if is_given(language):
             self._opts.language = LanguageCode(language)
         if is_given(output_format):
@@ -194,7 +176,7 @@ class ChunkedStream(tts.ChunkedStream):
             data = _to_smallest_options(self._opts)
             data["text"] = self._input_text
 
-            url = f"{self._opts.base_url}/{self._opts.model}/get_speech"
+            url = f"{self._opts.base_url}/tts"
 
             headers = {
                 "Authorization": f"Bearer {self._opts.api_key}",
@@ -235,12 +217,12 @@ class ChunkedStream(tts.ChunkedStream):
 
 
 def _to_smallest_options(opts: _TTSOptions) -> dict[str, Any]:
-    base_keys = ["voice_id", "sample_rate", "speed", "language", "output_format"]
-    # consistency, similarity, enhancement are lightning-v2 only params
-    extra_keys = ["consistency", "similarity", "enhancement"]
-
-    keys = base_keys + extra_keys if opts.model == "lightning-v2" else base_keys
-    result = {key: getattr(opts, key) for key in keys}
-    if "language" in result and isinstance(result["language"], LanguageCode):
-        result["language"] = result["language"].language
+    result = {
+        "model": opts.model,
+        "voice_id": opts.voice_id,
+        "sample_rate": opts.sample_rate,
+        "speed": opts.speed,
+        "language": opts.language.language if isinstance(opts.language, LanguageCode) else opts.language,
+        "output_format": opts.output_format,
+    }
     return result
