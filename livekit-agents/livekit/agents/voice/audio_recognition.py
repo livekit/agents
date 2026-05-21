@@ -989,7 +989,6 @@ class AudioRecognition:
             # if user is still speaking (an immediate VAD SOS will interrupt the agent)
             if self._vad:
                 if self._vad_speech_started:
-                    _start_time = time.perf_counter()
                     if self._vad_stream is not None:
                         self._vad_stream.flush()
                     else:
@@ -999,8 +998,8 @@ class AudioRecognition:
                         "stt end of speech received while vad is still in a speech segment, "
                         "flushing vad",
                         extra={
-                            "flush_duration_ms": (time.perf_counter() - _start_time) * 1000,
                             "vad_speech_start_time": self._speech_start_time,
+                            "flushed": self._vad_stream is not None,
                         },
                     )
 
