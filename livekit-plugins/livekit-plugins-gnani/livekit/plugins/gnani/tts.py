@@ -978,24 +978,24 @@ class SynthesizeStream(tts.SynthesizeStream):
             stream=True,
         )
 
+        text_parts: list[str] = []
+
+        async for data in self._input_ch:
+            if isinstance(data, str):
+                text_parts.append(data)
+            elif isinstance(data, self._FlushSentinel):
+                break
+
+        full_text = "".join(text_parts).strip()
+        if not full_text:
+            return
+
+        self._mark_started()
+
         segment_id = utils.shortuuid()
         output_emitter.start_segment(segment_id=segment_id)
 
         try:
-            text_parts: list[str] = []
-
-            async for data in self._input_ch:
-                if isinstance(data, str):
-                    text_parts.append(data)
-                elif isinstance(data, self._FlushSentinel):
-                    break
-
-            full_text = "".join(text_parts).strip()
-            if not full_text:
-                return
-
-            self._mark_started()
-
             ws_url = self._build_ws_url()
             headers = {
                 "Content-Type": "application/json",
