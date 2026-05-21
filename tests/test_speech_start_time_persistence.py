@@ -26,6 +26,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from livekit.agents import stt
 from livekit.agents.vad import VADEvent, VADEventType
 from livekit.agents.voice.audio_recognition import AudioRecognition
 
@@ -169,3 +170,105 @@ class TestUserTurnStartPersistence:
         # _speech_start_time should now reflect the second burst's start, not the first
         assert audio_recognition._speech_start_time is not None
         assert audio_recognition._speech_start_time > first_burst_speech_start
+
+
+class TestSttSpeechEndTiming:
+    """Test STT-provided END_OF_SPEECH timing when no external VAD is configured."""
+
+    def _create_audio_recognition(self, *, vad: object | None = None) -> AudioRecognition:
+        with patch.object(AudioRecognition, "__init__", lambda self, *args, **kwargs: None):
+            audio_recognition = AudioRecognition.__new__(AudioRecognition)
+
+        audio_recognition._turn_detection_mode = None
+        audio_recognition._turn_detector = None
+        audio_recognition._vad = vad
+        audio_recognition._stt = MagicMock()
+        audio_recognition._stt_request_ids = []
+        audio_recognition._interruption_enabled = False
+        audio_recognition._user_turn_committed = False
+        audio_recognition._end_of_turn_task = None
+
+        audio_recognition._speech_start_time = None
+        audio_recognition._vad_speech_started = False
+        audio_recognition._speaking = False
+        audio_recognition._last_speaking_time = None
+        audio_recognition._last_final_transcript_time = None
+        audio_recognition._stt_end_of_speech_received = False
+
+        audio_recognition._last_language = None
+        audio_recognition._audio_transcript = ""
+        audio_recognition._audio_interim_transcript = ""
+        audio_recognition._audio_preflight_transcript = ""
+        audio_recognition._final_transcript_confidence = []
+        audio_recognition._final_transcript_received = asyncio.Event()
+        audio_recognition._vad_base_turn_detection = False
+
+        audio_recognition._hooks = MagicMock()
+        audio_recognition._session = MagicMock()
+        audio_recognition._session.amd = None
+        audio_recognition._ensure_user_turn_span = MagicMock()
+
+        return audio_recognition
+
+    @staticmethod
+    def _stt_event(type_: stt.SpeechEventType, text: str = "hello") -> stt.SpeechEvent:
+        return stt.SpeechEvent(
+            type=type_,
+            alternatives=[stt.SpeechData(text=text, language="en")],
+        )
+
+    @pytest.mark.asyncio
+    async def test_stt_eos_timestamp_is_preserved_for_final_transcript_without_external_vad(self):
+        audio_recognition = self._create_audio_recognition()
+
+        with patch(
+            "livekit.agents.voice.audio_recognition.time.time",
+            side_effect=[10.0, 10.5, 10.6, 10.7],
+        ):
+            await audio_recognition._on_stt_event(
+                self._stt_event(stt.SpeechEventType.END_OF_SPEECH)
+            )
+            stt_eos_time = audio_recognition._last_speaking_time
+
+            await audio_recognition._on_stt_event(
+                self._stt_event(stt.SpeechEventType.FINAL_TRANSCRIPT)
+            )
+
+        assert audio_recognition._stt_end_of_speech_received is True
+        assert stt_eos_time == 10.0
+        assert audio_recognition._last_final_transcript_time == 10.6
+        assert audio_recognition._last_speaking_time == stt_eos_time
+
+    @pytest.mark.asyncio
+    async def test_final_transcript_falls_back_when_stt_eos_was_not_received(self):
+        audio_recognition = self._create_audio_recognition()
+        audio_recognition._last_speaking_time = 10.0
+
+        with patch(
+            "livekit.agents.voice.audio_recognition.time.time",
+            side_effect=[20.0, 20.1, 20.2],
+        ):
+            await audio_recognition._on_stt_event(
+                self._stt_event(stt.SpeechEventType.FINAL_TRANSCRIPT)
+            )
+
+        assert audio_recognition._stt_end_of_speech_received is False
+        assert audio_recognition._last_final_transcript_time == 20.1
+        assert audio_recognition._last_speaking_time == 20.2
+
+    @pytest.mark.asyncio
+    async def test_external_vad_timestamp_is_not_overwritten_by_final_transcript(self):
+        audio_recognition = self._create_audio_recognition(vad=object())
+        audio_recognition._last_speaking_time = 10.0
+
+        with patch(
+            "livekit.agents.voice.audio_recognition.time.time",
+            side_effect=[20.0, 20.1],
+        ):
+            await audio_recognition._on_stt_event(
+                self._stt_event(stt.SpeechEventType.FINAL_TRANSCRIPT)
+            )
+
+        assert audio_recognition._stt_end_of_speech_received is False
+        assert audio_recognition._last_final_transcript_time == 20.1
+        assert audio_recognition._last_speaking_time == 10.0

@@ -160,6 +160,7 @@ class AudioRecognition:
         self._last_final_transcript_time: float | None = None
         self._last_speaking_time: float | None = None
         self._speech_start_time: float | None = None
+        self._stt_end_of_speech_received = False
 
         # used for manual commit_user_turn
         self._final_transcript_received = asyncio.Event()
@@ -677,6 +678,7 @@ class AudioRecognition:
         self._last_final_transcript_time = None
         self._speech_start_time = None
         self._last_speaking_time = None
+        self._stt_end_of_speech_received = False
         self._vad_speech_started = False
         self._user_turn_committed = False
 
@@ -876,18 +878,11 @@ class AudioRecognition:
             self._audio_preflight_transcript = ""
 
             if self._last_speaking_time is None or (
-                not self._vad and self._turn_detection_mode != "stt"
+                not self._vad and not self._stt_end_of_speech_received
             ):
-                # No external VAD and the STT plugin is not providing speech
-                # boundaries (turn_detection != "stt"); fall back to the STT
-                # transcript-arrival timestamp.
-                #
-                # When turn_detection_mode == "stt", the STT plugin's
-                # SpeechEventType.END_OF_SPEECH event has already populated
-                # _last_speaking_time with the actual end-of-speech moment.
-                # Overwriting it here with `time.time()` would zero out
-                # transcription_delay / end_of_utterance_delay metrics, so we
-                # preserve the STT-provided timestamp.
+                # No speech-end timestamp is available from VAD or STT, so fall
+                # back to the transcript-arrival time. If STT already emitted
+                # END_OF_SPEECH, preserve that timestamp for latency metrics.
                 self._last_speaking_time = time.time()
 
             if self._vad_base_turn_detection or self._user_turn_committed:
@@ -940,13 +935,9 @@ class AudioRecognition:
             self._audio_interim_transcript = transcript
 
             if self._last_speaking_time is None or (
-                not self._vad and self._turn_detection_mode != "stt"
+                not self._vad and not self._stt_end_of_speech_received
             ):
-                # vad disabled, use stt timestamp.
-                # Same rationale as in the FINAL_TRANSCRIPT handler above:
-                # when turn_detection_mode == "stt", the STT plugin's
-                # END_OF_SPEECH timestamp is preserved instead of being
-                # overwritten by the transcript arrival time.
+                # Same rationale as in the FINAL_TRANSCRIPT handler above.
                 self._last_speaking_time = time.time()
 
             if self._turn_detection_mode != "manual" or self._user_turn_committed:
@@ -968,7 +959,11 @@ class AudioRecognition:
             )
             self._audio_interim_transcript = ev.alternatives[0].text
 
-        elif ev.type == stt.SpeechEventType.END_OF_SPEECH and self._turn_detection_mode == "stt":
+        elif ev.type == stt.SpeechEventType.END_OF_SPEECH and (
+            self._turn_detection_mode == "stt" or self._vad is None
+        ):
+            self._stt_end_of_speech_received = True
+
             with trace.use_span(self._ensure_user_turn_span()):
                 self._hooks.on_end_of_speech(None)
 
@@ -985,14 +980,19 @@ class AudioRecognition:
                 self.update_vad(self._vad)
 
             self._speaking = False
-            self._user_turn_committed = True
             if not self._vad or self._last_speaking_time is None:
                 self._last_speaking_time = time.time()
 
-            chat_ctx = self._hooks.retrieve_chat_ctx().copy()
-            self._run_eou_detection(chat_ctx)
+            if self._turn_detection_mode == "stt":
+                self._user_turn_committed = True
+                chat_ctx = self._hooks.retrieve_chat_ctx().copy()
+                self._run_eou_detection(chat_ctx)
 
-        elif ev.type == stt.SpeechEventType.START_OF_SPEECH and self._turn_detection_mode == "stt":
+        elif ev.type == stt.SpeechEventType.START_OF_SPEECH and (
+            self._turn_detection_mode == "stt" or self._vad is None
+        ):
+            self._stt_end_of_speech_received = False
+
             # If the plugin provided a server onset timestamp, use it;
             # otherwise fall back to message arrival time.
             if self._speech_start_time is None:
@@ -1204,6 +1204,7 @@ class AudioRecognition:
                     self._speech_start_time = None
                     self._vad_speech_started = False
                     self._last_speaking_time = None
+                    self._stt_end_of_speech_received = False
 
             self._user_turn_committed = False
 
