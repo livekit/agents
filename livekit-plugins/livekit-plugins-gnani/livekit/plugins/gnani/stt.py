@@ -337,7 +337,10 @@ class SpeechStream(stt.RecognizeStream):
                         # All audio sent. The Gnani API has no application-level
                         # end-of-stream message, so give the server a short
                         # window to flush final transcripts before closing.
-                        await asyncio.sleep(1.0)
+                        try:
+                            await asyncio.wait_for(asyncio.shield(recv_task), timeout=1.0)
+                        except asyncio.TimeoutError:
+                            pass
                 finally:
                     await utils.aio.gracefully_cancel(send_task, recv_task)
 
