@@ -1144,13 +1144,15 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     )
 
                 if msg.type != aiohttp.WSMsgType.BINARY:
+                    ws_data = str(msg.data)
+                    if len(ws_data) > 128:
+                        ws_data = ws_data[:128] + f"...(+{len(ws_data) - 128} more)"
                     logger.warning(
                         "unexpected message type: %s",
                         msg.type,
                         extra={
                             "type": msg.type.name,
-                            "ws_extra": msg.extra,
-                            "ws_data": str(msg.data),
+                            "ws_data": ws_data,
                         },
                     )
                     continue
