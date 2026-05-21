@@ -864,6 +864,10 @@ class TTS(tts.TTS):
                     f"legacy v2 voices are lowercase (e.g. 'karan')."
                 )
             self._opts.voice = voice
+            if model is None:
+                self._opts.model = (
+                    "vachana-voice-v2" if voice in LEGACY_V2_VOICES else "vachana-voice-v3"
+                )
         if model is not None:
             self._opts.model = model
         if language is not None:

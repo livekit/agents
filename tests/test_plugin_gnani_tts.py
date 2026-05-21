@@ -184,6 +184,32 @@ def test_tts_update_options_voice():
     assert tts._opts.voice == "neha"
 
 
+def test_tts_update_options_voice_auto_model():
+    """update_options auto-updates model when switching between v2/v3 voices."""
+    from livekit.plugins.gnani import TTS
+
+    tts = TTS(api_key="test-key", voice="Karan")
+    assert tts._opts.model == "vachana-voice-v3"
+
+    tts.update_options(voice="sia")
+    assert tts._opts.voice == "sia"
+    assert tts._opts.model == "vachana-voice-v2"
+
+    tts.update_options(voice="Simran")
+    assert tts._opts.voice == "Simran"
+    assert tts._opts.model == "vachana-voice-v3"
+
+
+def test_tts_update_options_voice_explicit_model():
+    """update_options with both voice and model uses the explicit model."""
+    from livekit.plugins.gnani import TTS
+
+    tts = TTS(api_key="test-key", voice="Karan")
+    tts.update_options(voice="sia", model="custom-model")
+    assert tts._opts.voice == "sia"
+    assert tts._opts.model == "custom-model"
+
+
 def test_tts_update_options_rejects_invalid_voice():
     """update_options rejects unsupported voices."""
     from livekit.plugins.gnani import TTS
