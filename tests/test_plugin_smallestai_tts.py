@@ -55,6 +55,26 @@ def test_lightning_v2_not_a_default():
     assert "v2" not in tts._opts.model
 
 
+def test_default_voice_is_sophia_for_standard_model():
+    tts = TTS(api_key="test-key", model="lightning_v3.1")
+    assert tts._opts.voice_id == "sophia"
+
+
+def test_default_voice_is_meher_for_pro_model():
+    tts = TTS(api_key="test-key", model="lightning_v3.1_pro")
+    assert tts._opts.voice_id == "meher"
+
+
+def test_explicit_voice_overrides_default_for_pro():
+    tts = TTS(api_key="test-key", model="lightning_v3.1_pro", voice_id="rhea")
+    assert tts._opts.voice_id == "rhea"
+
+
+def test_explicit_voice_overrides_default_for_standard():
+    tts = TTS(api_key="test-key", model="lightning_v3.1", voice_id="aria")
+    assert tts._opts.voice_id == "aria"
+
+
 def test_no_consistency_similarity_enhancement_attrs():
     tts = TTS(api_key="test-key")
     assert not hasattr(tts._opts, "consistency")

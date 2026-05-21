@@ -59,7 +59,7 @@ class TTS(tts.TTS):
         *,
         api_key: str | None = None,
         model: TTSModels | str = "lightning_v3.1",
-        voice_id: str = "sophia",
+        voice_id: str | None = None,
         sample_rate: int = 24000,
         speed: float = 1.0,
         language: str = "en",
@@ -74,8 +74,9 @@ class TTS(tts.TTS):
             model: The TTS model to use. Use "lightning_v3.1" (default) for the standard
                 model with 217 voices across 12 languages, or "lightning_v3.1_pro" for the
                 premium pool with curated American, British, and Indian voices at 44.1 kHz.
-            voice_id: The voice ID to use for synthesis. Pro voices must be paired with
-                "lightning_v3.1_pro"; standard voices with "lightning_v3.1".
+            voice_id: The voice ID to use for synthesis. Defaults to "meher" for
+                "lightning_v3.1_pro" and "sophia" for all other models. Pro voices must be
+                paired with "lightning_v3.1_pro"; standard voices with "lightning_v3.1".
             sample_rate: Sample rate for the audio output. Both models are natively 44.1 kHz;
                 supported rates are 8000, 16000, 24000, and 44100.
             speed: Speed of the speech synthesis (0.5–2.0).
@@ -98,6 +99,9 @@ class TTS(tts.TTS):
                 "Smallest.ai API key is required, either as argument or set"
                 " SMALLEST_API_KEY environment variable"
             )
+
+        if voice_id is None:
+            voice_id = "meher" if model == "lightning_v3.1_pro" else "sophia"
 
         self._opts = _TTSOptions(
             model=model,
