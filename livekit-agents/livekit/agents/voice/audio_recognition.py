@@ -845,8 +845,11 @@ class AudioRecognition:
             self._stt_end_of_speech_received = False
         elif ev.type == stt.SpeechEventType.END_OF_SPEECH and self._vad is None:
             self._stt_end_of_speech_received = True
-            if self._last_speaking_time is None:
-                self._last_speaking_time = time.time()
+            self._last_speaking_time = time.time()
+
+            if self._vad_base_turn_detection and self._audio_transcript and not self._speaking:
+                chat_ctx = self._hooks.retrieve_chat_ctx().copy()
+                self._run_eou_detection(chat_ctx)
 
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
             transcript = ev.alternatives[0].text

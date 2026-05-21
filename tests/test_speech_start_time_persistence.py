@@ -175,12 +175,8 @@ class TestUserTurnStartPersistence:
 class TestSttSpeechEndTiming:
     """Test STT-provided END_OF_SPEECH timing without external VAD."""
 
-    def _create_audio_recognition(
-        self, *, vad: object | None = None
-    ) -> AudioRecognition:
-        with patch.object(
-            AudioRecognition, "__init__", lambda self, *args, **kwargs: None
-        ):
+    def _create_audio_recognition(self, *, vad: object | None = None) -> AudioRecognition:
+        with patch.object(AudioRecognition, "__init__", lambda self, *args, **kwargs: None):
             audio_recognition = AudioRecognition.__new__(AudioRecognition)
 
         audio_recognition._turn_detection_mode = None
@@ -206,18 +202,18 @@ class TestSttSpeechEndTiming:
         audio_recognition._final_transcript_confidence = []
         audio_recognition._final_transcript_received = asyncio.Event()
         audio_recognition._vad_base_turn_detection = False
+        audio_recognition._end_of_turn_task = None
 
         audio_recognition._hooks = MagicMock()
         audio_recognition._session = MagicMock()
         audio_recognition._session.amd = None
         audio_recognition._ensure_user_turn_span = MagicMock()
+        audio_recognition._run_eou_detection = MagicMock()
 
         return audio_recognition
 
     @staticmethod
-    def _stt_event(
-        type_: stt.SpeechEventType, text: str = "hello"
-    ) -> stt.SpeechEvent:
+    def _stt_event(type_: stt.SpeechEventType, text: str = "hello") -> stt.SpeechEvent:
         return stt.SpeechEvent(
             type=type_,
             alternatives=[stt.SpeechData(text=text, language="en")],
@@ -244,6 +240,29 @@ class TestSttSpeechEndTiming:
         assert stt_eos_time == 10.0
         assert audio_recognition._last_final_transcript_time == 10.6
         assert audio_recognition._last_speaking_time == stt_eos_time
+
+    @pytest.mark.asyncio
+    async def test_stt_eos_replaces_fallback_final_transcript_time(self):
+        audio_recognition = self._create_audio_recognition()
+        audio_recognition._vad_base_turn_detection = True
+
+        with patch(
+            "livekit.agents.voice.audio_recognition.time.time",
+            side_effect=[20.0, 20.1, 30.0],
+        ):
+            await audio_recognition._on_stt_event(
+                self._stt_event(stt.SpeechEventType.FINAL_TRANSCRIPT)
+            )
+            fallback_transcript_time = audio_recognition._last_speaking_time
+
+            await audio_recognition._on_stt_event(
+                self._stt_event(stt.SpeechEventType.END_OF_SPEECH)
+            )
+
+        assert fallback_transcript_time == 20.1
+        assert audio_recognition._stt_end_of_speech_received is True
+        assert audio_recognition._last_speaking_time == 30.0
+        assert audio_recognition._run_eou_detection.call_count == 2
 
     @pytest.mark.asyncio
     async def test_final_transcript_falls_back_without_stt_eos(self):
