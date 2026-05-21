@@ -1424,14 +1424,22 @@ class AgentActivity(RecognitionHooks):
     ) -> None:
         agent_active = True
         user_active = True
+
+        async def _wait_for_eou() -> None:
+            # eou is part of the user turn and may spawn a new speech handle,
+            # so an in-flight eou keeps both the user and the agent active.
+            nonlocal user_active
+            if (
+                self._audio_recognition
+                and (eou_task := self._audio_recognition._end_of_turn_task)
+                and not eou_task.done()
+            ):
+                user_active = True
+                await eou_task
+
         while (wait_for_agent and agent_active) or (wait_for_user and user_active):
             if wait_for_agent:
-                if (
-                    self._audio_recognition
-                    and (eou_task := self._audio_recognition._end_of_turn_task)
-                    and not eou_task.done()
-                ):
-                    await eou_task
+                await _wait_for_eou()
 
                 if self._current_speech is None and not self._speech_q:
                     agent_active = False
@@ -1447,6 +1455,8 @@ class AgentActivity(RecognitionHooks):
                 else:
                     user_active = True
                     await self._user_silence_event.wait()
+
+                await _wait_for_eou()
 
     # -- Realtime Session events --
 
