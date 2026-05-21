@@ -11,6 +11,16 @@ def _make_llm(**kwargs):
     return LLM(api_key="sk-ant-test", **kwargs)
 
 
+def _filter_thinking(deltas: list[str]) -> str:
+    """Stream ``deltas`` through the thinking-tag filter and return the emitted text."""
+    from livekit.plugins.anthropic.llm import _ThinkingTagFilter
+
+    fltr = _ThinkingTagFilter()
+    out = [fltr.push(text) for text in deltas]
+    out.append(fltr.flush())
+    return "".join(out)
+
+
 class TestHttpxTimeoutDefaults:
     def test_default_read_timeout_is_generous(self) -> None:
         """Default read timeout must accommodate adaptive-thinking pauses (≥30 s)."""
@@ -57,3 +67,110 @@ class TestHttpxTimeoutCustom:
         # timeout= argument should have no effect here
         llm = _make_llm(client=tight_client, timeout=httpx.Timeout(5.0, read=999.0))
         assert llm._client._client.timeout.read == 1.0
+
+
+class TestThinkingTagStripping:
+    """When tools are attached, Claude may wrap chain-of-thought in <thinking> tags.
+
+    Those tags must be stripped from the streamed text, but the actual assistant
+    response (the part that feeds TTS) must always be emitted — even when the tags
+    are split across streaming deltas, which is the normal token-by-token case.
+    """
+
+    def test_plain_answer_passes_through(self) -> None:
+        assert _filter_thinking(["Hello", " there", "!"]) == "Hello there!"
+
+    def test_thinking_block_stripped_tags_on_own_deltas(self) -> None:
+        got = _filter_thinking(["<thinking>", "the user said hi", "</thinking>", "Hello there!"])
+        assert got == "Hello there!"
+
+    def test_answer_emitted_when_closing_tag_split_across_deltas(self) -> None:
+        # regression: the closing tag streamed as "</" + "thinking>" used to leave the
+        # parser permanently in "ignoring" mode, dropping the entire spoken answer so
+        # no audio was ever published.
+        got = _filter_thinking(["<thinking>", "reasoning", "</", "thinking>", "Hello there!"])
+        assert got == "Hello there!"
+
+    def test_answer_emitted_when_opening_tag_split_across_deltas(self) -> None:
+        got = _filter_thinking(["<", "thinking>", "reasoning", "</thinking>", "Hello there!"])
+        assert got == "Hello there!"
+
+    def test_thinking_block_with_leading_whitespace(self) -> None:
+        got = _filter_thinking(["\n<thinking>", "reasoning", "</thinking>", "Hi!"])
+        assert got == "\nHi!"
+
+    def test_text_resembling_tag_is_not_dropped(self) -> None:
+        # text that merely looks like the start of a tag must not be silently swallowed
+        assert _filter_thinking(["1 < 2 is true"]) == "1 < 2 is true"
+
+    def test_partial_opening_tag_at_end_is_flushed(self) -> None:
+        # a dangling "<th" that never completes into a real tag must not be lost
+        assert _filter_thinking(["all good", "<th"]) == "all good<th"
+
+
+class TestParseEventThinkingIntegration:
+    """End-to-end check that ``_parse_event`` emits the spoken answer with tools attached."""
+
+    async def test_split_closing_tag_still_emits_answer(self) -> None:
+        import anthropic.types as at
+
+        from livekit.agents.llm.chat_context import ChatContext
+        from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
+        from livekit.plugins.anthropic.llm import LLMStream
+
+        async def _never() -> None:
+            return None
+
+        never = _never()
+        stream = LLMStream(
+            _make_llm(),
+            anthropic_stream=never,
+            chat_ctx=ChatContext.empty(),
+            tools=["smoke"],
+            conn_options=DEFAULT_API_CONNECT_OPTIONS,
+        )
+        # we only drive _parse_event manually; tear down the background _run task
+        await stream.aclose()
+        never.close()  # the cancelled _run never awaited it
+
+        events = [
+            at.RawContentBlockStartEvent(
+                type="content_block_start",
+                index=0,
+                content_block=at.TextBlock(type="text", text="", citations=None),
+            ),
+            at.RawContentBlockDeltaEvent(
+                type="content_block_delta",
+                index=0,
+                delta=at.TextDelta(type="text_delta", text="<thinking>"),
+            ),
+            at.RawContentBlockDeltaEvent(
+                type="content_block_delta",
+                index=0,
+                delta=at.TextDelta(type="text_delta", text="the user said hi"),
+            ),
+            at.RawContentBlockDeltaEvent(
+                type="content_block_delta",
+                index=0,
+                delta=at.TextDelta(type="text_delta", text="</"),
+            ),
+            at.RawContentBlockDeltaEvent(
+                type="content_block_delta",
+                index=0,
+                delta=at.TextDelta(type="text_delta", text="thinking>"),
+            ),
+            at.RawContentBlockDeltaEvent(
+                type="content_block_delta",
+                index=0,
+                delta=at.TextDelta(type="text_delta", text="Hello there!"),
+            ),
+            at.RawContentBlockStopEvent(type="content_block_stop", index=0),
+        ]
+
+        emitted = ""
+        for ev in events:
+            chunk = stream._parse_event(ev)
+            if chunk is not None and chunk.delta is not None and chunk.delta.content:
+                emitted += chunk.delta.content
+
+        assert emitted == "Hello there!"
