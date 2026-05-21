@@ -1073,8 +1073,10 @@ class AudioRecognition:
                 self._session.amd._on_user_speech_ended(ev.silence_duration)
 
     async def _on_overlap_speech_event(self, ev: inference.OverlappingSpeechEvent) -> None:
-        if self.backchannel_boundary_active:
-            logger.trace("ignoring overlap speech event during backchannel boundary cooldown")
+        if self.backchannel_boundary_active and not ev.is_interruption:
+            logger.trace(
+                "ignoring backchannel event during backchannel boundary cooldown, falling back to vad"
+            )
             return
 
         if ev.is_interruption:

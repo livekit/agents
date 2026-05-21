@@ -719,7 +719,7 @@ async def test_start_boundary_does_not_block_vad_interruption() -> None:
     check_timestamp(speaking_to_listening.created_at - t_origin, 4.5, speed_factor=speed)
 
 
-async def test_backchannel_boundary_suppresses_start_boundary_interruption() -> None:
+async def test_backchannel_boundary_suppresses_start_boundary_backchannel() -> None:
     actions = FakeActions()
     session = create_session(
         actions,
@@ -738,14 +738,20 @@ async def test_backchannel_boundary_suppresses_start_boundary_interruption() -> 
 
     try:
         recognition.on_start_of_agent_speech(started_at=time.time())
-        await recognition._on_overlap_speech_event(_interruption_event())
-
+        # backchannels during the cooldown are dropped (they are a no-op anyway,
+        # but this guards against the gate firing on `on_interruption`)
+        await recognition._on_overlap_speech_event(_backchannel_event())
         assert hooks.interruptions == []
 
-        await asyncio.sleep(0.06)
+        # a real interruption during the cooldown must still fire
         await recognition._on_overlap_speech_event(_interruption_event())
-
         assert len(hooks.interruptions) == 1
+
+        # after cooldown, both event types behave normally
+        await asyncio.sleep(0.06)
+        await recognition._on_overlap_speech_event(_backchannel_event())
+        await recognition._on_overlap_speech_event(_interruption_event())
+        assert len(hooks.interruptions) == 2
     finally:
         await _close_test_session(session)
 
@@ -1167,6 +1173,15 @@ def _interruption_event() -> inference.OverlappingSpeechEvent:
     return inference.OverlappingSpeechEvent(
         type="overlapping_speech",
         is_interruption=True,
+        overlap_started_at=time.time(),
+        detected_at=time.time(),
+    )
+
+
+def _backchannel_event() -> inference.OverlappingSpeechEvent:
+    return inference.OverlappingSpeechEvent(
+        type="overlapping_speech",
+        is_interruption=False,
         overlap_started_at=time.time(),
         detected_at=time.time(),
     )
