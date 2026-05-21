@@ -223,3 +223,15 @@ GeminiTTSModels = Literal[
     "gemini-2.5-flash-lite-preview-tts",
     "gemini-2.5-pro-tts",
 ]
+
+# Gemini multimodal models used by the Gemini STT plugin to transcribe audio
+# via generate_content. See https://ai.google.dev/gemini-api/docs/audio
+GeminiSTTModels = Literal[
+    "gemini-3.5-flash",
+    "gemini-3-pro-preview",
+    "gemini-3-flash-preview",
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash-001",
+]
