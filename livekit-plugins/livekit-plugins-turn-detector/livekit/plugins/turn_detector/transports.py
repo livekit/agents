@@ -1,9 +1,9 @@
-"""Audio EOT transports: protocol + cloud (WS) + local (audio_eot package).
+"""Audio EOT transports: protocol + cloud (WS) + local (livekit-local-inference).
 
-The local transport imports the ``audio_eot`` package (published separately
-from a private repo) at module load. The package's pybind11 module loads its
-native lib in a constructor, so weight pages are resident before this module
-finishes importing and inherited via COW by forked job processes.
+The local transport imports ``livekit.local_inference`` at module load. The
+package's pybind11 module loads its native lib in a constructor, so weight
+pages are resident before this module finishes importing and inherited via
+COW by forked job processes.
 """
 
 from __future__ import annotations
@@ -40,13 +40,12 @@ from livekit.agents.voice.turn import (
 )
 
 try:
-    # TODO: @chenghao-mou update the import to use the released package
-    import audio_eot as _audio_eot  # type: ignore[import-not-found]
+    from livekit.local_inference import EOT as _EOT
 except ImportError as _e:
-    _audio_eot = None
-    _audio_eot_import_error: BaseException | None = _e
+    _EOT = None  # type: ignore[misc,assignment]
+    _local_inference_import_error: BaseException | None = _e
 else:
-    _audio_eot_import_error = None
+    _local_inference_import_error = None
 from livekit.protocol.agent_pb.agent_inference import (
     AUDIO_ENCODING_PCM_S16LE,
     ClientMessage,
@@ -80,19 +79,20 @@ _CLIENT_BUFFER_SAMPLES = int(_CLIENT_BUFFER_SECONDS * DEFAULT_SAMPLE_RATE)
 
 
 def _lib_available() -> bool:
-    return _audio_eot is not None
+    return _EOT is not None
 
 
 def _get_lib_load_error() -> BaseException | None:
-    return _audio_eot_import_error
+    return _local_inference_import_error
 
 
-if _audio_eot is None:
+if _EOT is None:
     # Surface the import failure at module load — the deferred RuntimeError
     # at first use is otherwise easy to miss deep inside session bring-up.
     warnings.warn(
-        f"livekit.plugins.turn_detector: `audio_eot` package not installed "
-        f"({_audio_eot_import_error}). Local AudioTurnDetector will raise on first use.",
+        f"livekit.plugins.turn_detector: `livekit-local-inference` not installed "
+        f"({_local_inference_import_error}). "
+        f"Local AudioTurnDetector will raise on first use.",
         stacklevel=2,
     )
 
@@ -394,6 +394,9 @@ class _LocalTransport:
         self._buf = utils.AudioArrayBuffer(
             buffer_size=_CLIENT_BUFFER_SAMPLES, sample_rate=DEFAULT_SAMPLE_RATE
         )
+        # EOT model singleton is shared across instances inside the native lib;
+        # one Python-side handle per transport is fine.
+        self._eot = _EOT() if _EOT is not None else None
         self._stream_ref: weakref.ref[_AudioTurnDetectorStream] | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
 
@@ -401,7 +404,7 @@ class _LocalTransport:
         self._stream_ref = weakref.ref(stream)
 
     def transport_ready(self) -> bool:
-        return _audio_eot is not None
+        return self._eot is not None
 
     def start_inference(self, request_id: str) -> None:
         task = asyncio.create_task(self._predict(request_id, self._buf.read()))
@@ -409,12 +412,13 @@ class _LocalTransport:
         task.add_done_callback(self._tasks.discard)
 
     async def _predict(self, request_id: str, pcm_snapshot: np.ndarray) -> None:
+        # ``transport_ready`` gated us on ``self._eot is not None``; runtime
+        # mutation is impossible since the field is set once at __init__.
+        assert self._eot is not None
         prob = 0.0
         t0 = time.monotonic()
         try:
-            if _audio_eot is None:
-                raise _audio_eot_import_error or RuntimeError("audio_eot package not installed")
-            prob = float(await asyncio.to_thread(_audio_eot.predict, pcm_snapshot))
+            prob = float(await asyncio.to_thread(self._eot.predict, pcm_snapshot))
         except Exception:
             logger.exception("local audio EOT prediction failed")
         inference_duration = time.monotonic() - t0

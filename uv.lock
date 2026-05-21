@@ -2200,6 +2200,18 @@ wheels = [
 ]
 
 [[package]]
+name = "livekit-local-inference"
+version = "0.2.4"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a7/40/cf51daafecb707959007e1a39d129d5126acf9660e2746f6999183d49804/livekit_local_inference-0.2.4-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:bc3e0addba863c3600c262bb63cf4ba089beab037c249c0ed7963468422adbe5", size = 34828765, upload-time = "2026-05-21T07:36:23.127Z" },
+    { url = "https://files.pythonhosted.org/packages/62/de/a1e79d925e7a9eaa16b2b1a5da39e6cb61a84a57b1824a117ec8e9ddf1ba/livekit_local_inference-0.2.4-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:40f4edce370291e1db4eb8aca4d7da4bfdd931ae710b15283bfba5ff465cfa7d", size = 35093580, upload-time = "2026-05-21T07:36:26.243Z" },
+    { url = "https://files.pythonhosted.org/packages/55/61/34f8d71c88d9e772d5970e4e9a6c856c5dc9c65fd11e780028703c8814b1/livekit_local_inference-0.2.4-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:8010434a8c9dfd7fd8ce7a1a03b833aeb2551af157469cd0f252236f29faaba7", size = 34814833, upload-time = "2026-05-21T07:36:29.371Z" },
+    { url = "https://files.pythonhosted.org/packages/ba/8e/f426f6f6a2af7505442887137d28c213160211b9d146cddd4b0cee8827bf/livekit_local_inference-0.2.4-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:e35d0440fed04f7a9970819f2afc7dedc2f15b84f11667d7c6903acae3cd98c1", size = 34862737, upload-time = "2026-05-21T07:36:32.533Z" },
+    { url = "https://files.pythonhosted.org/packages/c7/b5/5e0716798df61e4bc21924ff5dab9c7c28108f08b1a02f533b3508e2ae6e/livekit_local_inference-0.2.4-cp312-cp312-win_amd64.whl", hash = "sha256:3cd202386fd79e5a8220ded015ca42915fd5ab01dd964b7584b783f6331fad83", size = 34899581, upload-time = "2026-05-21T07:36:36.391Z" },
+]
+
+[[package]]
 name = "livekit-plugins-anam"
 source = { editable = "livekit-plugins/livekit-plugins-anam" }
 dependencies = [
@@ -3044,6 +3056,7 @@ dependencies = [
     { name = "aiohttp" },
     { name = "jinja2" },
     { name = "livekit-agents" },
+    { name = "livekit-local-inference" },
     { name = "livekit-protocol" },
     { name = "numpy" },
     { name = "onnxruntime" },
@@ -3055,6 +3068,7 @@ requires-dist = [
     { name = "aiohttp" },
     { name = "jinja2" },
     { name = "livekit-agents", editable = "livekit-agents" },
+    { name = "livekit-local-inference", specifier = ">=0.2.4" },
     { name = "livekit-protocol" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "onnxruntime", marker = "python_full_version < '3.11'", specifier = ">=1.18,<1.24" },

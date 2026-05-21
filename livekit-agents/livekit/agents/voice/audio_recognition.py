@@ -175,6 +175,10 @@ class AudioRecognition:
         self._last_commit_time: float | None = None
         self._last_committed_speaking_time: float | None = None
 
+        # vad override with the audio eot model
+        self._vad_min_silence_orig: float | None = None
+        self._warned_vad_silence_override = False
+
         self._sample_rate: int | None = None
         self._speaking = False
 
@@ -654,7 +658,46 @@ class AudioRecognition:
                 self._tasks.add(task)
                 self._stt_pipeline = None
 
+    def _maybe_apply_vad_silence_override(self) -> None:
+        """Bump the ``min_silence_duration`` for the audio eot detector if needed"""
+        if self._vad_min_silence_orig is not None:
+            return  # already overridden
+        if not isinstance(self._turn_detector, _AudioTurnDetector):
+            return
+        if self._vad is None:
+            return
+        required = (MIN_SILENCE_DURATION_MS + 50) / 1000
+        # only silero vad has this attribute today
+        try:
+            current = float(self._vad._opts.min_silence_duration)  # type: ignore[attr-defined]
+            if current >= required:
+                return
+            self._vad.update_options(min_silence_duration=required)  # type: ignore[attr-defined]
+        except (AttributeError, TypeError):
+            return
+        self._vad_min_silence_orig = current
+        if not self._warned_vad_silence_override:
+            logger.info(
+                "bumping vad min_silence_duration for audio eot detector",
+                extra={"from": current, "to": required},
+            )
+            self._warned_vad_silence_override = True
+
+    def _revert_vad_silence_override(self) -> None:
+        """Restore the original ``min_silence_duration`` snapshot, if any."""
+        if self._vad_min_silence_orig is None:
+            return
+        if self._vad is not None:
+            try:
+                self._vad.update_options(  # type: ignore[attr-defined]
+                    min_silence_duration=self._vad_min_silence_orig
+                )
+            except (AttributeError, TypeError):
+                pass  # should not happen: apply only succeeded if the kwarg was accepted
+        self._vad_min_silence_orig = None
+
     def update_vad(self, vad: vad.VAD | None) -> None:
+        self._vad_min_silence_orig = None
         self._vad = vad
         if vad:
             self._vad_ch = aio.Chan[rtc.AudioFrame]()
@@ -671,6 +714,7 @@ class AudioRecognition:
         self._interruption_enabled = (
             self._interruption_detection is not None and self._vad is not None
         )
+        self._maybe_apply_vad_silence_override()
 
     async def detach_stt(self) -> _STTPipeline | None:
         """Detach the STT pipeline for handoff to another AudioRecognition.
@@ -720,6 +764,9 @@ class AudioRecognition:
 
     def update_turn_detector(self, detector: _TurnDetector | _AudioTurnDetector | None) -> None:
         """Update the turn detector and turn detector stream if possible."""
+        # Audio detector going away → restore VAD min_silence on the still-bound VAD.
+        if not isinstance(detector, _AudioTurnDetector):
+            self._revert_vad_silence_override()
         self._turn_detector = detector
         self._turn_detector_stream = (
             detector.stream() if isinstance(detector, _AudioTurnDetector) else None
@@ -739,6 +786,7 @@ class AudioRecognition:
             self._tasks.add(task)
             self._turn_detection_atask = None
             self._turn_detection_ch = None
+        self._maybe_apply_vad_silence_override()
 
     def clear_user_turn(self) -> None:
         self._audio_transcript = ""
@@ -1207,7 +1255,7 @@ class AudioRecognition:
             and self._speech_start_time is None  # no new speech since last commit
         ):
             logger.warning(
-                "stt final arrived late, committing directly",
+                "stt final arrived late or vad missed the speech, committing directly",
                 extra={
                     "last_speaking_time": self._last_committed_speaking_time,
                     "commit_time": self._last_commit_time,
