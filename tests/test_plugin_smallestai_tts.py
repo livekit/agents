@@ -1,11 +1,9 @@
 """Unit tests for SmallestAI TTS plugin — Lightning v3.1 / v3.1 Pro."""
+
 from __future__ import annotations
 
-import asyncio
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import aiohttp
 import pytest
 
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
@@ -15,10 +13,11 @@ from livekit.plugins.smallestai.tts import ChunkedStream, _to_smallest_options
 
 def _make_mock_post(captured: dict):
     """Return a sync callable that acts as aiohttp session.post async context manager."""
+
     async def iter_chunks():
         yield b"\x00\x01", False
 
-    def post(url, *, headers, json, timeout):
+    def post(url, *, headers, json=None, timeout=None):
         captured["url"] = url
         captured["body"] = json
 
@@ -90,6 +89,7 @@ def test_constructor_rejects_unknown_kwargs():
 def test_missing_api_key_raises():
     with patch.dict("os.environ", {}, clear=True):
         import os
+
         os.environ.pop("SMALLEST_API_KEY", None)
         with pytest.raises(ValueError, match="API key"):
             TTS()

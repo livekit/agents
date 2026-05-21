@@ -226,7 +226,9 @@ def _to_smallest_options(opts: _TTSOptions) -> dict[str, Any]:
         "voice_id": opts.voice_id,
         "sample_rate": opts.sample_rate,
         "speed": opts.speed,
-        "language": opts.language.language if isinstance(opts.language, LanguageCode) else opts.language,
+        "language": opts.language.language
+        if isinstance(opts.language, LanguageCode)
+        else opts.language,
         "output_format": opts.output_format,
     }
     return result
