@@ -2,6 +2,7 @@ from __future__ import annotations
 
 # mypy: disable-error-code=import-untyped
 import asyncio
+import inspect
 import os
 from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Any
@@ -26,7 +27,6 @@ from livekit.agents.voice.avatar import (
 from ojin.ojin_client_messages import (
     OjinAudioInputMessage,
     OjinCancelInteractionMessage,
-    OjinEndInteractionMessage,
     OjinInteractionResponseMessage,
     OjinSessionReadyMessage,
     OjinSessionReadyPing,
@@ -42,6 +42,15 @@ _DEFAULT_VIDEO_HEIGHT = 512
 _DEFAULT_VIDEO_FPS = 25
 _DEFAULT_AUDIO_SAMPLE_RATE = 16000
 _DEFAULT_AUDIO_CHANNELS = 1
+_PCM16_BYTES_PER_SAMPLE = 2
+_IDLE_INTERACTION_ID = "00000000-0000-0000-0000-000000000000"
+_IDLE_AUDIO_SAMPLES_PER_CHANNEL = round(_DEFAULT_AUDIO_SAMPLE_RATE / _DEFAULT_VIDEO_FPS)
+_IDLE_AUDIO_FRAME_BYTES = (
+    b"\x00"
+    * _IDLE_AUDIO_SAMPLES_PER_CHANNEL
+    * _DEFAULT_AUDIO_CHANNELS
+    * _PCM16_BYTES_PER_SAMPLE
+)
 
 _SESSION_READY_TIMEOUT = 30.0
 
@@ -65,25 +74,62 @@ class OjinVideoGenerator(VideoGenerator):
         self._closed = False
         self._interaction_started = False
         self._interrupted = False
+        self._drop_interaction_id: str | None = None
         self._receive_message_atask: asyncio.Task[Any] | None = None
+
+    async def _start_interaction(self) -> None:
+        result = self._client.start_interaction()
+        if inspect.isawaitable(result):
+            await result
+        self._interaction_started = True
+
+    @staticmethod
+    def _drain_queue(queue: Any) -> None:
+        while True:
+            try:
+                queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+
+    def _drain_pending_client_messages(self) -> None:
+        queue = getattr(self._client, "_pending_client_messages_queue", None)
+        if not isinstance(queue, asyncio.Queue):
+            return
+
+        self._drain_queue(queue)
+
+    async def start_idle_stream(self) -> None:
+        """Start Ojin's continuous idle stream with one silent audio frame."""
+        if self._interaction_started:
+            return
+
+        await self._start_interaction()
+        await self._client.send_message(
+            OjinAudioInputMessage(audio_int16_bytes=_IDLE_AUDIO_FRAME_BYTES)
+        )
 
     async def push_audio(self, frame: rtc.AudioFrame | AudioSegmentEnd) -> None:
         """Push an audio frame to Ojin or signal end of segment."""
         if isinstance(frame, AudioSegmentEnd):
-            await self._client.send_message(OjinEndInteractionMessage())
-            self._interaction_started = False
+            # Keep Ojin's idle stream alive between segments.
             return
 
         if not self._interaction_started:
-            self._interaction_started = True
-            self._client.start_interaction()
+            await self._start_interaction()
 
         await self._client.send_message(OjinAudioInputMessage(audio_int16_bytes=bytes(frame.data)))
 
     async def clear_buffer(self) -> None:
         """Cancel current interaction and signal interruption to the stream."""
         self._interrupted = True
+        active_interaction_id = getattr(self._client, "_active_interaction_id", None)
+        if active_interaction_id and active_interaction_id != _IDLE_INTERACTION_ID:
+            self._drop_interaction_id = active_interaction_id
+
+        # Drop queued audio from the interrupted turn.
+        self._drain_pending_client_messages()
         await self._client.send_message(OjinCancelInteractionMessage())
+        self._drain_pending_client_messages()
         self._interaction_started = False
 
     def __aiter__(
@@ -131,6 +177,11 @@ class OjinVideoGenerator(VideoGenerator):
                 continue
 
             if isinstance(msg, OjinInteractionResponseMessage):
+                if self._drop_interaction_id:
+                    if msg.interaction_id == self._drop_interaction_id:
+                        continue
+                    self._drop_interaction_id = None
+
                 # Decode JPEG to VideoFrame via thread pool
                 if msg.video_frame_bytes:
                     width, height, rgb_data = await asyncio.to_thread(
@@ -259,6 +310,7 @@ class AvatarSession:
                 video_width=video_width,
                 video_height=video_height,
             )
+            await self._generator.start_idle_stream()
 
             audio_buffer = QueueAudioOutput(sample_rate=_DEFAULT_AUDIO_SAMPLE_RATE)
 
