@@ -1281,6 +1281,32 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._activity is not None:
             await self._activity._wait_for_inactive()
 
+    async def wait_for_idle(self) -> AgentActivity:
+        """Wait until the current activity is idle, returning it.
+
+        If the activity changes (handoff) during the wait, the wait re-targets to
+        the new current activity. Raises ``ActivityClosedError`` if the session is
+        closing.
+        """
+        from .agent_activity import ActivityClosedError
+
+        while True:
+            if self._closing_task is not None:
+                raise ActivityClosedError("session is closing")
+            activity = self._activity
+            if activity is None:
+                # no activity yet — wait a tick and re-check
+                await asyncio.sleep(0)
+                continue
+            try:
+                await activity.wait_for_idle()
+                return activity
+            except ActivityClosedError:
+                # activity closed during the wait — retry with whatever is current
+                if self._activity is activity:
+                    raise
+                continue
+
     async def _update_activity(
         self,
         agent: Agent,

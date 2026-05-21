@@ -89,6 +89,12 @@ _AgentActivityContextVar = contextvars.ContextVar["AgentActivity"]("agents_activ
 _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_handle")
 
 
+class ActivityClosedError(Exception):
+    """Raised by ``AgentActivity.wait_for_idle`` / ``AgentSession.wait_for_idle`` when
+    the target activity (or session) has terminally closed and the wait can never
+    succeed."""
+
+
 @dataclass
 class _OnEnterData:
     session: AgentSession
@@ -179,6 +185,13 @@ class AgentActivity(RecognitionHooks):
 
         self._drain_blocked_tasks: list[asyncio.Task[Any]] = []
         self._mcp_tools: list[mcp.MCPToolset] = []
+
+        # activity-scoped tool executor. Every tool dispatched in this activity runs
+        # through this executor. On drain it cancels cancellable tools and waits for
+        # the rest; reply delivery is scoped to this activity's agent.
+        from .tool_executor import _ToolExecutor
+
+        self._tool_executor = _ToolExecutor(owning_activity=self)
 
         self._user_turn_exceeded_atask: asyncio.Task[None] | None = None
         self._user_turn_exceeded_locked: bool = False
@@ -369,7 +382,17 @@ class AgentActivity(RecognitionHooks):
     def tools(
         self,
     ) -> list[llm.Tool | llm.Toolset]:
-        return self._session.tools + self._agent.tools + self._mcp_tools
+        from .tool_executor import cancel_task, get_running_tasks, has_cancellable_tool
+
+        tools = self._session.tools + self._agent.tools + self._mcp_tools
+        # auto-expose cancel_task / get_running_tasks whenever any tool opts in via
+        # allow_cancellation=True. Done here so the same set of tools is visible to
+        # LLM inference, realtime sessions, chat-ctx construction, and tool dispatch.
+        # always-on (not per-turn) so the schema stays stable across turns and the
+        # LLM prompt cache stays warm.
+        if has_cancellable_tool(tools):
+            tools = [*tools, cancel_task, get_running_tasks]
+        return tools
 
     @property
     def min_consecutive_speech_delay(self) -> float:
@@ -1001,11 +1024,18 @@ class AgentActivity(RecognitionHooks):
             # on_exit_task should be awaited in `drain`
             self._on_exit_task = None
 
+            # cancel cancellable tools, wait for the rest before tearing the activity down
+            await self._tool_executor.drain()
+
             await self._close_session()
             await asyncio.gather(*self._interrupt_background_speeches(force=False))
 
             if self._scheduling_atask is not None:
                 await utils.aio.cancel_and_wait(self._scheduling_atask)
+
+            # close the executor — anything still running (non-cancellable that survived
+            # drain, or session-scoped delivery tasks) gets cancelled here.
+            await self._tool_executor.aclose()
 
             self._agent._activity = None
 
@@ -1419,19 +1449,37 @@ class AgentActivity(RecognitionHooks):
             if self._scheduling_paused and len(to_wait) == 0:
                 break
 
+    async def wait_for_idle(self) -> None:
+        """Wait until this activity has no in-flight agent or user work.
+
+        Raises:
+            ActivityClosedError: if the activity has terminally closed.
+        """
+        if self._closed:
+            raise ActivityClosedError(f"activity {self.agent.label} is closed")
+        await self._wait_for_inactive()
+        if self._closed:
+            raise ActivityClosedError(f"activity {self.agent.label} is closed")
+
     async def _wait_for_inactive(
         self, *, wait_for_agent: bool = True, wait_for_user: bool = True
     ) -> None:
         agent_active = True
         user_active = True
+
+        async def _wait_for_eou() -> None:
+            nonlocal user_active
+            if (
+                self._audio_recognition
+                and (eou_task := self._audio_recognition._end_of_turn_task)
+                and not eou_task.done()
+            ):
+                user_active = True
+                await eou_task
+
         while (wait_for_agent and agent_active) or (wait_for_user and user_active):
             if wait_for_agent:
-                if (
-                    self._audio_recognition
-                    and (eou_task := self._audio_recognition._end_of_turn_task)
-                    and not eou_task.done()
-                ):
-                    await eou_task
+                await _wait_for_eou()
 
                 if self._current_speech is None and not self._speech_q:
                     agent_active = False
@@ -1447,6 +1495,8 @@ class AgentActivity(RecognitionHooks):
                 else:
                     user_active = True
                     await self._user_silence_event.wait()
+
+                await _wait_for_eou()
 
     # -- Realtime Session events --
 

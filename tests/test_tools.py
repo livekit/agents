@@ -665,19 +665,18 @@ class TestAsyncToolsetDedup:
     """Test that multiple AsyncToolsets can coexist without duplicate tool name conflicts."""
 
     def test_two_async_toolsets_no_conflict(self):
-        """Two AsyncToolsets share the same get_running_tasks/cancel_task singleton tools."""
+        """Two AsyncToolsets compose without raising."""
         from livekit.agents.llm.async_toolset import AsyncToolset
 
         ts1 = AsyncToolset(id="booking", tools=[mock_tool_1])
         ts2 = AsyncToolset(id="search", tools=[mock_tool_2])
 
-        # should not raise — the management tools are the same module-level instances
+        # should not raise — tools are scoped per toolset
         ctx = ToolContext([ts1, ts2])
 
-        # only one copy of each management tool in the flattened list
         names = [t.id for t in ctx.flatten() if hasattr(t, "id")]
-        assert names.count("get_running_tasks") == 1
-        assert names.count("cancel_task") == 1
+        assert "mock_tool_1" in names
+        assert "mock_tool_2" in names
 
     def test_async_toolset_same_id_no_conflict(self):
         """Two AsyncToolsets with the same id should not conflict."""
@@ -690,5 +689,5 @@ class TestAsyncToolsetDedup:
         ctx = ToolContext([ts1, ts2])
 
         names = [t.id for t in ctx.flatten() if hasattr(t, "id")]
-        assert names.count("get_running_tasks") == 1
-        assert names.count("cancel_task") == 1
+        assert "mock_tool_1" in names
+        assert "mock_tool_2" in names

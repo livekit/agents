@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from enum import Enum, unique
 from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal, TypeVar
@@ -31,9 +32,14 @@ from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
     from .agent_session import AgentSession
+    from .tool_executor import _ToolExecutor
 
 
 Userdata_T = TypeVar("Userdata_T")
+
+
+UPDATE_TEMPLATE = """The tool `{function_name}` has updated, message: {message}
+The task is still running, so DON'T make up or give information not included in the message above."""
 
 
 class RunContext(Generic[Userdata_T]):
@@ -50,6 +56,14 @@ class RunContext(Generic[Userdata_T]):
         self._function_call = function_call
 
         self._initial_step_idx = speech_handle.num_steps - 1
+
+        # update machinery — populated whether or not an executor is attached
+        self._updates: list[tuple[FunctionCall, FunctionCallOutput]] = []
+        self._step_idx: int = 0
+
+        # voice-path wiring; set by the executor when present
+        self._executor: _ToolExecutor | None = None
+        self._pending_fut: asyncio.Future[Any] | None = None
 
     @property
     def session(self) -> AgentSession[Userdata_T]:
@@ -86,6 +100,73 @@ class RunContext(Generic[Userdata_T]):
         this method only waits for the assistant's spoken response prior running
         this tool to finish playing."""
         await self.speech_handle._wait_for_generation(step_idx=self._initial_step_idx)
+
+    async def update(self, message: str | Any, *, _template: str = UPDATE_TEMPLATE) -> None:
+        """Push a progress update into the conversation.
+
+        Each update synthesizes a `(FunctionCall, FunctionCallOutput)` pair appended
+        to `_updates`. In the voice path, the first update releases control to the
+        LLM and subsequent updates are coalesced into a deferred reply. Outside the
+        voice path (e.g. `execute_function_call`), updates are still recorded but
+        no reply is fired.
+        """
+        if isinstance(message, str):
+            message = _template.format(
+                function_name=self.function_call.name,
+                call_id=self.function_call.call_id,
+                message=message,
+            )
+
+        pair = self._make_update_pair(
+            message, call_id_suffix=f"_update_{self._step_idx}" if self._step_idx > 0 else ""
+        )
+        self._step_idx += 1
+        self._updates.append(pair)
+
+        if self._executor is None:
+            return  # standalone — nothing else to do
+
+        # voice path
+        assert self._pending_fut is not None
+        if not self._pending_fut.done():
+            # first update releases the executor's await on _pending_fut so the
+            # dispatch returns to the LLM with this update as the synthetic output
+            self._pending_fut.set_result(message)
+            self._function_call.extra["__livekit_agents_tool_pending"] = True
+            return
+
+        await self._executor._enqueue_reply(self, [pair[0], pair[1]])
+
+    def _make_update_pair(
+        self, message: Any, *, call_id_suffix: str = ""
+    ) -> tuple[FunctionCall, FunctionCallOutput]:
+        """Synthesize a (FunctionCall, FunctionCallOutput) pair for a progress update.
+
+        The new FunctionCall carries a synthesized call_id (`{call_id}_{call_id_suffix}`)
+        but copies name/arguments/extra from the original call. The output is
+        wrapped through `make_tool_output` so error/agent-task handling is uniform.
+        """
+        from .generation import make_tool_output
+
+        fnc_call = FunctionCall(
+            call_id=f"{self.function_call.call_id}{call_id_suffix}",
+            name=self.function_call.name,
+            arguments=self.function_call.arguments,
+            extra=self.function_call.extra,
+        )
+        tool_output = make_tool_output(fnc_call=fnc_call, output=message, exception=None)
+        # fnc_call_out is None only when the message is invalid; surface a stub
+        # FunctionCallOutput so callers can still see the synthesized pair.
+        if tool_output.fnc_call_out is None:
+            fnc_call_out = FunctionCallOutput(
+                name=fnc_call.name,
+                call_id=fnc_call.call_id,
+                output=str(message or ""),
+                is_error=False,
+            )
+        else:
+            fnc_call_out = tool_output.fnc_call_out
+        return (fnc_call, fnc_call_out)
 
 
 EventTypes = Literal[

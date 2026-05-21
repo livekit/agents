@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import functools
-import inspect
 import json
 import time
 from collections.abc import AsyncGenerator, AsyncIterable, Callable, Sequence
@@ -10,7 +9,6 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 from opentelemetry import trace
-from pydantic import ValidationError
 
 from livekit import rtc
 
@@ -492,14 +490,34 @@ async def _execute_tools_task(
     tool_execution_completed_cb: Callable[[ToolExecutionOutput], Any],
     tool_output: _ToolOutput,
 ) -> None:
-    """execute tools, when cancelled, stop executing new tools but wait for the pending ones"""
+    """execute tools through the activity's _ToolExecutor.
+
+    Every tool dispatched here runs through the executor's background-task lifecycle.
+    Tools that never call ``ctx.update()`` behave like classic sync tools (the
+    executor's _pending_fut resolves with the return value). Tools that call
+    ``ctx.update()`` release control to the LLM with the update message as the
+    synthetic output, and the executor coalesces subsequent updates and the final
+    return value into deferred replies.
+    """
+
+    from pydantic_core import from_json
 
     from .agent import _set_activity_task_info
     from .events import RunContext
+    from .run_result import _MockToolsContextVar
 
     def _tool_completed(out: ToolExecutionOutput) -> None:
         tool_execution_completed_cb(out)
         tool_output.output.append(out)
+
+    activity = session._activity
+    if activity is None:
+        logger.error(
+            "no active AgentActivity to execute tools",
+            extra={"speech_id": speech_handle.id},
+        )
+        return
+    executor = activity._tool_executor
 
     tasks: list[asyncio.Task[Any]] = []
     try:
@@ -550,19 +568,19 @@ async def _execute_tools_task(
                 )
                 continue
 
+            # parse the JSON arguments up front so the executor doesn't repeat the work.
+            # bad JSON is reported as a tool error immediately.
             try:
-                json_args = fnc_call.arguments or "{}"
-                fnc_args, fnc_kwargs = llm_utils.prepare_function_arguments(
-                    fnc=function_tool,
-                    json_arguments=json_args,
-                    call_ctx=RunContext(
-                        session=session,
-                        speech_handle=speech_handle,
-                        function_call=fnc_call,
-                    ),
-                )
-
-            except (ValidationError, ValueError) as e:
+                raw_args = from_json(fnc_call.arguments or "{}")
+                while isinstance(raw_args, str):
+                    raw_args = from_json(raw_args)
+                if raw_args is None:
+                    raw_args = {}
+                elif not isinstance(raw_args, dict):
+                    raise ValueError(
+                        f"expected dict from function arguments, got {type(raw_args).__name__}"
+                    )
+            except Exception as e:
                 logger.exception(
                     f"tried to call AI function `{fnc_call.name}` with invalid arguments",
                     extra={
@@ -579,68 +597,32 @@ async def _execute_tools_task(
 
             tool_execution_started_cb(fnc_call)
             try:
-                from .run_result import _MockToolsContextVar
-
                 mock_tools: dict[str, Callable] = _MockToolsContextVar.get({}).get(
                     type(session.current_agent), {}
                 )
+                mock = mock_tools.get(fnc_call.name)
 
-                if mock := mock_tools.get(fnc_call.name):
-                    logger.debug(
-                        "executing mock tool",
-                        extra={
-                            "function": fnc_call.name,
-                            "arguments": fnc_call.arguments,
-                            "speech_id": speech_handle.id,
-                        },
-                    )
+                run_ctx = RunContext(
+                    session=session, speech_handle=speech_handle, function_call=fnc_call
+                )
 
-                    async def _run_mock(mock: Callable, *fnc_args: Any, **fnc_kwargs: Any) -> Any:
-                        sig = inspect.signature(mock)
+                logger.debug(
+                    "executing tool",
+                    extra={
+                        "function": fnc_call.name,
+                        "arguments": fnc_call.arguments,
+                        "speech_id": speech_handle.id,
+                        "mocked": mock is not None,
+                    },
+                )
 
-                        pos_param_names = [
-                            name
-                            for name, param in sig.parameters.items()
-                            if param.kind
-                            in (
-                                inspect.Parameter.POSITIONAL_ONLY,
-                                inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                            )
-                        ]
-                        max_positional = len(pos_param_names)
-                        trimmed_args = fnc_args[:max_positional]
-                        kw_param_names = [
-                            name
-                            for name, param in sig.parameters.items()
-                            if param.kind
-                            in (
-                                inspect.Parameter.KEYWORD_ONLY,
-                                inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                            )
-                        ]
-                        trimmed_kwargs = {
-                            k: v for k, v in fnc_kwargs.items() if k in kw_param_names
-                        }
-
-                        bound = sig.bind_partial(*trimmed_args, **trimmed_kwargs)
-                        bound.apply_defaults()
-
-                        if inspect.iscoroutinefunction(mock):
-                            return await mock(*bound.args, **bound.kwargs)
-                        else:
-                            return mock(*bound.args, **bound.kwargs)
-
-                    function_callable = functools.partial(_run_mock, mock, *fnc_args, **fnc_kwargs)
-                else:
-                    logger.debug(
-                        "executing tool",
-                        extra={
-                            "function": fnc_call.name,
-                            "arguments": fnc_call.arguments,
-                            "speech_id": speech_handle.id,
-                        },
-                    )
-                    function_callable = functools.partial(function_tool, *fnc_args, **fnc_kwargs)
+                function_callable = functools.partial(
+                    executor.execute,
+                    tool=function_tool,
+                    run_ctx=run_ctx,
+                    raw_arguments=raw_args,
+                    mock=mock,
+                )
 
                 @tracer.start_as_current_span("function_tool")
                 async def _traceable_fnc_tool(
