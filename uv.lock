@@ -928,19 +928,6 @@ wheels = [
 ]
 
 [[package]]
-name = "gnani-vachana"
-version = "0.2.2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "requests" },
-    { name = "websockets" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/5a/4f/452def73ea0c8a38b94833353f986780e96df98994f8e4542ae2df43d3af/gnani_vachana-0.2.2.tar.gz", hash = "sha256:ad89625e1be9d6f80cba294f28feacc6738e6280f78b7aeecfc1b433a6278960", size = 21046, upload-time = "2026-04-27T12:41:13.702Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/6e/e4/1dcee219c967f826c1282f10e53bb11d75ff180a37d2bae2a652974948ce/gnani_vachana-0.2.2-py3-none-any.whl", hash = "sha256:4ea3b17c51f99c0318e826d7877b7367e79081dbdbc8f88a47376a1abf970b71", size = 22036, upload-time = "2026-04-27T12:41:12.208Z" },
-]
-
-[[package]]
 name = "google-api-core"
 version = "2.30.3"
 source = { registry = "https://pypi.org/simple" }
@@ -1889,9 +1876,6 @@ fishaudio = [
 gladia = [
     { name = "livekit-plugins-gladia" },
 ]
-gnani = [
-    { name = "livekit-plugins-gnani" },
-]
 google = [
     { name = "livekit-plugins-google" },
 ]
@@ -2058,7 +2042,6 @@ requires-dist = [
     { name = "livekit-plugins-fireworksai", marker = "extra == 'fireworksai'", editable = "livekit-plugins/livekit-plugins-fireworksai" },
     { name = "livekit-plugins-fishaudio", marker = "extra == 'fishaudio'", editable = "livekit-plugins/livekit-plugins-fishaudio" },
     { name = "livekit-plugins-gladia", marker = "extra == 'gladia'", editable = "livekit-plugins/livekit-plugins-gladia" },
-    { name = "livekit-plugins-gnani", marker = "extra == 'gnani'", editable = "livekit-plugins/livekit-plugins-gnani" },
     { name = "livekit-plugins-google", marker = "extra == 'google'", editable = "livekit-plugins/livekit-plugins-google" },
     { name = "livekit-plugins-gradium", marker = "extra == 'gradium'", editable = "livekit-plugins/livekit-plugins-gradium" },
     { name = "livekit-plugins-groq", marker = "extra == 'groq'", editable = "livekit-plugins/livekit-plugins-groq" },
@@ -2121,7 +2104,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hedra", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "minimax", "mistralai", "murf", "neuphonic", "nltk", "nvidia", "openai", "perplexity", "phonic", "resemble", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "speechify", "speechmatics", "spitch", "tavus", "trugen", "turn-detector", "ultravox", "upliftai", "xai"]
+provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "google", "gradium", "groq", "hamming", "hedra", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "minimax", "mistralai", "murf", "neuphonic", "nltk", "nvidia", "openai", "perplexity", "phonic", "resemble", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "speechify", "speechmatics", "spitch", "tavus", "trugen", "turn-detector", "ultravox", "upliftai", "xai"]
 
 [[package]]
 name = "livekit-api"
@@ -2497,14 +2480,12 @@ requires-dist = [
 name = "livekit-plugins-gnani"
 source = { editable = "livekit-plugins/livekit-plugins-gnani" }
 dependencies = [
-    { name = "gnani-vachana" },
     { name = "livekit-agents", extra = ["codecs"] },
     { name = "websockets" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "gnani-vachana", specifier = ">=0.2.2,<1.0" },
     { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
     { name = "websockets", specifier = ">=13.1,<16.0" },
 ]

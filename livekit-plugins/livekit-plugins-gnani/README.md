@@ -13,7 +13,7 @@
 pip install livekit-plugins-gnani
 ```
 
-This will also install the [`gnani-vachana`](https://pypi.org/project/gnani-vachana/) core SDK as a dependency.
+This will also install the [`websockets`](https://pypi.org/project/websockets/) and [`livekit-agents`](https://pypi.org/project/livekit-agents/) packages as dependencies.
 
 ## Prerequisites
 
@@ -115,19 +115,12 @@ Plus 250+ language-specific voices for Assamese, Bengali, Bodo, Dogri, Gujarati,
 
 ## Architecture
 
-```
-gnani-vachana           ← Core SDK (REST, WebSocket, SSE clients)
-    ↑
-livekit-plugins-gnani   ← This package (LiveKit Agents adapter)
-```
-
-This plugin is a thin adapter that wraps the `gnani-vachana` SDK into LiveKit's `stt.STT` and `tts.TTS` base classes. All connection logic, authentication, and audio format handling lives in the core SDK.
+This plugin directly implements the Gnani Vachana REST and WebSocket APIs using `aiohttp` (for batch STT/TTS) and `websockets` (for streaming STT/TTS), adapting them into LiveKit's `stt.STT` and `tts.TTS` base classes. No external SDK is required — all connection logic, authentication, and audio format handling is self-contained.
 
 ## Documentation
 
 - [Vachana API Docs](https://docs.inya.ai/vachana/introduction/introduction)
 - [LiveKit Agents Docs](https://docs.livekit.io/agents/)
-- [gnani-vachana SDK](https://pypi.org/project/gnani-vachana/)
 
 ## License
 

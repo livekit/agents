@@ -62,9 +62,18 @@ SUPPORTED_LANGUAGES: set[str] = {
 }
 
 STREAM_SUPPORTED_LANGUAGES: set[str] = {
-    "bn-IN", "en-IN", "gu-IN", "hi-IN", "kn-IN",
-    "ml-IN", "mr-IN", "pa-IN", "ta-IN", "te-IN",
-    "en-hi-IN-latn", "en-hi-in-cm",
+    "bn-IN",
+    "en-IN",
+    "gu-IN",
+    "hi-IN",
+    "kn-IN",
+    "ml-IN",
+    "mr-IN",
+    "pa-IN",
+    "ta-IN",
+    "te-IN",
+    "en-hi-IN-latn",
+    "en-hi-in-cm",
 }
 
 SAMPLE_RATE_16K = 16000
@@ -316,7 +325,19 @@ class SpeechStream(stt.RecognizeStream):
                 recv_task = asyncio.create_task(self._recv_messages(ws), name="gnani-stt-recv")
 
                 try:
-                    await asyncio.gather(send_task, recv_task)
+                    # Wait for send to finish; if recv errors first, propagate it.
+                    done, _ = await asyncio.wait(
+                        [send_task, recv_task],
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    for task in done:
+                        task.result()
+
+                    if send_task.done() and not recv_task.done():
+                        # All audio sent. The Gnani API has no application-level
+                        # end-of-stream message, so give the server a short
+                        # window to flush final transcripts before closing.
+                        await asyncio.sleep(1.0)
                 finally:
                     await utils.aio.gracefully_cancel(send_task, recv_task)
 
@@ -350,8 +371,6 @@ class SpeechStream(stt.RecognizeStream):
 
         if audio_buffer:
             await ws.send(bytes(audio_buffer))
-
-        await ws.close()
 
     async def _recv_messages(self, ws: Any) -> None:
         try:
