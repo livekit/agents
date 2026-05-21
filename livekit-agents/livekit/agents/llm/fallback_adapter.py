@@ -19,6 +19,13 @@ DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
 )
 
 
+def _is_useful_chunk(chunk: ChatChunk) -> bool:
+    """A chunk is "useful" if it carries content or tool calls that can be
+    surfaced to the user. Chunks that only carry metadata (e.g. usage) don't
+    count as progress for the time-to-first-chunk timeout."""
+    return bool(chunk.delta and (chunk.delta.content or chunk.delta.tool_calls))
+
+
 @dataclass
 class _LLMStatus:
     available: bool
@@ -177,12 +184,33 @@ class FallbackLLMStream(LLMStream):
                 ),
             ) as stream:
                 should_set_current = not check_recovery
-                async for chunk in stream:
+                # `attempt_timeout` is forwarded to the underlying LLM as the
+                # connection timeout, but a provider can open the connection and
+                # then stay silent (no useful chunk, no HTTP error). Apply the
+                # same timeout to the time-to-first-useful-chunk so a connected
+                # but silent attempt also triggers a fallback.
+                received_useful_chunk = False
+                stream_iter = stream.__aiter__()
+                while True:
+                    if received_useful_chunk:
+                        chunk = await stream_iter.__anext__()
+                    else:
+                        chunk = await asyncio.wait_for(
+                            stream_iter.__anext__(),
+                            self._fallback_adapter._attempt_timeout,
+                        )
+
                     if should_set_current:
                         should_set_current = False
                         self._current_stream = stream
+
+                    if not received_useful_chunk and _is_useful_chunk(chunk):
+                        received_useful_chunk = True
+
                     yield chunk
 
+        except StopAsyncIteration:
+            pass
         except asyncio.TimeoutError:
             if check_recovery:
                 logger.warning(f"{llm.label} recovery timed out")
