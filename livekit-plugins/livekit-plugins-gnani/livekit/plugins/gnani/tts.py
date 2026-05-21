@@ -30,26 +30,123 @@ from .log import logger
 GNANI_TTS_BASE_URL = "https://api.vachana.ai"
 
 GnaniTTSVoices = Literal[
-    "sia",
-    "raju",
-    "kanika",
-    "nikita",
-    "ravan",
-    "simran",
-    "karan",
-    "neha",
+    # Legacy v2 voices (lowercase) — work with model "vachana-voice-v2"
+    "sia", "raju", "kanika", "nikita", "ravan", "simran", "karan", "neha",
+    # v3 Primary voices (capitalized) — work with model "vachana-voice-v3"
+    "Karan", "Simran", "Nara", "Riya", "Viraj", "Raju",
+    # Assamese
+    "Priya", "Ankita", "Deepa", "Meena", "Kavya", "Sonal", "Tara", "Lata",
+    "Arjun", "Bikash", "Chinmoy", "Dipak", "Gautam", "Hemant", "Ishan", "Jatin",
+    # Bengali
+    "Ananya", "Barnali", "Chandana", "Diya", "Ena", "Falguni", "Gopa", "Haimanti",
+    "Abhik", "Biren", "Chirag", "Debraj", "Eshan", "Farhan", "Gourab", "Hridoy",
+    # Bodo
+    "Anamika", "Basanti", "Champa", "Durga", "Elina", "Fulomati", "Gitika", "Hiranya",
+    "Anil", "Biswajit", "Chandan", "Dhiraj", "Ewlung", "Felu", "Gobinda", "Hirendra",
+    # Dogri
+    "Asha", "Bhavna", "Charu", "Devika", "Ekta", "Fiza", "Geeta", "Hansa",
+    "Ajay", "Baldev", "Chetan", "Dinesh", "Eknath", "Feroz", "Gulshan", "Harbans",
+    # Gujarati
+    "Avani", "Bansari", "Charmi", "Dhara", "Esha", "Falak", "Gargi", "Heena",
+    "Akshay", "Bhavin", "Chirag_G", "Dhruv", "Eshan_G", "Falgun", "Gaurav", "Hardik",
+    # Hindi
+    "Aarav", "Bharat", "Chandan_H", "Deepak", "Eklavya", "Firoz", "Girish", "Hitesh",
+    # Kannada
+    "Anitha", "Bhavani", "Chaitra", "Divya", "Eswari", "Geetha", "Hema", "Indira",
+    "Aditya", "Basavaraj", "Chethan", "Darshan", "Eswar", "Ganesh", "Harish", "Imran_K",
+    # Kashmiri
+    "Aafreen", "Bilqees", "Chaman", "Dilshada", "Farida", "Gulnara", "Hajra", "Iffat",
+    "Altaf", "Bashir", "Choudhary", "Dilnawaz", "Fayaz", "Ghulam", "Habib", "Imtiyaz",
+    # Konkani
+    "Alka", "Bindiya", "Chhaya", "Damayanti", "Filomena", "Greta", "Hermine", "Ines",
+    "Agnelo", "Bosco", "Cletus", "Domnic", "Filipe", "Gracian", "Herculano", "Ivo",
+    # Maithili
+    "Archana", "Binita", "Chandrakala", "Dharitri", "Fulwanti", "Ganga", "Hemlata", "Indumati",
+    "Amaresh", "Baidyanath", "Chandrashekhar", "Durgesh", "Fanindra", "Gangadhar", "Harihar", "Indranath",
+    # Malayalam
+    "Ambika", "Bindhu", "Chithra", "Deepthi", "Elizabath", "Gowri", "Haritha", "Indulekha",
+    "Abhilash", "Biju", "Dileep", "Eldho", "Faizal", "Govind", "Harikrishnan", "Ibrahim_M",
+    # Manipuri
+    "Achouba", "Biren_M", "Chaoba", "Dinamani", "Ibomcha", "Khomdon", "Laishram", "Moirangthem",
+    # Marathi
+    "Aparna", "Bharati", "Chaitali", "Dipali", "Ekata", "Gauri", "Hruta", "Isha",
+    "Amol", "Bhalchandra", "Dattatray", "Eknath_M", "Ganpat", "Harishchandra", "Ishwar", "Jagannath",
+    # Nepali
+    "Anita", "Binita_N", "Chameli", "Durga_N", "Kamala", "Laxmi", "Mina", "Nirmala",
+    "Amar", "Bikram", "Chandra", "Dipendra", "Kamal", "Laxman", "Mohan", "Narayan",
+    # Odia
+    "Anuradha", "Bijayalaxmi", "Chitralekha", "Debasmita", "Itishree", "Jayashree", "Kabita", "Lipsa",
+    "Asutosh", "Biswabhusan", "Chitta", "Debashish", "Itishri", "Jagabandhu", "Kartik", "Lingaraj",
+    # Punjabi
+    "Amandeep", "Balwinder", "Charanjit", "Daljit", "Gurpreet", "Harpreet", "Jaspreet", "Kirandeep",
+    "Amarjit", "Balkar", "Charanjeet", "Daljeet", "Gurjeet", "Harjeet", "Jagjeet", "Kulwant",
+    # Sanskrit
+    "Akshara", "Bhavika", "Chanda", "Devaki", "Ekata_S", "Gayatri", "Hemavati", "Indrani",
+    "Achyut", "Brahmanand", "Chidananda", "Devdutt", "Gangadhar_S", "Harinath", "Ishaan", "Jagdish",
+    # Santhali
+    "Arjun_S", "Birsa", "Chand", "Dhanu", "Haram", "Jitu", "Kalu", "Lako",
+    # Sindhi
+    "Ameena", "Bhagwanti", "Chandni", "Draupadi", "Feroza", "Gulabo", "Heera", "Indra",
+    # Tamil
+    "Abinaya", "Bhavani_T", "Chitra", "Dhivya", "Ezhilarasi", "Geetha_T", "Hemamalini", "Ilavarasi",
+    "Anbarasan", "Balamurugan", "Chelladurai", "Dhanasekaran", "Elumalai", "Gnanasekaran", "Hariharan_T", "Ilayaraja",
+    # Telugu
+    "Alekhya", "Bhargavi", "Charitha", "Deepthi_T", "Eswari_T", "Gayathri", "Harika", "Indumathi",
+    "Adithya", "Bhaskar", "Chaitanya", "Dhanunjay", "Eswar_T", "Gowtham", "Harsha", "Indradeep",
+    # Urdu
+    "Aiza", "Bushra", "Chandni_U", "Dilnoza", "Fareeha", "Gulshan_U", "Hina", "Iqra",
+    "Asad", "Babar", "Danish", "Ehsan", "Faisal", "Ghazanfar", "Hamza", "Imran",
 ]
 
-SUPPORTED_VOICES: set[str] = {
-    "sia",
-    "raju",
-    "kanika",
-    "nikita",
-    "ravan",
-    "simran",
-    "karan",
-    "neha",
+LEGACY_V2_VOICES: set[str] = {
+    "sia", "raju", "kanika", "nikita", "ravan", "simran", "karan", "neha",
 }
+
+V3_VOICES: set[str] = {
+    "Karan", "Simran", "Nara", "Riya", "Viraj", "Raju",
+    "Priya", "Ankita", "Deepa", "Meena", "Kavya", "Sonal", "Tara", "Lata",
+    "Arjun", "Bikash", "Chinmoy", "Dipak", "Gautam", "Hemant", "Ishan", "Jatin",
+    "Ananya", "Barnali", "Chandana", "Diya", "Ena", "Falguni", "Gopa", "Haimanti",
+    "Abhik", "Biren", "Chirag", "Debraj", "Eshan", "Farhan", "Gourab", "Hridoy",
+    "Anamika", "Basanti", "Champa", "Durga", "Elina", "Fulomati", "Gitika", "Hiranya",
+    "Anil", "Biswajit", "Chandan", "Dhiraj", "Ewlung", "Felu", "Gobinda", "Hirendra",
+    "Asha", "Bhavna", "Charu", "Devika", "Ekta", "Fiza", "Geeta", "Hansa",
+    "Ajay", "Baldev", "Chetan", "Dinesh", "Eknath", "Feroz", "Gulshan", "Harbans",
+    "Avani", "Bansari", "Charmi", "Dhara", "Esha", "Falak", "Gargi", "Heena",
+    "Akshay", "Bhavin", "Chirag_G", "Dhruv", "Eshan_G", "Falgun", "Gaurav", "Hardik",
+    "Aarav", "Bharat", "Chandan_H", "Deepak", "Eklavya", "Firoz", "Girish", "Hitesh",
+    "Anitha", "Bhavani", "Chaitra", "Divya", "Eswari", "Geetha", "Hema", "Indira",
+    "Aditya", "Basavaraj", "Chethan", "Darshan", "Eswar", "Ganesh", "Harish", "Imran_K",
+    "Aafreen", "Bilqees", "Chaman", "Dilshada", "Farida", "Gulnara", "Hajra", "Iffat",
+    "Altaf", "Bashir", "Choudhary", "Dilnawaz", "Fayaz", "Ghulam", "Habib", "Imtiyaz",
+    "Alka", "Bindiya", "Chhaya", "Damayanti", "Filomena", "Greta", "Hermine", "Ines",
+    "Agnelo", "Bosco", "Cletus", "Domnic", "Filipe", "Gracian", "Herculano", "Ivo",
+    "Archana", "Binita", "Chandrakala", "Dharitri", "Fulwanti", "Ganga", "Hemlata", "Indumati",
+    "Amaresh", "Baidyanath", "Chandrashekhar", "Durgesh", "Fanindra", "Gangadhar", "Harihar", "Indranath",
+    "Ambika", "Bindhu", "Chithra", "Deepthi", "Elizabath", "Gowri", "Haritha", "Indulekha",
+    "Abhilash", "Biju", "Dileep", "Eldho", "Faizal", "Govind", "Harikrishnan", "Ibrahim_M",
+    "Achouba", "Biren_M", "Chaoba", "Dinamani", "Ibomcha", "Khomdon", "Laishram", "Moirangthem",
+    "Aparna", "Bharati", "Chaitali", "Dipali", "Ekata", "Gauri", "Hruta", "Isha",
+    "Amol", "Bhalchandra", "Dattatray", "Eknath_M", "Ganpat", "Harishchandra", "Ishwar", "Jagannath",
+    "Anita", "Binita_N", "Chameli", "Durga_N", "Kamala", "Laxmi", "Mina", "Nirmala",
+    "Amar", "Bikram", "Chandra", "Dipendra", "Kamal", "Laxman", "Mohan", "Narayan",
+    "Anuradha", "Bijayalaxmi", "Chitralekha", "Debasmita", "Itishree", "Jayashree", "Kabita", "Lipsa",
+    "Asutosh", "Biswabhusan", "Chitta", "Debashish", "Itishri", "Jagabandhu", "Kartik", "Lingaraj",
+    "Amandeep", "Balwinder", "Charanjit", "Daljit", "Gurpreet", "Harpreet", "Jaspreet", "Kirandeep",
+    "Amarjit", "Balkar", "Charanjeet", "Daljeet", "Gurjeet", "Harjeet", "Jagjeet", "Kulwant",
+    "Akshara", "Bhavika", "Chanda", "Devaki", "Ekata_S", "Gayatri", "Hemavati", "Indrani",
+    "Achyut", "Brahmanand", "Chidananda", "Devdutt", "Gangadhar_S", "Harinath", "Ishaan", "Jagdish",
+    "Arjun_S", "Birsa", "Chand", "Dhanu", "Haram", "Jitu", "Kalu", "Lako",
+    "Ameena", "Bhagwanti", "Chandni", "Draupadi", "Feroza", "Gulabo", "Heera", "Indra",
+    "Abinaya", "Bhavani_T", "Chitra", "Dhivya", "Ezhilarasi", "Geetha_T", "Hemamalini", "Ilavarasi",
+    "Anbarasan", "Balamurugan", "Chelladurai", "Dhanasekaran", "Elumalai", "Gnanasekaran", "Hariharan_T", "Ilayaraja",
+    "Alekhya", "Bhargavi", "Charitha", "Deepthi_T", "Eswari_T", "Gayathri", "Harika", "Indumathi",
+    "Adithya", "Bhaskar", "Chaitanya", "Dhanunjay", "Eswar_T", "Gowtham", "Harsha", "Indradeep",
+    "Aiza", "Bushra", "Chandni_U", "Dilnoza", "Fareeha", "Gulshan_U", "Hina", "Iqra",
+    "Asad", "Babar", "Danish", "Ehsan", "Faisal", "Ghazanfar", "Hamza", "Imran",
+}
+
+SUPPORTED_VOICES: set[str] = LEGACY_V2_VOICES | V3_VOICES
 
 GnaniTTSEncodings = Literal["linear_pcm", "oggopus"]
 GnaniTTSContainers = Literal["raw", "mp3", "wav", "mulaw", "ogg"]
@@ -61,15 +158,15 @@ SUPPORTED_SAMPLE_RATES = (8000, 16000, 22050, 44100)
 @dataclass
 class GnaniTTSOptions:
     api_key: str
-    voice: str = "sia"
-    model: str = "vachana-voice-v2"
+    voice: str = "Karan"
+    model: str = "vachana-voice-v3"
     sample_rate: int = 16000
     encoding: str = "linear_pcm"
     container: str = "wav"
     num_channels: int = 1
     sample_width: int = 2
     base_url: str = GNANI_TTS_BASE_URL
-    language: str = "IND-IN"
+    language: str = "hi"
 
 
 class TTS(tts.TTS):
@@ -79,28 +176,28 @@ class TTS(tts.TTS):
     Supports batch synthesis via REST API and real-time streaming via WebSocket.
 
     Args:
-        voice: Voice to use for synthesis (sia, raju, kanika, etc.).
-        model: TTS model name (default: vachana-voice-v2).
+        voice: Voice to use for synthesis (Karan, Simran, Riya, etc.).
+        model: TTS model name (default: vachana-voice-v3).
         sample_rate: Audio output sample rate (8000-44100).
         encoding: Audio encoding (linear_pcm or oggopus).
         container: Audio container format (raw, mp3, wav, mulaw, ogg).
         api_key: Gnani API key (falls back to GNANI_API_KEY env var).
         base_url: Vachana API base URL.
-        language: Language code for WebSocket TTS (default: IND-IN).
+        language: Language code for TTS (default: hi).
     """
 
     def __init__(
         self,
         *,
-        voice: GnaniTTSVoices | str = "sia",
-        model: str = "vachana-voice-v2",
+        voice: GnaniTTSVoices | str = "Karan",
+        model: str = "vachana-voice-v3",
         sample_rate: int = 16000,
         num_channels: int = 1,
         encoding: GnaniTTSEncodings | str = "linear_pcm",
         container: GnaniTTSContainers | str = "wav",
         api_key: str | None = None,
         base_url: str = GNANI_TTS_BASE_URL,
-        language: str = "IND-IN",
+        language: str = "hi",
     ) -> None:
         if sample_rate not in SUPPORTED_SAMPLE_RATES:
             raise ValueError(
@@ -122,7 +219,10 @@ class TTS(tts.TTS):
 
         if voice not in SUPPORTED_VOICES:
             raise ValueError(
-                f"Voice '{voice}' not supported. Choose from: {sorted(SUPPORTED_VOICES)}"
+                f"Voice '{voice}' not supported. "
+                f"v3 voices are capitalized (e.g. 'Karan'), "
+                f"legacy v2 voices are lowercase (e.g. 'karan'). "
+                f"See SUPPORTED_VOICES for the full list."
             )
 
         self._opts = GnaniTTSOptions(
@@ -171,7 +271,9 @@ class TTS(tts.TTS):
         if voice is not None:
             if voice not in SUPPORTED_VOICES:
                 raise ValueError(
-                    f"Voice '{voice}' not supported. Choose from: {sorted(SUPPORTED_VOICES)}"
+                    f"Voice '{voice}' not supported. "
+                    f"v3 voices are capitalized (e.g. 'Karan'), "
+                    f"legacy v2 voices are lowercase (e.g. 'karan')."
                 )
             self._opts.voice = voice
         if model is not None:
@@ -269,9 +371,9 @@ class SynthesizeStream(tts.SynthesizeStream):
     def _build_ws_url(self) -> str:
         base = self._opts.base_url
         if base.startswith("https://"):
-            ws_base = "wss://" + base[len("https://") :]
+            ws_base = "wss://" + base[len("https://"):]
         elif base.startswith("http://"):
-            ws_base = "ws://" + base[len("http://") :]
+            ws_base = "ws://" + base[len("http://"):]
         else:
             ws_base = "wss://" + base
         return f"{ws_base}/api/v1/tts"

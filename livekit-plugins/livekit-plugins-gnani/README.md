@@ -46,7 +46,7 @@ stt = STT(language="hi-IN")
 ```python
 from livekit.plugins.gnani import TTS
 
-tts = TTS(voice="sia")
+tts = TTS(voice="Karan")
 
 # Use with a LiveKit voice agent pipeline
 ```
@@ -65,7 +65,7 @@ tts = TTS(voice="sia")
 
 - **Chunked synthesis** — REST API for single-request audio generation
 - **Real-time streaming** — WebSocket API for low-latency streaming synthesis
-- **8 voices** — sia, raju, kanika, nikita, ravan, simran, karan, neha
+- **250+ voices** — v3 capitalized voices (Karan, Simran, Riya, etc.) + legacy v2 lowercase voices
 - **Configurable output** — sample rate (8000–44100), encoding (linear_pcm, oggopus), container (raw, mp3, wav, mulaw, ogg)
 
 ## Supported Languages
@@ -85,16 +85,33 @@ tts = TTS(voice="sia")
 
 ## Available Voices
 
+**v3 voices** (default model `vachana-voice-v3`, capitalized):
+
+| Voice   | ID        | Language  |
+|---------|-----------|-----------|
+| Karan   | `Karan`   | Primary   |
+| Simran  | `Simran`  | Primary   |
+| Nara    | `Nara`    | Primary   |
+| Riya    | `Riya`    | Primary   |
+| Viraj   | `Viraj`   | Primary   |
+| Raju    | `Raju`    | Primary   |
+
+Plus 250+ language-specific voices for Assamese, Bengali, Bodo, Dogri, Gujarati, Hindi, Kannada, Kashmiri, Konkani, Maithili, Malayalam, Manipuri, Marathi, Nepali, Odia, Punjabi, Sanskrit, Santhali, Sindhi, Tamil, Telugu, and Urdu.
+
+**Legacy v2 voices** (model `vachana-voice-v2`, lowercase):
+
 | Voice   | ID        |
 |---------|-----------|
-| Sia     | `sia`     |
-| Raju    | `raju`    |
-| Kanika  | `kanika`  |
-| Nikita  | `nikita`  |
-| Ravan   | `ravan`   |
-| Simran  | `simran`  |
-| Karan   | `karan`   |
-| Neha    | `neha`    |
+| sia     | `sia`     |
+| raju    | `raju`    |
+| kanika  | `kanika`  |
+| nikita  | `nikita`  |
+| ravan   | `ravan`   |
+| simran  | `simran`  |
+| karan   | `karan`   |
+| neha    | `neha`    |
+
+> **Note:** Casing matters — `"Karan"` uses v3 model, `"karan"` uses v2 model.
 
 ## Architecture
 

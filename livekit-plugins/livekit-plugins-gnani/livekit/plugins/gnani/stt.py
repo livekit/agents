@@ -61,9 +61,10 @@ SUPPORTED_LANGUAGES: set[str] = {
     "en-IN,hi-IN",
 }
 
-STREAM_SUPPORTED_LANGUAGES: set[str] = SUPPORTED_LANGUAGES | {
-    "en-hi-IN-latn",
-    "en-hi-in-cm",
+STREAM_SUPPORTED_LANGUAGES: set[str] = {
+    "bn-IN", "en-IN", "gu-IN", "hi-IN", "kn-IN",
+    "ml-IN", "mr-IN", "pa-IN", "ta-IN", "te-IN",
+    "en-hi-IN-latn", "en-hi-in-cm",
 }
 
 SAMPLE_RATE_16K = 16000
