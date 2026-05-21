@@ -407,6 +407,7 @@ async def _audio_forwarding_task(
 ) -> None:
     resampler: rtc.AudioResampler | None = None
 
+    cancelled = False
     try:
         audio_output.resume()
 
@@ -437,6 +438,9 @@ async def _audio_forwarding_task(
             for frame in resampler.flush():
                 await audio_output.capture_frame(frame)
 
+    except asyncio.CancelledError:
+        cancelled = True
+        raise
     finally:
         if isinstance(tts_output, _ACloseable):
             try:
@@ -445,6 +449,8 @@ async def _audio_forwarding_task(
                 logger.error("error while closing tts output", exc_info=e)
 
         audio_output.flush()
+        if cancelled:
+            audio_output.clear_buffer()
 
 
 @dataclass
