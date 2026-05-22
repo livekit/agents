@@ -152,8 +152,8 @@ class STT(stt.STT):
             )
 
         # LiveKit defaults continuous_partials to True (vs. AssemblyAI's server default of
-        # False) since steady-cadence partials are typically desired in turn-based agent
-        # pipelines. The U3Pro guard above ensures non-U3Pro users can't reach this default.
+        # False) for steady-cadence partials. This parameter is only supported for
+        # u3-rt-pro, enforced by the validation above.
         if not is_given(continuous_partials) and model == "u3-rt-pro":
             continuous_partials = True
 
