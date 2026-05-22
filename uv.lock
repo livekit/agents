@@ -2367,6 +2367,7 @@ dependencies = [
     { name = "livekit-agents", extra = ["codecs", "openai"] },
     { name = "msgpack" },
     { name = "msgpack-types" },
+    { name = "openai" },
 ]
 
 [package.metadata]
@@ -2374,6 +2375,7 @@ requires-dist = [
     { name = "livekit-agents", extras = ["codecs", "openai"], editable = "livekit-agents" },
     { name = "msgpack", specifier = ">=1.0" },
     { name = "msgpack-types", specifier = ">=0.7.0" },
+    { name = "openai", specifier = ">=2.16.0" },
 ]
 
 [[package]]

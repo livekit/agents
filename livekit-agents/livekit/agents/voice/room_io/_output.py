@@ -153,7 +153,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
             return_when=asyncio.FIRST_COMPLETED,
         )
 
-        interrupted = wait_for_interruption.done()
+        interrupted = self._interrupted_event.is_set()
         pushed_duration = self._pushed_duration
 
         if interrupted:

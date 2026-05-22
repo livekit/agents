@@ -106,11 +106,12 @@ class InterruptionOptions(TypedDict, total=False):
     """Seconds of silence after an interruption before it is
     classified as false. ``None`` disables. Defaults to ``2.0``."""
     backchannel_boundary: float | tuple[float, float] | None
-    """Seconds to suppress adaptive interruption handling when the agent
-    starts or stops speaking each turn to allow for easier turn correction.
-    Use tuple to apply different values for start and end separately.
-    ``None`` disables. Defaults to ``(1.0, 3.5)``. End value should be higher
-    to account for STT transcript timestamp inaccuracy."""
+    """Seconds near the start/end of each agent turn during which overlapping
+    speech classified as a backchannel by the adaptive detector is suppressed
+    (events flagged as interruptions still pass through). Use a tuple to apply
+    different values for start and end separately. ``None`` disables. Defaults
+    to ``(1.0, 3.5)``. End value should be higher to account for STT transcript
+    timestamp inaccuracy."""
 
 
 _INTERRUPTION_DEFAULTS: InterruptionOptions = {

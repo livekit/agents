@@ -71,6 +71,7 @@ class _ArcanaOptions:
     max_tokens: NotGivenOr[int] = NOT_GIVEN
     lang: NotGivenOr[TTSLangs | str] = NOT_GIVEN
     sample_rate: NotGivenOr[int] = NOT_GIVEN
+    time_scale_factor: NotGivenOr[float] = NOT_GIVEN
 
 
 @dataclass
@@ -78,6 +79,7 @@ class _CodaOptions:
     max_tokens: NotGivenOr[int] = NOT_GIVEN
     lang: NotGivenOr[TTSLangs | str] = NOT_GIVEN
     sample_rate: NotGivenOr[int] = NOT_GIVEN
+    time_scale_factor: NotGivenOr[float] = NOT_GIVEN
 
 
 @dataclass
@@ -88,6 +90,7 @@ class _MistOptions:
     reduce_latency: NotGivenOr[bool] = NOT_GIVEN
     pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN
     phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN
+    time_scale_factor: NotGivenOr[float] = NOT_GIVEN
 
 
 def _is_mist_model(model: TTSModels | str) -> bool:
@@ -115,12 +118,16 @@ def _model_params(opts: _TTSOptions) -> dict[str, object]:
             params["top_p"] = ao.top_p
         if is_given(ao.max_tokens):
             params["max_tokens"] = ao.max_tokens
+        if is_given(ao.time_scale_factor):
+            params["timeScaleFactor"] = ao.time_scale_factor
     elif opts.model == "coda" and opts.coda_options is not None:
         co = opts.coda_options
         if is_given(co.lang):
             params["lang"] = co.lang
         if is_given(co.max_tokens):
             params["max_tokens"] = co.max_tokens
+        if is_given(co.time_scale_factor):
+            params["timeScaleFactor"] = co.time_scale_factor
     elif _is_mist_model(opts.model) and opts.mist_options is not None:
         mo = opts.mist_options
         if is_given(mo.lang):
@@ -131,7 +138,19 @@ def _model_params(opts: _TTSOptions) -> dict[str, object]:
             params["pauseBetweenBrackets"] = mo.pause_between_brackets
         if is_given(mo.phonemize_between_brackets):
             params["phonemizeBetweenBrackets"] = mo.phonemize_between_brackets
+        # time_scale_factor is supported by mistv3 but not mistv2.
+        if is_given(mo.time_scale_factor) and opts.model != "mistv2":
+            params["timeScaleFactor"] = mo.time_scale_factor
     return params
+
+
+def _check_time_scale_factor_supported(
+    model: TTSModels | str, time_scale_factor: NotGivenOr[float]
+) -> None:
+    if is_given(time_scale_factor) and model == "mistv2":
+        raise ValueError(
+            "time_scale_factor is not supported by the mistv2 model; use arcana, mistv3, or coda."
+        )
 
 
 class TTS(tts.TTS):
@@ -147,6 +166,8 @@ class TTS(tts.TTS):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
         max_tokens: NotGivenOr[int] = NOT_GIVEN,
+        # Shared by arcana, mistv3, and coda
+        time_scale_factor: NotGivenOr[float] = NOT_GIVEN,
         # Mistv2 options
         sample_rate: int = 22050,
         speed_alpha: NotGivenOr[float] = NOT_GIVEN,
@@ -180,6 +201,8 @@ class TTS(tts.TTS):
                 "Rime API key is required, either as argument or set RIME_API_KEY environmental variable"  # noqa: E501
             )
 
+        _check_time_scale_factor_supported(model, time_scale_factor)
+
         if not is_given(speaker):
             if _is_mist_model(model):
                 speaker = DefaultMistVoice
@@ -200,12 +223,14 @@ class TTS(tts.TTS):
                 max_tokens=max_tokens,
                 lang=lang,
                 sample_rate=sample_rate,
+                time_scale_factor=time_scale_factor,
             )
         elif model == "coda":
             self._opts.coda_options = _CodaOptions(
                 max_tokens=max_tokens,
                 lang=lang,
                 sample_rate=sample_rate,
+                time_scale_factor=time_scale_factor,
             )
         elif _is_mist_model(model):
             self._opts.mist_options = _MistOptions(
@@ -215,6 +240,7 @@ class TTS(tts.TTS):
                 reduce_latency=reduce_latency,
                 pause_between_brackets=pause_between_brackets,
                 phonemize_between_brackets=phonemize_between_brackets,
+                time_scale_factor=time_scale_factor,
             )
         self._session = http_session
         self._base_url = resolved_base_url
@@ -325,6 +351,8 @@ class TTS(tts.TTS):
         top_p: NotGivenOr[float] = NOT_GIVEN,
         max_tokens: NotGivenOr[int] = NOT_GIVEN,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        # Coda parameters
+        time_scale_factor: NotGivenOr[float] = NOT_GIVEN,
         # Mistv2 parameters
         speed_alpha: NotGivenOr[float] = NOT_GIVEN,
         reduce_latency: NotGivenOr[bool] = NOT_GIVEN,
@@ -332,6 +360,9 @@ class TTS(tts.TTS):
         phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
+        effective_model = model if is_given(model) else self._opts.model
+        _check_time_scale_factor_supported(effective_model, time_scale_factor)
+
         # WS URL is bound at pool connect; invalidate if any URL-affecting param changed.
         prev_ws_url = self._ws_url() if self._use_websocket else None
         if is_given(base_url):
@@ -363,6 +394,8 @@ class TTS(tts.TTS):
                 self._opts.arcana_options.lang = lang
             if is_given(sample_rate):
                 self._opts.arcana_options.sample_rate = sample_rate
+            if is_given(time_scale_factor):
+                self._opts.arcana_options.time_scale_factor = time_scale_factor
 
         elif self._opts.model == "coda" and self._opts.coda_options is not None:
             if is_given(max_tokens):
@@ -371,6 +404,8 @@ class TTS(tts.TTS):
                 self._opts.coda_options.lang = lang
             if is_given(sample_rate):
                 self._opts.coda_options.sample_rate = sample_rate
+            if is_given(time_scale_factor):
+                self._opts.coda_options.time_scale_factor = time_scale_factor
 
         elif _is_mist_model(self._opts.model) and self._opts.mist_options is not None:
             if is_given(lang):
@@ -385,6 +420,8 @@ class TTS(tts.TTS):
                 self._opts.mist_options.pause_between_brackets = pause_between_brackets
             if is_given(phonemize_between_brackets):
                 self._opts.mist_options.phonemize_between_brackets = phonemize_between_brackets
+            if is_given(time_scale_factor):
+                self._opts.mist_options.time_scale_factor = time_scale_factor
 
         if prev_ws_url is not None and self._ws_url() != prev_ws_url:
             self._pool.invalidate()

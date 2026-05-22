@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from unittest.mock import MagicMock, Mock
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
@@ -719,7 +719,7 @@ async def test_start_boundary_does_not_block_vad_interruption() -> None:
     check_timestamp(speaking_to_listening.created_at - t_origin, 4.5, speed_factor=speed)
 
 
-async def test_backchannel_boundary_suppresses_start_boundary_interruption() -> None:
+async def test_backchannel_boundary_suppresses_start_boundary_backchannel() -> None:
     actions = FakeActions()
     session = create_session(
         actions,
@@ -738,16 +738,73 @@ async def test_backchannel_boundary_suppresses_start_boundary_interruption() -> 
 
     try:
         recognition.on_start_of_agent_speech(started_at=time.time())
-        await recognition._on_overlap_speech_event(_interruption_event())
-
+        # backchannels during the cooldown are dropped (they are a no-op anyway,
+        # but this guards against the gate firing on `on_interruption`)
+        await recognition._on_overlap_speech_event(_backchannel_event())
         assert hooks.interruptions == []
 
-        await asyncio.sleep(0.06)
+        # a real interruption during the cooldown must still fire
         await recognition._on_overlap_speech_event(_interruption_event())
-
         assert len(hooks.interruptions) == 1
+
+        # after cooldown, both event types behave normally
+        await asyncio.sleep(0.06)
+        await recognition._on_overlap_speech_event(_backchannel_event())
+        await recognition._on_overlap_speech_event(_interruption_event())
+        assert len(hooks.interruptions) == 2
     finally:
         await _close_test_session(session)
+
+
+async def _make_stt_eos_recognition() -> AudioRecognition:
+    return AudioRecognition(
+        create_session(FakeActions()),
+        hooks=_TestRecognitionHooks(),
+        endpointing=BaseEndpointing(min_delay=0.0, max_delay=0.0),
+        stt=None,
+        vad=None,
+        interruption_detection=None,
+        turn_detection="stt",
+    )
+
+
+async def test_stt_eos_resets_active_vad_stream_without_restarting_vad() -> None:
+    recognition = await _make_stt_eos_recognition()
+    recognition._speaking = True
+    recognition._vad_speech_started = True
+    recognition._vad = MagicMock()
+    resettable_stream = MagicMock()
+    recognition._vad_stream = resettable_stream
+
+    try:
+        with patch.object(recognition, "update_vad") as update_vad:
+            await recognition._on_stt_event(SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
+
+        resettable_stream.flush.assert_called_once_with()
+        update_vad.assert_not_called()
+        assert recognition._vad_stream is resettable_stream
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
+async def test_stt_eos_falls_back_to_update_vad_when_no_active_stream() -> None:
+    recognition = await _make_stt_eos_recognition()
+    recognition._speaking = True
+    recognition._vad_speech_started = True
+    recognition._vad = MagicMock()
+    recognition._vad_stream = None
+
+    try:
+        with patch.object(recognition, "update_vad") as update_vad:
+            await recognition._on_stt_event(SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
+
+        update_vad.assert_called_once_with(recognition._vad)
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
 
 
 async def test_backchannel_boundary_releases_end_boundary_transcript() -> None:
@@ -1116,6 +1173,15 @@ def _interruption_event() -> inference.OverlappingSpeechEvent:
     return inference.OverlappingSpeechEvent(
         type="overlapping_speech",
         is_interruption=True,
+        overlap_started_at=time.time(),
+        detected_at=time.time(),
+    )
+
+
+def _backchannel_event() -> inference.OverlappingSpeechEvent:
+    return inference.OverlappingSpeechEvent(
+        type="overlapping_speech",
+        is_interruption=False,
         overlap_started_at=time.time(),
         detected_at=time.time(),
     )

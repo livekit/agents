@@ -17,8 +17,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 from dataclasses import asdict, dataclass
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 
 import aiohttp
 
@@ -279,8 +280,8 @@ class SpeechStream(stt.SpeechStream):
         await ws.send_str(json.dumps(config))
         logger.debug("Soniox Speech-to-Text API connection established!")
 
-        # Reset duration tracking on new connection
         self._reported_duration_ms = 0
+        self.audio_queue = asyncio.Queue()
         return ws
 
     def _report_processed_audio_duration(self, total_audio_proc_ms: float) -> None:
@@ -448,120 +449,124 @@ class SpeechStream(stt.SpeechStream):
                 final_original.reset()
 
         is_translation_mode = self._stt._params.translation is not None
-        # Method handles receiving messages from the Soniox Speech-to-Text API.
-        while self._ws:
-            try:
-                async for msg in self._ws:
-                    if msg.type in (
-                        aiohttp.WSMsgType.CLOSED,
-                        aiohttp.WSMsgType.CLOSE,
-                        aiohttp.WSMsgType.CLOSING,
-                    ):
-                        break
 
-                    if msg.type != aiohttp.WSMsgType.TEXT:
-                        logger.warning(
-                            f"Unexpected message type from Soniox Speech-to-Text API: {msg.type}"
-                        )
-                        continue
+        if not self._ws:
+            return
 
-                    try:
-                        content = json.loads(msg.data)
-                        tokens = content["tokens"]
+        try:
+            async for msg in self._ws:
+                if msg.type in (
+                    aiohttp.WSMsgType.CLOSED,
+                    aiohttp.WSMsgType.CLOSE,
+                    aiohttp.WSMsgType.CLOSING,
+                ):
+                    break
 
-                        non_final = _TokenAccumulator()
-                        non_final_original = _TokenAccumulator()
-                        total_audio_proc_ms = content.get("total_audio_proc_ms", 0)
+                if msg.type != aiohttp.WSMsgType.TEXT:
+                    logger.warning(
+                        f"Unexpected message type from Soniox Speech-to-Text API: {msg.type}"
+                    )
+                    continue
 
-                        # 1) process tokens: accumulate final/non-final,
-                        #    flush immediately on endpoint tokens.
-                        for token in tokens:
-                            is_translated = token.get("translation_status") == "translation"
-                            if (
-                                is_translation_mode
-                                and not is_end_token(token)
-                                and not is_translated
-                            ):
-                                # Original-language token: capture text for source_text only.
-                                if token["is_final"]:
-                                    final_original.update(token)
-                                else:
-                                    non_final_original.update(token)
-                                continue
+                try:
+                    content = json.loads(msg.data)
+                    tokens = content["tokens"]
+
+                    non_final = _TokenAccumulator()
+                    non_final_original = _TokenAccumulator()
+                    total_audio_proc_ms = content.get("total_audio_proc_ms", 0)
+
+                    # 1) process tokens: accumulate final/non-final,
+                    #    flush immediately on endpoint tokens.
+                    for token in tokens:
+                        is_translated = token.get("translation_status") == "translation"
+                        if is_translation_mode and not is_end_token(token) and not is_translated:
+                            # Original-language token: capture text for source_text only.
                             if token["is_final"]:
-                                if is_end_token(token):
-                                    send_endpoint_transcript()
-                                    self._report_processed_audio_duration(
-                                        total_audio_proc_ms,
-                                    )
-                                else:
-                                    final.update(token)
+                                final_original.update(token)
                             else:
-                                non_final.update(token)
-
-                        # 2) emit START_OF_SPEECH + transcript for remaining content.
-                        if final.text or non_final.text:
-                            if not is_speaking:
-                                is_speaking = True
-                                self._event_ch.send_nowait(
-                                    stt.SpeechEvent(type=SpeechEventType.START_OF_SPEECH)
+                                non_final_original.update(token)
+                            continue
+                        if token["is_final"]:
+                            if is_end_token(token):
+                                send_endpoint_transcript()
+                                self._report_processed_audio_duration(
+                                    total_audio_proc_ms,
                                 )
-                            interim_segs = _merge_lang_segments(
-                                final_original._lang_segments, non_final_original._lang_segments
-                            )
-                            interim_src_langs = [
-                                LanguageCode(lang) for lang, _ in interim_segs
-                            ] or None
-                            interim_src_texts = [t for _, t in interim_segs] or None
+                            else:
+                                final.update(token)
+                        else:
+                            non_final.update(token)
 
-                            # When all tokens in this batch are final (no non-final pending),
-                            # speech has reached a stable state — emit PREFLIGHT_TRANSCRIPT to
-                            # allow preemptive LLM generation. This mirrors Deepgram v2's
-                            # EagerEndOfTurn behavior.
-                            event_type = (
-                                SpeechEventType.PREFLIGHT_TRANSCRIPT
-                                if final.text and not non_final.text
-                                else SpeechEventType.INTERIM_TRANSCRIPT
-                            )
+                    # 2) emit START_OF_SPEECH + transcript for remaining content.
+                    if final.text or non_final.text:
+                        if not is_speaking:
+                            is_speaking = True
                             self._event_ch.send_nowait(
-                                stt.SpeechEvent(
-                                    type=event_type,
-                                    alternatives=[
-                                        final.merged_speech_data(
-                                            non_final,
-                                            self.start_time_offset,
-                                            source_languages=interim_src_langs,
-                                            source_texts=interim_src_texts,
-                                        )
-                                    ],
-                                )
+                                stt.SpeechEvent(type=SpeechEventType.START_OF_SPEECH)
                             )
+                        interim_segs = _merge_lang_segments(
+                            final_original._lang_segments, non_final_original._lang_segments
+                        )
+                        interim_src_langs = [LanguageCode(lang) for lang, _ in interim_segs] or None
+                        interim_src_texts = [t for _, t in interim_segs] or None
 
-                        # 3) on error or finish, flush any remaining final tokens.
-                        if (
-                            content.get("finished")
-                            or content.get("error_code")
-                            or content.get("error_message")
-                        ):
-                            send_endpoint_transcript()
-                            self._report_processed_audio_duration(total_audio_proc_ms)
-
-                        if content.get("error_code") or content.get("error_message"):
-                            logger.error(
-                                f"WebSocket error: {content.get('error_code')}"
-                                f" - {content.get('error_message')}"
+                        # When all tokens in this batch are final (no non-final pending),
+                        # speech has reached a stable state — emit PREFLIGHT_TRANSCRIPT to
+                        # allow preemptive LLM generation. This mirrors Deepgram v2's
+                        # EagerEndOfTurn behavior.
+                        event_type = (
+                            SpeechEventType.PREFLIGHT_TRANSCRIPT
+                            if final.text and not non_final.text
+                            else SpeechEventType.INTERIM_TRANSCRIPT
+                        )
+                        self._event_ch.send_nowait(
+                            stt.SpeechEvent(
+                                type=event_type,
+                                alternatives=[
+                                    final.merged_speech_data(
+                                        non_final,
+                                        self.start_time_offset,
+                                        source_languages=interim_src_langs,
+                                        source_texts=interim_src_texts,
+                                    )
+                                ],
                             )
+                        )
 
-                        if content.get("finished"):
-                            logger.debug("Transcription finished")
+                    # 3) on error or finish, flush any remaining final tokens.
+                    if (
+                        content.get("finished")
+                        or content.get("error_code")
+                        or content.get("error_message")
+                    ):
+                        send_endpoint_transcript()
+                        self._report_processed_audio_duration(total_audio_proc_ms)
 
-                    except Exception as e:
-                        logger.exception(f"Error processing message: {e}")
+                    if content.get("error_code") or content.get("error_message"):
+                        logger.error(
+                            f"WebSocket error: {content.get('error_code')}"
+                            f" - {content.get('error_message')}"
+                        )
 
-            except aiohttp.ClientError as e:
-                logger.error(f"WebSocket error while receiving: {e}")
-            except Exception as e:
-                logger.error(f"Unexpected error while receiving messages: {e}")
+                    if content.get("finished"):
+                        logger.debug("Transcription finished")
+
+                except Exception as e:
+                    logger.exception(f"Error processing message: {e}")
+
+        except asyncio.CancelledError:
+            # Normal shutdown — don't trigger reconnect.
+            raise
+        except aiohttp.ClientError as e:
+            logger.error(f"WebSocket error while receiving: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error while receiving messages: {e}")
+
+        # Request reconnect if STT silently dies on WS drop.
+        if not self._reconnect_event.is_set():
+            logger.warning("Soniox STT WebSocket closed; requesting reconnect")
+            self._reconnect_event.set()
 
 
 def _merge_lang_segments(
@@ -576,6 +581,11 @@ def _merge_lang_segments(
         else:
             result.append((lang, text))
     return result
+
+
+class _LangStats(NamedTuple):
+    num_chars: int
+    updated_at: float
 
 
 class _TokenAccumulator:
@@ -595,13 +605,28 @@ class _TokenAccumulator:
         self._confidence_count: int = 0
         self._has_start_time: bool = False
         self._lang_segments: list[tuple[str, str]] = []  # (language, text) pairs
+        self._lang_stats: dict[str, _LangStats] = {}
+
+    def _get_language(self) -> str:
+        """Language with the most characters; ties go to the one that reached the count first."""
+        if not self._lang_stats:
+            return ""
+        most_chars = max(s.num_chars for s in self._lang_stats.values())
+        tied = [
+            (lang_code, stats)
+            for lang_code, stats in self._lang_stats.items()
+            if stats.num_chars == most_chars
+        ]
+        return min(tied, key=lambda t: t[1].updated_at)[0]
 
     def update(self, token: dict[str, Any]) -> None:
         text = token["text"]
         lang = token.get("language", "")
         self.text += text
-        if lang and not self.language:
-            self.language = lang
+        if lang and text:
+            chars, _ = self._lang_stats.get(lang, (0, 0.0))
+            self._lang_stats[lang] = _LangStats(chars + len(text), time.monotonic())
+            self.language = self._get_language()
         if "speaker" in token and self.speaker_id is None:
             self.speaker_id = str(token["speaker"])
         if "start_ms" in token and not self._has_start_time:
@@ -635,6 +660,7 @@ class _TokenAccumulator:
         self._confidence_count = 0
         self._has_start_time = False
         self._lang_segments = []
+        self._lang_stats = {}
 
     def to_speech_data(
         self,
