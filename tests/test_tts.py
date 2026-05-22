@@ -33,7 +33,6 @@ from livekit.plugins import (
     mistralai,
     neuphonic,
     resemble,
-    respeecher,
     rime,
     speechify,
     spitch,
@@ -197,13 +196,6 @@ SYNTHESIZE_TTS = [
             "proxy-upstream": "f.cluster.resemble.ai:443",
         },
         id="resemble",
-    ),
-    pytest.param(
-        lambda: {
-            "tts": respeecher.TTS(voice_id="samantha"),
-            "proxy-upstream": "api.respeecher.com:443",
-        },
-        id="respeecher",
     ),
     pytest.param(
         lambda: {
@@ -438,13 +430,6 @@ STREAM_TTS = [
             "proxy-upstream": "websocket.cluster.resemble.ai:443",
         },
         id="resemble",
-    ),
-    pytest.param(
-        lambda: {
-            "tts": respeecher.TTS(voice_id="samantha"),
-            "proxy-upstream": "api.respeecher.com:443",
-        },
-        id="respeecher",
     ),
     pytest.param(
         lambda: {

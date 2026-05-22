@@ -45,6 +45,11 @@ API_AUTH_HEADER = "X-API-Key"
 API_VERSION_HEADER = "LiveKit-Plugin-Respeecher-Version"
 API_BASE_URL = "https://api.respeecher.com/v1"
 
+DEFAULT_VOICES: dict[str, str] = {
+    "/public/tts/en-rt": "samantha",
+    "/public/tts/ua-rt": "olesia-conversation",
+}
+
 
 @dataclass
 class _TTSOptions:
@@ -57,11 +62,46 @@ class _TTSOptions:
     base_url: str
 
 
+async def list_voices(
+    *,
+    model: TTSModels | str = "/public/tts/en-rt",
+    api_key: NotGivenOr[str] = NOT_GIVEN,
+    base_url: str = API_BASE_URL,
+    http_session: aiohttp.ClientSession | None = None,
+) -> list[Voice]:
+    """List available voices for the given Respeecher model.
+
+    Args:
+        model: The Respeecher TTS model whose voices should be listed.
+        api_key: Respeecher API key. If not provided, uses RESPEECHER_API_KEY env variable.
+        base_url: The base URL for the Respeecher API.
+        http_session: Optional aiohttp session to use for the request.
+    """
+    resolved_api_key = api_key if is_given(api_key) else os.environ.get("RESPEECHER_API_KEY")
+    if not resolved_api_key:
+        raise ValueError("RESPEECHER_API_KEY must be set")
+
+    session = http_session or utils.http_context.http_session()
+    async with session.get(
+        f"{base_url}{model}/voices",
+        headers={
+            API_AUTH_HEADER: resolved_api_key,
+            API_VERSION_HEADER: API_VERSION,
+        },
+    ) as resp:
+        resp.raise_for_status()
+        data = await resp.json()
+        voices = [Voice(voice_data) for voice_data in data]
+        if not voices:
+            raise APIError("No voices are available")
+        return voices
+
+
 class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        voice_id: str,
+        voice_id: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         model: TTSModels | str = "/public/tts/en-rt",
         encoding: TTSEncoding = "pcm_s16le",
@@ -75,7 +115,7 @@ class TTS(tts.TTS):
         Create a new instance of Respeecher TTS.
 
         Args:
-            voice_id: ID of the voice to use. Each model exposes a different set of voices; call list_voices() to discover the IDs available for the chosen model.
+            voice_id: ID of the voice to use. If not provided, a model-specific default is used (see `DEFAULT_VOICES`). Each model exposes a different set of voices; call the module-level `list_voices()` helper to discover the IDs available for the chosen model.
             api_key: Respeecher API key. If not provided, uses RESPEECHER_API_KEY env variable.
             model: The Respeecher TTS model to use.
             encoding: Audio encoding format.
@@ -98,11 +138,18 @@ class TTS(tts.TTS):
         if not respeecher_api_key:
             raise ValueError("RESPEECHER_API_KEY must be set")
 
+        resolved_voice_id = voice_id if is_given(voice_id) else DEFAULT_VOICES.get(model)
+        if not resolved_voice_id:
+            raise ValueError(
+                f"voice_id is required for model {model!r} (no default voice is configured); "
+                "pass voice_id explicitly or use one of the supported models."
+            )
+
         self._opts = _TTSOptions(
             model=model,
             encoding=encoding,
             sample_rate=sample_rate,
-            voice_id=voice_id,
+            voice_id=resolved_voice_id,
             voice_settings=voice_settings,
             api_key=respeecher_api_key,
             base_url=base_url,
@@ -136,26 +183,6 @@ class TTS(tts.TTS):
         if not self._session:
             self._session = utils.http_context.http_session()
         return self._session
-
-    async def list_voices(self) -> list[Voice]:
-        """List available voices from Respeecher API"""
-        async with self._ensure_session().get(
-            f"{self._opts.base_url}{self._opts.model}/voices",
-            headers={
-                API_AUTH_HEADER: self._opts.api_key,
-                API_VERSION_HEADER: API_VERSION,
-            },
-        ) as resp:
-            resp.raise_for_status()
-            data = await resp.json()
-            voices = []
-            for voice_data in data:
-                voices.append(Voice(voice_data))
-
-            if len(voices) == 0:
-                raise APIError("No voices are available")
-
-            return voices
 
     def update_options(
         self,
