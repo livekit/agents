@@ -390,8 +390,14 @@ class SpeechStreamv2(stt.SpeechStream):
         if len(configure_msg) <= 1:
             return
 
-        assert self._ws is not None
-        asyncio.ensure_future(self._ws.send_str(json.dumps(configure_msg)))
+        asyncio.ensure_future(self._do_send_configure(json.dumps(configure_msg)))
+
+    async def _do_send_configure(self, msg_str: str) -> None:
+        try:
+            if self._ws is not None and not self._ws.closed:
+                await self._ws.send_str(msg_str)
+        except Exception:
+            logger.debug("failed to send Configure message, ws may be closing")
 
     async def _run(self) -> None:
         closing_ws = False
