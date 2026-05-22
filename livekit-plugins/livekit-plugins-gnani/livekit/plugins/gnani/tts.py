@@ -356,16 +356,12 @@ class SSEChunkedStream(tts.ChunkedStream):
                         if payload.get("is_final", False):
                             audio_b64 = payload.get("audio", "")
                             if audio_b64:
-                                output_emitter.push(
-                                    _strip_wav_header(base64.b64decode(audio_b64))
-                                )
+                                output_emitter.push(_strip_wav_header(base64.b64decode(audio_b64)))
                             break
 
                         audio_b64 = payload.get("audio", "")
                         if audio_b64:
-                            output_emitter.push(
-                                _strip_wav_header(base64.b64decode(audio_b64))
-                            )
+                            output_emitter.push(_strip_wav_header(base64.b64decode(audio_b64)))
                         continue
 
                     if line.startswith(":"):
