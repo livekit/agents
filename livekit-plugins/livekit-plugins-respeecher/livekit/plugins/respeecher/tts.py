@@ -347,7 +347,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     json.dumps(
                         {
                             "context_id": context_id,
-                            "transcript": sent.token,
+                            "transcript": sent.token if sent.token else " ",
                             "voice": _voice_payload(),
                             "continue": True,
                             "output_format": output_format,
@@ -359,7 +359,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 json.dumps(
                     {
                         "context_id": context_id,
-                        "transcript": "",
+                        "transcript": " ",
                         "voice": _voice_payload(),
                         "continue": False,
                         "output_format": output_format,
