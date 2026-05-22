@@ -500,9 +500,8 @@ async def _execute_tools_task(
     """execute tools through the activity's _ToolExecutor.
 
     Every tool dispatched here runs through the executor's background-task lifecycle.
-    Tools that never call ``ctx.update()`` behave like classic sync tools (the
-    executor's _pending_fut resolves with the return value). Tools that call
-    ``ctx.update()`` release control to the LLM with the update message as the
+    Tools that never call ``ctx.update()`` behave like classic sync tools. Tools that
+    call ``ctx.update()`` release control to the LLM with the update message as the
     synthetic output, and the executor coalesces subsequent updates and the final
     return value into deferred replies.
     """

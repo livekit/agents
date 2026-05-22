@@ -55,7 +55,6 @@ class RunContext(Generic[Userdata_T]):
 
         # update machinery — populated whether or not an executor is attached
         self._updates: list[tuple[FunctionCall, FunctionCallOutput]] = []
-        self._step_idx: int = 0
 
         # set by the executor when present
         self._executor: _ToolExecutor | None = None
@@ -127,10 +126,10 @@ class RunContext(Generic[Userdata_T]):
                 message=message,
             )
 
+        update_step = len(self._updates)
         pair = self._make_update_pair(
-            message, call_id_suffix=f"_update_{self._step_idx}" if self._step_idx > 0 else ""
+            message, call_id_suffix=f"_update_{update_step}" if update_step > 0 else ""
         )
-        self._step_idx += 1
         self._updates.append(pair)
 
         if self._executor is None:

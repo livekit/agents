@@ -78,6 +78,7 @@ from .generation import (
     update_instructions,
 )
 from .speech_handle import DEFAULT_INPUT_DETAILS, InputDetails, SpeechHandle
+from .tool_executor import _resolve_async_tool_prompts, _ToolExecutor
 from .turn import EndpointingOptions, TurnDetectionMode
 
 if TYPE_CHECKING:
@@ -189,9 +190,6 @@ class AgentActivity(RecognitionHooks):
         # activity-scoped tool executor. Every tool dispatched in this activity runs
         # through this executor. On drain it cancels cancellable tools and waits for
         # the rest; reply delivery is scoped to this activity's agent.
-        from .tool_executor import _resolve_async_tool_prompts, _ToolExecutor
-
-        # whole-value override: agent > session > defaults
         if is_given(self._agent._async_tool_prompts):
             activity_prompts = _resolve_async_tool_prompts(self._agent._async_tool_prompts)
         else:
