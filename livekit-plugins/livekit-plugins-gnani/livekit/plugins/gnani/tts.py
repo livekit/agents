@@ -335,15 +335,15 @@ class SSEChunkedStream(tts.ChunkedStream):
                         continue
                     if raw_line.startswith("event:"):
                         continue
+                    if raw_line.startswith(":"):
+                        continue
+                    if raw_line.startswith("id:") or raw_line.startswith("retry:"):
+                        continue
                     if raw_line.startswith("data:"):
                         raw_line = raw_line[5:].strip()
 
                     buf += raw_line
                     try:
-                        payload = json.loads(buf)
-                    except json.JSONDecodeError:
-                        continue
-                    buf = ""
 
                     if payload.get("status") == "error" or "error" in payload:
                         raise APIStatusError(
