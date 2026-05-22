@@ -113,13 +113,14 @@ class STT(stt.STT):
             min_turn_silence: Minimum silence in ms before a confident end-of-turn is finalized.
             min_end_of_turn_silence_when_confident: Deprecated. Use min_turn_silence instead.
             continuous_partials: Whether to emit additional partial transcripts during long
-                turns at a steady ~3 second cadence. When disabled, only one early partial is
-                emitted near turn start until `max_turn_silence` is reached. When enabled
-                (default in LiveKit; AssemblyAI server defaults to False), additional partials
-                covering the full turn transcript are emitted approximately every 3 seconds
-                while speech continues, alongside partials emitted after `min_turn_silence`.
-                The first partial (at 750 ms) is unaffected. Only supported with the
-                'u3-rt-pro' model.
+                turns at a steady ~3 second cadence. By default, partials are emitted at
+                two points: one at 750 ms after turn start (configurable via
+                `interruption_delay`), and one each time silence exceeds
+                `min_turn_silence` without ending the turn. When enabled (default in
+                LiveKit; AssemblyAI server defaults to False), additional partials covering
+                the full turn transcript are emitted approximately every 3 seconds while
+                speech continues, on top of those baseline partials. Only supported with
+                the 'u3-rt-pro' model.
             interruption_delay: How soon the first early partial is emitted, in ms.
                 Range 0–1000, default 500. Lower values produce faster time-to-first-token
                 for barge-in; higher values produce more confident first partials. Only
