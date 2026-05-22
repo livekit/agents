@@ -497,13 +497,12 @@ class SynthesizeStream(tts.SynthesizeStream):
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         import websockets
 
-        mime = "audio/pcm"
         request_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=request_id,
             sample_rate=self._tts.sample_rate,
             num_channels=self._tts.num_channels,
-            mime_type=mime,
+            mime_type="audio/pcm",
             stream=True,
         )
 
