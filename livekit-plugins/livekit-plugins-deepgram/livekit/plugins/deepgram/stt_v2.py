@@ -321,7 +321,11 @@ class SpeechStreamv2(stt.SpeechStream):
             keyterm = keyterms
 
         requires_reconnect = (
-            is_given(model) or is_given(sample_rate) or is_given(mip_opt_out) or is_given(endpoint_url) or is_given(tags)
+            is_given(model)
+            or is_given(sample_rate)
+            or is_given(mip_opt_out)
+            or is_given(endpoint_url)
+            or is_given(tags)
         )
 
         if is_given(model):
