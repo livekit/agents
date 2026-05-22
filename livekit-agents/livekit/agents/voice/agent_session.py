@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 import time
-from collections.abc import AsyncIterable, Callable, Sequence
+from collections.abc import AsyncIterable, Awaitable, Callable, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from contextvars import Token
 from dataclasses import dataclass
@@ -196,6 +197,49 @@ class VoiceActivityVideoSampler:
 
 
 DEFAULT_TTS_TEXT_TRANSFORMS: list[TextTransforms] = ["filter_markdown", "filter_emoji"]
+
+# emit a warning if session drain hasn't completed after this many seconds.
+# drain is not cancelled — this is purely an observability signal so a stalled
+# close path leaves a breadcrumb of what tasks are still running.
+_DRAIN_WARN_AFTER: float = 300.0
+
+
+_T = TypeVar("_T")
+
+
+# cap how many running tasks we dump in the slow-drain warning so structured
+# log sinks aren't flooded when the process has hundreds of live tasks.
+_SLOW_WARNING_TASK_LIMIT: int = 50
+
+
+async def _run_with_slow_warning(coro: Awaitable[_T], *, after: float, label: str) -> _T:
+    """Run *coro* and log a warning with a snapshot of running tasks if it
+    takes longer than *after* seconds. Never cancels *coro*."""
+
+    async def _watchdog() -> None:
+        await asyncio.sleep(after)
+        self_task = asyncio.current_task()
+        running = [t for t in asyncio.all_tasks() if not t.done() and t is not self_task]
+        truncated = running[:_SLOW_WARNING_TASK_LIMIT]
+        logger.warning(
+            "%s still running after %.1fs",
+            label,
+            after,
+            extra={
+                "running_tasks": [
+                    {"name": t.get_name(), "coro": repr(t.get_coro())} for t in truncated
+                ],
+                "running_tasks_total": len(running),
+            },
+        )
+
+    watchdog = asyncio.create_task(_watchdog(), name=f"{label}_watchdog")
+    try:
+        return await coro
+    finally:
+        watchdog.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await watchdog
 
 
 class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
@@ -944,7 +988,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     except RuntimeError:
                         # uninterruptible speech
                         pass
-                await activity.drain()
+
+                await _run_with_slow_warning(
+                    activity.drain(),
+                    after=_DRAIN_WARN_AFTER,
+                    label="agent_session_drain",
+                )
 
                 # wait any uninterruptible speech to finish
                 if activity.current_speech:
@@ -959,12 +1008,19 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 if (
                     reason != CloseReason.ERROR
                     and (audio_recognition := activity._audio_recognition) is not None
+                    and audio_recognition.has_pending_user_turn
                 ):
-                    # wait for the user transcript to be committed
-                    audio_recognition.commit_user_turn(
-                        audio_detached=True,
-                        transcript_timeout=self._opts.session_close_transcript_timeout,
-                    )
+                    # best-effort: wait for the in-flight user transcript to be committed
+                    # before tearing down. Bounded by `session_close_transcript_timeout`
+                    # inside the task. Any failure here must not block close — STT/EOU
+                    # errors and timeouts can still leave a clean shutdown.
+                    try:
+                        await audio_recognition.commit_user_turn(
+                            audio_detached=True,
+                            transcript_timeout=self._opts.session_close_transcript_timeout,
+                        )
+                    except (asyncio.TimeoutError, APIError, RuntimeError) as e:
+                        logger.warning("commit_user_turn during close failed", exc_info=e)
 
                 await activity.aclose()
             self._activity = None

@@ -260,6 +260,11 @@ STTEncoding = Literal["pcm_s16le"]
 DEFAULT_ENCODING: STTEncoding = "pcm_s16le"
 DEFAULT_SAMPLE_RATE: int = 16000
 
+# inference STT error codes that should not be retried — reconnecting after
+# these just produces another instance of the same error.
+# 2007: server closed an idle session; a fresh socket would idle out the same way.
+_NON_RETRYABLE_ERROR_CODES: frozenset[int] = frozenset({2007})
+
 
 @dataclass
 class STTOptions:
@@ -775,10 +780,14 @@ class SpeechStream(stt.SpeechStream):
                 elif msg_type == "session.closed":
                     pass
                 elif msg_type == "error":
+                    code = data.get("code", -1)
+                    # `None` lets APIStatusError apply its default (4xx → non-retryable).
+                    retryable = False if code in _NON_RETRYABLE_ERROR_CODES else None
                     raise APIStatusError(
                         f"LiveKit Inference STT returned error: {data.get('message')}",
-                        status_code=data.get("code", -1),
+                        status_code=code,
                         body=data,
+                        retryable=retryable,
                     )
 
         ws: aiohttp.ClientWebSocketResponse | None = None

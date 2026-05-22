@@ -711,6 +711,24 @@ class AudioRecognition:
         self.update_stt(None)
         self.update_stt(stt)
 
+    @property
+    def has_pending_user_turn(self) -> bool:
+        """True if there is in-flight user input that has not been committed yet.
+
+        A user turn is considered pending when any of these are true:
+        - VAD or STT currently report the user as speaking
+        - We have transcript text (interim or final) buffered
+        - A user_turn span is open — covers the post-EOS / pre-transcript window
+          where audio may still be sitting in the STT pipeline buffer
+        """
+        return (
+            self._vad_speech_started
+            or self._speaking
+            or bool(self._audio_interim_transcript)
+            or bool(self._audio_transcript)
+            or (self._user_turn_span is not None and self._user_turn_span.is_recording())
+        )
+
     def commit_user_turn(
         self,
         *,

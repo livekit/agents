@@ -382,7 +382,7 @@ class RecognizeStream(ABC):
                 last_start_time = time.time()
                 return await self._run()
             except APIError as e:
-                if max_retries == 0:
+                if max_retries == 0 or not e.retryable:
                     self._emit_error(e, recoverable=False)
                     raise
                 elif self._num_retries == max_retries:

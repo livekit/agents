@@ -309,7 +309,11 @@ class ChunkedStream(ABC):
                     return
 
                 retry_interval = self._conn_options._interval_for_retry(i)
-                if self._conn_options.max_retry == 0 or self._conn_options.max_retry == i:
+                if (
+                    self._conn_options.max_retry == 0
+                    or self._conn_options.max_retry == i
+                    or not e.retryable
+                ):
                     self._emit_error(e, recoverable=False)
                     raise
                 else:
