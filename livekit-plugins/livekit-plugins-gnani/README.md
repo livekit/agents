@@ -65,7 +65,7 @@ tts = TTS(voice="Karan")
 
 - **Chunked synthesis** — REST API for single-request audio generation
 - **Real-time streaming** — WebSocket API for low-latency streaming synthesis
-- **250+ voices** — v3 capitalized voices (Karan, Simran, Riya, etc.) + legacy v2 lowercase voices
+- **6 voices** — Karan, Simran, Nara, Riya, Viraj, Raju
 - **Configurable output** — sample rate (8000–44100), encoding (linear_pcm, oggopus), container (raw, mp3, wav, mulaw, ogg)
 
 ## Supported Languages
@@ -85,33 +85,14 @@ tts = TTS(voice="Karan")
 
 ## Available Voices
 
-**v3 voices** (default model `vachana-voice-v3`, capitalized):
-
-| Voice   | ID        | Language  |
-|---------|-----------|-----------|
-| Karan   | `Karan`   | Primary   |
-| Simran  | `Simran`  | Primary   |
-| Nara    | `Nara`    | Primary   |
-| Riya    | `Riya`    | Primary   |
-| Viraj   | `Viraj`   | Primary   |
-| Raju    | `Raju`    | Primary   |
-
-Plus 250+ language-specific voices for Assamese, Bengali, Bodo, Dogri, Gujarati, Hindi, Kannada, Kashmiri, Konkani, Maithili, Malayalam, Manipuri, Marathi, Nepali, Odia, Punjabi, Sanskrit, Santhali, Sindhi, Tamil, Telugu, and Urdu.
-
-**Legacy v2 voices** (model `vachana-voice-v2`, lowercase):
-
-| Voice   | ID        |
-|---------|-----------|
-| sia     | `sia`     |
-| raju    | `raju`    |
-| kanika  | `kanika`  |
-| nikita  | `nikita`  |
-| ravan   | `ravan`   |
-| simran  | `simran`  |
-| karan   | `karan`   |
-| neha    | `neha`    |
-
-> **Note:** Casing matters — `"Karan"` uses v3 model, `"karan"` uses v2 model.
+| Voice   | ID        | Gender | Description              |
+|---------|-----------|--------|--------------------------|
+| Karan   | `Karan`   | Male   | Bold, Trustworthy        |
+| Simran  | `Simran`  | Female | Confident, Bright        |
+| Nara    | `Nara`    | Female | Gentle, Expressive       |
+| Riya    | `Riya`    | Female | Cheerful, Energetic      |
+| Viraj   | `Viraj`   | Male   | Commanding, Dynamic      |
+| Raju    | `Raju`    | Male   | Grounded, Conversational |
 
 ## Architecture
 

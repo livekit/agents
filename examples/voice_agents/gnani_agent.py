@@ -84,7 +84,7 @@ async def entrypoint(ctx: JobContext) -> None:
     session: AgentSession = AgentSession(
         stt=gnani.STT(language="en-IN"),
         llm=groq.LLM(model="llama-3.1-8b-instant"),
-        tts=gnani.TTS(voice="sia"),
+        tts=gnani.TTS(voice="Karan"),
         vad=ctx.proc.userdata["vad"],
         turn_handling=TurnHandlingOptions(
             interruption={

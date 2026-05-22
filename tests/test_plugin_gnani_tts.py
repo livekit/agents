@@ -45,17 +45,16 @@ def test_tts_custom_voice():
     """TTS accepts custom voice."""
     from livekit.plugins.gnani import TTS
 
-    tts = TTS(api_key="test-key", voice="raju")
-    assert tts._opts.voice == "raju"
+    tts = TTS(api_key="test-key", voice="Raju")
+    assert tts._opts.voice == "Raju"
 
 
 def test_tts_all_voices_accepted():
-    """TTS accepts all documented voices (both v2 legacy and v3)."""
+    """TTS accepts all documented voices."""
     from livekit.plugins.gnani import TTS
 
-    v2_voices = ["sia", "raju", "kanika", "nikita", "ravan", "simran", "karan", "neha"]
-    v3_voices = ["Karan", "Simran", "Nara", "Riya", "Viraj", "Raju"]
-    for voice in v2_voices + v3_voices:
+    voices = ["Karan", "Simran", "Nara", "Riya", "Viraj", "Raju"]
+    for voice in voices:
         tts = TTS(api_key="test-key", voice=voice)
         assert tts._opts.voice == voice
 
@@ -76,17 +75,8 @@ def test_tts_default_model():
     assert tts._opts.model == "vachana-voice-v3"
 
 
-def test_tts_model_auto_v2():
-    """TTS auto-selects vachana-voice-v2 for legacy lowercase voices."""
-    from livekit.plugins.gnani import TTS
-
-    tts = TTS(api_key="test-key", voice="sia")
-    assert tts._opts.model == "vachana-voice-v2"
-    assert tts.model == "vachana-voice-v2"
-
-
-def test_tts_model_auto_v3():
-    """TTS auto-selects vachana-voice-v3 for capitalized v3 voices."""
+def test_tts_model_v3():
+    """TTS uses vachana-voice-v3 model."""
     from livekit.plugins.gnani import TTS
 
     tts = TTS(api_key="test-key", voice="Simran")
@@ -95,10 +85,10 @@ def test_tts_model_auto_v3():
 
 
 def test_tts_model_explicit_override():
-    """Explicit model parameter overrides auto-detection."""
+    """Explicit model parameter overrides default."""
     from livekit.plugins.gnani import TTS
 
-    tts = TTS(api_key="test-key", voice="sia", model="custom-model")
+    tts = TTS(api_key="test-key", voice="Karan", model="custom-model")
     assert tts._opts.model == "custom-model"
 
 
@@ -179,34 +169,18 @@ def test_tts_update_options_voice():
     """update_options can change voice."""
     from livekit.plugins.gnani import TTS
 
-    tts = TTS(api_key="test-key", voice="sia")
-    tts.update_options(voice="neha")
-    assert tts._opts.voice == "neha"
-
-
-def test_tts_update_options_voice_auto_model():
-    """update_options auto-updates model when switching between v2/v3 voices."""
-    from livekit.plugins.gnani import TTS
-
     tts = TTS(api_key="test-key", voice="Karan")
-    assert tts._opts.model == "vachana-voice-v3"
-
-    tts.update_options(voice="sia")
-    assert tts._opts.voice == "sia"
-    assert tts._opts.model == "vachana-voice-v2"
-
     tts.update_options(voice="Simran")
     assert tts._opts.voice == "Simran"
-    assert tts._opts.model == "vachana-voice-v3"
 
 
-def test_tts_update_options_voice_explicit_model():
+def test_tts_update_options_voice_and_model():
     """update_options with both voice and model uses the explicit model."""
     from livekit.plugins.gnani import TTS
 
     tts = TTS(api_key="test-key", voice="Karan")
-    tts.update_options(voice="sia", model="custom-model")
-    assert tts._opts.voice == "sia"
+    tts.update_options(voice="Riya", model="custom-model")
+    assert tts._opts.voice == "Riya"
     assert tts._opts.model == "custom-model"
 
 
