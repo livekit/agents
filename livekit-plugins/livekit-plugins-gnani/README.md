@@ -46,10 +46,19 @@ stt = STT(language="hi-IN")
 ```python
 from livekit.plugins.gnani import TTS
 
+# REST (default) — single-request batch synthesis
 tts = TTS(voice="Karan")
 
-# Use with a LiveKit voice agent pipeline
+# SSE — streaming via Server-Sent Events (lower latency)
+tts = TTS(voice="Karan", synthesize_method="sse")
+
+# WebSocket — real-time streaming via stream() (lowest latency)
+tts = TTS(voice="Karan", synthesize_method="websocket")
 ```
+
+All three modes work with the standard LiveKit voice agent pipeline.
+The `synthesize_method` controls which endpoint `synthesize()` uses.
+The `stream()` method always uses WebSocket regardless of this setting.
 
 ## Features
 
@@ -63,8 +72,9 @@ tts = TTS(voice="Karan")
 
 ### TTS
 
-- **Chunked synthesis** — REST API for single-request audio generation
-- **Real-time streaming** — WebSocket API for low-latency streaming synthesis
+- **REST synthesis** — single-request batch audio generation (`synthesize_method="rest"`)
+- **SSE streaming** — lower-latency chunked synthesis via Server-Sent Events (`synthesize_method="sse"`)
+- **WebSocket streaming** — lowest-latency real-time synthesis via `stream()` or `synthesize_method="websocket"`
 - **6 voices** — Karan, Simran, Nara, Riya, Viraj, Raju
 - **Configurable output** — sample rate (8000–44100), encoding (linear_pcm, oggopus), container (raw, mp3, wav, mulaw, ogg)
 

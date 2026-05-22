@@ -211,6 +211,38 @@ def test_tts_update_options_language():
     assert tts._opts.language == "hi-IN"
 
 
+def test_tts_default_synthesize_method():
+    """TTS defaults to 'rest' synthesize method."""
+    from livekit.plugins.gnani import TTS
+
+    tts = TTS(api_key="test-key")
+    assert tts._opts.synthesize_method == "rest"
+
+
+def test_tts_sse_synthesize_method():
+    """TTS with synthesize_method='sse' stores the option correctly."""
+    from livekit.plugins.gnani import TTS
+
+    tts = TTS(api_key="test-key", synthesize_method="sse")
+    assert tts._opts.synthesize_method == "sse"
+
+
+def test_tts_rest_synthesize_method():
+    """TTS with synthesize_method='rest' stores the option correctly."""
+    from livekit.plugins.gnani import TTS
+
+    tts = TTS(api_key="test-key", synthesize_method="rest")
+    assert tts._opts.synthesize_method == "rest"
+
+
+def test_tts_websocket_synthesize_method():
+    """TTS with synthesize_method='websocket' stores the option correctly."""
+    from livekit.plugins.gnani import TTS
+
+    tts = TTS(api_key="test-key", synthesize_method="websocket")
+    assert tts._opts.synthesize_method == "websocket"
+
+
 def test_tts_base_url_default():
     """TTS defaults to Vachana API base URL."""
     from livekit.plugins.gnani import TTS
