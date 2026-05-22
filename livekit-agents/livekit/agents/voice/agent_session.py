@@ -452,9 +452,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._closing: bool = False
         self._job_context_cb_registered: bool = False
 
-        # count of active `claim_user_turn` scopes. while > 0,
-        # `wait_for_inactive` is held open and `user_state` is pinned to
-        # "speaking".
+        # count of active `claim_user_turn` scopes. while > 0, `wait_for_inactive`
+        # is held open and `user_state` is pinned to "speaking"
         self._user_turn_claims: int = 0
         self._user_turn_released: asyncio.Event = asyncio.Event()
         self._user_turn_released.set()
