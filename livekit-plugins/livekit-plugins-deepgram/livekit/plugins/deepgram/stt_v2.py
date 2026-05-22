@@ -297,6 +297,7 @@ class SpeechStreamv2(stt.SpeechStream):
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
         self._ws: aiohttp.ClientWebSocketResponse | None = None
+        self._configure_task: asyncio.Task[None] | None = None
 
     def update_options(
         self,
@@ -371,7 +372,6 @@ class SpeechStreamv2(stt.SpeechStream):
         eager_eot_threshold: NotGivenOr[float] = NOT_GIVEN,
         language_hint: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
-        """Send a Configure control message to update settings mid-stream without reconnecting."""
         configure_msg: dict[str, Any] = {"type": "Configure"}
 
         if is_given(keyterm):
@@ -394,14 +394,18 @@ class SpeechStreamv2(stt.SpeechStream):
         if len(configure_msg) <= 1:
             return
 
-        asyncio.ensure_future(self._do_send_configure(json.dumps(configure_msg)))
+        self._configure_task = asyncio.create_task(
+            self._do_send_configure(json.dumps(configure_msg))
+        )
 
     async def _do_send_configure(self, msg_str: str) -> None:
         try:
             if self._ws is not None and not self._ws.closed:
                 await self._ws.send_str(msg_str)
+                return
         except Exception:
-            logger.debug("failed to send Configure message, ws may be closing")
+            logger.debug("failed to send Configure message, falling back to reconnect")
+        self._reconnect_event.set()
 
     async def _run(self) -> None:
         closing_ws = False
@@ -515,6 +519,9 @@ class SpeechStreamv2(stt.SpeechStream):
                     tasks_group.exception()  # retrieve the exception
             finally:
                 self._ws = None
+                if self._configure_task is not None and not self._configure_task.done():
+                    self._configure_task.cancel()
+                    self._configure_task = None
                 if ws is not None:
                     await ws.close()
 
@@ -631,6 +638,13 @@ class SpeechStreamv2(stt.SpeechStream):
 
                 end_event = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                 self._event_ch.send_nowait(end_event)
+
+        elif data["type"] == "ConfigureSuccess":
+            logger.debug("Configure message applied", extra={"data": data})
+
+        elif data["type"] == "ConfigureFailure":
+            logger.warning("Configure message rejected by Deepgram", extra={"data": data})
+            self._reconnect_event.set()
 
         elif data["type"] == "Error":
             logger.warning("deepgram sent an error", extra={"data": data})
