@@ -38,10 +38,6 @@ if TYPE_CHECKING:
 Userdata_T = TypeVar("Userdata_T")
 
 
-UPDATE_TEMPLATE = """The tool `{function_name}` has updated, message: {message}
-The task is still running, so DON'T make up or give information not included in the message above."""
-
-
 class RunContext(Generic[Userdata_T]):
     # private ctor
     def __init__(
@@ -61,9 +57,9 @@ class RunContext(Generic[Userdata_T]):
         self._updates: list[tuple[FunctionCall, FunctionCallOutput]] = []
         self._step_idx: int = 0
 
-        # voice-path wiring; set by the executor when present
+        # set by the executor when present
         self._executor: _ToolExecutor | None = None
-        self._pending_fut: asyncio.Future[Any] | None = None
+        self._first_update_fut: asyncio.Future[Any] | None = None
 
     @property
     def session(self) -> AgentSession[Userdata_T]:
@@ -101,7 +97,7 @@ class RunContext(Generic[Userdata_T]):
         this tool to finish playing."""
         await self.speech_handle._wait_for_generation(step_idx=self._initial_step_idx)
 
-    async def update(self, message: str | Any, *, _template: str = UPDATE_TEMPLATE) -> None:
+    async def update(self, message: str | Any, *, template: str | None = None) -> None:
         """Push a progress update into the conversation.
 
         Each update synthesizes a `(FunctionCall, FunctionCallOutput)` pair appended
@@ -109,9 +105,23 @@ class RunContext(Generic[Userdata_T]):
         LLM and subsequent updates are coalesced into a deferred reply. Outside the
         voice path (e.g. `execute_function_call`), updates are still recorded but
         no reply is fired.
+
+        Args:
+            message: Progress message; if a string, it is wrapped by ``template``
+                before being added to the chat context.
+            template: Per-call ``.format()`` template override. When ``None`` (default),
+                falls back to the executor's resolved ``update`` template, and to
+                the module-level ``UPDATE_TEMPLATE`` if no executor is attached.
         """
         if isinstance(message, str):
-            message = _template.format(
+            if template is None:
+                if self._executor is not None:
+                    template = self._executor._tool_prompts["update"]
+                else:
+                    from .tool_executor import UPDATE_TEMPLATE
+
+                    template = UPDATE_TEMPLATE
+            message = template.format(
                 function_name=self.function_call.name,
                 call_id=self.function_call.call_id,
                 message=message,
@@ -126,16 +136,21 @@ class RunContext(Generic[Userdata_T]):
         if self._executor is None:
             return  # standalone — nothing else to do
 
-        # voice path
-        assert self._pending_fut is not None
-        if not self._pending_fut.done():
-            # first update releases the executor's await on _pending_fut so the
-            # dispatch returns to the LLM with this update as the synthetic output
-            self._pending_fut.set_result(message)
-            self._function_call.extra["__livekit_agents_tool_pending"] = True
+        assert self._first_update_fut is not None
+        if not self._first_update_fut.done():
+            self._first_update_fut.set_result(message)
+            self._function_call.extra["__livekit_agents_tool_non_blocking"] = True
             return
 
         await self._executor._enqueue_reply(self, [pair[0], pair[1]])
+
+    def _attach_executor(
+        self, executor: _ToolExecutor, first_update_fut: asyncio.Future[Any]
+    ) -> None:
+        if self._first_update_fut is not None:
+            raise ValueError("Executor already attached")
+        self._executor = executor
+        self._first_update_fut = first_update_fut
 
     def _make_update_pair(
         self, message: Any, *, call_id_suffix: str = ""

@@ -29,6 +29,7 @@ from ..utils import aio, is_given
 from ..utils.aio import itertools
 from . import io
 from .speech_handle import SpeechHandle
+from .tool_executor import _build_executor_map
 from .transcription.text_transforms import _apply_text_transforms
 
 if TYPE_CHECKING:
@@ -523,7 +524,13 @@ async def _execute_tools_task(
             extra={"speech_id": speech_handle.id},
         )
         return
-    executor = activity._tool_executor
+
+    # map function-name -> executor: AsyncToolset members route to their own
+    # executor so updates/replies stay per-toolset; everything else falls back to
+    # the activity executor.
+    executor_by_name = _build_executor_map(
+        toolsets=tool_ctx.toolsets, default=activity._tool_executor
+    )
 
     tasks: list[asyncio.Task[Any]] = []
     try:
@@ -622,6 +629,7 @@ async def _execute_tools_task(
                     },
                 )
 
+                executor = executor_by_name.get(fnc_call.name, activity._tool_executor)
                 function_callable = functools.partial(
                     executor.execute,
                     tool=function_tool,

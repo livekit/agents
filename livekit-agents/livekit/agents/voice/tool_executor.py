@@ -5,6 +5,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from typing_extensions import TypedDict
+
 from .. import utils
 from ..job import JobContext, get_job_context
 from ..llm.chat_context import ChatContext, ChatItem
@@ -29,6 +31,9 @@ if TYPE_CHECKING:
     from .agent_session import AgentSession
 
 
+UPDATE_TEMPLATE = """The tool `{function_name}` has updated, message: {message}
+The task is still running, so DON'T make up or give information not included in the message above."""
+
 DUPLICATE_REJECT = """Same tool `{function_name}` is already running:
 {running_fnc_calls}
 If you want to cancel the existing one, call `cancel_task` with call_id."""
@@ -50,6 +55,58 @@ Review your most recent assistant messages.
 - If your previous messages already conveyed these results to the user, return an empty response (no text at all).
 - Otherwise, summarize the results naturally with a transition.
 Do NOT repeat information you have already told the user."""
+
+
+class AsyncToolPrompts(TypedDict, total=False):
+    """System-message templates injected around tool dispatch.
+
+    Each field is a ``str.format()`` template; unmentioned keys keep their
+    defaults. Used by tools that opt into ``ctx.update()`` progress messages,
+    ``on_duplicate`` policies, or coalesced reply delivery.
+
+    Resolution order at construction time (each layer is a whole-value override):
+
+    - ``AsyncToolset.async_tool_prompts`` > container's prompts > defaults
+    - Container is ``Agent`` for agent-scoped toolsets, ``AgentSession`` for
+      session-scoped ones.
+    - For tools dispatched through the activity's built-in executor:
+      ``Agent.async_tool_prompts`` > ``AgentSession.async_tool_prompts`` > defaults.
+
+    Placeholders:
+
+    - ``update``: ``{function_name}`` ``{call_id}`` ``{message}``
+    - ``duplicate_reject`` / ``duplicate_confirm``: ``{function_name}`` ``{running_fnc_calls}``
+    - ``reply_at_tail`` / ``reply_maybe_covered``: ``{pending_call_ids}``
+    """
+
+    update: str
+    """Wraps a user-provided ``ctx.update(message)`` string before it lands in chat_ctx."""
+    duplicate_reject: str
+    """Sent to the LLM when ``on_duplicate='reject'`` blocks a duplicate call."""
+    duplicate_confirm: str
+    """Sent to the LLM when ``on_duplicate='confirm'`` requires re-call with confirmation."""
+    reply_at_tail: str
+    """Instruction for the deferred reply when the pending update is the tail of chat_ctx."""
+    reply_maybe_covered: str
+    """Instruction for the deferred reply when newer items came after the pending update."""
+
+
+_ASYNC_TOOL_PROMPTS_DEFAULTS: AsyncToolPrompts = {
+    "update": UPDATE_TEMPLATE,
+    "duplicate_reject": DUPLICATE_REJECT,
+    "duplicate_confirm": DUPLICATE_CONFIRM,
+    "reply_at_tail": REPLY_INSTRUCTIONS_AT_TAIL,
+    "reply_maybe_covered": REPLY_INSTRUCTIONS_MAYBE_COVERED,
+}
+
+
+def _resolve_async_tool_prompts(
+    config: AsyncToolPrompts | None = None,
+) -> AsyncToolPrompts:
+    """Return a fully-populated ``AsyncToolPrompts`` with defaults filled in for absent keys."""
+    if config is None:
+        return AsyncToolPrompts(**_ASYNC_TOOL_PROMPTS_DEFAULTS)
+    return AsyncToolPrompts(**{**_ASYNC_TOOL_PROMPTS_DEFAULTS, **config})
 
 
 # Module-level registry of running tool calls, keyed by (JobContext | None, call_id).
@@ -129,6 +186,7 @@ class _ToolExecutor:
         self,
         *,
         owning_activity: AgentActivity | None = None,
+        async_tool_prompts: AsyncToolPrompts | None = None,
     ) -> None:
         self._running_tasks: dict[str, _RunningTask] = {}
 
@@ -141,8 +199,14 @@ class _ToolExecutor:
         # activity is current at reply time (session-scoped).
         self._owning_activity: AgentActivity | None = owning_activity
 
+        self._tool_prompts: AsyncToolPrompts = _resolve_async_tool_prompts(async_tool_prompts)
+
     def set_owning_activity(self, activity: AgentActivity | None) -> None:
         self._owning_activity = activity
+
+    def set_tool_prompts(self, prompts: AsyncToolPrompts) -> None:
+        """Replace the resolved prompt templates. Caller is responsible for resolution."""
+        self._tool_prompts = prompts
 
     @property
     def has_running_tasks(self) -> bool:
@@ -192,8 +256,8 @@ class _ToolExecutor:
             raise ValueError(f"Task already running for call_id: {call_id}")
 
         # attach the executor + pending future so RunContext.update() can talk back
-        run_ctx._executor = self
-        run_ctx._pending_fut = asyncio.Future[Any]()
+        first_update_fut = asyncio.Future[Any]()
+        run_ctx._attach_executor(self, first_update_fut)
 
         async def _execute_tool() -> Any:
             try:
@@ -208,9 +272,8 @@ class _ToolExecutor:
                     output = await tool(*fnc_args, **fnc_kwargs)
             except asyncio.CancelledError:
                 logger.debug("tool cancelled", extra={"call_id": call_id, "function": fnc_name})
-                assert run_ctx._pending_fut is not None
-                if not run_ctx._pending_fut.done():
-                    run_ctx._pending_fut.set_result(None)
+                if not first_update_fut.done():
+                    first_update_fut.set_result(None)
                 return
             except Exception as e:
                 output = e
@@ -219,13 +282,12 @@ class _ToolExecutor:
                     extra={"call_id": call_id, "function": fnc_name},
                 )
 
-            assert run_ctx._pending_fut is not None
-            if not run_ctx._pending_fut.done():
+            if not first_update_fut.done():
                 # tool returned before any update() — pass result back to dispatch
                 if isinstance(output, BaseException):
-                    run_ctx._pending_fut.set_exception(output)
+                    first_update_fut.set_exception(output)
                 else:
-                    run_ctx._pending_fut.set_result(output)
+                    first_update_fut.set_result(output)
                 return
 
             if output is None:
@@ -259,7 +321,7 @@ class _ToolExecutor:
 
         exe_task.add_done_callback(_on_done)
 
-        return await run_ctx._pending_fut
+        return await first_update_fut
 
     async def cancel(self, call_id: str) -> bool:
         task = self._running_tasks.get(call_id)
@@ -383,7 +445,11 @@ class _ToolExecutor:
         # has been said since — summarize directly, otherwise an item was
         # appended after update, tell the LLM to skip if agent already talked about it
         at_tail = (items := target_agent.chat_ctx.items) and items[-1].id == pending_items[-1].id
-        template = REPLY_INSTRUCTIONS_AT_TAIL if at_tail else REPLY_INSTRUCTIONS_MAYBE_COVERED
+        template = (
+            self._tool_prompts["reply_at_tail"]
+            if at_tail
+            else self._tool_prompts["reply_maybe_covered"]
+        )
 
         pending_call_ids = [
             item.call_id for item in pending_items if item.type == "function_call_output"
@@ -424,7 +490,7 @@ class _ToolExecutor:
             return None
 
         if on_duplicate == "reject":
-            return DUPLICATE_REJECT.format(
+            return self._tool_prompts["duplicate_reject"].format(
                 function_name=fnc_name,
                 running_fnc_calls="\n".join(
                     [fnc_call.model_dump_json() for fnc_call in running_fnc_calls]
@@ -432,7 +498,7 @@ class _ToolExecutor:
             )
 
         if on_duplicate == "confirm" and not confirm_duplicate:
-            return DUPLICATE_CONFIRM.format(
+            return self._tool_prompts["duplicate_confirm"].format(
                 function_name=fnc_name,
                 running_fnc_calls="\n".join(
                     [fnc_call.model_dump_json() for fnc_call in running_fnc_calls]
@@ -440,3 +506,32 @@ class _ToolExecutor:
             )
 
         return None
+
+
+def _build_executor_map(
+    *,
+    toolsets: Sequence[Toolset],
+    default: _ToolExecutor,
+) -> dict[str, _ToolExecutor]:
+    """Build a function-name → executor mapping for dispatch routing.
+
+    Tools belonging (directly or nested) to an ``AsyncToolset`` route to that
+    toolset's own executor so background updates and replies are coalesced per
+    toolset. All other tools fall back to ``default`` (the activity executor).
+    """
+    from ..llm.async_toolset import AsyncToolset
+
+    mapping: dict[str, _ToolExecutor] = {}
+
+    def walk(ts: Toolset, current: _ToolExecutor) -> None:
+        if isinstance(ts, AsyncToolset):
+            current = ts._executor
+        for child in ts.tools:
+            if isinstance(child, (FunctionTool, RawFunctionTool)):
+                mapping[child.info.name] = current
+            elif isinstance(child, Toolset):
+                walk(child, current)
+
+    for ts in toolsets:
+        walk(ts, default)
+    return mapping

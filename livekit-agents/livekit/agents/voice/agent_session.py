@@ -61,6 +61,7 @@ from .recorder_io import RecorderIO
 from .remote_session import RoomSessionTransport, SessionHost
 from .run_result import RunResult
 from .speech_handle import InputDetails, SpeechHandle
+from .tool_executor import AsyncToolPrompts, _resolve_async_tool_prompts
 from .turn import (
     EndpointingOptions,
     InterruptionOptions,
@@ -225,6 +226,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
         # Tool settings
         tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
+        async_tool_prompts: NotGivenOr[AsyncToolPrompts] = NOT_GIVEN,
         max_tool_steps: int = 3,
         # TTS settings
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
@@ -271,6 +273,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             tts (tts.TTS | str, optional): Text-to-speech engine.
             tools (list[llm.FunctionTool | llm.RawFunctionTool], optional): List of
                 tools shared by every agent in the agent session.
+            async_tool_prompts (AsyncToolPrompts, optional): System-message templates
+                injected around tool dispatch (progress updates, duplicate handling,
+                coalesced replies). Unspecified keys keep their defaults. May be
+                overridden per-agent on ``Agent(async_tool_prompts=...)`` or per-toolset
+                on ``AsyncToolset(async_tool_prompts=...)``.
             mcp_servers (list[mcp.MCPServer], optional): List of MCP servers
                 providing external tools for the agent to use.
             userdata (Userdata_T, optional): Arbitrary per-session user data.
@@ -408,6 +415,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 "and will be removed in a future version. Use `MCPToolset` instead."
             )
         self._tools = tools if is_given(tools) else []
+        self._async_tool_prompts = _resolve_async_tool_prompts(async_tool_prompts or None)
 
         # unrecoverable error counts, reset after agent speaking
         self._llm_error_counts = 0

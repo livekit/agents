@@ -189,9 +189,16 @@ class AgentActivity(RecognitionHooks):
         # activity-scoped tool executor. Every tool dispatched in this activity runs
         # through this executor. On drain it cancels cancellable tools and waits for
         # the rest; reply delivery is scoped to this activity's agent.
-        from .tool_executor import _ToolExecutor
+        from .tool_executor import _resolve_async_tool_prompts, _ToolExecutor
 
-        self._tool_executor = _ToolExecutor(owning_activity=self)
+        # whole-value override: agent > session > defaults
+        if is_given(self._agent._async_tool_prompts):
+            activity_prompts = _resolve_async_tool_prompts(self._agent._async_tool_prompts)
+        else:
+            activity_prompts = self._session._async_tool_prompts
+        self._tool_executor = _ToolExecutor(
+            owning_activity=self, async_tool_prompts=activity_prompts
+        )
 
         self._user_turn_exceeded_atask: asyncio.Task[None] | None = None
         self._user_turn_exceeded_locked: bool = False
@@ -603,6 +610,10 @@ class AgentActivity(RecognitionHooks):
                     if isinstance(self.tts, tts.TTS):
                         self.tts.prewarm()
 
+                # one-shot setup (not called on resume) so toolsets and MCP
+                # connections persist across pause/resume.
+                await self._setup_toolsets()
+
                 # don't use start_span for _start_session, avoid nested user/assistant turns
                 await self._start_session(reuse_resources=reuse_resources)
                 self._started = True
@@ -693,6 +704,50 @@ class AgentActivity(RecognitionHooks):
 
         return resources
 
+    async def _setup_toolsets(self) -> None:
+        """Initialize all toolsets attached to the session or agent.
+
+        Recurses into nested toolsets, attaches each ``AsyncToolset`` to the
+        right scope (session vs agent), and calls every toolset's ``setup()``.
+        """
+        from ..llm.async_toolset import AsyncToolset
+
+        assert self._lock.locked(), "_setup_toolsets must run under the activity lock."
+
+        if self.mcp_servers:
+            from ..llm.mcp import MCPToolset
+
+            self._mcp_tools = [
+                MCPToolset(id=utils.shortuuid("mcp_toolset_"), mcp_server=server)
+                for server in self.mcp_servers
+            ]
+
+        session_toolsets = [t for t in self._session.tools if isinstance(t, llm.Toolset)]
+        agent_toolsets = [t for t in self._agent.tools if isinstance(t, llm.Toolset)]
+        mcp_toolsets: list[llm.Toolset] = list(self._mcp_tools)
+
+        all_toolsets = session_toolsets + agent_toolsets + mcp_toolsets
+        if not all_toolsets:
+            return
+
+        # attach activity to agent-scoped toolsets, resolve nested toolsets
+        for ts in llm.ToolContext(session_toolsets).toolsets:
+            if isinstance(ts, AsyncToolset):
+                ts._attach_activity(activity=None, session=self._session)
+        for ts in llm.ToolContext(agent_toolsets).toolsets:
+            if isinstance(ts, AsyncToolset):
+                ts._attach_activity(activity=self, session=self._session)
+
+        # setup all toolsets
+        @utils.log_exceptions(logger=logger)
+        async def _do_setup(toolset: llm.Toolset) -> None:
+            await toolset.setup()
+
+        await asyncio.gather(
+            *(_do_setup(ts) for ts in all_toolsets),
+            return_exceptions=True,
+        )
+
     async def _start_session(self, *, reuse_resources: _ReusableResources | None = None) -> None:
         assert self._lock.locked(), "_start_session should only be used when locked."
 
@@ -715,26 +770,6 @@ class AgentActivity(RecognitionHooks):
             self._interruption_detector.on("metrics_collected", self._on_metrics_collected)
             self._interruption_detector.on("error", self._on_error)
             self._interruption_detector.on("overlapping_speech", self._on_overlap_speech_ended)
-
-        if self.mcp_servers:
-            from ..llm.mcp import MCPToolset
-
-            self._mcp_tools = [
-                MCPToolset(id=utils.shortuuid("mcp_toolset_"), mcp_server=server)
-                for server in self.mcp_servers
-            ]
-
-        toolsets = [tool for tool in self.tools if isinstance(tool, llm.Toolset)]
-        if toolsets:
-
-            @utils.log_exceptions(logger=logger)
-            async def _setup_toolset(toolset: llm.Toolset) -> None:
-                await toolset.setup()
-
-            await asyncio.gather(
-                *(_setup_toolset(toolset) for toolset in toolsets),
-                return_exceptions=True,
-            )
 
         if isinstance(self.llm, llm.RealtimeModel):
             rt_reused = reuse_resources is not None and reuse_resources.rt_session is not None
@@ -995,16 +1030,6 @@ class AgentActivity(RecognitionHooks):
         if self._audio_recognition is not None:
             await self._audio_recognition.aclose()
 
-        # close the toolsets created internally and the ones from the agent
-        # leave the ones from the session open, they will be closed by the session
-        toolsets = self._mcp_tools + [
-            tool for tool in self._agent.tools if isinstance(tool, llm.Toolset)
-        ]
-        if toolsets:
-            await asyncio.gather(
-                *(toolset.aclose() for toolset in toolsets), return_exceptions=True
-            )
-
         await self._cancel_speech_pause(
             old_task=self._cancel_speech_pause_task,
             interrupt=False,  # don't interrupt the paused speech, it's managed by _pause_scheduling_task
@@ -1033,8 +1058,18 @@ class AgentActivity(RecognitionHooks):
             if self._scheduling_atask is not None:
                 await utils.aio.cancel_and_wait(self._scheduling_atask)
 
-            # close the executor — anything still running (non-cancellable that survived
-            # drain, or session-scoped delivery tasks) gets cancelled here.
+            # toolsets + their executors outlive pause; tear them down only on
+            # terminal close. session-scoped toolsets are closed by the session.
+            toolsets = self._mcp_tools + [
+                tool for tool in self._agent.tools if isinstance(tool, llm.Toolset)
+            ]
+            if toolsets:
+                await asyncio.gather(
+                    *(toolset.aclose() for toolset in toolsets), return_exceptions=True
+                )
+
+            # close the activity executor — anything still running (non-cancellable
+            # that survived drain) gets cancelled here.
             await self._tool_executor.aclose()
 
             self._agent._activity = None

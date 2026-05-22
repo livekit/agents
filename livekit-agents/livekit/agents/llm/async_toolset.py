@@ -4,11 +4,14 @@ import warnings
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Literal
 
+from ..utils.misc import is_given
 from ..voice.events import RunContext as AsyncRunContext
+from ..voice.tool_executor import AsyncToolPrompts, _resolve_async_tool_prompts, _ToolExecutor
 from .tool_context import Tool, Toolset
 
 if TYPE_CHECKING:
-    from ..voice.tool_executor import _ToolExecutor
+    from ..voice.agent_activity import AgentActivity
+    from ..voice.agent_session import AgentSession
 
 # Backwards-compatible alias. Tools that type their context as ``AsyncRunContext``
 # keep working unchanged — the unified ``RunContext`` carries the same surface.
@@ -44,9 +47,12 @@ class AsyncToolset(Toolset):
         *,
         id: str,
         tools: Sequence[Tool] | None = None,
+        async_tool_prompts: AsyncToolPrompts | None = None,
         on_duplicate_call: DuplicateMode | None = None,
     ) -> None:
         super().__init__(id=id, tools=tools)
+
+        # TODO: make this still work but with a warning
         if on_duplicate_call is not None:
             warnings.warn(
                 "AsyncToolset(on_duplicate_call=...) is deprecated; set on_duplicate "
@@ -55,11 +61,27 @@ class AsyncToolset(Toolset):
                 stacklevel=2,
             )
 
-        # session-scoped executor — owning_activity is None so reply targeting
-        # follows the session's current agent at delivery time.
-        from ..voice.tool_executor import _ToolExecutor
+        self._tool_prompts_override: AsyncToolPrompts | None = async_tool_prompts
+        self._executor = _ToolExecutor(owning_activity=None)
 
-        self._executor: _ToolExecutor = _ToolExecutor(owning_activity=None)
+    def _attach_activity(self, *, activity: AgentActivity | None, session: AgentSession) -> None:
+        """Attach this toolset to an activity scope.
+
+        When ``activity`` is ``None`` the toolset is session-scoped: tool
+        replies survive agent handoff and are delivered to whichever agent
+        is current. Otherwise the toolset is agent-scoped and replies are
+        delivered to that activity's agent.
+        """
+
+        self._executor.set_owning_activity(activity)
+
+        if self._tool_prompts_override is not None:
+            resolved = _resolve_async_tool_prompts(self._tool_prompts_override)
+        elif activity is not None and is_given(activity._agent._async_tool_prompts):
+            resolved = _resolve_async_tool_prompts(activity._agent._async_tool_prompts)
+        else:
+            resolved = session._async_tool_prompts
+        self._executor.set_tool_prompts(resolved)
 
     async def aclose(self) -> None:
         await super().aclose()
