@@ -57,8 +57,9 @@ tts = TTS(voice="Karan", synthesize_method="websocket")
 ```
 
 All three modes work with the standard LiveKit voice agent pipeline.
-The `synthesize_method` controls which endpoint `synthesize()` uses.
-The `stream()` method always uses WebSocket regardless of this setting.
+The `synthesize_method` controls which transport `synthesize()` uses
+(REST, SSE, or WebSocket). The `stream()` method always uses WebSocket
+regardless of this setting.
 
 ## Features
 
@@ -74,7 +75,7 @@ The `stream()` method always uses WebSocket regardless of this setting.
 
 - **REST synthesis** — single-request batch audio generation (`synthesize_method="rest"`)
 - **SSE streaming** — lower-latency chunked synthesis via Server-Sent Events (`synthesize_method="sse"`)
-- **WebSocket streaming** — lowest-latency real-time synthesis via `stream()` or `synthesize_method="websocket"`
+- **WebSocket synthesis** — lowest-latency synthesis via `synthesize_method="websocket"` or the `stream()` method
 - **6 voices** — Karan, Simran, Nara, Riya, Viraj, Raju
 - **Configurable output** — sample rate (8000–44100), encoding (linear_pcm, oggopus), container (raw, mp3, wav, mulaw, ogg)
 

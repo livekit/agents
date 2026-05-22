@@ -243,6 +243,57 @@ def test_tts_websocket_synthesize_method():
     assert tts._opts.synthesize_method == "websocket"
 
 
+def test_synthesize_routes_rest_by_default():
+    """synthesize() returns RESTChunkedStream when method is 'rest'."""
+    from unittest.mock import MagicMock, patch
+
+    from livekit.plugins.gnani import TTS
+    from livekit.plugins.gnani.tts import RESTChunkedStream
+
+    def _fake_create_task(coro, *args, **kwargs):
+        coro.close()
+        return MagicMock()
+
+    tts = TTS(api_key="test-key", synthesize_method="rest")
+    with patch("livekit.agents.tts.tts.asyncio.create_task", side_effect=_fake_create_task):
+        stream = tts.synthesize("hello")
+    assert isinstance(stream, RESTChunkedStream)
+
+
+def test_synthesize_routes_sse():
+    """synthesize() returns SSEChunkedStream when method is 'sse'."""
+    from unittest.mock import MagicMock, patch
+
+    from livekit.plugins.gnani import TTS
+    from livekit.plugins.gnani.tts import SSEChunkedStream
+
+    def _fake_create_task(coro, *args, **kwargs):
+        coro.close()
+        return MagicMock()
+
+    tts = TTS(api_key="test-key", synthesize_method="sse")
+    with patch("livekit.agents.tts.tts.asyncio.create_task", side_effect=_fake_create_task):
+        stream = tts.synthesize("hello")
+    assert isinstance(stream, SSEChunkedStream)
+
+
+def test_synthesize_routes_websocket():
+    """synthesize() returns WebSocketChunkedStream when method is 'websocket'."""
+    from unittest.mock import MagicMock, patch
+
+    from livekit.plugins.gnani import TTS
+    from livekit.plugins.gnani.tts import WebSocketChunkedStream
+
+    def _fake_create_task(coro, *args, **kwargs):
+        coro.close()
+        return MagicMock()
+
+    tts = TTS(api_key="test-key", synthesize_method="websocket")
+    with patch("livekit.agents.tts.tts.asyncio.create_task", side_effect=_fake_create_task):
+        stream = tts.synthesize("hello")
+    assert isinstance(stream, WebSocketChunkedStream)
+
+
 def test_tts_base_url_default():
     """TTS defaults to Vachana API base URL."""
     from livekit.plugins.gnani import TTS

@@ -1,10 +1,13 @@
 """Text-to-Speech implementation for Gnani Vachana
 
 This module provides a TTS implementation that uses the Gnani Vachana API,
-supporting three synthesis modes:
-  - REST (ChunkedStream) — single-request batch synthesis
-  - SSE  (SSEChunkedStream) — streaming via Server-Sent Events
-  - WebSocket (SynthesizeStream) — lowest-latency realtime streaming
+supporting three synthesis modes via ``synthesize()``:
+  - REST  (RESTChunkedStream) — single-request batch synthesis
+  - SSE   (SSEChunkedStream)  — streaming via Server-Sent Events
+  - WebSocket (WebSocketChunkedStream) — lowest-latency via WebSocket
+
+Additionally, ``stream()`` uses WebSocket (SynthesizeStream) for real-time
+token-by-token streaming input.
 """
 
 from __future__ import annotations
@@ -155,6 +158,8 @@ class TTS(tts.TTS):
     ) -> tts.ChunkedStream:
         if self._opts.synthesize_method == "sse":
             return SSEChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        if self._opts.synthesize_method == "websocket":
+            return WebSocketChunkedStream(tts=self, input_text=text, conn_options=conn_options)
         return RESTChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
     def stream(
@@ -369,7 +374,101 @@ class SSEChunkedStream(tts.ChunkedStream):
 
 
 # ---------------------------------------------------------------------------
-# WebSocket SynthesizeStream
+# WebSocket ChunkedStream (for synthesize_method="websocket")
+# ---------------------------------------------------------------------------
+
+
+class WebSocketChunkedStream(tts.ChunkedStream):
+    """WebSocket-based chunked TTS — wss://api.vachana.ai/api/v1/tts.
+
+    Wraps the WebSocket endpoint into the ChunkedStream interface so that
+    ``synthesize()`` can use it when ``synthesize_method="websocket"``.
+    Each received chunk's WAV header is stripped; only raw PCM is emitted.
+    """
+
+    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+        super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
+        self._tts: TTS = tts
+        self._opts = replace(tts._opts)
+
+    def _build_ws_url(self) -> str:
+        base = self._opts.base_url
+        if base.startswith("https://"):
+            ws_base = "wss://" + base[len("https://") :]
+        elif base.startswith("http://"):
+            ws_base = "ws://" + base[len("http://") :]
+        else:
+            ws_base = "wss://" + base
+        return f"{ws_base}/api/v1/tts"
+
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        import websockets
+
+        try:
+            ws_url = self._build_ws_url()
+            async with websockets.connect(
+                ws_url,
+                additional_headers=_build_headers(self._opts),
+                ping_interval=20,
+                ping_timeout=20,
+                close_timeout=10,
+            ) as ws:
+                request_body = _build_payload(self._opts, self._input_text)
+                request_body["language"] = self._opts.language
+                await ws.send(json.dumps(request_body))
+
+                output_emitter.initialize(
+                    request_id=utils.shortuuid(),
+                    sample_rate=self._tts.sample_rate,
+                    num_channels=self._tts.num_channels,
+                    mime_type="audio/pcm",
+                )
+
+                async for msg in ws:
+                    if isinstance(msg, bytes):
+                        output_emitter.push(_strip_wav_header(msg))
+                        continue
+
+                    payload = json.loads(msg)
+                    msg_type = payload.get("type", "")
+
+                    if msg_type == "audio":
+                        inner = payload.get("data", {})
+                        audio_b64 = inner.get("audio", "")
+                        if audio_b64:
+                            output_emitter.push(_strip_wav_header(base64.b64decode(audio_b64)))
+
+                    elif msg_type == "complete":
+                        inner = payload.get("data")
+                        if inner is not None:
+                            audio_b64 = inner.get("audio", "")
+                            if audio_b64:
+                                output_emitter.push(_strip_wav_header(base64.b64decode(audio_b64)))
+                        break
+
+                    elif msg_type == "error":
+                        error_msg = payload.get("message", "Unknown error")
+                        logger.error("Gnani TTS WS error: %s", error_msg)
+                        raise APIStatusError(
+                            message=f"Gnani TTS stream error: {error_msg}",
+                            status_code=500,
+                            body=error_msg,
+                        )
+
+                output_emitter.flush()
+
+        except websockets.exceptions.ConnectionClosed as e:
+            raise APIConnectionError(f"Gnani TTS WebSocket closed: {e}") from e
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError("Gnani TTS WebSocket timed out") from e
+        except (APIStatusError, APIConnectionError, APITimeoutError):
+            raise
+        except Exception as e:
+            raise APIConnectionError(f"Gnani TTS WebSocket error: {e}") from e
+
+
+# ---------------------------------------------------------------------------
+# WebSocket SynthesizeStream (for stream())
 # ---------------------------------------------------------------------------
 
 
