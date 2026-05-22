@@ -38,10 +38,17 @@ DUPLICATE_CONFIRM = """Same tool `{function_name}` is already running:
 Re-call with confirm duplicate True to run a duplicate if needed,
 or if you want to cancel the existing one, call `cancel_task` with call_id."""
 
-REPLY_INSTRUCTIONS = """New results arrived from background tool calls (call_ids: {pending_call_ids}).
+# used when the pending update is the most recent item in chat_ctx — the agent
+# can't have already talked about it.
+REPLY_INSTRUCTIONS_AT_TAIL = """New results arrived from background tool calls (call_ids: {pending_call_ids}).
+Summarize the results naturally. Do NOT repeat information you have already told the user."""
+
+# used when newer items have been appended after the pending update — the agent
+# may have already verbalized the result in its most recent turn.
+REPLY_INSTRUCTIONS_MAYBE_COVERED = """New results arrived from background tool calls (call_ids: {pending_call_ids}).
 Review your most recent assistant messages.
 - If your previous messages already conveyed these results to the user, return an empty response (no text at all).
-- Otherwise, summarize the results naturally with a transition like "by the way, ...".
+- Otherwise, summarize the results naturally with a transition.
 Do NOT repeat information you have already told the user."""
 
 
@@ -170,9 +177,6 @@ class _ToolExecutor:
         confirm_duplicate: bool | None = None
         if on_duplicate == "confirm":
             confirm_duplicate = bool(raw_arguments.pop(CONFIRM_DUPLICATE_PARAM, False))
-        else:
-            # tolerate stray param if a provider echoed it back
-            raw_arguments.pop(CONFIRM_DUPLICATE_PARAM, None)
 
         duplicate_result = await self._check_duplicate(
             fnc_name, on_duplicate=on_duplicate, confirm_duplicate=confirm_duplicate
@@ -224,12 +228,12 @@ class _ToolExecutor:
                     run_ctx._pending_fut.set_result(output)
                 return
 
-            # update() was called earlier; the final return value needs to land
-            # via the coalescer as a separate synthetic output.
             if output is None:
                 return
 
-            pair = run_ctx._make_update_pair(output)
+            # update() was called earlier; the final return value needs to land
+            # via the coalescer as a separate synthetic output
+            pair = run_ctx._make_update_pair(output, call_id_suffix="_final")
             run_ctx._updates.append(pair)
             await self._enqueue_reply(run_ctx, [pair[0], pair[1]])
 
@@ -375,11 +379,17 @@ class _ToolExecutor:
             chat_ctx = target_agent.chat_ctx.copy()
             chat_ctx.insert(items_to_insert)
 
+        # if the pending update is still the tail of chat_ctx, nothing new
+        # has been said since — summarize directly, otherwise an item was
+        # appended after update, tell the LLM to skip if agent already talked about it
+        at_tail = (items := target_agent.chat_ctx.items) and items[-1].id == pending_items[-1].id
+        template = REPLY_INSTRUCTIONS_AT_TAIL if at_tail else REPLY_INSTRUCTIONS_MAYBE_COVERED
+
         pending_call_ids = [
             item.call_id for item in pending_items if item.type == "function_call_output"
         ]
         session.generate_reply(
-            instructions=REPLY_INSTRUCTIONS.format(pending_call_ids=pending_call_ids),
+            instructions=template.format(pending_call_ids=pending_call_ids),
             tool_choice="none",
             chat_ctx=chat_ctx,
         )

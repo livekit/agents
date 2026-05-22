@@ -18,7 +18,19 @@ from livekit.plugins import silero
 
 logger = logging.getLogger("async-travel-helper")
 
-_annoying_loggers = ["h2", "rustls", "hyper_util", "cookie_store", "primp"]
+_annoying_loggers = [
+    "h2",
+    "rustls",
+    "hyper_util",
+    "cookie_store",
+    "primp",
+    "hpack",
+    "hickory_net",
+    "hickory_dns",
+    "hickory_resolver",
+    "hickory_proto",
+    "reqwest",
+]
 for name in _annoying_loggers:
     logging.getLogger(name).setLevel(logging.WARNING)
 
@@ -35,7 +47,7 @@ class TravelToolset(AsyncToolset):
 
     # -- Tool 1: Mock flight booking (takes ~2 minutes with progress updates) --
 
-    @llm.function_tool
+    @llm.function_tool(allow_cancellation=True, on_duplicate="confirm")
     async def book_flight(
         self, ctx: AsyncRunContext, origin: str, destination: str, date: str
     ) -> str:
@@ -87,7 +99,7 @@ class TravelToolset(AsyncToolset):
 
     # -- Tool 2: Tour guide via web search --
 
-    @llm.function_tool
+    @llm.function_tool(allow_cancellation=True, on_duplicate="confirm")
     async def tour_guide(self, ctx: AsyncRunContext, destination: str, interests: str) -> str:
         """Called when user wants to know about a destination, including
         sightseeing spots, restaurants, local food, nightlife, or neighborhood tips.

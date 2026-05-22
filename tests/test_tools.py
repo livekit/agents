@@ -691,3 +691,74 @@ class TestAsyncToolsetDedup:
         names = [t.id for t in ctx.flatten() if hasattr(t, "id")]
         assert "mock_tool_1" in names
         assert "mock_tool_2" in names
+
+
+class TestConfirmDuplicateSchema:
+    """Schema injection for @function_tool(on_duplicate='confirm')."""
+
+    @staticmethod
+    @function_tool(on_duplicate="confirm")
+    async def _confirm_tool(origin: str, destination: str) -> dict[str, str]:
+        """Book a flight.
+
+        Args:
+            origin: where to fly from
+            destination: where to fly to
+        """
+        return {"origin": origin, "destination": destination}
+
+    @staticmethod
+    @function_tool(
+        raw_schema={
+            "name": "raw_confirm_tool",
+            "description": "raw tool",
+            "parameters": {
+                "type": "object",
+                "properties": {"gate_id": {"type": "string"}},
+                "required": ["gate_id"],
+            },
+        },
+        on_duplicate="confirm",
+    )
+    async def _raw_confirm_tool(raw_arguments: dict[str, Any]) -> dict[str, Any]:
+        return raw_arguments
+
+    def test_legacy_schema_has_confirm_param(self):
+        params = build_legacy_openai_schema(self._confirm_tool)["function"]["parameters"]
+        assert "lk_agents_confirm_duplicate" in params["properties"]
+        # legacy: not in required, has a default
+        assert "lk_agents_confirm_duplicate" not in params.get("required", [])
+        assert params["properties"]["lk_agents_confirm_duplicate"]["default"] is False
+
+    def test_strict_schema_has_confirm_param(self):
+        params = build_strict_openai_schema(self._confirm_tool)["function"]["parameters"]
+        assert "lk_agents_confirm_duplicate" in params["properties"]
+        # strict: in required, nullable type for optionality
+        assert "lk_agents_confirm_duplicate" in params["required"]
+        prop_type = params["properties"]["lk_agents_confirm_duplicate"]["type"]
+        assert "null" in prop_type and "boolean" in prop_type
+
+    def test_raw_schema_has_confirm_param(self):
+        params = self._raw_confirm_tool.info.raw_schema["parameters"]
+        assert "lk_agents_confirm_duplicate" in params["properties"]
+        assert "lk_agents_confirm_duplicate" in params["required"]
+        prop_type = params["properties"]["lk_agents_confirm_duplicate"]["type"]
+        assert "null" in prop_type and "boolean" in prop_type
+
+    def test_plain_tool_has_no_confirm_param(self):
+        params = build_strict_openai_schema(mock_tool_1)["function"]["parameters"]
+        assert "lk_agents_confirm_duplicate" not in params.get("properties", {})
+
+    @pytest.mark.asyncio
+    async def test_direct_call_with_typed_args(self):
+        # Wrapper preserves direct invocation with the original signature.
+        result = await self._confirm_tool(origin="NYC", destination="Tokyo")
+        assert result == {"origin": "NYC", "destination": "Tokyo"}
+
+    @pytest.mark.asyncio
+    async def test_wrapper_drops_confirm_kwarg(self):
+        # The wrapper pops lk_agents_confirm_duplicate before calling the user fn.
+        result = await self._confirm_tool(
+            origin="NYC", destination="Tokyo", lk_agents_confirm_duplicate=True
+        )
+        assert result == {"origin": "NYC", "destination": "Tokyo"}
