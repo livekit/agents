@@ -372,6 +372,7 @@ class SpeechStreamv2(stt.SpeechStream):
         eager_eot_threshold: NotGivenOr[float] = NOT_GIVEN,
         language_hint: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
+        """Send a Configure control message to update settings mid-stream without reconnecting."""
         configure_msg: dict[str, Any] = {"type": "Configure"}
 
         if is_given(keyterm):
