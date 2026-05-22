@@ -135,7 +135,6 @@ EventTypes = Literal[
     "input_speech_stopped",  # serverside VAD
     "input_audio_transcription_completed",
     "generation_created",
-    "session_disconnected",
     "session_reconnected",
     "metrics_collected",
     "remote_item_added",

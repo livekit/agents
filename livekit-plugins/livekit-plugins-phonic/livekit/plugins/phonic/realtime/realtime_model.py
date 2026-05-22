@@ -685,7 +685,16 @@ class RealtimeSession(llm.RealtimeSession):
                 elif msg_type == "assistant_ended_conversation":
                     logger.info(f"Phonic Conversation {self._conversation_id} ended by assistant")
                     self._session_should_close.set()
-                    self.emit("session_disconnected")
+                    from livekit.agents.job import get_job_context
+
+                    job_ctx = get_job_context(required=False)
+                    if job_ctx:
+
+                        async def _delete_room() -> None:
+                            await job_ctx.delete_room()
+
+                        job_ctx.add_shutdown_callback(_delete_room)
+                        job_ctx.shutdown()
                     break
                 elif msg_type == "conversation_created":
                     self._conversation_id = message.conversation_id

@@ -660,7 +660,6 @@ class AgentActivity(RecognitionHooks):
                     self._rt_session.off("metrics_collected", self._on_metrics_collected)
                     self._rt_session.off("remote_item_added", self._on_remote_item_added)
                     self._rt_session.off("error", self._on_error)
-                    self._rt_session.off("session_disconnected", self._on_session_disconnected)
                     resources.rt_session = self._rt_session
                     self._rt_session = None  # prevent _close_session from closing it
 
@@ -738,7 +737,6 @@ class AgentActivity(RecognitionHooks):
             self._rt_session.on("metrics_collected", self._on_metrics_collected)
             self._rt_session.on("remote_item_added", self._on_remote_item_added)
             self._rt_session.on("error", self._on_error)
-            self._rt_session.on("session_disconnected", self._on_session_disconnected)
 
             remove_instructions(self._agent._chat_ctx)
 
@@ -948,7 +946,6 @@ class AgentActivity(RecognitionHooks):
             self._rt_session.off("metrics_collected", self._on_metrics_collected)
             self._rt_session.off("remote_item_added", self._on_remote_item_added)
             self._rt_session.off("error", self._on_error)
-            self._rt_session.off("session_disconnected", self._on_session_disconnected)
 
         if isinstance(self.stt, stt.STT):
             self.stt.off("metrics_collected", self._on_metrics_collected)
@@ -1516,18 +1513,6 @@ class AgentActivity(RecognitionHooks):
 
         self._session._on_error(error)
     
-    def _on_session_disconnected(self) -> None:
-        from ..job import get_job_context
-
-        job_ctx = get_job_context(required=False)
-        if job_ctx:
-            async def _delete_room() -> None:
-                await job_ctx.delete_room()
-
-            job_ctx.add_shutdown_callback(_delete_room)
-            job_ctx.shutdown()
-        else:
-            self._session.shutdown()
 
     def _on_overlap_speech_ended(self, ev: inference.OverlappingSpeechEvent) -> None:
         if ev.is_interruption:
