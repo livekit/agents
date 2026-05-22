@@ -1458,6 +1458,12 @@ class AgentActivity(RecognitionHooks):
 
                 await _wait_for_eou()
 
+            if self._session._user_turn_claims > 0:
+                # `AgentSession.claim_user_turn` is holding idle open
+                await self._session._user_turn_released.wait()
+                agent_active = wait_for_agent
+                user_active = wait_for_user
+
     # -- Realtime Session events --
 
     def _on_metrics_collected(

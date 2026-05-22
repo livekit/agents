@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 import copy
 import time
-from collections.abc import AsyncIterable, Callable, Sequence
-from contextlib import AbstractContextManager, nullcontext
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Sequence
+from contextlib import AbstractContextManager, asynccontextmanager, nullcontext
 from contextvars import Token
 from dataclasses import dataclass
 from types import TracebackType
@@ -451,6 +451,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._closing_task: asyncio.Task[None] | None = None
         self._closing: bool = False
         self._job_context_cb_registered: bool = False
+
+        # count of active `claim_user_turn` scopes. while > 0,
+        # `wait_for_inactive` is held open and `user_state` is pinned to
+        # "speaking".
+        self._user_turn_claims: int = 0
+        self._user_turn_released: asyncio.Event = asyncio.Event()
+        self._user_turn_released.set()
 
         self._global_run_state: RunResult | None = None
         # TODO(theomonnom): need a better way to expose early assistant metrics
@@ -1215,6 +1222,32 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         return self._activity.interrupt(force=force)
 
+    @asynccontextmanager
+    async def claim_user_turn(self) -> AsyncIterator[None]:
+        """Declare a programmatic user-driven turn.
+
+        Pins ``user_state`` to ``"speaking"`` and holds ``wait_for_inactive``
+        open until release. On release, ``user_state`` is re-derived from the
+        audio path. Reentrant and session-scoped (survives handoff).
+
+        Use in custom ``text_input_cb`` or any flow that drives a user turn
+        across awaits.
+        """
+        first = self._user_turn_claims == 0
+        self._user_turn_claims += 1
+        if first:
+            self._user_turn_released.clear()
+            self._update_user_state("speaking", last_speaking_time=time.time())
+        try:
+            yield
+        finally:
+            self._user_turn_claims -= 1
+            if self._user_turn_claims == 0:
+                self._user_turn_released.set()
+                activity = self._activity
+                speaking = activity is not None and not activity._user_silence_event.is_set()
+                self._update_user_state("speaking" if speaking else "listening")
+
     def clear_user_turn(self) -> None:
         # clear the transcription or input audio buffer of the user turn
         if self._activity is None:
@@ -1525,6 +1558,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _update_user_state(
         self, state: UserState, *, last_speaking_time: float | None = None
     ) -> None:
+        # pinned to "speaking" while a `claim_user_turn` is active; voice
+        # transitions are recoverable from `_user_silence_event` on release
+        if self._user_turn_claims > 0 and state != "speaking":
+            return
+
         if self._user_state == state:
             return
 
