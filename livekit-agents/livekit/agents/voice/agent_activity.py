@@ -1512,7 +1512,6 @@ class AgentActivity(RecognitionHooks):
             return
 
         self._session._on_error(error)
-    
 
     def _on_overlap_speech_ended(self, ev: inference.OverlappingSpeechEvent) -> None:
         if ev.is_interruption:
