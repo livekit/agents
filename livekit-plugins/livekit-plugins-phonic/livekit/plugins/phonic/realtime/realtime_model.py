@@ -651,6 +651,8 @@ class RealtimeSession(llm.RealtimeSession):
     @utils.log_exceptions(logger=logger)
     async def _send_task(self, socket: AsyncConversationsSocketClient) -> None:
         async for payload in self._send_ch:
+            if self._session_should_close.is_set():
+                break
             await socket.send_audio_chunk(payload)
 
     @utils.log_exceptions(logger=logger)
@@ -682,8 +684,9 @@ class RealtimeSession(llm.RealtimeSession):
                     self._emit_error(Exception(message.error.message), recoverable=False)
                 elif msg_type == "assistant_ended_conversation":
                     logger.info(f"Phonic Conversation {self._conversation_id} ended by assistant")
-                    await self._close_active_session()
-                    self._close_current_generation(interrupted=False)
+                    self._session_should_close.set()
+                    self.emit("session_disconnected")
+                    break
                 elif msg_type == "conversation_created":
                     self._conversation_id = message.conversation_id
                     logger.info(f"Phonic Conversation began with ID: {self._conversation_id}")
