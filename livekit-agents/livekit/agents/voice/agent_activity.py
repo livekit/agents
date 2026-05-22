@@ -1468,6 +1468,8 @@ class AgentActivity(RecognitionHooks):
         user_active = True
 
         async def _wait_for_eou() -> None:
+            # eou is part of the user turn and may spawn a new speech handle,
+            # so an in-flight eou keeps both the user and the agent active.
             nonlocal user_active
             if (
                 self._audio_recognition
