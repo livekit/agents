@@ -328,44 +328,56 @@ class SSEChunkedStream(tts.ChunkedStream):
                     mime_type="audio/pcm",
                 )
 
-                buf = ""
-                async for raw_bytes in res.content:
-                    raw_line = raw_bytes.decode("utf-8").strip()
-                    if not raw_line:
-                        continue
-                    if raw_line.startswith("event:"):
-                        continue
-                    if raw_line.startswith(":"):
-                        continue
-                    if raw_line.startswith("id:") or raw_line.startswith("retry:"):
-                        continue
-                    if raw_line.startswith("data:"):
-                        raw_line = raw_line[5:].strip()
+                data_buf = ""
+                while True:
+                    line_bytes = await res.content.readline()
+                    if not line_bytes:
+                        break
+                    line = line_bytes.decode("utf-8").rstrip("\r\n")
 
-                    buf += raw_line
-                    try:
-                        payload = json.loads(buf)
-                    except json.JSONDecodeError:
-                        continue
-                    buf = ""
+                    if not line:
+                        if not data_buf:
+                            continue
+                        try:
+                            payload = json.loads(data_buf)
+                        except json.JSONDecodeError:
+                            data_buf = ""
+                            continue
+                        data_buf = ""
 
-                    if payload.get("status") == "error" or "error" in payload:
-                        raise APIStatusError(
-                            message=payload.get("message", json.dumps(payload)),
-                            status_code=500,
-                            body=payload,
-                        )
-                    if payload.get("status") == "streaming_started":
-                        continue
-                    if payload.get("is_final", False):
+                        if payload.get("status") == "error" or "error" in payload:
+                            raise APIStatusError(
+                                message=payload.get("message", json.dumps(payload)),
+                                status_code=500,
+                                body=payload,
+                            )
+                        if payload.get("status") == "streaming_started":
+                            continue
+                        if payload.get("is_final", False):
+                            audio_b64 = payload.get("audio", "")
+                            if audio_b64:
+                                output_emitter.push(
+                                    _strip_wav_header(base64.b64decode(audio_b64))
+                                )
+                            break
+
                         audio_b64 = payload.get("audio", "")
                         if audio_b64:
-                            output_emitter.push(_strip_wav_header(base64.b64decode(audio_b64)))
-                        break
+                            output_emitter.push(
+                                _strip_wav_header(base64.b64decode(audio_b64))
+                            )
+                        continue
 
-                    audio_b64 = payload.get("audio", "")
-                    if audio_b64:
-                        output_emitter.push(_strip_wav_header(base64.b64decode(audio_b64)))
+                    if line.startswith(":"):
+                        continue
+                    if line.startswith("event:"):
+                        continue
+                    if line.startswith("id:") or line.startswith("retry:"):
+                        continue
+                    if line.startswith("data:"):
+                        data_buf += line[5:].strip()
+                    else:
+                        data_buf += line.strip()
 
                 output_emitter.flush()
 
