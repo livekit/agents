@@ -344,6 +344,10 @@ class SSEChunkedStream(tts.ChunkedStream):
 
                     buf += raw_line
                     try:
+                        payload = json.loads(buf)
+                    except json.JSONDecodeError:
+                        continue
+                    buf = ""
 
                     if payload.get("status") == "error" or "error" in payload:
                         raise APIStatusError(
