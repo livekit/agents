@@ -541,13 +541,19 @@ class AudioRecognition:
 
         return False
 
-    def push_audio(self, frame: rtc.AudioFrame, *, skip_stt: bool = False) -> None:
+    def push_audio(self, frame: rtc.AudioFrame, *, stt_frame: rtc.AudioFrame | None = None) -> None:
+        """Forward an audio frame to STT, VAD, AMD and the interruption detector.
+
+        When ``stt_frame`` is provided, it is sent to the STT pipeline in place of
+        ``frame`` (e.g. a silence substitute during AEC warmup or uninterruptible
+        speech). VAD, AMD and the interruption channel always receive ``frame``.
+        """
         if self._input_started_at is None:
             self._input_started_at = time.time() - frame.duration
 
         self._sample_rate = frame.sample_rate
-        if not skip_stt and self._stt_pipeline is not None:
-            self._stt_pipeline.audio_ch.send_nowait(frame)
+        if self._stt_pipeline is not None:
+            self._stt_pipeline.audio_ch.send_nowait(stt_frame if stt_frame is not None else frame)
 
         if self._vad_ch is not None:
             self._vad_ch.send_nowait(frame)
@@ -737,16 +743,10 @@ class AudioRecognition:
 
                 # flush the stt by pushing silence
                 if audio_detached and self._sample_rate:
-                    num_samples = int(self._sample_rate * 0.2)
-                    silence_frame = rtc.AudioFrame(
-                        b"\x00\x00" * num_samples,
-                        sample_rate=self._sample_rate,
-                        num_channels=1,
-                        samples_per_channel=num_samples,
-                    )
-                    num_frames = max(0, int(math.ceil(stt_flush_duration / silence_frame.duration)))
+                    silence = utils.audio.silence_frame(0.2, self._sample_rate)
+                    num_frames = max(0, int(math.ceil(stt_flush_duration / silence.duration)))
                     for _ in range(num_frames):
-                        self.push_audio(silence_frame)
+                        self.push_audio(silence)
 
                 # wait for the final transcript to be available
                 try:
