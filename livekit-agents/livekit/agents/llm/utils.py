@@ -376,11 +376,39 @@ def prepare_function_arguments(
     json_arguments: str | dict[str, Any],
     call_ctx: RunContext[Any] | None = None,
 ) -> tuple[tuple[Any, ...], dict[str, Any]]:  # returns args, kwargs
-    """
-    Create the positional and keyword arguments to call a function tool from
+    """Create the positional and keyword arguments to call a function tool from
     the raw function output from the LLM.
-    """
 
+    Argument-validation failures (bad JSON, pydantic ValidationError, missing
+    required params) are surfaced as :class:`ToolError` so the LLM gets a
+    concrete error message and can self-correct on its next turn.
+    """
+    try:
+        return _prepare_function_arguments(
+            fnc=fnc, json_arguments=json_arguments, call_ctx=call_ctx
+        )
+    except ToolError:
+        raise
+    except (pydantic.ValidationError, ValueError, TypeError) as e:
+        logger.error(
+            f"error parsing arguments for `{fnc.info.name}`",
+            extra={"function": fnc.info.name, "arguments": json_arguments},
+        )
+        raise ToolError(f"Error parsing arguments for `{fnc.info.name}`: {e}") from e
+    except Exception:
+        logger.exception(
+            f"error parsing arguments for `{fnc.info.name}`",
+            extra={"function": fnc.info.name, "arguments": json_arguments},
+        )
+        raise
+
+
+def _prepare_function_arguments(
+    *,
+    fnc: FunctionTool | RawFunctionTool,
+    json_arguments: str | dict[str, Any],
+    call_ctx: RunContext[Any] | None,
+) -> tuple[tuple[Any, ...], dict[str, Any]]:
     signature = inspect.signature(fnc)
     type_hints = get_type_hints(fnc, include_extras=True)
 
@@ -636,24 +664,6 @@ async def execute_function_call(
             json_arguments=tool_call.arguments or "{}",
             call_ctx=call_ctx,
         )
-    except (pydantic.ValidationError, ValueError) as e:
-        # Surface argument validation errors to the LLM so it can self-correct.
-        # Without this, the LLM only sees "An internal error occurred" and has
-        # no signal about what was wrong with its arguments.
-        logger.warning(
-            f"invalid arguments for AI function `{tool_call.name}`: {e}",
-            extra={"call_id": tool_call.call_id, "arguments": tool_call.arguments},
-        )
-        tool_error = ToolError(f"Error parsing arguments for `{tool_call.name}`: {e}")
-        return make_function_call_output(fnc_call=fnc_call, output=None, exception=tool_error)
-    except Exception as e:
-        logger.exception(
-            f"exception preparing arguments for AI function `{tool_call.name}`",
-            extra={"call_id": tool_call.call_id, "arguments": tool_call.arguments},
-        )
-        return make_function_call_output(fnc_call=fnc_call, output=None, exception=e)
-
-    try:
         result = function_tool(*fnc_args, **fnc_kwargs)
         if asyncio.iscoroutine(result):
             result = await result
@@ -661,8 +671,9 @@ async def execute_function_call(
         return make_function_call_output(fnc_call=fnc_call, output=result, exception=None)
 
     except Exception as e:
-        logger.exception(
-            f"exception executing AI function `{tool_call.name}`",
-            extra={"call_id": tool_call.call_id, "arguments": tool_call.arguments},
-        )
+        if not isinstance(e, ToolError):
+            logger.exception(
+                f"exception executing AI function `{tool_call.name}`",
+                extra={"call_id": tool_call.call_id, "arguments": tool_call.arguments},
+            )
         return make_function_call_output(fnc_call=fnc_call, output=None, exception=e)

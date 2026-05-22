@@ -10,7 +10,6 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 from opentelemetry import trace
-from pydantic import ValidationError
 
 from livekit import rtc
 
@@ -507,6 +506,39 @@ async def _execute_tools_task(
         tool_execution_completed_cb(out)
         tool_output.output.append(out)
 
+    async def _run_mock(mock: Callable, *fnc_args: Any, **fnc_kwargs: Any) -> Any:
+        sig = inspect.signature(mock)
+
+        pos_param_names = [
+            name
+            for name, param in sig.parameters.items()
+            if param.kind
+            in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            )
+        ]
+        max_positional = len(pos_param_names)
+        trimmed_args = fnc_args[:max_positional]
+        kw_param_names = [
+            name
+            for name, param in sig.parameters.items()
+            if param.kind
+            in (
+                inspect.Parameter.KEYWORD_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            )
+        ]
+        trimmed_kwargs = {k: v for k, v in fnc_kwargs.items() if k in kw_param_names}
+
+        bound = sig.bind_partial(*trimmed_args, **trimmed_kwargs)
+        bound.apply_defaults()
+
+        if inspect.iscoroutinefunction(mock):
+            return await mock(*bound.args, **bound.kwargs)
+        else:
+            return mock(*bound.args, **bound.kwargs)
+
     tasks: list[asyncio.Task[Any]] = []
     try:
         async for fnc_call in function_stream:
@@ -556,30 +588,6 @@ async def _execute_tools_task(
                 )
                 continue
 
-            try:
-                json_args = fnc_call.arguments or "{}"
-                fnc_args, fnc_kwargs = llm_utils.prepare_function_arguments(
-                    fnc=function_tool,
-                    json_arguments=json_args,
-                    call_ctx=RunContext(
-                        session=session,
-                        speech_handle=speech_handle,
-                        function_call=fnc_call,
-                    ),
-                )
-
-            except (ValidationError, ValueError) as e:
-                logger.exception(
-                    f"tried to call AI function `{fnc_call.name}` with invalid arguments",
-                    extra={
-                        "function": fnc_call.name,
-                        "arguments": fnc_call.arguments,
-                        "speech_id": speech_handle.id,
-                    },
-                )
-                _tool_completed(make_tool_output(fnc_call=fnc_call, output=None, exception=e))
-                continue
-
             if not tool_output.first_tool_started_fut.done():
                 tool_output.first_tool_started_fut.set_result(None)
 
@@ -590,63 +598,40 @@ async def _execute_tools_task(
                 mock_tools: dict[str, Callable] = _MockToolsContextVar.get({}).get(
                     type(session.current_agent), {}
                 )
+                mock = mock_tools.get(fnc_call.name)
+                mocked = mock is not None
 
-                if mock := mock_tools.get(fnc_call.name):
-                    logger.debug(
-                        "executing mock tool",
-                        extra={
-                            "function": fnc_call.name,
-                            "arguments": fnc_call.arguments,
-                            "speech_id": speech_handle.id,
-                        },
+                run_ctx = RunContext(
+                    session=session, speech_handle=speech_handle, function_call=fnc_call
+                )
+                json_args = fnc_call.arguments or "{}"
+                _bound_tool: llm.FunctionTool | llm.RawFunctionTool = function_tool
+
+                # unified body: arg prep + invocation in one closure so a ToolError
+                # from prepare_function_arguments is routed through the existing
+                # per-tool handler below
+                async def _execute(
+                    ctx: RunContext[Any],
+                    fnc: llm.FunctionTool | llm.RawFunctionTool = _bound_tool,
+                    raw_args: str = json_args,
+                    bound_mock: Callable | None = mock,
+                ) -> Any:
+                    fnc_args, fnc_kwargs = llm_utils.prepare_function_arguments(
+                        fnc=fnc, json_arguments=raw_args, call_ctx=ctx
                     )
+                    if bound_mock is not None:
+                        return await _run_mock(bound_mock, *fnc_args, **fnc_kwargs)
+                    return await fnc(*fnc_args, **fnc_kwargs)
 
-                    async def _run_mock(mock: Callable, *fnc_args: Any, **fnc_kwargs: Any) -> Any:
-                        sig = inspect.signature(mock)
-
-                        pos_param_names = [
-                            name
-                            for name, param in sig.parameters.items()
-                            if param.kind
-                            in (
-                                inspect.Parameter.POSITIONAL_ONLY,
-                                inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                            )
-                        ]
-                        max_positional = len(pos_param_names)
-                        trimmed_args = fnc_args[:max_positional]
-                        kw_param_names = [
-                            name
-                            for name, param in sig.parameters.items()
-                            if param.kind
-                            in (
-                                inspect.Parameter.KEYWORD_ONLY,
-                                inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                            )
-                        ]
-                        trimmed_kwargs = {
-                            k: v for k, v in fnc_kwargs.items() if k in kw_param_names
-                        }
-
-                        bound = sig.bind_partial(*trimmed_args, **trimmed_kwargs)
-                        bound.apply_defaults()
-
-                        if inspect.iscoroutinefunction(mock):
-                            return await mock(*bound.args, **bound.kwargs)
-                        else:
-                            return mock(*bound.args, **bound.kwargs)
-
-                    function_callable = functools.partial(_run_mock, mock, *fnc_args, **fnc_kwargs)
-                else:
-                    logger.debug(
-                        "executing tool",
-                        extra={
-                            "function": fnc_call.name,
-                            "arguments": fnc_call.arguments,
-                            "speech_id": speech_handle.id,
-                        },
-                    )
-                    function_callable = functools.partial(function_tool, *fnc_args, **fnc_kwargs)
+                logger.debug(
+                    "executing mock tool" if mocked else "executing tool",
+                    extra={
+                        "function": fnc_call.name,
+                        "arguments": fnc_call.arguments,
+                        "speech_id": speech_handle.id,
+                    },
+                )
+                function_callable = functools.partial(_execute, run_ctx)
 
                 @tracer.start_as_current_span("function_tool")
                 async def _traceable_fnc_tool(
