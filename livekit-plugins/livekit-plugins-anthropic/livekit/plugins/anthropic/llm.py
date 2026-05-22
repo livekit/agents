@@ -46,6 +46,81 @@ def _model_disables_prefill(model: str) -> bool:
     return any(model.startswith(p) for p in _NO_PREFILL_PATTERNS)
 
 
+_THINKING_OPEN = "<thinking>"
+_THINKING_CLOSE = "</thinking>"
+
+
+def _partial_tag_suffix_len(text: str, tag: str) -> int:
+    """Length of the longest suffix of ``text`` that is a (non-empty) prefix of ``tag``.
+
+    Used to hold back the tail of a streamed chunk that might still grow into ``tag``
+    on the next delta (e.g. ``"</"`` could become ``"</thinking>"``).
+    """
+    for size in range(min(len(text), len(tag) - 1), 0, -1):
+        if tag.startswith(text[-size:]):
+            return size
+    return 0
+
+
+class _ThinkingTagFilter:
+    """Strip ``<thinking>...</thinking>`` chain-of-thought spans from a streamed text.
+
+    Anthropic models may emit chain-of-thought wrapped in ``<thinking>`` tags when tools
+    are provided. The tags can be split across streaming deltas, so a stateful scanner is
+    required: a naive per-delta check leaves the parser stuck and silently drops the actual
+    answer (and therefore the audio that would be synthesized from it).
+    """
+
+    def __init__(self) -> None:
+        self._inside = False
+        self._buf = ""
+
+    def push(self, text: str) -> str:
+        self._buf += text
+        out: list[str] = []
+
+        while self._buf:
+            if not self._inside:
+                idx = self._buf.find(_THINKING_OPEN)
+                if idx == -1:
+                    # emit everything except a possible partial opening tag at the tail
+                    hold = _partial_tag_suffix_len(self._buf, _THINKING_OPEN)
+                    if hold:
+                        out.append(self._buf[:-hold])
+                        self._buf = self._buf[-hold:]
+                    else:
+                        out.append(self._buf)
+                        self._buf = ""
+                    break
+
+                out.append(self._buf[:idx])
+                self._buf = self._buf[idx + len(_THINKING_OPEN) :]
+                self._inside = True
+            else:
+                idx = self._buf.find(_THINKING_CLOSE)
+                if idx == -1:
+                    # still thinking; keep only a possible partial closing tag at the tail
+                    hold = _partial_tag_suffix_len(self._buf, _THINKING_CLOSE)
+                    self._buf = self._buf[-hold:] if hold else ""
+                    break
+
+                self._buf = self._buf[idx + len(_THINKING_CLOSE) :]
+                self._inside = False
+
+        return "".join(out)
+
+    def flush(self) -> str:
+        """Return any buffered text that is not part of a thinking span."""
+        if self._inside:
+            self._buf = ""
+            return ""
+
+        # a dangling partial opening tag never completed: it was real text
+        out = self._buf
+        self._buf = ""
+        return out
+
+
 @dataclass
 class _LLMOptions:
     model: str | ChatModels
@@ -293,7 +368,8 @@ class LLMStream(llm.LLMStream):
         self._fnc_raw_arguments: str | None = None
 
         self._request_id: str = ""
-        self._ignoring_cot = False  # ignore chain of thought
+        # strips <thinking> chain-of-thought spans that Claude may emit when tools are set
+        self._thinking_filter = _ThinkingTagFilter()
         self._input_tokens = 0
         self._cache_creation_tokens = 0
         self._cache_read_tokens = 0
@@ -311,6 +387,17 @@ class LLMStream(llm.LLMStream):
                     if chat_chunk is not None:
                         self._event_ch.send_nowait(chat_chunk)
                         retryable = False
+
+                # flush any text held back by the thinking-tag filter (e.g. a trailing
+                # fragment that never completed into a real tag)
+                if text := self._thinking_filter.flush():
+                    self._event_ch.send_nowait(
+                        llm.ChatChunk(
+                            id=self._request_id,
+                            delta=llm.ChoiceDelta(content=text, role="assistant"),
+                        )
+                    )
+                    retryable = False
 
                 # https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching#tracking-cache-performance
                 prompt_token = (
@@ -360,17 +447,10 @@ class LLMStream(llm.LLMStream):
         elif event.type == "content_block_delta":
             delta = event.delta
             if delta.type == "text_delta":
-                text = delta.text
-
-                if self._tools is not None:
-                    # anthropic may inject COC when using functions
-                    if text.startswith("<thinking>"):
-                        self._ignoring_cot = True
-                    elif self._ignoring_cot and "</thinking>" in text:
-                        text = text.split("</thinking>")[-1]
-                        self._ignoring_cot = False
-
-                if self._ignoring_cot:
+                # anthropic may inject chain-of-thought wrapped in <thinking> tags when
+                # tools are provided; strip it without dropping the actual answer
+                text = self._thinking_filter.push(delta.text)
+                if not text:
                     return None
 
                 return llm.ChatChunk(
@@ -382,6 +462,13 @@ class LLMStream(llm.LLMStream):
                 self._fnc_raw_arguments += delta.partial_json
 
         elif event.type == "content_block_stop":
+            if self._tool_call_id is None:
+                # flush any text held back while scanning for a (possibly partial) tag
+                if text := self._thinking_filter.flush():
+                    return llm.ChatChunk(
+                        id=self._request_id,
+                        delta=llm.ChoiceDelta(content=text, role="assistant"),
+                    )
             if self._tool_call_id is not None:
                 assert self._fnc_name is not None
                 assert self._fnc_raw_arguments is not None
