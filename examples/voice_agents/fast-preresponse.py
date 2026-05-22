@@ -10,7 +10,6 @@ from livekit.agents import (
     AgentSession,
     JobContext,
     cli,
-    inference,
     llm,
 )
 from livekit.agents.llm.chat_context import ChatContext, ChatMessage
@@ -83,7 +82,6 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         stt=deepgram.STT(),
         tts=openai.TTS(),
-        vad=inference.VAD(model="silero"),
     )
     await session.start(PreResponseAgent(), room=ctx.room)
 

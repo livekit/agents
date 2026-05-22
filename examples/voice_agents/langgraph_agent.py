@@ -63,7 +63,6 @@ async def entrypoint(ctx: JobContext):
     )
 
     session = AgentSession(
-        vad=inference.VAD(model="silero"),
         # any combination of STT, LLM, TTS, or realtime API can be used
         stt=inference.STT("deepgram/nova-3", language="multi"),
         tts=inference.TTS("cartesia/sonic-3"),

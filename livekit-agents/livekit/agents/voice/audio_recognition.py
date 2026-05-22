@@ -304,6 +304,16 @@ class AudioRecognition:
             and not self._interruption_ch.closed
         )
 
+    @property
+    def _has_user_vad(self) -> bool:
+        """True only when a user-configured VAD is wired. Framework-default
+        VAD instances return False here so the STT-hook ``speaking=`` payload
+        type and ``_last_speaking_time`` source stay on their pre-default-VAD
+        codepaths (preserving observable behaviour for sessions that didn't
+        configure a VAD).
+        """
+        return self._vad is not None and not self._vad.is_default
+
     # region: boundary for adaptive interruption detection
 
     @property
@@ -981,7 +991,7 @@ class AudioRecognition:
             self._hooks.on_final_transcript(
                 ev,
                 speaking=self._speaking
-                if self._vad or self._turn_detection_mode == "stt"
+                if self._has_user_vad or self._turn_detection_mode == "stt"
                 else None,
             )
             if self._session.amd is not None:
@@ -1000,8 +1010,8 @@ class AudioRecognition:
             self._audio_interim_transcript = ""
             self._audio_preflight_transcript = ""
 
-            if not self._vad or self._last_speaking_time is None:
-                # vad disabled, use stt timestamp
+            if not self._has_user_vad or self._last_speaking_time is None:
+                # no user-configured vad, use stt timestamp
                 # TODO: this would screw up transcription latency metrics
                 # but we'll live with it for now.
                 # the correct way is to ensure STT fires SpeechEventType.END_OF_SPEECH
@@ -1038,7 +1048,7 @@ class AudioRecognition:
             self._hooks.on_interim_transcript(
                 ev,
                 speaking=self._speaking
-                if self._vad or self._turn_detection_mode == "stt"
+                if self._has_user_vad or self._turn_detection_mode == "stt"
                 else None,
             )
             transcript = ev.alternatives[0].text
@@ -1064,8 +1074,8 @@ class AudioRecognition:
             self._audio_preflight_transcript = (self._audio_transcript + " " + transcript).lstrip()
             self._audio_interim_transcript = transcript
 
-            if not self._vad or self._last_speaking_time is None:
-                # vad disabled, use stt timestamp
+            if not self._has_user_vad or self._last_speaking_time is None:
+                # no user-configured vad, use stt timestamp
                 self._last_speaking_time = time.time()
 
             if self._turn_detection_mode != "manual" or self._user_turn_committed:
@@ -1082,7 +1092,7 @@ class AudioRecognition:
             self._hooks.on_interim_transcript(
                 ev,
                 speaking=self._speaking
-                if self._vad or self._turn_detection_mode == "stt"
+                if self._has_user_vad or self._turn_detection_mode == "stt"
                 else None,
             )
             self._audio_interim_transcript = ev.alternatives[0].text
@@ -1105,7 +1115,7 @@ class AudioRecognition:
 
             self._speaking = False
             self._user_turn_committed = True
-            if not self._vad or self._last_speaking_time is None:
+            if not self._has_user_vad or self._last_speaking_time is None:
                 self._last_speaking_time = time.time()
 
             chat_ctx = self._hooks.retrieve_chat_ctx().copy()

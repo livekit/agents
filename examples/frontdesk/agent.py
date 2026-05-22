@@ -266,7 +266,6 @@ async def frontdesk_agent(ctx: JobContext):
         llm=inference.LLM("google/gemini-2.5-flash"),
         tts=inference.TTS("cartesia/sonic-3", voice="39b376fc-488e-4d0c-8b37-e00b72059fdd"),
         turn_detection=AudioTurnDetector(),
-        vad=inference.VAD(model="silero"),
         max_tool_steps=1,
     )
 

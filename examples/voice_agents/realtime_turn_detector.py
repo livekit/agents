@@ -3,7 +3,7 @@ import logging
 from dotenv import load_dotenv
 from google.genai import types  # noqa: F401
 
-from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli, inference
+from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli
 from livekit.agents.inference import AudioTurnDetector
 from livekit.plugins import deepgram, google, openai  # noqa: F401
 
@@ -25,7 +25,6 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         allow_interruptions=True,
         turn_detection=AudioTurnDetector(),
-        vad=inference.VAD(model="silero"),
         stt=deepgram.STT(),
         # To use OpenAI Realtime API
         llm=openai.realtime.RealtimeModel(

@@ -8,7 +8,6 @@ from livekit.agents import (
     JobContext,
     WorkerOptions,
     cli,
-    inference,
 )
 from livekit.agents.inference import AudioTurnDetector
 from livekit.plugins import nvidia, openai
@@ -20,7 +19,6 @@ load_dotenv()
 
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
-        vad=inference.VAD(model="silero"),
         llm=openai.LLM(model="gpt-4.1-mini"),
         stt=nvidia.STT(),
         tts=nvidia.TTS(),

@@ -106,7 +106,6 @@ async def entrypoint(ctx: JobContext):
         "user_id": "your user_id",
     }
     session = AgentSession(
-        vad=inference.VAD(model="silero"),
         llm=inference.LLM("openai/gpt-4.1-mini"),
         stt=inference.STT("deepgram/nova-3"),
         tts=inference.TTS("cartesia/sonic-3"),

@@ -12,7 +12,6 @@ from livekit.agents import (
     JobContext,
     RunContext,
     cli,
-    inference,
     metrics,
 )
 from livekit.agents.job import get_job_context
@@ -135,7 +134,6 @@ server = AgentServer()
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession[StoryData](
-        vad=inference.VAD(model="silero"),
         # any combination of STT, LLM, TTS, or realtime API can be used
         llm=openai.LLM(model="gpt-4.1-mini"),
         stt=deepgram.STT(model="nova-3"),

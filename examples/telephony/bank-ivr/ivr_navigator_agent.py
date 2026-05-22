@@ -82,7 +82,6 @@ async def dtmf_session(ctx: JobContext) -> None:
     }
 
     session: AgentSession = AgentSession(
-        vad=inference.VAD(model="silero"),
         llm=inference.LLM("openai/gpt-4.1"),
         stt=inference.STT("deepgram/nova-3"),
         tts=inference.TTS("rime/arcana"),

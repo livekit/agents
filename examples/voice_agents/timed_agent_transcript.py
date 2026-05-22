@@ -44,7 +44,6 @@ async def entrypoint(ctx: JobContext):
         stt=inference.STT("deepgram/nova-3"),
         llm=inference.LLM("google/gemini-2.5-flash"),
         tts=cartesia.TTS(),
-        vad=inference.VAD(model="silero"),
         # enable TTS-aligned transcript, can be configured at the Agent level as well
         use_tts_aligned_transcript=True,
     )

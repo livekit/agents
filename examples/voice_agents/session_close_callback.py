@@ -2,7 +2,7 @@ import logging
 
 from dotenv import load_dotenv
 
-from livekit.agents import Agent, AgentServer, AgentSession, CloseEvent, JobContext, cli, inference
+from livekit.agents import Agent, AgentServer, AgentSession, CloseEvent, JobContext, cli
 from livekit.agents.beta.tools import EndCallTool
 from livekit.plugins import google  # noqa: F401
 
@@ -42,9 +42,7 @@ server = AgentServer()
 
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
-    session = AgentSession(
-        vad=inference.VAD(model="silero"),
-    )
+    session = AgentSession()
 
     await session.start(agent=MyAgent(), room=ctx.room)
 

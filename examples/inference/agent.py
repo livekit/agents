@@ -58,7 +58,6 @@ async def entrypoint(ctx: JobContext) -> None:
         stt=inference.STT(model=DEFAULT_STT),
         llm=inference.LLM(model=DEFAULT_LLM),
         tts=inference.TTS(model=DEFAULT_TTS),
-        vad=inference.VAD(model="silero"),
     )
 
     def parse_value(payload: str, fallback: str) -> str:

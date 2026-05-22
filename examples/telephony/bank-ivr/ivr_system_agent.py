@@ -630,7 +630,6 @@ async def bank_ivr_session(ctx: JobContext) -> None:
     state = SessionState()
 
     session: AgentSession[SessionState] = AgentSession(
-        vad=inference.VAD(model="silero"),
         llm=inference.LLM("openai/gpt-4.1"),
         stt=inference.STT("deepgram/nova-3"),
         tts=inference.TTS("cartesia/sonic-3"),

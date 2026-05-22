@@ -53,7 +53,6 @@ from livekit.agents import (
     AgentSession,
     AutoSubscribe,
     ToolError,
-    inference,
     room_io,
 )
 from livekit.agents.llm import function_tool
@@ -222,7 +221,6 @@ async def entrypoint(ctx: agents.JobContext):
                     stt=aws.STT(),
                     llm=aws.LLM(),
                     tts=aws.TTS(),
-                    vad=inference.VAD(model="silero"),
                 )
             else:
                 print("⚡ Using REALTIME mode: Nova Sonic 2.0")

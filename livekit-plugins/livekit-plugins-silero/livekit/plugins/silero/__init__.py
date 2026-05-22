@@ -30,7 +30,10 @@ from .log import logger
 
 warnings.warn(
     "livekit-plugins-silero is deprecated and will be removed in v2.0. "
-    'Use `from livekit.agents import inference; inference.VAD(model="silero")` instead.',
+    "AgentSession now defaults to the bundled silero VAD, so you can drop the "
+    "explicit `vad=` argument entirely; pass `vad=None` to opt out, or use "
+    '`from livekit.agents import inference; inference.VAD(model="silero", ...)`'
+    " to customise options.",
     DeprecationWarning,
     stacklevel=2,
 )

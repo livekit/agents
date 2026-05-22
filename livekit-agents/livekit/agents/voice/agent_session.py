@@ -198,6 +198,12 @@ class VoiceActivityVideoSampler:
 DEFAULT_TTS_TEXT_TRANSFORMS: list[TextTransforms] = ["filter_markdown", "filter_emoji"]
 
 
+def _build_default_vad() -> vad.VAD:
+    instance = inference.VAD(model="silero")
+    instance._is_default = True
+    return instance
+
+
 class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @deprecate_params(
         {
@@ -266,7 +272,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         Args:
             stt (stt.STT | str, optional): Speech-to-text backend.
-            vad (vad.VAD, optional): Voice-activity detector
+            vad (vad.VAD, optional): Voice-activity detector. Defaults to the
+                bundled silero VAD (``inference.VAD(model="silero")``) when
+                omitted. Pass ``vad=None`` to opt out, or pass an explicit
+                instance to customise options.
             llm (llm.LLM | llm.RealtimeModel | str, optional): LLM or RealtimeModel
             tts (tts.TTS | str, optional): Text-to-speech engine.
             tools (list[llm.FunctionTool | llm.RawFunctionTool], optional): List of
@@ -395,6 +404,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             tts = inference.TTS.from_model_string(tts)
 
         self._stt = stt or None
+        if not is_given(vad):
+            vad = _build_default_vad()
         self._vad = vad or None
         self._llm = llm or None
         self._tts = tts or None

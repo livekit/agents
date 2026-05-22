@@ -66,7 +66,6 @@ async def entrypoint(ctx: JobContext):
         logger.warning("ZAPIER_MCP_SERVER environment variable not set. MCP integration disabled.")
 
     session = AgentSession(
-        vad=inference.VAD(model="silero"),
         # minimum delay for endpointing, used when turn detector believes the user is done with their turn  # noqa: E501
         min_endpointing_delay=0.5,
         # maximum delay for endpointing, used when turn detector does not believe the user is done with their turn  # noqa: E501

@@ -9,7 +9,6 @@ from livekit.agents import (
     JobContext,
     cli,
     function_tool,
-    inference,
     room_io,
 )
 from livekit.plugins.ultravox.realtime import RealtimeModel
@@ -28,7 +27,6 @@ class MyAgent(Agent):
                 voice="Jessica",
                 language_hint="en",
             ),
-            vad=inference.VAD(model="silero"),
         )
 
     async def on_enter(self):
