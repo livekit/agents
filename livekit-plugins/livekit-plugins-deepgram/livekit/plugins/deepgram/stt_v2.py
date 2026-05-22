@@ -296,6 +296,7 @@ class SpeechStreamv2(stt.SpeechStream):
 
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
+        self._ws: aiohttp.ClientWebSocketResponse | None = None
 
     def update_options(
         self,
@@ -313,6 +314,16 @@ class SpeechStreamv2(stt.SpeechStream):
         # deprecated
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
+        if is_given(keyterms):
+            logger.warning(
+                "`keyterms` is deprecated, use `keyterm` instead for consistency with Deepgram API."
+            )
+            keyterm = keyterms
+
+        requires_reconnect = (
+            is_given(model) or is_given(sample_rate) or is_given(mip_opt_out) or is_given(endpoint_url) or is_given(tags)
+        )
+
         if is_given(model):
             self._opts.model = model
         if is_given(sample_rate):
@@ -321,11 +332,6 @@ class SpeechStreamv2(stt.SpeechStream):
             self._opts.eot_threshold = eot_threshold
         if is_given(eot_timeout_ms):
             self._opts.eot_timeout_ms = eot_timeout_ms
-        if is_given(keyterms):
-            logger.warning(
-                "`keyterms` is deprecated, use `keyterm` instead for consistency with Deepgram API."
-            )
-            keyterm = keyterms
         if is_given(keyterm):
             self._opts.keyterm = keyterm
         if is_given(mip_opt_out):
@@ -339,7 +345,53 @@ class SpeechStreamv2(stt.SpeechStream):
         if is_given(eager_eot_threshold):
             self._opts.eager_eot_threshold = eager_eot_threshold
 
-        self._reconnect_event.set()
+        if requires_reconnect:
+            self._reconnect_event.set()
+        elif self._ws is not None and not self._ws.closed:
+            self._send_configure(
+                keyterm=keyterm,
+                eot_threshold=eot_threshold,
+                eot_timeout_ms=eot_timeout_ms,
+                eager_eot_threshold=eager_eot_threshold,
+                language_hint=language_hint,
+            )
+        else:
+            self._reconnect_event.set()
+
+    def _send_configure(
+        self,
+        *,
+        keyterm: NotGivenOr[str | list[str]] = NOT_GIVEN,
+        eot_threshold: NotGivenOr[float] = NOT_GIVEN,
+        eot_timeout_ms: NotGivenOr[int] = NOT_GIVEN,
+        eager_eot_threshold: NotGivenOr[float] = NOT_GIVEN,
+        language_hint: NotGivenOr[list[str]] = NOT_GIVEN,
+    ) -> None:
+        """Send a Configure control message to update settings mid-stream without reconnecting."""
+        configure_msg: dict[str, Any] = {"type": "Configure"}
+
+        if is_given(keyterm):
+            terms = [keyterm] if isinstance(keyterm, str) else list(keyterm)
+            configure_msg["keyterms"] = terms
+
+        thresholds: dict[str, Any] = {}
+        if is_given(eot_threshold):
+            thresholds["eot_threshold"] = eot_threshold
+        if is_given(eot_timeout_ms):
+            thresholds["eot_timeout_ms"] = eot_timeout_ms
+        if is_given(eager_eot_threshold):
+            thresholds["eager_eot_threshold"] = eager_eot_threshold
+        if thresholds:
+            configure_msg["thresholds"] = thresholds
+
+        if is_given(language_hint):
+            configure_msg["language_hints"] = language_hint
+
+        if len(configure_msg) <= 1:
+            return
+
+        assert self._ws is not None
+        asyncio.ensure_future(self._ws.send_str(json.dumps(configure_msg)))
 
     async def _run(self) -> None:
         closing_ws = False
@@ -424,6 +476,7 @@ class SpeechStreamv2(stt.SpeechStream):
         while True:
             try:
                 ws = await self._connect_ws()
+                self._ws = ws
                 tasks = [
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
@@ -451,6 +504,7 @@ class SpeechStreamv2(stt.SpeechStream):
                     tasks_group.cancel()
                     tasks_group.exception()  # retrieve the exception
             finally:
+                self._ws = None
                 if ws is not None:
                     await ws.close()
 
