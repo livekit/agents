@@ -21,10 +21,10 @@ from unittest.mock import MagicMock
 
 import aiohttp
 
+from livekit.agents.inference.eot.detector import _AudioTurnDetectorStreamImpl
+from livekit.agents.inference.eot.transports import _CloudTransport
 from livekit.agents.types import APIConnectOptions
 from livekit.agents.voice.turn import TurnDetectorOptions
-from livekit.plugins.turn_detector.audio import _AudioTurnDetectorStreamImpl
-from livekit.plugins.turn_detector.transports import _CloudTransport
 from livekit.protocol.agent_pb.agent_inference import ClientMessage
 
 

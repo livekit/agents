@@ -714,7 +714,13 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 )
 
             if self._mp_ctx_str == "forkserver":
-                plugin_packages = [p.package for p in Plugin.registered_plugins] + ["av"]
+                # Preloading ``livekit.local_inference`` in the forkserver
+                # triggers the pybind11 constructor that pages in EOT model
+                # weights; each forked job inherits those pages via COW.
+                plugin_packages = [p.package for p in Plugin.registered_plugins] + [
+                    "av",
+                    "livekit.local_inference",
+                ]
                 logger.info("preloading plugins", extra={"packages": plugin_packages})
                 self._mp_ctx.set_forkserver_preload(plugin_packages)
 

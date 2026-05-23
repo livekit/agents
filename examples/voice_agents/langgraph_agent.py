@@ -16,8 +16,8 @@ from livekit.agents import (
     cli,
     inference,
 )
+from livekit.agents.inference import AudioTurnDetector
 from livekit.plugins import langchain, silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("basic-agent")
 
@@ -76,7 +76,7 @@ async def entrypoint(ctx: JobContext):
         stt=inference.STT("deepgram/nova-3", language="multi"),
         tts=inference.TTS("cartesia/sonic-3"),
         # use LiveKit's turn detection model
-        turn_detection=MultilingualModel(),
+        turn_detection=AudioTurnDetector(),
     )
 
     await session.start(

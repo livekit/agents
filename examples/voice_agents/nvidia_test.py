@@ -10,8 +10,8 @@ from livekit.agents import (
     WorkerOptions,
     cli,
 )
+from livekit.agents.inference import AudioTurnDetector
 from livekit.plugins import nvidia, openai, silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("basic-agent")
 
@@ -32,7 +32,7 @@ async def entrypoint(ctx: JobContext):
         resume_false_interruption=True,
         false_interruption_timeout=1.0,
         min_interruption_duration=0.2,
-        turn_detection=MultilingualModel(),
+        turn_detection=AudioTurnDetector(),
     )
 
     await session.start(

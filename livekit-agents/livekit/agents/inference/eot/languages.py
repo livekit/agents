@@ -1,13 +1,15 @@
-# Per-language "unlikely" thresholds. Calibrated separately per checkpoint —
-# do NOT unify.
+"""Per-language ``unlikely`` thresholds for the audio EOT detector.
+
+Calibrated separately per checkpoint — do NOT unify CLOUD and LOCAL tables.
+"""
 
 from __future__ import annotations
 
 from typing import Literal, cast
 
-from livekit.agents.language import LanguageCode
-from livekit.agents.types import NotGivenOr
-from livekit.agents.utils.misc import is_given
+from ...language import LanguageCode
+from ...types import NotGivenOr
+from ...utils.misc import is_given
 
 CLOUD_LANGUAGES: dict[str, float] = {
     "ar": 0.3500,
@@ -43,13 +45,13 @@ LOCAL_LANGUAGES: dict[str, float] = {
     "zh": 0.3550,
 }
 
-_Backend = Literal["cloud", "local"]
-_BASE: dict[_Backend, dict[str, float]] = {"cloud": CLOUD_LANGUAGES, "local": LOCAL_LANGUAGES}
+Backend = Literal["cloud", "local"]
+_BASE: dict[Backend, dict[str, float]] = {"cloud": CLOUD_LANGUAGES, "local": LOCAL_LANGUAGES}
 
 
 def materialize_thresholds(
     user_value: NotGivenOr[float | dict[LanguageCode | str, float]],
-    backend: _Backend,
+    backend: Backend,
 ) -> dict[str, float]:
     """Resolve user override + per-backend defaults into a complete per-language map.
 

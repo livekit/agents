@@ -84,7 +84,7 @@ import os
 from livekit import agents
 from livekit.agents import AgentSession, Agent, RoomInputOptions
 from livekit.plugins import baseten, openai, noise_cancellation, silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
+from livekit.agents.inference import AudioTurnDetector
 
 BASETEN_API_KEY = os.getenv("BASETEN_API_KEY")
 whisper_model_id = "your-whisper-model-id"  # or use chain_id for chain deployments
@@ -117,7 +117,7 @@ async def entrypoint(ctx: agents.JobContext):
             ),
         ),
         vad=silero.VAD.load(),
-        turn_detection=MultilingualModel(),
+        turn_detection=AudioTurnDetector(),
     )
 
     await session.start(

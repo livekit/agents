@@ -1,4 +1,4 @@
-"""Unified audio EOT detector with cloud → local fallback."""
+"""Audio end-of-turn detector with cloud → local fallback."""
 
 from __future__ import annotations
 
@@ -9,33 +9,29 @@ from typing import Literal
 
 import aiohttp
 
-from livekit.agents import Plugin, utils
-from livekit.agents._exceptions import APIConnectionError, APIError, APITimeoutError
-from livekit.agents.language import LanguageCode
-from livekit.agents.types import (
+from ... import utils
+from ..._exceptions import APIConnectionError, APIError, APITimeoutError
+from ...language import LanguageCode
+from ...log import logger
+from ...types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     APIConnectOptions,
     NotGivenOr,
 )
-from livekit.agents.utils import is_given
-from livekit.agents.voice.turn import (
+from ...utils import is_given
+from ...voice.turn import (
     DEFAULT_SAMPLE_RATE,
     TurnDetectorOptions,
     _AudioTurnDetector,
     _AudioTurnDetectorStream,
 )
-
 from .languages import materialize_thresholds, rescale_for_local_fallback
-from .log import logger
 from .transports import (
     _AudioTurnDetectionTransport,
     _CloudTransport,
-    _get_lib_load_error,
-    _lib_available,
     _LocalTransport,
 )
-from .version import __version__
 
 __all__ = ["AudioTurnDetector"]
 
@@ -110,10 +106,6 @@ class AudioTurnDetector(_AudioTurnDetector):
                         f"AudioTurnDetector(backend='cloud') requires "
                         f"{', '.join(missing)} (env or constructor argument)."
                     )
-
-        if resolved_backend == "local" and not _lib_available():
-            err = _get_lib_load_error() or RuntimeError("audio EOT native library not loaded")
-            raise err
 
         opts = TurnDetectorOptions(
             sample_rate=sample_rate,
@@ -209,21 +201,9 @@ class _AudioTurnDetectorStreamImpl(_AudioTurnDetectorStream):
                 self._on_local_failure(reason=e)
 
     def _fall_back_to_local(self, *, reason: BaseException) -> None:
-        if not _lib_available():
-            # Lib missing — emit 1.0 and let cloud retry next turn.
-            if not self._warned_cloud_failure:
-                logger.warning(
-                    "cloud audio EOT failed (%s) and local mini lib is unavailable; "
-                    "defaulting to 1.0 for current and future failures",
-                    reason,
-                )
-                self._warned_cloud_failure = True
-            self._emit_default_for_inflight()
-            return
-
         if not self._warned_cloud_failure:
             logger.warning(
-                "cloud audio EOT failed (%s); falling back to local mini model",
+                "cloud audio eot failed (%s); falling back to local mini model",
                 reason,
             )
             self._warned_cloud_failure = True
@@ -242,7 +222,7 @@ class _AudioTurnDetectorStreamImpl(_AudioTurnDetectorStream):
     def _on_local_failure(self, *, reason: BaseException) -> None:
         if not self._warned_local_failure:
             logger.warning(
-                "local audio EOT mini failed (%s); defaulting to 1.0 and retrying on next turn",
+                "local audio eot mini failed (%s); defaulting to 1.0 and retrying on next turn",
                 reason,
             )
             self._warned_local_failure = True
@@ -261,14 +241,3 @@ class _AudioTurnDetectorStreamImpl(_AudioTurnDetectorStream):
     async def aclose(self) -> None:
         self._transport.detach()
         await super().aclose()
-
-
-class _AudioEotPlugin(Plugin):
-    def __init__(self) -> None:
-        super().__init__(__name__, __version__, __package__, logger)
-
-    def download_files(self) -> None:
-        pass
-
-
-Plugin.register_plugin(_AudioEotPlugin())

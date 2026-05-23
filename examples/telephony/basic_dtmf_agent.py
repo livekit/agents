@@ -15,11 +15,11 @@ from livekit.agents import (
 from livekit.agents.beta.workflows.dtmf_inputs import (
     GetDtmfTask,
 )
+from livekit.agents.inference import AudioTurnDetector
 from livekit.agents.llm.tool_context import ToolError, function_tool
 from livekit.agents.voice.events import RunContext
 from livekit.agents.worker import AgentServer
 from livekit.plugins import silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("dtmf-agent")
 
@@ -140,7 +140,7 @@ async def entrypoint(ctx: JobContext) -> None:
         llm=inference.LLM("openai/gpt-4.1-mini"),
         stt=inference.STT("deepgram/nova-3"),
         tts=inference.TTS("inworld/inworld-tts-1"),
-        turn_detection=MultilingualModel(),
+        turn_detection=AudioTurnDetector(),
     )
 
     @session.on("metrics_collected")

@@ -132,8 +132,8 @@ from livekit.agents import (
     metrics,
     room_io,
 )
+from livekit.agents.inference import AudioTurnDetector
 from livekit.plugins import inworld, silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("inworld-agent")
 
@@ -173,7 +173,7 @@ async def entrypoint(ctx: JobContext):
         stt=inworld.STT(model="inworld/inworld-stt-1"),
         llm="openai/gpt-4.1-mini",
         tts=inworld.TTS(voice="Clive"),
-        turn_detection=MultilingualModel(),
+        turn_detection=AudioTurnDetector(),
         vad=ctx.proc.userdata["vad"],
     )
 

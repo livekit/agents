@@ -15,8 +15,8 @@ from livekit.agents import (
     mcp,
     metrics,
 )
+from livekit.agents.inference import AudioTurnDetector
 from livekit.plugins import silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 load_dotenv(dotenv_path=".env.local")
 logger = logging.getLogger("voice-agent")
@@ -33,7 +33,7 @@ class Assistant(Agent):
             llm=inference.LLM("google/gemini-2.5-flash"),
             tts=inference.TTS("rime/arcana"),
             # use LiveKit's transformer-based turn detector
-            turn_detection=MultilingualModel(),
+            turn_detection=AudioTurnDetector(),
         )
 
     async def on_enter(self):

@@ -1,16 +1,15 @@
-"""Audio EOT transports: protocol + cloud (WS) + local (livekit-local-inference).
+"""Audio EOT transports: cloud (WebSocket) + local (livekit-local-inference).
 
-The local transport imports ``livekit.local_inference`` at module load. The
-package's pybind11 module loads its native lib in a constructor, so weight
-pages are resident before this module finishes importing and inherited via
-COW by forked job processes.
+The native model singleton is loaded once at module import via the
+``livekit.local_inference`` pybind11 constructor — weight pages are resident
+before this module finishes importing and inherited via COW by forked job
+processes.
 """
 
 from __future__ import annotations
 
 import asyncio
 import time
-import warnings
 import weakref
 from typing import TYPE_CHECKING, Any
 
@@ -19,33 +18,7 @@ import numpy as np
 from google.protobuf.timestamp_pb2 import Timestamp
 
 from livekit import rtc
-from livekit.agents import utils
-from livekit.agents._exceptions import (
-    APIConnectionError,
-    APIError,
-    APIStatusError,
-    APITimeoutError,
-    create_api_error_from_http,
-)
-from livekit.agents.inference._utils import create_access_token, get_inference_headers
-from livekit.agents.metrics import EOTInferenceMetrics
-from livekit.agents.metrics.base import Metadata
-from livekit.agents.types import APIConnectOptions
-from livekit.agents.utils import aio
-from livekit.agents.voice.turn import (
-    DEFAULT_SAMPLE_RATE,
-    TurnDetectorOptions,
-    _AudioTurnDetectionTransport,
-    _AudioTurnDetectorStream,
-)
-
-try:
-    from livekit.local_inference import EOT as _EOT
-except ImportError as _e:
-    _EOT = None  # type: ignore[misc,assignment]
-    _local_inference_import_error: BaseException | None = _e
-else:
-    _local_inference_import_error = None
+from livekit.local_inference import EOT as _EOT
 from livekit.protocol.agent_pb.agent_inference import (
     AUDIO_ENCODING_PCM_S16LE,
     ClientMessage,
@@ -60,10 +33,29 @@ from livekit.protocol.agent_pb.agent_inference import (
     SessionSettings,
 )
 
-from .log import logger
+from ... import utils
+from ..._exceptions import (
+    APIConnectionError,
+    APIError,
+    APIStatusError,
+    APITimeoutError,
+    create_api_error_from_http,
+)
+from ...log import logger
+from ...metrics import EOTInferenceMetrics
+from ...metrics.base import Metadata
+from ...types import APIConnectOptions
+from ...utils import aio
+from ...voice.turn import (
+    DEFAULT_SAMPLE_RATE,
+    TurnDetectorOptions,
+    _AudioTurnDetectionTransport,
+    _AudioTurnDetectorStream,
+)
+from .._utils import create_access_token, get_inference_headers
 
 if TYPE_CHECKING:
-    from .audio import AudioTurnDetector
+    from .detector import AudioTurnDetector
 
 
 __all__ = [
@@ -76,25 +68,6 @@ __all__ = [
 # Native model operates on up to 1.2 s of 16 kHz s16le PCM per predict.
 _CLIENT_BUFFER_SECONDS = 1.2
 _CLIENT_BUFFER_SAMPLES = int(_CLIENT_BUFFER_SECONDS * DEFAULT_SAMPLE_RATE)
-
-
-def _lib_available() -> bool:
-    return _EOT is not None
-
-
-def _get_lib_load_error() -> BaseException | None:
-    return _local_inference_import_error
-
-
-if _EOT is None:
-    # Surface the import failure at module load — the deferred RuntimeError
-    # at first use is otherwise easy to miss deep inside session bring-up.
-    warnings.warn(
-        f"livekit.plugins.turn_detector: `livekit-local-inference` not installed "
-        f"({_local_inference_import_error}). "
-        f"Local AudioTurnDetector will raise on first use.",
-        stacklevel=2,
-    )
 
 
 class _CloudTransport:
@@ -396,7 +369,7 @@ class _LocalTransport:
         )
         # EOT model singleton is shared across instances inside the native lib;
         # one Python-side handle per transport is fine.
-        self._eot = _EOT() if _EOT is not None else None
+        self._eot = _EOT()
         self._stream_ref: weakref.ref[_AudioTurnDetectorStream] | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
 
@@ -404,7 +377,7 @@ class _LocalTransport:
         self._stream_ref = weakref.ref(stream)
 
     def transport_ready(self) -> bool:
-        return self._eot is not None
+        return True
 
     def start_inference(self, request_id: str) -> None:
         task = asyncio.create_task(self._predict(request_id, self._buf.read()))
@@ -412,9 +385,6 @@ class _LocalTransport:
         task.add_done_callback(self._tasks.discard)
 
     async def _predict(self, request_id: str, pcm_snapshot: np.ndarray) -> None:
-        # ``transport_ready`` gated us on ``self._eot is not None``; runtime
-        # mutation is impossible since the field is set once at __init__.
-        assert self._eot is not None
         prob = 0.0
         t0 = time.monotonic()
         try:

@@ -16,13 +16,13 @@ from livekit.agents import (
     inference,
     metrics,
 )
+from livekit.agents.inference import AudioTurnDetector
 from livekit.agents.llm import FallbackAdapter as FallbackLLMAdapter, function_tool
 from livekit.agents.stt import FallbackAdapter as FallbackSTTAdapter
 from livekit.agents.telemetry import set_tracer_provider
 from livekit.agents.tts import FallbackAdapter as FallbackTTSAdapter
 from livekit.agents.voice import MetricsCollectedEvent
 from livekit.plugins import openai, silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("langfuse-trace-example")
 
@@ -95,7 +95,7 @@ class Kelly(Agent):
                     inference.TTS("rime/arcana"),
                 ]
             ),
-            turn_detection=MultilingualModel(),
+            turn_detection=AudioTurnDetector(),
             tools=[lookup_weather],
         )
 

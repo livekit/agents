@@ -1,3 +1,4 @@
+from .eot import AudioTurnDetector
 from .interruption import (
     AdaptiveInterruptionDetector,
     InterruptionDataFrameType,
@@ -20,4 +21,5 @@ __all__ = [
     "InterruptionDetectionError",
     "OverlappingSpeechEvent",
     "InterruptionDataFrameType",
+    "AudioTurnDetector",
 ]

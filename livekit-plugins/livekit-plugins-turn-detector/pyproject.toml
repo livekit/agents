@@ -23,7 +23,6 @@ classifiers = [
 dependencies = [
     "livekit-agents>=1.5.12",
     "aiohttp",
-    "livekit-local-inference>=0.2.5",
     "livekit-protocol",
     "transformers>=4.47.1,!=4.57.2,!=4.57.3",  # 4.57.2-4.57.3 have a bug with local_files_only=True (huggingface/transformers#42369)
     "numpy>=1.26",

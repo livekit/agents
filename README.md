@@ -47,7 +47,7 @@ agents that can see, hear, and understand.
 To install the core Agents library, along with plugins for popular model providers:
 
 ```bash
-pip install "livekit-agents[openai,silero,deepgram,cartesia,turn-detector]"
+pip install "livekit-agents[openai,silero,deepgram,cartesia]"
 ```
 
 ## Docs and guides

@@ -3,8 +3,8 @@ import logging
 from dotenv import load_dotenv
 
 from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli, inference, mcp
+from livekit.agents.inference import AudioTurnDetector
 from livekit.plugins import silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("mcp-agent")
 
@@ -36,7 +36,7 @@ async def entrypoint(ctx: JobContext):
         stt=inference.STT("deepgram/nova-3", language="multi"),
         llm=inference.LLM("openai/gpt-4.1-mini"),
         tts=inference.TTS("cartesia/sonic-3"),
-        turn_detection=MultilingualModel(),
+        turn_detection=AudioTurnDetector(),
         tools=[
             mcp.MCPToolset(
                 id="mcp_toolset_1", mcp_server=mcp.MCPServerHTTP(url="http://localhost:8000/sse")

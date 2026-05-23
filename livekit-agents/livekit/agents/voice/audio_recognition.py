@@ -1187,10 +1187,9 @@ class AudioRecognition:
             if self._turn_detection_ch is not None:
                 self._turn_detection_ch.send_nowait(ev)
 
-            if (
-                self._vad_base_turn_detection
-                and not isinstance(self._turn_detector, _AudioTurnDetector)
-            ) or (self._turn_detection_mode == "stt" and self._user_turn_committed):
+            if self._vad_base_turn_detection or (
+                self._turn_detection_mode == "stt" and self._user_turn_committed
+            ):
                 chat_ctx = self._hooks.retrieve_chat_ctx().copy()
                 self._run_eou_detection(chat_ctx, trigger="vad")
 

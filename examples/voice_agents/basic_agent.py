@@ -18,9 +18,9 @@ from livekit.agents import (
     text_transforms,
 )
 from livekit.agents.beta import EndCallTool
+from livekit.agents.inference import AudioTurnDetector
 from livekit.agents.llm import function_tool
 from livekit.plugins import silero
-from livekit.plugins.turn_detector.audio import AudioTurnDetector
 
 # uncomment to enable Krisp background voice/noise cancellation
 # from livekit.plugins import noise_cancellation
