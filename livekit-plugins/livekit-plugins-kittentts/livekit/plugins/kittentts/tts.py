@@ -15,9 +15,10 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import uuid
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
@@ -133,7 +134,7 @@ class TTS(tts.TTS):
 
             def load_model() -> Any:
                 try:
-                    from kittentts import KittenTTS
+                    kittentts_module = importlib.import_module("kittentts")
                 except ModuleNotFoundError as e:
                     raise ModuleNotFoundError(
                         "KittenTTS is required. Install it with "
@@ -142,6 +143,7 @@ class TTS(tts.TTS):
                         "kittentts-0.8.1-py3-none-any.whl`."
                     ) from e
 
+                KittenTTS = cast(Any, kittentts_module).KittenTTS
                 return KittenTTS(opts.model, cache_dir=opts.cache_dir, backend=opts.backend)
 
             self._model = await asyncio.to_thread(load_model)

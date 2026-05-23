@@ -12,7 +12,7 @@ from livekit.plugins.kittentts import tts as kittentts_tts
 
 
 class FakeKittenTTS:
-    instances: list["FakeKittenTTS"] = []
+    instances: list[FakeKittenTTS] = []
 
     def __init__(self, model_name: str, cache_dir: str | None = None, backend: str | None = None):
         self.model_name = model_name
