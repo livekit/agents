@@ -29,7 +29,6 @@ from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli, in
 from livekit.agents.llm import function_tool
 from livekit.plugins import silero
 
-
 logger = logging.getLogger("ejentum-cognitive-harness")
 logger.setLevel(logging.INFO)
 
@@ -91,9 +90,7 @@ class CognitiveHarnessAgent(Agent):
                 ) as r:
                     if r.status != 200:
                         body = await r.text()
-                        logger.warning(
-                            "Ejentum API %s: %s", r.status, body[:200]
-                        )
+                        logger.warning("Ejentum API %s: %s", r.status, body[:200])
                         return ""
                     payload = await r.json()
         except Exception:
@@ -102,9 +99,7 @@ class CognitiveHarnessAgent(Agent):
 
         if isinstance(payload, list) and payload:
             scaffold = payload[0].get(mode, "")
-            logger.info(
-                "Scaffold retrieved", extra={"mode": mode, "length": len(scaffold)}
-            )
+            logger.info("Scaffold retrieved", extra={"mode": mode, "length": len(scaffold)})
             return scaffold
         return ""
 
@@ -119,9 +114,7 @@ async def entrypoint(ctx: JobContext) -> None:
 
     await session.start(agent=CognitiveHarnessAgent(), room=ctx.room)
     await session.generate_reply(
-        instructions=(
-            "Greet the user briefly and ask what they would like to think through."
-        ),
+        instructions=("Greet the user briefly and ask what they would like to think through."),
     )
 
 
