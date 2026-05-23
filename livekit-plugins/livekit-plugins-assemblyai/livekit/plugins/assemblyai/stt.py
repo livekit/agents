@@ -112,8 +112,15 @@ class STT(stt.STT):
                 Defaults to 0.4.
             min_turn_silence: Minimum silence in ms before a confident end-of-turn is finalized.
             min_end_of_turn_silence_when_confident: Deprecated. Use min_turn_silence instead.
-            continuous_partials: Emit partial transcripts continuously as new audio arrives,
-                rather than only when stable. Only supported with the 'u3-rt-pro' model.
+            continuous_partials: Whether to emit additional partial transcripts during long
+                turns at a steady ~3 second cadence. By default, partials are emitted at
+                two points: one at 750 ms after turn start (configurable via
+                `interruption_delay`), and one each time silence exceeds
+                `min_turn_silence` without ending the turn. When enabled (default in
+                LiveKit; AssemblyAI server defaults to False), additional partials covering
+                the full turn transcript are emitted approximately every 3 seconds while
+                speech continues, on top of those baseline partials. Only supported with
+                the 'u3-rt-pro' model.
             interruption_delay: How soon the first early partial is emitted, in ms.
                 Range 0–1000, default 500. Lower values produce faster time-to-first-token
                 for barge-in; higher values produce more confident first partials. Only
@@ -144,6 +151,12 @@ class STT(stt.STT):
             raise ValueError(
                 "The 'interruption_delay' parameter is only supported with the 'u3-rt-pro' model."
             )
+
+        # LiveKit defaults continuous_partials to True (vs. AssemblyAI's server default of
+        # False) for steady-cadence partials. This parameter is only supported for
+        # u3-rt-pro, enforced by the validation above.
+        if not is_given(continuous_partials) and model == "u3-rt-pro":
+            continuous_partials = True
 
         self._base_url = base_url
         assemblyai_api_key = api_key if is_given(api_key) else os.environ.get("ASSEMBLYAI_API_KEY")
@@ -243,6 +256,7 @@ class STT(stt.STT):
         keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         continuous_partials: NotGivenOr[bool] = NOT_GIVEN,
+        interruption_delay: NotGivenOr[int] = NOT_GIVEN,
         # Deprecated — use min_turn_silence instead
         min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
@@ -270,6 +284,8 @@ class STT(stt.STT):
             self._opts.vad_threshold = vad_threshold
         if is_given(continuous_partials):
             self._opts.continuous_partials = continuous_partials
+        if is_given(interruption_delay):
+            self._opts.interruption_delay = interruption_delay
 
         for stream in self._streams:
             stream.update_options(
@@ -281,6 +297,7 @@ class STT(stt.STT):
                 keyterms_prompt=keyterms_prompt,
                 vad_threshold=vad_threshold,
                 continuous_partials=continuous_partials,
+                interruption_delay=interruption_delay,
             )
 
 
@@ -335,6 +352,7 @@ class SpeechStream(stt.SpeechStream):
         keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         continuous_partials: NotGivenOr[bool] = NOT_GIVEN,
+        interruption_delay: NotGivenOr[int] = NOT_GIVEN,
         # Deprecated — use min_turn_silence instead
         min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
@@ -362,6 +380,8 @@ class SpeechStream(stt.SpeechStream):
             self._opts.vad_threshold = vad_threshold
         if is_given(continuous_partials):
             self._opts.continuous_partials = continuous_partials
+        if is_given(interruption_delay):
+            self._opts.interruption_delay = interruption_delay
 
         # Send UpdateConfiguration message over the active websocket
         config_msg: dict = {"type": "UpdateConfiguration"}
@@ -377,6 +397,8 @@ class SpeechStream(stt.SpeechStream):
             config_msg["end_of_turn_confidence_threshold"] = end_of_turn_confidence_threshold
         if is_given(continuous_partials):
             config_msg["continuous_partials"] = continuous_partials
+        if is_given(interruption_delay):
+            config_msg["interruption_delay"] = interruption_delay
         if is_given(vad_threshold):
             config_msg["vad_threshold"] = vad_threshold
 

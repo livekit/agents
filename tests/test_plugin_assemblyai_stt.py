@@ -230,15 +230,53 @@ async def test_continuous_partials_update():
     assert stt._opts.continuous_partials is True
 
 
-async def test_continuous_partials_update_from_default():
-    """Test continuous_partials can be set via update_options when not initially set."""
+async def test_continuous_partials_defaults_to_true_for_u3_rt_pro():
+    """Test continuous_partials defaults to True when model is u3-rt-pro (LiveKit-only
+    default; AssemblyAI server defaults to False)."""
     from livekit.plugins.assemblyai import STT
 
     stt = STT(api_key="test-key", model="u3-rt-pro")
-    assert stt._opts.continuous_partials is NOT_GIVEN
-
-    stt.update_options(continuous_partials=True)
     assert stt._opts.continuous_partials is True
+
+
+async def test_continuous_partials_explicit_false_overrides_livekit_default():
+    """Test explicit continuous_partials=False overrides the LiveKit-only True default."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model="u3-rt-pro", continuous_partials=False)
+    assert stt._opts.continuous_partials is False
+
+
+async def test_continuous_partials_update_from_default():
+    """Test continuous_partials can be updated via update_options away from LiveKit default."""
+    from livekit.plugins.assemblyai import STT
+
+    # LiveKit defaults this to True for u3-rt-pro
+    stt = STT(api_key="test-key", model="u3-rt-pro")
+    assert stt._opts.continuous_partials is True
+
+    stt.update_options(continuous_partials=False)
+    assert stt._opts.continuous_partials is False
+
+
+async def test_interruption_delay_update():
+    """Test interruption_delay can be updated dynamically via update_options."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model="u3-rt-pro", interruption_delay=200)
+    stt.update_options(interruption_delay=750)
+    assert stt._opts.interruption_delay == 750
+
+
+async def test_interruption_delay_update_from_default():
+    """Test interruption_delay can be set via update_options when not initially set."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model="u3-rt-pro")
+    assert stt._opts.interruption_delay is NOT_GIVEN
+
+    stt.update_options(interruption_delay=300)
+    assert stt._opts.interruption_delay == 300
 
 
 async def test_interruption_delay_default():
