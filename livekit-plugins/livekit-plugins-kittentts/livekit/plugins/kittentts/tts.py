@@ -40,7 +40,6 @@ class _TTSOptions:
     speed: float
     clean_text: bool
     cache_dir: str | None
-    backend: str | None
 
 
 def _audio_to_pcm16(audio: Any) -> bytes:
@@ -67,7 +66,6 @@ class TTS(tts.TTS):
         speed: float = DEFAULT_SPEED,
         clean_text: bool = True,
         cache_dir: str | None = None,
-        backend: str | None = None,
     ) -> None:
         """Create a KittenTTS text-to-speech instance."""
         super().__init__(
@@ -81,7 +79,6 @@ class TTS(tts.TTS):
             speed=speed,
             clean_text=clean_text,
             cache_dir=cache_dir,
-            backend=backend,
         )
         self._model: Any | None = None
         self._opts_revision = 0
@@ -103,7 +100,6 @@ class TTS(tts.TTS):
         speed: NotGivenOr[float] = NOT_GIVEN,
         clean_text: NotGivenOr[bool] = NOT_GIVEN,
         cache_dir: NotGivenOr[str | None] = NOT_GIVEN,
-        backend: NotGivenOr[str | None] = NOT_GIVEN,
     ) -> None:
         reset_model = False
         if is_given(model) and model != self._opts.model:
@@ -111,9 +107,6 @@ class TTS(tts.TTS):
             reset_model = True
         if is_given(cache_dir) and cache_dir != self._opts.cache_dir:
             self._opts.cache_dir = cache_dir
-            reset_model = True
-        if is_given(backend) and backend != self._opts.backend:
-            self._opts.backend = backend
             reset_model = True
         if is_given(voice):
             self._opts.voice = voice
@@ -148,7 +141,7 @@ class TTS(tts.TTS):
                         ) from e
 
                     KittenTTS = cast(Any, kittentts_module).KittenTTS
-                    return KittenTTS(opts.model, cache_dir=opts.cache_dir, backend=opts.backend)
+                    return KittenTTS(opts.model, cache_dir=opts.cache_dir)
 
                 model = await asyncio.to_thread(load_model)
                 if opts_revision == self._opts_revision:

@@ -16,10 +16,9 @@ from livekit.plugins.kittentts import tts as kittentts_tts
 class FakeKittenTTS:
     instances: list[FakeKittenTTS] = []
 
-    def __init__(self, model_name: str, cache_dir: str | None = None, backend: str | None = None):
+    def __init__(self, model_name: str, cache_dir: str | None = None):
         self.model_name = model_name
         self.cache_dir = cache_dir
-        self.backend = backend
         self.calls = []
         FakeKittenTTS.instances.append(self)
 
@@ -51,7 +50,6 @@ async def test_synthesize_returns_pcm_audio() -> None:
         speed=1.2,
         clean_text=False,
         cache_dir="/tmp/kittentts-cache",
-        backend="cpu",
     )
 
     frame = await service.synthesize("hello").collect()
@@ -64,7 +62,6 @@ async def test_synthesize_returns_pcm_audio() -> None:
     fake_model = FakeKittenTTS.instances[0]
     assert fake_model.model_name == "KittenML/kitten-tts-nano-0.8"
     assert fake_model.cache_dir == "/tmp/kittentts-cache"
-    assert fake_model.backend == "cpu"
     assert fake_model.calls == [
         {
             "text": "hello",
@@ -98,13 +95,11 @@ async def test_update_options_discards_stale_concurrent_model_load() -> None:
     release = threading.Event()
 
     class BlockingKittenTTS(FakeKittenTTS):
-        def __init__(
-            self, model_name: str, cache_dir: str | None = None, backend: str | None = None
-        ):
+        def __init__(self, model_name: str, cache_dir: str | None = None):
             if model_name == "old-model":
                 started.set()
                 assert release.wait(timeout=5)
-            super().__init__(model_name, cache_dir=cache_dir, backend=backend)
+            super().__init__(model_name, cache_dir=cache_dir)
 
     sys.modules["kittentts"].KittenTTS = BlockingKittenTTS
     service = kittentts_tts.TTS(model="old-model")
