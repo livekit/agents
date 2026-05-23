@@ -17,6 +17,8 @@
 See https://docs.livekit.io/agents/build/turns/vad/ for more information.
 """
 
+import warnings
+
 from .vad import VAD, VADStream
 from .version import __version__
 
@@ -25,6 +27,13 @@ __all__ = ["VAD", "VADStream", "__version__"]
 from livekit.agents import Plugin
 
 from .log import logger
+
+warnings.warn(
+    "livekit-plugins-silero is deprecated and will be removed in v2.0. "
+    'Use `from livekit.agents import inference; inference.VAD(model="silero")` instead.',
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 
 class SileroPlugin(Plugin):

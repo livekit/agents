@@ -18,7 +18,6 @@ from livekit.agents import (
 from livekit.agents.voice.avatar import DataStreamAudioOutput
 from livekit.agents.voice.io import PlaybackFinishedEvent, PlaybackStartedEvent
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
-from livekit.plugins import silero
 
 load_dotenv()
 
@@ -75,7 +74,7 @@ async def entrypoint(ctx: JobContext):
         stt=inference.STT("deepgram/nova-3"),
         llm=inference.LLM("google/gemini-2.5-flash"),
         tts=inference.TTS("cartesia/sonic-3"),
-        vad=silero.VAD.load(),
+        vad=inference.VAD(model="silero"),
         resume_false_interruption=False,
     )
 

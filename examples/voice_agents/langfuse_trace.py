@@ -22,7 +22,7 @@ from livekit.agents.stt import FallbackAdapter as FallbackSTTAdapter
 from livekit.agents.telemetry import set_tracer_provider
 from livekit.agents.tts import FallbackAdapter as FallbackTTSAdapter
 from livekit.agents.voice import MetricsCollectedEvent
-from livekit.plugins import openai, silero
+from livekit.plugins import openai
 
 logger = logging.getLogger("langfuse-trace-example")
 
@@ -149,7 +149,7 @@ async def entrypoint(ctx: JobContext):
 
     ctx.add_shutdown_callback(flush_trace)
 
-    session = AgentSession(vad=silero.VAD.load())
+    session = AgentSession(vad=inference.VAD(model="silero"))
 
     @session.on("metrics_collected")
     def _on_metrics_collected(ev: MetricsCollectedEvent):

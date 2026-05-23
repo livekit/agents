@@ -39,7 +39,6 @@ from livekit.agents.evals import (
     tool_use_judge,
 )
 from livekit.agents.inference import AudioTurnDetector
-from livekit.plugins import silero
 
 load_dotenv()
 
@@ -267,7 +266,7 @@ async def frontdesk_agent(ctx: JobContext):
         llm=inference.LLM("google/gemini-2.5-flash"),
         tts=inference.TTS("cartesia/sonic-3", voice="39b376fc-488e-4d0c-8b37-e00b72059fdd"),
         turn_detection=AudioTurnDetector(),
-        vad=silero.VAD.load(),
+        vad=inference.VAD(model="silero"),
         max_tool_steps=1,
     )
 

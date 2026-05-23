@@ -10,7 +10,6 @@ from livekit.agents import (
     AgentSession,
     AutoSubscribe,
     JobContext,
-    JobProcess,
     StopResponse,
     cli,
     inference,
@@ -18,7 +17,6 @@ from livekit.agents import (
     room_io,
     utils,
 )
-from livekit.plugins import silero
 
 load_dotenv()
 
@@ -92,7 +90,7 @@ class MultiUserTranscriber:
             return self._sessions[participant.identity]
 
         session = AgentSession(
-            vad=self.ctx.proc.userdata["vad"],
+            vad=inference.VAD(model="silero"),
         )
         await session.start(
             agent=Transcriber(
@@ -135,12 +133,6 @@ async def entrypoint(ctx: JobContext):
 
     ctx.add_shutdown_callback(cleanup)
 
-
-def prewarm(proc: JobProcess):
-    proc.userdata["vad"] = silero.VAD.load()
-
-
-server.setup_fnc = prewarm
 
 if __name__ == "__main__":
     cli.run_app(server)

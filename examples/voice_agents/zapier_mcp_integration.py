@@ -9,14 +9,12 @@ from livekit.agents import (
     AgentSession,
     AutoSubscribe,
     JobContext,
-    JobProcess,
     cli,
     inference,
     mcp,
     metrics,
 )
 from livekit.agents.inference import AudioTurnDetector
-from livekit.plugins import silero
 
 load_dotenv(dotenv_path=".env.local")
 logger = logging.getLogger("voice-agent")
@@ -45,13 +43,6 @@ class Assistant(Agent):
 server = AgentServer()
 
 
-def prewarm(proc: JobProcess):
-    proc.userdata["vad"] = silero.VAD.load()
-
-
-server.setup_fnc = prewarm
-
-
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     logger.info(f"connecting to room {ctx.room.name}")
@@ -75,7 +66,7 @@ async def entrypoint(ctx: JobContext):
         logger.warning("ZAPIER_MCP_SERVER environment variable not set. MCP integration disabled.")
 
     session = AgentSession(
-        vad=ctx.proc.userdata["vad"],
+        vad=inference.VAD(model="silero"),
         # minimum delay for endpointing, used when turn detector believes the user is done with their turn  # noqa: E501
         min_endpointing_delay=0.5,
         # maximum delay for endpointing, used when turn detector does not believe the user is done with their turn  # noqa: E501

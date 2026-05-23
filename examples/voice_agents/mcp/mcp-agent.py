@@ -4,7 +4,6 @@ from dotenv import load_dotenv
 
 from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli, inference, mcp
 from livekit.agents.inference import AudioTurnDetector
-from livekit.plugins import silero
 
 logger = logging.getLogger("mcp-agent")
 
@@ -32,7 +31,7 @@ server = AgentServer()
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
-        vad=silero.VAD.load(),
+        vad=inference.VAD(model="silero"),
         stt=inference.STT("deepgram/nova-3", language="multi"),
         llm=inference.LLM("openai/gpt-4.1-mini"),
         tts=inference.TTS("cartesia/sonic-3"),

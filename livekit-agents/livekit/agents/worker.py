@@ -714,12 +714,13 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 )
 
             if self._mp_ctx_str == "forkserver":
-                # Preloading ``livekit.local_inference`` in the forkserver
-                # triggers the pybind11 constructor that pages in EOT model
-                # weights; each forked job inherits those pages via COW.
+                # `livekit.agents.inference._warmup` is a side-effect module:
+                # importing it from the forkserver process calls `init_vad()` and
+                # `init_eot()`, paging the native model weights into the
+                # forkserver. Forked job processes inherit those pages via COW.
                 plugin_packages = [p.package for p in Plugin.registered_plugins] + [
                     "av",
-                    "livekit.local_inference",
+                    "livekit.agents.inference._warmup",
                 ]
                 logger.info("preloading plugins", extra={"packages": plugin_packages})
                 self._mp_ctx.set_forkserver_preload(plugin_packages)

@@ -53,10 +53,11 @@ from livekit.agents import (
     AgentSession,
     AutoSubscribe,
     ToolError,
+    inference,
     room_io,
 )
 from livekit.agents.llm import function_tool
-from livekit.plugins import aws, silero
+from livekit.plugins import aws
 
 load_dotenv()
 
@@ -221,7 +222,7 @@ async def entrypoint(ctx: agents.JobContext):
                     stt=aws.STT(),
                     llm=aws.LLM(),
                     tts=aws.TTS(),
-                    vad=silero.VAD.load(),
+                    vad=inference.VAD(model="silero"),
                 )
             else:
                 print("⚡ Using REALTIME mode: Nova Sonic 2.0")

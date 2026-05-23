@@ -16,10 +16,11 @@ from livekit.agents import (
     AutoSubscribe,
     JobContext,
     cli,
+    inference,
     llm,
 )
 from livekit.agents.voice.agent import ModelSettings
-from livekit.plugins import deepgram, openai, silero
+from livekit.plugins import deepgram, openai
 
 load_dotenv()
 
@@ -46,7 +47,7 @@ class RetrievalAgent(Agent):
                 "with users will be voice. You should use short and concise "
                 "responses, and avoiding usage of unpronouncable punctuation."
             ),
-            vad=silero.VAD.load(),
+            vad=inference.VAD(model="silero"),
             stt=deepgram.STT(),
             llm=openai.LLM(),
             tts=openai.TTS(),
