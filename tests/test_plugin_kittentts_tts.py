@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
+import threading
 import types
 
 import numpy as np
@@ -88,3 +90,35 @@ def test_metadata_properties() -> None:
     assert service.sample_rate == 24000
     assert service.num_channels == 1
     assert service.capabilities.streaming is False
+
+
+@pytest.mark.asyncio
+async def test_update_options_discards_stale_concurrent_model_load() -> None:
+    started = threading.Event()
+    release = threading.Event()
+
+    class BlockingKittenTTS(FakeKittenTTS):
+        def __init__(
+            self, model_name: str, cache_dir: str | None = None, backend: str | None = None
+        ):
+            if model_name == "old-model":
+                started.set()
+                assert release.wait(timeout=5)
+            super().__init__(model_name, cache_dir=cache_dir, backend=backend)
+
+    sys.modules["kittentts"].KittenTTS = BlockingKittenTTS
+    service = kittentts_tts.TTS(model="old-model")
+
+    load_task = asyncio.create_task(service._ensure_model())
+    assert await asyncio.to_thread(started.wait, 5)
+
+    service.update_options(model="new-model")
+    release.set()
+
+    model = await load_task
+
+    assert model.model_name == "new-model"
+    assert [instance.model_name for instance in FakeKittenTTS.instances] == [
+        "old-model",
+        "new-model",
+    ]

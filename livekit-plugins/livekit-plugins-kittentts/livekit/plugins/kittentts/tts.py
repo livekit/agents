@@ -84,6 +84,7 @@ class TTS(tts.TTS):
             backend=backend,
         )
         self._model: Any | None = None
+        self._opts_revision = 0
         self._model_lock = asyncio.Lock()
 
     @property
@@ -121,33 +122,38 @@ class TTS(tts.TTS):
         if is_given(clean_text):
             self._opts.clean_text = clean_text
         if reset_model:
+            self._opts_revision += 1
             self._model = None
 
     async def _ensure_model(self) -> Any:
         if self._model is not None:
             return self._model
 
-        async with self._model_lock:
-            if self._model is not None:
-                return self._model
-            opts = replace(self._opts)
+        while True:
+            async with self._model_lock:
+                if self._model is not None:
+                    return self._model
+                opts = replace(self._opts)
+                opts_revision = self._opts_revision
 
-            def load_model() -> Any:
-                try:
-                    kittentts_module = importlib.import_module("kittentts")
-                except ModuleNotFoundError as e:
-                    raise ModuleNotFoundError(
-                        "KittenTTS is required. Install it with "
-                        "`pip install "
-                        "https://github.com/KittenML/KittenTTS/releases/download/0.8.1/"
-                        "kittentts-0.8.1-py3-none-any.whl`."
-                    ) from e
+                def load_model(opts: _TTSOptions = opts) -> Any:
+                    try:
+                        kittentts_module = importlib.import_module("kittentts")
+                    except ModuleNotFoundError as e:
+                        raise ModuleNotFoundError(
+                            "KittenTTS is required. Install it with "
+                            "`pip install "
+                            "https://github.com/KittenML/KittenTTS/releases/download/0.8.1/"
+                            "kittentts-0.8.1-py3-none-any.whl`."
+                        ) from e
 
-                KittenTTS = cast(Any, kittentts_module).KittenTTS
-                return KittenTTS(opts.model, cache_dir=opts.cache_dir, backend=opts.backend)
+                    KittenTTS = cast(Any, kittentts_module).KittenTTS
+                    return KittenTTS(opts.model, cache_dir=opts.cache_dir, backend=opts.backend)
 
-            self._model = await asyncio.to_thread(load_model)
-            return self._model
+                model = await asyncio.to_thread(load_model)
+                if opts_revision == self._opts_revision:
+                    self._model = model
+                    return self._model
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
