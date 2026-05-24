@@ -64,20 +64,20 @@ def _frame_gain(
     """
     fade_in_n = int(fade_in * sample_rate) if fade_in > 0 else 0
     fade_out_n = int(fade_out * sample_rate) if fade_out > 0 else 0
-    in_fade_in = fade_in_n > 0 and t < fade_in_n
-    in_fade_out = fade_out_n > 0 and stop_t is not None
-    if not in_fade_in and not in_fade_out and volume == 1.0:
+    needs_fade_in = fade_in_n > 0 and t < fade_in_n
+    needs_fade_out = fade_out_n > 0 and stop_t is not None
+    if not needs_fade_in and not needs_fade_out and volume == 1.0:
         return None
 
     gain = np.full(n, volume, dtype=np.float32)
-    if in_fade_in or in_fade_out:
+    if needs_fade_in:
         idx = t + np.arange(n)
-        if in_fade_in:
-            phase = np.clip(idx / fade_in_n, 0.0, 1.0)
-            gain *= np.sin(phase * (np.pi / 2)).astype(np.float32)
-        if in_fade_out:
-            phase = np.clip((idx - stop_t) / fade_out_n, 0.0, 1.0)
-            gain *= np.cos(phase * (np.pi / 2)).astype(np.float32)
+        phase = np.clip(idx / fade_in_n, 0.0, 1.0)
+        gain *= np.sin(phase * (np.pi / 2)).astype(np.float32)
+    if stop_t is not None and fade_out_n > 0:
+        idx = t + np.arange(n)
+        phase = np.clip((idx - stop_t) / fade_out_n, 0.0, 1.0)
+        gain *= np.cos(phase * (np.pi / 2)).astype(np.float32)
     return gain
 
 
