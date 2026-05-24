@@ -29,7 +29,7 @@ from livekit.agents import (
     stt,
     utils,
 )
-from livekit.agents._exceptions import APIConnectionError, APIStatusError
+from livekit.agents._exceptions import APIConnectionError, APIError, APIStatusError
 from livekit.agents.types import NOT_GIVEN, NotGivenOr, TimedString
 from livekit.agents.utils import is_given
 
@@ -138,9 +138,17 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
                     continue
 
                 try:
-                    self._process_stream_event(json.loads(msg.data))
+                    data = json.loads(msg.data)
                 except Exception:
-                    logger.exception("failed to process Cartesia STT message")
+                    logger.exception("failed to parse Cartesia STT message")
+                    continue
+                else:
+                    try:
+                        self._process_stream_event(data)
+                    except (APIError, APIConnectionError):
+                        raise
+                    except Exception:
+                        logger.exception("failed to process Cartesia STT message")
 
         ws: aiohttp.ClientWebSocketResponse | None = None
 

@@ -27,6 +27,7 @@ from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     LanguageCode,
     stt,
     utils,
@@ -267,6 +268,8 @@ class TurnsRecognizeStream(CartesiaRecognizeStream):
                 else:
                     try:
                         self._process_stream_event(data)
+                    except (APIError, APIConnectionError):
+                        raise
                     except Exception:
                         logger.exception("failed to process Cartesia STT message")
 
@@ -454,6 +457,7 @@ class TurnsRecognizeStream(CartesiaRecognizeStream):
             logger.warning("cartesia sent an error", extra={"data": data})
             if status_code >= 500:
                 raise APIConnectionError(message=message, retryable=True)
+            return
 
         logger.warning("received unexpected message from Cartesia STT: %s", data)
 
