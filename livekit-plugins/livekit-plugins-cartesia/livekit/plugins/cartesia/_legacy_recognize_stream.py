@@ -115,20 +115,14 @@ class STTErrorEvent(TypedDict):
 
     Attributes:
         type: Event discriminator.
-        error_code: Stable code identifying the error.
-        status_code: HTTP-style status code; values >= 500 are treated as retryable.
-        title: Short human-readable error title.
-        message: Detailed human-readable error message.
-        doc_url: URL to documentation describing this error.
+        code: HTTP-style status code; values >= 500 are treated as retryable.
+        message: Human-readable error message.
         request_id: Unique identifier for this WebSocket connection.
     """
 
     type: Literal["error"]
-    error_code: NotRequired[str]
-    status_code: NotRequired[int]
-    title: NotRequired[str]
+    code: NotRequired[int]
     message: NotRequired[str]
-    doc_url: NotRequired[str]
     request_id: NotRequired[str]
 
 
@@ -410,8 +404,8 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
             logger.debug("Received done acknowledgment from Cartesia STT - session closing")
 
         elif data["type"] == "error":
-            message = data.get("message") or data.get("title") or "unknown error from cartesia"
-            status_code = data.get("status_code") or 500
+            message = data.get("message") or "unknown error from cartesia"
+            status_code = data.get("code") or 500
             logger.warning("cartesia sent an error", extra={"data": data})
             if status_code >= 500:
                 raise APIConnectionError(message=message, retryable=True)
