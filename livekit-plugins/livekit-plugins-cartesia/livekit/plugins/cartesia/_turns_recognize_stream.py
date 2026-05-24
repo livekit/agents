@@ -17,10 +17,11 @@ from __future__ import annotations
 import asyncio
 import json
 import warnings
+from typing import Literal
 from urllib.parse import urlencode
 
 import aiohttp
-from typing_extensions import override
+from typing_extensions import NotRequired, TypedDict, override
 
 from livekit import rtc
 from livekit.agents import (
@@ -43,6 +44,132 @@ from .constants import (
 )
 from .log import logger
 from .models import STTEncoding, STTLanguages, TurnDetectingSTTModel
+
+
+class STTConnectedEvent(TypedDict):
+    """Fires once when the WebSocket connection is established.
+
+    You do not need to wait for this event before sending audio.
+
+    Attributes:
+        type: Event discriminator.
+        request_id: Unique identifier for this connection. Does not change between turns.
+    """
+
+    type: Literal["connected"]
+    request_id: str
+
+
+class STTTurnStartEvent(TypedDict):
+    """Model predicts the start of a user turn.
+
+    Attributes:
+        type: Event discriminator.
+        request_id: Unique identifier for this connection. Does not change between turns.
+    """
+
+    type: Literal["turn.start"]
+    request_id: str
+
+
+class STTTurnUpdateEvent(TypedDict):
+    """Fires repeatedly as the model transcribes the current user turn.
+
+    Used for interim transcript events.
+
+    Attributes:
+        type: Event discriminator.
+        transcript: Cumulative text for the current turn, i.e. the full text transcribed
+            so far in this turn, not a delta.
+        request_id: Unique identifier for this connection. Does not change between turns.
+    """
+
+    type: Literal["turn.update"]
+    transcript: str
+    request_id: str
+
+
+class STTTurnEagerEndEvent(TypedDict):
+    """Fires when the model predicts the user might be done speaking.
+
+    Used for preflight transcript events.
+
+    Attributes:
+        type: Event discriminator.
+        transcript: Cumulative text for the current turn, i.e. the full text transcribed
+            so far in this turn, not a delta.
+        request_id: Unique identifier for this connection. Does not change between turns.
+    """
+
+    type: Literal["turn.eager_end"]
+    transcript: str
+    request_id: str
+
+
+class STTTurnResumeEvent(TypedDict):
+    """Fires after ``turn.eager_end`` if the user turn has not actually ended.
+
+    Attributes:
+        type: Event discriminator.
+        request_id: Unique identifier for this connection. Does not change between turns.
+    """
+
+    type: Literal["turn.resume"]
+    request_id: str
+
+
+class STTTurnEndEvent(TypedDict):
+    """Marks the end of a user turn.
+
+    Used for end-of-speech and final transcript events.
+
+    Attributes:
+        type: Event discriminator.
+        transcript: Cumulative text for the current turn, i.e. the full text transcribed
+            so far in this turn, not a delta.
+        request_id: Unique identifier for this connection. Does not change between turns.
+    """
+
+    type: Literal["turn.end"]
+    transcript: str
+    request_id: str
+
+
+class STTErrorEvent(TypedDict):
+    """Error event sent by the server.
+
+    Attributes:
+        type: Event discriminator.
+        error_code: Stable code identifying the error.
+        status_code: HTTP-style status code; values >= 500 are treated as retryable.
+        title: Short human-readable error title.
+        message: Detailed human-readable error message.
+        doc_url: URL to documentation describing this error.
+        request_id: Unique identifier for this connection. Does not change between turns.
+    """
+
+    type: Literal["error"]
+    error_code: NotRequired[str]
+    status_code: NotRequired[int]
+    title: NotRequired[str]
+    message: NotRequired[str]
+    doc_url: NotRequired[str]
+    request_id: NotRequired[str]
+
+
+STTEventMessage = (
+    STTConnectedEvent
+    | STTTurnStartEvent
+    | STTTurnUpdateEvent
+    | STTTurnEagerEndEvent
+    | STTTurnResumeEvent
+    | STTTurnEndEvent
+    | STTErrorEvent
+)
+"""Server-sent event on the ``/stt/turns/websocket`` endpoint.
+
+See https://docs.cartesia.ai/api-reference/stt/turns/websocket.
+"""
 
 
 class TurnsRecognizeStream(CartesiaRecognizeStream):
@@ -133,18 +260,10 @@ class TurnsRecognizeStream(CartesiaRecognizeStream):
                     continue
 
                 try:
-                    data = json.loads(msg.data)
+                    data: STTEventMessage = json.loads(msg.data)
                 except Exception:
                     logger.exception("failed to parse Cartesia STT message")
                     continue
-                if data.get("type") == "error":
-                    message = (
-                        data.get("message") or data.get("title") or "unknown error from cartesia"
-                    )
-                    status_code = data.get("status_code") or 500
-                    logger.warning("cartesia sent an error", extra={"data": data})
-                    if status_code >= 500:
-                        raise APIConnectionError(message=message, retryable=True)
                 else:
                     try:
                         self._process_stream_event(data)
@@ -252,17 +371,14 @@ class TurnsRecognizeStream(CartesiaRecognizeStream):
             )
         )
 
-    def _process_stream_event(self, data: dict) -> None:
-        """Process incoming WebSocket messages."""
-        message_type = data.get("type")
-
+    def _process_stream_event(self, data: STTEventMessage) -> None:
         if request_id := data.get("request_id"):
             self._request_id = request_id
 
-        if message_type == "connected":
+        if data["type"] == "connected":
             return
 
-        if message_type == "turn.start":
+        if data["type"] == "turn.start":
             if self._speaking:
                 return
             self._speaking = True
@@ -273,10 +389,10 @@ class TurnsRecognizeStream(CartesiaRecognizeStream):
                 )
             return
 
-        if message_type == "turn.update":
+        if data["type"] == "turn.update":
             if not self._speaking:
                 return
-            transcript = data.get("transcript", "")
+            transcript = data["transcript"]
             if not transcript:
                 return
             # only send interim transcript events if there's a change
@@ -287,17 +403,17 @@ class TurnsRecognizeStream(CartesiaRecognizeStream):
             self._send_transcript_event(stt.SpeechEventType.INTERIM_TRANSCRIPT, transcript)
             return
 
-        if message_type == "turn.eager_end":
+        if data["type"] == "turn.eager_end":
             if not self._speaking:
                 return
-            transcript = data.get("transcript", self._current_transcript)
+            transcript = data["transcript"] or self._current_transcript
             if not transcript:
                 return
             self._current_transcript = transcript
             self._send_transcript_event(stt.SpeechEventType.PREFLIGHT_TRANSCRIPT, transcript)
             return
 
-        if message_type == "turn.resume":
+        if data["type"] == "turn.resume":
             # turn.resume has no transcript; re-emit the most recent cumulative
             # transcript as an interim so the pipeline cancels the preflight.
             if not self._speaking or not self._current_transcript:
@@ -307,10 +423,10 @@ class TurnsRecognizeStream(CartesiaRecognizeStream):
             )
             return
 
-        if message_type == "turn.end":
+        if data["type"] == "turn.end":
             if not self._speaking:
                 return
-            transcript = data.get("transcript", self._current_transcript)
+            transcript = data["transcript"] or self._current_transcript
 
             if self._speech_duration > 0 and not self._event_ch.closed:
                 self._event_ch.send_nowait(
@@ -331,6 +447,13 @@ class TurnsRecognizeStream(CartesiaRecognizeStream):
                 self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
             self._current_transcript = ""
             return
+
+        if data["type"] == "error":
+            message = data.get("message") or data.get("title") or "unknown error from cartesia"
+            status_code = data.get("status_code") or 500
+            logger.warning("cartesia sent an error", extra={"data": data})
+            if status_code >= 500:
+                raise APIConnectionError(message=message, retryable=True)
 
         logger.warning("received unexpected message from Cartesia STT: %s", data)
 
