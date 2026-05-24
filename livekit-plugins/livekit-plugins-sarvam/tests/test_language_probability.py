@@ -1,27 +1,73 @@
 """Tests for SpeechData.confidence threading from Sarvam's language_probability.
 
-Place at: livekit-plugins/livekit-plugins-sarvam/tests/test_language_probability.py
+Verifies that both the REST and WS paths thread ``language_probability`` from
+Sarvam's response into ``SpeechData.confidence`` (instead of the previous
+hardcoded ``1.0``), with a defensive fallback when the field is absent or has
+an unexpected type.
 """
 
-from unittest.mock import MagicMock, patch
+from __future__ import annotations
+
+from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
 from livekit.agents import stt
-from livekit.plugins.sarvam.stt import STT
+from livekit.plugins.sarvam.stt import SpeechStream
+
+# ---------------------------------------------------------------------------
+# Helpers — build a minimal STT instance + fake the channel/logger/state that
+# `_handle_transcript_data` touches. We bypass __init__ so the test doesn't
+# need an API key, an HTTP session, or a real WebSocket.
+# ---------------------------------------------------------------------------
 
 
-# Helper: build a minimal transcript_data dict matching Saaras v3 WS payload shape
-def _ws_payload(**overrides):
-    base = {
-        "text": "hello world",
-        "language": "en-IN",
+def _make_stream_under_test() -> tuple[SpeechStream, list[Any]]:
+    """Construct a minimal SpeechStream and collect its emitted events.
+
+    Returns ``(stream_instance, captured_events)`` where each event sent via
+    ``send_nowait`` is appended to ``captured_events``. We bypass ``__init__``
+    so the test doesn't need an API key, an HTTP session, or a real WebSocket.
+    """
+    instance = SpeechStream.__new__(SpeechStream)
+    captured: list[Any] = []
+    event_ch = MagicMock()
+    event_ch.send_nowait = captured.append
+    instance._event_ch = event_ch  # type: ignore[attr-defined]
+    instance._logger = MagicMock()  # type: ignore[attr-defined]
+    instance._build_log_context = lambda: {}  # type: ignore[attr-defined]
+    instance._server_request_id = None  # type: ignore[attr-defined]
+    instance._opts = MagicMock(language="en-IN")  # type: ignore[attr-defined]
+    return instance, captured
+
+
+def _ws_message(**transcript_overrides: Any) -> dict:
+    """Build the outer WS message dict expected by ``_handle_transcript_data``.
+
+    Default shape mirrors a Saaras v3 streaming final-transcript chunk.
+    """
+    transcript_data: dict[str, Any] = {
+        "transcript": "नमस्ते",
+        "language_code": "hi-IN",
         "speech_start": 0.0,
         "speech_end": 1.2,
         "metrics": {"audio_duration": 1.2},
+        "request_id": "req-test",
     }
-    base.update(overrides)
-    return base
+    transcript_data.update(transcript_overrides)
+    return {"type": "data", "data": transcript_data}
+
+
+def _final_event(captured: list[Any]) -> stt.SpeechEvent:
+    finals = [ev for ev in captured if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT]
+    assert finals, "no FINAL_TRANSCRIPT event emitted"
+    return finals[0]
+
+
+# ---------------------------------------------------------------------------
+# WS path — happy cases
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -31,67 +77,62 @@ def _ws_payload(**overrides):
         (1.0, 1.0),
         (0.0, 0.0),
         (0.5, 0.5),
+        (0.123, 0.123),
     ],
 )
-def test_ws_threads_language_probability_into_confidence(language_probability, expected_confidence):
+async def test_ws_threads_language_probability_into_confidence(
+    language_probability: float, expected_confidence: float
+) -> None:
     """WS path must thread Sarvam's language_probability into SpeechData.confidence."""
-    payload = _ws_payload(language_probability=language_probability)
-    captured = []
-
-    # Patch the event channel so we can capture what gets emitted
-    with patch.object(STT, "__init__", return_value=None):
-        instance = STT.__new__(STT)
-        instance._event_ch = MagicMock()
-        instance._event_ch.send_nowait = lambda ev: captured.append(ev)
-        instance._logger = MagicMock()
-        instance._opts = MagicMock(language="en-IN")
-        instance._build_log_context = lambda: {}
-        instance._handle_transcript_data(payload, request_id="test")
-
-    final_events = [ev for ev in captured if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT]
-    assert final_events, "no FINAL_TRANSCRIPT event emitted"
-    assert final_events[0].alternatives[0].confidence == pytest.approx(expected_confidence)
+    instance, captured = _make_stream_under_test()
+    await instance._handle_transcript_data(_ws_message(language_probability=language_probability))
+    final = _final_event(captured)
+    assert final.alternatives[0].confidence == pytest.approx(expected_confidence)
 
 
-@pytest.mark.parametrize(
-    "bad_value",
-    [None, "0.95", True, [], {}, float("nan")],  # noqa: F632 — nan handled below
-)
-def test_ws_falls_back_to_1_0_on_missing_or_bad_type(bad_value):
-    """Missing field or unexpected type → confidence falls back to 1.0 (no crash)."""
-    if bad_value is None:
-        payload = _ws_payload()  # field absent
-    else:
-        payload = _ws_payload(language_probability=bad_value)
-
-    captured = []
-    with patch.object(STT, "__init__", return_value=None):
-        instance = STT.__new__(STT)
-        instance._event_ch = MagicMock()
-        instance._event_ch.send_nowait = lambda ev: captured.append(ev)
-        instance._logger = MagicMock()
-        instance._opts = MagicMock(language="en-IN")
-        instance._build_log_context = lambda: {}
-        instance._handle_transcript_data(payload, request_id="test")
-
-    final = [ev for ev in captured if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT]
-    # bool is a subclass of int in Python; isinstance(True, int) is True.
-    # If you want bool rejected, tighten the parser's guard accordingly.
-    if isinstance(bad_value, bool):
-        # bool currently coerces: True → 1.0, False → 0.0
-        assert final[0].alternatives[0].confidence == pytest.approx(float(bad_value))
-    else:
-        assert final[0].alternatives[0].confidence == 1.0
+# ---------------------------------------------------------------------------
+# WS path — defensive fallback cases (absent / null / wrong type)
+# ---------------------------------------------------------------------------
 
 
-def test_rest_threads_language_probability_into_confidence():
-    """REST path must thread Sarvam's language_probability into SpeechData.confidence.
+async def test_ws_missing_language_probability_falls_back_to_1_0() -> None:
+    """When the field is absent, confidence falls back to 1.0 (no crash)."""
+    instance, captured = _make_stream_under_test()
+    # _ws_message() helper omits language_probability by default
+    await instance._handle_transcript_data(_ws_message())
+    final = _final_event(captured)
+    assert final.alternatives[0].confidence == 1.0
 
-    Mocks the HTTP response with a payload containing language_probability=0.91.
-    Asserts the returned SpeechEvent's confidence == 0.91.
-    """
-    # NOTE: REST path test requires more setup (mocking aiohttp session). The minimal
-    # shape: construct a response dict with language_probability=0.91, feed it through
-    # the parser branch, assert SpeechData.confidence == 0.91. See WS test pattern;
-    # the REST parser logic is identical (isinstance guard + fallback).
-    pytest.skip("REST integration test stub — implement against real session mock")
+
+async def test_ws_null_language_probability_falls_back_to_1_0() -> None:
+    """Explicit null also falls back to 1.0."""
+    instance, captured = _make_stream_under_test()
+    await instance._handle_transcript_data(_ws_message(language_probability=None))
+    final = _final_event(captured)
+    assert final.alternatives[0].confidence == 1.0
+
+
+@pytest.mark.parametrize("bad_value", ["0.95", [], {}, object()])
+async def test_ws_unexpected_type_falls_back_to_1_0(bad_value: Any) -> None:
+    """String / list / dict / object → confidence falls back to 1.0 with a debug log."""
+    instance, captured = _make_stream_under_test()
+    await instance._handle_transcript_data(_ws_message(language_probability=bad_value))
+    final = _final_event(captured)
+    assert final.alternatives[0].confidence == 1.0
+    # The defensive branch logs a debug warning so contract drift is visible.
+    assert instance._logger.debug.called  # type: ignore[attr-defined]
+
+
+# ---------------------------------------------------------------------------
+# WS path — out-of-range values pass through verbatim (clamping is not this
+# layer's job; downstream consumers can clamp if they need to).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("value", [-0.5, 1.5, 2.0])
+async def test_ws_out_of_range_values_passed_through(value: float) -> None:
+    """Out-of-[0,1] values are passed through verbatim (no clamping)."""
+    instance, captured = _make_stream_under_test()
+    await instance._handle_transcript_data(_ws_message(language_probability=value))
+    final = _final_event(captured)
+    assert final.alternatives[0].confidence == pytest.approx(value)

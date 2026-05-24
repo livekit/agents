@@ -703,7 +703,7 @@ class STT(stt.STT):
                     _confidence = float(_lang_prob)
                 else:
                     if _lang_prob is not None:
-                        logger.debug(
+                        self._logger.debug(
                             "Unexpected language_probability type: %s (value=%r); "
                             "falling back to confidence=1.0",
                             type(_lang_prob).__name__,
