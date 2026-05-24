@@ -173,6 +173,11 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
     @override
     async def _run(self) -> None:
         closing_ws = False
+        # Reset per-connection state so a transport-error retry (a new _run
+        # invocation by the base class) starts fresh.
+        self._speaking = False
+        self._speech_duration = 0
+        self._last_speech_end_time = 0
 
         async def keepalive_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             try:
