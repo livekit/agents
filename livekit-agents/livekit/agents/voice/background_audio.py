@@ -54,27 +54,50 @@ def _envelope_gain(
     """Equal-power gain envelope for ``n`` samples starting at sample ``t``.
 
     Returns ``None`` when neither the fade-in nor a fade-out tail applies
-    to this frame, so the caller can skip the gain multiply entirely.
+    to this frame, so callers can skip the gain multiply entirely.
     Equal-power (``sin(phase * pi/2)``) keeps a gentle slope at the
     silent end of each ramp, where a linear ramp would knee audibly.
     """
-    gain: np.ndarray | None = None
+    fade_in_n = int(fade_in * sample_rate) if fade_in > 0 else 0
+    fade_out_n = int(fade_out * sample_rate) if fade_out > 0 else 0
+    in_fade_in = fade_in_n > 0 and t < fade_in_n
+    in_fade_out = fade_out_n > 0 and stop_t is not None
+    if not in_fade_in and not in_fade_out:
+        return None
+
     idx = t + np.arange(n)
-
-    if fade_in > 0:
-        fade_in_n = int(fade_in * sample_rate)
-        if fade_in_n > 0 and t < fade_in_n:
-            phase = np.clip(idx / fade_in_n, 0.0, 1.0)
-            gain = np.sin(phase * (np.pi / 2)).astype(np.float32)
-
-    if stop_t is not None and fade_out > 0:
-        fade_out_n = int(fade_out * sample_rate)
-        if fade_out_n > 0:
-            phase = np.clip((idx - stop_t) / fade_out_n, 0.0, 1.0)
-            tail = np.cos(phase * (np.pi / 2)).astype(np.float32)
-            gain = tail if gain is None else gain * tail
-
+    gain: np.ndarray | None = None
+    if in_fade_in:
+        phase = np.clip(idx / fade_in_n, 0.0, 1.0)
+        gain = np.sin(phase * (np.pi / 2)).astype(np.float32)
+    if in_fade_out:
+        phase = np.clip((idx - stop_t) / fade_out_n, 0.0, 1.0)
+        tail = np.cos(phase * (np.pi / 2)).astype(np.float32)
+        gain = tail if gain is None else gain * tail
     return gain
+
+
+def _apply_gain(frame: rtc.AudioFrame, volume: float, gain: np.ndarray | None) -> rtc.AudioFrame:
+    """Return ``frame`` with volume + envelope applied, or the frame itself
+    when no modification is needed (single source of truth for the fast path).
+    """
+    if volume == 1.0 and gain is None:
+        return frame
+
+    data = np.frombuffer(frame.data, dtype=np.int16).astype(np.float32)
+    if volume != 1.0:
+        data *= volume
+    if gain is not None:
+        if frame.num_channels > 1:
+            gain = np.repeat(gain, frame.num_channels)
+        data *= gain
+    np.clip(data, -32768, 32767, out=data)
+    return rtc.AudioFrame(
+        data=data.astype(np.int16).tobytes(),
+        sample_rate=frame.sample_rate,
+        num_channels=frame.num_channels,
+        samples_per_channel=frame.samples_per_channel,
+    )
 
 
 class AudioConfig(NamedTuple):
@@ -369,7 +392,6 @@ class BackgroundAudioPlayer:
             sound = _loop_audio_frames(sound) if loop else audio_frames_from_file(sound)
 
         stopped = False
-        has_fade = fade_in > 0 or fade_out > 0
 
         async def _gen_wrapper() -> AsyncGenerator[rtc.AudioFrame, None]:
             t = 0  # cumulative samples (per channel) emitted so far
@@ -382,29 +404,8 @@ class BackgroundAudioPlayer:
                         stop_t = t
 
                     n = frame.samples_per_channel
-                    gain = (
-                        _envelope_gain(t, n, stop_t, fade_in, fade_out, frame.sample_rate)
-                        if has_fade
-                        else None
-                    )
-
-                    if volume != 1.0 or gain is not None:
-                        data = np.frombuffer(frame.data, dtype=np.int16).astype(np.float32)
-                        if volume != 1.0:
-                            data *= 10 ** (np.log10(volume))
-                        if gain is not None:
-                            if frame.num_channels > 1:
-                                gain = np.repeat(gain, frame.num_channels)
-                            data *= gain
-                        np.clip(data, -32768, 32767, out=data)
-                        yield rtc.AudioFrame(
-                            data=data.astype(np.int16).tobytes(),
-                            sample_rate=frame.sample_rate,
-                            num_channels=frame.num_channels,
-                            samples_per_channel=n,
-                        )
-                    else:
-                        yield frame
+                    gain = _envelope_gain(t, n, stop_t, fade_in, fade_out, frame.sample_rate)
+                    yield _apply_gain(frame, volume, gain)
 
                     t += n
                     if stop_t is not None and (t - stop_t) >= int(fade_out * frame.sample_rate):
