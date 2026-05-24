@@ -206,9 +206,9 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
                     self._speech_duration += frame.duration
                     await ws.send_bytes(frame.data.tobytes())
 
-                    if has_ended:
-                        await ws.send_str("finalize")
-                        has_ended = False
+                if has_ended:
+                    await ws.send_str("finalize")
+                    has_ended = False
 
             closing_ws = True
             await ws.send_str("close")
