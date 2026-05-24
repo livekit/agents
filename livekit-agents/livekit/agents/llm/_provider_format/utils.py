@@ -31,8 +31,12 @@ def convert_mid_conversation_instructions(
     items: list[llm.ChatItem] = []
 
     for item in chat_ctx.items:
-        is_system = item.type == "message" and item.role in ("system", "developer")
-        if is_system and first_system_seen and (text := item.text_content):
+        if (
+            item.type == "message"
+            and item.role in ("system", "developer")
+            and first_system_seen
+            and (text := item.text_content)
+        ):
             items.append(
                 llm.ChatMessage(
                     id=item.id,
@@ -42,7 +46,7 @@ def convert_mid_conversation_instructions(
                 )
             )
         else:
-            if is_system:
+            if item.type == "message" and item.role in ("system", "developer"):
                 first_system_seen = True
             items.append(item)
 
