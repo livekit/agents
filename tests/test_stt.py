@@ -71,7 +71,9 @@ STTs: list[Callable[[], stt.STT]] = [
         # spitch,
     ]
 ] + [
-    pytest.param(lambda: cartesia.STT(model="ink-whisper"), id="ink-whisper@livekit.plugins.cartesia"),
+    pytest.param(
+        lambda: cartesia.STT(model="ink-whisper"), id="ink-whisper@livekit.plugins.cartesia"
+    ),
     pytest.param(lambda: deepgram.STTv2(), id="livekit.plugins.deepgram.STTv2"),
     pytest.param(
         lambda: gradium.STT(model_endpoint="wss://us.api.gradium.ai/api/speech/asr"),
