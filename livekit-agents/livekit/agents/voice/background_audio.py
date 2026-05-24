@@ -51,43 +51,37 @@ def _frame_gain(
     fade_out: float,
     sample_rate: int,
     volume: float,
-) -> float | np.ndarray | None:
+) -> np.ndarray | None:
     """Combined gain to apply to ``n`` samples starting at sample ``t``.
 
-    Returns:
-        - ``None`` when no modification is needed (volume == 1 and no fade
-          envelope is active for this frame). Caller passes the frame through.
-        - A ``float`` when only the constant ``volume`` applies. Caller does a
-          single scalar multiply.
-        - An ``np.ndarray`` of length ``n`` when a fade is active. Volume is
-          baked into the array so the caller does one multiply, not two.
+    Returns ``None`` when no modification is needed (volume == 1 and no fade
+    is active for this frame); the caller passes the frame through untouched.
+    Otherwise returns an ``np.ndarray`` of length ``n`` with the volume scalar
+    and the equal-power fade envelope baked in.
 
-    Equal-power (``sin(phase * pi/2)``) on both ramps so the silent end has a
-    gentle slope where a linear ramp would knee audibly.
+    Equal-power (``sin(phase * pi/2)``) keeps a gentle slope at the silent end
+    of each ramp where a linear ramp would knee audibly.
     """
     fade_in_n = int(fade_in * sample_rate) if fade_in > 0 else 0
     fade_out_n = int(fade_out * sample_rate) if fade_out > 0 else 0
     in_fade_in = fade_in_n > 0 and t < fade_in_n
     in_fade_out = fade_out_n > 0 and stop_t is not None
-    if not in_fade_in and not in_fade_out:
-        return None if volume == 1.0 else volume
+    if not in_fade_in and not in_fade_out and volume == 1.0:
+        return None
 
-    idx = t + np.arange(n)
-    gain: np.ndarray | None = None
-    if in_fade_in:
-        phase = np.clip(idx / fade_in_n, 0.0, 1.0)
-        gain = np.sin(phase * (np.pi / 2)).astype(np.float32)
-    if in_fade_out:
-        phase = np.clip((idx - stop_t) / fade_out_n, 0.0, 1.0)
-        tail = np.cos(phase * (np.pi / 2)).astype(np.float32)
-        gain = tail if gain is None else gain * tail
-    assert gain is not None  # one of the two ramps was active
-    if volume != 1.0:
-        gain = gain * np.float32(volume)
+    gain = np.full(n, volume, dtype=np.float32)
+    if in_fade_in or in_fade_out:
+        idx = t + np.arange(n)
+        if in_fade_in:
+            phase = np.clip(idx / fade_in_n, 0.0, 1.0)
+            gain *= np.sin(phase * (np.pi / 2)).astype(np.float32)
+        if in_fade_out:
+            phase = np.clip((idx - stop_t) / fade_out_n, 0.0, 1.0)
+            gain *= np.cos(phase * (np.pi / 2)).astype(np.float32)
     return gain
 
 
-def _apply_gain(frame: rtc.AudioFrame, gain: float | np.ndarray | None) -> rtc.AudioFrame:
+def _apply_gain(frame: rtc.AudioFrame, gain: np.ndarray | None) -> rtc.AudioFrame:
     """Return ``frame`` with ``gain`` applied, or the frame unchanged when
     ``gain`` is ``None`` (single source of truth for the no-op fast path).
     """
@@ -95,9 +89,9 @@ def _apply_gain(frame: rtc.AudioFrame, gain: float | np.ndarray | None) -> rtc.A
         return frame
 
     data = np.frombuffer(frame.data, dtype=np.int16).astype(np.float32)
-    if isinstance(gain, np.ndarray) and frame.num_channels > 1:
+    if frame.num_channels > 1:
         gain = np.repeat(gain, frame.num_channels)
-    data *= gain  # broadcasts a scalar, element-wise for an array
+    data *= gain
     np.clip(data, -32768, 32767, out=data)
     return rtc.AudioFrame(
         data=data.astype(np.int16).tobytes(),
