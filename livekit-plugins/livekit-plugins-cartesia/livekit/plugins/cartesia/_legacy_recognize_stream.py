@@ -141,14 +141,8 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
                     data = json.loads(msg.data)
                 except Exception:
                     logger.exception("failed to parse Cartesia STT message")
-                    continue
                 else:
-                    try:
-                        self._process_stream_event(data)
-                    except (APIError, APIConnectionError):
-                        raise
-                    except Exception:
-                        logger.exception("failed to process Cartesia STT message")
+                    self._process_stream_event(data)
 
         ws: aiohttp.ClientWebSocketResponse | None = None
 

@@ -264,14 +264,8 @@ class TurnsRecognizeStream(CartesiaRecognizeStream):
                     data: STTEventMessage = json.loads(msg.data)
                 except Exception:
                     logger.exception("failed to parse Cartesia STT message")
-                    continue
                 else:
-                    try:
-                        self._process_stream_event(data)
-                    except (APIError, APIConnectionError):
-                        raise
-                    except Exception:
-                        logger.exception("failed to process Cartesia STT message")
+                    self._process_stream_event(data)
 
         # Reset per-connection state so a transport-error retry (a new _run
         # invocation by the base class) starts fresh. Without this, stale
