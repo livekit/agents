@@ -43,27 +43,34 @@ class BuiltinAudioClip(enum.Enum):
 AudioSource = AsyncIterator[rtc.AudioFrame] | str | BuiltinAudioClip
 
 
-def _envelope_gain(
+def _frame_gain(
     t: int,
     n: int,
     stop_t: int | None,
     fade_in: float,
     fade_out: float,
     sample_rate: int,
-) -> np.ndarray | None:
-    """Equal-power gain envelope for ``n`` samples starting at sample ``t``.
+    volume: float,
+) -> float | np.ndarray | None:
+    """Combined gain to apply to ``n`` samples starting at sample ``t``.
 
-    Returns ``None`` when neither the fade-in nor a fade-out tail applies
-    to this frame, so callers can skip the gain multiply entirely.
-    Equal-power (``sin(phase * pi/2)``) keeps a gentle slope at the
-    silent end of each ramp, where a linear ramp would knee audibly.
+    Returns:
+        - ``None`` when no modification is needed (volume == 1 and no fade
+          envelope is active for this frame). Caller passes the frame through.
+        - A ``float`` when only the constant ``volume`` applies. Caller does a
+          single scalar multiply.
+        - An ``np.ndarray`` of length ``n`` when a fade is active. Volume is
+          baked into the array so the caller does one multiply, not two.
+
+    Equal-power (``sin(phase * pi/2)``) on both ramps so the silent end has a
+    gentle slope where a linear ramp would knee audibly.
     """
     fade_in_n = int(fade_in * sample_rate) if fade_in > 0 else 0
     fade_out_n = int(fade_out * sample_rate) if fade_out > 0 else 0
     in_fade_in = fade_in_n > 0 and t < fade_in_n
     in_fade_out = fade_out_n > 0 and stop_t is not None
     if not in_fade_in and not in_fade_out:
-        return None
+        return None if volume == 1.0 else volume
 
     idx = t + np.arange(n)
     gain: np.ndarray | None = None
@@ -74,23 +81,23 @@ def _envelope_gain(
         phase = np.clip((idx - stop_t) / fade_out_n, 0.0, 1.0)
         tail = np.cos(phase * (np.pi / 2)).astype(np.float32)
         gain = tail if gain is None else gain * tail
+    assert gain is not None  # one of the two ramps was active
+    if volume != 1.0:
+        gain = gain * np.float32(volume)
     return gain
 
 
-def _apply_gain(frame: rtc.AudioFrame, volume: float, gain: np.ndarray | None) -> rtc.AudioFrame:
-    """Return ``frame`` with volume + envelope applied, or the frame itself
-    when no modification is needed (single source of truth for the fast path).
+def _apply_gain(frame: rtc.AudioFrame, gain: float | np.ndarray | None) -> rtc.AudioFrame:
+    """Return ``frame`` with ``gain`` applied, or the frame unchanged when
+    ``gain`` is ``None`` (single source of truth for the no-op fast path).
     """
-    if volume == 1.0 and gain is None:
+    if gain is None:
         return frame
 
     data = np.frombuffer(frame.data, dtype=np.int16).astype(np.float32)
-    if volume != 1.0:
-        data *= volume
-    if gain is not None:
-        if frame.num_channels > 1:
-            gain = np.repeat(gain, frame.num_channels)
-        data *= gain
+    if isinstance(gain, np.ndarray) and frame.num_channels > 1:
+        gain = np.repeat(gain, frame.num_channels)
+    data *= gain  # broadcasts a scalar, element-wise for an array
     np.clip(data, -32768, 32767, out=data)
     return rtc.AudioFrame(
         data=data.astype(np.int16).tobytes(),
@@ -404,8 +411,8 @@ class BackgroundAudioPlayer:
                         stop_t = t
 
                     n = frame.samples_per_channel
-                    gain = _envelope_gain(t, n, stop_t, fade_in, fade_out, frame.sample_rate)
-                    yield _apply_gain(frame, volume, gain)
+                    gain = _frame_gain(t, n, stop_t, fade_in, fade_out, frame.sample_rate, volume)
+                    yield _apply_gain(frame, gain)
 
                     t += n
                     if stop_t is not None and (t - stop_t) >= int(fade_out * frame.sample_rate):
