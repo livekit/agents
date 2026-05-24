@@ -1,15 +1,22 @@
 from typing import Literal
 
-TTSEncoding = Literal[
-    "pcm_s16le",
-    # Not yet supported
-    # "pcm_f32le",
-    # "pcm_mulaw",
-    # "pcm_alaw",
-]
+###############################################################################
+#                                    TTS                                      #
+###############################################################################
+
+TTSEncoding = Literal["pcm_s16le"]
+"""
+.. deprecated::
+    1.5.5 Encoding should not be parameterized.
+    Only `pcm_s16le`is allowed. Prefer using `AUDIO_ENCODING` from constants.py.
+"""
 
 TTSModels = Literal["sonic", "sonic-2", "sonic-lite", "sonic-preview", "sonic-turbo", "sonic-3"]
+"""See [the docs](https://docs.cartesia.ai/build-with-cartesia/tts-models/latest) for all options."""
+
 TTSLanguages = Literal["en", "es", "fr", "de", "pt", "zh", "ja"]
+"""See [the docs](https://docs.cartesia.ai/build-with-cartesia/tts-models/latest) for all options."""
+
 TTSDefaultVoiceId = "f786b574-daa5-4673-aa0c-cbe3e8534c02"  # Katie - Friendly Fixer
 TTSVoiceSpeed = Literal["fastest", "fast", "normal", "slow", "slowest"]
 
@@ -76,56 +83,31 @@ TTSVoiceEmotion = Literal[
     "Determined",
 ]
 
-# STT model definitions
-STTEncoding = Literal["pcm_s16le",]
-
-STTModels = Literal["ink-whisper"]
-STTLanguages = Literal[
-    "en",
-    "de",
-    "es",
-    "fr",
-    "ja",
-    "pt",
-    "zh",
-    "hi",
-    "ko",
-    "it",
-    "nl",
-    "pl",
-    "ru",
-    "sv",
-    "tr",
-    "tl",
-    "bg",
-    "ro",
-    "ar",
-    "cs",
-    "el",
-    "fi",
-    "hr",
-    "ms",
-    "sk",
-    "da",
-    "ta",
-    "uk",
-    "hu",
-    "no",
-    "vi",
-    "bn",
-    "th",
-    "he",
-    "ka",
-    "id",
-    "te",
-    "gu",
-    "kn",
-    "ml",
-    "mr",
-    "or",
-    "pa",
-]
-
 
 def _is_sonic_3(model: str) -> bool:
     return model.startswith("sonic-3")
+
+
+###############################################################################
+#                                    STT                                      #
+###############################################################################
+
+STTEncoding = Literal["pcm_s16le"]
+"""
+.. deprecated::
+    1.5.5 Encoding should not be parameterized.
+    Only `pcm_s16le`is allowed. Prefer using `AUDIO_ENCODING` from constants.py.
+"""
+
+TurnDetectingSTTModel = Literal["ink-2"]
+"""
+STT models that support turn detection.
+
+See [the docs](https://docs.cartesia.ai/build-with-cartesia/stt-models/latest) for all options.
+"""
+
+STTModels = Literal["ink-whisper"] | TurnDetectingSTTModel
+"""See [the docs](https://docs.cartesia.ai/build-with-cartesia/stt-models/latest) for all options."""
+
+STTLanguages = Literal["en"]
+"""See [the docs](https://docs.cartesia.ai/build-with-cartesia/stt-models/latest) for all options."""
