@@ -216,17 +216,19 @@ class BackgroundAudioPlayer:
         if source is None:
             return None
 
-        if isinstance(source, BuiltinAudioClip):
-            return AudioConfig(self._normalize_builtin_audio(source))
-        elif isinstance(source, list):
-            selected = self._select_sound_from_list(source)
-            if selected is None:
+        if isinstance(source, list):
+            source = self._select_sound_from_list(source)
+            if source is None:
                 return None
-            return selected._replace(source=self._normalize_builtin_audio(selected.source))
-        elif isinstance(source, AudioConfig):
+
+        if isinstance(source, AudioConfig):
+            # Defensive copy so we never mutate the caller's AudioConfig. `_replace`
+            # on a NamedTuple returns a new tuple with the field substituted.
             return source._replace(source=self._normalize_builtin_audio(source.source))
 
-        return AudioConfig(source)
+        # Raw AudioSource (BuiltinAudioClip / str / AsyncIterator) — wrap in a
+        # fresh AudioConfig with defaults for volume / fades.
+        return AudioConfig(self._normalize_builtin_audio(source))
 
     def _normalize_builtin_audio(self, source: AudioSource) -> AsyncIterator[rtc.AudioFrame] | str:
         if isinstance(source, BuiltinAudioClip):
