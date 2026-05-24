@@ -188,26 +188,21 @@ class BackgroundAudioPlayer:
 
     def _normalize_sound_source(
         self, source: AudioSource | AudioConfig | list[AudioConfig] | None
-    ) -> tuple[AudioSource, float, float, float] | None:
+    ) -> AudioConfig | None:
         if source is None:
             return None
 
         if isinstance(source, BuiltinAudioClip):
-            return self._normalize_builtin_audio(source), 1.0, 0.0, 0.0
+            return AudioConfig(self._normalize_builtin_audio(source))
         elif isinstance(source, list):
             selected = self._select_sound_from_list(source)
             if selected is None:
                 return None
-            return selected.source, selected.volume, selected.fade_in, selected.fade_out
+            return selected._replace(source=self._normalize_builtin_audio(selected.source))
         elif isinstance(source, AudioConfig):
-            return (
-                self._normalize_builtin_audio(source.source),
-                source.volume,
-                source.fade_in,
-                source.fade_out,
-            )
+            return source._replace(source=self._normalize_builtin_audio(source.source))
 
-        return source, 1.0, 0.0, 0.0
+        return AudioConfig(source)
 
     def _normalize_builtin_audio(self, source: AudioSource) -> AsyncIterator[rtc.AudioFrame] | str:
         if isinstance(source, BuiltinAudioClip):
@@ -246,23 +241,19 @@ class BackgroundAudioPlayer:
         if not self._mixer_atask:
             raise RuntimeError("BackgroundAudio is not started")
 
-        normalized = self._normalize_sound_source(audio)
-        if normalized is None:
+        cfg = self._normalize_sound_source(audio)
+        if cfg is None:
             play_handle = PlayHandle()
             play_handle._mark_playout_done()
             return play_handle
 
-        sound_source, volume, fade_in, fade_out = normalized
-
-        if loop and isinstance(sound_source, AsyncIterator):
+        if loop and isinstance(cfg.source, AsyncIterator):
             raise ValueError(
                 "Looping sound via AsyncIterator is not supported. Use a string file path or your own 'infinite' AsyncIterator with loop=False"  # noqa: E501
             )
 
-        play_handle = PlayHandle(fade_out=fade_out)
-        task = asyncio.create_task(
-            self._play_task(play_handle, sound_source, volume, loop, fade_in, fade_out)
-        )
+        play_handle = PlayHandle(fade_out=cfg.fade_out)
+        task = asyncio.create_task(self._play_task(play_handle, cfg, loop))
         task.add_done_callback(lambda _: self._play_tasks.remove(task))
         task.add_done_callback(lambda _: play_handle._mark_playout_done())
         self._play_tasks.append(task)
@@ -315,16 +306,10 @@ class BackgroundAudioPlayer:
                 self._agent_session.on("agent_state_changed", self._agent_state_changed)
 
             if self._ambient_sound:
-                normalized = self._normalize_sound_source(self._ambient_sound)
-                if normalized:
-                    sound_source, volume, fade_in, fade_out = normalized
-                    selected_sound = AudioConfig(
-                        sound_source, volume, fade_in=fade_in, fade_out=fade_out
-                    )
-                    if isinstance(sound_source, str):
-                        self._ambient_handle = self.play(selected_sound, loop=True)
-                    else:
-                        self._ambient_handle = self.play(selected_sound)
+                cfg = self._normalize_sound_source(self._ambient_sound)
+                if cfg is not None:
+                    loop_ambient = isinstance(cfg.source, str)
+                    self._ambient_handle = self.play(cfg, loop=loop_ambient)
 
     async def aclose(self) -> None:
         """
@@ -375,23 +360,13 @@ class BackgroundAudioPlayer:
             self._thinking_handle.stop()
 
     @log_exceptions(logger=logger)
-    async def _play_task(
-        self,
-        play_handle: PlayHandle,
-        sound: AudioSource,
-        volume: float,
-        loop: bool,
-        fade_in: float,
-        fade_out: float,
-    ) -> None:
+    async def _play_task(self, play_handle: PlayHandle, cfg: AudioConfig, loop: bool) -> None:
+        sound, volume, fade_in, fade_out = cfg.source, cfg.volume, cfg.fade_in, cfg.fade_out
+
         if isinstance(sound, BuiltinAudioClip):
             sound = sound.path()
-
         if isinstance(sound, str):
-            if loop:
-                sound = _loop_audio_frames(sound)
-            else:
-                sound = audio_frames_from_file(sound)
+            sound = _loop_audio_frames(sound) if loop else audio_frames_from_file(sound)
 
         stopped = False
         has_fade = fade_in > 0 or fade_out > 0
