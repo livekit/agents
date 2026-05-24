@@ -43,44 +43,58 @@ class BuiltinAudioClip(enum.Enum):
 AudioSource = AsyncIterator[rtc.AudioFrame] | str | BuiltinAudioClip
 
 
-def _envelope_gain(
-    t: int,
-    n: int,
-    stop_t: int | None,
-    fade_in: float,
-    fade_out: float,
-    sample_rate: int,
-) -> np.ndarray:
-    """Equal-power gain envelope for a single audio frame.
+class _FadeEnvelope:
+    """Tracks fade-in / fade-out progress across a stream of audio frames.
 
-    Args:
-        t: Cumulative samples emitted (per channel) before this frame.
-        n: Samples in this frame (per channel).
-        stop_t: Sample index at which ``stop()`` was observed, or ``None``.
-        fade_in: Fade-in duration in seconds.
-        fade_out: Fade-out duration in seconds.
-        sample_rate: Hz of the current frame.
-
-    Returns a 1D ``float32`` array of length ``n``. Equal-power
-    (``sin(phase * π/2)``) sounds perceptually smooth, with a gentle
-    slope at the silent end where a linear ramp would knee audibly.
+    Equal-power curve (``sin(phase * pi/2)``) on both ends: the silent
+    end of each ramp has a gentle slope, so a 1.5s fade doesn't knee
+    audibly the way a linear ramp would.
     """
-    gain = np.ones(n, dtype=np.float32)
-    idx = t + np.arange(n)
 
-    if fade_in > 0:
-        fade_in_n = int(fade_in * sample_rate)
-        if fade_in_n > 0:
-            phase = np.clip(idx / fade_in_n, 0.0, 1.0).astype(np.float32)
-            gain *= np.sin(phase * (np.pi / 2)).astype(np.float32)
+    def __init__(self, fade_in: float, fade_out: float) -> None:
+        self._fade_in = fade_in
+        self._fade_out = fade_out
+        self._t = 0  # cumulative samples (per channel) emitted so far
+        self._stop_t: int | None = None  # sample index when stop was requested
 
-    if stop_t is not None and fade_out > 0:
-        fade_out_n = int(fade_out * sample_rate)
-        if fade_out_n > 0:
-            phase = np.clip((idx - stop_t) / fade_out_n, 0.0, 1.0).astype(np.float32)
-            gain *= np.cos(phase * (np.pi / 2)).astype(np.float32)
+    @property
+    def active(self) -> bool:
+        return self._fade_in > 0 or self._fade_out > 0
 
-    return gain
+    def request_stop(self) -> None:
+        """Begin the fade-out tail. No-op if already requested or no fade-out."""
+        if self._stop_t is None and self._fade_out > 0:
+            self._stop_t = self._t
+
+    def gain(self, n: int, sample_rate: int) -> np.ndarray | None:
+        """Per-sample gain for the next ``n`` samples, or ``None`` if no
+        envelope segment applies to this frame.
+        """
+        gain: np.ndarray | None = None
+        idx = self._t + np.arange(n)
+
+        if self._fade_in > 0:
+            fade_in_n = int(self._fade_in * sample_rate)
+            if fade_in_n > 0 and self._t < fade_in_n:
+                phase = np.clip(idx / fade_in_n, 0.0, 1.0)
+                gain = np.sin(phase * (np.pi / 2)).astype(np.float32)
+
+        if self._stop_t is not None:
+            fade_out_n = int(self._fade_out * sample_rate)
+            if fade_out_n > 0:
+                phase = np.clip((idx - self._stop_t) / fade_out_n, 0.0, 1.0)
+                tail = np.cos(phase * (np.pi / 2)).astype(np.float32)
+                gain = tail if gain is None else gain * tail
+
+        return gain
+
+    def advance(self, n: int) -> None:
+        self._t += n
+
+    def tail_done(self, sample_rate: int) -> bool:
+        if self._stop_t is None:
+            return False
+        return (self._t - self._stop_t) >= int(self._fade_out * sample_rate)
 
 
 class AudioConfig(NamedTuple):
@@ -400,36 +414,24 @@ class BackgroundAudioPlayer:
                 sound = audio_frames_from_file(sound)
 
         stopped = False
-        needs_per_sample_gain = fade_in > 0 or fade_out > 0
+        envelope = _FadeEnvelope(fade_in, fade_out)
 
         async def _gen_wrapper() -> AsyncGenerator[rtc.AudioFrame, None]:
             try:
-                t = 0  # cumulative samples emitted (per channel)
-                stop_t: int | None = None
                 async for frame in sound:
                     if stopped:
                         break
-
-                    fade_out_started = (
-                        fade_out > 0 and play_handle._stop_fut.done()
-                    )
-                    if fade_out_started and stop_t is None:
-                        stop_t = t
+                    if play_handle._stop_fut.done():
+                        envelope.request_stop()
 
                     n = frame.samples_per_channel
-                    if volume != 1.0 or needs_per_sample_gain:
+                    gain = envelope.gain(n, frame.sample_rate) if envelope.active else None
+
+                    if volume != 1.0 or gain is not None:
                         data = np.frombuffer(frame.data, dtype=np.int16).astype(np.float32)
                         if volume != 1.0:
                             data *= 10 ** (np.log10(volume))
-                        if needs_per_sample_gain:
-                            gain = _envelope_gain(
-                                t,
-                                n,
-                                stop_t,
-                                fade_in,
-                                fade_out,
-                                frame.sample_rate,
-                            )
+                        if gain is not None:
                             if frame.num_channels > 1:
                                 gain = np.repeat(gain, frame.num_channels)
                             data *= gain
@@ -443,14 +445,9 @@ class BackgroundAudioPlayer:
                     else:
                         yield frame
 
-                    t += n
-
-                    # Fade-out complete: drop out cleanly so the play
-                    # task can wind down.
-                    if stop_t is not None:
-                        elapsed = (t - stop_t) / frame.sample_rate
-                        if elapsed >= fade_out:
-                            break
+                    envelope.advance(n)
+                    if envelope.tail_done(frame.sample_rate):
+                        break
             finally:
                 # use try/finally because the mixer's asyncio.wait_for can cancel
                 # __anext__, which finalizes the generator and skips code after
