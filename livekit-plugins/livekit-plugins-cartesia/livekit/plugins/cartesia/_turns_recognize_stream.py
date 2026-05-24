@@ -27,7 +27,6 @@ from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
-    APIError,
     LanguageCode,
     stt,
     utils,
@@ -167,14 +166,17 @@ STTEventMessage = (
     | STTTurnEndEvent
     | STTErrorEvent
 )
-"""Server-sent event on the ``/stt/turns/websocket`` endpoint.
-
-See https://docs.cartesia.ai/api-reference/stt/turns/websocket.
-"""
+"""Server-sent message on the ``/stt/turns/websocket`` endpoint."""
 
 
 class TurnsRecognizeStream(CartesiaRecognizeStream):
-    """Cartesia STT stream with turn detection"""
+    """
+    Cartesia STT stream with turn detection
+
+
+    See also:
+        https://docs.cartesia.ai/api-reference/stt/turns/websocket
+    """
 
     def __init__(
         self,
@@ -252,7 +254,11 @@ class TurnsRecognizeStream(CartesiaRecognizeStream):
                     if self._closing_ws or self._session.closed:
                         return
                     raise APIConnectionError(
-                        message="Cartesia STT connection closed unexpectedly",
+                        message=(
+                            "Cartesia STT connection closed unexpectedly "
+                            f"(close_code={ws.close_code}, "
+                            f"data={msg.data!r}, extra={msg.extra!r})"
+                        ),
                         retryable=True,
                     )
 
