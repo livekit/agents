@@ -20,8 +20,6 @@ examples/avatar/
   hold_music.py   # Procedural F-major pairing-tone-style synth used as
                   # background hold music while a persona swap is in
                   # flight. No audio file shipped.
-  livekit.toml    # Regenerated from playground.yaml by the deploy
-                  # workflow; committed for local-dev convenience.
   Dockerfile, requirements.txt
 ```
 
@@ -88,12 +86,14 @@ up from the file is picked up.
 ## Deployment
 
 `playground.yaml` carries the avatar entry (pixel icon, accent, persona
-dropdown, `agent_id`). The CI workflow at
-`.github/workflows/deploy-examples.yml` includes `avatar` in its matrix and
-regenerates `livekit.toml` from `playground.yaml` before invoking
-`lk agent deploy`.
+dropdown, `agent_id`) that the playground reads.
 
-Per-agent secrets are set out of band, once:
+The example is deployed manually via `lk agent deploy` — it isn't in
+`.github/workflows/deploy-examples.yml`'s matrix because it needs a
+per-deploy `LEMONSLICE_API_KEY` and we keep its secrets pinned out of
+band rather than in the workflow.
+
+Set the agent secrets once before the first deploy:
 
 ```bash
 cd examples/avatar
@@ -101,3 +101,7 @@ lk agent update-secrets --project examples \
   --secrets "LIVEKIT_AGENT_NAME=avatar" \
   --secrets "LEMONSLICE_API_KEY=$LEMONSLICE_API_KEY"
 ```
+
+Then deploy from `examples/avatar/` with a local `livekit.toml` pointing
+at `subdomain = "examples-wfxyig8v"` and the avatar `agent_id` from
+`examples/playground.yaml`.
