@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import enum
 import json
+import logging
 import os
 import platform
 import weakref
@@ -341,6 +342,29 @@ def _get_urls_for_model(model: str) -> tuple[str, str]:
     if model_config and model_config.use_translate_endpoint:
         return SARVAM_STT_TRANSLATE_BASE_URL, SARVAM_STT_TRANSLATE_STREAMING_URL
     return SARVAM_STT_BASE_URL, SARVAM_STT_STREAMING_URL
+
+
+def _extract_confidence(
+    payload: dict,
+    instance_logger: logging.Logger,
+) -> float:
+    """Read Sarvam's ``language_probability`` from a response payload.
+
+    Returns the value as a float when present and numeric. Falls back to
+    ``1.0`` when the field is absent, ``None``, or has an unexpected type
+    (defensive — the field is documented for the REST endpoint but not
+    explicitly for streaming, so contract drift is logged for visibility).
+    """
+    value = payload.get("language_probability")
+    if isinstance(value, (int, float)):
+        return float(value)
+    if value is not None:
+        instance_logger.debug(
+            "Unexpected language_probability type: %s (value=%r); falling back to confidence=1.0",
+            type(value).__name__,
+            value,
+        )
+    return 1.0
 
 
 def _calculate_audio_duration(
@@ -692,32 +716,13 @@ class STT(stt.STT):
                 if start_time == 0.0 and end_time == 0.0:
                     end_time = _calculate_audio_duration(buffer)
 
-                # Sarvam Saaras returns ``language_probability``
-                # on every response — thread it into SpeechData.confidence
-                # so downstream consumers
-                # see real confidence values instead of a hardcoded 1.0.
-                # Defensive: defaults to 1.0 if the field is absent or has
-                # an unexpected type (API contract drift detection).
-                _lang_prob = response_json.get("language_probability")
-                if isinstance(_lang_prob, (int, float)):
-                    _confidence = float(_lang_prob)
-                else:
-                    if _lang_prob is not None:
-                        self._logger.debug(
-                            "Unexpected language_probability type: %s (value=%r); "
-                            "falling back to confidence=1.0",
-                            type(_lang_prob).__name__,
-                            _lang_prob,
-                        )
-                    _confidence = 1.0
-
                 alternatives = [
                     stt.SpeechData(
                         language=detected_language,
                         text=transcript_text,
                         start_time=start_time,
                         end_time=end_time,
-                        confidence=_confidence,
+                        confidence=_extract_confidence(response_json, self._logger),
                     )
                 ]
 
@@ -1490,33 +1495,13 @@ class SpeechStream(stt.SpeechStream):
             )
             self._event_ch.send_nowait(usage_event)
 
-            # Sarvam Saaras streaming WS sends ``language_probability``
-            # in the transcript_data payload — thread it into SpeechData.confidence
-            # so downstream consumers see
-            # real confidence values instead of the SpeechData default (1.0).
-            # Defensive: defaults to 1.0 if the field is absent or has an
-            # unexpected type (the field is documented for REST but not
-            # explicitly for streaming — API contract drift detection).
-            _lang_prob = transcript_data.get("language_probability")
-            if isinstance(_lang_prob, (int, float)):
-                _confidence = float(_lang_prob)
-            else:
-                if _lang_prob is not None:
-                    self._logger.debug(
-                        "Unexpected language_probability type: %s (value=%r); "
-                        "falling back to confidence=1.0",
-                        type(_lang_prob).__name__,
-                        _lang_prob,
-                    )
-                _confidence = 1.0
-
             # Create speech data
             speech_data = stt.SpeechData(
                 language=language,
                 text=transcript_text,
                 start_time=transcript_data.get("speech_start", 0.0),
                 end_time=transcript_data.get("speech_end", 0.0),
-                confidence=_confidence,
+                confidence=_extract_confidence(transcript_data, self._logger),
             )
 
             # Create final transcript event with request_id
