@@ -16,7 +16,6 @@ from livekit.agents import (
     AutoSubscribe,
     JobContext,
     cli,
-    inference,
     llm,
 )
 from livekit.agents.voice.agent import ModelSettings
@@ -47,7 +46,6 @@ class RetrievalAgent(Agent):
                 "with users will be voice. You should use short and concise "
                 "responses, and avoiding usage of unpronouncable punctuation."
             ),
-            vad=inference.VAD(model="silero"),
             stt=deepgram.STT(),
             llm=openai.LLM(),
             tts=openai.TTS(),

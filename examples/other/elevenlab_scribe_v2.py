@@ -30,7 +30,6 @@ async def entrypoint(ctx: JobContext) -> None:
 
     session: AgentSession = AgentSession(
         allow_interruptions=True,
-        vad=inference.VAD(model="silero"),
         stt=stt,
         llm=inference.LLM("openai/gpt-4.1-mini"),
         tts=inference.TTS("cartesia/sonic-3"),

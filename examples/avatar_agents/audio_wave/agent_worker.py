@@ -74,7 +74,6 @@ async def entrypoint(ctx: JobContext):
         stt=inference.STT("deepgram/nova-3"),
         llm=inference.LLM("google/gemini-2.5-flash"),
         tts=inference.TTS("cartesia/sonic-3"),
-        vad=inference.VAD(model="silero"),
         resume_false_interruption=False,
     )
 

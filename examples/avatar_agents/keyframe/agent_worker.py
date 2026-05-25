@@ -51,7 +51,6 @@ async def entrypoint(ctx: JobContext):
         llm=inference.LLM("google/gemini-2.5-flash"),
         tts=inference.TTS("cartesia/sonic-3"),
         resume_false_interruption=False,
-        vad=inference.VAD(model="silero"),
         turn_detection=AudioTurnDetector(),
     )
 

@@ -89,9 +89,7 @@ class MultiUserTranscriber:
         if participant.identity in self._sessions:
             return self._sessions[participant.identity]
 
-        session = AgentSession(
-            vad=inference.VAD(model="silero"),
-        )
+        session = AgentSession()
         await session.start(
             agent=Transcriber(
                 participant_identity=participant.identity,

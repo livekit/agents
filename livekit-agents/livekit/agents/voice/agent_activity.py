@@ -284,7 +284,14 @@ class AgentActivity(RecognitionHooks):
                 mode = None
 
             # fallback to VAD if server side turn detection is disabled and VAD is available
-            if not llm_model.capabilities.turn_detection and vad_model and mode is None:
+            # (only when the user explicitly supplied a VAD — don't auto-flip turn detection
+            # just because the framework's default silero VAD is present).
+            if (
+                not llm_model.capabilities.turn_detection
+                and vad_model is not None
+                and not vad_model.is_default
+                and mode is None
+            ):
                 mode = "vad"
 
         elif mode == "realtime_llm":
@@ -794,11 +801,24 @@ class AgentActivity(RecognitionHooks):
             self._session._chat_ctx.insert(initial_config)
 
         await self._resume_scheduling_task()
+        # When the realtime LLM provides server-side VAD, the framework-supplied
+        # default VAD is dead weight: server events drive turn detection, and
+        # wiring it would only burn per-stream silero CPU. Skip it. A
+        # user-configured VAD still gets wired so explicit AudioTurnDetector /
+        # turn_detection="vad" opt-ins keep working.
+        wired_vad = self.vad
+        if (
+            wired_vad is not None
+            and wired_vad.is_default
+            and isinstance(self.llm, llm.RealtimeModel)
+            and self.llm.capabilities.turn_detection
+        ):
+            wired_vad = None
         self._audio_recognition = AudioRecognition(
             self._session,
             hooks=self,
             stt=self._agent.stt_node if self.stt else None,
-            vad=self.vad,
+            vad=wired_vad,
             interruption_detection=self._interruption_detector,
             endpointing=create_endpointing(self.endpointing_opts),
             turn_detection=self._turn_detection,
@@ -1532,7 +1552,10 @@ class AgentActivity(RecognitionHooks):
         self._session.emit("overlapping_speech", ev)
 
     def _on_input_speech_started(self, _: llm.InputSpeechStartedEvent) -> None:
-        if self.vad is None:
+        # When only the framework default VAD is present, server-side VAD events
+        # are the canonical state source (the default VAD isn't even wired in
+        # this realtime+server-VAD path). Treat default-VAD as no-VAD here.
+        if self.vad is None or self.vad.is_default:
             self._session._update_user_state("speaking")
             if self._audio_recognition:
                 self._audio_recognition.on_start_of_speech(
@@ -1550,7 +1573,7 @@ class AgentActivity(RecognitionHooks):
             )
 
     def _on_input_speech_stopped(self, ev: llm.InputSpeechStoppedEvent) -> None:
-        if self.vad is None:
+        if self.vad is None or self.vad.is_default:
             if self._audio_recognition:
                 self._audio_recognition.on_end_of_speech(
                     ended_at=time.time(),
@@ -3794,11 +3817,15 @@ class AgentActivity(RecognitionHooks):
         return self._agent.vad if is_given(self._agent.vad) else self._session.vad
 
     def _resolve_interruption_detection(self) -> inference.AdaptiveInterruptionDetector | None:
+        # Adaptive interruption is opt-in (or opt-in-by-environment); we don't
+        # want a framework-default VAD to silently flip eligibility on for
+        # users who never configured a VAD themselves.
+        user_vad = self.vad is not None and not self.vad.is_default
         if not (
             self.stt is not None
             and self.stt.capabilities.aligned_transcript
             and self.stt.capabilities.streaming
-            and self.vad is not None
+            and user_vad
             and self._turn_detection not in ("manual", "realtime_llm")
             and not isinstance(self.llm, llm.RealtimeModel)
         ):

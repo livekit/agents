@@ -171,7 +171,6 @@ async def entrypoint(ctx: JobContext):
         llm=inference.LLM("openai/gpt-4.1-mini"),
         tts=inference.TTS("cartesia/sonic-3"),
         stt=inference.STT("deepgram/nova-3"),
-        vad=inference.VAD(model="silero"),
     )
 
     # Track token usage to observe prompt caching behavior.

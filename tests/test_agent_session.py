@@ -1248,3 +1248,40 @@ async def test_silent_tool_call_pause_state_does_not_leak_into_tool_reply() -> N
     assert transitions[silent_step_finished + 1] == ("listening", "speaking")
     assert false_interruption_events
     assert false_interruption_events[-1].resumed is True
+
+
+async def test_default_vad_is_auto_provisioned() -> None:
+    from livekit.agents.voice.agent_session import AgentSession
+
+    session = AgentSession()
+    try:
+        assert session.vad is not None
+        assert session.vad.is_default is True
+    finally:
+        await session.aclose()
+
+
+async def test_explicit_vad_none_opts_out() -> None:
+    from livekit.agents.voice.agent_session import AgentSession
+
+    session = AgentSession(vad=None)
+    try:
+        assert session.vad is None
+    finally:
+        await session.aclose()
+
+
+async def test_user_supplied_vad_keeps_is_default_false() -> None:
+    from livekit.agents.voice.agent_session import AgentSession
+
+    from .fake_vad import FakeVAD
+
+    user_vad = FakeVAD(fake_user_speeches=[])
+    assert user_vad.is_default is False
+
+    session = AgentSession(vad=user_vad)
+    try:
+        assert session.vad is user_vad
+        assert session.vad.is_default is False
+    finally:
+        await session.aclose()

@@ -149,7 +149,7 @@ async def entrypoint(ctx: JobContext):
 
     ctx.add_shutdown_callback(flush_trace)
 
-    session = AgentSession(vad=inference.VAD(model="silero"))
+    session = AgentSession()
 
     @session.on("metrics_collected")
     def _on_metrics_collected(ev: MetricsCollectedEvent):

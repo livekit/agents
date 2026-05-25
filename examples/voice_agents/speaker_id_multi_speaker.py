@@ -6,7 +6,7 @@ import datetime
 
 from dotenv import load_dotenv
 
-from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli, inference
+from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli
 from livekit.agents.stt import MultiSpeakerAdapter
 from livekit.plugins import deepgram, openai, speechmatics  # noqa: F401
 
@@ -54,7 +54,6 @@ server = AgentServer()
 @server.rtc_session()
 async def entrypoint(ctx: JobContext) -> None:
     session = AgentSession(
-        vad=inference.VAD(model="silero"),
         llm=openai.LLM(),
         tts=openai.TTS(),
         stt=MultiSpeakerAdapter(

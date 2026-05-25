@@ -12,7 +12,6 @@ from livekit.agents import (
     MetricsCollectedEvent,
     StopResponse,
     cli,
-    inference,
     llm,
     metrics,
     room_io,
@@ -77,7 +76,6 @@ async def entrypoint(ctx: JobContext):
 
     session = AgentSession(
         # vad is only needed for non-streaming STT implementations
-        vad=inference.VAD(model="silero"),
     )
 
     @session.on("metrics_collected")

@@ -59,7 +59,6 @@ async def entrypoint(ctx: JobContext):
         stt=inference.STT("deepgram/nova-3"),
         llm=inference.LLM("openai/gpt-4.1-mini"),
         tts=inference.TTS("cartesia/sonic-3"),
-        vad=inference.VAD(model="silero"),
     )
 
     @session.on("function_tools_executed")

@@ -8,7 +8,6 @@ from livekit.agents import (
     AgentSession,
     JobContext,
     cli,
-    inference,
     room_io,
     voice,  # noqa: F401
 )
@@ -24,7 +23,6 @@ server = AgentServer()
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
-        vad=inference.VAD(model="silero"),
         # both Gemini and OpenAI Realtime API support streaming video input
         llm=google.realtime.RealtimeModel(),
         # customize how video frames are sampled

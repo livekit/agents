@@ -8,7 +8,6 @@ from livekit.agents import (
     AgentSession,
     JobContext,
     cli,
-    inference,
     room_io,
 )
 from livekit.agents.inference import AudioTurnDetector
@@ -45,7 +44,6 @@ async def my_agent(ctx: JobContext):
         llm=xai.realtime.RealtimeModel(voice="ara"),
         turn_detection=AudioTurnDetector(),
         tools=[xai.realtime.XSearch(), xai.realtime.WebSearch()],
-        vad=inference.VAD(model="silero"),
         preemptive_generation=True,
     )
 

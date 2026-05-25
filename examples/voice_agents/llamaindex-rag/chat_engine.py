@@ -53,7 +53,6 @@ class ChatEngineAgent(Agent):
                 "with users will be voice. You should use short and concise "
                 "responses, and avoiding usage of unpronouncable punctuation."
             ),
-            vad=inference.VAD(model="silero"),
             stt=inference.STT("deepgram/nova-3"),
             llm=DummyLLM(),  # use a dummy LLM to enable the pipeline reply
             tts=inference.TTS("cartesia/sonic-3"),

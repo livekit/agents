@@ -193,7 +193,6 @@ async def entrypoint(ctx: JobContext):
         llm=inference.LLM("openai/gpt-5.3-chat-latest"),
         tts=inference.TTS("cartesia/sonic-3", voice="e07c00bc-4134-4eae-9ea4-1a55fb45746b"),
         # llm=google.realtime.RealtimeModel(),
-        vad=inference.VAD(model="silero"),
         turn_handling={"interruption": {"mode": "vad"}},
     )
 

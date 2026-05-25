@@ -8,7 +8,6 @@ from livekit.agents import (
     AgentSession,
     JobContext,
     cli,
-    inference,
     metrics,
 )
 from livekit.agents.voice import MetricsCollectedEvent
@@ -43,7 +42,6 @@ async def entrypoint(ctx: JobContext):
         "user_id": "your user_id",
     }
     session = AgentSession(
-        vad=inference.VAD(model="silero"),
         # any combination of STT, LLM, TTS, or realtime API can be used
         llm=openai.LLM(model="gpt-4.1-mini"),
         stt=deepgram.STT(model="nova-3", language="multi"),

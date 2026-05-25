@@ -327,7 +327,6 @@ async def entrypoint(ctx: JobContext):
         stt=inference.STT(model="deepgram/nova-3"),
         llm=inference.LLM(model="openai/gpt-4.1-mini"),
         tts=inference.TTS(model="cartesia/sonic-3"),
-        vad=inference.VAD(model="silero"),
         max_tool_steps=5,
         # to use realtime model, replace the stt, llm, tts and vad with the following
         # llm=openai.realtime.RealtimeModel(voice="alloy"),

@@ -353,7 +353,6 @@ async def entrypoint(ctx: JobContext):
         llm=inference.LLM("google/gemini-2.5-flash"),
         stt=inference.STT("deepgram/nova-3", language="multi"),
         tts=inference.TTS("inworld/inworld-tts-1"),
-        vad=inference.VAD(model="silero"),
         turn_detection=AudioTurnDetector(),
         preemptive_generation=True,
     )
