@@ -107,6 +107,19 @@ class VAD(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
     @abstractmethod
     def stream(self) -> VADStream: ...
 
+    @property
+    def min_silence_duration(self) -> float | None:
+        """Current ``min_silence_duration`` floor in seconds, or ``None`` if the VAD does
+        not expose this knob. Implementations that support runtime tuning should override
+        both the getter and setter.
+        """
+        return None
+
+    @min_silence_duration.setter
+    def min_silence_duration(self, duration: float) -> None:
+        """No-op for VADs that do not expose this knob (check the getter first)."""
+        return None
+
 
 class VADStream(ABC):
     class _FlushSentinel:

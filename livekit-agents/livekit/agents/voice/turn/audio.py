@@ -1,3 +1,9 @@
+"""Audio EOT (end-of-turn) detector base, stream state machine, and the
+transport Protocol that concrete cloud/local backends implement.
+
+Concrete implementations live in ``livekit.agents.inference.eot``.
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -9,21 +15,18 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal, Protocol, runtime_checkable
 
-from typing_extensions import TypedDict
-
 from livekit import rtc
 
-from .. import utils
-from ..language import LanguageCode
-from ..llm import ChatContext
-from ..log import logger
-from ..types import (
+from ... import utils
+from ...language import LanguageCode
+from ...llm import ChatContext
+from ...log import logger
+from ...types import (
     DEFAULT_API_CONNECT_OPTIONS,
-    NOT_GIVEN,
     APIConnectOptions,
-    NotGivenOr,
 )
-from ..utils import aio, is_given
+from ...utils import aio
+from .base import TurnDetectionEvent
 
 DEFAULT_SAMPLE_RATE: int = 16000
 MIN_SILENCE_DURATION_MS = 200
@@ -35,23 +38,14 @@ class _Status(str, Enum):
 
 
 @dataclass
-class TurnDetectionEvent:
-    type: Literal["eot_prediction"]
-    end_of_turn_probability: float
-    last_speaking_time: float
-    detection_delay: float | None = None
-    """Latest input audio creation time -> prediction receive time."""
-    inference_duration: float | None = None
-    """Server-side model inference time."""
-
-
-@dataclass
 class TurnDetectorOptions:
+    """Options shared by the audio EOT stream and every transport.
+
+    Cloud-only transport concerns (base URL, credentials, conn options)
+    live on a separate options dataclass owned by the cloud transport.
+    """
+
     sample_rate: int
-    base_url: str
-    api_key: str
-    api_secret: str
-    conn_options: APIConnectOptions
     thresholds: dict[str, float] = field(default_factory=dict)
 
 
@@ -77,6 +71,10 @@ class _AudioTurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
         raise NotImplementedError
 
     async def unlikely_threshold(self, language: LanguageCode | None) -> float | None:
+        # `language=None` means "unknown" — treat as English so callers without
+        # a detected language still get a working threshold. Explicit unknown
+        # codes (e.g. "vi") still miss the dict and return None, so
+        # `supports_language` returns False for unsupported languages.
         lang_key = language.language if language is not None else "en"
         return self._opts.thresholds.get(lang_key)
 
@@ -138,6 +136,18 @@ class _AudioTurnDetectorStream:
         self._preemptive_request_id: str | None = None
         self._preemptive_request_fut: asyncio.Future[float] | None = None
         self._preemptive_prediction: TurnDetectionEvent | None = None
+        # Latest resolved prediction for the current inference window. Cleared
+        # when a new window starts (next warmup) or on commit (flush). Lets
+        # ``predict_end_of_turn`` return immediately when a prediction has
+        # already arrived via the event stream.
+        self._last_prediction: TurnDetectionEvent | None = None
+        # True between ``on_speech_started()`` and the next ``flush()`` —
+        # i.e. a user turn is open and ``predict_end_of_turn`` should run.
+        # When False, predict short-circuits to a positive default: there's
+        # no fresh speech to evaluate (e.g. an STT final arriving after the
+        # audio EOT model already committed the turn). Initialised True so
+        # the first turn isn't gated before any flush has happened.
+        self._user_turn_started: bool = True
 
         self._tasks: set[asyncio.Task[None]] = set()
         self._task = asyncio.create_task(self._main_task())
@@ -154,6 +164,8 @@ class _AudioTurnDetectorStream:
         return self._detector.provider
 
     async def unlikely_threshold(self, language: LanguageCode | None) -> float | None:
+        # See `_AudioTurnDetector.unlikely_threshold`: None defaults to "en";
+        # unsupported language codes return None.
         lang_key = language.language if language is not None else "en"
         return self._opts.thresholds.get(lang_key)
 
@@ -181,6 +193,9 @@ class _AudioTurnDetectorStream:
             request_id = utils.shortuuid("turn_request_")
             self._preemptive_request_id = request_id
             self._preemptive_request_fut = asyncio.Future[float]()
+            # New inference window — drop any cached prediction from the
+            # previous window so ``predict_end_of_turn`` won't return stale.
+            self._last_prediction = None
             self._transport.start_inference(request_id)
         if self._preemptive_request_fut is None:
             raise RuntimeError("eot detection warmup failed, no request future")
@@ -223,7 +238,21 @@ class _AudioTurnDetectorStream:
         self._audio_ch.send_nowait(
             _AudioTurnDetectorStream._FlushSentinel(reason=reason, keep_tail_ms=keep_tail_ms)
         )
+        # Turn boundary — the cached prediction belongs to the turn we just
+        # closed and must not leak into the next one.
+        self._last_prediction = None
+        # Close the user turn: until the next ``on_speech_started()`` signal,
+        # ``predict_end_of_turn`` short-circuits.
+        self._user_turn_started = False
         self.deactivate(trigger=reason)
+
+    def on_speech_started(self) -> None:
+        """Signal that a fresh user utterance has started. Opens the user
+        turn so ``predict_end_of_turn`` runs normally again, and deactivates
+        any in-flight inference for the now-stale prior window — the next
+        VAD silence/end-of-speech will warm up and activate a fresh one."""
+        self._user_turn_started = True
+        self.deactivate(trigger="vad sos")
 
     # endregion
 
@@ -308,13 +337,45 @@ class _AudioTurnDetectorStream:
             detection_delay=detection_delay,
             inference_duration=inference_duration,
         )
+        self._last_prediction = event
         if self.is_active:
             self._emit_event(event)
         else:
             self._preemptive_prediction = event
 
-    async def predict_end_of_turn(self, *, timeout: float | None = None) -> float:
-        """Run a warmup inference and wait for a prediction within `timeout`."""
+    @property
+    def last_prediction(self) -> TurnDetectionEvent | None:
+        """Most recent resolved prediction in the current inference window,
+        or ``None`` if no prediction has arrived yet."""
+        return self._last_prediction
+
+    async def predict_end_of_turn(
+        self,
+        chat_ctx: ChatContext | None = None,
+        *,
+        timeout: float | None = None,
+    ) -> float:
+        """Run a warmup inference and wait for a prediction within `timeout`.
+
+        Returns the cached prediction if one has already arrived for the
+        current inference window. ``chat_ctx`` is accepted (and ignored) so
+        the call site stays uniform with text-based ``_TurnDetector``
+        implementations.
+        """
+        if self._last_prediction is not None:
+            return self._last_prediction.end_of_turn_probability
+
+        if not self._user_turn_started:
+            # No open user turn — running predict here would just wait for
+            # inference on near-silence. Common path: an STT final arrived
+            # after the audio EOT model already committed the turn. Return
+            # a positive default so the caller falls through its
+            # min_endpointing_delay path.
+            logger.warning(
+                "predict_end_of_turn called with no open user turn, short-circuiting",
+            )
+            return 1.0
+
         timeout = timeout if timeout is not None else 0.5
         fut: asyncio.Future[float] | None = None
         try:
@@ -325,6 +386,10 @@ class _AudioTurnDetectorStream:
                 raise asyncio.TimeoutError()
             return done.pop().result()
         except asyncio.TimeoutError:
+            # Contract on timeout: we couldn't tell within `timeout`, so assume
+            # the turn is over. Resolve the future with 1.0 (so any concurrent
+            # waiter sees the same value) and deactivate the inference window
+            # (a stale prediction arriving later must not fire an event).
             logger.warning(
                 "eot prediction timed out, returning a default value",
                 extra={
@@ -399,296 +464,3 @@ class _AudioTurnDetectorStream:
         pass
 
     # endregion
-
-
-class _TurnDetector(Protocol):
-    @property
-    def model(self) -> str:
-        return "unknown"
-
-    @property
-    def provider(self) -> str:
-        return "unknown"
-
-    # TODO: Move those two functions to EOU ctor (capabilities dataclass)
-    async def unlikely_threshold(self, language: LanguageCode | None) -> float | None: ...
-    async def supports_language(self, language: LanguageCode | None) -> bool: ...
-
-    async def predict_end_of_turn(
-        self, chat_ctx: ChatContext, *, timeout: float | None = None
-    ) -> float: ...
-
-
-TurnDetectionMode = (
-    Literal["stt", "vad", "realtime_llm", "manual"] | _TurnDetector | _AudioTurnDetector
-)
-"""
-The mode of turn detection to use.
-
-- "stt": use speech-to-text result to detect the end of the user's turn
-- "vad": use VAD to detect the start and end of the user's turn
-- "realtime_llm": use server-side turn detection provided by the realtime LLM
-- "manual": manually manage the turn detection
-- _TurnDetector: use the default mode with the provided turn detector
-
-(default) If not provided, automatically choose the best mode based on
-    available models (realtime_llm -> vad -> stt -> manual)
-If the needed model (VAD, STT, or RealtimeModel) is not provided, fallback to the default mode.
-"""
-
-
-class EndpointingOptions(TypedDict, total=False):
-    """Configuration for endpointing.
-
-    All keys are optional. Missing keys inherit from the session default
-    (at the ``Agent`` level) or use the documented defaults
-    (at the ``AgentSession`` level).
-    """
-
-    mode: Literal["fixed", "dynamic"]
-    """Endpointing mode. ``"fixed"`` for fixed delay, ``"dynamic"`` for dynamic delay. Defaults to ``"fixed"``."""
-    min_delay: float
-    """Minimum time (s) since last detected speech before declaring the
-    user's turn complete. Defaults to ``0.5``."""
-    max_delay: float
-    """Maximum time (s) the agent waits before terminating the turn.
-    Defaults to ``3.0``."""
-    alpha: float
-    """Exponential moving average coefficient for dynamic endpointing.
-    The higher the value, the more weight is given to the history.
-    Defaults to ``0.9``. Only applies when mode is ``dynamic``."""
-
-
-_ENDPOINTING_DEFAULTS: EndpointingOptions = {
-    "mode": "fixed",
-    "min_delay": 0.5,
-    "max_delay": 3.0,
-    "alpha": 0.9,
-}
-
-
-class InterruptionOptions(TypedDict, total=False):
-    """Configuration for interruption handling.
-
-    All keys are optional. Missing keys inherit from the session default
-    (at the ``Agent`` level) or use the documented defaults
-    (at the ``AgentSession`` level).
-
-    ``mode`` absent means the session picks the best available strategy.
-    """
-
-    enabled: bool
-    """Whether interruptions are enabled. Defaults to ``True``."""
-    mode: Literal["adaptive", "vad"]
-    """Interruption handling strategy. ``"adaptive"`` for ML-based
-    detection, ``"vad"`` for simple voice-activity detection.
-    Absent means auto-detect."""
-    discard_audio_if_uninterruptible: bool
-    """Drop buffered audio while the agent speaks and cannot be
-    interrupted. Defaults to ``True``."""
-    min_duration: float
-    """Minimum speech length (s) to register as an interruption.
-    Defaults to ``0.5``."""
-    min_words: int
-    """Minimum word count to consider an interruption (STT only).
-    Defaults to ``0``."""
-    resume_false_interruption: bool
-    """Resume the agent's speech after a false interruption.
-    Defaults to ``True``."""
-    false_interruption_timeout: float | None
-    """Seconds of silence after an interruption before it is
-    classified as false. ``None`` disables. Defaults to ``2.0``."""
-    backchannel_boundary: float | tuple[float, float] | None
-    """Seconds near the start/end of each agent turn during which overlapping
-    speech classified as a backchannel by the adaptive detector is suppressed
-    (events flagged as interruptions still pass through). Use a tuple to apply
-    different values for start and end separately. ``None`` disables. Defaults
-    to ``(1.0, 1.0)``. End value accounts for STT transcript timestamp
-    inaccuracy."""
-
-
-_INTERRUPTION_DEFAULTS: InterruptionOptions = {
-    "enabled": True,
-    "discard_audio_if_uninterruptible": True,
-    "min_duration": 0.5,
-    "min_words": 0,
-    "resume_false_interruption": True,
-    "false_interruption_timeout": 2.0,
-    "backchannel_boundary": (1.0, 1.0),
-}
-
-
-class PreemptiveGenerationOptions(TypedDict, total=False):
-    """Configuration for preemptive generation."""
-
-    enabled: bool
-    """Whether preemptive generation is enabled. Defaults to ``True``."""
-
-    preemptive_tts: bool
-    """Whether to also run TTS preemptively before the turn is confirmed.
-    When ``False`` (default), only LLM runs preemptively; TTS starts once the
-    turn is confirmed and the speech is scheduled."""
-
-    max_speech_duration: float
-    """Maximum user speech duration (s) for which preemptive generation
-    is attempted. Beyond this threshold, preemptive generation is skipped
-    since long utterances are more likely to change and users may expect
-    slower responses. Defaults to ``10.0``."""
-
-    max_retries: int
-    """Maximum number of preemptive generation attempts per user turn.
-    The counter resets when the turn completes. Defaults to ``3``."""
-
-
-_PREEMPTIVE_GENERATION_DEFAULTS: PreemptiveGenerationOptions = {
-    "enabled": True,
-    "preemptive_tts": False,
-    "max_speech_duration": 10.0,
-    "max_retries": 3,
-}
-
-
-class UserTurnLimitOptions(TypedDict, total=False):
-    """Configuration for detecting when a user has been speaking too long
-    without the agent successfully responding.
-
-    The framework tracks accumulated word count and wall-clock duration
-    across consecutive user turns. Counters only reset when the agent
-    transitions to ``speaking`` state (i.e., produces audio output).
-
-    Both thresholds default to ``None`` (disabled). Set at least one to
-    enable the feature.
-    """
-
-    max_words: int | None
-    """Maximum accumulated word count before triggering. Uses the
-    framework's WordTokenizer for counting. ``None`` disables word-based
-    limiting. Defaults to ``None``."""
-
-    max_duration: float | None
-    """Maximum wall-clock duration (seconds) since the user first started
-    speaking in the current accumulation window. ``None`` disables
-    duration-based limiting. Defaults to ``None``."""
-
-
-_USER_TURN_LIMIT_DEFAULTS: UserTurnLimitOptions = {
-    "max_words": None,
-    "max_duration": None,
-}
-
-
-class TurnHandlingOptions(TypedDict, total=False):
-    """Configuration for the turn handling system.
-
-    Can be passed as a plain dict::
-
-        AgentSession(
-            turn_handling={
-                "endpointing": {"min_delay": 0.3},
-                "interruption": {"enabled": False},
-                "preemptive_generation": {"preemptive_tts": True},
-            },
-        )
-
-    All keys are optional and default to sensible values.
-    """
-
-    turn_detection: TurnDetectionMode | None
-    """Strategy for deciding when the user has finished speaking.
-    Absent means the session auto-selects."""
-    endpointing: EndpointingOptions
-    """Endpointing configuration. Defaults to ``{"min_delay": 0.5, "max_delay": 3.0}``."""
-    interruption: InterruptionOptions
-    """Interruption handling configuration. Use ``{"enabled": False}`` to disable."""
-    preemptive_generation: PreemptiveGenerationOptions
-    """Preemptive generation configuration. Use ``{"enabled": False}`` to disable."""
-    user_turn_limit: UserTurnLimitOptions
-    """User turn limit configuration. Use ``{"max_words": 50}`` to enable."""
-
-
-def _resolve_preemptive_generation(
-    config: PreemptiveGenerationOptions | None = None,
-) -> PreemptiveGenerationOptions:
-    """Fill in defaults for missing keys."""
-    if config is None:
-        return PreemptiveGenerationOptions(**_PREEMPTIVE_GENERATION_DEFAULTS)
-    return PreemptiveGenerationOptions(**{**_PREEMPTIVE_GENERATION_DEFAULTS, **config})
-
-
-def _resolve_endpointing(config: EndpointingOptions | None = None) -> EndpointingOptions:
-    """Fill in defaults for missing keys."""
-    if config is None:
-        return EndpointingOptions(**_ENDPOINTING_DEFAULTS)
-    return EndpointingOptions(**{**_ENDPOINTING_DEFAULTS, **config})
-
-
-def _resolve_interruption(
-    config: InterruptionOptions | None = None,
-) -> InterruptionOptions:
-    """Fill in defaults for missing keys (``mode`` stays absent if not provided)."""
-    if config is None:
-        return InterruptionOptions(**_INTERRUPTION_DEFAULTS)
-    return InterruptionOptions(**{**_INTERRUPTION_DEFAULTS, **config})
-
-
-def _resolve_user_turn_limit(
-    config: UserTurnLimitOptions | None = None,
-) -> UserTurnLimitOptions:
-    """Fill in defaults for missing keys."""
-    if config is None:
-        return UserTurnLimitOptions(**_USER_TURN_LIMIT_DEFAULTS)
-    return UserTurnLimitOptions(**{**_USER_TURN_LIMIT_DEFAULTS, **config})
-
-
-def _migrate_turn_handling(
-    min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
-    max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
-    false_interruption_timeout: NotGivenOr[float | None] = NOT_GIVEN,
-    turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
-    discard_audio_if_uninterruptible: NotGivenOr[bool] = NOT_GIVEN,
-    min_interruption_duration: NotGivenOr[float] = NOT_GIVEN,
-    min_interruption_words: NotGivenOr[int] = NOT_GIVEN,
-    allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
-    resume_false_interruption: NotGivenOr[bool] = NOT_GIVEN,
-    agent_false_interruption_timeout: NotGivenOr[float | None] = NOT_GIVEN,
-    preemptive_generation: NotGivenOr[bool] = NOT_GIVEN,
-) -> TurnHandlingOptions:
-    """Build a TurnHandlingOptions from deprecated keyword arguments."""
-    if is_given(agent_false_interruption_timeout):
-        false_interruption_timeout = agent_false_interruption_timeout
-
-    result: TurnHandlingOptions = {}
-
-    # endpointing — only include keys that were explicitly provided
-    endpointing_opts: EndpointingOptions = {}
-    if is_given(min_endpointing_delay):
-        endpointing_opts["min_delay"] = min_endpointing_delay
-    if is_given(max_endpointing_delay):
-        endpointing_opts["max_delay"] = max_endpointing_delay
-    if endpointing_opts:
-        result["endpointing"] = endpointing_opts
-
-    # interruption — only include keys that were explicitly provided
-    interruption: InterruptionOptions = {}
-    if allow_interruptions is False:
-        interruption["enabled"] = False
-    if is_given(discard_audio_if_uninterruptible):
-        interruption["discard_audio_if_uninterruptible"] = discard_audio_if_uninterruptible
-    if is_given(min_interruption_duration):
-        interruption["min_duration"] = min_interruption_duration
-    if is_given(min_interruption_words):
-        interruption["min_words"] = min_interruption_words
-    if is_given(false_interruption_timeout):
-        interruption["false_interruption_timeout"] = false_interruption_timeout
-    if is_given(resume_false_interruption):
-        interruption["resume_false_interruption"] = resume_false_interruption
-    if interruption:
-        result["interruption"] = interruption
-
-    if is_given(turn_detection):
-        result["turn_detection"] = turn_detection
-
-    if is_given(preemptive_generation):
-        result["preemptive_generation"] = {"enabled": preemptive_generation}
-
-    return result

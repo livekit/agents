@@ -36,6 +36,16 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.voice.turn import TurnDetectorOptions, _AudioTurnDetectorStream
 
 
+async def _wait_for(predicate: Any, *, ticks: int = 20) -> None:
+    """Yield to the event loop until ``predicate()`` is true or we run out
+    of ticks. Replaces fragile ``await asyncio.sleep(0)`` counts now that
+    the run loop wraps ``transport.run()`` in a task (extra hop)."""
+    for _ in range(ticks):
+        if predicate():
+            return
+        await asyncio.sleep(0)
+
+
 @contextlib.contextmanager
 def _clean_env(**overrides: str | None):
     """Patch env vars: keys with None get removed, others get set."""
@@ -100,14 +110,8 @@ class _ScriptedTransport:
 
 
 def _make_opts(thresholds: dict[str, float] | None = None) -> TurnDetectorOptions:
-    from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
-
     return TurnDetectorOptions(
         sample_rate=16000,
-        base_url="ws://test",
-        api_key="x",
-        api_secret="x",
-        conn_options=DEFAULT_API_CONNECT_OPTIONS,
         thresholds=thresholds if thresholds is not None else {},
     )
 
@@ -125,6 +129,7 @@ def _make_stream_with_transport(
     the real constructor would — the stream's threshold lookup reads its own
     ``opts.thresholds``."""
     from livekit.agents.inference.eot.languages import materialize_thresholds
+    from livekit.agents.inference.eot.transports import _CloudTransportOptions
     from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
     detector = MagicMock()
@@ -134,11 +139,22 @@ def _make_stream_with_transport(
     opts = _make_opts(materialize_thresholds(user_threshold, backend))  # type: ignore[arg-type]
     stream = _AudioTurnDetectorStreamImpl.__new__(_AudioTurnDetectorStreamImpl)
     stream._backend = backend  # type: ignore[assignment]
+    stream._cloud_opts = (
+        _CloudTransportOptions(
+            base_url="ws://test",
+            api_key="x",
+            api_secret="x",
+            conn_options=DEFAULT_API_CONNECT_OPTIONS,
+        )
+        if backend == "cloud"
+        else None
+    )
     stream._http_session = None
-    stream._conn_options = DEFAULT_API_CONNECT_OPTIONS
     stream._is_fallback = False
     stream._warned_cloud_failure = False
     stream._warned_local_failure = False
+    stream._transport_task = None
+    stream._fallback_cancel_pending = False
     _AudioTurnDetectorStream.__init__(stream, detector=detector, opts=opts, transport=transport)
     return stream
 
@@ -189,9 +205,7 @@ class TestFallback:
         transport = _ScriptedTransport(run_behavior="raise", run_exc=APIConnectionError("boom"))
         with patch.object(_LocalTransport, "run", new=lambda self: asyncio.sleep(0)):
             stream = _make_stream_with_transport(transport)
-            # Give the main task a chance to run + flip.
-            await asyncio.sleep(0)
-            await asyncio.sleep(0)
+            await _wait_for(lambda: stream.backend == "local")
             assert stream.backend == "local"
             assert stream.is_fallback is True
             assert stream._warned_cloud_failure is True
@@ -214,13 +228,52 @@ class TestFallback:
         transport = _ScriptedTransport(run_behavior="raise", run_exc=APIConnectionError("boom"))
         with patch.object(_LocalTransport, "run", new=lambda self: asyncio.sleep(0)):
             stream = _make_stream_with_transport(transport)
-            await asyncio.sleep(0)
-            await asyncio.sleep(0)
+            await _wait_for(lambda: stream.backend == "local")
             # Cloud transport ran exactly once; no resurrection.
             assert transport.run_calls == 1
             # Future turns can call warmup without re-touching cloud.
             stream.warmup()
             assert stream.backend == "local"
+            await stream.aclose()
+
+
+class TestDetectorViewAfterFallback:
+    async def test_detector_model_and_threshold_follow_fallback(self) -> None:
+        """After cloud→local fallback the detector view (read by EOU metrics
+        and by ``audio_recognition`` when it consults the detector directly)
+        must report the post-fallback backend + rescaled thresholds."""
+        with _clean_env(
+            LIVEKIT_REMOTE_EOT_URL="ws://gateway",
+            LIVEKIT_API_KEY="k",
+            LIVEKIT_API_SECRET="s",
+        ):
+            detector = AudioTurnDetector(unlikely_threshold=0.5)
+            assert detector.model == "eot-audio"
+            cloud_threshold = await detector.unlikely_threshold(LanguageCode("en"))
+            assert cloud_threshold == pytest.approx(0.5)
+
+        transport = _ScriptedTransport(run_behavior="raise", run_exc=APIConnectionError("boom"))
+        with patch.object(_LocalTransport, "run", new=lambda self: asyncio.sleep(0)):
+            stream = _AudioTurnDetectorStreamImpl.__new__(_AudioTurnDetectorStreamImpl)
+            stream._backend = "cloud"
+            stream._cloud_opts = None
+            stream._http_session = None
+            stream._is_fallback = False
+            stream._warned_cloud_failure = False
+            stream._warned_local_failure = False
+            stream._transport_task = None
+            stream._fallback_cancel_pending = False
+            _AudioTurnDetectorStream.__init__(
+                stream, detector=detector, opts=detector._opts, transport=transport
+            )
+            await _wait_for(lambda: stream.backend == "local")
+
+            assert detector.model == "eot-audio-mini"
+            assert detector.backend == "local"
+            local_threshold = await detector.unlikely_threshold(LanguageCode("en"))
+            expected = LOCAL_LANGUAGES["en"] * (0.5 / CLOUD_LANGUAGES["en"])
+            assert local_threshold == pytest.approx(expected)
+
             await stream.aclose()
 
 
@@ -230,8 +283,7 @@ class TestLocalFailureRetry:
         permanently disable local — the next turn invokes _predict again."""
         transport = _ScriptedTransport(run_behavior="raise", run_exc=RuntimeError("local boom"))
         stream = _make_stream_with_transport(transport, backend="local")
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
+        await _wait_for(lambda: stream._warned_local_failure)
         # Local failed; warning logged once; backend stays local; no fallback flag.
         assert stream.backend == "local"
         assert stream.is_fallback is False
@@ -250,8 +302,7 @@ class TestWarningDedupe:
         transport = _ScriptedTransport(run_behavior="raise", run_exc=APIConnectionError("boom"))
         with patch.object(_LocalTransport, "run", new=lambda self: asyncio.sleep(0)):
             stream = _make_stream_with_transport(transport)
-            await asyncio.sleep(0)
-            await asyncio.sleep(0)
+            await _wait_for(lambda: stream.backend == "local")
             # Trigger a second fallback path by calling the method directly.
             stream._fall_back_to_local(reason=APIConnectionError("boom2"))
             # Only one warning across both invocations.
@@ -300,8 +351,7 @@ class TestThresholdScaling:
         transport = _ScriptedTransport(run_behavior="raise", run_exc=APIConnectionError("boom"))
         with patch.object(_LocalTransport, "run", new=lambda self: asyncio.sleep(0)):
             stream = _make_stream_with_transport(transport, user_threshold=0.5)
-            await asyncio.sleep(0)
-            await asyncio.sleep(0)
+            await _wait_for(lambda: stream.backend == "local")
             assert stream.backend == "local"
             assert stream.is_fallback is True
             value = await stream.unlikely_threshold(LanguageCode("en"))
@@ -359,8 +409,7 @@ class TestThresholdDictOverride:
         transport = _ScriptedTransport(run_behavior="raise", run_exc=APIConnectionError("boom"))
         with patch.object(_LocalTransport, "run", new=lambda self: asyncio.sleep(0)):
             stream = _make_stream_with_transport(transport, user_threshold={"en": 0.55, "ja": 0.25})
-            await asyncio.sleep(0)
-            await asyncio.sleep(0)
+            await _wait_for(lambda: stream.backend == "local")
             assert stream.is_fallback is True
             assert await stream.unlikely_threshold(LanguageCode("en")) == pytest.approx(
                 LOCAL_LANGUAGES["en"] * (0.55 / CLOUD_LANGUAGES["en"])

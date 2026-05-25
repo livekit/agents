@@ -22,7 +22,7 @@ from unittest.mock import MagicMock
 import aiohttp
 
 from livekit.agents.inference.eot.detector import _AudioTurnDetectorStreamImpl
-from livekit.agents.inference.eot.transports import _CloudTransport
+from livekit.agents.inference.eot.transports import _CloudTransport, _CloudTransportOptions
 from livekit.agents.types import APIConnectOptions
 from livekit.agents.voice.turn import TurnDetectorOptions
 from livekit.protocol.agent_pb.agent_inference import ClientMessage
@@ -106,32 +106,34 @@ def make_stream(
     detector.provider = "livekit"
     session_mock = MagicMock()
     session_mock.closed = False
-    opts = TurnDetectorOptions(
-        sample_rate=16000,
+    opts = TurnDetectorOptions(sample_rate=16000)
+    conn_options = APIConnectOptions(max_retry=max_retry, retry_interval=retry_interval)
+    cloud_opts = _CloudTransportOptions(
         base_url="",
         api_key="x",
         api_secret="x",
-        conn_options=APIConnectOptions(max_retry=max_retry, retry_interval=retry_interval),
+        conn_options=conn_options,
     )
-    conn_options = APIConnectOptions(max_retry=max_retry, retry_interval=retry_interval)
     transport = ControlledCloudTransport(
         fake_ws=fake_ws,
         connect_script=connect_script,
         detector=detector,
         opts=opts,
+        cloud_opts=cloud_opts,
         http_session=session_mock,
-        conn_options=conn_options,
     )
     stream = _AudioTurnDetectorStreamImpl.__new__(_AudioTurnDetectorStreamImpl)
     # Manually wire the impl so we can inject the controlled transport
     # before super().__init__ kicks off the main task.
     stream._backend = "cloud"
+    stream._cloud_opts = cloud_opts
     stream._user_threshold = None
     stream._http_session = session_mock
-    stream._conn_options = conn_options
     stream._is_fallback = False
     stream._warned_cloud_failure = False
     stream._warned_local_failure = False
+    stream._transport_task = None
+    stream._fallback_cancel_pending = False
     # Now run the FSM base __init__ (kicks off _main_task → _run, also binds transport).
     from livekit.agents.voice.turn import _AudioTurnDetectorStream
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import time
 import weakref
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import aiohttp
@@ -61,8 +62,21 @@ if TYPE_CHECKING:
 __all__ = [
     "_AudioTurnDetectionTransport",
     "_CloudTransport",
+    "_CloudTransportOptions",
     "_LocalTransport",
 ]
+
+
+@dataclass
+class _CloudTransportOptions:
+    """Cloud-WebSocket-specific options. Held separately from
+    ``TurnDetectorOptions`` so the local transport doesn't see fields that
+    don't apply to it."""
+
+    base_url: str
+    api_key: str
+    api_secret: str
+    conn_options: APIConnectOptions
 
 
 # Native model operates on up to 1.2 s of 16 kHz s16le PCM per predict.
@@ -78,12 +92,13 @@ class _CloudTransport:
         *,
         detector: AudioTurnDetector,
         opts: TurnDetectorOptions,
+        cloud_opts: _CloudTransportOptions,
         http_session: aiohttp.ClientSession | None,
-        conn_options: APIConnectOptions,
     ) -> None:
         self._detector_ref: weakref.ref[AudioTurnDetector] = weakref.ref(detector)
         self._opts = opts
-        self._conn_options = conn_options
+        self._cloud_opts = cloud_opts
+        self._conn_options = cloud_opts.conn_options
         self._session_holder = http_session
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._num_retries = 0
@@ -145,7 +160,7 @@ class _CloudTransport:
     def _build_auth_headers(self) -> dict[str, str]:
         return {
             **get_inference_headers(),
-            "Authorization": f"Bearer {create_access_token(self._opts.api_key, self._opts.api_secret)}",
+            "Authorization": f"Bearer {create_access_token(self._cloud_opts.api_key, self._cloud_opts.api_secret)}",
         }
 
     def _send_message(self, msg: ClientMessage) -> None:
@@ -158,7 +173,7 @@ class _CloudTransport:
             pass
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        base_url = self._opts.base_url
+        base_url = self._cloud_opts.base_url
         if base_url.startswith(("http://", "https://")):
             base_url = base_url.replace("http", "ws", 1)
 

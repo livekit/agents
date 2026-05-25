@@ -28,7 +28,7 @@ from ..stt import SpeechEvent
 from ..telemetry import trace_types, tracer
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import aio, is_given
-from ..vad import VADEvent, VADEventType, VADStream
+from ..vad import VADStream
 from . import io
 from ._utils import _set_participant_attributes
 from .endpointing import BaseEndpointing
@@ -86,6 +86,7 @@ class RecognitionHooks(Protocol):
     def on_interim_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None) -> None: ...
     def on_final_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None = None) -> None: ...
     def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool: ...
+    def on_eot_prediction(self, ev: EotPredictionEvent) -> None: ...
     def on_preemptive_generation(self, info: _PreemptiveGenerationInfo) -> None: ...
     def on_user_turn_exceeded(self, ev: UserTurnExceededEvent) -> None: ...
     def retrieve_chat_ctx(self) -> llm.ChatContext: ...
@@ -171,10 +172,6 @@ class AudioRecognition:
         self._vad_base_turn_detection = self._turn_detection_mode in ("vad", None)
         self._user_turn_committed = False  # true if user turn ended but EOU task not done
 
-        # used for late final transcript after commit (audio EOT fires before all finals arrive)
-        self._last_commit_time: float | None = None
-        self._last_committed_speaking_time: float | None = None
-
         # vad override with the audio eot model
         self._vad_min_silence_orig: float | None = None
         self._warned_vad_silence_override = False
@@ -240,16 +237,7 @@ class AudioRecognition:
 
         # audio streaming turn detection
         self._turn_detector_stream: _AudioTurnDetectorStream | None = None
-        self._turn_detection_ch: (
-            aio.Chan[rtc.AudioFrame | VADEvent | bool | _AudioTurnDetectorStream._FlushSentinel]
-            | None
-        ) = None
         self._turn_detection_atask: asyncio.Task[None] | None = None
-        # most recent prediction emitted by the turn detector stream for the
-        # current inference window; reused by stt/manual-triggered EOU runs so we
-        # don't issue a redundant predict_end_of_turn that would just wait for the
-        # next prediction and time out.
-        self._latest_eot_prediction: TurnDetectionEvent | None = None
         # set on VAD START_OF_SPEECH, cleared on END_OF_SPEECH. Lets an
         # in-flight EOU wait abort if the user starts speaking again.
         self._user_speaking_event = asyncio.Event()
@@ -307,12 +295,7 @@ class AudioRecognition:
 
     @property
     def _has_user_vad(self) -> bool:
-        """True only when a user-configured VAD is wired. Framework-default
-        VAD instances return False here so the STT-hook ``speaking=`` payload
-        type and ``_last_speaking_time`` source stay on their pre-default-VAD
-        codepaths (preserving observable behaviour for sessions that didn't
-        configure a VAD).
-        """
+        """True if vad is user provided."""
         return self._vad is not None and not self._vad.is_default
 
     # region: boundary for adaptive interruption detection
@@ -610,8 +593,8 @@ class AudioRecognition:
         if self._interruption_ch is not None:
             self._interruption_ch.send_nowait(frame)
 
-        if self._turn_detection_ch is not None:
-            self._turn_detection_ch.send_nowait(frame)
+        if self._turn_detector_stream is not None:
+            self._turn_detector_stream.push_audio(frame)
 
     async def aclose(self) -> None:
         self._closing.set()
@@ -683,15 +666,13 @@ class AudioRecognition:
             return
         if self._vad is None:
             return
+        current = self._vad.min_silence_duration
+        if current is None:
+            return  # VAD does not expose this knob
         required = (MIN_SILENCE_DURATION_MS + 50) / 1000
-        # only silero vad has this attribute today
-        try:
-            current = float(self._vad._opts.min_silence_duration)  # type: ignore[attr-defined]
-            if current >= required:
-                return
-            self._vad.update_options(min_silence_duration=required)  # type: ignore[attr-defined]
-        except (AttributeError, TypeError):
+        if current >= required:
             return
+        self._vad.min_silence_duration = required
         self._vad_min_silence_orig = current
         if not self._warned_vad_silence_override:
             logger.info(
@@ -705,12 +686,7 @@ class AudioRecognition:
         if self._vad_min_silence_orig is None:
             return
         if self._vad is not None:
-            try:
-                self._vad.update_options(  # type: ignore[attr-defined]
-                    min_silence_duration=self._vad_min_silence_orig
-                )
-            except (AttributeError, TypeError):
-                pass  # should not happen: apply only succeeded if the kwarg was accepted
+            self._vad.min_silence_duration = self._vad_min_silence_orig
         self._vad_min_silence_orig = None
 
     def update_vad(self, vad: vad.VAD | None) -> None:
@@ -791,20 +767,14 @@ class AudioRecognition:
             detector.stream() if isinstance(detector, _AudioTurnDetector) else None
         )
         if self._turn_detector_stream is not None:
-            self._turn_detection_ch = aio.Chan[
-                rtc.AudioFrame | VADEvent | bool | _AudioTurnDetectorStream._FlushSentinel
-            ]()
             self._turn_detection_atask = asyncio.create_task(
-                self._turn_detection_task(
-                    self._turn_detector_stream, self._turn_detection_ch, self._turn_detection_atask
-                )
+                self._turn_detection_task(self._turn_detector_stream, self._turn_detection_atask)
             )
         elif self._turn_detection_atask is not None:
             task = asyncio.create_task(aio.cancel_and_wait(self._turn_detection_atask))
             task.add_done_callback(lambda _: self._tasks.discard(task))
             self._tasks.add(task)
             self._turn_detection_atask = None
-            self._turn_detection_ch = None
         self._maybe_apply_vad_silence_override()
 
     def clear_user_turn(self) -> None:
@@ -817,7 +787,11 @@ class AudioRecognition:
         self._last_speaking_time = None
         self._vad_speech_started = False
         self._user_turn_committed = False
-        self._latest_eot_prediction = None
+
+        # any cached prediction on the audio stream belongs to the turn we
+        # just cleared — flush it so the next predict starts fresh.
+        if self._turn_detector_stream is not None:
+            self._turn_detector_stream.flush(reason="clear_user_turn")
 
         # end any in-progress user_turn span so the next speech starts a fresh one
         if self._user_turn_span is not None and self._user_turn_span.is_recording():
@@ -901,7 +875,6 @@ class AudioRecognition:
             self._run_eou_detection(
                 chat_ctx,
                 skip_reply=skip_reply,
-                latest_eot_prediction=self._latest_eot_prediction,
                 trigger="manual",
             )
             self._user_turn_committed = True
@@ -1043,7 +1016,6 @@ class AudioRecognition:
                     chat_ctx = self._hooks.retrieve_chat_ctx().copy()
                     self._run_eou_detection(
                         chat_ctx,
-                        latest_eot_prediction=self._latest_eot_prediction,
                         trigger="stt",
                     )
 
@@ -1133,7 +1105,6 @@ class AudioRecognition:
             chat_ctx = self._hooks.retrieve_chat_ctx().copy()
             self._run_eou_detection(
                 chat_ctx,
-                latest_eot_prediction=self._latest_eot_prediction,
                 trigger="stt",
             )
 
@@ -1160,17 +1131,14 @@ class AudioRecognition:
                 self._speech_start_time = speech_start_time
                 self._vad_speech_started = True
 
-            # new utterance: drop any cached prediction from the previous turn or utterance
-            self._latest_eot_prediction = None
-
             with trace.use_span(self._ensure_user_turn_span(start_time=speech_start_time)):
                 self._hooks.on_start_of_speech(ev, speech_start_time=speech_start_time)
 
             self._speaking = True
             self._user_speaking_event.set()
 
-            if self._turn_detection_ch is not None:
-                self._turn_detection_ch.send_nowait(ev)
+            if self._turn_detector_stream is not None:
+                self._turn_detector_stream.on_speech_started()
 
             if self._end_of_turn_task is not None:
                 self._end_of_turn_task.cancel()
@@ -1206,8 +1174,8 @@ class AudioRecognition:
             self._user_speaking_event.clear()
             self._last_speaking_time = time.time() - ev.silence_duration - ev.inference_duration
 
-            if self._turn_detection_ch is not None:
-                self._turn_detection_ch.send_nowait(ev)
+            if self._turn_detector_stream is not None:
+                self._turn_detector_stream.activate(trigger="vad eos")
 
             if self._vad_base_turn_detection or (
                 self._turn_detection_mode == "stt" and self._user_turn_committed
@@ -1234,7 +1202,6 @@ class AudioRecognition:
         *,
         trigger: Literal["vad", "turn_detector", "stt", "manual"],
         skip_reply: bool = False,
-        latest_eot_prediction: TurnDetectionEvent | None = None,
     ) -> None:
         """
         Run endpointing delay arbitrage. Turn detection might have been decided already by the vad, manual, or stt.
@@ -1243,7 +1210,6 @@ class AudioRecognition:
         Args:
             chat_ctx: The chat context.
             skip_reply: Whether to skip the reply.
-            latest_eot_prediction: The latest EOT prediction from a streaming turn detector.
             trigger: The trigger for the EOU detection.
         """
         if self._stt and not self._audio_transcript and self._turn_detection_mode != "manual":
@@ -1264,26 +1230,6 @@ class AudioRecognition:
             and (self._audio_transcript or isinstance(self._turn_detector, _AudioTurnDetector))
             else None  # disable EOU model if manual turn detection enabled
         )
-
-        # Late STT final after an audio-EOT commit without any new speech started.
-        # The corresponding audio was already flushed, so an eou prediction would
-        # run on near-silence. Skip the predict and let the bounce commit after min_delay
-        if (
-            trigger == "stt"
-            and isinstance(self._turn_detector, _AudioTurnDetector)
-            and self._last_commit_time is not None
-            and self._vad is not None
-            and self._speech_start_time is None  # no new speech since last commit
-        ):
-            logger.warning(
-                "stt final arrived late or vad missed the speech, committing directly",
-                extra={
-                    "last_speaking_time": self._last_committed_speaking_time,
-                    "commit_time": self._last_commit_time,
-                    "received_at": time.time(),
-                },
-            )
-            turn_detector = None
 
         @utils.log_exceptions(logger=logger)
         async def _bounce_eou_task(
@@ -1307,19 +1253,10 @@ class AudioRecognition:
                     ):
                         end_of_turn_probability = 0.0
                         try:
-                            if latest_eot_prediction is not None:
-                                end_of_turn_probability = (
-                                    latest_eot_prediction.end_of_turn_probability
-                                )
-                            elif isinstance(turn_detector, _AudioTurnDetectorStream):
-                                end_of_turn_probability = await turn_detector.predict_end_of_turn(
-                                    timeout=endpointing_delay,
-                                )
-                            else:
-                                end_of_turn_probability = await turn_detector.predict_end_of_turn(
-                                    chat_ctx,
-                                    timeout=endpointing_delay,
-                                )
+                            end_of_turn_probability = await turn_detector.predict_end_of_turn(
+                                chat_ctx,
+                                timeout=endpointing_delay,
+                            )
                             unlikely_threshold = await turn_detector.unlikely_threshold(
                                 self._last_language
                             )
@@ -1330,6 +1267,11 @@ class AudioRecognition:
                                 endpointing_delay = self._endpointing.max_delay
                         except Exception:
                             logger.exception("Error predicting end of turn")
+
+                        # Text-based detectors return ``None`` here (no
+                        # streaming inference window); audio detectors return
+                        # the cached ``TurnDetectionEvent`` for that window.
+                        prediction_event: TurnDetectionEvent | None = turn_detector.last_prediction
 
                         eou_detection_span.set_attributes(
                             {
@@ -1367,34 +1309,33 @@ class AudioRecognition:
                             },
                         )
 
-                        if (host := self._session._session_host) is not None:
-                            inference_duration = (
-                                latest_eot_prediction.inference_duration
-                                if latest_eot_prediction is not None
-                                and latest_eot_prediction.inference_duration is not None
-                                else 0.0
+                        inference_duration = (
+                            prediction_event.inference_duration
+                            if prediction_event is not None
+                            and prediction_event.inference_duration is not None
+                            else 0.0
+                        )
+                        # end of speech -> prediction receive time
+                        delay = (
+                            time.time() - last_speaking_time
+                            if last_speaking_time is not None
+                            else 0.0
+                        )
+                        self._hooks.on_eot_prediction(
+                            EotPredictionEvent(
+                                probability=end_of_turn_probability or 0.0,
+                                threshold=unlikely_threshold or 0.0,
+                                inference_duration=inference_duration,
+                                delay=delay,
                             )
-                            # end of speech -> prediction receive time
-                            delay = (
-                                time.time() - last_speaking_time
-                                if last_speaking_time is not None
-                                else 0.0
-                            )
-                            host._on_eot_prediction(
-                                EotPredictionEvent(
-                                    probability=end_of_turn_probability or 0.0,
-                                    threshold=unlikely_threshold or 0.0,
-                                    inference_duration=inference_duration,
-                                    delay=delay,
-                                )
-                            )
+                        )
                         if (
-                            latest_eot_prediction is not None
-                            and latest_eot_prediction.detection_delay is not None
+                            prediction_event is not None
+                            and prediction_event.detection_delay is not None
                         ):
                             eou_detection_span.set_attribute(
                                 trace_types.ATTR_EOU_DETECTION_DELAY,
-                                latest_eot_prediction.detection_delay,
+                                prediction_event.detection_delay,
                             )
 
             extra_sleep = endpointing_delay
@@ -1476,7 +1417,6 @@ class AudioRecognition:
                 self._audio_transcript = ""
                 self._final_transcript_confidence = []
                 self._last_final_transcript_time = None
-                self._last_committed_speaking_time = last_speaking_time
                 # concurrent user speech might have changed it
                 # only reset if there is no new speech
                 if self._last_speaking_time == last_speaking_time:
@@ -1485,10 +1425,10 @@ class AudioRecognition:
                     self._last_speaking_time = None
 
                 if self._turn_detector_stream is not None:
+                    # flush() also clears the stream's cached prediction and
+                    # closes the user turn until the next ``on_speech_started()``
+                    # signal.
                     self._turn_detector_stream.flush(reason="turn committed")
-
-                self._latest_eot_prediction = None
-                self._last_commit_time = time.time()
 
             self._user_turn_committed = False
 
@@ -1537,8 +1477,7 @@ class AudioRecognition:
 
         task_func = (
             _bounce_eou_task_with_speaking_guard
-            if self._turn_detector is not None
-            and isinstance(self._turn_detector, _AudioTurnDetector)
+            if isinstance(self._turn_detector, _AudioTurnDetector)
             else _bounce_eou_task
         )
         # copy the last_speaking_time before awaiting (the value can change)
@@ -1641,28 +1580,10 @@ class AudioRecognition:
     async def _turn_detection_task(
         self,
         stream: _AudioTurnDetectorStream,
-        ch: aio.Chan[rtc.AudioFrame | VADEvent | bool | _AudioTurnDetectorStream._FlushSentinel],
         task: asyncio.Task[None] | None,
     ) -> None:
         if task is not None:
             await aio.cancel_and_wait(task)
-
-        @utils.log_exceptions(logger=logger)
-        async def _forward() -> None:
-            async for msg in ch:
-                if isinstance(msg, rtc.AudioFrame):
-                    stream.push_audio(msg)
-                elif isinstance(msg, VADEvent):
-                    if msg.type == VADEventType.START_OF_SPEECH:
-                        stream.deactivate(trigger="vad sos")
-                    elif msg.type == VADEventType.END_OF_SPEECH:
-                        stream.activate(trigger="vad eos")
-                elif isinstance(msg, bool):
-                    (stream.activate if msg else stream.deactivate)(trigger="manual")
-                elif isinstance(msg, _AudioTurnDetectorStream._FlushSentinel):
-                    stream.flush(msg.reason)
-
-        forward_task = asyncio.create_task(_forward())
 
         try:
             async for ev in stream:
@@ -1671,17 +1592,16 @@ class AudioRecognition:
                 if not stream.is_inference_running:
                     continue
 
-                self._latest_eot_prediction = ev
+                # The stream caches ``ev`` as ``last_prediction``; the bounce
+                # task reads it back via ``predict_end_of_turn``.
                 self._run_eou_detection(
                     self._hooks.retrieve_chat_ctx().copy(),
-                    latest_eot_prediction=ev,
                     trigger="turn_detector",
                 )
                 threshold = await stream.unlikely_threshold(self._last_language)
                 if threshold is not None and ev.end_of_turn_probability >= threshold:
                     stream.deactivate(trigger="positive eou prediction")
         finally:
-            await aio.cancel_and_wait(forward_task)
             await stream.aclose()
 
     @utils.log_exceptions(logger=logger)

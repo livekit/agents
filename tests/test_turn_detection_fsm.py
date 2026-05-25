@@ -15,7 +15,6 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import MagicMock
 
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 from livekit.agents.voice.turn import (
     TurnDetectionEvent,
     TurnDetectorOptions,
@@ -80,13 +79,7 @@ class _FakeBackend(_AudioTurnDetectorStream):
 
 
 def _make_opts() -> TurnDetectorOptions:
-    return TurnDetectorOptions(
-        sample_rate=16000,
-        base_url="",
-        api_key="",
-        api_secret="",
-        conn_options=DEFAULT_API_CONNECT_OPTIONS,
-    )
+    return TurnDetectorOptions(sample_rate=16000)
 
 
 def _make_stream() -> _FakeBackend:
@@ -249,5 +242,94 @@ class TestAudioTurnDetectionFSM:
             s.activate()
             assert s.emitted == [0.7]
             assert s._preemptive_prediction is None
+        finally:
+            await s.aclose()
+
+
+class TestPredictOnSilenceGuard:
+    """``predict_end_of_turn`` short-circuits to a positive default when no
+    fresh ``on_speech_started()`` signal has arrived since the last
+    ``flush()``. Covers the late-STT-after-commit case: the audio EOT model
+    already committed (so flush ran); a stray STT final arrives before any
+    new speech; running predict would just wait on silence."""
+
+    async def test_predict_short_circuits_after_flush(self) -> None:
+        s = _make_stream()
+        try:
+            s.flush(reason="turn committed")
+            # No on_speech_started since the flush — predict must short-circuit
+            # without starting an inference window.
+            prob = await s.predict_end_of_turn(timeout=1.0)
+            assert prob == 1.0
+            # Flush itself emits one stop_inference; no fresh start_inference
+            # afterwards.
+            starts_after_flush = [e for e in s.events if e[0] == "start_inference"]
+            assert starts_after_flush == []
+            assert s._preemptive_request_id is None
+        finally:
+            await s.aclose()
+
+    async def test_predict_runs_after_on_speech_started(self) -> None:
+        """``on_speech_started()`` re-arms predict so the next call runs the
+        full warmup → wait → resolve path (and times out here since no
+        prediction is fed in)."""
+        s = _make_stream()
+        try:
+            s.flush(reason="turn committed")
+            s.on_speech_started()
+            prob = await s.predict_end_of_turn(timeout=0.01)
+            # Timed out → default 1.0, but the warmup actually happened.
+            assert prob == 1.0
+            starts = [e for e in s.events if e[0] == "start_inference"]
+            # One inference window opened by predict_end_of_turn after the
+            # on_speech_started re-arm.
+            assert len(starts) == 1
+        finally:
+            await s.aclose()
+
+    async def test_predict_returns_cached_prediction_before_short_circuit(self) -> None:
+        """A cached prediction wins over the short-circuit: if a prediction
+        has already arrived, the short-circuit guard is moot."""
+        s = _make_stream()
+        try:
+            s.warmup()
+            request_id = s._preemptive_request_id
+            assert request_id is not None
+            s.simulate_prediction(request_id, probability=0.4)
+            # flush() clears `_last_prediction` (turn boundary). Re-arming
+            # the cached prediction means: do NOT flush; just call predict.
+            prob = await s.predict_end_of_turn(timeout=1.0)
+            assert prob == 0.4
+        finally:
+            await s.aclose()
+
+    async def test_on_speech_started_deactivates_inflight_inference(self) -> None:
+        """``on_speech_started()`` rolls in the prior ``deactivate(trigger="vad sos")``
+        responsibility — a warmup in flight when speech (re)starts must be
+        torn down so its prediction can't fire for the now-stale window."""
+        s = _make_stream()
+        try:
+            s.warmup()
+            s.activate()
+            assert s.is_inference_running
+
+            s.on_speech_started()
+
+            assert not s.is_inference_running
+            assert s._status == _Status.IDLE
+            assert ("stop_inference", "vad sos") in s.events
+        finally:
+            await s.aclose()
+
+    async def test_initial_state_does_not_short_circuit(self) -> None:
+        """Before any ``flush()`` the guard is disarmed — first turn must
+        run predict normally (timing out here, but exercising the path)."""
+        s = _make_stream()
+        try:
+            prob = await s.predict_end_of_turn(timeout=0.01)
+            assert prob == 1.0  # timeout default
+            # The path did open an inference window.
+            starts = [e for e in s.events if e[0] == "start_inference"]
+            assert len(starts) == 1
         finally:
             await s.aclose()

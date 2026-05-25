@@ -247,6 +247,14 @@ class VAD(agents.vad.VAD):
                 deactivation_threshold=deactivation_threshold,
             )
 
+    @property
+    def min_silence_duration(self) -> float | None:
+        return self._opts.min_silence_duration
+
+    @min_silence_duration.setter
+    def min_silence_duration(self, duration: float) -> None:
+        self.update_options(min_silence_duration=duration)
+
 
 class VADStream(agents.vad.VADStream):
     def __init__(self, vad: VAD, opts: _VADOptions, model: onnx_model.OnnxModel) -> None:
