@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from .agent import Agent
     from .agent_activity import AgentActivity
     from .agent_session import AgentSession
+    from .speech_handle import SpeechHandle
 
 
 UPDATE_TEMPLATE = """The tool `{function_name}` has updated, message: {message}
@@ -451,14 +452,33 @@ class _ToolExecutor:
             else self._tool_prompts["reply_maybe_covered"]
         )
 
-        pending_call_ids = [
-            item.call_id for item in pending_items if item.type == "function_call_output"
-        ]
-        session.generate_reply(
-            instructions=template.format(pending_call_ids=pending_call_ids),
+        call_ids = [item.call_id for item in pending_items if item.type == "function_call_output"]
+        speech = session.generate_reply(
+            instructions=template.format(pending_call_ids=call_ids),
             tool_choice="none",
             chat_ctx=chat_ctx,
         )
+        logger.debug(
+            "generate async tool reply",
+            extra={
+                "speech_id": speech.id,
+                "items": [
+                    (item.name, item.call_id)
+                    for item in pending_items
+                    if item.type == "function_call_output"
+                ],
+                "updates_at_tail": at_tail,
+            },
+        )
+
+        def _on_speech_done(speech: SpeechHandle) -> None:
+            if not speech.chat_items:
+                logger.debug(
+                    "async tool reply was done without outputs",
+                    extra={"speech_id": speech.id, "interrupted": speech.interrupted},
+                )
+
+        speech.add_done_callback(_on_speech_done)
 
     async def _check_duplicate(
         self,

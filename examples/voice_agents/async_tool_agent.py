@@ -12,8 +12,16 @@ except ImportError as e:
         "ddgs (duckduckgo search) is required for this example. Install it with: pip install ddgs"
     ) from e
 
-from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli, inference, llm
-from livekit.agents.llm.async_toolset import AsyncRunContext, AsyncToolset
+from livekit.agents import (
+    Agent,
+    AgentServer,
+    AgentSession,
+    JobContext,
+    RunContext,
+    cli,
+    inference,
+    llm,
+)
 from livekit.plugins import silero
 
 logger = logging.getLogger("async-travel-helper")
@@ -30,6 +38,7 @@ _annoying_loggers = [
     "hickory_resolver",
     "hickory_proto",
     "reqwest",
+    "ddgs.ddgs",
 ]
 for name in _annoying_loggers:
     logging.getLogger(name).setLevel(logging.WARNING)
@@ -37,20 +46,33 @@ for name in _annoying_loggers:
 load_dotenv()
 
 
-class TravelToolset(AsyncToolset):
+class TravelAgent(Agent):
     def __init__(self) -> None:
-        super().__init__(id="travel")
+        super().__init__(
+            instructions=(
+                "You are a friendly travel assistant that communicates via voice. "
+                "Avoid emojis and markdown — speak naturally and concisely. "
+                "You can help with two things: booking flights and recommending what "
+                "to see, eat, and do at a destination. "
+                "Use the book_flight tool when the user wants to book a flight. "
+                "Use the tour_guide tool when the user asks about places to visit, "
+                "restaurants, sightseeing, nightlife, or things to do somewhere. "
+                "Summarize the results in a concise and natural manner that suitable for voice communication. "
+                f"Today is {datetime.now().strftime('%Y-%m-%d %A')}. "
+                "When user is not asking, don't repeat the messages you have already said in the conversation. "
+                "Don't make up flight details or ask for flight preferences — always use the tools. "
+            ),
+        )
         self._thinking_llm = inference.LLM(
             "openai/gpt-5.4", extra_kwargs={"reasoning_effort": "medium"}
         )
         self._ddgs = DDGS()
 
-    # -- Tool 1: Mock flight booking (takes ~2 minutes with progress updates) --
+    async def on_enter(self):
+        self.session.generate_reply(instructions="Greet the user and introduce yourself.")
 
     @llm.function_tool(allow_cancellation=True, on_duplicate="confirm")
-    async def book_flight(
-        self, ctx: AsyncRunContext, origin: str, destination: str, date: str
-    ) -> str:
+    async def book_flight(self, ctx: RunContext, origin: str, destination: str, date: str) -> str:
         """Called when user wants to book a flight.
 
         Args:
@@ -100,7 +122,7 @@ class TravelToolset(AsyncToolset):
     # -- Tool 2: Tour guide via web search --
 
     @llm.function_tool(allow_cancellation=True, on_duplicate="confirm")
-    async def tour_guide(self, ctx: AsyncRunContext, destination: str, interests: str) -> str:
+    async def tour_guide(self, ctx: RunContext, destination: str, interests: str) -> str:
         """Called when user wants to know about a destination, including
         sightseeing spots, restaurants, local food, nightlife, or neighborhood tips.
 
@@ -170,30 +192,6 @@ class TravelToolset(AsyncToolset):
 
         response = await self._thinking_llm.chat(chat_ctx=summary_ctx).collect()
         return response.text
-
-
-class TravelAgent(Agent):
-    def __init__(self) -> None:
-        super().__init__(
-            instructions=(
-                "You are a friendly travel assistant that communicates via voice. "
-                "Avoid emojis and markdown — speak naturally and concisely. "
-                "You can help with two things: booking flights and recommending what "
-                "to see, eat, and do at a destination. "
-                "Use the book_flight tool when the user wants to book a flight. "
-                "Use the tour_guide tool when the user asks about places to visit, "
-                "restaurants, sightseeing, nightlife, or things to do somewhere. "
-                "Summarize the results in a concise and natural manner that suitable for voice communication. "
-                f"Today is {datetime.now().strftime('%Y-%m-%d %A')}. "
-                "When user is not asking, don't repeat the messages you have already said in the conversation. "
-                "Don't make up flight details or ask for flight preferences — always use the tools. "
-            ),
-            tools=[TravelToolset()],
-        )
-        self._llm_count = 0
-
-    async def on_enter(self):
-        self.session.generate_reply(instructions="Greet the user and introduce yourself.")
 
 
 server = AgentServer()

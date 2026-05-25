@@ -105,10 +105,10 @@ async def entrypoint(ctx: JobContext) -> None:
                 "resume_false_interruption": True,
                 "false_interruption_timeout": 1.0,
             },
+            # allow the LLM to generate a response while waiting for the end of turn
+            # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
+            preemptive_generation={"enabled": True, "max_retries": 3},
         ),
-        # allow the LLM to generate a response while waiting for the end of turn
-        # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
-        preemptive_generation=True,
         # blocks interruptions for a few seconds after the agent starts speaking to allow client to calibrate AEC
         aec_warmup_duration=3.0,
         tts_text_transforms=[
