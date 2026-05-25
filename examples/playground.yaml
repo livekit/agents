@@ -17,6 +17,35 @@ project:
   subdomain: examples-wfxyig8v
 
 examples:
+  frontdesk:
+    title: Front Desk
+    description: A receptionist agent wired up to a live calendar. Answers questions about availability, books appointments in real time, and confirms back to the caller.
+    # brand palette — indigo-500
+    accent: "#1F44F9"
+    agent_id: CA_9TqkLsnwhjmE
+    entry: agent.py
+    github: "https://github.com/livekit/agents/tree/main/examples/frontdesk"
+    tags: [tools, scheduling]
+    icon:
+      # Calendar with the top header strip in the highlight tone.
+      size: 12
+      pixels: |
+        000000000000
+        000100010000
+        001111111000
+        012222222100
+        011111111100
+        010000000100
+        010000000100
+        010000000100
+        010000000100
+        010000000100
+        001111111000
+        000000000000
+    views:
+      - rpc: set_appointment_status
+        title: "\uf073 Schedule"
+
   healthcare:
     title: Healthcare
     description: A medical front-desk agent that handles intake, authenticates returning patients, books appointments, and hands the conversation off to a human when it needs to.
@@ -68,35 +97,6 @@ examples:
         011000000000
         010000000000
         000000000000
-
-  frontdesk:
-    title: Front Desk
-    description: A receptionist agent wired up to a live calendar. Answers questions about availability, books appointments in real time, and confirms back to the caller.
-    # brand palette — indigo-500
-    accent: "#1F44F9"
-    agent_id: CA_9TqkLsnwhjmE
-    entry: agent.py
-    github: "https://github.com/livekit/agents/tree/main/examples/frontdesk"
-    tags: [tools, scheduling]
-    icon:
-      # Calendar with the top header strip in the highlight tone.
-      size: 12
-      pixels: |
-        000000000000
-        000100010000
-        001111111000
-        012222222100
-        011111111100
-        010000000100
-        010000000100
-        010000000100
-        010000000100
-        010000000100
-        001111111000
-        000000000000
-    views:
-      - rpc: set_appointment_status
-        title: "\uf073 Schedule"
 
   drive-thru:
     title: Drive Thru
