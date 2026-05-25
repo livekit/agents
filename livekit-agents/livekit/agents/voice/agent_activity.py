@@ -1060,14 +1060,19 @@ class AgentActivity(RecognitionHooks):
 
         should_discard: bool = aec_warmup_active or uninterruptible_speech_active
 
-        if not should_discard:
-            if self._rt_session is not None:
-                self._rt_session.push_audio(frame)
+        # When discarding, substitute silence on the paths that would otherwise
+        # see contaminated/echoed audio (STT, realtime model) so the downstream
+        # stream stays continuous. VAD, AMD and the interruption detector keep
+        # receiving the real frame so they can still react to the user.
+        stt_frame: rtc.AudioFrame | None = None
+        if should_discard:
+            stt_frame = utils.audio.silence_frame_like(frame)
 
-        # Always forward to _audio_recognition for VAD, even when discarding STT/LLM
-        # VAD needs frames to detect speech end and update user state correctly
+        if self._rt_session is not None:
+            self._rt_session.push_audio(stt_frame if stt_frame is not None else frame)
+
         if self._audio_recognition is not None:
-            self._audio_recognition.push_audio(frame, skip_stt=should_discard)
+            self._audio_recognition.push_audio(frame, stt_frame=stt_frame)
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
         if not self._started:
