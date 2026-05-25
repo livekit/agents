@@ -12,20 +12,20 @@ from ...types import NotGivenOr
 from ...utils.misc import is_given
 
 CLOUD_LANGUAGES: dict[str, float] = {
-    "ar": 0.3500,
-    "de": 0.4000,
-    "en": 0.4500,
-    "es": 0.4100,
-    "fr": 0.3900,
-    "hi": 0.5350,
+    "ar": 0.3550,
+    "de": 0.4950,
+    "en": 0.5600,
+    "es": 0.5900,
+    "fr": 0.5750,
+    "hi": 0.5750,
     "id": 0.4700,
-    "it": 0.3250,
-    "ja": 0.4800,
-    "ko": 0.5650,
-    "nl": 0.4250,
-    "pt": 0.4150,
-    "tr": 0.3450,
-    "zh": 0.4700,
+    "it": 0.6400,
+    "ja": 0.3700,
+    "ko": 0.6950,
+    "nl": 0.7500,
+    "pt": 0.6650,
+    "tr": 0.6500,
+    "zh": 0.5900,
 }
 
 LOCAL_LANGUAGES: dict[str, float] = {
