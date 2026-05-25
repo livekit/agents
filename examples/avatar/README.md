@@ -1,107 +1,78 @@
-# LemonSlice Avatar with Switchable Personas
+# LemonSlice Avatar
 
-A voice agent paired with a [LemonSlice](https://www.lemonslice.com/) animated
-avatar. The agent boots into one of 15 hard-coded personas — each pairs an
-image (the avatar that LemonSlice renders), a Cartesia voice id, a system
-prompt, and a pair of body-language prompts (speaking / idle). The playground
-dropdown picks the persona by id and dispatches the choice as agent metadata;
-the agent resolves it and wires up the right TTS + prompt.
+A voice agent with a talking-head avatar you can swap mid-conversation.
+Pick a persona from the dropdown — an influencer, a cat, a fox, a music
+teacher, Marilyn Monroe — and the agent's face, voice, and personality
+all change without dropping the call.
 
-## Layout
+Try it in the [LiveKit Playground](https://playground.livekit.io/?example=avatar).
 
-```
-examples/avatar/
-  agent.py        # AgentSession, the set_avatar RPC, the hold-music
-                  # context manager.
-  personas.py     # `Persona` dataclass + the `PERSONAS` library +
-                  # `resolve_persona` helper + the COMMON_INSTRUCTIONS
-                  # shared directive that's appended to every persona's
-                  # system prompt.
-  hold_music.py   # Procedural F-major pairing-tone-style synth used as
-                  # background hold music while a persona swap is in
-                  # flight. No audio file shipped.
-  Dockerfile, requirements.txt
-```
+## What's in here
 
-## Personas
+- **15 personas** to choose from — each has its own face, voice, system
+  prompt, and idle/speaking body-language hints.
+- **Live persona switching** — the dropdown fires a `set_avatar` RPC; a
+  short hold tone plays while the avatar reconnects with the new face
+  and voice.
+- **LiveKit Inference** for STT + LLM (Deepgram Nova-3 + Gemini 3
+  Flash), Cartesia for TTS, [LemonSlice](https://lemonslice.com) for
+  the avatar video.
 
-Defined in `personas.py:PERSONAS`. The set: `influencer` (default),
-`software_engineer`, `music_teacher`, `social_worker`, `joyce`, `iris`,
-`ai_therapist`, `management_consultant`, `shopping_assistant`, `cat_girl`,
-`mock_interviewer_legal`, `mr_fox`, `monroe`, `fortnite_guide`, `kitten_tutor`.
+## Running it locally
 
-Each `Persona` carries `image_url`, `voice_id`, `system_prompt`,
-`speaking_prompt`, and `idle_prompt`. The body-language prompts are forwarded
-to LemonSlice as `agent_prompt` / `agent_idle_prompt`.
+You'll need:
 
-The shared `COMMON_INSTRUCTIONS` block in `personas.py` is appended to every
-persona's system prompt — that's where the global "speak naturally, one or
-two short sentences, no markdown" rules live.
+- A LiveKit Cloud project (`LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`,
+  `LIVEKIT_URL`).
+- A LemonSlice API key — get one from
+  [lemonslice.com](https://lemonslice.com). Export it as
+  `LEMONSLICE_API_KEY`.
 
-## Switching personas at runtime
-
-The `set_avatar` RPC accepts `{"value": "<persona_id>"}` and:
-
-1. Plays a short pairing-tone hold loop on a background audio track.
-2. Closes the previous LemonSlice `AvatarSession`.
-   `BaseAvatarSession.aclose()` kicks the avatar participant via
-   `RoomService.RemoveParticipant` so its audio + video publications are
-   torn down.
-3. Starts a fresh `AvatarSession` with the new image, `agent_prompt`,
-   and `agent_idle_prompt`. `wait_for_join()` blocks until the new
-   participant + video track are present.
-4. `session.update_agent(make_agent(new_persona))` swaps in the new TTS
-   voice + system prompt.
-5. `session.generate_reply(...)` triggers the new persona to introduce
-   itself; the hold music fades out as that audio starts.
-
-Concurrent `set_avatar` calls are serialised behind an `asyncio.Lock`; a
-call that arrives while a swap is in flight is rejected with an RPC
-application error so the frontend can surface a "try again in a moment"
-toast.
-
-The RPC returns `{"id": "<persona_id>"}`. The image swap happens fully
-mid-session — no client reconnect required.
-
-## Initial persona on connect
-
-The agent reads the persona id from `ctx.job.metadata`. The playground sends
-either a JSON `{"persona_id": "..."}` object or a bare id string; both are
-accepted. Unknown or missing ids fall back to `DEFAULT_PERSONA_ID = "influencer"`.
-
-## Running locally
+Then:
 
 ```bash
-export LEMONSLICE_API_KEY="sk_lemon_..."
-export LIVEKIT_API_KEY="..."
-export LIVEKIT_API_SECRET="..."
-export LIVEKIT_URL="..."
-
-python examples/avatar/agent.py dev
+pip install -r requirements.txt
+python agent.py dev
 ```
 
-The example also calls `load_dotenv(find_dotenv(...))`, so any `.env` walking
-up from the file is picked up.
+Connect from any LiveKit client. The agent reads the starting persona
+from the job metadata; if no metadata is sent it defaults to the
+California influencer.
 
-## Deployment
+## Adding or editing personas
 
-`playground.yaml` carries the avatar entry (pixel icon, accent, persona
-dropdown, `agent_id`) that the playground reads.
+Everything lives in [`personas.py`](./personas.py). Each entry has:
 
-The example is deployed manually via `lk agent deploy` — it isn't in
-`.github/workflows/deploy-examples.yml`'s matrix because it needs a
-per-deploy `LEMONSLICE_API_KEY` and we keep its secrets pinned out of
-band rather than in the workflow.
+- `image_url` — the picture LemonSlice will animate.
+- `voice_id` — a Cartesia voice id.
+- `system_prompt` — who the persona *is*. Keep it tight; the shared
+  `COMMON_INSTRUCTIONS` block already covers global rules (be brief,
+  no markdown, etc.).
+- `speaking_prompt` / `idle_prompt` — short body-language cues sent to
+  LemonSlice (`agent_prompt` / `agent_idle_prompt`).
 
-Set the agent secrets once before the first deploy:
+To add a persona, append a new `Persona(...)` to the `PERSONAS` dict.
+The playground UI auto-discovers it once
+[`examples/playground.yaml`](../playground.yaml) is updated too.
 
-```bash
-cd examples/avatar
-lk agent update-secrets --project examples \
-  --secrets "LIVEKIT_AGENT_NAME=avatar" \
-  --secrets "LEMONSLICE_API_KEY=$LEMONSLICE_API_KEY"
+## How persona switching works
+
+When the playground dropdown changes, the frontend calls the agent's
+`set_avatar` RPC. The agent:
+
+1. Plays a short hold tone in the background.
+2. Closes the current avatar session.
+3. Opens a fresh one with the new face + body-language prompts.
+4. Swaps the TTS voice + system prompt.
+5. Greets you as the new persona.
+
+No reconnect, no page refresh — the same call, with a different face.
+
+## Files
+
 ```
-
-Then deploy from `examples/avatar/` with a local `livekit.toml` pointing
-at `subdomain = "examples-wfxyig8v"` and the avatar `agent_id` from
-`examples/playground.yaml`.
+agent.py        entry point + the set_avatar RPC
+personas.py     the 15 personas and the shared prompt rules
+hold_music.py   the soft three-note "please wait" tone
+Dockerfile      for cloud deploys
+```
