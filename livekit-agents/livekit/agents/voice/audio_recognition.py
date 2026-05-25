@@ -690,7 +690,7 @@ class AudioRecognition:
         self._vad_min_silence_orig = None
 
     def update_vad(self, vad: vad.VAD | None) -> None:
-        self._vad_min_silence_orig = None
+        self._revert_vad_silence_override()
         self._vad = vad
         if vad:
             self._vad_stream = None
