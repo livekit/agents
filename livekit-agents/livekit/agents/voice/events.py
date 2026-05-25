@@ -135,8 +135,11 @@ class RunContext(Generic[Userdata_T]):
                 },
             )
 
+        # first update keeps the original call_id
         update_step = len(self._updates)
-        pair = self._make_update_pair(message, call_id_suffix=f"_update_{update_step}")
+        pair = self._make_update_pair(
+            message, call_id_suffix=f"_update_{update_step}" if update_step > 0 else ""
+        )
         self._updates.append(pair)
 
         if self._executor is None:

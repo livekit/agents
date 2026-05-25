@@ -939,13 +939,14 @@ class TestRunContextUpdate:
     """RunContext.update() — call_id suffix, extra-dict isolation, ordering."""
 
     @pytest.mark.asyncio
-    async def test_update_uses_update_n_suffix_from_zero(self):
-        """First update uses ``_update_0`` so it can't collide with the eventual FunctionCallOutput."""
+    async def test_first_update_keeps_original_call_id(self):
+        """First update reuses the original call_id (so realtime/response models can
+        match it server-side); later updates get an ``_update_N`` suffix."""
         ctx = _make_run_context(call_id="orig")
         await ctx.update("msg1")
         await ctx.update("msg2")
 
-        assert ctx._updates[0][0].call_id == "orig_update_0"
+        assert ctx._updates[0][0].call_id == "orig"
         assert ctx._updates[1][0].call_id == "orig_update_1"
 
     @pytest.mark.asyncio
