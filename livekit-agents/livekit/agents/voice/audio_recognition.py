@@ -1200,7 +1200,7 @@ class AudioRecognition:
         self,
         chat_ctx: llm.ChatContext,
         *,
-        trigger: Literal["vad", "turn_detector", "stt", "manual"],
+        trigger: Literal["vad", "stt", "manual"],
         skip_reply: bool = False,
     ) -> None:
         """
@@ -1252,6 +1252,11 @@ class AudioRecognition:
                         tracer.start_as_current_span("eou_detection") as eou_detection_span,
                     ):
                         end_of_turn_probability = 0.0
+                        # Audio detectors cache the resolved prediction for the
+                        # current inference window; a non-None value here means
+                        # ``predict_end_of_turn`` will short-circuit on cache
+                        # (e.g. stt-trigger reusing a vad-trigger result).
+                        from_cache = turn_detector.last_prediction is not None
                         try:
                             end_of_turn_probability = await turn_detector.predict_end_of_turn(
                                 chat_ctx,
@@ -1296,6 +1301,7 @@ class AudioRecognition:
                                 trace_types.ATTR_EOU_DELAY: endpointing_delay,
                                 trace_types.ATTR_EOU_LANGUAGE: self._last_language or "",
                                 trace_types.ATTR_EOU_SOURCE: trigger,
+                                trace_types.ATTR_EOU_FROM_CACHE: from_cache,
                             }
                         )
                         logger.debug(
@@ -1306,6 +1312,7 @@ class AudioRecognition:
                                 "endpointing_delay": endpointing_delay,
                                 "language": self._last_language or "",
                                 "trigger": trigger,
+                                "from_cache": from_cache,
                             },
                         )
 
@@ -1592,12 +1599,9 @@ class AudioRecognition:
                 if not stream.is_inference_running:
                     continue
 
-                # The stream caches ``ev`` as ``last_prediction``; the bounce
-                # task reads it back via ``predict_end_of_turn``.
-                self._run_eou_detection(
-                    self._hooks.retrieve_chat_ctx().copy(),
-                    trigger="turn_detector",
-                )
+                # The vad-EOS bounce task already reads the cached prediction
+                # via ``predict_end_of_turn``; we only need the threshold check
+                # here to short-circuit further inference on a positive result.
                 threshold = await stream.unlikely_threshold(self._last_language)
                 if threshold is not None and ev.end_of_turn_probability >= threshold:
                     stream.deactivate(trigger="positive eou prediction")

@@ -128,7 +128,11 @@ class TestTurnDetectionTaskPredictions:
     """Predictions emitted by the stream drive `_run_eou_detection` + may
     deactivate the stream on a positive prediction."""
 
-    async def test_prediction_invokes_run_eou_detection(self) -> None:
+    async def test_subthreshold_prediction_does_not_deactivate(self) -> None:
+        """The turn-detection subscriber no longer re-fires `_run_eou_detection`
+        (the vad-EOS bounce already covers that via the cached prediction).
+        A below-threshold prediction only updates `last_prediction`; the
+        stream stays active and `_run_eou_detection` is not called from here."""
         recognition = _make_recognition_shell()
         stream = _RecordingStream(detector=_make_detector_stub(), opts=_make_opts())
         task = asyncio.create_task(recognition._turn_detection_task(stream, None))
@@ -140,12 +144,7 @@ class TestTurnDetectionTaskPredictions:
             for _ in range(5):
                 await asyncio.sleep(0)
 
-            assert recognition._run_eou_detection.called
-            kwargs = recognition._run_eou_detection.call_args.kwargs
-            assert kwargs["trigger"] == "turn_detector"
-            # The prediction is no longer passed as a kwarg — it lives on the
-            # stream as ``last_prediction`` and the bounce task reads it back
-            # via ``predict_end_of_turn``.
+            recognition._run_eou_detection.assert_not_called()
             assert stream.last_prediction is not None
             assert stream.last_prediction.end_of_turn_probability == 0.3
             # Stream wasn't deactivated for sub-threshold prediction.
@@ -174,7 +173,8 @@ class TestTurnDetectionTaskPredictions:
 
     async def test_prediction_skipped_when_inference_not_running(self) -> None:
         """An event delivered while the FSM is idle (no active turn) is
-        treated as stale and must NOT trigger `_run_eou_detection`."""
+        treated as stale: the subscriber skips the threshold/deactivate path,
+        even for a positive probability."""
         recognition = _make_recognition_shell()
         stream = _RecordingStream(detector=_make_detector_stub(), opts=_make_opts())
         task = asyncio.create_task(recognition._turn_detection_task(stream, None))
@@ -184,7 +184,7 @@ class TestTurnDetectionTaskPredictions:
             for _ in range(5):
                 await asyncio.sleep(0)
 
-            recognition._run_eou_detection.assert_not_called()
+            assert "positive eou prediction" not in stream.deactivate_calls
         finally:
             await aio.cancel_and_wait(task)
 
@@ -259,7 +259,7 @@ class TestSpeakingGuardRace:
         ar = _make_full_recognition_for_eou()
         chat_ctx = _make_chat_ctx_stub()
 
-        ar._run_eou_detection(chat_ctx, trigger="turn_detector")
+        ar._run_eou_detection(chat_ctx, trigger="vad")
 
         # The bounce is sleeping ~0.5 s. Fire the speaking event well inside
         # that window — the guard's `asyncio.wait(FIRST_COMPLETED)` returns
@@ -280,7 +280,7 @@ class TestSpeakingGuardRace:
         ar._speaking = True
         chat_ctx = _make_chat_ctx_stub()
 
-        ar._run_eou_detection(chat_ctx, trigger="turn_detector")
+        ar._run_eou_detection(chat_ctx, trigger="vad")
 
         assert ar._end_of_turn_task is not None
         await ar._end_of_turn_task
