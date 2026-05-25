@@ -166,9 +166,8 @@ class AudioRecognition:
 
         self._sample_rate: int | None = None
 
-        # silence event with boundary semantics: set on END_OF_SPEECH, cleared on START_OF_SPEECH.
-        # _speaking is its inverse. used by _wait_for_inactive so it can await the end of the user
-        # turn and then pick up any new speech handle spawned by EOU
+        # set on END_OF_SPEECH, cleared on START_OF_SPEECH; _speaking is its inverse.
+        # exposed as an event so _wait_for_inactive can level-wait on it
         self._user_silence_ev = asyncio.Event()
         self._user_silence_ev.set()
 

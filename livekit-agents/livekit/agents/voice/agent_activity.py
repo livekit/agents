@@ -91,9 +91,7 @@ _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_
 
 
 class ActivityClosedError(Exception):
-    """Raised by ``AgentActivity.wait_for_idle`` / ``AgentSession.wait_for_idle`` when
-    the target activity (or session) has terminally closed and the wait can never
-    succeed."""
+    """Raised by ``wait_for_idle`` when the target activity/session has closed."""
 
 
 @dataclass
@@ -187,9 +185,8 @@ class AgentActivity(RecognitionHooks):
         self._drain_blocked_tasks: list[asyncio.Task[Any]] = []
         self._mcp_tools: list[mcp.MCPToolset] = []
 
-        # activity-scoped tool executor. Every tool dispatched in this activity runs
-        # through this executor. On drain it cancels cancellable tools and waits for
-        # the rest; reply delivery is scoped to this activity's agent.
+        # activity-scoped executor: cancels cancellable tools / awaits the rest on drain,
+        # and delivers replies to this activity's agent
         if is_given(self._agent._async_tool_prompts):
             activity_prompts = _resolve_async_tool_prompts(self._agent._async_tool_prompts)
         else:
@@ -390,11 +387,9 @@ class AgentActivity(RecognitionHooks):
         from .tool_executor import cancel_task, get_running_tasks, has_cancellable_tool
 
         tools = self._session.tools + self._agent.tools + self._mcp_tools
-        # auto-expose cancel_task / get_running_tasks whenever any tool opts in via
-        # allow_cancellation=True. Done here so the same set of tools is visible to
-        # LLM inference, realtime sessions, chat-ctx construction, and tool dispatch.
-        # always-on (not per-turn) so the schema stays stable across turns and the
-        # LLM prompt cache stays warm.
+        # auto-expose cancel_task / get_running_tasks when any tool opts in via
+        # allow_cancellation=True. always-on (not per-turn) so the LLM-visible
+        # schema stays stable across turns and the prompt cache stays warm
         if has_cancellable_tool(tools):
             tools = [*tools, cancel_task, get_running_tasks]
         return tools
@@ -608,8 +603,8 @@ class AgentActivity(RecognitionHooks):
                     if isinstance(self.tts, tts.TTS):
                         self.tts.prewarm()
 
-                # one-shot setup (not called on resume) so toolsets and MCP
-                # connections persist across pause/resume.
+                # one-shot — not re-run on resume, so toolsets and MCP connections
+                # survive pause/resume
                 await self._setup_toolsets()
 
                 # don't use start_span for _start_session, avoid nested user/assistant turns
@@ -703,11 +698,7 @@ class AgentActivity(RecognitionHooks):
         return resources
 
     async def _setup_toolsets(self) -> None:
-        """Initialize all toolsets attached to the session or agent.
-
-        Recurses into nested toolsets, attaches each ``AsyncToolset`` to the
-        right scope (session vs agent), and calls every toolset's ``setup()``.
-        """
+        """Build MCP toolsets, scope each AsyncToolset, and call ``setup()`` on all."""
         from ..llm.async_toolset import AsyncToolset
 
         assert self._lock.locked(), "_setup_toolsets must run under the activity lock."
@@ -728,7 +719,7 @@ class AgentActivity(RecognitionHooks):
         if not all_toolsets:
             return
 
-        # attach activity to agent-scoped toolsets, resolve nested toolsets
+        # session.tools → session-scoped (survives handoff); agent.tools → activity-scoped
         for ts in llm.ToolContext(session_toolsets).toolsets:
             if isinstance(ts, AsyncToolset):
                 ts._attach_activity(activity=None, session=self._session)
@@ -736,7 +727,6 @@ class AgentActivity(RecognitionHooks):
             if isinstance(ts, AsyncToolset):
                 ts._attach_activity(activity=self, session=self._session)
 
-        # setup all toolsets
         @utils.log_exceptions(logger=logger)
         async def _do_setup(toolset: llm.Toolset) -> None:
             await toolset.setup()
@@ -1047,7 +1037,7 @@ class AgentActivity(RecognitionHooks):
             # on_exit_task should be awaited in `drain`
             self._on_exit_task = None
 
-            # cancel cancellable tools, wait for the rest before tearing the activity down
+            # cancel cancellable tools and await the rest before teardown
             await self._tool_executor.drain()
 
             await self._close_session()
@@ -1056,8 +1046,8 @@ class AgentActivity(RecognitionHooks):
             if self._scheduling_atask is not None:
                 await utils.aio.cancel_and_wait(self._scheduling_atask)
 
-            # toolsets + their executors outlive pause; tear them down only on
-            # terminal close. session-scoped toolsets are closed by the session.
+            # session-scoped toolsets are closed by the session; this only closes
+            # the agent's own toolsets + MCP — all of which outlive pause
             toolsets = self._mcp_tools + [
                 tool for tool in self._agent.tools if isinstance(tool, llm.Toolset)
             ]
@@ -1066,8 +1056,7 @@ class AgentActivity(RecognitionHooks):
                     *(toolset.aclose() for toolset in toolsets), return_exceptions=True
                 )
 
-            # close the activity executor — anything still running (non-cancellable
-            # that survived drain) gets cancelled here.
+            # final sweep: anything non-cancellable that survived drain dies here
             await self._tool_executor.aclose()
 
             self._agent._activity = None
@@ -1485,8 +1474,7 @@ class AgentActivity(RecognitionHooks):
     async def wait_for_idle(self) -> None:
         """Wait until this activity has no in-flight agent or user work.
 
-        Raises:
-            ActivityClosedError: if the activity has terminally closed.
+        Raises ``ActivityClosedError`` if the activity has terminally closed.
         """
         if self._closed:
             raise ActivityClosedError(f"activity {self.agent.label} is closed")

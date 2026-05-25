@@ -1050,11 +1050,8 @@ def mock_tools(agent: type[Agent], mocks: dict[str, Callable]) -> Generator[None
 
 
 async def _run_mock(mock: Callable, *fnc_args: Any, **fnc_kwargs: Any) -> Any:
-    """Invoke a mock tool with args/kwargs trimmed to match its signature.
-
-    The mock may declare a subset of the real tool's parameters; trim args/kwargs
-    so signature.bind doesn't reject the call.
-    """
+    """Invoke a mock tool, trimming args/kwargs to whatever subset of the real
+    tool's parameters the mock actually declares."""
     import inspect
 
     sig = inspect.signature(mock)

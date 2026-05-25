@@ -525,13 +525,8 @@ class FunctionCallResult:
     raw_output: Any
     raw_exception: BaseException | None
     fnc_call_updates: list[tuple[FunctionCall, FunctionCallOutput]] = field(default_factory=list)
-    """Progress updates produced via ``ctx.update()`` during this call.
-
-    Populated when the tool function calls ``ctx.update(...)`` from a standalone
-    execution context (no executor attached). Each entry is a synthesized
-    ``(FunctionCall, FunctionCallOutput)`` pair with a derived call_id. Always
-    empty for tools that don't call ``ctx.update()``.
-    """
+    """Synthesized pairs from any ``ctx.update()`` calls during this standalone
+    execution. Empty unless the tool actually called ``ctx.update()``."""
 
 
 def make_function_call_output(
@@ -675,7 +670,7 @@ async def execute_function_call(
         )
         out = make_function_call_output(fnc_call=fnc_call, output=None, exception=e)
 
-    # capture any ctx.update() calls into the result so callers can inspect them
+    # surface any ctx.update() calls so callers can inspect them
     if call_ctx is not None and call_ctx._updates:
         out.fnc_call_updates = list(call_ctx._updates)
     return out

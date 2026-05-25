@@ -497,13 +497,11 @@ async def _execute_tools_task(
     tool_execution_completed_cb: Callable[[ToolExecutionOutput], Any],
     tool_output: _ToolOutput,
 ) -> None:
-    """execute tools through the activity's _ToolExecutor.
+    """Dispatch tools through the activity's _ToolExecutor.
 
-    Every tool dispatched here runs through the executor's background-task lifecycle.
-    Tools that never call ``ctx.update()`` behave like classic sync tools. Tools that
-    call ``ctx.update()`` release control to the LLM with the update message as the
-    synthetic output, and the executor coalesces subsequent updates and the final
-    return value into deferred replies.
+    Tools that never call ``ctx.update()`` behave like classic sync tools. Those
+    that do release control to the LLM with the first update as their synthetic
+    output, and later updates / the final return are coalesced into deferred replies.
     """
 
     from pydantic_core import from_json
@@ -524,9 +522,8 @@ async def _execute_tools_task(
         )
         return
 
-    # map function-name -> executor: AsyncToolset members route to their own
-    # executor so updates/replies stay per-toolset; everything else falls back to
-    # the activity executor.
+    # AsyncToolset members route to their own executor for per-toolset
+    # update/reply coalescing; the rest fall back to the activity executor
     executor_by_name = _build_executor_map(
         toolsets=tool_ctx.toolsets, default=activity._tool_executor
     )
@@ -580,8 +577,8 @@ async def _execute_tools_task(
                 )
                 continue
 
-            # parse the JSON arguments up front so the executor doesn't repeat the work.
-            # bad JSON is reported as a tool error immediately.
+            # parse up front so the executor doesn't repeat the work, and so
+            # invalid JSON surfaces as a tool error instead of inside the lock
             try:
                 raw_args = from_json(fnc_call.arguments or "{}")
                 while isinstance(raw_args, str):

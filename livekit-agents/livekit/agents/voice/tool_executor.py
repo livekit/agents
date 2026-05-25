@@ -61,17 +61,8 @@ Do NOT repeat information you have already told the user."""
 class AsyncToolPrompts(TypedDict, total=False):
     """System-message templates injected around tool dispatch.
 
-    Each field is a ``str.format()`` template; unmentioned keys keep their
-    defaults. Used by tools that opt into ``ctx.update()`` progress messages,
-    ``on_duplicate`` policies, or coalesced reply delivery.
-
-    Resolution order at construction time (each layer is a whole-value override):
-
-    - ``AsyncToolset.async_tool_prompts`` > container's prompts > defaults
-    - Container is ``Agent`` for agent-scoped toolsets, ``AgentSession`` for
-      session-scoped ones.
-    - For tools dispatched through the activity's built-in executor:
-      ``Agent.async_tool_prompts`` > ``AgentSession.async_tool_prompts`` > defaults.
+    Each field is a ``str.format()`` template; unmentioned keys keep their defaults.
+    Set on ``AgentSession``, ``Agent``, or ``AsyncToolset`` (most specific wins).
 
     Placeholders:
 
@@ -110,9 +101,8 @@ def _resolve_async_tool_prompts(
     return AsyncToolPrompts(**{**_ASYNC_TOOL_PROMPTS_DEFAULTS, **config})
 
 
-# Module-level registry of running tool calls, keyed by (JobContext | None, call_id).
-# Shared across all executors so `get_running_tasks` / `cancel_task` see a global view
-# scoped by job context.
+# shared across all executors so the cancel_task / get_running_tasks companion tools
+# see a single job-scoped view
 _RunningTasks: dict[tuple[JobContext | None, str], _RunningTask] = {}
 
 
@@ -140,9 +130,7 @@ async def cancel_task(call_id: str) -> str:
 
 
 def has_cancellable_tool(tools: Sequence[Tool | Toolset]) -> bool:
-    """Recursively check whether any function tool in ``tools`` opts into LLM
-    cancellation. Used by ``AgentActivity.tools`` to decide whether to auto-expose
-    the ``cancel_task`` / ``get_running_tasks`` companion tools."""
+    """Return True if any tool (or nested toolset tool) sets ``allow_cancellation=True``."""
     for tool in tools:
         if isinstance(tool, (FunctionTool, RawFunctionTool)):
             if tool.info.allow_cancellation:
@@ -171,16 +159,11 @@ class _PendingUpdate:
 class _ToolExecutor:
     """Lifecycle manager for in-flight tool calls.
 
-    Every tool call dispatched in the voice loop runs through this executor: it
-    creates the background task, applies the per-tool duplicate policy, tracks
-    cancellability, and coalesces progress replies. Two variants exist by
-    construction:
+    Activity-scoped (``owning_activity`` set): tasks belong to one AgentActivity
+    and are cancelled or awaited on drain depending on ``allow_cancellation``.
 
-    - Activity-scoped (`owning_activity` set): tasks belong to one AgentActivity
-      and are cancelled (when `allow_cancellation=True`) or awaited (when False)
-      on activity drain/handoff.
-    - Session-scoped (`owning_activity=None`): tasks survive agent handoff;
-      replies are delivered to whichever agent is current at delivery time.
+    Session-scoped (``owning_activity=None``): tasks survive agent handoff; replies
+    are delivered to whichever agent is current at delivery time.
     """
 
     def __init__(
@@ -192,22 +175,17 @@ class _ToolExecutor:
         self._running_tasks: dict[str, _RunningTask] = {}
         self._duplicate_check_lock = asyncio.Lock()
 
-        # speech delivery — shared across all tools in this executor
         self._pending_updates: list[_PendingUpdate] = []
         self._reply_task: asyncio.Task[None] | None = None
 
-        # owning_activity determines reply scope: when set, wait for this activity
-        # to be idle and deliver to its agent; when None, deliver to whichever
-        # activity is current at reply time (session-scoped).
         self._owning_activity: AgentActivity | None = owning_activity
-
         self._tool_prompts: AsyncToolPrompts = _resolve_async_tool_prompts(async_tool_prompts)
 
     def set_owning_activity(self, activity: AgentActivity | None) -> None:
         self._owning_activity = activity
 
     def set_tool_prompts(self, prompts: AsyncToolPrompts) -> None:
-        """Replace the resolved prompt templates. Caller is responsible for resolution."""
+        """Replace the prompt templates. Caller must pre-resolve defaults."""
         self._tool_prompts = prompts
 
     @property
@@ -226,14 +204,7 @@ class _ToolExecutor:
         raw_arguments: dict[str, Any],
         mock: Callable[..., Any] | None = None,
     ) -> Any:
-        """Run ``tool`` in the executor. Returns when the first ``ctx.update()`` lands
-        or the tool returns (whichever comes first).
-
-        - Strips `lk_agents_confirm_duplicate` from raw_arguments before invoking
-          the user function; applies the duplicate policy when present.
-        - Registers in the in-flight table so duplicate detection, cancellation,
-          and reply coalescing can see this call.
-        """
+        """Run ``tool``. Returns when the first ``ctx.update()`` lands or the tool returns."""
         call_id = run_ctx.function_call.call_id
         fnc_name = run_ctx.function_call.name
         info = tool.info
@@ -257,7 +228,7 @@ class _ToolExecutor:
         if call_id in self._running_tasks:
             raise ValueError(f"Task already running for call_id: {call_id}")
 
-        # attach the executor + pending future so RunContext.update() can talk back
+        # the future is how RunContext.update() talks back to dispatch
         first_update_fut = asyncio.Future[Any]()
         run_ctx._attach_executor(self, first_update_fut)
 
@@ -285,7 +256,7 @@ class _ToolExecutor:
                 )
 
             if not first_update_fut.done():
-                # tool returned before any update() — pass result back to dispatch
+                # tool returned without ctx.update() — surface the result to dispatch
                 if isinstance(output, BaseException):
                     first_update_fut.set_exception(output)
                 else:
@@ -295,7 +266,8 @@ class _ToolExecutor:
             if output is None:
                 return
 
-            # agent handoff via return after ctx.update() isn't supported
+            # the first update has already been returned to dispatch, so an Agent
+            # return now has no surface to carry an agent_task back
             from .agent import Agent
 
             if isinstance(output, Agent):
@@ -304,8 +276,7 @@ class _ToolExecutor:
                     "agent handoff after a progress update is not supported"
                 )
 
-            # update() was called earlier; the final return value needs to land
-            # via the coalescer as a separate synthetic output
+            # final return goes through the coalescer as a synthetic output
             pair = run_ctx._make_update_pair(output, call_id_suffix="_final")
             run_ctx._updates.append(pair)
             await self._enqueue_reply(run_ctx, [pair[0], pair[1]])
@@ -329,6 +300,7 @@ class _ToolExecutor:
         def _on_done(_: asyncio.Task[Any]) -> None:
             self._running_tasks.pop(call_id, None)
             _RunningTasks.pop(task_key, None)
+            # detach so a stashed RunContext can't drive the executor post-completion
             run_ctx._detach_executor()
 
         exe_task.add_done_callback(_on_done)
@@ -347,12 +319,8 @@ class _ToolExecutor:
         return True
 
     async def cancel_all(self, *, cancellable_only: bool = False) -> None:
-        """Cancel all running tool tasks owned by this executor.
-
-        When ``cancellable_only`` is True, only tasks with ``allow_cancellation=True``
-        are cancelled; non-cancellable tasks are awaited to completion (used during
-        drain).
-        """
+        """Cancel all running tasks. When ``cancellable_only=True``, tasks with
+        ``allow_cancellation=False`` are awaited to completion instead (used by drain)."""
         if cancellable_only:
             to_cancel = [t.exe_task for t in self._running_tasks.values() if t.allow_cancellation]
             to_wait = [t.exe_task for t in self._running_tasks.values() if not t.allow_cancellation]
@@ -376,16 +344,12 @@ class _ToolExecutor:
         self._running_tasks.clear()
 
     async def drain(self) -> None:
-        """Wait for non-cancellable tools to finish; cancel the cancellable ones.
-
-        Called on activity end. Reply delivery (`_deliver_reply`) is NOT cancelled
-        here — the orphan-update path takes care of dropping replies whose target
-        activity has closed.
-        """
+        """Cancel cancellable tools, await the rest. Reply delivery is left running;
+        ``_deliver_reply`` drops itself when its target activity closes."""
         await self.cancel_all(cancellable_only=True)
 
     async def _enqueue_reply(self, ctx: RunContext, items: list[ChatItem]) -> None:
-        # eager insert so any reply before delivery sees the items
+        # eager insert so a reply firing before delivery sees the items
         target = (
             self._owning_activity.agent
             if self._owning_activity is not None
@@ -394,7 +358,6 @@ class _ToolExecutor:
         chat_ctx = target.chat_ctx.copy()
         chat_ctx.insert(items)
         await target.update_chat_ctx(chat_ctx)
-        # match normal tool dispatch: items go on session history too
         ctx.session.history.insert(items)
 
         self._pending_updates.append(_PendingUpdate(ctx=ctx, items=items, target=target))
@@ -403,7 +366,7 @@ class _ToolExecutor:
             self._reply_task = asyncio.create_task(
                 self._deliver_reply(ctx.session), name="tool_executor_deliver_reply"
             )
-            # let an active run wait for the deferred reply to land
+            # let an active RunResult wait for the deferred reply to land
             run_state = ctx.session._global_run_state
             if run_state is not None:
                 run_state._watch_handle(self._reply_task)
@@ -453,9 +416,8 @@ class _ToolExecutor:
             chat_ctx = target_agent.chat_ctx.copy()
             chat_ctx.insert(items_to_insert)
 
-        # if the pending update is still the tail of chat_ctx, nothing new
-        # has been said since — summarize directly, otherwise an item was
-        # appended after update, tell the LLM to skip if agent already talked about it
+        # if the update is still the tail, the agent hasn't spoken since — summarize
+        # directly; otherwise let the LLM decide whether it already covered this
         at_tail = (items := target_agent.chat_ctx.items) and items[-1].id == pending_items[-1].id
         template = (
             self._tool_prompts["reply_at_tail"]
@@ -511,7 +473,7 @@ class _ToolExecutor:
                 return None
 
             if on_duplicate == "replace":
-                # replace must honor allow_cancellation
+                # replace must honor each in-flight task's allow_cancellation flag
                 non_cancellable = [
                     fnc_call
                     for fnc_call in running_fnc_calls
@@ -557,12 +519,8 @@ def _build_executor_map(
     toolsets: Sequence[Toolset],
     default: _ToolExecutor,
 ) -> dict[str, _ToolExecutor]:
-    """Build a function-name → executor mapping for dispatch routing.
-
-    Tools belonging (directly or nested) to an ``AsyncToolset`` route to that
-    toolset's own executor so background updates and replies are coalesced per
-    toolset. All other tools fall back to ``default`` (the activity executor).
-    """
+    """Map each tool to its owning executor: AsyncToolset tools route to that
+    toolset's own executor; everything else falls back to ``default``."""
     from ..llm.async_toolset import AsyncToolset
 
     mapping: dict[str, _ToolExecutor] = {}

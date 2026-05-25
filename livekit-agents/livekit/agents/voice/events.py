@@ -53,10 +53,10 @@ class RunContext(Generic[Userdata_T]):
 
         self._initial_step_idx = speech_handle.num_steps - 1
 
-        # update machinery — populated whether or not an executor is attached
+        # synthesized progress-update pairs, populated whether or not an executor is attached
         self._updates: list[tuple[FunctionCall, FunctionCallOutput]] = []
 
-        # set by the executor when present
+        # set/cleared by the executor around the tool's lifetime
         self._executor: _ToolExecutor | None = None
         self._first_update_fut: asyncio.Future[Any] | None = None
 
@@ -99,18 +99,15 @@ class RunContext(Generic[Userdata_T]):
     async def update(self, message: str | Any, *, template: str | None = None) -> None:
         """Push a progress update into the conversation.
 
-        Each update synthesizes a `(FunctionCall, FunctionCallOutput)` pair appended
-        to `_updates`. In the voice path, the first update releases control to the
-        LLM and subsequent updates are coalesced into a deferred reply. Outside the
-        voice path (e.g. `execute_function_call`), updates are still recorded but
-        no reply is fired.
+        The first update releases control to the LLM with ``message`` as the tool's
+        synthetic return; subsequent updates are coalesced into a deferred reply.
+        Outside the voice path (e.g. ``execute_function_call``) updates are recorded
+        on the result but no reply is fired.
 
         Args:
-            message: Progress message; if a string, it is wrapped by ``template``
-                before being added to the chat context.
-            template: Per-call ``.format()`` template override. When ``None`` (default),
-                falls back to the executor's resolved ``update`` template, and to
-                the module-level ``UPDATE_TEMPLATE`` if no executor is attached.
+            message: Progress message; strings are wrapped by ``template``.
+            template: Per-call format override. Defaults to the executor's resolved
+                ``update`` template (or the module default when no executor is attached).
         """
         if isinstance(message, str):
             if template is None:
@@ -158,9 +155,8 @@ class RunContext(Generic[Userdata_T]):
     ) -> tuple[FunctionCall, FunctionCallOutput]:
         """Synthesize a (FunctionCall, FunctionCallOutput) pair for a progress update.
 
-        The new FunctionCall carries a synthesized call_id (`{call_id}_{call_id_suffix}`)
-        but copies name/arguments/extra from the original call. The output is
-        wrapped through `make_tool_output` so error/agent-task handling is uniform.
+        The new FunctionCall carries ``{call_id}{call_id_suffix}``; name/arguments/extra
+        are copied. ``make_tool_output`` is reused so error handling matches dispatch.
         """
         from .generation import make_tool_output
 
@@ -171,8 +167,7 @@ class RunContext(Generic[Userdata_T]):
             extra=dict(self.function_call.extra),
         )
         tool_output = make_tool_output(fnc_call=fnc_call, output=message, exception=None)
-        # fnc_call_out is None only when the message is invalid; surface a stub
-        # FunctionCallOutput so callers can still see the synthesized pair.
+        # fall back to a stub when the message isn't a valid tool output (e.g. raw object)
         if tool_output.fnc_call_out is None:
             fnc_call_out = FunctionCallOutput(
                 name=fnc_call.name,

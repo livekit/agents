@@ -350,7 +350,6 @@ def function_tool(
 
         wrapped: Callable[..., Any] = func
         if on_duplicate == "confirm":
-            # extend the function's signature with the confirm-duplicate param
             wrapped = _wrap_with_confirm_duplicate(func)
 
         docstring = parse_from_object(func)
@@ -369,11 +368,8 @@ def function_tool(
 
 
 def _wrap_with_confirm_duplicate(func: Callable[..., Any]) -> Callable[..., Any]:
-    """Append a CONFIRM_DUPLICATE_PARAM kwarg to ``func``'s signature.
-
-    The wrapper drops the kwarg before calling ``func`` so direct invocation
-    with the original args keeps working.
-    """
+    """Extend ``func``'s signature with a CONFIRM_DUPLICATE_PARAM kwarg, stripped
+    by the wrapper before delegating so direct calls with the original args still work."""
     try:
         resolved = get_type_hints(func, include_extras=True)
     except Exception:
@@ -397,9 +393,8 @@ def _wrap_with_confirm_duplicate(func: Callable[..., Any]) -> Callable[..., Any]
         annotation=annotation,
     )
     wrapper.__signature__ = sig.replace(parameters=[*sig.parameters.values(), extra])  # type: ignore[attr-defined]
-    # set both: __annotations__ for Python 3.10-3.13, __annotate__ for Python 3.14
-    # (PEP 649). Set __annotate__ last because assigning __annotations__ first
-    # nulls __annotate__ on 3.14.
+    # set both for PEP 649: __annotations__ for 3.10-3.13, __annotate__ for 3.14.
+    # __annotate__ must come last — assigning __annotations__ nulls it on 3.14.
     wrapper.__annotations__ = new_annotations
     wrapper.__annotate__ = lambda _format=1: dict(new_annotations)  # type: ignore[attr-defined]
     return wrapper

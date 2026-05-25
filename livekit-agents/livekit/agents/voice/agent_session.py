@@ -273,11 +273,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             tts (tts.TTS | str, optional): Text-to-speech engine.
             tools (list[llm.FunctionTool | llm.RawFunctionTool], optional): List of
                 tools shared by every agent in the agent session.
-            async_tool_prompts (AsyncToolPrompts, optional): System-message templates
-                injected around tool dispatch (progress updates, duplicate handling,
-                coalesced replies). Unspecified keys keep their defaults. May be
-                overridden per-agent on ``Agent(async_tool_prompts=...)`` or per-toolset
-                on ``AsyncToolset(async_tool_prompts=...)``.
+            async_tool_prompts (AsyncToolPrompts, optional): Prompt templates for
+                ``ctx.update()`` / duplicate-handling / coalesced replies. Unspecified
+                keys keep their defaults; can be overridden per-``Agent`` or per-``AsyncToolset``.
             mcp_servers (list[mcp.MCPServer], optional): List of MCP servers
                 providing external tools for the agent to use.
             userdata (Userdata_T, optional): Arbitrary per-session user data.
@@ -1285,16 +1283,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 # (used to make sure we're correctly adding the AgentHandoffResult before completion)  # noqa: E501
                 run_state._watch_handle(task)
 
-    async def wait_for_inactive(self) -> None:
-        if self._activity is not None:
-            await self._activity._wait_for_inactive()
-
     async def wait_for_idle(self) -> AgentActivity:
-        """Wait until the current activity is idle, returning it.
+        """Wait until the current activity is idle and return it. Re-targets on handoff.
 
-        If the activity changes (handoff) during the wait, the wait re-targets to
-        the new current activity. Raises ``ActivityClosedError`` if the session is
-        closing, or ``RuntimeError`` if no activity is set.
+        Raises ``ActivityClosedError`` if the session is closing,
+        or ``RuntimeError`` if no activity has been started.
         """
         from .agent_activity import ActivityClosedError
 
@@ -1310,10 +1303,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 await activity.wait_for_idle()
                 return activity
             except ActivityClosedError:
-                # activity closed during the wait — retry with whatever is current
+                # handoff in flight — re-target to whatever's current now
                 if self._activity is activity:
                     raise
                 continue
+
+    async def wait_for_inactive(self) -> None:
+        logger.warning("wait_for_inactive is deprecated, use wait_for_idle instead")
+        if self._activity is not None:
+            await self._activity._wait_for_inactive()
 
     async def _update_activity(
         self,

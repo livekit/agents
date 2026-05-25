@@ -13,19 +13,18 @@ if TYPE_CHECKING:
     from ..voice.agent_activity import AgentActivity
     from ..voice.agent_session import AgentSession
 
-# Backwards-compatible alias. Tools that type their context as ``AsyncRunContext``
-# keep working unchanged — the unified ``RunContext`` carries the same surface.
+# AsyncRunContext is a backwards-compat alias — the unified RunContext now carries
+# the same surface, so user tools typing `ctx: AsyncRunContext` keep working
 __all__ = ["AsyncRunContext", "AsyncToolset"]
 
 
 class AsyncToolset(Toolset):
     """Session-scoped toolset whose tools survive agent handoff.
 
-    Tools added here run through a session-scoped :class:`_ToolExecutor`, so a
-    background ``ctx.update()`` started under agent A still gets its reply
-    delivered after a handoff to agent B. Tools placed directly on
-    ``Agent(tools=...)`` use the activity-scoped executor instead and are
-    cancelled/awaited on handoff (depending on ``allow_cancellation``).
+    Background updates from tools in this toolset are delivered to whichever agent
+    is current at delivery time, so a ``ctx.update()`` started under agent A still
+    completes after a handoff to agent B. Tools placed on ``Agent(tools=...)``
+    instead use the activity-scoped executor and are cancelled/awaited on handoff.
 
     Example::
 
@@ -39,7 +38,7 @@ class AsyncToolset(Toolset):
         session = AgentSession(tools=[AsyncToolset(id="booking", tools=[book_flight])])
     """
 
-    # Deprecated; kept for backwards type-import compatibility.
+    # deprecated; kept for backwards type-import compatibility
     DuplicateMode = Literal["allow", "replace", "reject", "confirm"]
 
     def __init__(
@@ -85,14 +84,8 @@ class AsyncToolset(Toolset):
         return out
 
     def _attach_activity(self, *, activity: AgentActivity | None, session: AgentSession) -> None:
-        """Attach this toolset to an activity scope.
-
-        When ``activity`` is ``None`` the toolset is session-scoped: tool
-        replies survive agent handoff and are delivered to whichever agent
-        is current. Otherwise the toolset is agent-scoped and replies are
-        delivered to that activity's agent.
-        """
-
+        """Bind this toolset to a scope. ``activity=None`` makes it session-scoped
+        (replies survive handoff); otherwise replies stay with ``activity``'s agent."""
         self._executor.set_owning_activity(activity)
 
         if self._tool_prompts_override is not None:

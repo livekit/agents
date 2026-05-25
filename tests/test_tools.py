@@ -902,10 +902,7 @@ def _make_run_context(
     extra: dict[str, Any] | None = None,
     allow_interruptions: bool = True,
 ):
-    """Build a minimal RunContext without spinning up a full AgentSession.
-
-    Only the attributes the executor/update path actually reads are populated.
-    """
+    """Build a minimal RunContext — only what the executor and update() actually read."""
     from unittest.mock import MagicMock
 
     from livekit.agents.llm import FunctionCall
@@ -930,7 +927,7 @@ def _make_run_context(
 
 @pytest.fixture(autouse=False)
 def _clear_running_tasks():
-    """Module-level _RunningTasks registry must be empty between executor tests."""
+    """Wipe the module-level registry between tests to avoid cross-test bleed."""
     from livekit.agents.voice.tool_executor import _RunningTasks
 
     _RunningTasks.clear()
@@ -943,8 +940,7 @@ class TestRunContextUpdate:
 
     @pytest.mark.asyncio
     async def test_update_uses_update_n_suffix_from_zero(self):
-        """First update is `_update_0`, not the original call_id (no collision
-        with the eventual FunctionCallOutput)."""
+        """First update uses ``_update_0`` so it can't collide with the eventual FunctionCallOutput."""
         ctx = _make_run_context(call_id="orig")
         await ctx.update("msg1")
         await ctx.update("msg2")
@@ -954,8 +950,7 @@ class TestRunContextUpdate:
 
     @pytest.mark.asyncio
     async def test_synthesized_pair_extra_is_copy(self):
-        """Mutating the original function_call.extra must not leak into a pair
-        synthesized earlier (each pair gets its own copy of extra)."""
+        """Each synthesized pair gets its own ``extra`` dict so later mutation doesn't leak back."""
         ctx = _make_run_context(call_id="orig", extra={"k": "v"})
         await ctx.update("msg1")
 
@@ -966,7 +961,7 @@ class TestRunContextUpdate:
 
     @pytest.mark.asyncio
     async def test_updates_recorded_without_executor(self):
-        """Standalone path: update() just appends to _updates; no crash."""
+        """With no executor attached, update() just appends to ``_updates`` and returns."""
         ctx = _make_run_context()
         await ctx.update("first")
         await ctx.update("second")
@@ -1041,9 +1036,9 @@ class TestHasCancellableTool:
 def _register_fake(
     executor, call_id: str, name: str, *, allow_cancellation: bool, allow_interruptions: bool = True
 ):
-    """Pre-populate executor._running_tasks with a stand-in entry so we can
-    exercise _check_duplicate / cancel_all without choreographing real execute()
-    lifetimes. Returns the (exe_task, run_ctx) so the caller can clean up."""
+    """Stub a _RunningTask into the executor so policy methods can be tested
+    without choreographing real execute() lifetimes. Caller must clean up the
+    returned task via _cleanup_fakes."""
     import asyncio as _asyncio
 
     from livekit.agents.voice.tool_executor import _RunningTask
@@ -1164,8 +1159,7 @@ class TestCheckDuplicate:
 
     @pytest.mark.asyncio
     async def test_duplicate_check_lock_serializes(self):
-        """concurrent _check_duplicate calls are serialized by the executor's
-        lock. Manually holding the lock blocks the next caller."""
+        """Holding the executor's lock blocks any concurrent _check_duplicate."""
         import asyncio as _asyncio
 
         from livekit.agents.voice.tool_executor import _ToolExecutor
@@ -1197,8 +1191,7 @@ class TestCancelAll:
         cancellable = _register_fake(executor, "c", "tool_c", allow_cancellation=True)
         non_cancellable = _register_fake(executor, "nc", "tool_nc", allow_cancellation=False)
         try:
-            # drain cancels the cancellable; the non-cancellable still has to
-            # finish on its own — start drain in the background and verify.
+            # drain cancels the cancellable but awaits the non-cancellable
             import asyncio as _asyncio
 
             drain_task = _asyncio.create_task(executor.drain())
@@ -1213,9 +1206,8 @@ class TestCancelAll:
 
     @pytest.mark.asyncio
     async def test_cancel_raises_when_interruptions_disallowed(self):
-        """cancel() refuses when the speech handle disallows interruptions.
-
-        Drain and LLM-driven cancel both go through this predicate."""
+        """cancel() refuses when the speech handle has ``allow_interruptions=False`` —
+        the same predicate gates drain and LLM-driven cancel."""
         from livekit.agents.llm.tool_context import ToolError
         from livekit.agents.voice.tool_executor import _ToolExecutor
 
@@ -1231,8 +1223,7 @@ class TestCancelAll:
 
     @pytest.mark.asyncio
     async def test_cancel_task_companion_misses_non_cancellable(self):
-        """`cancel_task` (LLM-facing companion) returns not-found for a tool
-        registered with allow_cancellation=False."""
+        """The LLM-facing ``cancel_task`` skips tools registered with ``allow_cancellation=False``."""
         from livekit.agents.voice.tool_executor import _RunningTasks, _ToolExecutor, cancel_task
 
         executor = _ToolExecutor()
@@ -1253,8 +1244,8 @@ class TestToolExecutorLifecycle:
 
     @pytest.mark.asyncio
     async def test_run_context_back_refs_cleared_on_finish(self):
-        """After the tool task completes, the RunContext no longer references
-        the executor — prevents post-completion update() leaks."""
+        """RunContext drops its executor refs once the tool finishes — a stashed
+        ctx can't drive the executor post-completion."""
         import asyncio as _asyncio
 
         from livekit.agents.voice.tool_executor import _ToolExecutor
@@ -1269,8 +1260,7 @@ class TestToolExecutorLifecycle:
         result = await executor.execute(tool=quick_tool, run_ctx=run_ctx, raw_arguments={})
         assert result == "ok"
 
-        # let the done callback fire
-        await _asyncio.sleep(0)
+        await _asyncio.sleep(0)  # let _on_done fire
         assert run_ctx._executor is None
         assert run_ctx._first_update_fut is None
 
@@ -1314,8 +1304,7 @@ class TestAsyncToolsetOnDuplicateInheritance:
 
 class TestAgentSessionWaitForIdle:
     def test_raises_runtime_error_when_no_activity(self):
-        """wait_for_idle on a session with no started activity raises rather than
-        spinning forever."""
+        """wait_for_idle raises instead of spinning when no activity has started."""
         import asyncio as _asyncio
 
         from livekit.agents.voice.agent_session import AgentSession
