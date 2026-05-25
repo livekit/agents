@@ -176,6 +176,8 @@ class STT(stt.STT):
                 error=exc,
             )
             raise APIConnectionError(str(exc)) from exc
+        except Exception as exc:
+            raise APIConnectionError() from exc
 
         event = _speech_event_from_response(
             payload,
