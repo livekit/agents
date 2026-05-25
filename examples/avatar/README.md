@@ -5,7 +5,7 @@ Pick a persona from the dropdown — an influencer, a cat, a fox, a music
 teacher, Marilyn Monroe — and the agent's face, voice, and personality
 all change without dropping the call.
 
-Try it in the [LiveKit Playground](https://playground.livekit.io/?example=avatar).
+Try it in the [LiveKit Playground](https://agents.livekit.io/?example=avatar).
 
 ## What's in here
 
