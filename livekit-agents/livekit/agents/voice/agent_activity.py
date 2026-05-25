@@ -1512,6 +1512,10 @@ class AgentActivity(RecognitionHooks):
                 user_active = True
                 await eou_task
 
+            if self._user_turn_completed_atask and not self._user_turn_completed_atask.done():
+                user_active = True
+                await self._user_turn_completed_atask
+
         while (wait_for_agent and agent_active) or (wait_for_user and user_active):
             if wait_for_agent:
                 await _wait_for_eou()
@@ -1525,11 +1529,11 @@ class AgentActivity(RecognitionHooks):
                     await asyncio.sleep(0)
 
             if wait_for_user:
-                if self._user_silence_event.is_set():
-                    user_active = False
-                else:
+                if self._audio_recognition and self._audio_recognition._speaking:
                     user_active = True
-                    await self._user_silence_event.wait()
+                    await self._audio_recognition._wait_for_user_silence()
+                else:
+                    user_active = False
 
                 await _wait_for_eou()
 
