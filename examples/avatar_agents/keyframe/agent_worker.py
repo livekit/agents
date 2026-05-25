@@ -15,7 +15,7 @@ from livekit.agents import (
     inference,
 )
 from livekit.agents.inference import AudioTurnDetector
-from livekit.plugins import keyframe, silero
+from livekit.plugins import keyframe
 from livekit.plugins.keyframe import Emotion
 
 load_dotenv()
@@ -51,7 +51,6 @@ async def entrypoint(ctx: JobContext):
         llm=inference.LLM("google/gemini-2.5-flash"),
         tts=inference.TTS("cartesia/sonic-3"),
         resume_false_interruption=False,
-        vad=silero.VAD.load(),
         turn_detection=AudioTurnDetector(),
     )
 

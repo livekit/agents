@@ -1,14 +1,15 @@
 import pytest
 
 from livekit.agents import vad
-from livekit.plugins import silero
+from livekit.agents.inference import VAD as InferenceVAD
 
 from . import utils
 
 SAMPLE_RATES = [16000, 44100]  # test multiple input sample rates
 
 
-VAD = silero.VAD.load(
+VAD = InferenceVAD(
+    model="silero",
     min_speech_duration=0.5,
     min_silence_duration=0.75,
 )

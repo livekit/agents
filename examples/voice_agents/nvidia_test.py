@@ -6,25 +6,19 @@ from livekit.agents import (
     Agent,
     AgentSession,
     JobContext,
-    JobProcess,
     WorkerOptions,
     cli,
 )
 from livekit.agents.inference import AudioTurnDetector
-from livekit.plugins import nvidia, openai, silero
+from livekit.plugins import nvidia, openai
 
 logger = logging.getLogger("basic-agent")
 
 load_dotenv()
 
 
-def prewarm(proc: JobProcess):
-    proc.userdata["vad"] = silero.VAD.load()
-
-
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
-        vad=ctx.proc.userdata["vad"],
         llm=openai.LLM(model="gpt-4.1-mini"),
         stt=nvidia.STT(),
         tts=nvidia.TTS(),
@@ -42,4 +36,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))

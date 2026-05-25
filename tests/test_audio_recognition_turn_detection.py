@@ -568,9 +568,9 @@ class TestVadMinSilenceOverride:
 
         ar._maybe_apply_vad_silence_override()
 
-        assert ar._vad._opts.min_silence_duration == pytest.approx(0.2)
+        assert ar._vad._opts.min_silence_duration == pytest.approx(0.25)
         assert ar._vad_min_silence_orig == pytest.approx(0.1)
-        assert ar._vad.update_options_calls == [pytest.approx(0.2)]
+        assert ar._vad.update_options_calls == [pytest.approx(0.25)]
 
     def test_audio_detector_leaves_high_min_silence_alone(self) -> None:
         ar = _make_recognition_for_override()
@@ -588,7 +588,7 @@ class TestVadMinSilenceOverride:
         ar._vad = _FakeVad(min_silence_duration=0.1)
         ar._turn_detector = MagicMock(spec=_AudioTurnDetector)
         ar._maybe_apply_vad_silence_override()
-        assert ar._vad._opts.min_silence_duration == pytest.approx(0.2)
+        assert ar._vad._opts.min_silence_duration == pytest.approx(0.25)
 
         ar._revert_vad_silence_override()
 
@@ -603,7 +603,7 @@ class TestVadMinSilenceOverride:
         ar._maybe_apply_vad_silence_override()
         ar._maybe_apply_vad_silence_override()
 
-        assert ar._vad.update_options_calls == [pytest.approx(0.2)]
+        assert ar._vad.update_options_calls == [pytest.approx(0.25)]
         assert ar._vad_min_silence_orig == pytest.approx(0.1)
 
     def test_non_audio_detector_skips(self) -> None:
@@ -675,7 +675,7 @@ class TestVadMinSilenceOverride:
             ar._vad = _FakeVad(min_silence_duration=0.05)
             ar._maybe_apply_vad_silence_override()
 
-        bumped = [r for r in caplog.records if "bumped VAD min_silence_duration" in r.message]
+        bumped = [r for r in caplog.records if "bumping vad min_silence_duration" in r.message]
         assert len(bumped) == 1
 
     async def test_update_turn_detector_drives_apply_and_revert(self) -> None:
@@ -695,7 +695,7 @@ class TestVadMinSilenceOverride:
 
         try:
             ar.update_turn_detector(detector)
-            assert ar._vad._opts.min_silence_duration == pytest.approx(0.2)
+            assert ar._vad._opts.min_silence_duration == pytest.approx(0.25)
             assert ar._vad_min_silence_orig == pytest.approx(0.1)
 
             ar.update_turn_detector(None)

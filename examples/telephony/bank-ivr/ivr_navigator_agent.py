@@ -9,7 +9,6 @@ from livekit.agents import (
     AgentServer,
     AgentSession,
     JobContext,
-    JobProcess,
     MetricsCollectedEvent,
     RunContext,
     cli,
@@ -17,7 +16,6 @@ from livekit.agents import (
     metrics,
 )
 from livekit.agents.llm.tool_context import function_tool
-from livekit.plugins import silero
 
 logger = logging.getLogger("phone-tree-agent")
 
@@ -76,13 +74,6 @@ class DtmfAgent(Agent):
         context.session.shutdown(drain=True)
 
 
-def prewarm(proc: JobProcess) -> None:
-    proc.userdata["vad"] = silero.VAD.load()
-
-
-server.setup_fnc = prewarm
-
-
 @server.rtc_session(agent_name=PHONE_TREE_AGENT_DISPATCH_NAME)
 async def dtmf_session(ctx: JobContext) -> None:
     await ctx.connect()
@@ -91,7 +82,6 @@ async def dtmf_session(ctx: JobContext) -> None:
     }
 
     session: AgentSession = AgentSession(
-        vad=ctx.proc.userdata["vad"],
         llm=inference.LLM("openai/gpt-4.1"),
         stt=inference.STT("deepgram/nova-3"),
         tts=inference.TTS("rime/arcana"),

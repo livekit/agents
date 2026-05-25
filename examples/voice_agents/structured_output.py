@@ -19,7 +19,7 @@ from livekit.agents import (
     cli,
 )
 from livekit.agents.inference import AudioTurnDetector
-from livekit.plugins import openai, silero
+from livekit.plugins import openai
 
 logger = logging.getLogger("structured-output")
 load_dotenv()
@@ -129,7 +129,6 @@ server = AgentServer()
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
-        vad=silero.VAD.load(),
         turn_detection=AudioTurnDetector(),
     )
     await session.start(agent=MyAgent(), room=ctx.room)

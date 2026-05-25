@@ -2,8 +2,8 @@ import logging
 
 from dotenv import load_dotenv
 
-from livekit.agents import Agent, AgentServer, AgentSession, JobContext, JobProcess, cli, inference
-from livekit.plugins import elevenlabs, silero
+from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli, inference
+from livekit.plugins import elevenlabs
 
 logger = logging.getLogger("realtime-scribe-v2")
 logger.setLevel(logging.INFO)
@@ -12,13 +12,6 @@ load_dotenv()
 
 
 server = AgentServer()
-
-
-def prewarm(proc: JobProcess) -> None:
-    proc.userdata["vad"] = silero.VAD.load()
-
-
-server.setup_fnc = prewarm
 
 
 @server.rtc_session()
@@ -37,7 +30,6 @@ async def entrypoint(ctx: JobContext) -> None:
 
     session: AgentSession = AgentSession(
         allow_interruptions=True,
-        vad=ctx.proc.userdata["vad"],
         stt=stt,
         llm=inference.LLM("openai/gpt-4.1-mini"),
         tts=inference.TTS("cartesia/sonic-3"),

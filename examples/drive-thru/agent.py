@@ -35,7 +35,6 @@ from livekit.agents import (
     inference,
 )
 from livekit.agents.inference import AudioTurnDetector
-from livekit.plugins import silero
 
 load_dotenv()
 
@@ -488,7 +487,6 @@ async def drive_thru_agent(ctx: JobContext) -> None:
         llm=inference.LLM("openai/gpt-5-mini"),
         tts=inference.TTS("cartesia/sonic-3", voice="f786b574-daa5-4673-aa0c-cbe3e8534c02"),
         turn_detection=AudioTurnDetector(),
-        vad=silero.VAD.load(),
         max_tool_steps=10,
     )
 

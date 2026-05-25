@@ -218,14 +218,9 @@ def _resolve_vad_for_model(
         )
         return None
     if is_speechmatics and vad_instance is None:
-        try:
-            from livekit.plugins.silero import VAD as SileroVAD
-        except ImportError as e:
-            raise ImportError(
-                "livekit-plugins-silero is required: model "
-                f"{model!r} does not handle endpointing server-side."
-            ) from e
-        vad_instance = SileroVAD.load()
+        from .vad import VAD
+
+        vad_instance = VAD(model="silero")
     return vad_instance
 
 

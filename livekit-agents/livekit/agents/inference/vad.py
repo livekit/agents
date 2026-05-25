@@ -1,4 +1,4 @@
-# Copyright 2023 LiveKit, Inc.
+# Copyright 2026 LiveKit, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,25 +17,23 @@ from __future__ import annotations
 import asyncio
 import time
 import weakref
-from dataclasses import dataclass
-from pathlib import Path
+from dataclasses import dataclass, replace
 from typing import Literal
 
 import numpy as np
-import onnxruntime  # type: ignore
 
-from livekit import agents, rtc
-from livekit.agents import utils
-from livekit.agents.types import (
-    NOT_GIVEN,
-    NotGivenOr,
-)
-from livekit.agents.utils import is_given
+from livekit import rtc
+from livekit.local_inference import VAD as _NativeVAD, VAD_WINDOW_SAMPLES
 
-from . import onnx_model
-from .log import logger
+from .. import utils, vad
+from ..log import logger
+from ..types import NOT_GIVEN, NotGivenOr
+from ..utils import is_given
 
 SLOW_INFERENCE_THRESHOLD = 0.2  # late by 200ms
+_MODEL_SAMPLE_RATE = 16000
+
+VADModels = Literal["silero"]
 
 
 @dataclass
@@ -46,159 +44,60 @@ class _VADOptions:
     max_buffered_speech: float
     activation_threshold: float
     deactivation_threshold: float
-    sample_rate: int
 
 
-class VAD(agents.vad.VAD):
+class VAD(vad.VAD):
+    """Voice Activity Detection backed by ``livekit-local-inference``.
+
+    The native model singleton is loaded once at module import (via the
+    pybind11 ``.so`` constructor); each stream allocates its own per-instance
+    LSTM/context state.
     """
-    Silero Voice Activity Detection (VAD) class.
 
-    This class provides functionality to detect speech segments within audio data using the Silero VAD model.
-    """  # noqa: E501
-
-    @classmethod
-    def load(
-        cls,
+    def __init__(
+        self,
         *,
+        model: VADModels = "silero",
         min_speech_duration: float = 0.05,
-        min_silence_duration: float = 0.55,
+        min_silence_duration: float = 0.1,
         prefix_padding_duration: float = 0.5,
         max_buffered_speech: float = 60.0,
         activation_threshold: float = 0.5,
-        sample_rate: Literal[8000, 16000] = 16000,
-        force_cpu: bool = True,
-        onnx_file_path: NotGivenOr[Path | str] = NOT_GIVEN,
         deactivation_threshold: NotGivenOr[float] = NOT_GIVEN,
-        # deprecated
-        padding_duration: NotGivenOr[float] = NOT_GIVEN,
-    ) -> agents.vad.VAD:
-        """
-        Load and initialize the Silero VAD model.
-
-        This method loads the ONNX model and prepares it for inference. When options are not provided,
-        sane defaults are used.
-
-        **Note:**
-            This method is blocking and may take time to load the model into memory.
-            It is recommended to call this method inside your prewarm mechanism.
-
-        **Example:**
-
-            ```python
-            def prewarm(proc: JobProcess):
-                proc.userdata["vad"] = silero.VAD.load()
-
-
-            async def entrypoint(ctx: JobContext):
-                vad = (ctx.proc.userdata["vad"],)
-                # your agent logic...
-
-
-            if __name__ == "__main__":
-                cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
-            ```
-
-        Args:
-            min_speech_duration (float): Minimum duration of speech to start a new speech chunk.
-            min_silence_duration (float): At the end of each speech, wait this duration before ending the speech.
-            prefix_padding_duration (float): Duration of padding to add to the beginning of each speech chunk.
-            max_buffered_speech (float): Maximum duration of speech to keep in the buffer (in seconds).
-            activation_threshold (float): Threshold to consider a frame as speech.
-            sample_rate (Literal[8000, 16000]): Sample rate for the inference (only 8KHz and 16KHz are supported).
-            onnx_file_path (Path | str | None): Path to the ONNX model file. If not provided, the default model will be loaded. This can be helpful if you want to use a previous version of the silero model.
-            force_cpu (bool): Force the use of CPU for inference.
-            deactivation_threshold (float): Negative threshold (noise or exit threshold). If model's current state is SPEECH, values BELOW this value are considered as NON-SPEECH. Default is max(activation_threshold - 0.15, 0.01).
-            padding_duration (float | None): **Deprecated**. Use `prefix_padding_duration` instead.
-
-        Returns:
-            VAD: An instance of the VAD class ready for streaming.
-
-        Raises:
-            ValueError: If an unsupported sample rate is provided.
-        """  # noqa: E501
-        if sample_rate not in onnx_model.SUPPORTED_SAMPLE_RATES:
-            raise ValueError("Silero VAD only supports 8KHz and 16KHz sample rates")
-
-        if is_given(padding_duration):
-            logger.warning(
-                "padding_duration is deprecated and will be removed in 1.5.0, use prefix_padding_duration instead",  # noqa: E501
-            )
-            prefix_padding_duration = padding_duration
-
+    ) -> None:
+        super().__init__(capabilities=vad.VADCapabilities(update_interval=0.032))
+        if model != "silero":
+            raise ValueError(f"Unknown VAD model: {model!r}. Supported: 'silero'.")
         if is_given(deactivation_threshold) and deactivation_threshold <= 0:
             raise ValueError("deactivation_threshold must be greater than 0")
-
-        # When the requested settings are compatible with the native
-        # implementation in `livekit-local-inference`, delegate to the new
-        # `livekit.agents.inference.VAD(model="silero")` so users get the
-        # COW-shared / faster path without changing their call sites. The
-        # native lib only supports 16 kHz with the bundled model file, so
-        # custom sample rate or `onnx_file_path` falls back to the legacy
-        # onnxruntime path.
-        if sample_rate == 16000 and not is_given(onnx_file_path):
-            if not force_cpu:
-                logger.warning(
-                    "force_cpu=False is ignored when using the bundled native "
-                    "VAD; the model runs CPU-only. Pass `onnx_file_path=...` "
-                    "to keep the legacy onnxruntime path that honors force_cpu."
-                )
-            from livekit.agents import inference
-
-            return inference.VAD(
-                model="silero",
-                min_speech_duration=min_speech_duration,
-                min_silence_duration=min_silence_duration,
-                prefix_padding_duration=prefix_padding_duration,
-                max_buffered_speech=max_buffered_speech,
-                activation_threshold=activation_threshold,
-                deactivation_threshold=deactivation_threshold,
-            )
-
-        session = onnx_model.new_inference_session(force_cpu, onnx_file_path=onnx_file_path or None)
-        opts = _VADOptions(
+        self._model = model
+        self._opts = _VADOptions(
             min_speech_duration=min_speech_duration,
             min_silence_duration=min_silence_duration,
             prefix_padding_duration=prefix_padding_duration,
             max_buffered_speech=max_buffered_speech,
             activation_threshold=activation_threshold,
-            deactivation_threshold=deactivation_threshold or max(activation_threshold - 0.15, 0.01),
-            sample_rate=sample_rate,
+            deactivation_threshold=deactivation_threshold
+            if is_given(deactivation_threshold)
+            else max(activation_threshold - 0.15, 0.01),
         )
-        return cls(session=session, opts=opts)
-
-    def __init__(
-        self,
-        *,
-        session: onnxruntime.InferenceSession,
-        opts: _VADOptions,
-    ) -> None:
-        super().__init__(capabilities=agents.vad.VADCapabilities(update_interval=0.032))
-        self._onnx_session = session
-        self._opts = opts
-        self._streams = weakref.WeakSet[VADStream]()
+        self._streams: weakref.WeakSet[_VADStream] = weakref.WeakSet()
 
     @property
     def model(self) -> str:
-        return "silero"
+        return self._model
 
     @property
     def provider(self) -> str:
-        return "ONNX"
+        return "livekit-local-inference"
 
-    def stream(self) -> VADStream:
-        """
-        Create a new VADStream for processing audio data.
-
-        Returns:
-            VADStream: A stream object for processing audio input and detecting speech.
-        """
-        stream = VADStream(
-            self,
-            self._opts,
-            onnx_model.OnnxModel(
-                onnx_session=self._onnx_session, sample_rate=self._opts.sample_rate
-            ),
-        )
+    def stream(self) -> vad.VADStream:
+        # Each stream owns its own _VADOptions snapshot so that
+        # _VADStream.update_options() can read the prior value of
+        # max_buffered_speech before mutating it. Sharing the dataclass would
+        # let VAD.update_options() mutate the stream's view first, and the
+        # stream would never observe an increase.
+        stream = _VADStream(self, replace(self._opts))
         self._streams.add(stream)
         return stream
 
@@ -212,18 +111,6 @@ class VAD(agents.vad.VAD):
         activation_threshold: NotGivenOr[float] = NOT_GIVEN,
         deactivation_threshold: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
-        """
-        Update the VAD options.
-
-        This method allows you to update the VAD options after the VAD object has been created.
-
-        Args:
-            min_speech_duration (float): Minimum duration of speech to start a new speech chunk.
-            min_silence_duration (float): At the end of each speech, wait this duration before ending the speech.
-            prefix_padding_duration (float): Duration of padding to add to the beginning of each speech chunk.
-            max_buffered_speech (float): Maximum duration of speech to keep in the buffer (in seconds).
-            activation_threshold (float): Threshold to consider a frame as speech.
-        """  # noqa: E501
         if is_given(min_speech_duration):
             self._opts.min_speech_duration = min_speech_duration
         if is_given(min_silence_duration):
@@ -248,12 +135,11 @@ class VAD(agents.vad.VAD):
             )
 
 
-class VADStream(agents.vad.VADStream):
-    def __init__(self, vad: VAD, opts: _VADOptions, model: onnx_model.OnnxModel) -> None:
-        super().__init__(vad)
-        self._opts, self._model = opts, model
-        self._loop = asyncio.get_event_loop()
-        self._exp_filter = utils.ExpFilter(alpha=0.35)
+class _VADStream(vad.VADStream):
+    def __init__(self, parent: VAD, opts: _VADOptions) -> None:
+        super().__init__(parent)
+        self._opts = opts
+        self._native_vad = _NativeVAD()
 
         self._input_sample_rate = 0
         self._speech_buffer: np.ndarray | None = None
@@ -270,19 +156,6 @@ class VADStream(agents.vad.VADStream):
         activation_threshold: NotGivenOr[float] = NOT_GIVEN,
         deactivation_threshold: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
-        """
-        Update the VAD options.
-
-        This method allows you to update the VAD options after the VAD object has been created.
-
-        Args:
-            min_speech_duration (float): Minimum duration of speech to start a new speech chunk.
-            min_silence_duration (float): At the end of each speech, wait this duration before ending the speech.
-            prefix_padding_duration (float): Duration of padding to add to the beginning of each speech chunk.
-            max_buffered_speech (float): Maximum duration of speech to keep in the buffer (in seconds).
-            activation_threshold (float): Threshold to consider a frame as speech.
-            deactivation_threshold (float): Negative threshold (noise or exit threshold). If model's current state is SPEECH, values BELOW this value are considered as NON-SPEECH.
-        """  # noqa: E501
         old_max_buffered_speech = self._opts.max_buffered_speech
 
         if is_given(min_speech_duration):
@@ -313,9 +186,8 @@ class VADStream(agents.vad.VADStream):
             if self._opts.max_buffered_speech > old_max_buffered_speech:
                 self._speech_buffer_max_reached = False
 
-    @agents.utils.log_exceptions(logger=logger)
+    @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
-        inference_f32_data = np.empty(self._model.window_size_samples, dtype=np.float32)
         speech_buffer_index: int = 0
 
         # "pub_" means public, these values are exposed to the users through events
@@ -355,12 +227,12 @@ class VADStream(agents.vad.VADStream):
                     dtype=np.int16,
                 )
 
-                if self._input_sample_rate != self._opts.sample_rate:
+                if self._input_sample_rate != _MODEL_SAMPLE_RATE:
                     # resampling needed: the input sample rate isn't the same as the model's
                     # sample rate used for inference
                     resampler = rtc.AudioResampler(
                         input_rate=self._input_sample_rate,
-                        output_rate=self._opts.sample_rate,
+                        output_rate=_MODEL_SAMPLE_RATE,
                         quality=rtc.AudioResamplerQuality.QUICK,  # VAD doesn't need high quality
                     )
 
@@ -384,33 +256,27 @@ class VADStream(agents.vad.VADStream):
                 available_inference_samples = sum(
                     [frame.samples_per_channel for frame in inference_frames]
                 )
-                if available_inference_samples < self._model.window_size_samples:
+                if available_inference_samples < VAD_WINDOW_SAMPLES:
                     break  # not enough samples to run inference
 
                 input_frame = utils.combine_frames(input_frames)
                 inference_frame = utils.combine_frames(inference_frames)
 
-                # convert data to f32
-                np.divide(
-                    inference_frame.data[: self._model.window_size_samples],
-                    np.iinfo(np.int16).max,
-                    out=inference_f32_data,
-                    dtype=np.float32,
+                # native lib takes int16 directly — no float32 conversion
+                inference_window = np.asarray(
+                    inference_frame.data[:VAD_WINDOW_SAMPLES], dtype=np.int16
                 )
 
                 # run the inference
-                p = await self._loop.run_in_executor(None, self._model, inference_f32_data)
-                p = self._exp_filter.apply(exp=1.0, sample=p)
+                p = await asyncio.to_thread(self._native_vad.predict, inference_window)
 
-                window_duration = self._model.window_size_samples / self._opts.sample_rate
+                window_duration = VAD_WINDOW_SAMPLES / _MODEL_SAMPLE_RATE
 
-                pub_current_sample += self._model.window_size_samples
+                pub_current_sample += VAD_WINDOW_SAMPLES
                 pub_timestamp += window_duration
 
-                resampling_ratio = self._input_sample_rate / self._model.sample_rate
-                to_copy = (
-                    self._model.window_size_samples * resampling_ratio + input_copy_remaining_fract
-                )
+                resampling_ratio = self._input_sample_rate / _MODEL_SAMPLE_RATE
+                to_copy = VAD_WINDOW_SAMPLES * resampling_ratio + input_copy_remaining_fract
                 to_copy_int = int(to_copy)
                 input_copy_remaining_fract = to_copy - to_copy_int
 
@@ -473,8 +339,8 @@ class VADStream(agents.vad.VADStream):
                     pub_silence_duration += window_duration
 
                 self._event_ch.send_nowait(
-                    agents.vad.VADEvent(
-                        type=agents.vad.VADEventType.INFERENCE_DONE,
+                    vad.VADEvent(
+                        type=vad.VADEventType.INFERENCE_DONE,
                         samples_index=pub_current_sample,
                         timestamp=pub_timestamp,
                         silence_duration=pub_silence_duration,
@@ -508,8 +374,8 @@ class VADStream(agents.vad.VADStream):
                             pub_speech_duration = speech_threshold_duration
 
                             self._event_ch.send_nowait(
-                                agents.vad.VADEvent(
-                                    type=agents.vad.VADEventType.START_OF_SPEECH,
+                                vad.VADEvent(
+                                    type=vad.VADEventType.START_OF_SPEECH,
                                     samples_index=pub_current_sample,
                                     timestamp=pub_timestamp,
                                     silence_duration=pub_silence_duration,
@@ -534,8 +400,8 @@ class VADStream(agents.vad.VADStream):
                         pub_silence_duration = silence_threshold_duration
 
                         self._event_ch.send_nowait(
-                            agents.vad.VADEvent(
-                                type=agents.vad.VADEventType.END_OF_SPEECH,
+                            vad.VADEvent(
+                                type=vad.VADEventType.END_OF_SPEECH,
                                 samples_index=pub_current_sample,
                                 timestamp=pub_timestamp,
                                 silence_duration=pub_silence_duration,
@@ -567,12 +433,12 @@ class VADStream(agents.vad.VADStream):
                         )
                     )
 
-                if len(inference_frame.data) - self._model.window_size_samples > 0:
-                    data = inference_frame.data[self._model.window_size_samples :].tobytes()
+                if len(inference_frame.data) - VAD_WINDOW_SAMPLES > 0:
+                    data = inference_frame.data[VAD_WINDOW_SAMPLES:].tobytes()
                     inference_frames.append(
                         rtc.AudioFrame(
                             data=data,
-                            sample_rate=self._opts.sample_rate,
+                            sample_rate=_MODEL_SAMPLE_RATE,
                             num_channels=1,
                             samples_per_channel=len(data) // 2,
                         )
