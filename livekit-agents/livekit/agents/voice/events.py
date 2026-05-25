@@ -265,7 +265,7 @@ class ErrorEvent(BaseModel):
 
     @field_serializer("source")
     def _serialize_source(self, source: Any) -> Any:
-        if isinstance(source, (LLM, STT, TTS, RealtimeModel, AdaptiveInterruptionDetector)):
+        if isinstance(source, LLM | STT | TTS | RealtimeModel | AdaptiveInterruptionDetector):
             return {"model": source.model, "provider": source.provider}
         if isinstance(source, BaseModel):
             return source.model_dump()
