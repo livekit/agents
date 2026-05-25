@@ -148,6 +148,11 @@ class _AudioTurnDetectorStream:
         # audio EOT model already committed the turn). Initialised True so
         # the first turn isn't gated before any flush has happened.
         self._user_turn_started: bool = True
+        # Warn once per stream when ``predict_end_of_turn`` is called after
+        # the audio EOT model has already committed the turn (common with
+        # slow STT finals). Subsequent occurrences log at debug to avoid
+        # flooding production logs with what is normal, expected behavior.
+        self._late_predict_warned: bool = False
 
         self._tasks: set[asyncio.Task[None]] = set()
         self._task = asyncio.create_task(self._main_task())
@@ -366,14 +371,18 @@ class _AudioTurnDetectorStream:
             return self._last_prediction.end_of_turn_probability
 
         if not self._user_turn_started:
-            # No open user turn — running predict here would just wait for
-            # inference on near-silence. Common path: an STT final arrived
-            # after the audio EOT model already committed the turn. Return
-            # a positive default so the caller falls through its
-            # min_endpointing_delay path.
-            logger.warning(
-                "predict_end_of_turn called with no open user turn, short-circuiting",
-            )
+            if not self._late_predict_warned:
+                self._late_predict_warned = True
+                logger.warning(
+                    "predict_end_of_turn called after the audio eot model already "
+                    "committed the turn (likely a late stt final). consider raising "
+                    "`min_delay` in the endpointing options to accommodate slow stt. "
+                    "subsequent occurrences on this stream will log at debug level.",
+                )
+            else:
+                logger.debug(
+                    "stt transcript arrived after a turn commit, short-circuiting",
+                )
             return 1.0
 
         timeout = timeout if timeout is not None else 0.5
