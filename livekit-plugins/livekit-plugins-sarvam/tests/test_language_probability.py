@@ -112,9 +112,15 @@ async def test_ws_null_language_probability_falls_back_to_1_0() -> None:
     assert final.alternatives[0].confidence == 1.0
 
 
-@pytest.mark.parametrize("bad_value", ["0.95", [], {}, object()])
+@pytest.mark.parametrize("bad_value", ["0.95", [], {}, object(), True, False])
 async def test_ws_unexpected_type_falls_back_to_1_0(bad_value: Any) -> None:
-    """String / list / dict / object → confidence falls back to 1.0 with a debug log."""
+    """String / list / dict / object / bool → confidence falls back to 1.0 with a debug log.
+
+    bool is included because Python's ``bool`` is a subclass of ``int``;
+    without an explicit guard a JSON ``false`` from Sarvam would silently
+    become ``confidence=0.0`` and wrongly flag a valid transcript as low
+    confidence. Same defensive pattern as ``livekit-plugins-slng``.
+    """
     instance, captured = _make_stream_under_test()
     await instance._handle_transcript_data(_ws_message(language_probability=bad_value))
     final = _final_event(captured)

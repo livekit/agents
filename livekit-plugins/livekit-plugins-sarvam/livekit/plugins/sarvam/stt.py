@@ -356,7 +356,10 @@ def _extract_confidence(
     explicitly for streaming, so contract drift is logged for visibility).
     """
     value = payload.get("language_probability")
-    if isinstance(value, (int, float)):
+    # bool is a subclass of int — exclude explicitly so that an accidental
+    # JSON `false` doesn't silently become ``confidence=0.0``. Same pattern
+    # as livekit-plugins-slng/.../stt.py.
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
         return float(value)
     if value is not None:
         instance_logger.debug(
