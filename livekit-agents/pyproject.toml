@@ -54,6 +54,7 @@ dependencies = [
     "prometheus-client>=0.22",
     "openai>=2",
     "aiofiles>=24",
+    "json-repair==0.59.10",
 ]
 
 [project.optional-dependencies]

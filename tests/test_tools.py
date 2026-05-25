@@ -405,6 +405,138 @@ class TestToolExecution:
                 fnc=agent.mock_tool_in_agent, json_arguments='{"opt_arg2": "test2"}'
             )
 
+    def test_repairs_malformed_json_arguments(self):
+        """LLMs occasionally emit syntactically invalid JSON for tool calls.
+        We should recover via json_repair instead of giving up immediately."""
+        # Missing closing brace.
+        args, kwargs = prepare_function_arguments(
+            fnc=mock_tool_1, json_arguments='{"arg1": "hi", "opt_arg2": "yo"'
+        )
+        assert args == ("hi", "yo")
+
+        # Unquoted-style payload (json_repair handles loose forms).
+        args, kwargs = prepare_function_arguments(fnc=mock_tool_1, json_arguments="{arg1: 'hi'}")
+        assert args == ("hi", None)
+
+    def test_unrepairable_json_arguments_raise(self):
+        """If json_repair can't recover anything meaningful, we should
+        still raise so the caller can strip the call from history."""
+        with pytest.raises(ValueError, match="could not parse"):
+            prepare_function_arguments(fnc=mock_tool_1, json_arguments="not json at all")
+
+    def test_repairs_gemma_template_token_leak(self):
+        """Gemma chat-template tokens (<|...|>) sometimes leak into function-call
+        arguments, producing unparseable JSON. The repair pass should both fix
+        the JSON shape AND strip the leaked tokens so the original payload
+        (an order id, here) survives the round-trip cleanly."""
+
+        @function_tool
+        async def remove_order_item(order_id: list[str]) -> str:
+            return ",".join(order_id)
+
+        # Real failing payload captured from a Gemma 4 deployment. The model
+        # tried to emit `{"order_id": ["O_WAAB70"]}` but `<|"|"` template
+        # tokens leaked around the value, breaking the JSON (the string is
+        # never properly closed before `]}`).
+        leaked = '{"order_id": ["<|\\"|\\"O_WAAB70<|\\"|\\"]}'
+
+        args, kwargs = prepare_function_arguments(fnc=remove_order_item, json_arguments=leaked)
+        assert args == (["O_WAAB70"],), f"expected order_id=['O_WAAB70'], got {args}"
+
+    def test_strip_template_tokens_leaves_clean_strings_alone(self):
+        """Token stripping should only kick in on the repair path; well-formed
+        arguments that happen to contain `<|...|>` substrings should pass through
+        unmodified (we only run the strip pass when json_repair was triggered)."""
+        args, _ = prepare_function_arguments(fnc=mock_tool_1, json_arguments='{"arg1": "<|safe|>"}')
+        assert args == ("<|safe|>", None)
+
+    def test_parse_function_arguments_strict(self):
+        """parse_function_arguments should accept valid JSON unchanged."""
+        from livekit.agents.llm.utils import parse_function_arguments
+
+        assert parse_function_arguments('{"a": 1, "b": [2, 3]}') == {"a": 1, "b": [2, 3]}
+        # Empty/None payloads normalize to {}.
+        assert parse_function_arguments("{}") == {}
+        assert parse_function_arguments("null") == {}
+
+    def test_parse_function_arguments_non_dict_raises(self):
+        """parse_function_arguments must reject non-dict shapes (the caller
+        always expects a kwarg-style mapping)."""
+        from livekit.agents.llm.utils import parse_function_arguments
+
+        with pytest.raises(ValueError, match="expected dict"):
+            parse_function_arguments("[1, 2, 3]")
+        # Bare JSON strings hit the Nova-Sonic double-encoded unwrap path,
+        # which raises a more specific error.
+        with pytest.raises(ValueError, match="non-JSON string"):
+            parse_function_arguments('"just a string"')
+
+    def test_prepare_function_arguments_accepts_pre_parsed_dict(self):
+        """Callers that already parsed the JSON (e.g. _execute_tools_task after
+        canonicalizing fnc_call.arguments) can pass the dict directly. Must
+        behave the same as passing the equivalent JSON string."""
+        from_string = prepare_function_arguments(
+            fnc=mock_tool_1, json_arguments='{"arg1": "hi", "opt_arg2": "yo"}'
+        )
+        from_dict = prepare_function_arguments(
+            fnc=mock_tool_1, json_arguments={"arg1": "hi", "opt_arg2": "yo"}
+        )
+        assert from_string == from_dict == (("hi", "yo"), {})
+
+    @pytest.mark.asyncio
+    async def test_execute_function_call_preserves_valid_argument_structure(self):
+        """Canonicalization may normalize whitespace, but for already-valid JSON
+        the *structure* (keys, values) must round-trip identically. The repair
+        path must not silently alter legitimate arguments."""
+        from livekit.agents.llm.llm import FunctionToolCall
+        from livekit.agents.llm.utils import execute_function_call
+
+        tool_ctx = ToolContext([mock_tool_1])
+        original_args = '{"arg1": "hello", "opt_arg2": "world"}'
+        tool_call = FunctionToolCall(
+            name="mock_tool_1", arguments=original_args, call_id="call-valid-1"
+        )
+
+        result = await execute_function_call(tool_call, tool_ctx)
+        assert result.fnc_call_out is not None
+        assert result.fnc_call_out.is_error is False
+
+        # Whatever ended up in fnc_call.arguments must decode to the same dict.
+        assert json.loads(result.fnc_call.arguments) == {"arg1": "hello", "opt_arg2": "world"}
+
+    @pytest.mark.asyncio
+    async def test_execute_function_call_canonicalizes_repaired_arguments(self):
+        """After a successful repair, the FunctionCall's `arguments` should be
+        rewritten to canonical JSON so the next LLM turn doesn't see the
+        broken string in conversation history (which would fail re-serialization
+        and cause 5xx from providers like Vertex)."""
+        from livekit.agents.llm.llm import FunctionToolCall
+        from livekit.agents.llm.utils import execute_function_call
+
+        @function_tool
+        async def remove_order_item(order_id: list[str]) -> str:
+            return ",".join(order_id)
+
+        tool_ctx = ToolContext([remove_order_item])
+        raw_broken = '{"order_id": ["<|\\"|\\"O_WAAB70<|\\"|\\"]}'
+        tool_call = FunctionToolCall(
+            name="remove_order_item",
+            arguments=raw_broken,
+            call_id="call-canon-1",
+        )
+
+        result = await execute_function_call(tool_call, tool_ctx)
+        assert result.fnc_call_out is not None
+        assert result.fnc_call_out.is_error is False
+        assert result.fnc_call_out.output == "O_WAAB70"
+
+        # The arguments stored on the FunctionCall should now be valid JSON
+        # that re-serializes cleanly to the repaired payload — so subsequent
+        # LLM turns don't choke on broken syntax in the history.
+        assert result.fnc_call.arguments != raw_broken
+        parsed = json.loads(result.fnc_call.arguments)
+        assert parsed == {"order_id": ["O_WAAB70"]}
+
 
 class TestNoParametersSchema:
     """Test that functions with no parameters generate valid JSON schema."""
