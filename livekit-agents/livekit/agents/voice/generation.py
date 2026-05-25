@@ -558,9 +558,21 @@ async def _execute_tools_task(
 
             try:
                 json_args = fnc_call.arguments or "{}"
+                args_dict = llm_utils.parse_function_arguments(json_args)
+
+                # If we had to repair/strip the original payload, write the
+                # canonical JSON back to the FunctionCall so subsequent LLM
+                # turns receive valid syntax in the conversation history.
+                # Without this, the malformed `arguments` from the model
+                # propagates forward and most providers (Vertex, OpenAI) will
+                # reject the request with a 5xx on the next turn.
+                canonical_args = json.dumps(args_dict, default=str)
+                if canonical_args != json_args:
+                    fnc_call.arguments = canonical_args
+
                 fnc_args, fnc_kwargs = llm_utils.prepare_function_arguments(
                     fnc=function_tool,
-                    json_arguments=json_args,
+                    json_arguments=args_dict,
                     call_ctx=RunContext(
                         session=session,
                         speech_handle=speech_handle,
@@ -569,15 +581,31 @@ async def _execute_tools_task(
                 )
 
             except (ValidationError, ValueError) as e:
-                logger.exception(
-                    f"tried to call AI function `{fnc_call.name}` with invalid arguments",
+                # Strip the faulty turn from the conversation: when the LLM emits
+                # arguments we can't decode/validate, surfacing the failure back to
+                # the model in chat history tends to poison subsequent turns
+                # (smaller models repeat the same malformed output). Instead, drop
+                # the call entirely so the next reply runs against a clean history.
+                logger.warning(
+                    f"tried to call AI function `{fnc_call.name}` with invalid arguments; "
+                    "stripping the call from chat history",
                     extra={
                         "function": fnc_call.name,
                         "arguments": fnc_call.arguments,
                         "speech_id": speech_handle.id,
+                        "error": str(e),
                     },
                 )
-                _tool_completed(make_tool_output(fnc_call=fnc_call, output=None, exception=e))
+                _tool_completed(
+                    ToolExecutionOutput(
+                        fnc_call=fnc_call.model_copy(),
+                        fnc_call_out=None,
+                        agent_task=None,
+                        raw_output=None,
+                        raw_exception=e,
+                        reply_required=False,
+                    )
+                )
                 continue
 
             if not tool_output.first_tool_started_fut.done():
