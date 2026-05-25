@@ -53,8 +53,9 @@ Summarize the results naturally. Do NOT repeat information you have already told
 # may have already verbalized the result in its most recent turn.
 REPLY_INSTRUCTIONS_MAYBE_COVERED = """New results arrived from background tool calls (call_ids: {call_ids}).
 Review your most recent assistant messages.
-- If your previous messages already conveyed these results to the user, return an empty response (no text at all).
-- Otherwise, summarize the results naturally with a transition.
+- If your previous messages already conveyed these results to the user after the updates arrived, \
+    return an empty response (no text at all).
+- Otherwise, summarize the results with a natural transition.
 Do NOT repeat information you have already told the user."""
 
 
