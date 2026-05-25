@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import enum
 import json
+import logging
 import os
 import platform
 import weakref
@@ -341,6 +342,32 @@ def _get_urls_for_model(model: str) -> tuple[str, str]:
     if model_config and model_config.use_translate_endpoint:
         return SARVAM_STT_TRANSLATE_BASE_URL, SARVAM_STT_TRANSLATE_STREAMING_URL
     return SARVAM_STT_BASE_URL, SARVAM_STT_STREAMING_URL
+
+
+def _extract_confidence(
+    payload: dict,
+    instance_logger: logging.Logger,
+) -> float:
+    """Read Sarvam's ``language_probability`` from a response payload.
+
+    Returns the value as a float when present and numeric. Falls back to
+    ``1.0`` when the field is absent, ``None``, or has an unexpected type
+    (defensive — the field is documented for the REST endpoint but not
+    explicitly for streaming, so contract drift is logged for visibility).
+    """
+    value = payload.get("language_probability")
+    # bool is a subclass of int — exclude explicitly so that an accidental
+    # JSON `false` doesn't silently become ``confidence=0.0``. Same pattern
+    # as livekit-plugins-slng/.../stt.py.
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    if value is not None:
+        instance_logger.debug(
+            "Unexpected language_probability type: %s (value=%r); falling back to confidence=1.0",
+            type(value).__name__,
+            value,
+        )
+    return 1.0
 
 
 def _calculate_audio_duration(
@@ -698,7 +725,7 @@ class STT(stt.STT):
                         text=transcript_text,
                         start_time=start_time,
                         end_time=end_time,
-                        confidence=1.0,  # Sarvam doesn't provide confidence score in this response
+                        confidence=_extract_confidence(response_json, self._logger),
                     )
                 ]
 
@@ -1477,6 +1504,7 @@ class SpeechStream(stt.SpeechStream):
                 text=transcript_text,
                 start_time=transcript_data.get("speech_start", 0.0),
                 end_time=transcript_data.get("speech_end", 0.0),
+                confidence=_extract_confidence(transcript_data, self._logger),
             )
 
             # Create final transcript event with request_id

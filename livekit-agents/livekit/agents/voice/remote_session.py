@@ -294,6 +294,7 @@ def _chat_item_to_proto(item: llm.ChatItem) -> agent_pb.ChatContext.ChatItem:
             id=item.id,
             role=pb_role,
             content=content,
+            interrupted=item.interrupted,
             metrics=_metrics_to_proto(item.metrics),
         )
         return agent_pb.ChatContext.ChatItem(message=pb_msg)

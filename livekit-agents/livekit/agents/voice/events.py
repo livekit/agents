@@ -4,7 +4,7 @@ import time
 from enum import Enum, unique
 from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_serializer, model_validator
 from typing_extensions import Self
 
 from ..inference.interruption import (
@@ -262,6 +262,20 @@ class ErrorEvent(BaseModel):
     error: LLMError | STTError | TTSError | RealtimeModelError | InterruptionDetectionError | Any
     source: LLM | STT | TTS | RealtimeModel | AdaptiveInterruptionDetector | Any
     created_at: float = Field(default_factory=time.time)
+
+    @field_serializer("source")
+    def _serialize_source(self, source: Any) -> Any:
+        if isinstance(source, (LLM, STT, TTS, RealtimeModel, AdaptiveInterruptionDetector)):
+            return {"model": source.model, "provider": source.provider}
+        if isinstance(source, BaseModel):
+            return source.model_dump()
+        return repr(source)
+
+    @field_serializer("error")
+    def _serialize_error(self, error: Any) -> Any:
+        if isinstance(error, BaseModel):
+            return error.model_dump()
+        return repr(error)
 
 
 @unique
