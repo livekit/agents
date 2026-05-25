@@ -14,7 +14,7 @@ Try it in the [LiveKit Playground](https://agents.livekit.io/?example=avatar).
 - **Live persona switching** — the dropdown fires a `set_avatar` RPC; a
   short hold tone plays while the avatar reconnects with the new face
   and voice.
-- **LiveKit Inference** for STT + LLM (Deepgram Nova-3 + Gemini 3
+- **LiveKit Inference** for STT + LLM (Deepgram Nova-3 + Gemini 3.5
   Flash), Cartesia for TTS, [LemonSlice](https://lemonslice.com) for
   the avatar video.
 
