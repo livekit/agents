@@ -799,7 +799,7 @@ class TestAsyncToolPrompts:
 
     @staticmethod
     def _mock_scope(session_update: str = "session", agent_update: str | None = None):
-        # minimal stand-ins for AsyncToolset.bind_activity to read from
+        # minimal stand-ins for what AsyncToolset._attach_activity reads from
         from livekit.agents.types import NOT_GIVEN
         from livekit.agents.voice.tool_executor import _resolve_async_tool_prompts
 
@@ -825,7 +825,7 @@ class TestAsyncToolPrompts:
             async_tool_prompts={"update": "toolset-own"},
         )
         session, activity = self._mock_scope(agent_update="agent")
-        ts._attach_activity(activity, session=session)
+        ts._attach_activity(activity=activity, session=session)
         assert ts._executor._tool_prompts["update"] == "toolset-own"
 
     def test_toolset_inherits_agent_when_no_override(self):
@@ -833,7 +833,7 @@ class TestAsyncToolPrompts:
 
         ts = AsyncToolset(id="t", tools=[mock_tool_1])
         session, activity = self._mock_scope(agent_update="agent")
-        ts._attach_activity(activity, session=session)
+        ts._attach_activity(activity=activity, session=session)
         # whole-value override: only `update` was given on agent, the rest fall
         # back to module defaults (NOT to session_prompts)
         assert ts._executor._tool_prompts["update"] == "agent"
@@ -843,17 +843,17 @@ class TestAsyncToolPrompts:
 
         ts = AsyncToolset(id="t", tools=[mock_tool_1])
         session, activity = self._mock_scope()
-        ts._attach_activity(activity, session=session)
+        ts._attach_activity(activity=activity, session=session)
         assert ts._executor._tool_prompts["update"] == "session"
 
     def test_session_scoped_toolset_skips_agent(self):
-        # bind_activity(None) marks the toolset as session-scoped; agent prompts
-        # are ignored even if present.
+        # _attach_activity(activity=None) marks the toolset as session-scoped;
+        # agent prompts are ignored even if present.
         from livekit.agents.llm.async_toolset import AsyncToolset
 
         ts = AsyncToolset(id="t", tools=[mock_tool_1])
         session, _activity = self._mock_scope(agent_update="agent-should-be-ignored")
-        ts._attach_activity(None, session=session)
+        ts._attach_activity(activity=None, session=session)
         assert ts._executor._tool_prompts["update"] == "session"
         assert ts._executor._owning_activity is None
 

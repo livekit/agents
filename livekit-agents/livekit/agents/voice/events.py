@@ -127,9 +127,7 @@ class RunContext(Generic[Userdata_T]):
             )
 
         update_step = len(self._updates)
-        pair = self._make_update_pair(
-            message, call_id_suffix=f"_update_{update_step}" if update_step > 0 else ""
-        )
+        pair = self._make_update_pair(message, call_id_suffix=f"_update_{update_step}")
         self._updates.append(pair)
 
         if self._executor is None:
@@ -151,6 +149,10 @@ class RunContext(Generic[Userdata_T]):
         self._executor = executor
         self._first_update_fut = first_update_fut
 
+    def _detach_executor(self) -> None:
+        self._executor = None
+        self._first_update_fut = None
+
     def _make_update_pair(
         self, message: Any, *, call_id_suffix: str = ""
     ) -> tuple[FunctionCall, FunctionCallOutput]:
@@ -166,7 +168,7 @@ class RunContext(Generic[Userdata_T]):
             call_id=f"{self.function_call.call_id}{call_id_suffix}",
             name=self.function_call.name,
             arguments=self.function_call.arguments,
-            extra=self.function_call.extra,
+            extra=dict(self.function_call.extra),
         )
         tool_output = make_tool_output(fnc_call=fnc_call, output=message, exception=None)
         # fnc_call_out is None only when the message is invalid; surface a stub

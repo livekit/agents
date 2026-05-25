@@ -1294,18 +1294,18 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         If the activity changes (handoff) during the wait, the wait re-targets to
         the new current activity. Raises ``ActivityClosedError`` if the session is
-        closing.
+        closing, or ``RuntimeError`` if no activity is set.
         """
         from .agent_activity import ActivityClosedError
 
         while True:
             if self._closing_task is not None:
                 raise ActivityClosedError("session is closing")
+
             activity = self._activity
             if activity is None:
-                # no activity yet — wait a tick and re-check
-                await asyncio.sleep(0)
-                continue
+                raise RuntimeError("AgentSession has no active AgentActivity")
+
             try:
                 await activity.wait_for_idle()
                 return activity

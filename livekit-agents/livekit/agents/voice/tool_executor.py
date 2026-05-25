@@ -190,6 +190,7 @@ class _ToolExecutor:
         async_tool_prompts: AsyncToolPrompts | None = None,
     ) -> None:
         self._running_tasks: dict[str, _RunningTask] = {}
+        self._duplicate_check_lock = asyncio.Lock()
 
         # speech delivery — shared across all tools in this executor
         self._pending_updates: list[_PendingUpdate] = []
@@ -228,7 +229,7 @@ class _ToolExecutor:
         """Run ``tool`` in the executor. Returns when the first ``ctx.update()`` lands
         or the tool returns (whichever comes first).
 
-        - Strips `_lk_agents_confirm_duplicate` from raw_arguments before invoking
+        - Strips `lk_agents_confirm_duplicate` from raw_arguments before invoking
           the user function; applies the duplicate policy when present.
         - Registers in the in-flight table so duplicate detection, cancellation,
           and reply coalescing can see this call.
@@ -294,6 +295,15 @@ class _ToolExecutor:
             if output is None:
                 return
 
+            # agent handoff via return after ctx.update() isn't supported
+            from .agent import Agent
+
+            if isinstance(output, Agent):
+                raise ToolError(
+                    f"tool `{fnc_name}` returned an Agent after ctx.update(); "
+                    "agent handoff after a progress update is not supported"
+                )
+
             # update() was called earlier; the final return value needs to land
             # via the coalescer as a separate synthetic output
             pair = run_ctx._make_update_pair(output, call_id_suffix="_final")
@@ -319,6 +329,7 @@ class _ToolExecutor:
         def _on_done(_: asyncio.Task[Any]) -> None:
             self._running_tasks.pop(call_id, None)
             _RunningTasks.pop(task_key, None)
+            run_ctx._detach_executor()
 
         exe_task.add_done_callback(_on_done)
 
@@ -490,40 +501,53 @@ class _ToolExecutor:
         if on_duplicate == "allow":
             return None
 
-        running_fnc_calls = [
-            t.ctx.function_call
-            for t in self._running_tasks.values()
-            if t.ctx.function_call.name == fnc_name
-        ]
-        if len(running_fnc_calls) == 0:
-            return None
+        async with self._duplicate_check_lock:
+            running_fnc_calls = [
+                t.ctx.function_call
+                for t in self._running_tasks.values()
+                if t.ctx.function_call.name == fnc_name
+            ]
+            if len(running_fnc_calls) == 0:
+                return None
 
-        if on_duplicate == "replace":
-            results = await asyncio.gather(
-                *[self.cancel(fnc_call.call_id) for fnc_call in running_fnc_calls],
-                return_exceptions=True,
-            )
-            exceptions = [result for result in results if isinstance(result, Exception)]
-            if exceptions:
-                error_messages = "\n".join([str(e) for e in exceptions])
-                raise ToolError(f"Failed to cancel duplicate tool calls: {error_messages}")
-            return None
+            if on_duplicate == "replace":
+                # replace must honor allow_cancellation
+                non_cancellable = [
+                    fnc_call
+                    for fnc_call in running_fnc_calls
+                    if not self._running_tasks[fnc_call.call_id].allow_cancellation
+                ]
+                if non_cancellable:
+                    raise ToolError(
+                        f"cannot replace duplicate call of `{fnc_name}`: "
+                        f"running call is not cancellable (allow_cancellation=False)"
+                    )
 
-        if on_duplicate == "reject":
-            return self._tool_prompts["duplicate_reject"].format(
-                function_name=fnc_name,
-                running_fnc_calls="\n".join(
-                    [fnc_call.model_dump_json() for fnc_call in running_fnc_calls]
-                ),
-            )
+                results = await asyncio.gather(
+                    *[self.cancel(fnc_call.call_id) for fnc_call in running_fnc_calls],
+                    return_exceptions=True,
+                )
+                exceptions = [result for result in results if isinstance(result, Exception)]
+                if exceptions:
+                    error_messages = "\n".join([str(e) for e in exceptions])
+                    raise ToolError(f"Failed to cancel duplicate tool calls: {error_messages}")
+                return None
 
-        if on_duplicate == "confirm" and not confirm_duplicate:
-            return self._tool_prompts["duplicate_confirm"].format(
-                function_name=fnc_name,
-                running_fnc_calls="\n".join(
-                    [fnc_call.model_dump_json() for fnc_call in running_fnc_calls]
-                ),
-            )
+            if on_duplicate == "reject":
+                return self._tool_prompts["duplicate_reject"].format(
+                    function_name=fnc_name,
+                    running_fnc_calls="\n".join(
+                        [fnc_call.model_dump_json() for fnc_call in running_fnc_calls]
+                    ),
+                )
+
+            if on_duplicate == "confirm" and not confirm_duplicate:
+                return self._tool_prompts["duplicate_confirm"].format(
+                    function_name=fnc_name,
+                    running_fnc_calls="\n".join(
+                        [fnc_call.model_dump_json() for fnc_call in running_fnc_calls]
+                    ),
+                )
 
         return None
 

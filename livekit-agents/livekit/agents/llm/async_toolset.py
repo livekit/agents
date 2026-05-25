@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import warnings
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Literal
 
+from ..log import logger
 from ..utils.misc import is_given
 from ..voice.events import RunContext as AsyncRunContext
 from ..voice.tool_executor import AsyncToolPrompts, _resolve_async_tool_prompts, _ToolExecutor
-from .tool_context import Tool, Toolset
+from .tool_context import FunctionTool, RawFunctionTool, Tool, Toolset
 
 if TYPE_CHECKING:
     from ..voice.agent_activity import AgentActivity
@@ -52,17 +52,37 @@ class AsyncToolset(Toolset):
     ) -> None:
         super().__init__(id=id, tools=tools)
 
-        # TODO: make this still work but with a warning
         if on_duplicate_call is not None:
-            warnings.warn(
+            logger.warning(
                 "AsyncToolset(on_duplicate_call=...) is deprecated; set on_duplicate "
-                "on @function_tool per tool instead.",
-                DeprecationWarning,
-                stacklevel=2,
+                "on @function_tool per tool instead."
             )
+
+            for child in self._iter_function_tools():
+                if child.info.on_duplicate != on_duplicate_call:
+                    logger.warning(
+                        "overwriting on_duplicate=%s on tool %s with %s",
+                        child.info.on_duplicate,
+                        child.info.name,
+                        on_duplicate_call,
+                    )
+                    child.info.on_duplicate = on_duplicate_call
 
         self._tool_prompts_override: AsyncToolPrompts | None = async_tool_prompts
         self._executor = _ToolExecutor(owning_activity=None)
+
+    def _iter_function_tools(self) -> list[FunctionTool | RawFunctionTool]:
+        out: list[FunctionTool | RawFunctionTool] = []
+
+        def walk(tools: Sequence[Tool | Toolset]) -> None:
+            for tool in tools:
+                if isinstance(tool, (FunctionTool, RawFunctionTool)):
+                    out.append(tool)
+                elif isinstance(tool, Toolset):
+                    walk(tool.tools)
+
+        walk(self.tools)
+        return out
 
     def _attach_activity(self, *, activity: AgentActivity | None, session: AgentSession) -> None:
         """Attach this toolset to an activity scope.
