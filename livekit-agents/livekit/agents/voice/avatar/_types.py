@@ -112,7 +112,46 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
         else:
             self._room.on("connection_state_changed", self._on_connection_state_changed)
 
+    async def wait_for_join(self, *, timeout: float | None = 30.0) -> None:
+        """Block until the avatar's participant + video track have
+        joined the room. Provider implementations should await this
+        from their `start()` override after the upstream session has
+        been triggered, so callers can rely on `start()` returning
+        only when the avatar is actually present in the room (and
+        chained operations like aclose don't race a half-joined
+        avatar).
+
+        Raises ``asyncio.TimeoutError`` when the avatar doesn't join
+        within ``timeout`` seconds (default 30s). Pass ``timeout=None``
+        to wait indefinitely.
+        """
+        if self._wait_avatar_join_task is None:
+            return
+        if timeout is None:
+            await self._wait_avatar_join_task
+            return
+        await asyncio.wait_for(asyncio.shield(self._wait_avatar_join_task), timeout=timeout)
+
     async def aclose(self) -> None:
+        if self._room is not None and self._room.isconnected():
+            job_ctx = get_job_context(required=False)
+            if job_ctx is not None:
+                try:
+                    from livekit import api
+
+                    await job_ctx.api.room.remove_participant(
+                        api.RoomParticipantIdentity(
+                            room=self._room.name,
+                            identity=self.avatar_identity,
+                        )
+                    )
+                except Exception:
+                    logger.debug(
+                        "failed to remove avatar participant",
+                        extra={"identity": self.avatar_identity},
+                        exc_info=True,
+                    )
+
         if self._agent_session:
             self._agent_session.off("conversation_item_added", self._on_conversation_item_added)
             self._agent_session = None

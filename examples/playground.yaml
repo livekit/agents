@@ -98,6 +98,35 @@ examples:
       - rpc: set_appointment_status
         title: "\uf073 Schedule"
 
+  hotel-receptionist:
+    title: Hotel Receptionist
+    description: A boutique-hotel receptionist that handles room bookings, restaurant reservations, cancellations, invoices, and charge disputes \u2014 all backed by a live SQLite database that streams to the playground.
+    # brand palette \u2014 purple-500
+    accent: "#9333EA"
+    agent_id: CA_TBD
+    entry: agent.py
+    github: "https://github.com/livekit/agents/tree/main/examples/hotel_receptionist"
+    tags: [tools, scheduling, database]
+    icon:
+      # Concierge bell \u2014 a half-dome with a stand and a button on top.
+      size: 12
+      pixels: |
+        000000000000
+        000001000000
+        000011100000
+        000011100000
+        000111110000
+        001111111000
+        011111111100
+        111111111110
+        000000000000
+        011111111100
+        000000000000
+        000000000000
+    views:
+      - rpc: sqlite_diff
+        title: "\uf1c0 Database"
+
   drive-thru:
     title: Drive Thru
     description: A drive-thru ordering agent that takes the order over voice, builds a structured cart with dynamically-generated tools per menu item, and reads back the total.
@@ -196,12 +225,24 @@ examples:
           - { value: deepgram/nova-3, label: Deepgram Nova-3 }
           - { value: deepgram/nova-3-medical, label: Deepgram Nova-3 Medical }
           - { value: deepgram/flux-general-en, label: Deepgram Flux (English) }
-          - { value: deepgram/flux-general-multi, label: Deepgram Flux (Multilingual) }
+          - {
+              value: deepgram/flux-general-multi,
+              label: Deepgram Flux (Multilingual),
+            }
           - { value: assemblyai/u3-rt-pro, label: AssemblyAI Universal-3 Pro }
-          - { value: assemblyai/universal-streaming, label: AssemblyAI Universal-Streaming }
-          - { value: assemblyai/universal-streaming-multilingual, label: AssemblyAI Universal-Streaming Multilingual }
+          - {
+              value: assemblyai/universal-streaming,
+              label: AssemblyAI Universal-Streaming,
+            }
+          - {
+              value: assemblyai/universal-streaming-multilingual,
+              label: AssemblyAI Universal-Streaming Multilingual,
+            }
           - { value: cartesia/ink-whisper, label: Cartesia Ink Whisper }
-          - { value: elevenlabs/scribe_v2_realtime, label: ElevenLabs Scribe v2 Realtime }
+          - {
+              value: elevenlabs/scribe_v2_realtime,
+              label: ElevenLabs Scribe v2 Realtime,
+            }
           - { value: speechmatics/enhanced, label: Speechmatics Enhanced }
           - { value: speechmatics/standard, label: Speechmatics Standard }
           - { value: xai/stt-1, label: xAI Speech-to-Text }
@@ -228,19 +269,34 @@ examples:
           - { value: openai/gpt-5.5, label: OpenAI GPT-5.5 }
           - { value: openai/gpt-oss-120b, label: OpenAI GPT OSS 120B }
           - { value: google/gemini-2.0-flash, label: Gemini 2.0 Flash }
-          - { value: google/gemini-2.0-flash-lite, label: Gemini 2.0 Flash-Lite }
+          - {
+              value: google/gemini-2.0-flash-lite,
+              label: Gemini 2.0 Flash-Lite,
+            }
           - { value: google/gemini-2.5-flash, label: Gemini 2.5 Flash }
-          - { value: google/gemini-2.5-flash-lite, label: Gemini 2.5 Flash-Lite }
+          - {
+              value: google/gemini-2.5-flash-lite,
+              label: Gemini 2.5 Flash-Lite,
+            }
           - { value: google/gemini-2.5-pro, label: Gemini 2.5 Pro }
           - { value: google/gemini-3-flash-preview, label: Gemini 3 Flash }
           - { value: google/gemini-3-pro-preview, label: Gemini 3 Pro }
-          - { value: google/gemini-3.1-flash-lite, label: Gemini 3.1 Flash Lite }
+          - {
+              value: google/gemini-3.1-flash-lite,
+              label: Gemini 3.1 Flash Lite,
+            }
           - { value: google/gemini-3.1-pro-preview, label: Gemini 3.1 Pro }
           - { value: xai/grok-4-1-fast-non-reasoning, label: Grok 4.1 Fast }
-          - { value: xai/grok-4-1-fast-reasoning, label: Grok 4.1 Fast Reasoning }
+          - {
+              value: xai/grok-4-1-fast-reasoning,
+              label: Grok 4.1 Fast Reasoning,
+            }
           - { value: xai/grok-4.20-0309-non-reasoning, label: Grok 4.20 }
           - { value: xai/grok-4.20-0309-reasoning, label: Grok 4.20 Reasoning }
-          - { value: xai/grok-4.20-multi-agent-0309, label: Grok 4.20 Multi-Agent }
+          - {
+              value: xai/grok-4.20-multi-agent-0309,
+              label: Grok 4.20 Multi-Agent,
+            }
           - { value: deepseek-ai/deepseek-v3, label: DeepSeek-V3 }
           - { value: deepseek-ai/deepseek-v3.1, label: DeepSeek-V3.1 }
           - { value: deepseek-ai/deepseek-v3.2, label: DeepSeek-V3.2 }
@@ -258,10 +314,19 @@ examples:
           - { value: deepgram/aura, label: Deepgram Aura }
           - { value: deepgram/aura-2, label: Deepgram Aura-2 }
           - { value: elevenlabs/eleven_flash_v2, label: ElevenLabs Flash v2 }
-          - { value: elevenlabs/eleven_flash_v2_5, label: ElevenLabs Flash v2.5 }
-          - { value: elevenlabs/eleven_multilingual_v2, label: ElevenLabs Multilingual v2 }
+          - {
+              value: elevenlabs/eleven_flash_v2_5,
+              label: ElevenLabs Flash v2.5,
+            }
+          - {
+              value: elevenlabs/eleven_multilingual_v2,
+              label: ElevenLabs Multilingual v2,
+            }
           - { value: elevenlabs/eleven_turbo_v2, label: ElevenLabs Turbo v2 }
-          - { value: elevenlabs/eleven_turbo_v2_5, label: ElevenLabs Turbo v2.5 }
+          - {
+              value: elevenlabs/eleven_turbo_v2_5,
+              label: ElevenLabs Turbo v2.5,
+            }
           - { value: elevenlabs/eleven_v3, label: ElevenLabs v3 }
           - { value: inworld/inworld-tts-1, label: Inworld TTS 1 }
           - { value: inworld/inworld-tts-1-max, label: Inworld TTS 1 Max }
@@ -283,12 +348,60 @@ examples:
         type: link
         label: "Open in Builder \u2192"
         primary: true
-    # Live conversation transcript. The agent doesn't push to this view
-    # by RPC the way other examples push markdown cards — the frontend
-    # subscribes to LiveKit `TranscriptionReceived` events and renders
-    # both sides of the conversation as text. `source: transcript` is
-    # the trigger; `rpc` is a sentinel value and isn't actually called.
-    views:
-      - rpc: __transcript
-        source: transcript
-        title: "\uf075 Transcript"
+
+  avatar:
+    title: Avatar
+    description: Talk to a LemonSlice avatar. Pick anyone from the dropdown to swap who you're chatting with, from a music teacher to a Pixar fox.
+    # LemonSlice brand \u2014 yellow-500 from the LK palette.
+    accent: "#F9E71F"
+    agent_id: CA_dzjZwsBsRKzZ
+    entry: agent.py
+    github: "https://github.com/livekit/agents/tree/main/examples/avatar"
+    tags: [avatar, video, multi-persona]
+    # Tells the jukebox frontend to render the AvatarFrame and drive
+    # the connect-time orb \u2192 video reveal animation. Without this
+    # flag the example renders like every other one (orb only).
+    avatar: true
+    icon:
+      # Head + shoulders. Head is filled with '2' (highlight tone) and
+      # the shoulders are '1' (full accent), so the two regions read as
+      # two distinct shades instead of a single blob.
+      size: 12
+      pixels: |
+        000000000000
+        000022220000
+        000222222000
+        002222222200
+        002222222200
+        002222222200
+        000222222000
+        000022220000
+        000000000000
+        001111111100
+        011111111110
+        111111111111
+    # The playground reads these `controls` and renders one widget
+    # per entry. The persona dropdown fires `set_avatar` on the
+    # agent with the chosen id as the payload value. The agent
+    # updates voice + system prompt live; the avatar image stays
+    # on the current persona until the session reconnects.
+    controls:
+      - rpc: set_avatar
+        label: Persona
+        default: influencer
+        options:
+          - { value: influencer, label: Influencer }
+          - { value: software_engineer, label: Software Engineer }
+          - { value: music_teacher, label: Music Teacher }
+          - { value: social_worker, label: Social Worker }
+          - { value: joyce, label: Joyce }
+          - { value: iris, label: Iris }
+          - { value: ai_therapist, label: AI Therapist }
+          - { value: management_consultant, label: Management Consultant }
+          - { value: shopping_assistant, label: Shopping Assistant }
+          - { value: cat_girl, label: Cat Girl }
+          - { value: mock_interviewer_legal, label: "Mock Interviewer (Legal)" }
+          - { value: mr_fox, label: Mr Fox }
+          - { value: monroe, label: Monroe }
+          - { value: fortnite_guide, label: Fortnite Guide }
+          - { value: kitten_tutor, label: Kitten Tutor }
