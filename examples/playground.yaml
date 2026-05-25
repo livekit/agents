@@ -292,3 +292,60 @@ examples:
       - rpc: __transcript
         source: transcript
         title: "\uf075 Transcript"
+
+  avatar:
+    title: Avatar
+    description: Talk to a LemonSlice avatar. Pick anyone from the dropdown to swap who you're chatting with, from a music teacher to a Pixar fox.
+    # LemonSlice brand \u2014 yellow-500 from the LK palette.
+    accent: "#F9E71F"
+    agent_id: CA_dzjZwsBsRKzZ
+    entry: agent.py
+    github: "https://github.com/livekit/agents/tree/main/examples/avatar"
+    tags: [avatar, video, multi-persona]
+    # Tells the jukebox frontend to render the AvatarFrame and drive
+    # the connect-time orb \u2192 video reveal animation. Without this
+    # flag the example renders like every other one (orb only).
+    avatar: true
+    icon:
+      # Head + shoulders. Head is filled with '2' (highlight tone) and
+      # the shoulders are '1' (full accent), so the two regions read as
+      # two distinct shades instead of a single blob.
+      size: 12
+      pixels: |
+        000000000000
+        000022220000
+        000222222000
+        002222222200
+        002222222200
+        002222222200
+        000222222000
+        000022220000
+        000000000000
+        001111111100
+        011111111110
+        111111111111
+    # The playground reads these `controls` and renders one widget
+    # per entry. The persona dropdown fires `set_avatar` on the
+    # agent with the chosen id as the payload value. The agent
+    # updates voice + system prompt live; the avatar image stays
+    # on the current persona until the session reconnects.
+    controls:
+      - rpc: set_avatar
+        label: Persona
+        default: influencer
+        options:
+          - { value: influencer, label: Influencer }
+          - { value: software_engineer, label: Software Engineer }
+          - { value: music_teacher, label: Music Teacher }
+          - { value: social_worker, label: Social Worker }
+          - { value: joyce, label: Joyce }
+          - { value: iris, label: Iris }
+          - { value: ai_therapist, label: AI Therapist }
+          - { value: management_consultant, label: Management Consultant }
+          - { value: shopping_assistant, label: Shopping Assistant }
+          - { value: cat_girl, label: Cat Girl }
+          - { value: mock_interviewer_legal, label: "Mock Interviewer (Legal)" }
+          - { value: mr_fox, label: Mr Fox }
+          - { value: monroe, label: Monroe }
+          - { value: fortnite_guide, label: Fortnite Guide }
+          - { value: kitten_tutor, label: Kitten Tutor }
