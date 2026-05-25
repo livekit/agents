@@ -969,6 +969,29 @@ class TestRunContextUpdate:
         assert "first" in ctx._updates[0][1].output
         assert "second" in ctx._updates[1][1].output
 
+    @pytest.mark.asyncio
+    async def test_update_accepts_callable_template(self):
+        """``template=`` may be a callable receiving the placeholder dict."""
+        ctx = _make_run_context(call_id="orig", name="fn")
+        await ctx.update(
+            "hello", template=lambda c: f"[{c['function_name']}/{c['call_id']}] {c['message']}"
+        )
+        assert ctx._updates[0][1].output == "[fn/orig] hello"
+
+
+class TestAsyncToolPromptsRendering:
+    """``_render`` dispatches between ``str.format`` and callable templates."""
+
+    def test_render_string(self):
+        from livekit.agents.voice.tool_executor import _render
+
+        assert _render("hi {name}", {"name": "world"}) == "hi world"
+
+    def test_render_callable(self):
+        from livekit.agents.voice.tool_executor import _render
+
+        assert _render(lambda c: f"hi {c['name']}", {"name": "world"}) == "hi world"
+
 
 class TestExecuteFunctionCallWithUpdate:
     """execute_function_call wires ctx.update() into FunctionCallResult.fnc_call_updates."""

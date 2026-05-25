@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Callable
 from enum import Enum, unique
 from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal, TypeVar
 
@@ -32,7 +33,7 @@ from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
     from .agent_session import AgentSession
-    from .tool_executor import _ToolExecutor
+    from .tool_executor import UpdatePromptArgs, _ToolExecutor
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -96,7 +97,12 @@ class RunContext(Generic[Userdata_T]):
         this tool to finish playing."""
         await self.speech_handle._wait_for_generation(step_idx=self._initial_step_idx)
 
-    async def update(self, message: str | Any, *, template: str | None = None) -> None:
+    async def update(
+        self,
+        message: str | Any,
+        *,
+        template: str | Callable[[UpdatePromptArgs], str] | None = None,
+    ) -> None:
         """Push a progress update into the conversation.
 
         The first update releases control to the LLM with ``message`` as the tool's
@@ -106,8 +112,9 @@ class RunContext(Generic[Userdata_T]):
 
         Args:
             message: Progress message; strings are wrapped by ``template``.
-            template: Per-call format override. Defaults to the executor's resolved
-                ``update`` template (or the module default when no executor is attached).
+            template: Per-call override — either a ``str.format()`` template or a
+                callable receiving ``UpdatePromptArgs``. Defaults to the executor's
+                resolved ``update`` template (or the module default when standalone).
         """
         if isinstance(message, str):
             if template is None:
@@ -117,10 +124,15 @@ class RunContext(Generic[Userdata_T]):
                     from .tool_executor import UPDATE_TEMPLATE
 
                     template = UPDATE_TEMPLATE
-            message = template.format(
-                function_name=self.function_call.name,
-                call_id=self.function_call.call_id,
-                message=message,
+            from .tool_executor import _render
+
+            message = _render(
+                template,
+                {
+                    "function_name": self.function_call.name,
+                    "call_id": self.function_call.call_id,
+                    "message": message,
+                },
             )
 
         update_step = len(self._updates)

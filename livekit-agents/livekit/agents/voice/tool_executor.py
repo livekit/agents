@@ -36,51 +36,78 @@ UPDATE_TEMPLATE = """The tool `{function_name}` has updated, message: {message}
 The task is still running, so DON'T make up or give information not included in the message above."""
 
 DUPLICATE_REJECT = """Same tool `{function_name}` is already running:
-{running_fnc_calls}
+{fnc_calls_text}
 If you want to cancel the existing one, call `cancel_task` with call_id."""
 
 DUPLICATE_CONFIRM = """Same tool `{function_name}` is already running:
-{running_fnc_calls}
+{fnc_calls_text}
 Re-call with confirm duplicate True to run a duplicate if needed,
 or if you want to cancel the existing one, call `cancel_task` with call_id."""
 
 # used when the pending update is the most recent item in chat_ctx — the agent
 # can't have already talked about it.
-REPLY_INSTRUCTIONS_AT_TAIL = """New results arrived from background tool calls (call_ids: {pending_call_ids}).
+REPLY_INSTRUCTIONS_AT_TAIL = """New results arrived from background tool calls (call_ids: {call_ids}).
 Summarize the results naturally. Do NOT repeat information you have already told the user."""
 
 # used when newer items have been appended after the pending update — the agent
 # may have already verbalized the result in its most recent turn.
-REPLY_INSTRUCTIONS_MAYBE_COVERED = """New results arrived from background tool calls (call_ids: {pending_call_ids}).
+REPLY_INSTRUCTIONS_MAYBE_COVERED = """New results arrived from background tool calls (call_ids: {call_ids}).
 Review your most recent assistant messages.
 - If your previous messages already conveyed these results to the user, return an empty response (no text at all).
 - Otherwise, summarize the results naturally with a transition.
 Do NOT repeat information you have already told the user."""
 
 
+class UpdatePromptArgs(TypedDict):
+    """Args for the ``update`` template."""
+
+    function_name: str
+    call_id: str
+    message: str
+
+
+class DuplicatePromptArgs(TypedDict):
+    """Args for the ``duplicate_reject`` / ``duplicate_confirm`` templates."""
+
+    function_name: str
+    fnc_calls_json: list[str]
+    """JSON dump per in-flight FunctionCall — use this from callable templates."""
+    fnc_calls_text: str
+    """``fnc_calls_json`` joined by newlines — what the default string templates use."""
+
+
+class ReplyPromptArgs(TypedDict):
+    """Args for the ``reply_at_tail`` / ``reply_maybe_covered`` templates."""
+
+    call_ids: list[str]
+
+
 class AsyncToolPrompts(TypedDict, total=False):
     """System-message templates injected around tool dispatch.
 
-    Each field is a ``str.format()`` template; unmentioned keys keep their defaults.
-    Set on ``AgentSession``, ``Agent``, or ``AsyncToolset`` (most specific wins).
-
-    Placeholders:
-
-    - ``update``: ``{function_name}`` ``{call_id}`` ``{message}``
-    - ``duplicate_reject`` / ``duplicate_confirm``: ``{function_name}`` ``{running_fnc_calls}``
-    - ``reply_at_tail`` / ``reply_maybe_covered``: ``{pending_call_ids}``
+    Each field is either a ``str.format()`` template or a callable returning a string,
+    with the args typed as ``UpdatePromptArgs`` / ``DuplicatePromptArgs`` /
+    ``ReplyPromptArgs``. Unmentioned keys keep their defaults. Set on ``AgentSession``,
+    ``Agent``, or ``AsyncToolset`` (most specific wins).
     """
 
-    update: str
+    update: str | Callable[[UpdatePromptArgs], str]
     """Wraps a user-provided ``ctx.update(message)`` string before it lands in chat_ctx."""
-    duplicate_reject: str
+    duplicate_reject: str | Callable[[DuplicatePromptArgs], str]
     """Sent to the LLM when ``on_duplicate='reject'`` blocks a duplicate call."""
-    duplicate_confirm: str
+    duplicate_confirm: str | Callable[[DuplicatePromptArgs], str]
     """Sent to the LLM when ``on_duplicate='confirm'`` requires re-call with confirmation."""
-    reply_at_tail: str
-    """Instruction for the deferred reply when the pending update is the tail of chat_ctx."""
-    reply_maybe_covered: str
+    reply_at_tail: str | Callable[[ReplyPromptArgs], str]
+    """Instruction for the deferred reply when the pending update is still the tail of chat_ctx."""
+    reply_maybe_covered: str | Callable[[ReplyPromptArgs], str]
     """Instruction for the deferred reply when newer items came after the pending update."""
+
+
+def _render(template: str | Callable[[Any], str], args: dict[str, Any]) -> str:
+    """Render a template: callables receive ``args``; strings use ``str.format(**args)``."""
+    if callable(template):
+        return template(args)
+    return template.format(**args)
 
 
 _ASYNC_TOOL_PROMPTS_DEFAULTS: AsyncToolPrompts = {
@@ -427,7 +454,7 @@ class _ToolExecutor:
 
         call_ids = [item.call_id for item in pending_items if item.type == "function_call_output"]
         speech = session.generate_reply(
-            instructions=template.format(pending_call_ids=call_ids),
+            instructions=_render(template, {"call_ids": call_ids}),
             tool_choice="none",
             chat_ctx=chat_ctx,
         )
@@ -495,21 +522,17 @@ class _ToolExecutor:
                     raise ToolError(f"Failed to cancel duplicate tool calls: {error_messages}")
                 return None
 
+            fnc_calls_json = [fnc_call.model_dump_json() for fnc_call in running_fnc_calls]
+            args: DuplicatePromptArgs = {
+                "function_name": fnc_name,
+                "fnc_calls_json": fnc_calls_json,
+                "fnc_calls_text": "\n".join(fnc_calls_json),
+            }
             if on_duplicate == "reject":
-                return self._tool_prompts["duplicate_reject"].format(
-                    function_name=fnc_name,
-                    running_fnc_calls="\n".join(
-                        [fnc_call.model_dump_json() for fnc_call in running_fnc_calls]
-                    ),
-                )
+                return _render(self._tool_prompts["duplicate_reject"], dict(args))
 
             if on_duplicate == "confirm" and not confirm_duplicate:
-                return self._tool_prompts["duplicate_confirm"].format(
-                    function_name=fnc_name,
-                    running_fnc_calls="\n".join(
-                        [fnc_call.model_dump_json() for fnc_call in running_fnc_calls]
-                    ),
-                )
+                return _render(self._tool_prompts["duplicate_confirm"], dict(args))
 
         return None
 
