@@ -113,17 +113,11 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
             self._room.on("connection_state_changed", self._on_connection_state_changed)
 
     async def wait_for_join(self, *, timeout: float | None = 30.0) -> None:
-        """Block until the avatar's participant + video track have
-        joined the room. Provider implementations should await this
-        from their `start()` override after the upstream session has
-        been triggered, so callers can rely on `start()` returning
-        only when the avatar is actually present in the room (and
-        chained operations like aclose don't race a half-joined
-        avatar).
+        """Wait until the avatar participant has joined the room and
+        published its video track.
 
-        Raises ``asyncio.TimeoutError`` when the avatar doesn't join
-        within ``timeout`` seconds (default 30s). Pass ``timeout=None``
-        to wait indefinitely.
+        Raises ``asyncio.TimeoutError`` if it doesn't arrive within
+        ``timeout`` seconds. Pass ``timeout=None`` to wait indefinitely.
         """
         if self._wait_avatar_join_task is None:
             return
