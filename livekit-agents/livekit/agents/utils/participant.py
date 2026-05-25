@@ -75,7 +75,6 @@ async def wait_for_participant(
     identity: str | None = None,
     kind: list[rtc.ParticipantKind.ValueType] | rtc.ParticipantKind.ValueType | None = None,
     include_local: Literal[False] = False,
-    timeout: float | None = None,
 ) -> rtc.RemoteParticipant: ...
 
 
@@ -86,7 +85,6 @@ async def wait_for_participant(
     identity: str | None = None,
     kind: list[rtc.ParticipantKind.ValueType] | rtc.ParticipantKind.ValueType | None = None,
     include_local: Literal[True],
-    timeout: float | None = None,
 ) -> rtc.Participant: ...
 
 
@@ -96,7 +94,6 @@ async def wait_for_participant(
     identity: str | None = None,
     kind: list[rtc.ParticipantKind.ValueType] | rtc.ParticipantKind.ValueType | None = None,
     include_local: bool = False,
-    timeout: float | None = None,
 ) -> rtc.Participant:
     """
     Returns a participant that matches the given identity. If identity is None, the first
@@ -104,8 +101,6 @@ async def wait_for_participant(
     If the participant has already joined, the function will return immediately.
 
     When `include_local` is True, the local participant is also considered.
-    When `timeout` is set, raises `asyncio.TimeoutError` if the participant doesn't
-    arrive within the given number of seconds.
     """
     if not room.isconnected():
         raise RuntimeError("room is not connected")
@@ -145,9 +140,7 @@ async def wait_for_participant(
             if fut.done():
                 break
 
-        if timeout is None:
-            return await fut
-        return await asyncio.wait_for(fut, timeout=timeout)
+        return await fut
     finally:
         room.off("participant_active", _on_participant_active)
         room.off("connection_state_changed", _on_connection_state_changed)
@@ -161,7 +154,6 @@ async def wait_for_track_publication(
     kind: list[rtc.TrackKind.ValueType] | rtc.TrackKind.ValueType | None = None,
     include_local: Literal[False] = False,
     wait_for_subscription: bool = False,
-    timeout: float | None = None,
 ) -> rtc.RemoteTrackPublication: ...
 
 
@@ -173,7 +165,6 @@ async def wait_for_track_publication(
     kind: list[rtc.TrackKind.ValueType] | rtc.TrackKind.ValueType | None = None,
     include_local: Literal[True],
     wait_for_subscription: bool = False,
-    timeout: float | None = None,
 ) -> rtc.TrackPublication: ...
 
 
@@ -184,7 +175,6 @@ async def wait_for_track_publication(
     kind: list[rtc.TrackKind.ValueType] | rtc.TrackKind.ValueType | None = None,
     include_local: bool = False,
     wait_for_subscription: bool = False,
-    timeout: float | None = None,
 ) -> rtc.TrackPublication:
     """Returns a track publication matching the given identity and kind.
     If identity is None, the first track matching the kind will be returned.
@@ -193,8 +183,6 @@ async def wait_for_track_publication(
 
     When `include_local` is True, tracks published by the local participant are also considered;
     local publications resolve on publish and ignore ``wait_for_subscription``.
-    When ``timeout`` is set, raises ``asyncio.TimeoutError`` if no matching track
-    arrives within the given number of seconds.
     """
     if not room.isconnected():
         raise RuntimeError("room is not connected")
@@ -274,9 +262,7 @@ async def wait_for_track_publication(
             if fut.done():
                 break
 
-        if timeout is None:
-            return await fut
-        return await asyncio.wait_for(fut, timeout=timeout)
+        return await fut
     finally:
         if wait_for_subscription:
             room.off("track_subscribed", _on_track_subscribed)
