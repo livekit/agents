@@ -588,6 +588,28 @@ async def _execute_tools_task(
                 )
                 continue
 
+            run_ctx = RunContext(
+                session=session, speech_handle=speech_handle, function_call=fnc_call
+            )
+            json_args = fnc_call.arguments or "{}"
+
+            try:
+                prepared = llm_utils.prepare_function_arguments(
+                    fnc=function_tool, json_arguments=json_args, call_ctx=run_ctx
+                )
+            except ToolError as e:
+                logger.warning(
+                    "ToolError while preparing tool arguments: %s",
+                    e.message,
+                    extra={"function": fnc_call.name, "speech_id": speech_handle.id},
+                )
+                _tool_completed(make_tool_output(fnc_call=fnc_call, output=None, exception=e))
+                continue
+
+            # write canonical JSON back so subsequent LLM turns see the normalized payload
+            if prepared.canonical_arguments != json_args:
+                fnc_call.arguments = prepared.canonical_arguments
+
             if not tool_output.first_tool_started_fut.done():
                 tool_output.first_tool_started_fut.set_result(None)
 
@@ -601,32 +623,14 @@ async def _execute_tools_task(
                 mock = mock_tools.get(fnc_call.name)
                 mocked = mock is not None
 
-                run_ctx = RunContext(
-                    session=session, speech_handle=speech_handle, function_call=fnc_call
-                )
-                json_args = fnc_call.arguments or "{}"
-                _bound_tool: llm.FunctionTool | llm.RawFunctionTool = function_tool
-
-                # unified body: arg prep + invocation in one closure so a ToolError
-                # from prepare_function_arguments is routed through the existing
-                # per-tool handler below
-                async def _execute(
-                    ctx: RunContext[Any],
-                    fnc_call: llm.FunctionCall = fnc_call,
-                    fnc: llm.FunctionTool | llm.RawFunctionTool = _bound_tool,
-                    raw_args: str = json_args,
-                    bound_mock: Callable | None = mock,
-                ) -> Any:
-                    prepared = llm_utils.prepare_function_arguments(
-                        fnc=fnc, json_arguments=raw_args, call_ctx=ctx
+                if mock is not None:
+                    function_callable = functools.partial(
+                        _run_mock, mock, *prepared.args, **prepared.kwargs
                     )
-                    # write canonical JSON back so subsequent LLM turns don't
-                    # see the broken payload in conversation history
-                    if prepared.canonical_arguments != raw_args:
-                        fnc_call.arguments = prepared.canonical_arguments
-                    if bound_mock is not None:
-                        return await _run_mock(bound_mock, *prepared.args, **prepared.kwargs)
-                    return await fnc(*prepared.args, **prepared.kwargs)
+                else:
+                    function_callable = functools.partial(
+                        function_tool, *prepared.args, **prepared.kwargs
+                    )
 
                 logger.debug(
                     "executing mock tool" if mocked else "executing tool",
@@ -636,7 +640,6 @@ async def _execute_tools_task(
                         "speech_id": speech_handle.id,
                     },
                 )
-                function_callable = functools.partial(_execute, run_ctx)
 
                 @tracer.start_as_current_span("function_tool")
                 async def _traceable_fnc_tool(
