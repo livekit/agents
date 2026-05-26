@@ -63,7 +63,7 @@ class TestAMDClassifier:
     async def test_short_greeting_no_transcript_emits_pre_baked_human(self) -> None:
         """Short utterance + no STT text => HUMAN/short_greeting verdict."""
         clf = _make_classifier(human_silence_threshold=0.1)
-        clf.start()
+        clf.start_listening()
         results: list[AMDPredictionEvent] = []
         clf.on("amd_prediction", results.append)
 
@@ -89,7 +89,7 @@ class TestAMDClassifier:
         pre-baked HUMAN timer and replace it with a long_speech timer anchored at
         speech_ended + machine_silence_threshold."""
         clf = _make_classifier(human_silence_threshold=0.1, machine_silence_threshold=0.3)
-        clf.start()
+        clf.start_listening()
         results: list[AMDPredictionEvent] = []
         clf.on("amd_prediction", results.append)
 
@@ -119,7 +119,7 @@ class TestAMDClassifier:
         """The replacement timer fires near speech_ended + machine_silence_threshold,
         not push_text + machine_silence_threshold."""
         clf = _make_classifier(human_silence_threshold=0.05, machine_silence_threshold=0.3)
-        clf.start()
+        clf.start_listening()
 
         clf.on_user_speech_started()
         await asyncio.sleep(0.05)
@@ -156,7 +156,7 @@ class TestAMDClassifier:
             human_speech_threshold=0.1,
             machine_silence_threshold=0.3,
         )
-        clf.start()
+        clf.start_listening()
 
         clf.on_user_speech_started()
         await asyncio.sleep(0.15)
@@ -177,7 +177,7 @@ class TestAMDClassifier:
         """If a transcript is already present when speech ends (push_text before
         on_user_speech_ended), the short branch picks the long_speech trigger."""
         clf = _make_classifier(human_silence_threshold=0.1, machine_silence_threshold=0.3)
-        clf.start()
+        clf.start_listening()
 
         clf.on_user_speech_started()
         await asyncio.sleep(0.05)
@@ -197,7 +197,7 @@ class TestAMDClassifier:
     async def test_on_user_speech_started_clears_trigger(self) -> None:
         """on_user_speech_started cancels the silence timer and nulls the trigger."""
         clf = _make_classifier(human_silence_threshold=1.0)
-        clf.start()
+        clf.start_listening()
 
         clf.on_user_speech_started()
         await asyncio.sleep(0.05)
@@ -214,7 +214,7 @@ class TestAMDClassifier:
     async def test_silence_callback_clears_trigger_on_fire(self) -> None:
         """When the silence timer fires, both handle and trigger are nulled out."""
         clf = _make_classifier(human_silence_threshold=0.05)
-        clf.start()
+        clf.start_listening()
 
         clf.on_user_speech_started()
         await asyncio.sleep(0.02)
@@ -249,7 +249,7 @@ class TestAMDClassifier:
             ]
         )
         clf = _make_classifier(llm=llm, human_silence_threshold=0.1, machine_silence_threshold=0.3)
-        clf.start()
+        clf.start_listening()
         results: list[AMDPredictionEvent] = []
         clf.on("amd_prediction", results.append)
 
@@ -273,7 +273,7 @@ class TestAMDClassifier:
         clf = _make_classifier(
             llm=llm, human_speech_threshold=0.05, machine_silence_threshold=0.3
         )
-        clf.start()
+        clf.start_listening()
         results: list[AMDPredictionEvent] = []
         clf.on("amd_prediction", results.append)
 
@@ -303,7 +303,7 @@ class TestAMDClassifier:
         clf = _make_classifier(
             llm=llm, human_speech_threshold=0.05, machine_silence_threshold=0.3
         )
-        clf.start()
+        clf.start_listening()
         results: list[AMDPredictionEvent] = []
         clf.on("amd_prediction", results.append)
 
@@ -347,7 +347,7 @@ class TestAMDClassifier:
         clf = _make_classifier(
             llm=llm, human_speech_threshold=0.05, machine_silence_threshold=0.3
         )
-        clf.start()
+        clf.start_listening()
         results: list[AMDPredictionEvent] = []
         clf.on("amd_prediction", results.append)
 
@@ -369,9 +369,8 @@ class TestAMDClassifier:
         clf = _make_classifier(
             llm=llm, human_speech_threshold=0.05, machine_silence_threshold=0.3, timeout=5.0
         )
-        clf.start()
         clf.start_detection_timer()
-        clf.start_no_speech_timer()
+        clf.start_listening()
         assert clf._detection_timeout_timer is not None
         assert clf._no_speech_timer is not None
 
@@ -396,7 +395,7 @@ class TestAMDClassifier:
         clf = _make_classifier(
             llm=llm, human_speech_threshold=0.05, machine_silence_threshold=0.3, timeout=5.0
         )
-        clf.start()
+        clf.start_listening()
         clf.start_detection_timer()
 
         clf.on_user_speech_started()
@@ -424,7 +423,7 @@ class TestAMDClassifier:
             timeout=0.4,
             wait_until_finished=True,
         )
-        clf.start()
+        clf.start_listening()
         clf.start_detection_timer()
         results: list[AMDPredictionEvent] = []
         clf.on("amd_prediction", results.append)
@@ -449,8 +448,7 @@ class TestAMDClassifier:
         """no_speech_timeout fires regardless of wait_until_finished — there
         is nothing to wait for if no audio was ever heard."""
         clf = _make_classifier(no_speech_threshold=0.2, wait_until_finished=True)
-        clf.start()
-        clf.start_no_speech_timer()
+        clf.start_listening()
         results: list[AMDPredictionEvent] = []
         clf.on("amd_prediction", results.append)
 

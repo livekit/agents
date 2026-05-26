@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     from ...llm import LLM
     from ...stt import STT
     from ..agent_session import AgentSession
+    from ..audio_recognition import _EndOfTurnInfo
 
 EVALUATED_LLM_MODELS: set[str] = {
     "google/gemini-3.1-flash-lite",
@@ -98,10 +99,12 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
     - ``machine-unavailable``: the mailbox is full or not set up; leaving a message is not possible.
     - ``uncertain``: the transcript is ambiguous and could not be classified.
 
-    amd should be started before the SIP participant is created so no audio
+    AMD should be started before the SIP participant is created so no audio
     is missed. The overall detection-timeout budget starts when the
-    participant's audio track is subscribed (so amd cannot hang if the call
-    never connects). For SIP participants, the no-speech timer and
+    participant's audio track is subscribed (so AMD cannot hang if the call
+    never connects).
+
+    For SIP participants, the no-speech timer and
     audio/transcript processing are deferred until ``sip.callStatus ==
     "active"`` so pre-answer audio (ringback, carrier early media, dialtone)
     does not poison the classifier or burn the no-speech budget.
@@ -126,7 +129,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             agent speech immediately when a machine is detected.
         ivr_detection: If ``True`` (default), automatically start IVR
             navigation when a ``machine-ivr`` result is returned.
-        participant_identity: If set, amd listens only to this participant's
+        participant_identity: If set, AMD listens only to this participant's
             audio track. If omitted, the first remote audio track wins and
             the publisher is resolved from the track sid.
         stt: STT used for transcript generation. Accepts an :class:`STT`
@@ -146,7 +149,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             waiting for the post-speech silence and a positive end-of-turn
             from the session's turn detector before emitting. Useful for
             outbound voicemail flows where leaving a message early would
-            overlap the greeting. ``no_speech_timeout`` still fires
+            overlap the greeting. ``no_speech_timeout`` (uncertain) still fires
             normally (no audio at all means there is nothing to wait for).
             Defaults to ``False``.
     """
@@ -213,7 +216,6 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         self._setup_task: asyncio.Task[None] | None = None
         self._sip_answer_task: asyncio.Task[None] | None = None
         self._audio_ch: aio.Chan[rtc.AudioFrame] | None = None
-        self._listening: bool = False
 
     @property
     def enabled(self) -> bool:
@@ -225,7 +227,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
 
     @property
     def started(self) -> bool:
-        return self._classifier is not None and self._classifier.started
+        return self._classifier is not None and self._classifier.listening
 
     async def execute(self) -> AMDPredictionEvent:
         """Run AMD and return the result.
@@ -233,9 +235,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         While executing, speech playout authorization is locked. Once the
         result is available, authorization is resumed and automatic actions
         (interrupt on machine, ivr detection) are applied based on the
-        configured options. AMD then tears itself down so the caller can act
-        on the verdict (e.g. ``generate_reply``) without AMD's hooks
-        consuming subsequent transcripts.
+        configured options.
         """
         if self._classifier:
             await self._classifier._verdict_ready.wait()
@@ -257,13 +257,33 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         if self._session._activity:
             self._session._activity._resume_authorization()
 
-        await self.aclose()
         return result
 
-    def _on_end_of_turn(self) -> None:
+    def _on_end_of_turn(self, info: _EndOfTurnInfo) -> bool:
+        """Forward EOT to the classifier and signal whether AMD is consuming
+        this turn so the agent activity should skip the normal reply pipeline.
+
+        Returns ``True`` when AMD has decided this is a machine and the caller
+        asked us to take over via ``interrupt_on_machine``; the caller is
+        expected to drive its own ``generate_reply`` (e.g. leaving a voicemail)
+        and the auto-reply triggered by user-turn completion would otherwise
+        race with it.
+        """
         if self._closed or not self._classifier:
-            return
+            return False
         self._classifier.on_end_of_turn()
+        if not (
+            self._interrupt_on_machine and self._result is not None and self._result.is_machine
+        ):
+            return False
+        logger.debug(
+            "skipping auto reply: AMD already returned a machine verdict",
+            extra={
+                "category": self._result.category.value,
+                "transcript": info.new_transcript,
+            },
+        )
+        return True
 
     async def __aenter__(self) -> AMD:
         await self._run(self._session)
@@ -280,26 +300,20 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
     # region: lifecycle hooks (called by AudioRecognition)
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
-        if not self._listening:
+        if not (self._classifier and self._classifier.listening):
             return
-        if self._audio_ch and not self._audio_ch.closed and self._classifier:
+        if self._audio_ch and not self._audio_ch.closed:
             self._audio_ch.send_nowait(frame)
 
     def _on_user_speech_started(self) -> None:
-        if not self._listening:
-            return
         if self._classifier:
             self._classifier.on_user_speech_started()
 
     def _on_user_speech_ended(self, silence_duration: float) -> None:
-        if not self._listening:
-            return
         if self._classifier:
             self._classifier.on_user_speech_ended(silence_duration)
 
     def _on_transcript(self, text: str) -> None:
-        if not self._listening:
-            return
         if self._classifier:
             self._classifier.push_text(text)
 
@@ -362,8 +376,8 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
 
         session._amd = self
 
-        # start the classifier first; timers are armed later in _setup
-        self._classifier.start()
+        # classifier is dormant until start_detection_timer / start_listening;
+        # the listening gate stays closed so pre-setup audio is dropped.
         self._start_span()
         if session._activity:
             session._activity._pause_authorization()
@@ -379,8 +393,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             )
             if self._classifier:
                 self._classifier.start_detection_timer()
-                self._classifier.start_no_speech_timer()
-            self._listening = True
+                self._classifier.start_listening()
         else:
             room = session._room_io.room
             publication = await wait_for_track_publication(
@@ -391,7 +404,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             )
             if self._closed or not self._classifier:
                 return
-            # outer budget runs from track-up so amd bails out even if the
+            # outer budget runs from track-up so AMD bails out even if the
             # call never reaches the active state
             self._classifier.start_detection_timer()
 
@@ -407,8 +420,9 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
                     None,
                 )
             if publisher is None:
-                # publisher already gone; outer detection_timeout will resolve amd
+                # publisher already gone; outer detection_timeout will resolve AMD
                 return
+
             if publisher.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
                 self._sip_answer_task = asyncio.create_task(
                     self._wait_for_sip_answer(room, publisher.identity),
@@ -424,9 +438,8 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
     def _start_listening(self) -> None:
         if self._closed or not self._classifier:
             return
-        self._classifier.start_no_speech_timer()
-        self._listening = True
-        logger.debug("call has been answered, amd starts listening")
+        self._classifier.start_listening()
+        logger.debug("call has been answered, AMD starts listening")
 
     async def _wait_for_sip_answer(self, room: rtc.Room, identity: str) -> None:
         try:
@@ -438,8 +451,8 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             )
         except ParticipantAttributeWaitAborted as e:
             # participant dropped or room disconnected before answer — outer
-            # timeout will resolve amd with detection_timeout
-            logger.debug("amd: sip answer wait aborted", extra={"reason": str(e)})
+            # timeout will resolve AMD with detection_timeout
+            logger.debug("AMD: SIP answer wait aborted", extra={"reason": str(e)})
             return
         if not self._closed:
             self._start_listening()
@@ -481,11 +494,6 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
 
     def _on_amd_prediction(self, result: AMDPredictionEvent) -> None:
         self._result = result
-        # Stops the _on_user_speech_started/_on_user_speech_ended forwarders
-        # from touching the classifier in the window between emission and the
-        # aclose() in execute(); the audio/transcript paths are already
-        # guarded by their own closed-channel checks.
-        self._listening = False
         logger.info(
             "amd prediction",
             extra={
