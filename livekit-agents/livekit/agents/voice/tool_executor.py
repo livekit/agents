@@ -150,11 +150,11 @@ async def cancel_task(call_id: str) -> str:
     """Cancel a running tool call by call_id."""
     job_ctx = get_job_context(required=False)
     task = _RunningTasks.get((job_ctx, call_id))
-    if task is None or not task.allow_cancellation:
-        return f"Task {call_id} not found or not cancellable."
-    if await task.executor.cancel(call_id):
-        return f"Task {call_id} cancelled successfully."
-    return f"Task {call_id} not found or already completed."
+    if task is None:
+        raise ToolError(f"Task {call_id} not found")
+
+    await task.executor.cancel(call_id)
+    return f"Task {call_id} cancelled successfully."
 
 
 def has_cancellable_tool(tools: Sequence[Tool | Toolset]) -> bool:
@@ -339,6 +339,10 @@ class _ToolExecutor:
         task = self._running_tasks.get(call_id)
         if task is None:
             return False
+
+        if not task.allow_cancellation:
+            raise ToolError(f"Tool call {call_id} is not cancellable")
+
         if not task.ctx.speech_handle.allow_interruptions:
             raise ToolError(
                 f"Tool call {call_id} is not cancellable because interruptions are disallowed"
