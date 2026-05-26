@@ -610,11 +610,13 @@ class AgentActivity(RecognitionHooks):
         resources = _ReusableResources()
 
         try:
-            # stt pipeline
+            # stt pipeline; only reuse with the default stt_node, a custom override may
+            # access the old self.session/activity inside the yield loop after detach
             if (
                 self._audio_recognition
                 and self.stt is not None
-                and type(self.agent).stt_node is type(new_activity.agent).stt_node
+                and type(self.agent).stt_node is Agent.stt_node
+                and type(new_activity.agent).stt_node is Agent.stt_node
                 and self.stt is new_activity.stt
             ):
                 resources.stt_pipeline = await self._audio_recognition.detach_stt()
