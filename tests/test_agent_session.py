@@ -1208,9 +1208,7 @@ async def test_tool_internal_exception_returns_generic_error() -> None:
     actions.add_llm(
         content="",
         tool_calls=[
-            FunctionToolCall(
-                name="get_weather", arguments='{"location": "Tokyo"}', call_id="1"
-            ),
+            FunctionToolCall(name="get_weather", arguments='{"location": "Tokyo"}', call_id="1"),
         ],
     )
 
