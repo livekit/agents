@@ -141,6 +141,14 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         detection_options: Optional overrides for timing thresholds and the AMD
             classification prompt (see :class:`DetectionOptions`). When
             omitted, library defaults apply.
+        wait_until_finished: If ``True``, once any speech has been heard the
+            ``detection_timeout`` no longer forces emission — AMD will keep
+            waiting for the post-speech silence and a positive end-of-turn
+            from the session's turn detector before emitting. Useful for
+            outbound voicemail flows where leaving a message early would
+            overlap the greeting. ``no_speech_timeout`` still fires
+            normally (no audio at all means there is nothing to wait for).
+            Defaults to ``False``.
     """
 
     _DEFAULT_LLM_MODEL: str = "google/gemini-3.1-flash-lite"
@@ -157,6 +165,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         participant_identity: NotGivenOr[str] = NOT_GIVEN,
         suppress_compatibility_warning: bool = False,
         detection_options: NotGivenOr[DetectionOptions] = NOT_GIVEN,
+        wait_until_finished: bool = False,
     ) -> None:
         super().__init__()
 
@@ -177,6 +186,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         self._session: AgentSession = session
         self._interrupt_on_machine = interrupt_on_machine
         self._ivr_detection = ivr_detection
+        self._wait_until_finished = wait_until_finished
         self._suppress_compatibility_warning = suppress_compatibility_warning
         self._participant_identity: NotGivenOr[str] = participant_identity
         self._stt: NotGivenOr[_STT] = _InferenceSTT(stt) if isinstance(stt, str) else stt
@@ -223,7 +233,9 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         While executing, speech playout authorization is locked. Once the
         result is available, authorization is resumed and automatic actions
         (interrupt on machine, ivr detection) are applied based on the
-        configured options.
+        configured options. AMD then tears itself down so the caller can act
+        on the verdict (e.g. ``generate_reply``) without AMD's hooks
+        consuming subsequent transcripts.
         """
         if self._classifier:
             await self._classifier._verdict_ready.wait()
@@ -245,7 +257,13 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         if self._session._activity:
             self._session._activity._resume_authorization()
 
+        await self.aclose()
         return result
+
+    def _on_end_of_turn(self) -> None:
+        if self._closed or not self._classifier:
+            return
+        self._classifier.on_end_of_turn()
 
     async def __aenter__(self) -> AMD:
         await self._run(self._session)
@@ -408,6 +426,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             return
         self._classifier.start_no_speech_timer()
         self._listening = True
+        logger.debug("call has been answered, amd starts listening")
 
     async def _wait_for_sip_answer(self, room: rtc.Room, identity: str) -> None:
         try:
@@ -462,6 +481,11 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
 
     def _on_amd_prediction(self, result: AMDPredictionEvent) -> None:
         self._result = result
+        # Stops the _on_user_speech_started/_on_user_speech_ended forwarders
+        # from touching the classifier in the window between emission and the
+        # aclose() in execute(); the audio/transcript paths are already
+        # guarded by their own closed-channel checks.
+        self._listening = False
         logger.info(
             "amd prediction",
             extra={
@@ -550,6 +574,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
                 timeout=self._opts["timeout"],
                 prompt=self._opts["prompt"],
                 source="amd_stt" if is_given(self._stt) else "stt",
+                wait_until_finished=self._wait_until_finished,
             )
 
         return None

@@ -113,6 +113,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
         timeout: float = TIMEOUT,
         prompt: str = AMD_PROMPT,
         source: str = "stt",
+        wait_until_finished: bool = False,
     ):
         super().__init__()
         self._human_speech_threshold = human_speech_threshold
@@ -121,6 +122,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
         self._no_speech_threshold = no_speech_threshold
         self._timeout = timeout
         self._source = source
+        self._wait_until_finished = wait_until_finished
 
         self._input_ch: aio.Chan[str] = aio.Chan()
         self._classify_task: asyncio.Task[None] | None = None
@@ -138,7 +140,8 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
         self._speech_ended_at: float | None = None
         self._started = False
         self._closed = False
-        self._machine_silence_reached = False
+        self._silence_reached = False
+        self._eot_reached = False
         self._emitted = False
         self._transcript = ""
         self._extension_count = 0
@@ -193,7 +196,8 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
             self._no_speech_timer = None
         if self._speech_started_at is None:
             self._speech_started_at = time.time()
-        self._machine_silence_reached = False
+        self._silence_reached = False
+        self._eot_reached = False
 
     @_state_guard
     def on_user_speech_ended(self, silence_duration: float) -> None:
@@ -244,20 +248,43 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
         self._silence_timer_trigger = "long_speech"
 
     def _set_verdict(self, result: AMDPredictionEvent) -> None:
+        # the verdict may be set preemptively by the LLM mid-prompt; keep the
+        # detection/no-speech timers armed so they still bound the overall AMD
+        # lifetime — if they fire post-verdict the timeout path will force
+        # emission with the verdict we already have.
         self._verdict_result = result
+        self._try_emit_result()
+
+    def on_end_of_turn(self) -> None:
+        """Signal that the turn detector has committed a positive end-of-turn.
+
+        For machine verdicts, both this signal and the post-speech silence
+        timer must fire before the verdict is emitted (whichever lands last
+        unblocks the wait). For human/uncertain verdicts only the silence
+        timer is required (we want to respond quickly).
+        """
+        if self._closed or not self._started:
+            return
+        self._eot_reached = True
         self._try_emit_result()
 
     def _try_emit_result(self) -> None:
         if self._verdict_result is None:
             return
-        if not self._machine_silence_reached:
-            return
         if self._closed or self._emitted:
+            return
+        if not self._silence_reached:
+            return
+        if self._verdict_result.is_machine and not self._eot_reached:
+            # machine: wait for the turn detector to also confirm end-of-turn
             return
         self._verdict_ready.set()
         if self._detection_timeout_timer is not None:
             self._detection_timeout_timer.cancel()
             self._detection_timeout_timer = None
+        if self._no_speech_timer is not None:
+            self._no_speech_timer.cancel()
+            self._no_speech_timer = None
         self.emit("amd_prediction", self._verdict_result)
         self._emitted = True
 
@@ -274,7 +301,22 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
             self._silence_timer = None
             self._silence_timer_trigger = None
 
-        if is_given(category) and is_given(reason) and self._verdict_result is None:
+        # flip emission gates first so _set_verdict's inline _try_emit_result
+        # sees the final gate state; otherwise emission would have to wait for
+        # the trailing _try_emit_result and the intermediate state would be
+        # inconsistent (verdict set but gates not yet flipped).
+        self._silence_reached = True
+        is_timeout = is_given(category) and is_given(reason)
+        if is_timeout:
+            # timeouts normally force emission regardless of the EOT gate. With
+            # ``wait_until_finished``, the detection_timeout instead lets AMD
+            # keep waiting for EOT — but only if we've actually heard speech;
+            # if nothing ever arrived (no_speech_timeout) we still force out.
+            has_speech = self._speech_started_at is not None or bool(self._transcript)
+            if not (self._wait_until_finished and has_speech):
+                self._eot_reached = True
+
+        if is_timeout and self._verdict_result is None:
             self._set_verdict(
                 AMDPredictionEvent(
                     speech_duration=speech_duration or self.speech_duration,
@@ -284,15 +326,14 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
                     delay=(time.time() - self._speech_ended_at) if self._speech_ended_at else 0.0,
                 )
             )
-
-        self._machine_silence_reached = True
-        self._try_emit_result()
+        else:
+            self._try_emit_result()
 
     @_state_guard
     def push_text(self, text: str, source: str = "stt") -> None:
         """Push transcript text to the AMD classifier."""
         if self._input_ch.closed:
-            logger.debug("push_text called after close")
+            logger.debug("push_text called after amd close")
             return
         # ignore text from other sources (e.g. when both session and AMD have STT specified)
         if source != self._source:
@@ -369,7 +410,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
                 # silence reached so any pending verdict (or one produced by the
                 # re-classification below) can emit instead of waiting on the
                 # detection timeout.
-                self._machine_silence_reached = True
+                self._silence_reached = True
                 if not self._input_ch.closed:
                     # re-trigger classification with the latest transcript; on the
                     # next run, postpone is unavailable once extensions are
