@@ -448,7 +448,7 @@ class TestAMDClassifier:
 
         await asyncio.wait_for(clf._verdict_ready.wait(), timeout=1.0)
         assert len(results) == 1
-        assert results[0].category == AMDCategory.MACHINE_UNAVAILABLE
+        assert results[0].category == AMDCategory.UNCERTAIN
         assert results[0].reason == "no_speech_timeout"
 
         await clf.close()
