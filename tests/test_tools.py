@@ -6,7 +6,7 @@ import pytest
 from pydantic import BaseModel, Field
 
 from livekit.agents import Agent
-from livekit.agents.llm import ProviderTool, Tool, ToolContext, Toolset, function_tool
+from livekit.agents.llm import ProviderTool, Tool, ToolContext, ToolError, Toolset, function_tool
 from livekit.agents.llm._strict import to_strict_json_schema
 from livekit.agents.llm.utils import (
     build_legacy_openai_schema,
@@ -390,17 +390,17 @@ class TestToolExecution:
         assert output == {"arg1": "test", "opt_arg2": None}
 
     def test_unexpected_arguments(self):
-        with pytest.raises(ValueError, match="validation error"):
+        with pytest.raises(ToolError, match="validation error"):
             prepare_function_arguments(fnc=mock_tool_1, json_arguments='{"opt_arg2": "test2"}')
 
-        with pytest.raises(ValueError, match="Received no value for required parameter"):
+        with pytest.raises(ToolError, match="Received no value for required parameter"):
             prepare_function_arguments(fnc=mock_tool_2, json_arguments='{"arg1": null}')
 
-        with pytest.raises(ValueError, match="validation error"):
+        with pytest.raises(ToolError, match="validation error"):
             prepare_function_arguments(fnc=mock_tool_2, json_arguments='{"arg1": "d"}')
 
         agent = DummyAgent()
-        with pytest.raises(ValueError, match="validation error"):
+        with pytest.raises(ToolError, match="validation error"):
             prepare_function_arguments(
                 fnc=agent.mock_tool_in_agent, json_arguments='{"opt_arg2": "test2"}'
             )
@@ -419,9 +419,9 @@ class TestToolExecution:
         assert args == ("hi", None)
 
     def test_unrepairable_json_arguments_raise(self):
-        """If json_repair can't recover anything meaningful, we should
-        still raise so the caller can strip the call from history."""
-        with pytest.raises(ValueError, match="could not parse"):
+        """If json_repair can't recover anything meaningful, the error should
+        be surfaced as a ToolError so the LLM can self-correct on the next turn."""
+        with pytest.raises(ToolError, match="could not parse"):
             prepare_function_arguments(fnc=mock_tool_1, json_arguments="not json at all")
 
     def test_repairs_gemma_template_token_leak(self):
@@ -536,6 +536,38 @@ class TestToolExecution:
         assert result.fnc_call.arguments != raw_broken
         parsed = json.loads(result.fnc_call.arguments)
         assert parsed == {"order_id": ["O_WAAB70"]}
+
+    @pytest.mark.asyncio
+    async def test_execute_function_call_canonicalizes_when_validation_fails(self):
+        """When JSON parses (possibly via repair) but pydantic validation then
+        fails, fnc_call.arguments must STILL be canonicalized — otherwise the
+        broken raw payload propagates into chat history and the next LLM turn
+        gets a 5xx from providers that re-serialize."""
+        from livekit.agents.llm.llm import FunctionToolCall
+        from livekit.agents.llm.utils import execute_function_call
+
+        @function_tool
+        async def take_int(arg1: int) -> str:
+            return str(arg1)
+
+        tool_ctx = ToolContext([take_int])
+        # malformed JSON that json_repair can fix, but the value is the wrong
+        # type for pydantic validation (string where int is required)
+        raw_broken = '{arg1: "not_an_int"}'
+        tool_call = FunctionToolCall(
+            name="take_int", arguments=raw_broken, call_id="call-validate-fail"
+        )
+
+        result = await execute_function_call(tool_call, tool_ctx)
+
+        # Validation failed
+        assert result.fnc_call_out is not None
+        assert result.fnc_call_out.is_error is True
+
+        # But fnc_call.arguments was canonicalized despite the validation error
+        assert result.fnc_call.arguments != raw_broken
+        parsed = json.loads(result.fnc_call.arguments)
+        assert parsed == {"arg1": "not_an_int"}
 
 
 class TestNoParametersSchema:
