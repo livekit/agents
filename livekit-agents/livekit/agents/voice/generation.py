@@ -581,30 +581,23 @@ async def _execute_tools_task(
                 )
 
             except (ValidationError, ValueError) as e:
-                # Strip the faulty turn from the conversation: when the LLM emits
-                # arguments we can't decode/validate, surfacing the failure back to
-                # the model in chat history tends to poison subsequent turns
-                # (smaller models repeat the same malformed output). Instead, drop
-                # the call entirely so the next reply runs against a clean history.
+                # Surface schema/parse errors back to the LLM as a ToolError so
+                # it gets a clear, actionable message ("Error parsing arguments
+                # for X: <details>") and can retry the call with valid input.
+                # Other unexpected exceptions fall through to the generic
+                # "An internal error occurred" path in make_tool_output, so we
+                # don't leak internal details to the model.
                 logger.warning(
-                    f"tried to call AI function `{fnc_call.name}` with invalid arguments; "
-                    "stripping the call from chat history",
+                    f"invalid arguments for AI function `{fnc_call.name}`: {e}",
                     extra={
                         "function": fnc_call.name,
                         "arguments": fnc_call.arguments,
                         "speech_id": speech_handle.id,
-                        "error": str(e),
                     },
                 )
+                tool_error = ToolError(f"Error parsing arguments for `{fnc_call.name}`: {e}")
                 _tool_completed(
-                    ToolExecutionOutput(
-                        fnc_call=fnc_call.model_copy(),
-                        fnc_call_out=None,
-                        agent_task=None,
-                        raw_output=None,
-                        raw_exception=e,
-                        reply_required=False,
-                    )
+                    make_tool_output(fnc_call=fnc_call, output=None, exception=tool_error)
                 )
                 continue
 
