@@ -383,7 +383,10 @@ def _wrap_with_confirm_duplicate(func: Callable[..., Any]) -> Callable[..., Any]
     @functools.wraps(func)
     async def wrapper(*args: Any, **kwargs: Any) -> Any:
         kwargs.pop(CONFIRM_DUPLICATE_PARAM, None)
-        return await func(*args, **kwargs)
+        result = func(*args, **kwargs)
+        if asyncio.iscoroutine(result):
+            return await result
+        return result
 
     sig = inspect.signature(func)
     extra = inspect.Parameter(
