@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import inspect
+import json
+import re
 import types
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -17,6 +19,7 @@ from typing import (
     get_type_hints,
 )
 
+import json_repair
 import pydantic
 from pydantic import BaseModel, TypeAdapter, create_model
 from pydantic.fields import Field, FieldInfo
@@ -370,6 +373,94 @@ def function_arguments_to_pydantic_model(func: Callable[..., Any]) -> type[BaseM
     return create_model(model_name, **fields)
 
 
+# Patterns for chat-template tokens that sometimes leak into tool-call arguments
+# when the model fumbles its own special-token formatting. Ordered: well-formed
+# delimiters first (so we don't leave dangling halves), then stragglers.
+# Covers Qwen/ChatML-style (`<|im_start|>`, `<|tool_call|>`, the leaked `<|"|"`
+# we've seen from Gemma 4) and Gemma turn markers (`<start_of_turn>` /
+# `<end_of_turn>`).
+_TEMPLATE_TOKEN_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"<\|[^<>|]{0,40}\|>"),  # well-formed <|...|>
+    re.compile(r"<\|[^<>a-zA-Z0-9_]{0,10}"),  # dangling start <|"|" etc.
+    re.compile(r"[^<>a-zA-Z0-9_]{0,10}\|>"),  # dangling end
+    re.compile(r"<(?:start|end)_of_turn>"),  # Gemma turn markers
+)
+
+
+def _strip_template_tokens(value: Any) -> Any:
+    """Recursively remove leaked chat-template tokens from string values.
+
+    Only applied after a JSON repair pass — we don't want to silently rewrite
+    legitimate arguments that happen to contain `<|...|>` substrings.
+    """
+    if isinstance(value, str):
+        out = value
+        for pat in _TEMPLATE_TOKEN_PATTERNS:
+            out = pat.sub("", out)
+        return out.strip()
+    if isinstance(value, list):
+        cleaned = [_strip_template_tokens(v) for v in value]
+        # Drop empties that were left behind purely as separators between leaked
+        # tokens (e.g. `["<|", "X<|", ""]` -> `["X"]`).
+        return [v for v in cleaned if v not in ("", None)]
+    if isinstance(value, dict):
+        return {k: _strip_template_tokens(v) for k, v in value.items()}
+    return value
+
+
+def parse_function_arguments(json_arguments: str) -> dict[str, Any]:
+    """Parse a raw JSON tool-call arguments string into a dict.
+
+    First tries strict parsing; if the JSON is malformed (common with smaller /
+    open-weight models that fumble special tokens or escaping), falls back to
+    ``json_repair`` and then strips known chat-template token leaks.
+
+    Raises ``ValueError`` if the arguments can't be recovered or don't decode
+    to a dict-shaped value.
+    """
+    try:
+        args_dict: Any = from_json(json_arguments)
+    except ValueError as strict_err:
+        repaired = json_repair.loads(json_arguments)
+        if repaired == "":
+            # json_repair returns "" when it can't recover anything meaningful.
+            raise ValueError(
+                f"could not parse function arguments as JSON: {strict_err}: {json_arguments[:200]}"
+            ) from strict_err
+        # After a repair, also strip leaked chat-template tokens — many of
+        # the failures we see are caused by `<|...|>` markers bleeding into
+        # the model's structured output.
+        cleaned = _strip_template_tokens(repaired)
+        logger.warning(
+            "repaired malformed function-call JSON arguments",
+            extra={
+                "raw_arguments": json_arguments[:500],
+                "repaired": cleaned,
+                "error": str(strict_err),
+            },
+        )
+        args_dict = cleaned
+
+    # Some providers (e.g. Nova Sonic) double-encode tool arguments as nested
+    # JSON strings. Unwrap until we reach a non-string value.
+    while isinstance(args_dict, str):
+        try:
+            args_dict = from_json(args_dict)
+        except Exception:
+            raise ValueError(
+                f"function arguments decoded to a non-JSON string: {args_dict[:200]}"
+            ) from None
+
+    if args_dict is None:
+        return {}
+    if not isinstance(args_dict, dict):
+        raise ValueError(
+            f"expected dict from function arguments, "
+            f"got {type(args_dict).__name__}: {json_arguments[:200]}"
+        )
+    return args_dict
+
+
 def prepare_function_arguments(
     *,
     fnc: FunctionTool | RawFunctionTool,
@@ -413,24 +504,7 @@ def _prepare_function_arguments(
     type_hints = get_type_hints(fnc, include_extras=True)
 
     if isinstance(json_arguments, str):
-        args_dict = from_json(json_arguments)
-        # some providers (e.g. Nova Sonic) double-encode tool arguments as nested
-        # JSON strings. unwrap until we reach a non-string value.
-        while isinstance(args_dict, str):
-            try:
-                args_dict = from_json(args_dict)
-            except Exception:
-                raise ValueError(
-                    f"function arguments decoded to a non-JSON string: {args_dict[:200]}"
-                ) from None
-
-        if args_dict is None:
-            args_dict = {}
-        elif not isinstance(args_dict, dict):
-            raise ValueError(
-                f"expected dict from function arguments, "
-                f"got {type(args_dict).__name__}: {json_arguments[:200]}"
-            )
+        args_dict = parse_function_arguments(json_arguments)
     else:
         args_dict = json_arguments
 
@@ -659,9 +733,18 @@ async def execute_function_call(
         )
 
     try:
+        raw_args = tool_call.arguments or "{}"
+        args_dict = parse_function_arguments(raw_args)
+
+        # If repair/strip changed the structure, canonicalize fnc_call.arguments
+        # so it serializes back to valid JSON in subsequent LLM turns.
+        canonical_args = json.dumps(args_dict, default=str)
+        if canonical_args != raw_args:
+            fnc_call.arguments = canonical_args
+
         fnc_args, fnc_kwargs = prepare_function_arguments(
             fnc=function_tool,
-            json_arguments=tool_call.arguments or "{}",
+            json_arguments=args_dict,
             call_ctx=call_ctx,
         )
         result = function_tool(*fnc_args, **fnc_kwargs)
