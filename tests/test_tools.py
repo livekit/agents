@@ -1247,7 +1247,9 @@ class TestCancelAll:
 
     @pytest.mark.asyncio
     async def test_cancel_task_companion_misses_non_cancellable(self):
-        """The LLM-facing ``cancel_task`` skips tools registered with ``allow_cancellation=False``."""
+        """The LLM-facing ``cancel_task`` raises ToolError for tools registered with
+        ``allow_cancellation=False``."""
+        from livekit.agents.llm.tool_context import ToolError
         from livekit.agents.voice.tool_executor import _RunningTasks, _ToolExecutor, cancel_task
 
         executor = _ToolExecutor()
@@ -1255,8 +1257,8 @@ class TestCancelAll:
         # cancel_task reads from the module-level registry, not the executor's
         _RunningTasks[(None, "a")] = executor._running_tasks["a"]
         try:
-            msg = await cancel_task("a")
-            assert "not found or not cancellable" in msg
+            with pytest.raises(ToolError, match="not cancellable"):
+                await cancel_task("a")
             assert not t.cancelled()
         finally:
             _RunningTasks.pop((None, "a"), None)
