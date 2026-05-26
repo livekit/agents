@@ -21,7 +21,7 @@ from typing import Literal
 from urllib.parse import urlencode
 
 import aiohttp
-from typing_extensions import NotRequired, TypedDict, override
+from typing_extensions import NotRequired, TypedDict
 
 from livekit import rtc
 from livekit.agents import (
@@ -206,7 +206,6 @@ class TurnsRecognizeStream(CartesiaRecognizeStream):
         # cumulative transcript for the current turn; used to re-emit on turn.resume
         self._current_transcript = ""
 
-    @override
     async def _run(self) -> None:
         if self._input_ch.closed:
             return
@@ -461,7 +460,6 @@ class TurnsRecognizeStream(CartesiaRecognizeStream):
 
         logger.warning("received unexpected message from Cartesia STT: %s", data)
 
-    @override
     def update_options(
         self,
         *,

@@ -20,7 +20,6 @@ import weakref
 from dataclasses import dataclass
 
 import aiohttp
-from typing_extensions import override
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -196,16 +195,13 @@ class STT(stt.STT):
         self._streams = weakref.WeakSet[TurnsRecognizeStream | LegacyRecognizeStream]()
 
     @property
-    @override
     def model(self) -> str:
         return self._model
 
     @property
-    @override
     def provider(self) -> str:
         return "Cartesia"
 
-    @override
     async def _recognize_impl(
         self,
         buffer: utils.AudioBuffer,
@@ -217,7 +213,6 @@ class STT(stt.STT):
             "Cartesia STT does not support batch recognition, use stream() instead"
         )
 
-    @override
     def stream(
         self,
         *,

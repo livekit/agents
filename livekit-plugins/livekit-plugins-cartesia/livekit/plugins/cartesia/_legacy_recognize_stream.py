@@ -21,7 +21,7 @@ from typing import Literal
 from urllib.parse import urlencode
 
 import aiohttp
-from typing_extensions import NotRequired, TypedDict, override
+from typing_extensions import NotRequired, TypedDict
 
 from livekit import rtc
 from livekit.agents import (
@@ -170,7 +170,6 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
         self._speech_duration: float = 0
         self._last_speech_end_time: float = 0
 
-    @override
     async def _run(self) -> None:
         closing_ws = False
         # Reset per-connection state so a transport-error retry (a new _run
@@ -417,7 +416,6 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
         else:
             logger.warning("received unexpected message from Cartesia STT: %s", data)
 
-    @override
     def update_options(
         self,
         *,
