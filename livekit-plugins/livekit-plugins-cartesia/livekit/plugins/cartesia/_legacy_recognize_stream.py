@@ -162,7 +162,7 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
         self._api_key = api_key
         self._ws_base_url = ws_base_url
         self._session = session
-        # must be ISO 639-1 language code (without region_
+        # must be ISO 639-1 language code (without region)
         self._language_str = language.language if language is not None else None
         self._request_id = ""
         self._reconnect_event = asyncio.Event()

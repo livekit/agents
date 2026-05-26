@@ -190,6 +190,7 @@ class TurnsRecognizeStream(CartesiaRecognizeStream):
         api_key: str,
         ws_base_url: str,
         session: aiohttp.ClientSession,
+        language: LanguageCode | None,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=sample_rate)
         self._encoding = encoding
@@ -199,12 +200,16 @@ class TurnsRecognizeStream(CartesiaRecognizeStream):
         self._api_key = api_key
         self._ws_base_url = ws_base_url
         self._session = session
+        self._language = language
         self._request_id = ""
         self._speaking = False
         self._speech_duration: float = 0.0
         self._closing_ws = False
         # cumulative transcript for the current turn; used to re-emit on turn.resume
         self._current_transcript = ""
+
+        if language is not None and language.language != "en":
+            logger.warning("Cartesia STT (Ink 2) currently only supports English")
 
     async def _run(self) -> None:
         if self._input_ch.closed:
@@ -362,8 +367,7 @@ class TurnsRecognizeStream(CartesiaRecognizeStream):
 
         speech_data = stt.SpeechData(
             text=transcript,
-            # only English is supported right now
-            language=LanguageCode("en"),
+            language=self._language or LanguageCode("en"),
         )
         self._event_ch.send_nowait(
             stt.SpeechEvent(
@@ -466,11 +470,22 @@ class TurnsRecognizeStream(CartesiaRecognizeStream):
         language: NotGivenOr[STTLanguages | str] = NOT_GIVEN,
         model: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
-        """Cartesia STT (turn detecting) does not currently support updating options.
-        This method is a no-op.
+        """Change Cartesia STT options.
+
+        Args:
+            language: Changes the language emitted in :class:`~stt.SpeechData`.
+                Ink 2 does not have multi-lingual support yet and only works with English.
+            model: Deprecated. This is a no-op. Construct a new STT instance to change the model.
         """
+        language_code: NotGivenOr[LanguageCode]
+        if is_given(language):
+            language_code = LanguageCode(language)
+            self._language = language_code
+        else:
+            language_code = language
+
         if (is_given(model) and model != self._model) or (
-            is_given(language) and LanguageCode(language).language != "en"
+            is_given(language_code) and language_code.language != "en"
         ):
             # not changing the model and reconnecting since that is likely unexpected behavior
             warnings.warn(

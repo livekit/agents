@@ -42,10 +42,6 @@ def _is_whisper_model(model: STTModels | str) -> bool:
     return str(model).startswith("ink-whisper")
 
 
-def _is_language_ink_2_compatible(language_code: LanguageCode) -> bool:
-    return language_code.language == "en"
-
-
 def _base_url_to_ws_base_url(base_url: str) -> str:
     # If base_url already has a protocol, replace it, otherwise add wss://
     if base_url.startswith(("http://", "https://")):
@@ -95,7 +91,7 @@ class STT(stt.STT):
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = "https://api.cartesia.ai",
-        language: STTLanguages | str = "en",
+        language: STTLanguages | str | None = None,
         encoding: STTEncoding = AUDIO_ENCODING,
     ) -> None:
         """
@@ -114,7 +110,9 @@ class STT(stt.STT):
             https://docs.cartesia.ai/build-with-cartesia/stt-models/latest
 
         Args:
-            model: The Cartesia STT model to use. Defaults to ``ink-2`` if language is ``en`` and ``ink-whisper`` for other languages.
+            model: The Cartesia STT model to use.
+                Defaults to ``ink-2`` if language is ``en``.
+                Defaults to ``ink-whisper`` for other languages.
             sample_rate: The sample rate of the audio in Hz. Defaults to 16 kHz.
             audio_chunk_duration_ms: Duration in milliseconds of each audio chunk
                 sent to the Cartesia STT websocket. Defaults to 160 ms.
@@ -124,12 +122,11 @@ class STT(stt.STT):
             base_url: The base URL for the Cartesia API.
                 Defaults to ``https://api.cartesia.ai``.
             language: The language code for recognition.
-                This plugin needs to be updated to support languages besides ``en`` for ``ink-2``.
+                This plugin only supports ``en`` for ``ink-2``.
             encoding: The audio encoding format. Must be ``pcm_s16le``.
 
         Raises:
             ValueError: If no API key is provided or found in environment variables.
-            ValueError: If a language other than ``en`` is used for ``ink-2``.
 
         Examples:
             ```
@@ -153,12 +150,12 @@ class STT(stt.STT):
                 " CARTESIA_API_KEY environment variable"
             )
 
-        language_code = LanguageCode(language)
-        language_is_ink_2_compatible = _is_language_ink_2_compatible(language_code=language_code)
+        language_code = None if language is None else LanguageCode(language)
 
+        # TODO: default all languages to ink-2 once they are supported
         if is_given(model):
             resolved_model = model
-        elif language_is_ink_2_compatible:
+        elif language_code is None or language_code.language == "en":
             resolved_model = "ink-2"
         else:
             resolved_model = "ink-whisper"
@@ -168,13 +165,12 @@ class STT(stt.STT):
         if is_whisper:
             capabilities = stt.STTCapabilities(
                 streaming=True,
-                interim_results=False,  # it might be fine to change this to True
+                interim_results=False,
                 aligned_transcript="word",
                 offline_recognize=False,
+                diarization=False,
             )
         else:
-            if not language_is_ink_2_compatible:
-                raise ValueError(f"Cartesia STT language must be 'en' when using '{model}'")
             capabilities = stt.STTCapabilities(
                 streaming=True,
                 interim_results=True,
@@ -221,11 +217,10 @@ class STT(stt.STT):
     ) -> TurnsRecognizeStream | LegacyRecognizeStream:
         if is_given(language):
             resolved_language = LanguageCode(language)
+        elif self._language is not None:
+            resolved_language = LanguageCode(self._language)
         else:
-            resolved_language = self._language
-
-        if not (_is_whisper_model(self._model) or _is_language_ink_2_compatible(resolved_language)):
-            raise ValueError(f"Cartesia STT language must be 'en' when using '{self._model}'")
+            resolved_language = None
 
         if self._session is None:
             session = utils.http_context.http_session()
@@ -244,6 +239,7 @@ class STT(stt.STT):
                 api_key=self._api_key,
                 ws_base_url=self._ws_base_url,
                 session=session,
+                language=resolved_language,
             )
             if not _is_whisper_model(self._model)
             else LegacyRecognizeStream(
@@ -273,11 +269,9 @@ class STT(stt.STT):
         Also propagates changes to all :class:`SpeechStream` created by :meth:`stream`.
 
         Args:
-            language: Used to change the language to match what the user is speaking.
             model: Deprecated. This is a no-op. Construct a new STT instance to change the model.
-
-        Raises:
-            ValueError: If a language other than ``en`` is used for ``ink-2``.
+            language: Used to change the language to match what the user is speaking.
+                Ink 2 does not have multi-lingual support yet and only works with English.
         """
         if is_given(model) and model != self._model:
             warnings.warn(
@@ -287,15 +281,7 @@ class STT(stt.STT):
             )
 
         if is_given(language):
-            resolved_language = LanguageCode(language)
-            if not (
-                _is_whisper_model(self._model) or _is_language_ink_2_compatible(resolved_language)
-            ):
-                raise ValueError(f"Cartesia STT language must be 'en' when using '{self._model}'")
-        else:
-            resolved_language = self._language
-
-        self._language = resolved_language
+            self._language = LanguageCode(language)
 
         for stream in self._streams:
             # do not update model since this is likely user error
