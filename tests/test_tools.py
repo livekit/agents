@@ -419,9 +419,9 @@ class TestToolExecution:
         assert args == ("hi", None)
 
     def test_unrepairable_json_arguments_raise(self):
-        """If json_repair can't recover anything meaningful, we should
-        still raise so the caller can strip the call from history."""
-        with pytest.raises(ValueError, match="could not parse"):
+        """If json_repair can't recover anything meaningful, the error should
+        be surfaced as a ToolError so the LLM can self-correct on the next turn."""
+        with pytest.raises(ToolError, match="could not parse"):
             prepare_function_arguments(fnc=mock_tool_1, json_arguments="not json at all")
 
     def test_repairs_gemma_template_token_leak(self):
@@ -481,7 +481,8 @@ class TestToolExecution:
         from_dict = prepare_function_arguments(
             fnc=mock_tool_1, json_arguments={"arg1": "hi", "opt_arg2": "yo"}
         )
-        assert from_string == from_dict == (("hi", "yo"), {})
+        assert (from_string.args, from_string.kwargs) == (("hi", "yo"), {})
+        assert (from_dict.args, from_dict.kwargs) == (("hi", "yo"), {})
 
     @pytest.mark.asyncio
     async def test_execute_function_call_preserves_valid_argument_structure(self):

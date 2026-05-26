@@ -612,16 +612,21 @@ async def _execute_tools_task(
                 # per-tool handler below
                 async def _execute(
                     ctx: RunContext[Any],
+                    fnc_call: llm.FunctionCall = fnc_call,
                     fnc: llm.FunctionTool | llm.RawFunctionTool = _bound_tool,
                     raw_args: str = json_args,
                     bound_mock: Callable | None = mock,
                 ) -> Any:
-                    fnc_args, fnc_kwargs = llm_utils.prepare_function_arguments(
+                    prepared = llm_utils.prepare_function_arguments(
                         fnc=fnc, json_arguments=raw_args, call_ctx=ctx
                     )
+                    # write canonical JSON back so subsequent LLM turns don't
+                    # see the broken payload in conversation history
+                    if prepared.canonical_arguments != raw_args:
+                        fnc_call.arguments = prepared.canonical_arguments
                     if bound_mock is not None:
-                        return await _run_mock(bound_mock, *fnc_args, **fnc_kwargs)
-                    return await fnc(*fnc_args, **fnc_kwargs)
+                        return await _run_mock(bound_mock, *prepared.args, **prepared.kwargs)
+                    return await fnc(*prepared.args, **prepared.kwargs)
 
                 logger.debug(
                     "executing mock tool" if mocked else "executing tool",

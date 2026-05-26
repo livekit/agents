@@ -127,10 +127,9 @@ class ToolProxyToolset(ToolSearchToolset):
         if fnc_tool is None:
             raise ToolError(f"unknown tool '{name}', use search_tools to discover available tools")
 
-        json_args = json.dumps(parameters) if isinstance(parameters, dict) else str(parameters)
         fnc_args, fnc_kwargs = prepare_function_arguments(
             fnc=fnc_tool,
-            json_arguments=json_args,
+            json_arguments=parameters,
             call_ctx=ctx,
         )
         return await fnc_tool(*fnc_args, **fnc_kwargs)
