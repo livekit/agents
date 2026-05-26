@@ -478,6 +478,7 @@ class _ToolExecutor:
                     "async tool reply was done without outputs",
                     extra={"speech_id": speech.id, "interrupted": speech.interrupted},
                 )
+                # TODO(long): reschedule interrupted replies?
 
         speech.add_done_callback(_on_speech_done)
 
