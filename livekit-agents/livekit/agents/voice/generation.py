@@ -599,9 +599,12 @@ async def _execute_tools_task(
                 )
             except ToolError as e:
                 logger.warning(
-                    "ToolError while preparing tool arguments: %s",
-                    e.message,
-                    extra={"function": fnc_call.name, "speech_id": speech_handle.id},
+                    f"invalid arguments for AI function `{fnc_call.name}`: {e}",
+                    extra={
+                        "function": fnc_call.name,
+                        "arguments": fnc_call.arguments,
+                        "speech_id": speech_handle.id,
+                    },
                 )
                 _tool_completed(make_tool_output(fnc_call=fnc_call, output=None, exception=e))
                 continue
