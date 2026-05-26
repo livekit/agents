@@ -290,9 +290,6 @@ class LLMStream(llm.LLMStream):
             )
         elif "contentBlockStop" in chunk:
             if self._tool_call_id:
-                if self._tool_call_id is None:
-                    logger.warning("aws bedrock llm: no tool call id in the response")
-                    return None
                 if self._fnc_name is None:
                     logger.warning("aws bedrock llm: no function name in the response")
                     return None
