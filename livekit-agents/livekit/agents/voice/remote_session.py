@@ -38,6 +38,7 @@ from .events import (
     AgentState,
     AgentStateChangedEvent,
     ConversationItemAddedEvent,
+    CustomEvent,
     ErrorEvent,
     FunctionToolsExecutedEvent,
     SessionUsageUpdatedEvent,
@@ -55,6 +56,23 @@ if TYPE_CHECKING:
 
 
 TOPIC_SESSION_MESSAGES = "lk.agent.session"
+
+
+def _dict_to_struct(data: Mapping[str, Any]) -> Any:
+    from google.protobuf.json_format import ParseDict
+    from google.protobuf.struct_pb2 import Struct
+
+    st = Struct()
+    ParseDict(dict(data), st, ignore_unknown_fields=True)
+    return st
+
+
+def _struct_to_dict(st: Any) -> dict[str, Any]:
+    if st is None:
+        return {}
+    from google.protobuf.json_format import MessageToDict
+
+    return MessageToDict(st, preserving_proto_field_name=True)
 
 
 class SessionTransport(ABC):
@@ -375,6 +393,7 @@ class SessionHost:
             session.on("session_usage_updated", self._on_session_usage_updated)
             session.on("overlapping_speech", self._on_overlapping_speech)
             session.on("error", self._on_error)
+            session.on("custom_event", self._on_custom_event)
 
     def register_text_input(self, text_input_cb: TextInputCallback) -> None:
         self._text_input_cb = text_input_cb
@@ -401,6 +420,7 @@ class SessionHost:
             self._session.off("session_usage_updated", self._on_session_usage_updated)
             self._session.off("overlapping_speech", self._on_overlapping_speech)
             self._session.off("error", self._on_error)
+            self._session.off("custom_event", self._on_custom_event)
 
         if self._recv_task:
             await utils.aio.cancel_and_wait(self._recv_task)
@@ -572,6 +592,17 @@ class SessionHost:
                     message=str(event.error) if event.error else "Unknown error",
                 )
             )
+        )
+
+    def _on_custom_event(self, event: CustomEvent) -> None:
+        self._send_event(
+            agent_pb.AgentSessionEvent(
+                custom_event=agent_pb.CustomEvent(
+                    type=event.event_type,
+                    payload=_dict_to_struct(event.payload),
+                )
+            ),
+            created_at=event.created_at,
         )
 
     async def _handle_request_safe(self, req: agent_pb.SessionRequest) -> None:

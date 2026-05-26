@@ -376,9 +376,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 else DEFAULT_TTS_TEXT_TRANSFORMS
             ),
             ivr_detection=ivr_detection,
-            use_tts_aligned_transcript=use_tts_aligned_transcript
-            if is_given(use_tts_aligned_transcript)
-            else None,
+            use_tts_aligned_transcript=(
+                use_tts_aligned_transcript if is_given(use_tts_aligned_transcript) else None
+            ),
             aec_warmup_duration=aec_warmup_duration,
             session_close_transcript_timeout=session_close_transcript_timeout,
         )
@@ -885,7 +885,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         *,
         reason: CloseReason,
         drain: bool = False,
-        error: llm.LLMError | stt.STTError | tts.TTSError | llm.RealtimeModelError | None = None,
+        error: (llm.LLMError | stt.STTError | tts.TTSError | llm.RealtimeModelError | None) = None,
     ) -> None:
         if self._closing_task:
             return
@@ -902,12 +902,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         *,
         reason: CloseReason,
         drain: bool = False,
-        error: llm.LLMError
-        | stt.STTError
-        | tts.TTSError
-        | llm.RealtimeModelError
-        | inference.InterruptionDetectionError
-        | None = None,
+        error: (
+            llm.LLMError
+            | stt.STTError
+            | tts.TTSError
+            | llm.RealtimeModelError
+            | inference.InterruptionDetectionError
+            | None
+        ) = None,
     ) -> None:
         if self._root_span_context:
             # make `activity.drain` and `on_exit` under the root span
@@ -1098,7 +1100,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._tools.extend(self._ivr_activity.tools)
         await self._ivr_activity.start()
         if transcript is not None:
-            logger.debug("IVR detection started with transcript", extra={"transcript": transcript})
+            logger.debug(
+                "IVR detection started with transcript",
+                extra={"transcript": transcript},
+            )
             self._ivr_activity._on_user_input_transcribed(
                 UserInputTranscribedEvent(transcript=transcript, is_final=True)
             )
@@ -1323,7 +1328,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                         await activity.aclose()
                     elif previous_activity == "pause":
                         reuse_resources = await activity.pause(
-                            blocked_tasks=blocked_tasks or [], new_activity=self._next_activity
+                            blocked_tasks=blocked_tasks or [],
+                            new_activity=self._next_activity,
                         )
 
                 if self._closing and new_activity == "start":
@@ -1343,17 +1349,20 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 run_state = self._global_run_state
                 handoff_item = AgentHandoff(
-                    old_agent_id=previous_activity_v.agent.id if previous_activity_v else None,
+                    old_agent_id=(previous_activity_v.agent.id if previous_activity_v else None),
                     new_agent_id=self._activity.agent.id,
                 )
                 if run_state:
                     run_state._agent_handoff(
                         item=handoff_item,
-                        old_agent=previous_activity_v.agent if previous_activity_v else None,
+                        old_agent=(previous_activity_v.agent if previous_activity_v else None),
                         new_agent=self._activity.agent,
                     )
                 self._chat_ctx.insert(handoff_item)
-                self.emit("conversation_item_added", ConversationItemAddedEvent(item=handoff_item))
+                self.emit(
+                    "conversation_item_added",
+                    ConversationItemAddedEvent(item=handoff_item),
+                )
 
                 if new_activity == "start":
                     await self._activity.start(reuse_resources=reuse_resources)
