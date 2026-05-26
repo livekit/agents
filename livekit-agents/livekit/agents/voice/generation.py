@@ -594,8 +594,12 @@ async def _execute_tools_task(
             json_args = fnc_call.arguments or "{}"
 
             try:
-                prepared = llm_utils.prepare_function_arguments(
-                    fnc=function_tool, json_arguments=json_args, call_ctx=run_ctx
+                fnc_args, fnc_kwargs = llm_utils.prepare_function_arguments(
+                    fnc=function_tool,
+                    json_arguments=json_args,
+                    call_ctx=run_ctx,
+                    # write canonical JSON back to fnc_call.arguments so subsequent LLM turns see valid JSON
+                    fnc_call=fnc_call,
                 )
             except ToolError as e:
                 logger.warning(
@@ -608,10 +612,6 @@ async def _execute_tools_task(
                 )
                 _tool_completed(make_tool_output(fnc_call=fnc_call, output=None, exception=e))
                 continue
-
-            # write canonical JSON back so subsequent LLM turns see the normalized payload
-            if prepared.canonical_arguments != json_args:
-                fnc_call.arguments = prepared.canonical_arguments
 
             if not tool_output.first_tool_started_fut.done():
                 tool_output.first_tool_started_fut.set_result(None)
@@ -627,13 +627,9 @@ async def _execute_tools_task(
                 mocked = mock is not None
 
                 if mock is not None:
-                    function_callable = functools.partial(
-                        _run_mock, mock, *prepared.args, **prepared.kwargs
-                    )
+                    function_callable = functools.partial(_run_mock, mock, *fnc_args, **fnc_kwargs)
                 else:
-                    function_callable = functools.partial(
-                        function_tool, *prepared.args, **prepared.kwargs
-                    )
+                    function_callable = functools.partial(function_tool, *fnc_args, **fnc_kwargs)
 
                 logger.debug(
                     "executing mock tool" if mocked else "executing tool",

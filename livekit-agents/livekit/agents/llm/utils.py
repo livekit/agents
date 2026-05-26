@@ -6,7 +6,7 @@ import inspect
 import json
 import re
 import types
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
@@ -461,48 +461,48 @@ def parse_function_arguments(json_arguments: str) -> dict[str, Any]:
     return args_dict
 
 
-@dataclass(frozen=True)
-class PreparedFunctionArguments:
-    """Result of :func:`prepare_function_arguments`.
-
-    Iterable as ``(args, kwargs)`` so existing ``args, kwargs = prepare_...(...)``
-    unpacking keeps working.
-    """
-
-    args: tuple[Any, ...]
-    kwargs: dict[str, Any]
-    canonical_arguments: str
-    """JSON-canonicalized form of the parsed arguments.
-
-    Equals the raw input when the model emitted valid JSON. Differs when
-    json_repair had to recover a malformed payload — callers that hold a
-    FunctionCall in chat history should overwrite ``fnc_call.arguments`` with
-    this so subsequent LLM turns see valid JSON (otherwise providers like
-    Vertex/OpenAI reject the request on the next turn).
-    """
-
-    def __iter__(self) -> Iterator[Any]:
-        yield self.args
-        yield self.kwargs
-
-
 def prepare_function_arguments(
     *,
     fnc: FunctionTool | RawFunctionTool,
     json_arguments: str | dict[str, Any],
     call_ctx: RunContext[Any] | None = None,
-) -> PreparedFunctionArguments:
+    fnc_call: FunctionCall | None = None,
+) -> tuple[tuple[Any, ...], dict[str, Any]]:  # returns args, kwargs
     """Create the positional and keyword arguments to call a function tool from
     the raw function output from the LLM.
 
     Argument-validation failures (bad JSON, pydantic ValidationError, missing
     required params) are surfaced as :class:`ToolError` so the LLM gets a
     concrete error message and can self-correct on its next turn.
+
+    When ``fnc_call`` is provided and ``json_arguments`` is a string, the
+    canonicalized JSON (post json_repair) is written back to
+    ``fnc_call.arguments`` BEFORE validation runs.
     """
+    # phase 1: parse — raw JSON failures raise ToolError immediately (no
+    # canonical to provide since the input itself was unparseable)
+    if isinstance(json_arguments, dict):
+        args_dict = json_arguments
+    else:
+        try:
+            args_dict = parse_function_arguments(json_arguments)
+        except ValueError as e:
+            logger.error(
+                f"error parsing arguments for `{fnc.info.name}`",
+                extra={"function": fnc.info.name, "arguments": json_arguments},
+            )
+            raise ToolError(f"Error parsing arguments for `{fnc.info.name}`: {e}") from e
+
+        # write canonical BEFORE validation so a downstream validation failure
+        # still leaves valid JSON in chat history
+        if fnc_call is not None:
+            canonical = json.dumps(args_dict, default=str)
+            if canonical != json_arguments:
+                fnc_call.arguments = canonical
+
+    # phase 2: validate + bind
     try:
-        return _prepare_function_arguments(
-            fnc=fnc, json_arguments=json_arguments, call_ctx=call_ctx
-        )
+        return _prepare_function_arguments(fnc=fnc, args_dict=args_dict, call_ctx=call_ctx)
     except ToolError:
         raise
     except (pydantic.ValidationError, ValueError, TypeError) as e:
@@ -522,16 +522,11 @@ def prepare_function_arguments(
 def _prepare_function_arguments(
     *,
     fnc: FunctionTool | RawFunctionTool,
-    json_arguments: str | dict[str, Any],
+    args_dict: dict[str, Any],
     call_ctx: RunContext[Any] | None,
-) -> PreparedFunctionArguments:
+) -> tuple[tuple[Any, ...], dict[str, Any]]:
     signature = inspect.signature(fnc)
     type_hints = get_type_hints(fnc, include_extras=True)
-
-    if isinstance(json_arguments, str):
-        args_dict = parse_function_arguments(json_arguments)
-    else:
-        args_dict = json_arguments
 
     if isinstance(fnc, FunctionTool):
         model_type = function_arguments_to_pydantic_model(fnc)
@@ -582,11 +577,7 @@ def _prepare_function_arguments(
 
     bound = signature.bind(**{**raw_fields, **context_dict})
     bound.apply_defaults()
-    return PreparedFunctionArguments(
-        args=bound.args,
-        kwargs=bound.kwargs,
-        canonical_arguments=json.dumps(args_dict, default=str),
-    )
+    return bound.args, bound.kwargs
 
 
 def _is_optional_type(hint: Any) -> bool:
@@ -763,18 +754,13 @@ async def execute_function_call(
 
     try:
         raw_args = tool_call.arguments or "{}"
-        prepared = prepare_function_arguments(
+        fnc_args, fnc_kwargs = prepare_function_arguments(
             fnc=function_tool,
             json_arguments=raw_args,
             call_ctx=call_ctx,
+            fnc_call=fnc_call,
         )
-
-        # If repair/strip changed the structure, canonicalize fnc_call.arguments
-        # so it serializes back to valid JSON in subsequent LLM turns.
-        if prepared.canonical_arguments != raw_args:
-            fnc_call.arguments = prepared.canonical_arguments
-
-        result = function_tool(*prepared.args, **prepared.kwargs)
+        result = function_tool(*fnc_args, **fnc_kwargs)
         if asyncio.iscoroutine(result):
             result = await result
 
