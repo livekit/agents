@@ -1222,9 +1222,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         return self._activity.interrupt(force=force)
 
-    def emit_custom_event(
-        self, event_type: str, payload: Mapping[str, Any] | None = None
-    ) -> None:
+    def emit_custom_event(self, event_type: str, payload: Mapping[str, Any] | None = None) -> None:
         """Emit an application-defined ``custom_event`` over the remote-session wire.
 
         Sugar over constructing ``agent_pb.CustomEvent`` and emitting it: wraps
