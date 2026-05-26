@@ -270,9 +270,7 @@ class TestAMDClassifier:
     async def test_machine_verdict_waits_for_eot(self) -> None:
         """Machine verdict is gated on BOTH silence_reached AND eot_reached."""
         llm = FakeLLM(fake_responses=[_machine_vm_response("voicemail greeting")])
-        clf = _make_classifier(
-            llm=llm, human_speech_threshold=0.05, machine_silence_threshold=0.3
-        )
+        clf = _make_classifier(llm=llm, human_speech_threshold=0.05, machine_silence_threshold=0.3)
         clf.start_listening()
         results: list[AMDPredictionEvent] = []
         clf.on("amd_prediction", results.append)
@@ -300,9 +298,7 @@ class TestAMDClassifier:
     async def test_machine_verdict_eot_before_silence(self) -> None:
         """Order independence: EOT before silence still emits at silence."""
         llm = FakeLLM(fake_responses=[_machine_vm_response("voicemail greeting")])
-        clf = _make_classifier(
-            llm=llm, human_speech_threshold=0.05, machine_silence_threshold=0.3
-        )
+        clf = _make_classifier(llm=llm, human_speech_threshold=0.05, machine_silence_threshold=0.3)
         clf.start_listening()
         results: list[AMDPredictionEvent] = []
         clf.on("amd_prediction", results.append)
@@ -344,9 +340,7 @@ class TestAMDClassifier:
                 )
             ]
         )
-        clf = _make_classifier(
-            llm=llm, human_speech_threshold=0.05, machine_silence_threshold=0.3
-        )
+        clf = _make_classifier(llm=llm, human_speech_threshold=0.05, machine_silence_threshold=0.3)
         clf.start_listening()
         results: list[AMDPredictionEvent] = []
         clf.on("amd_prediction", results.append)
