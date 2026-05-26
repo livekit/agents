@@ -38,7 +38,6 @@ from .events import (
     AgentState,
     AgentStateChangedEvent,
     ConversationItemAddedEvent,
-    CustomEvent,
     ErrorEvent,
     FunctionToolsExecutedEvent,
     SessionUsageUpdatedEvent,
@@ -56,23 +55,6 @@ if TYPE_CHECKING:
 
 
 TOPIC_SESSION_MESSAGES = "lk.agent.session"
-
-
-def _dict_to_struct(data: Mapping[str, Any]) -> Any:
-    from google.protobuf.json_format import ParseDict
-    from google.protobuf.struct_pb2 import Struct
-
-    st = Struct()
-    ParseDict(dict(data), st, ignore_unknown_fields=True)
-    return st
-
-
-def _struct_to_dict(st: Any) -> dict[str, Any]:
-    if st is None:
-        return {}
-    from google.protobuf.json_format import MessageToDict
-
-    return MessageToDict(st, preserving_proto_field_name=True)
 
 
 class SessionTransport(ABC):
@@ -594,16 +576,8 @@ class SessionHost:
             )
         )
 
-    def _on_custom_event(self, event: CustomEvent) -> None:
-        self._send_event(
-            agent_pb.AgentSessionEvent(
-                custom_event=agent_pb.CustomEvent(
-                    type=event.event_type,
-                    payload=_dict_to_struct(event.payload),
-                )
-            ),
-            created_at=event.created_at,
-        )
+    def _on_custom_event(self, event: agent_pb.CustomEvent) -> None:
+        self._send_event(agent_pb.AgentSessionEvent(custom_event=event))
 
     async def _handle_request_safe(self, req: agent_pb.SessionRequest) -> None:
         try:

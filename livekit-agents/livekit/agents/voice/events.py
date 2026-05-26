@@ -285,19 +285,6 @@ class CloseEvent(BaseModel):
     created_at: float = Field(default_factory=time.time)
 
 
-class CustomEvent(BaseModel):
-    """Application-defined event forwarded over the remote session wire.
-
-    ``event_type`` maps to proto ``CustomEvent.type``; ``payload`` maps to
-    proto ``CustomEvent.payload`` (arbitrary JSON-compatible object).
-    """
-
-    type: Literal["custom_event"] = "custom_event"
-    event_type: str
-    payload: dict[str, Any] = Field(default_factory=dict)
-    created_at: float = Field(default_factory=time.time)
-
-
 AgentEvent = Annotated[
     UserInputTranscribedEvent
     | UserStateChangedEvent
@@ -310,7 +297,6 @@ AgentEvent = Annotated[
     | SpeechCreatedEvent
     | ErrorEvent
     | CloseEvent
-    | OverlappingSpeechEvent
-    | CustomEvent,
+    | OverlappingSpeechEvent,
     Field(discriminator="type"),
 ]
