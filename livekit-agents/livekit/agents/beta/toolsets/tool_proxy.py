@@ -120,6 +120,9 @@ class ToolProxyToolset(ToolSearchToolset):
         if parameters is None:
             raise ToolError("parameters is required")
 
+        if not isinstance(parameters, dict | str):
+            raise ToolError("parameters must be a dictionary or a string")
+
         if self._tool_ctx is None:
             raise RuntimeError("toolset not initialized, call setup() first")
 
