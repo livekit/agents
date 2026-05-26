@@ -158,8 +158,12 @@ class LLM(llm.LLM):
                     tool_config["toolChoice"] = {"any": {}}
                 elif tool_choice == "auto":
                     tool_config["toolChoice"] = {"auto": {}}
-                else:
-                    return None
+                # Bedrock's toolChoice only accepts auto/any/tool — no "none" equivalent.
+                # We can't just drop toolConfig either: if messages contain toolUse or
+                # toolResult blocks (e.g. a draining agent replaying its last tool call),
+                # Bedrock rejects the request with ValidationException. Send the tools
+                # list and let toolChoice default to auto; upstream filtering in
+                # voice/generation.py discards any tool calls the model emits.
 
             return tool_config
 
