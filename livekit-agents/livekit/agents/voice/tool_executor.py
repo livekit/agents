@@ -153,7 +153,8 @@ async def cancel_task(call_id: str) -> str:
     if task is None:
         raise ToolError(f"Task {call_id} not found")
 
-    await task.executor.cancel(call_id)
+    if not await task.executor.cancel(call_id):
+        raise ToolError(f"Task {call_id} not found or already completed")
     return f"Task {call_id} cancelled successfully."
 
 
@@ -299,10 +300,12 @@ class _ToolExecutor:
             from .agent import Agent
 
             if isinstance(output, Agent):
-                raise ToolError(
+                logger.error(
                     f"tool `{fnc_name}` returned an Agent after ctx.update(); "
-                    "agent handoff after a progress update is not supported"
+                    "agent handoff after a progress update is not supported",
+                    extra={"call_id": call_id, "function": fnc_name},
                 )
+                return
 
             # final return goes through the coalescer as a synthetic output
             pair = run_ctx._make_update_pair(output, call_id_suffix="_final")
