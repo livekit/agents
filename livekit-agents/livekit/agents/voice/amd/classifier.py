@@ -144,14 +144,34 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
         self._extension_count = 0
 
     def start(self) -> None:
-        """Mark classifier as started (enables state guard). Call start_timers() separately."""
+        """Mark classifier as started (enables state guard). Arm timers via
+        :meth:`start_detection_timer` and :meth:`start_no_speech_timer`."""
         if self._started:
             return
         self._started = True
 
-    def start_timers(self) -> None:
-        """Start the no-speech and detection-timeout timers. Call after start()."""
+    def start_detection_timer(self) -> None:
+        """Arm the overall detection-timeout budget. Call after start()."""
         if not self._started or self._closed:
+            return
+        if self._detection_timeout_timer is not None:
+            return
+        self._detection_timeout_timer = asyncio.get_running_loop().call_later(
+            self._timeout,
+            functools.partial(
+                self._silence_timer_callback,
+                category=AMDCategory.UNCERTAIN,
+                reason="detection_timeout",
+            ),
+        )
+
+    def start_no_speech_timer(self) -> None:
+        """Arm the no-speech timer. Call once we expect audible speech to begin
+        (e.g. after SIP answer for outbound calls). Typically paired with
+        :meth:`start_detection_timer` to bound overall detection latency."""
+        if not self._started or self._closed:
+            return
+        if self._no_speech_timer is not None:
             return
         self._no_speech_timer = asyncio.get_running_loop().call_later(
             self._no_speech_threshold,
@@ -159,14 +179,6 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
                 self._silence_timer_callback,
                 category=AMDCategory.MACHINE_UNAVAILABLE,
                 reason="no_speech_timeout",
-            ),
-        )
-        self._detection_timeout_timer = asyncio.get_running_loop().call_later(
-            self._timeout,
-            functools.partial(
-                self._silence_timer_callback,
-                category=AMDCategory.UNCERTAIN,
-                reason="detection_timeout",
             ),
         )
 
