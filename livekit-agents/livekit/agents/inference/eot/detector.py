@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import os
+import weakref
 from dataclasses import replace
 from typing import Literal
 
@@ -55,9 +55,7 @@ class AudioTurnDetector(_AudioTurnDetector):
         self,
         *,
         backend: NotGivenOr[_Backend] = NOT_GIVEN,
-        unlikely_threshold: NotGivenOr[
-            float | dict[LanguageCode | str, float]
-        ] = NOT_GIVEN,
+        unlikely_threshold: NotGivenOr[float | dict[LanguageCode | str, float]] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
@@ -69,9 +67,7 @@ class AudioTurnDetector(_AudioTurnDetector):
         # instead of raising.
         auto = not is_given(backend)
         resolved_backend: _Backend = (
-            backend
-            if is_given(backend)
-            else ("cloud" if utils.is_hosted() else "local")
+            backend if is_given(backend) else ("cloud" if utils.is_hosted() else "local")
         )
 
         cloud_opts: _CloudTransportOptions | None = None
@@ -128,20 +124,50 @@ class AudioTurnDetector(_AudioTurnDetector):
         self._backend: _Backend = resolved_backend
         self._cloud_opts = cloud_opts
         self._http_session = http_session
+        # Active-backend views (model/backend, read by metrics + ``audio_recognition``)
+        # are computed from the active stream rather than written back here, so a
+        # per-stream cloud→local fallback never mutates this shared detector.
+        # The detector drives a single stream at a time (see ``stream()``); this
+        # holds that stream while it is open. ``_backend`` below is the
+        # construction-time default, used only before any stream exists.
+        self._active_stream_ref: weakref.ref[_AudioTurnDetectorStreamImpl] | None = None
+
+    def _active_stream(self) -> _AudioTurnDetectorStreamImpl | None:
+        return self._active_stream_ref() if self._active_stream_ref is not None else None
 
     @property
     def model(self) -> str:
-        return _WIRE_MODEL[self._backend]
+        return _WIRE_MODEL[self.backend]
 
     @property
     def backend(self) -> _Backend:
-        return self._backend
+        stream = self._active_stream()
+        return stream.backend if stream is not None else self._backend
+
+    async def unlikely_threshold(self, language: LanguageCode | None) -> float | None:
+        # Mirror the active-backend view: after a fallback the active stream holds
+        # the rescaled local thresholds, so consult it rather than this
+        # detector's construction-time ``_opts`` (which is never written back).
+        stream = self._active_stream()
+        if stream is not None:
+            return await stream.unlikely_threshold(language)
+        return await super().unlikely_threshold(language)
 
     def stream(
         self,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> _AudioTurnDetectorStream:
+        # Single-stream ownership: the detector exposes the active stream's
+        # backend/threshold view, so it drives one stream at a time. Callers
+        # replacing a stream must retire the previous one first
+        # (``detach()`` + ``aclose()``); see audio_recognition's
+        # ``update_turn_detector``.
+        if self._active_stream() is not None:
+            raise RuntimeError(
+                "AudioTurnDetector already has an active stream; close (or "
+                "detach) it before creating another."
+            )
         # Per-stream override for conn_options (e.g. an override at call site)
         # is layered on top of the detector-level cloud options.
         cloud_opts = (
@@ -157,6 +183,7 @@ class AudioTurnDetector(_AudioTurnDetector):
             http_session=self._http_session,
         )
         self._streams.add(stream)
+        self._active_stream_ref = weakref.ref(stream)
         return stream
 
 
@@ -177,7 +204,6 @@ class _AudioTurnDetectorStreamImpl(_AudioTurnDetectorStream):
         self._warned_cloud_failure = False
         self._warned_local_failure = False
         self._transport_task: asyncio.Task[None] | None = None
-        self._fallback_cancel_pending = False
 
         transport: _AudioTurnDetectionTransport
         if backend == "cloud":
@@ -198,24 +224,37 @@ class _AudioTurnDetectorStreamImpl(_AudioTurnDetectorStream):
         return self._backend
 
     @property
+    def model(self) -> str:
+        # Self-contained (does not proxy to the detector): the stream owns its
+        # active backend, so after a fallback this reports "local" while the
+        # detector — and any sibling stream — stay independent.
+        return _WIRE_MODEL[self._backend]
+
+    @property
     def is_fallback(self) -> bool:
         return self._is_fallback
 
     async def _run(self) -> None:
         while True:
-            task = asyncio.create_task(self._transport.run())
+            transport = self._transport
+            task = asyncio.create_task(transport.run())
             self._transport_task = task
             try:
                 await task
                 return
             except asyncio.CancelledError:
-                # _fall_back_to_local cancels the cloud task to break out of
-                # the dead session and continue on the new local transport.
-                if self._fallback_cancel_pending:
-                    self._fallback_cancel_pending = False
+                # Distinguish an intentional fallback swap from external
+                # cancellation (e.g. aclose) by observable state rather than a
+                # reset-prone flag: _fall_back_to_local swaps self._transport and
+                # cancels *this child task* before we get here. So a changed
+                # transport together with a directly-cancelled child means the
+                # cancel was ours — loop onto the new (local) transport. An
+                # aclose() cancels the parent (self._task) instead, leaving the
+                # child uncancelled, so it falls through and propagates below.
+                if self._transport is not transport and task.cancelled():
                     continue
-                # External cancellation (e.g. aclose) — ensure the in-flight
-                # transport task is also stopped, then propagate.
+                # External cancellation — ensure the in-flight transport task is
+                # also stopped, then propagate.
                 if not task.done():
                     await cancel_and_wait(task)
                 raise
@@ -241,18 +280,15 @@ class _AudioTurnDetectorStreamImpl(_AudioTurnDetectorStream):
             thresholds=rescale_for_local_fallback(self._opts.thresholds),
         )
         self._opts = rescaled
+        # Swap the transport before cancelling the in-flight task below: _run
+        # detects the fallback by observing that self._transport changed.
         self._transport = _LocalTransport(opts=self._opts)
         self._transport.bind(self)
         self._backend = "local"
         self._is_fallback = True
-        # Propagate the swap onto the detector so its model/threshold/backend
-        # views (read by metrics + by ``audio_recognition`` when consulting the
-        # detector directly) reflect the active local backend instead of the
-        # construction-time cloud one.
-        detector = self._detector
-        if isinstance(detector, AudioTurnDetector):
-            detector._backend = "local"
-            detector._opts = rescaled
+        # No write-back onto the detector: metrics + ``audio_recognition`` read
+        # the active backend through this stream (detector.backend delegates to
+        # its live stream), so the swap is visible without mutating shared state.
         # If transport.run() is still in flight (e.g. predict timeout while
         # the cloud session was otherwise idle), cancel it so the run loop
         # tears down the dead cloud WS and restarts on the local transport.
@@ -260,7 +296,6 @@ class _AudioTurnDetectorStreamImpl(_AudioTurnDetectorStream):
         # for inactivity and the ensuing error surfaces as a misleading log.
         task = self._transport_task
         if task is not None and not task.done():
-            self._fallback_cancel_pending = True
             task.cancel()
 
     def _on_local_failure(self, *, reason: BaseException) -> None:
@@ -282,6 +317,15 @@ class _AudioTurnDetectorStreamImpl(_AudioTurnDetectorStream):
         if self._backend == "cloud":
             self._fall_back_to_local(reason=asyncio.TimeoutError("predict_end_of_turn"))
 
+    def detach(self) -> None:
+        # Release the detector's single-stream slot if it still points at us, so
+        # a replacement stream can register while our async teardown finishes.
+        # Idempotent: once cleared, ``_active_stream()`` no longer returns self.
+        detector = self._detector
+        if isinstance(detector, AudioTurnDetector) and detector._active_stream() is self:
+            detector._active_stream_ref = None
+
     async def aclose(self) -> None:
+        self.detach()
         self._transport.detach()
         await super().aclose()

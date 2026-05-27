@@ -138,10 +138,6 @@ class VAD(vad.VAD):
     def min_silence_duration(self) -> float | None:
         return self._opts.min_silence_duration
 
-    @min_silence_duration.setter
-    def min_silence_duration(self, duration: float) -> None:
-        self.update_options(min_silence_duration=duration)
-
 
 class _VADStream(vad.VADStream):
     def __init__(self, parent: VAD, opts: _VADOptions) -> None:

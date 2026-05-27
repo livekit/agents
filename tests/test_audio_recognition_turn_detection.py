@@ -1,22 +1,23 @@
 """Integration tests for ``AudioRecognition`` audio turn-detection wiring.
 
-Covers two concerns the FSM-level tests can't reach:
+Covers concerns the FSM-level tests can't reach:
 
-1. ``_turn_detection_task`` — the stream's emitted predictions trigger
-   ``_run_eou_detection`` plus deactivate the stream on a positive prediction.
-
-2. The speaking-guard race in ``_run_eou_detection``: setting
+1. The speaking-guard race in ``_run_eou_detection``: setting
    ``_user_speaking_event`` mid-bounce must abort the commit so a
    late-arriving SOS doesn't ship the prior turn.
+
+2. ``on_eot_prediction`` dedup across the vad-EOS and stt-final triggers that
+   share one cached prediction, and the ``update_turn_detector`` swap wiring.
+
+The deactivate-on-positive-prediction behavior now lives in the stream FSM
+itself; see ``test_turn_detection_fsm.py``.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-import logging
 import time
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -25,169 +26,8 @@ from livekit.agents.utils import aio
 from livekit.agents.voice.audio_recognition import AudioRecognition
 from livekit.agents.voice.turn import (
     TurnDetectionEvent,
-    TurnDetectorOptions,
     _AudioTurnDetector,
-    _AudioTurnDetectorStream,
 )
-
-
-def _make_opts() -> TurnDetectorOptions:
-    return TurnDetectorOptions(
-        sample_rate=16000,
-        # Materialized table — the stream reads `self._opts.thresholds.get(lang)`
-        # for the deactivate-on-positive-prediction check, so a populated entry
-        # is required to exercise that branch.
-        thresholds={"en": 0.5},
-    )
-
-
-class _ParkingTransport:
-    """Transport that parks forever in `run()`; aclose cancels."""
-
-    def bind(self, stream: _AudioTurnDetectorStream) -> None:
-        pass
-
-    async def run(self) -> None:
-        await asyncio.Future()
-
-    def transport_ready(self) -> bool:
-        return True
-
-    def start_inference(self, request_id: str) -> None:
-        pass
-
-    def stop_inference(self, *, reason: str | None) -> None:
-        pass
-
-    async def push_frame(self, frame: Any) -> None:
-        pass
-
-    async def flush(self, sentinel: Any) -> None:
-        pass
-
-    def detach(self) -> None:
-        pass
-
-
-class _RecordingStream(_AudioTurnDetectorStream):
-    """Records deactivate calls and lets tests inject predictions via ``emit``."""
-
-    def __init__(self, *, detector: Any, opts: TurnDetectorOptions) -> None:
-        self.deactivate_calls: list[str | None] = []
-        super().__init__(detector=detector, opts=opts, transport=_ParkingTransport())
-
-    def deactivate(self, trigger: str | None = None) -> None:
-        self.deactivate_calls.append(trigger)
-        super().deactivate(trigger)
-
-    def emit(self, probability: float) -> None:
-        """Push an event directly onto the stream's channel — bypasses
-        request_id dedup so tests can exercise the consumer-side
-        ``is_inference_running`` stale-event guard. Mirrors the
-        ``_last_prediction`` cache that ``_handle_prediction`` would normally
-        set."""
-        event = TurnDetectionEvent(
-            type="eot_prediction",
-            last_speaking_time=time.time(),
-            end_of_turn_probability=probability,
-        )
-        self._last_prediction = event
-        self._emit_event(event)
-
-
-def _make_recognition_shell() -> AudioRecognition:
-    """Build an AudioRecognition with only the attrs `_turn_detection_task` touches."""
-    ar = AudioRecognition.__new__(AudioRecognition)
-    ar._session = MagicMock()
-    ar._hooks = MagicMock()
-    ar._hooks.retrieve_chat_ctx.return_value = MagicMock(copy=MagicMock(return_value=MagicMock()))
-    ar._closing = asyncio.Event()
-    ar._tasks = set()
-    ar._last_language = None
-    ar._run_eou_detection = MagicMock()
-    return ar
-
-
-def _make_detector_stub() -> MagicMock:
-    detector = MagicMock(spec=_AudioTurnDetector)
-    detector.model = "test"
-    detector.provider = "livekit"
-
-    async def unlikely_threshold(_lang: Any) -> float:
-        return 0.5
-
-    async def supports_language(_lang: Any) -> bool:
-        return True
-
-    detector.unlikely_threshold = unlikely_threshold
-    detector.supports_language = supports_language
-    return detector
-
-
-class TestTurnDetectionTaskPredictions:
-    """Predictions emitted by the stream drive `_run_eou_detection` + may
-    deactivate the stream on a positive prediction."""
-
-    async def test_subthreshold_prediction_does_not_deactivate(self) -> None:
-        """The turn-detection subscriber no longer re-fires `_run_eou_detection`
-        (the vad-EOS bounce already covers that via the cached prediction).
-        A below-threshold prediction only updates `last_prediction`; the
-        stream stays active and `_run_eou_detection` is not called from here."""
-        recognition = _make_recognition_shell()
-        stream = _RecordingStream(detector=_make_detector_stub(), opts=_make_opts())
-        task = asyncio.create_task(recognition._turn_detection_task(stream, None))
-        try:
-            # FSM must be running so the event isn't filtered as stale.
-            stream.warmup()
-            stream.activate(trigger="test")
-            stream.emit(0.3)  # below threshold 0.5 → no deactivate
-            for _ in range(5):
-                await asyncio.sleep(0)
-
-            recognition._run_eou_detection.assert_not_called()
-            assert stream.last_prediction is not None
-            assert stream.last_prediction.end_of_turn_probability == 0.3
-            # Stream wasn't deactivated for sub-threshold prediction.
-            assert "positive eou prediction" not in stream.deactivate_calls
-        finally:
-            await aio.cancel_and_wait(task)
-
-    async def test_positive_prediction_deactivates_stream(self) -> None:
-        """A prediction >= unlikely_threshold deactivates the stream so a
-        subsequent intra-speech silence can trigger a fresh warmup — letting
-        the bounce task re-evaluate on more recent audio if the user keeps
-        talking through the endpointing delay."""
-        recognition = _make_recognition_shell()
-        stream = _RecordingStream(detector=_make_detector_stub(), opts=_make_opts())
-        task = asyncio.create_task(recognition._turn_detection_task(stream, None))
-        try:
-            stream.warmup()
-            stream.activate(trigger="test")
-            stream.emit(0.9)  # >= 0.5 threshold
-            for _ in range(5):
-                await asyncio.sleep(0)
-
-            assert "positive eou prediction" in stream.deactivate_calls
-        finally:
-            await aio.cancel_and_wait(task)
-
-    async def test_prediction_skipped_when_inference_not_running(self) -> None:
-        """An event delivered while the FSM is idle (no active turn) is
-        treated as stale: the subscriber skips the threshold/deactivate path,
-        even for a positive probability."""
-        recognition = _make_recognition_shell()
-        stream = _RecordingStream(detector=_make_detector_stub(), opts=_make_opts())
-        task = asyncio.create_task(recognition._turn_detection_task(stream, None))
-        try:
-            # No warmup → no pending request; emit anyway.
-            stream.emit(0.9)
-            for _ in range(5):
-                await asyncio.sleep(0)
-
-            assert "positive eou prediction" not in stream.deactivate_calls
-        finally:
-            await aio.cancel_and_wait(task)
-
 
 # ---------------------------------------------------------------------------
 # Speaking-guard race
@@ -415,169 +255,83 @@ class TestEotPredictionDedup:
 
 
 class _FakeVad:
-    """Stand-in for a VAD that supports the ``min_silence_duration`` property
-    contract from ``agents.vad.VAD``: getter exposes the current value,
-    setter applies a new one."""
+    """Read-only stand-in exposing the ``min_silence_duration`` knob that
+    ``AudioRecognition`` validates against (read duck-typed via ``getattr``)."""
 
-    def __init__(self, min_silence_duration: float) -> None:
+    def __init__(self, min_silence_duration: float | None) -> None:
         self._min_silence_duration = min_silence_duration
-        self.setter_calls: list[float] = []
 
     @property
     def min_silence_duration(self) -> float | None:
         return self._min_silence_duration
 
-    @min_silence_duration.setter
-    def min_silence_duration(self, duration: float) -> None:
-        self.setter_calls.append(duration)
-        self._min_silence_duration = duration
 
-
-def _make_recognition_for_override() -> AudioRecognition:
-    """Minimal AudioRecognition wired for the override helpers — no tasks."""
+def _make_recognition_for_validation() -> AudioRecognition:
+    """Minimal AudioRecognition wired for the VAD-silence validation — no tasks."""
     ar = AudioRecognition.__new__(AudioRecognition)
     ar._vad = None
     ar._turn_detector = None
-    ar._vad_min_silence_orig = None
-    ar._warned_vad_silence_override = False
+    ar._turn_detector_stream = None
     return ar
 
 
-class TestVadMinSilenceOverride:
+class TestVadMinSilenceRequirement:
     """``audio EOT`` needs ~200ms of trailing silence; the VAD must report
-    END_OF_SPEECH no earlier than that. When the user pairs an audio EOT
-    detector with a VAD configured to a shorter silence, ``AudioRecognition``
-    bumps the VAD up — and restores the original on detach."""
+    END_OF_SPEECH no earlier than that. Rather than mutate the user's VAD,
+    ``AudioRecognition`` fails fast when ``min_silence_duration`` is too low
+    for an audio-EOT pairing."""
 
-    def test_audio_detector_bumps_low_min_silence(self) -> None:
-        ar = _make_recognition_for_override()
+    def test_low_min_silence_with_audio_detector_raises(self) -> None:
+        ar = _make_recognition_for_validation()
         ar._vad = _FakeVad(min_silence_duration=0.1)
         ar._turn_detector = MagicMock(spec=_AudioTurnDetector)
 
-        ar._maybe_apply_vad_silence_override()
+        with pytest.raises(ValueError, match="min_silence_duration"):
+            ar._check_vad_silence_requirement()
 
-        assert ar._vad.min_silence_duration == pytest.approx(0.25)
-        assert ar._vad_min_silence_orig == pytest.approx(0.1)
-        assert ar._vad.setter_calls == [pytest.approx(0.25)]
-
-    def test_audio_detector_leaves_high_min_silence_alone(self) -> None:
-        ar = _make_recognition_for_override()
+    def test_adequate_min_silence_passes(self) -> None:
+        ar = _make_recognition_for_validation()
         ar._vad = _FakeVad(min_silence_duration=0.5)
         ar._turn_detector = MagicMock(spec=_AudioTurnDetector)
 
-        ar._maybe_apply_vad_silence_override()
-
-        assert ar._vad.min_silence_duration == pytest.approx(0.5)
-        assert ar._vad_min_silence_orig is None
-        assert ar._vad.setter_calls == []
-
-    def test_swap_to_text_detector_restores_original(self) -> None:
-        ar = _make_recognition_for_override()
-        ar._vad = _FakeVad(min_silence_duration=0.1)
-        ar._turn_detector = MagicMock(spec=_AudioTurnDetector)
-        ar._maybe_apply_vad_silence_override()
-        assert ar._vad.min_silence_duration == pytest.approx(0.25)
-
-        ar._revert_vad_silence_override()
-
-        assert ar._vad.min_silence_duration == pytest.approx(0.1)
-        assert ar._vad_min_silence_orig is None
-
-    def test_double_apply_is_idempotent(self) -> None:
-        ar = _make_recognition_for_override()
-        ar._vad = _FakeVad(min_silence_duration=0.1)
-        ar._turn_detector = MagicMock(spec=_AudioTurnDetector)
-
-        ar._maybe_apply_vad_silence_override()
-        ar._maybe_apply_vad_silence_override()
-
-        assert ar._vad.setter_calls == [pytest.approx(0.25)]
-        assert ar._vad_min_silence_orig == pytest.approx(0.1)
+        ar._check_vad_silence_requirement()  # must not raise
 
     def test_non_audio_detector_skips(self) -> None:
-        ar = _make_recognition_for_override()
-        ar._vad = _FakeVad(min_silence_duration=0.1)
+        ar = _make_recognition_for_validation()
+        ar._vad = _FakeVad(min_silence_duration=0.05)
         ar._turn_detector = MagicMock()  # not an _AudioTurnDetector
 
-        ar._maybe_apply_vad_silence_override()
-
-        assert ar._vad.min_silence_duration == pytest.approx(0.1)
-        assert ar._vad_min_silence_orig is None
+        ar._check_vad_silence_requirement()  # must not raise
 
     def test_no_vad_skips(self) -> None:
-        ar = _make_recognition_for_override()
+        ar = _make_recognition_for_validation()
         ar._vad = None
         ar._turn_detector = MagicMock(spec=_AudioTurnDetector)
 
-        ar._maybe_apply_vad_silence_override()  # must not raise
+        ar._check_vad_silence_requirement()  # must not raise
 
-        assert ar._vad_min_silence_orig is None
-
-    def test_vad_without_min_silence_knob_skips_silently(self) -> None:
-        """A VAD whose ``min_silence_duration`` getter returns ``None``
-        (i.e. doesn't expose the knob — the ``agents.vad.VAD`` default)
-        is left alone."""
-
-        class _VadWithoutKnob:
-            def __init__(self) -> None:
-                self.setter_calls: list[float] = []
-
-            @property
-            def min_silence_duration(self) -> float | None:
-                return None
-
-            @min_silence_duration.setter
-            def min_silence_duration(self, duration: float) -> None:
-                self.setter_calls.append(duration)
-
-        vad = _VadWithoutKnob()
-        ar = _make_recognition_for_override()
-        ar._vad = vad
+    def test_vad_without_min_silence_knob_skips(self) -> None:
+        """A VAD that doesn't expose ``min_silence_duration`` can't be
+        validated, so the pairing is allowed (no raise)."""
+        ar = _make_recognition_for_validation()
+        ar._vad = MagicMock(spec=[])  # no min_silence_duration attribute
         ar._turn_detector = MagicMock(spec=_AudioTurnDetector)
 
-        ar._maybe_apply_vad_silence_override()  # must not raise
+        ar._check_vad_silence_requirement()  # must not raise
 
-        assert ar._vad_min_silence_orig is None
-        assert vad.setter_calls == []
-
-    def test_info_logged_once_per_lifetime(self, caplog: pytest.LogCaptureFixture) -> None:
-        """Second override (e.g., after VAD swap) doesn't double-log."""
-        ar = _make_recognition_for_override()
-        ar._turn_detector = MagicMock(spec=_AudioTurnDetector)
-
-        with caplog.at_level(logging.INFO, logger="livekit.agents"):
-            ar._vad = _FakeVad(min_silence_duration=0.1)
-            ar._maybe_apply_vad_silence_override()
-            # simulate VAD swap: clear snapshot, attach a new low VAD, re-apply
-            ar._vad_min_silence_orig = None
-            ar._vad = _FakeVad(min_silence_duration=0.05)
-            ar._maybe_apply_vad_silence_override()
-
-        bumped = [r for r in caplog.records if "bumping vad min_silence_duration" in r.message]
-        assert len(bumped) == 1
-
-    async def test_update_turn_detector_drives_apply_and_revert(self) -> None:
-        """Integration: `update_turn_detector(audio)` runs apply; switching
-        back to None runs revert. Locks in the call-site wiring."""
-        ar = _make_recognition_for_override()
-        # Wire the task fields update_turn_detector touches.
-        ar._turn_detection_atask = None
+    def test_update_turn_detector_validates_pairing(self) -> None:
+        """Integration: attaching an audio detector over a too-low VAD raises
+        through the ``update_turn_detector`` call site, before any stream is
+        built."""
+        ar = _make_recognition_for_validation()
         ar._tasks = set()
         ar._vad = _FakeVad(min_silence_duration=0.1)
-        # Stub the task body so update_turn_detector's create_task is a no-op.
-        ar._turn_detection_task = AsyncMock()  # type: ignore[method-assign]
 
         detector = MagicMock(spec=_AudioTurnDetector)
-        detector.stream.return_value = MagicMock()
 
-        try:
+        with pytest.raises(ValueError, match="min_silence_duration"):
             ar.update_turn_detector(detector)
-            assert ar._vad.min_silence_duration == pytest.approx(0.25)
-            assert ar._vad_min_silence_orig == pytest.approx(0.1)
 
-            ar.update_turn_detector(None)
-            assert ar._vad.min_silence_duration == pytest.approx(0.1)
-            assert ar._vad_min_silence_orig is None
-        finally:
-            # Drain the cancel_and_wait fire-and-forget task spawned above.
-            await asyncio.gather(*list(ar._tasks), return_exceptions=True)
+        # Aborted before building a stream — and without calling .stream().
+        assert ar._turn_detector_stream is None
+        detector.stream.assert_not_called()

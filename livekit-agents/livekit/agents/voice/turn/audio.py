@@ -10,7 +10,6 @@ import asyncio
 import contextlib
 import time
 import weakref
-from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal, Protocol, runtime_checkable
@@ -130,19 +129,17 @@ class _AudioTurnDetectorStream:
         self._audio_input_num_channels: int | None = None
         self._audio_resampler: rtc.AudioResampler | None = None
         self._audio_ch = aio.Chan[rtc.AudioFrame | _AudioTurnDetectorStream._FlushSentinel]()
-        self._event_ch = aio.Chan[TurnDetectionEvent]()
 
         self._status: _Status = _Status.IDLE
         self._preemptive_request_id: str | None = None
         self._preemptive_request_fut: asyncio.Future[float] | None = None
-        self._preemptive_prediction: TurnDetectionEvent | None = None
         self._last_prediction: TurnDetectionEvent | None = None
+        self._last_language: LanguageCode | None = None
         self._user_turn_started: bool = True
         self._late_predict_warned: bool = False
 
         self._tasks: set[asyncio.Task[None]] = set()
         self._task = asyncio.create_task(self._main_task())
-        self._task.add_done_callback(lambda _: self._event_ch.close())
 
     # region: _TurnDetector Protocol proxies
 
@@ -155,13 +152,27 @@ class _AudioTurnDetectorStream:
         return self._detector.provider
 
     async def unlikely_threshold(self, language: LanguageCode | None) -> float | None:
-        # See `_AudioTurnDetector.unlikely_threshold`: None defaults to "en";
-        # unsupported language codes return None.
         lang_key = language.language if language is not None else "en"
         return self._opts.thresholds.get(lang_key)
 
     async def supports_language(self, language: LanguageCode | None) -> bool:
         return await self.unlikely_threshold(language) is not None
+
+    def set_language(self, language: LanguageCode | None) -> None:
+        """Record the most recent detected language so the inline
+        early-deactivation check can resolve the unlikely-EOT threshold.
+        Pushed by ``AudioRecognition`` on each STT transcript."""
+        self._last_language = language
+
+    def _is_likely(self, probability: float) -> bool:
+        # A prediction at or above ``unlikely_threshold`` is no longer
+        # "unlikely" — it's a confident end-of-turn. Mirror that method's
+        # None→"en" fallback: an unknown language still gets the English
+        # threshold; an explicitly unsupported code misses the dict and is
+        # never treated as likely.
+        lang_key = self._last_language.language if self._last_language is not None else "en"
+        threshold = self._opts.thresholds.get(lang_key)
+        return threshold is not None and probability >= threshold
 
     # endregion
 
@@ -201,10 +212,14 @@ class _AudioTurnDetectorStream:
             )
             self.warmup()
         self._status = _Status.ACTIVE
-        if self._preemptive_prediction is not None:
-            held = self._preemptive_prediction
-            self._preemptive_prediction = None
-            self._emit_event(held)
+        # A prediction may have resolved during the preemptive warmup window,
+        # before activation. We deliberately hold off acting on the threshold
+        # until now: a confident EOT only commits once VAD confirms
+        # end-of-speech (the trigger that calls ``activate``).
+        if self._last_prediction is not None and self._is_likely(
+            self._last_prediction.end_of_turn_probability
+        ):
+            self.deactivate(trigger="positive eou prediction")
 
     def deactivate(self, trigger: str | None = None) -> None:
         if not self._transport.transport_ready():
@@ -212,7 +227,6 @@ class _AudioTurnDetectorStream:
         if self._preemptive_request_id is None and self._status == _Status.IDLE:
             return
         self._preemptive_request_id = None
-        self._preemptive_prediction = None
         if self._preemptive_request_fut is not None:
             with contextlib.suppress(asyncio.InvalidStateError):
                 self._preemptive_request_fut.set_result(0.0)
@@ -305,9 +319,6 @@ class _AudioTurnDetectorStream:
 
     # region: results
 
-    def _emit_event(self, event: TurnDetectionEvent) -> None:
-        self._event_ch.send_nowait(event)
-
     def _handle_prediction(
         self,
         request_id: str,
@@ -317,7 +328,7 @@ class _AudioTurnDetectorStream:
         detection_delay: float | None = None,
     ) -> None:
         """Accept a prediction from a transport. Stream owns dedup (by
-        request_id), future resolution, and active-vs-held event routing."""
+        request_id), future resolution, and the inline early-deactivate."""
         if request_id != self._preemptive_request_id:
             return
         if self._preemptive_request_fut is not None:
@@ -331,10 +342,14 @@ class _AudioTurnDetectorStream:
             inference_duration=inference_duration,
         )
         self._last_prediction = event
-        if self.is_active:
-            self._emit_event(event)
-        else:
-            self._preemptive_prediction = event
+        # Early-deactivate: stop inference as soon as a confident EOT lands so a
+        # later intra-speech silence can warm up a fresh window. Only while
+        # active — predictions during preemptive warmup are cached and
+        # re-checked in ``activate()``. ``deactivate`` just sends a non-blocking
+        # ``stop_inference``, so calling it inline from the transport's
+        # prediction callback is safe (no reentrant await).
+        if self.is_active and self._is_likely(probability):
+            self.deactivate(trigger="positive eou prediction")
 
     @property
     def last_prediction(self) -> TurnDetectionEvent | None:
@@ -405,20 +420,7 @@ class _AudioTurnDetectorStream:
 
     # endregion
 
-    # region: async iteration
-
-    async def __anext__(self) -> TurnDetectionEvent:
-        try:
-            return await self._event_ch.__anext__()
-        except StopAsyncIteration:
-            if not self._task.cancelled():
-                exc = self._task.exception()
-                if exc is not None:
-                    raise exc  # noqa: B904
-            raise StopAsyncIteration from None
-
-    def __aiter__(self) -> AsyncIterator[TurnDetectionEvent]:
-        return self
+    # region: teardown
 
     async def aclose(self) -> None:
         self.end_input()
@@ -429,7 +431,6 @@ class _AudioTurnDetectorStream:
                 self._preemptive_request_fut.set_result(0.0)
         self._preemptive_request_fut = None
         self._preemptive_request_id = None
-        self._preemptive_prediction = None
         self._status = _Status.IDLE
 
     # endregion
@@ -458,6 +459,13 @@ class _AudioTurnDetectorStream:
     def _on_predict_timeout(self) -> None:  # noqa: B027
         """Genuine event: ``predict_end_of_turn`` timed out. Subclasses may
         override to react (e.g. promote local on cloud timeout)."""
+        pass
+
+    def detach(self) -> None:  # noqa: B027
+        """Synchronously release this stream's registration on its owning
+        detector, so a replacement stream can be created before this one's
+        async teardown finishes. Base is a no-op; detectors that enforce
+        single-stream ownership override it. Idempotent."""
         pass
 
     # endregion

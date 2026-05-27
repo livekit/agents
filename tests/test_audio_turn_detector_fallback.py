@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import weakref
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -154,7 +155,6 @@ def _make_stream_with_transport(
     stream._warned_cloud_failure = False
     stream._warned_local_failure = False
     stream._transport_task = None
-    stream._fallback_cancel_pending = False
     _AudioTurnDetectorStream.__init__(stream, detector=detector, opts=opts, transport=transport)
     return stream
 
@@ -185,6 +185,36 @@ class TestAutoSelect:
             detector = AudioTurnDetector()
             # env said cloud, but creds absent → silent downgrade
             assert detector.backend == "local"
+
+
+class TestSingleStreamOwnership:
+    async def test_second_stream_rejected_until_first_retired(self) -> None:
+        """The detector drives one stream at a time: a second stream() while
+        the first is still registered raises; retiring the first re-allows it."""
+        with _clean_env(LIVEKIT_REMOTE_EOT_URL=None):
+            detector = AudioTurnDetector(backend="local")
+        with patch.object(_LocalTransport, "run", new=lambda self: asyncio.sleep(0)):
+            s1 = detector.stream()
+            with pytest.raises(RuntimeError):
+                detector.stream()
+
+            # Synchronous detach alone frees the slot (what update_turn_detector
+            # does before scheduling the old stream's async aclose).
+            s1.detach()
+            s2 = detector.stream()
+            await s1.aclose()
+            await s2.aclose()
+
+    async def test_aclose_releases_slot(self) -> None:
+        with _clean_env(LIVEKIT_REMOTE_EOT_URL=None):
+            detector = AudioTurnDetector(backend="local")
+        with patch.object(_LocalTransport, "run", new=lambda self: asyncio.sleep(0)):
+            s1 = detector.stream()
+            await s1.aclose()
+            assert detector._active_stream() is None
+            # A fresh stream is accepted after the previous one closed.
+            s2 = detector.stream()
+            await s2.aclose()
 
 
 class TestExplicitBackendErrors:
@@ -241,7 +271,11 @@ class TestDetectorViewAfterFallback:
     async def test_detector_model_and_threshold_follow_fallback(self) -> None:
         """After cloud→local fallback the detector view (read by EOU metrics
         and by ``audio_recognition`` when it consults the detector directly)
-        must report the post-fallback backend + rescaled thresholds."""
+        must report the post-fallback backend + rescaled thresholds.
+
+        The detector derives these from its live stream rather than a
+        write-back, so the stream is registered as the active one (exactly
+        what ``detector.stream()`` does) before driving the fallback."""
         with _clean_env(
             LIVEKIT_REMOTE_EOT_URL="ws://gateway",
             LIVEKIT_API_KEY="k",
@@ -262,10 +296,12 @@ class TestDetectorViewAfterFallback:
             stream._warned_cloud_failure = False
             stream._warned_local_failure = False
             stream._transport_task = None
-            stream._fallback_cancel_pending = False
             _AudioTurnDetectorStream.__init__(
                 stream, detector=detector, opts=detector._opts, transport=transport
             )
+            # Register as the detector's active stream (what stream() does) so
+            # the detector's model/backend/threshold views resolve through it.
+            detector._active_stream_ref = weakref.ref(stream)
             await _wait_for(lambda: stream.backend == "local")
 
             assert detector.model == "eot-audio-mini"

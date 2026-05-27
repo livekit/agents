@@ -235,7 +235,7 @@ class AgentActivity(RecognitionHooks):
         if turn_detection is not None and not isinstance(turn_detection, str):
             if isinstance(turn_detection, _AudioTurnDetector) and self.vad is None:
                 raise ValueError(
-                    "AudioTurnDetector requires a VAD model; pass vad=VAD() to AgentSession/Agent."
+                    "AudioTurnDetector requires a VAD model; pass vad=inference.VAD() to AgentSession/Agent."
                 )
             # return directly if turn_detection is _TurnDetector
             return turn_detection

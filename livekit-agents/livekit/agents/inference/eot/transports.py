@@ -102,8 +102,7 @@ class _CloudTransport:
         self._session_holder = http_session
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._num_retries = 0
-        # FIFO outbound queue so sync-scheduled sends (e.g. inference_start)
-        # aren't overtaken by awaited audio chunks. Allocated per connection.
+
         self._send_ch: aio.Chan[ClientMessage] | None = None
         self._stream_ref: weakref.ref[_AudioTurnDetectorStream] | None = None
 
@@ -382,8 +381,6 @@ class _LocalTransport:
         self._buf = utils.AudioArrayBuffer(
             buffer_size=_CLIENT_BUFFER_SAMPLES, sample_rate=DEFAULT_SAMPLE_RATE
         )
-        # EOT model singleton is shared across instances inside the native lib;
-        # one Python-side handle per transport is fine.
         self._eot = _EOT()
         self._stream_ref: weakref.ref[_AudioTurnDetectorStream] | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
@@ -422,7 +419,6 @@ class _LocalTransport:
             self._buf.shift(len(self._buf) - keep_samples)
 
     def stop_inference(self, *, reason: str | None) -> None:
-        # In-flight predicts run to completion; `_predict` drops stale results.
         return
 
     def detach(self) -> None:

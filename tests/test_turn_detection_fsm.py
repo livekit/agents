@@ -16,7 +16,6 @@ from typing import Any
 from unittest.mock import MagicMock
 
 from livekit.agents.voice.turn import (
-    TurnDetectionEvent,
     TurnDetectorOptions,
     _AudioTurnDetectorStream,
     _Status,
@@ -57,33 +56,28 @@ class _FakeTransport:
 
 
 class _FakeBackend(_AudioTurnDetectorStream):
-    """Stream + fake transport bundled for FSM testing. Wraps the events
-    list from the transport plus an `emitted` list of outbound probabilities."""
+    """Stream + fake transport bundled for FSM testing, exposing the
+    transport's recorded events."""
 
     def __init__(self, *, detector: Any, opts: TurnDetectorOptions) -> None:
         self._fake_transport = _FakeTransport()
-        self.emitted: list[float] = []
         super().__init__(detector=detector, opts=opts, transport=self._fake_transport)
 
     @property
     def events(self) -> list[tuple[str, ...]]:
         return self._fake_transport.events
 
-    def _emit_event(self, event: TurnDetectionEvent) -> None:
-        self.emitted.append(event.end_of_turn_probability)
-        super()._emit_event(event)
-
     def simulate_prediction(self, request_id: str, probability: float) -> None:
         """Mirror what a transport would do: hand the prediction to the stream."""
         self._handle_prediction(request_id, probability)
 
 
-def _make_opts() -> TurnDetectorOptions:
-    return TurnDetectorOptions(sample_rate=16000)
+def _make_opts(thresholds: dict[str, float] | None = None) -> TurnDetectorOptions:
+    return TurnDetectorOptions(sample_rate=16000, thresholds=thresholds or {})
 
 
-def _make_stream() -> _FakeBackend:
-    return _FakeBackend(detector=MagicMock(), opts=_make_opts())
+def _make_stream(thresholds: dict[str, float] | None = None) -> _FakeBackend:
+    return _FakeBackend(detector=MagicMock(), opts=_make_opts(thresholds))
 
 
 class TestAudioTurnDetectionFSM:
@@ -148,10 +142,11 @@ class TestAudioTurnDetectionFSM:
         finally:
             await s.aclose()
 
-    async def test_late_prediction_after_deactivate_not_replayed(self) -> None:
+    async def test_late_prediction_after_deactivate_not_acted_on(self) -> None:
         """Regression: a late prediction for the cancelled request id must be
-        dropped, not stashed for replay by the next activate()."""
-        s = _make_stream()
+        dropped (request-id mismatch), not cached for a later activate() to
+        act on."""
+        s = _make_stream(thresholds={"en": 0.5})
         try:
             s.warmup()
             cancelled_request_id = s._preemptive_request_id
@@ -160,11 +155,16 @@ class TestAudioTurnDetectionFSM:
             s.deactivate(trigger="vad sos")
 
             s.simulate_prediction(cancelled_request_id, probability=0.9)
-            assert s._preemptive_prediction is None
+            assert s.last_prediction is None
 
             s.warmup()
             s.activate(trigger="vad eos")
-            assert s.emitted == []
+            # No cached prediction for the fresh window → activate must not
+            # early-deactivate; inference stays running.
+            assert s.is_inference_running
+            assert "positive eou prediction" not in [
+                e[1] for e in s.events if e[0] == "stop_inference"
+            ]
         finally:
             await s.aclose()
 
@@ -226,22 +226,58 @@ class TestAudioTurnDetectionFSM:
         finally:
             await s.aclose()
 
-    async def test_activate_releases_preemptive_prediction(self) -> None:
-        """Predictions arriving before activate are held and released on activate."""
-        s = _make_stream()
+    async def test_positive_prediction_while_active_early_deactivates(self) -> None:
+        """A confident EOT arriving while active stops inference inline."""
+        s = _make_stream(thresholds={"en": 0.5})
+        try:
+            s.warmup()
+            s.activate(trigger="vad eos")
+            request_id = s._preemptive_request_id
+            assert request_id is not None
+
+            s.simulate_prediction(request_id, probability=0.9)  # >= 0.5
+            assert not s.is_inference_running
+            assert ("stop_inference", "positive eou prediction") in s.events
+        finally:
+            await s.aclose()
+
+    async def test_subthreshold_prediction_while_active_keeps_running(self) -> None:
+        """A below-threshold prediction is cached but doesn't deactivate."""
+        s = _make_stream(thresholds={"en": 0.5})
+        try:
+            s.warmup()
+            s.activate(trigger="vad eos")
+            request_id = s._preemptive_request_id
+            assert request_id is not None
+
+            s.simulate_prediction(request_id, probability=0.3)  # < 0.5
+            assert s.is_inference_running
+            assert s.last_prediction is not None
+            assert s.last_prediction.end_of_turn_probability == 0.3
+            assert "positive eou prediction" not in [
+                e[1] for e in s.events if e[0] == "stop_inference"
+            ]
+        finally:
+            await s.aclose()
+
+    async def test_preemptive_positive_prediction_acted_on_at_activate(self) -> None:
+        """A confident prediction resolving during preemptive warmup is held:
+        not acted on until activate() (VAD EOS) confirms end-of-speech, which
+        then early-deactivates from the cached value."""
+        s = _make_stream(thresholds={"en": 0.5})
         try:
             s.warmup()
             request_id = s._preemptive_request_id
             assert request_id is not None
-            s.simulate_prediction(request_id, probability=0.7)
-            # Held — not emitted yet.
-            assert s.emitted == []
-            assert s._preemptive_prediction is not None
-            assert s._preemptive_prediction.end_of_turn_probability == 0.7
+            s.simulate_prediction(request_id, probability=0.9)
+            # Cached, but not active yet → inference still running.
+            assert s.is_inference_running
+            assert s.last_prediction is not None
+            assert s.last_prediction.end_of_turn_probability == 0.9
 
-            s.activate()
-            assert s.emitted == [0.7]
-            assert s._preemptive_prediction is None
+            s.activate(trigger="vad eos")
+            assert not s.is_inference_running
+            assert ("stop_inference", "positive eou prediction") in s.events
         finally:
             await s.aclose()
 
