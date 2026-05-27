@@ -323,10 +323,6 @@ class _AudioSinkProxy(AudioOutput):
     def set_next_in_chain(self, new: AudioOutput | None) -> None:
         """Replace the downstream sink, transferring playback listeners
         and on_attached/on_detached state.
-
-        ``new`` may be a leaf or a wrapper chain — the base
-        :class:`AudioOutput` machinery cascades capture/flush and bubbles
-        playback events up regardless.
         """
         if new is self._next_in_chain:
             return
