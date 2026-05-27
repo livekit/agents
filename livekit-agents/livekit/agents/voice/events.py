@@ -101,7 +101,7 @@ EventTypes = Literal[
     "speech_created",
     "error",
     "close",
-    "custom_event",
+    "debug_message",
 ]
 
 UserState = Literal["speaking", "listening", "away"]

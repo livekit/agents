@@ -19,6 +19,8 @@ from typing import (
     runtime_checkable,
 )
 
+from google.protobuf.json_format import ParseDict
+from google.protobuf.struct_pb2 import Struct
 from opentelemetry import context as otel_context, trace
 from typing_extensions import TypedDict
 
@@ -1222,30 +1224,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         return self._activity.interrupt(force=force)
 
-    def emit_custom_event(self, event_type: str, payload: Mapping[str, Any] | None = None) -> None:
-        """Emit an application-defined ``custom_event`` over the remote-session wire.
-
-        Sugar over constructing ``agent_pb.CustomEvent`` and emitting it: wraps
-        ``payload`` (a JSON-compatible mapping) into a ``google.protobuf.Struct`` and
-        emits the proto. Listeners registered via
-        ``session.on("custom_event", handler)`` receive the same
-        ``agent_pb.CustomEvent``.
-
-        Args:
-            event_type: Application-defined type tag (maps to ``CustomEvent.type``).
-            payload: JSON-compatible mapping (maps to ``CustomEvent.payload``). Defaults
-                to an empty struct.
-        """
-        from google.protobuf.json_format import ParseDict
-        from google.protobuf.struct_pb2 import Struct
-
+    def _emit_debug_message(self, payload: Mapping[str, Any]) -> None:
+        """:meta private: internal — emit a debug/trace payload to the debugger/recorder."""
         st = Struct()
-        if payload:
-            ParseDict(dict(payload), st, ignore_unknown_fields=True)
-        # bypass the typed `AgentSession.emit` override (which narrows to AgentEvent
-        # for the event-trace report): custom events ride the proto, not the
-        # Pydantic union, and aren't part of the typed report.
-        super().emit("custom_event", agent_pb.CustomEvent(type=event_type, payload=st))
+        ParseDict(payload, st)
+        # super().emit bypasses AgentSession.emit's narrowed AgentEvent type;
+        # debug messages ride the proto, not the Pydantic event union.
+        super().emit("debug_message", agent_pb.DebugMessage(payload=st))
 
     def clear_user_turn(self) -> None:
         # clear the transcription or input audio buffer of the user turn

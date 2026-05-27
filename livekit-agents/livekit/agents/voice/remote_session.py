@@ -375,7 +375,7 @@ class SessionHost:
             session.on("session_usage_updated", self._on_session_usage_updated)
             session.on("overlapping_speech", self._on_overlapping_speech)
             session.on("error", self._on_error)
-            session.on("custom_event", self._on_custom_event)
+            session.on("debug_message", self._on_debug_message)
 
     def register_text_input(self, text_input_cb: TextInputCallback) -> None:
         self._text_input_cb = text_input_cb
@@ -402,7 +402,7 @@ class SessionHost:
             self._session.off("session_usage_updated", self._on_session_usage_updated)
             self._session.off("overlapping_speech", self._on_overlapping_speech)
             self._session.off("error", self._on_error)
-            self._session.off("custom_event", self._on_custom_event)
+            self._session.off("debug_message", self._on_debug_message)
 
         if self._recv_task:
             await utils.aio.cancel_and_wait(self._recv_task)
@@ -576,8 +576,8 @@ class SessionHost:
             )
         )
 
-    def _on_custom_event(self, event: agent_pb.CustomEvent) -> None:
-        self._send_event(agent_pb.AgentSessionEvent(custom_event=event))
+    def _on_debug_message(self, event: agent_pb.DebugMessage) -> None:
+        self._send_event(agent_pb.AgentSessionEvent(debug_message=event))
 
     async def _handle_request_safe(self, req: agent_pb.SessionRequest) -> None:
         try:
