@@ -119,7 +119,8 @@ unit-tests:
 		tests/test_endpointing.py \
 		tests/test_amd_classifier.py \
 		tests/test_session_host.py \
-		tests/test_http_context_helper.py
+		tests/test_http_context_helper.py \
+		tests/test_audio_sink_proxy.py
 
 # ============================================
 # Development Workflows

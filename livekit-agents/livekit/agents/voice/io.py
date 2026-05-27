@@ -324,12 +324,10 @@ class _AudioSinkProxy(AudioOutput):
         """Replace the downstream sink, transferring playback listeners
         and on_attached/on_detached state.
 
-        The new sink must be a leaf (no ``next_in_chain``) — the proxy is
-        the bottom of a wrapper chain and cannot itself hold wrappers.
+        ``new`` may be a leaf or a wrapper chain — the base
+        :class:`AudioOutput` machinery cascades capture/flush and bubbles
+        playback events up regardless.
         """
-        assert new is None or new.next_in_chain is None, (
-            "_AudioSinkProxy.set_next_in_chain expects a leaf sink, not a wrapper chain"
-        )
         if new is self._next_in_chain:
             return
 

@@ -167,13 +167,24 @@ def test_set_audio_sink_none_detaches_proxy_inner() -> None:
 # ---------- proxy invariants ----------
 
 
-def test_proxy_rejects_wrapper_chain_as_inner() -> None:
+@pytest.mark.asyncio
+async def test_proxy_accepts_wrapper_chain_as_inner() -> None:
     leaf = FakeAudioOutput()
-    wrapper = _PassthroughWrapper(next_in_chain=leaf)
+    wrapped_sink = _PassthroughWrapper(next_in_chain=leaf)
     proxy = _AudioSinkProxy()
+    proxy.set_next_in_chain(wrapped_sink)
 
-    with pytest.raises(AssertionError):
-        proxy.set_next_in_chain(wrapper)
+    assert proxy.next_in_chain is wrapped_sink
+
+    # events from the inner leaf still bubble up through proxy
+    received: list[PlaybackFinishedEvent] = []
+    proxy.on("playback_finished", received.append)
+
+    await proxy.capture_frame(_silence())
+    leaf.on_playback_finished(playback_position=1.0, interrupted=False)
+
+    assert len(received) == 1
+    assert received[0].playback_position == 1.0
 
 
 @pytest.mark.asyncio
