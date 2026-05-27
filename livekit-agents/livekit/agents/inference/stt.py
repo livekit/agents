@@ -220,7 +220,7 @@ def _resolve_vad_for_model(
     if is_speechmatics and vad_instance is None:
         from .vad import VAD
 
-        vad_instance = VAD(model="silero")
+        vad_instance = VAD()
     return vad_instance
 
 

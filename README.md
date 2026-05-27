@@ -47,7 +47,7 @@ agents that can see, hear, and understand.
 To install the core Agents library, along with plugins for popular model providers:
 
 ```bash
-pip install "livekit-agents[openai,silero,deepgram,cartesia]"
+pip install "livekit-agents[openai,deepgram,cartesia]"
 ```
 
 ## Docs and guides
@@ -92,7 +92,6 @@ from livekit.agents import (
     function_tool,
     inference,
 )
-from livekit.plugins import silero
 
 
 @function_tool
@@ -111,7 +110,7 @@ server = AgentServer()
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
-        vad=silero.VAD.load(),
+        vad=inference.VAD(),
         # any combination of STT, LLM, TTS, or realtime API can be used
         # this example shows LiveKit Inference, a unified API to access different models via LiveKit Cloud
         # to use model provider keys directly, replace with the following:
@@ -186,7 +185,7 @@ class StoryAgent(Agent):
     def __init__(self, name: str, location: str) -> None:
         super().__init__(
             instructions=f"You are a storyteller. Use the user's information in order to make the story personalized."
-            f"The user's name is {name}, from {location}"
+            f"The user's name is {name}, from {location}",
             # override the default model, switching to Realtime API from standard LLMs
             llm=openai.realtime.RealtimeModel(voice="echo"),
             chat_ctx=chat_ctx,
@@ -200,7 +199,7 @@ class StoryAgent(Agent):
 async def entrypoint(ctx: JobContext):
     userdata = StoryData()
     session = AgentSession[StoryData](
-        vad=silero.VAD.load(),
+        vad=inference.VAD(),
         stt="deepgram/nova-3",
         llm="openai/gpt-4.1-mini",
         tts="cartesia/sonic-3:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
@@ -222,7 +221,7 @@ Automated tests are essential for building reliable agents, especially with the 
 @pytest.mark.asyncio
 async def test_no_availability() -> None:
     llm = google.LLM()
-    async AgentSession(llm=llm) as sess:
+    async with AgentSession(llm=llm) as sess:
         await sess.start(MyAgent())
         result = await sess.run(
             user_input="Hello, I need to place an order."

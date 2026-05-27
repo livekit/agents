@@ -1000,11 +1000,7 @@ class AudioRecognition:
             self._audio_preflight_transcript = ""
 
             if not self._has_user_vad or self._last_speaking_time is None:
-                # no user-configured vad, use stt timestamp
-                # TODO: this would screw up transcription latency metrics
-                # but we'll live with it for now.
-                # the correct way is to ensure STT fires SpeechEventType.END_OF_SPEECH
-                # and using that timestamp for _last_speaking_time
+                # vad disabled or missed a speech, use stt timestamp
                 self._last_speaking_time = stt_last_speaking_time
 
             # check user turn limit after accumulating transcript

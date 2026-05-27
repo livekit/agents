@@ -127,13 +127,13 @@ from livekit.agents import (
     AgentServer,
     AgentSession,
     JobContext,
-    JobProcess,
     cli,
+    inference,
     metrics,
     room_io,
 )
 from livekit.agents.inference import AudioTurnDetector
-from livekit.plugins import inworld, silero
+from livekit.plugins import inworld
 
 logger = logging.getLogger("inworld-agent")
 
@@ -158,13 +158,6 @@ class InworldAgent(Agent):
 server = AgentServer()
 
 
-def prewarm(proc: JobProcess):
-    proc.userdata["vad"] = silero.VAD.load()
-
-
-server.setup_fnc = prewarm
-
-
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     ctx.log_context_fields = {"room": ctx.room.name}
@@ -174,7 +167,7 @@ async def entrypoint(ctx: JobContext):
         llm="openai/gpt-4.1-mini",
         tts=inworld.TTS(voice="Clive"),
         turn_detection=AudioTurnDetector(),
-        vad=ctx.proc.userdata["vad"],
+        vad=inference.VAD(),
     )
 
     usage_collector = metrics.UsageCollector()

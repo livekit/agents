@@ -82,8 +82,8 @@ stt = baseten.STT(
 ```python
 import os
 from livekit import agents
-from livekit.agents import AgentSession, Agent, RoomInputOptions
-from livekit.plugins import baseten, openai, noise_cancellation, silero
+from livekit.agents import AgentSession, Agent, RoomInputOptions, inference
+from livekit.plugins import baseten, openai, noise_cancellation
 from livekit.agents.inference import AudioTurnDetector
 
 BASETEN_API_KEY = os.getenv("BASETEN_API_KEY")
@@ -116,7 +116,7 @@ async def entrypoint(ctx: agents.JobContext):
                 ".api.baseten.co/environments/production/predict"
             ),
         ),
-        vad=silero.VAD.load(),
+        vad=inference.VAD(),
         turn_detection=AudioTurnDetector(),
     )
 

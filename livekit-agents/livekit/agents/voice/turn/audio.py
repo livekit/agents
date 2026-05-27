@@ -136,22 +136,8 @@ class _AudioTurnDetectorStream:
         self._preemptive_request_id: str | None = None
         self._preemptive_request_fut: asyncio.Future[float] | None = None
         self._preemptive_prediction: TurnDetectionEvent | None = None
-        # Latest resolved prediction for the current inference window. Cleared
-        # when a new window starts (next warmup) or on commit (flush). Lets
-        # ``predict_end_of_turn`` return immediately when a prediction has
-        # already arrived via the event stream.
         self._last_prediction: TurnDetectionEvent | None = None
-        # True between ``on_speech_started()`` and the next ``flush()`` —
-        # i.e. a user turn is open and ``predict_end_of_turn`` should run.
-        # When False, predict short-circuits to a positive default: there's
-        # no fresh speech to evaluate (e.g. an STT final arriving after the
-        # audio EOT model already committed the turn). Initialised True so
-        # the first turn isn't gated before any flush has happened.
         self._user_turn_started: bool = True
-        # Warn once per stream when ``predict_end_of_turn`` is called after
-        # the audio EOT model has already committed the turn (common with
-        # slow STT finals). Subsequent occurrences log at debug to avoid
-        # flooding production logs with what is normal, expected behavior.
         self._late_predict_warned: bool = False
 
         self._tasks: set[asyncio.Task[None]] = set()
