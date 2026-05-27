@@ -548,7 +548,11 @@ class _SyncedAudioOutput(io.AudioOutput):
             sample_rate=next_in_chain.sample_rate,
             capabilities=io.AudioOutputCapabilities(pause=True),
         )
-        self._next_in_chain: io.AudioOutput = next_in_chain  # redefined for better typing
+        # AudioOutput.__init__ may have auto-wrapped next_in_chain with an
+        # _AudioSinkProxy for hot-swap support; cache the post-wrap reference
+        # so passthrough calls go through the proxy
+        assert self.next_in_chain is not None
+        self._next_in_chain: io.AudioOutput = self.next_in_chain  # redefined for better typing
         self._synchronizer = synchronizer
         self._pushed_duration: float = 0.0
 

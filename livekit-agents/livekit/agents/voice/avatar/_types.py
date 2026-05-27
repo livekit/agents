@@ -93,16 +93,6 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
                 "release resources when the job shuts down"
             )
 
-        if agent_session._started and (audio_output := agent_session.output.audio) is not None:
-            logger.warning(
-                (
-                    "AvatarSession.start() was called after AgentSession.start(); "
-                    "the existing audio output may be replaced by the avatar. "
-                    "Please start the avatar session before AgentSession.start() to avoid this."
-                ),
-                extra={"audio_output": audio_output.label},
-            )
-
         self._room = room
         self._agent_session = agent_session
         self._agent_session.on("conversation_item_added", self._on_conversation_item_added)
@@ -120,6 +110,7 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
         ``timeout`` seconds. Pass ``timeout=None`` to wait indefinitely.
         """
         if self._wait_avatar_join_task is None:
+            # TODO: fix when this called before the room is connected
             return
         if timeout is None:
             await self._wait_avatar_join_task
@@ -147,6 +138,10 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
                     )
 
         if self._agent_session:
+            # detach the avatar's audio sink while preserving wrappers above
+            # (TranscriptSynchronizer, RecorderAudioOutput) so a subsequent
+            # AvatarSession.start() can re-attach into the same chain
+            self._agent_session.output.set_audio_sink(None, preserve_wrappers=True)
             self._agent_session.off("conversation_item_added", self._on_conversation_item_added)
             self._agent_session = None
 
