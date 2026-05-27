@@ -16,12 +16,10 @@ from __future__ import annotations
 
 import asyncio
 import json
-import warnings
-from typing import Literal
+from typing import TYPE_CHECKING
 from urllib.parse import urlencode
 
 import aiohttp
-from typing_extensions import NotRequired, TypedDict
 
 from livekit import rtc
 from livekit.agents import (
@@ -34,148 +32,34 @@ from livekit.agents import (
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils.misc import is_given
 
-from ._cartesia_recognize_stream import CartesiaRecognizeStream
-from .constants import (
+from ..constants import (
     API_AUTH_HEADER,
     API_VERSION,
     API_VERSION_HEADER,
     REQUEST_ID_HEADER,
     USER_AGENT,
 )
-from .log import logger
-from .models import STTEncoding, STTLanguages, TurnDetectingSTTModel
+from ..log import logger
+from ..models import STTEncoding, STTLanguages, TurnDetectingSTTModel
+from .cartesia_recognize_stream import CartesiaRecognizeStream
+
+if TYPE_CHECKING:
+    from .._types.stt_turns_websocket import STTEventMessage
 
 
-class STTConnectedEvent(TypedDict):
-    """Fires once when the WebSocket connection is established.
-
-    You do not need to wait for this event before sending audio.
-
-    Attributes:
-        type: Event discriminator.
-        request_id: Unique identifier for this connection. Does not change between turns.
+class TurnDetectingRecognizeStream(CartesiaRecognizeStream):
     """
+    Cartesia STT stream implementation for ``cartesia.STT(behavior="turn_detecting")``.
 
-    type: Literal["connected"]
-    request_id: str
+    This implementation ignores :meth:`flush`.
+    Final transcripts are emitted when the STT model detects :class:`~stt.SpeechEventType.END_OF_SPEECH`.
 
-
-class STTTurnStartEvent(TypedDict):
-    """Model predicts the start of a user turn.
-
-    Attributes:
-        type: Event discriminator.
-        request_id: Unique identifier for this connection. Does not change between turns.
-    """
-
-    type: Literal["turn.start"]
-    request_id: str
-
-
-class STTTurnUpdateEvent(TypedDict):
-    """Fires repeatedly as the model transcribes the current user turn.
-
-    Used for interim transcript events.
-
-    Attributes:
-        type: Event discriminator.
-        transcript: Cumulative text for the current turn, i.e. the full text transcribed
-            so far in this turn, not a delta.
-        request_id: Unique identifier for this connection. Does not change between turns.
-    """
-
-    type: Literal["turn.update"]
-    transcript: str
-    request_id: str
-
-
-class STTTurnEagerEndEvent(TypedDict):
-    """Fires when the model predicts the user might be done speaking.
-
-    Used for preflight transcript events.
-
-    Attributes:
-        type: Event discriminator.
-        transcript: Cumulative text for the current turn, i.e. the full text transcribed
-            so far in this turn, not a delta.
-        request_id: Unique identifier for this connection. Does not change between turns.
-    """
-
-    type: Literal["turn.eager_end"]
-    transcript: str
-    request_id: str
-
-
-class STTTurnResumeEvent(TypedDict):
-    """Fires after ``turn.eager_end`` if the user turn has not actually ended.
-
-    Attributes:
-        type: Event discriminator.
-        request_id: Unique identifier for this connection. Does not change between turns.
-    """
-
-    type: Literal["turn.resume"]
-    request_id: str
-
-
-class STTTurnEndEvent(TypedDict):
-    """Marks the end of a user turn.
-
-    Used for end-of-speech and final transcript events.
-
-    Attributes:
-        type: Event discriminator.
-        transcript: Cumulative text for the current turn, i.e. the full text transcribed
-            so far in this turn, not a delta.
-        request_id: Unique identifier for this connection. Does not change between turns.
-    """
-
-    type: Literal["turn.end"]
-    transcript: str
-    request_id: str
-
-
-class STTErrorEvent(TypedDict):
-    """Error event sent by the server.
-
-    Attributes:
-        type: Event discriminator.
-        error_code: Stable code identifying the error.
-        status_code: HTTP-style status code; values >= 500 are treated as retryable.
-        title: Short human-readable error title.
-        message: Detailed human-readable error message.
-        doc_url: URL to documentation describing this error.
-        request_id: Unique identifier for this connection. Does not change between turns.
-    """
-
-    type: Literal["error"]
-    error_code: NotRequired[str]
-    status_code: NotRequired[int]
-    title: NotRequired[str]
-    message: NotRequired[str]
-    doc_url: NotRequired[str]
-    request_id: NotRequired[str]
-
-
-STTEventMessage = (
-    STTConnectedEvent
-    | STTTurnStartEvent
-    | STTTurnUpdateEvent
-    | STTTurnEagerEndEvent
-    | STTTurnResumeEvent
-    | STTTurnEndEvent
-    | STTErrorEvent
-)
-"""Server-sent message on the ``/stt/turns/websocket`` endpoint."""
-
-
-class TurnsRecognizeStream(CartesiaRecognizeStream):
-    """
-    Cartesia STT stream with turn detection
-
+    Use ``cartesia.STT(behavior="transcribe_on_flush")`` instead
+    if you call :meth:`flush` to get the final transcript.
 
     See also:
-        https://docs.cartesia.ai/api-reference/stt/turns/websocket
+        - [API Reference](https://docs.cartesia.ai/api-reference/stt/turns/websocket)
+        - [Compare STT Endpoints](https://docs.cartesia.ai/use-the-api/compare-stt-endpoints)
     """
 
     def __init__(
@@ -190,7 +74,7 @@ class TurnsRecognizeStream(CartesiaRecognizeStream):
         api_key: str,
         ws_base_url: str,
         session: aiohttp.ClientSession,
-        language: LanguageCode | None,
+        language: LanguageCode,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=sample_rate)
         self._encoding = encoding
@@ -207,9 +91,6 @@ class TurnsRecognizeStream(CartesiaRecognizeStream):
         self._closing_ws = False
         # cumulative transcript for the current turn; used to re-emit on turn.resume
         self._current_transcript = ""
-
-        if language is not None and language.language != "en":
-            logger.warning("Cartesia STT (Ink 2) currently only supports English")
 
     async def _run(self) -> None:
         if self._input_ch.closed:
@@ -233,15 +114,18 @@ class TurnsRecognizeStream(CartesiaRecognizeStream):
             )
 
             async for data in self._input_ch:
-                frames: list[rtc.AudioFrame] = []
                 if isinstance(data, rtc.AudioFrame):
-                    frames.extend(audio_bstream.write(data.data.tobytes()))
-                elif isinstance(data, stt.RecognizeStream._FlushSentinel):
-                    frames.extend(audio_bstream.flush())
+                    for frame in audio_bstream.write(data.data.tobytes()):
+                        self._speech_duration += frame.duration
+                        await ws.send_bytes(frame.data.tobytes())
+                elif isinstance(data, self._FlushSentinel):
+                    logger.warning(
+                        'Cartesia STT stream.flush() was ignored. Use cartesia.STT(behavior="transcribe_on_flush") instead if you only expect a final transcript after stream.flush() is called.'
+                    )
 
-                for frame in frames:
-                    self._speech_duration += frame.duration
-                    await ws.send_bytes(frame.data.tobytes())
+            for frame in audio_bstream.flush():
+                self._speech_duration += frame.duration
+                await ws.send_bytes(frame.data.tobytes())
 
             self._closing_ws = True
             await ws.send_str(json.dumps({"type": "close"}))
@@ -306,22 +190,22 @@ class TurnsRecognizeStream(CartesiaRecognizeStream):
                 # the turn instead of losing it. In the normal close path the
                 # server sends turn.end first and _speaking is already False.
                 if self._speaking:
-                    if self._speech_duration > 0 and not self._event_ch.closed:
-                        self._event_ch.send_nowait(
-                            stt.SpeechEvent(
-                                type=stt.SpeechEventType.RECOGNITION_USAGE,
-                                request_id=self._request_id,
-                                recognition_usage=stt.RecognitionUsage(
-                                    audio_duration=self._speech_duration,
-                                ),
-                            )
-                        )
-                        self._speech_duration = 0.0
-                    if self._current_transcript:
-                        self._send_transcript_event(
-                            stt.SpeechEventType.FINAL_TRANSCRIPT, self._current_transcript
-                        )
                     if not self._event_ch.closed:
+                        if self._speech_duration > 0:
+                            self._event_ch.send_nowait(
+                                stt.SpeechEvent(
+                                    type=stt.SpeechEventType.RECOGNITION_USAGE,
+                                    request_id=self._request_id,
+                                    recognition_usage=stt.RecognitionUsage(
+                                        audio_duration=self._speech_duration,
+                                    ),
+                                )
+                            )
+                            self._speech_duration = 0.0
+                        if self._current_transcript:
+                            self._send_transcript_event(
+                                stt.SpeechEventType.FINAL_TRANSCRIPT, self._current_transcript
+                            )
                         self._event_ch.send_nowait(
                             stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                         )
@@ -367,7 +251,7 @@ class TurnsRecognizeStream(CartesiaRecognizeStream):
 
         speech_data = stt.SpeechData(
             text=transcript,
-            language=self._language or LanguageCode("en"),
+            language=self._language,
         )
         self._event_ch.send_nowait(
             stt.SpeechEvent(
@@ -434,23 +318,22 @@ class TurnsRecognizeStream(CartesiaRecognizeStream):
                 return
             transcript = data["transcript"] or self._current_transcript
 
-            if self._speech_duration > 0 and not self._event_ch.closed:
-                self._event_ch.send_nowait(
-                    stt.SpeechEvent(
-                        type=stt.SpeechEventType.RECOGNITION_USAGE,
-                        request_id=self._request_id,
-                        recognition_usage=stt.RecognitionUsage(
-                            audio_duration=self._speech_duration,
-                        ),
+            if not self._event_ch.closed:
+                if self._speech_duration > 0:
+                    self._event_ch.send_nowait(
+                        stt.SpeechEvent(
+                            type=stt.SpeechEventType.RECOGNITION_USAGE,
+                            request_id=self._request_id,
+                            recognition_usage=stt.RecognitionUsage(
+                                audio_duration=self._speech_duration,
+                            ),
+                        )
                     )
-                )
-                self._speech_duration = 0.0
-
-            self._send_transcript_event(stt.SpeechEventType.FINAL_TRANSCRIPT, transcript)
+                    self._speech_duration = 0.0
+                self._send_transcript_event(stt.SpeechEventType.FINAL_TRANSCRIPT, transcript)
+                self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
             self._speaking = False
-            if not self._event_ch.closed:
-                self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
             self._current_transcript = ""
             return
 
@@ -477,19 +360,10 @@ class TurnsRecognizeStream(CartesiaRecognizeStream):
                 Ink 2 does not have multi-lingual support yet and only works with English.
             model: Deprecated. This is a no-op. Construct a new STT instance to change the model.
         """
-        language_code: NotGivenOr[LanguageCode]
         if is_given(language):
-            language_code = LanguageCode(language)
-            self._language = language_code
-        else:
-            language_code = language
+            self._language = LanguageCode(language)
 
-        if (is_given(model) and model != self._model) or (
-            is_given(language_code) and language_code.language != "en"
-        ):
-            # not changing the model and reconnecting since that is likely unexpected behavior
-            warnings.warn(
-                "Cartesia STT (turn detecting) does not currently support updating options.",
-                FutureWarning,
-                stacklevel=2,
-            )
+        # not changing the model and reconnecting since that is likely unexpected behavior
+        logger.warning(
+            f"Cartesia STT model={self._model} does not currently support update_options()."
+        )

@@ -18,8 +18,10 @@ import os
 import warnings
 import weakref
 from dataclasses import dataclass
+from typing import Literal
 
 import aiohttp
+from typing_extensions import Never
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -31,11 +33,17 @@ from livekit.agents import (
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
-from ._cartesia_recognize_stream import CartesiaRecognizeStream
-from ._legacy_recognize_stream import LegacyRecognizeStream
-from ._turns_recognize_stream import TurnsRecognizeStream
+from ._recognize_streams.cartesia_recognize_stream import CartesiaRecognizeStream
+from ._recognize_streams.legacy_recognize_stream import LegacyRecognizeStream
+from ._recognize_streams.transcribe_on_flush_recognize_stream import (
+    TranscribeOnFlushRecognizeStream,
+)
+from ._recognize_streams.turn_detecting_recognize_stream import TurnDetectingRecognizeStream
 from .constants import AUDIO_ENCODING
+from .log import logger
 from .models import STTEncoding, STTLanguages, STTModels
+
+_ResolvedBehavior = Literal["turn_detecting", "transcribe_on_flush", "legacy"]
 
 
 def _is_whisper_model(model: STTModels | str) -> bool:
@@ -53,7 +61,7 @@ def _base_url_to_ws_base_url(base_url: str) -> str:
 class STT(stt.STT):
     """Cartesia speech to text.
 
-    Model ``ink-2`` and newer supports:
+    Model ``ink-2`` supports:
         - Streaming
         - Turn detection
         - Interim results
@@ -67,18 +75,27 @@ class STT(stt.STT):
 
     Examples:
 
-        ```
+        ```# Turn detecting
         from livekit.agents import AgentSession
         from livekit.plugins import cartesia
 
         session = AgentSession(
-            stt=cartesia.STT(),
+            stt=cartesia.STT(behavior="turn_detecting"),
             llm=LLM(),  # choose your favorite LLM
             tts=cartesia.TTS(),
             turn_handling={
                 "turn_detection": "stt",
             },
         )
+        ```
+
+        ```# Transcribe on flush()
+        from livekit.plugins import cartesia
+
+        stream = cartesia.STT(behavior="transcribe_on_flush")
+
+        def on_user_end_of_speech():
+            stream.flush()
         ```
     """
 
@@ -87,8 +104,9 @@ class STT(stt.STT):
         *,
         model: NotGivenOr[STTModels | str] = NOT_GIVEN,
         sample_rate: int = 16000,
-        audio_chunk_duration_ms: int = 160,
+        behavior: NotGivenOr[Literal["turn_detecting", "transcribe_on_flush"]] = NOT_GIVEN,
         api_key: str | None = None,
+        audio_chunk_duration_ms: int = 160,
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = "https://api.cartesia.ai",
         language: STTLanguages | str | None = None,
@@ -97,7 +115,7 @@ class STT(stt.STT):
         """
         Create a new instance of Cartesia STT.
 
-        Model ``ink-2`` and newer supports:
+        Model ``ink-2`` supports:
             - Streaming
             - Turn detection
             - Interim results
@@ -114,10 +132,15 @@ class STT(stt.STT):
                 Defaults to ``ink-2`` if language is ``en``.
                 Defaults to ``ink-whisper`` for other languages.
             sample_rate: The sample rate of the audio in Hz. Defaults to 16 kHz.
-            audio_chunk_duration_ms: Duration in milliseconds of each audio chunk
-                sent to the Cartesia STT websocket. Defaults to 160 ms.
+            behavior: How the model should behave.
+                Use `transcribe_on_flush` if you want to call ``stream.flush()``
+                to get the final transcript.
+                Otherwise, use `turn_detecting`.
+                Defaults to `turn_detecting` if ``model`` supports it.
             api_key: The Cartesia API key. If not provided, it will be read from
                 the ``CARTESIA_API_KEY`` environment variable.
+            audio_chunk_duration_ms: Duration in milliseconds of each audio chunk
+                sent to the Cartesia STT websocket. Defaults to 160 ms.
             http_session: Optional aiohttp ClientSession to use for requests.
             base_url: The base URL for the Cartesia API.
                 Defaults to ``https://api.cartesia.ai``.
@@ -127,20 +150,32 @@ class STT(stt.STT):
 
         Raises:
             ValueError: If no API key is provided or found in environment variables.
+            ValueError: If ``ink-whisper`` is used with ``transcribe_on_flush``.
 
         Examples:
-            ```
+
+            ```# Turn detecting
             from livekit.agents import AgentSession
             from livekit.plugins import cartesia
 
             session = AgentSession(
-                stt=cartesia.STT(),
+                stt=cartesia.STT(behavior="turn_detecting"),
                 llm=LLM(),  # choose your favorite LLM
                 tts=cartesia.TTS(),
                 turn_handling={
                     "turn_detection": "stt",
                 },
             )
+            ```
+
+            ```# Transcribe on flush()
+            from livekit.plugins import cartesia
+
+            stt = cartesia.STT(behavior="transcribe_on_flush")
+            stream = stt.stream()
+
+            def on_user_end_of_speech():
+                stream.flush()
             ```
         """
         resolved_api_key = api_key or os.environ.get("CARTESIA_API_KEY")
@@ -162,33 +197,45 @@ class STT(stt.STT):
 
         is_whisper = _is_whisper_model(resolved_model)
 
-        if is_whisper:
-            capabilities = stt.STTCapabilities(
-                streaming=True,
-                interim_results=False,
-                aligned_transcript="word",
-                offline_recognize=False,
-                diarization=False,
-            )
+        resolved_behavior: _ResolvedBehavior
+        if is_given(behavior):
+            resolved_behavior = behavior
+        elif not is_whisper:
+            # turn detecting results in better transcription out-of-the-box
+            resolved_behavior = "turn_detecting"
         else:
-            capabilities = stt.STTCapabilities(
+            resolved_behavior = "legacy"
+
+        if is_whisper and resolved_behavior == "turn_detecting":
+            raise ValueError(
+                f'Unsupported model behavior: cartesia.STT(model="{model}", behavior="turn_detecting"). Switch to model="ink-2" or omit behavior.'
+            )
+
+        super().__init__(
+            capabilities=stt.STTCapabilities(
                 streaming=True,
-                interim_results=True,
-                aligned_transcript=False,
+                interim_results=resolved_behavior != "legacy",
+                aligned_transcript="word" if is_whisper else False,
                 offline_recognize=False,
                 diarization=False,
             )
-        super().__init__(capabilities=capabilities)
+        )
 
-        self._language = language_code
-        self._encoding: STTEncoding = encoding
-        self._sample_rate = sample_rate
-        self._audio_chunk_duration_ms = audio_chunk_duration_ms
-        self._model = resolved_model
         self._api_key = resolved_api_key
-        self._ws_base_url = _base_url_to_ws_base_url(base_url=base_url)
+        self._audio_chunk_duration_ms = audio_chunk_duration_ms
+        self._behavior: _ResolvedBehavior = resolved_behavior
+        self._encoding: STTEncoding = encoding
+        self._language = language_code
+        self._model = resolved_model
+        self._sample_rate = sample_rate
         self._session = http_session
-        self._streams = weakref.WeakSet[TurnsRecognizeStream | LegacyRecognizeStream]()
+        self._ws_base_url = _base_url_to_ws_base_url(base_url=base_url)
+
+        self._streams = weakref.WeakSet[
+            TurnDetectingRecognizeStream | TranscribeOnFlushRecognizeStream | LegacyRecognizeStream
+        ]()
+
+        self._warn_on_unexpected_args(language=self._language)
 
     @property
     def model(self) -> str:
@@ -214,7 +261,7 @@ class STT(stt.STT):
         *,
         language: NotGivenOr[STTLanguages | str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> TurnsRecognizeStream | LegacyRecognizeStream:
+    ) -> CartesiaRecognizeStream:
         if is_given(language):
             resolved_language = LanguageCode(language)
         elif self._language is not None:
@@ -222,41 +269,64 @@ class STT(stt.STT):
         else:
             resolved_language = None
 
+        self._warn_on_unexpected_args(language=resolved_language)
+
         if self._session is None:
             session = utils.http_context.http_session()
             self._session = session
         else:
             session = self._session
 
-        stream = (
-            TurnsRecognizeStream(
-                stt=self,
-                conn_options=conn_options,
-                sample_rate=self._sample_rate,
-                encoding=self._encoding,
-                audio_chunk_duration_ms=self._audio_chunk_duration_ms,
-                model=self._model,
-                api_key=self._api_key,
-                ws_base_url=self._ws_base_url,
-                session=session,
-                language=resolved_language,
-            )
-            if not _is_whisper_model(self._model)
-            else LegacyRecognizeStream(
-                stt=self,
-                conn_options=conn_options,
-                sample_rate=self._sample_rate,
-                encoding=self._encoding,
-                audio_chunk_duration_ms=self._audio_chunk_duration_ms,
-                model=self._model,
-                api_key=self._api_key,
-                ws_base_url=self._ws_base_url,
-                session=session,
-                language=resolved_language,
-            )
-        )
+        stream: CartesiaRecognizeStream
+        match self._behavior:
+            case "turn_detecting":
+                stream = TurnDetectingRecognizeStream(
+                    stt=self,
+                    conn_options=conn_options,
+                    sample_rate=self._sample_rate,
+                    encoding=self._encoding,
+                    audio_chunk_duration_ms=self._audio_chunk_duration_ms,
+                    model=self._model,
+                    api_key=self._api_key,
+                    ws_base_url=self._ws_base_url,
+                    session=session,
+                    language=resolved_language or LanguageCode("en"),
+                )
+            case "transcribe_on_flush":
+                stream = TranscribeOnFlushRecognizeStream(
+                    stt=self,
+                    conn_options=conn_options,
+                    sample_rate=self._sample_rate,
+                    encoding=self._encoding,
+                    audio_chunk_duration_ms=self._audio_chunk_duration_ms,
+                    model=self._model,
+                    api_key=self._api_key,
+                    ws_base_url=self._ws_base_url,
+                    session=session,
+                    language=resolved_language,
+                )
+            case "legacy":
+                stream = LegacyRecognizeStream(
+                    stt=self,
+                    conn_options=conn_options,
+                    sample_rate=self._sample_rate,
+                    encoding=self._encoding,
+                    audio_chunk_duration_ms=self._audio_chunk_duration_ms,
+                    model=self._model,
+                    api_key=self._api_key,
+                    ws_base_url=self._ws_base_url,
+                    session=session,
+                    language=resolved_language,
+                )
+            case _:
+                _exhaustive_check: Never = self._behavior
+                raise ValueError(f"Cartesia STT has unexpected kwarg behavior={_exhaustive_check}")
+
         self._streams.add(stream)
         return stream
+
+    async def aclose(self) -> None:
+        pass  # todo
 
     def update_options(
         self,
@@ -282,10 +352,21 @@ class STT(stt.STT):
 
         if is_given(language):
             self._language = LanguageCode(language)
+            self._warn_on_unexpected_args(language=self._language)
 
         for stream in self._streams:
             # do not update model since this is likely user error
             stream.update_options(language=language)
+
+    def _warn_on_unexpected_args(self, language: LanguageCode | None) -> None:
+        """Logs a warning when arguments are unexpected.
+
+        This is not necessarily an error since the API may support languages in the future.
+        """
+        if self._behavior == "turn_detecting" and language and language.language != "en":
+            logger.warning(
+                f'Cartesia STT model="{self._model}" currently only supports English. You provided {language}, which may produce unexpected results.'
+            )
 
 
 @dataclass

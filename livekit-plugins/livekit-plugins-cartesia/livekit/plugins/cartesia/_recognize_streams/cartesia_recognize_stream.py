@@ -5,11 +5,11 @@ from livekit.agents import (
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 
-from .models import STTLanguages
+from ..models import STTLanguages
 
 
 class CartesiaRecognizeStream(stt.RecognizeStream):
-    """This ABC exists for backward compatibility"""
+    """Concrete instances are created by `cartesia.STT.stream()`"""
 
     @abstractmethod
     def update_options(

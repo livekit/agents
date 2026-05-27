@@ -16,12 +16,10 @@ from __future__ import annotations
 
 import asyncio
 import json
-import warnings
-from typing import Literal
+from typing import TYPE_CHECKING
 from urllib.parse import urlencode
 
 import aiohttp
-from typing_extensions import NotRequired, TypedDict
 
 from livekit import rtc
 from livekit.agents import (
@@ -34,110 +32,34 @@ from livekit.agents._exceptions import APIConnectionError
 from livekit.agents.types import NOT_GIVEN, NotGivenOr, TimedString
 from livekit.agents.utils import is_given
 
-from ._cartesia_recognize_stream import CartesiaRecognizeStream
-from .constants import (
+from ..constants import (
     API_AUTH_HEADER,
     API_VERSION,
     API_VERSION_HEADER,
     REQUEST_ID_HEADER,
     USER_AGENT,
 )
-from .log import logger
-from .models import STTEncoding, STTLanguages, STTModels
+from ..log import logger
+from ..models import STTEncoding, STTLanguages, STTModels
+from .cartesia_recognize_stream import CartesiaRecognizeStream
+
+if TYPE_CHECKING:
+    from .._types.stt_websocket import STTEventMessage
 
 
-class STTWord(TypedDict):
-    """Word-level timestamp from Cartesia STT.
-
-    Attributes:
-        word: The transcribed word.
-        start: Start time in seconds.
-        end: End time in seconds.
-    """
-
-    word: str
-    start: float
-    end: float
-
-
-class STTTranscriptEvent(TypedDict):
-    """Transcript chunk for the current connection.
-
-    Each event is a delta from the last chunk with ``is_final=True``, not the
-    cumulative transcript.
-
-    Attributes:
-        type: Event discriminator.
-        is_final: Whether ``text`` is finalized.
-        request_id: Unique identifier for this WebSocket connection.
-        text: Transcribed text delta.
-        duration: Duration of the audio in seconds.
-        language: Detected or specified language code.
-        words: Optional word-level timestamps.
-    """
-
-    type: Literal["transcript"]
-    is_final: bool
-    request_id: str
-    text: str
-    duration: float
-    language: str
-    words: NotRequired[list[STTWord]]
-    probability: NotRequired[float]
-
-
-class STTFlushDoneEvent(TypedDict):
-    """Acknowledgment for the ``finalize`` command.
-
-    Attributes:
-        type: Event discriminator.
-        request_id: Unique identifier for this WebSocket connection.
-    """
-
-    type: Literal["flush_done"]
-    request_id: str
-
-
-class STTDoneEvent(TypedDict):
-    """Acknowledgment for the ``close`` command; session is closing.
-
-    Attributes:
-        type: Event discriminator.
-        request_id: Unique identifier for this WebSocket connection.
-    """
-
-    type: Literal["done"]
-    request_id: str
-
-
-class STTErrorEvent(TypedDict):
-    """Error event sent by the server.
-
-    Attributes:
-        type: Event discriminator.
-        code: HTTP-style status code; values >= 500 are treated as retryable.
-        message: Human-readable error message.
-        request_id: Unique identifier for this WebSocket connection.
-    """
-
-    type: Literal["error"]
-    code: NotRequired[int]
-    message: NotRequired[str]
-    request_id: NotRequired[str]
-
-
-STTEventMessage = STTTranscriptEvent | STTFlushDoneEvent | STTDoneEvent | STTErrorEvent
-"""Server-sent message on the ``/stt/websocket`` endpoint."""
+def _get_api_language_param_from_language_code(language_code: LanguageCode) -> str:
+    """API expects an ISO 639-1 language code (without region)"""
+    return language_code.language
 
 
 class LegacyRecognizeStream(CartesiaRecognizeStream):
-    """Cartesia STT stream without turn detection.
+    """Cartesia STT stream implementation for ``ink-whisper`` when the ``behavior`` kwarg is omitted.
 
     See also:
         https://docs.cartesia.ai/api-reference/stt/stt
 
     .. deprecated::
-        Use TurnsRecognizeStream instead.
+        Use ``cartesia.STT(behavior="turn_detecting")`` or ``cartesia.STT(behavior="transcribe_on_flush")`` instead.
     """
 
     def __init__(
@@ -162,8 +84,7 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
         self._api_key = api_key
         self._ws_base_url = ws_base_url
         self._session = session
-        # must be ISO 639-1 language code (without region)
-        self._language_str = language.language if language is not None else None
+        self._language = language
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
         self._speaking = False
@@ -171,6 +92,9 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
         self._last_speech_end_time: float = 0
 
     async def _run(self) -> None:
+        if self._input_ch.closed:
+            return
+
         closing_ws = False
         # Reset per-connection state so a transport-error retry (a new _run
         # invocation by the base class) starts fresh.
@@ -197,22 +121,27 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
                 samples_per_channel=samples_per_chunk,
             )
 
-            has_ended = False
             async for data in self._input_ch:
-                frames: list[rtc.AudioFrame] = []
+                frames: list[rtc.AudioFrame | LegacyRecognizeStream._FlushSentinel] = []
                 if isinstance(data, rtc.AudioFrame):
                     frames.extend(audio_bstream.write(data.data.tobytes()))
                 elif isinstance(data, self._FlushSentinel):
                     frames.extend(audio_bstream.flush())
-                    has_ended = True
+                    frames.append(data)
+                    logger.warning(
+                        'Cartesia STT now has better support for stream.flush(). Try it out by using cartesia.STT(behavior="transcribe_on_flush"). This will prevent final transcripts from being emitted until stream.flush() is called.'
+                    )
 
                 for frame in frames:
-                    self._speech_duration += frame.duration
-                    await ws.send_bytes(frame.data.tobytes())
+                    if isinstance(frame, self._FlushSentinel):
+                        await ws.send_str("finalize")
+                    else:
+                        self._speech_duration += frame.duration
+                        await ws.send_bytes(frame.data.tobytes())
 
-                if has_ended:
-                    await ws.send_str("finalize")
-                    has_ended = False
+            for frame in audio_bstream.flush():
+                self._speech_duration += frame.duration
+                await ws.send_bytes(frame.data.tobytes())
 
             closing_ws = True
             await ws.send_str("close")
@@ -291,8 +220,10 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
             "encoding": self._encoding,
         }
 
-        if self._language_str is not None:
-            params["language"] = self._language_str
+        if self._language is not None:
+            params["language"] = _get_api_language_param_from_language_code(
+                language_code=self._language
+            )
 
         ws_url = f"{self._ws_base_url}/stt/websocket?{urlencode(params)}"
 
@@ -320,13 +251,16 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
     def _process_stream_event(self, data: STTEventMessage) -> None:
         """Process incoming WebSocket messages.
 
-        See https://docs.cartesia.ai/api-reference/stt/websocket.
+        See https://docs.cartesia.ai/api-reference/stt/stt.
         """
+        if request_id := data.get("request_id"):
+            self._request_id = request_id
+
         if data["type"] == "transcript":
-            request_id = data.get("request_id", self._request_id)
-            if request_id:
-                self._request_id = request_id
-            text = data.get("text", "")
+            if self._event_ch.closed:
+                return
+
+            text = data["text"]
             words = data.get("words", [])
             timed_words: list[TimedString] = [
                 TimedString(
@@ -343,9 +277,7 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
             start_time = self._last_speech_end_time
             end_time = start_time + data.get("duration", 0)
             self._last_speech_end_time = end_time
-            is_final = data.get("is_final", False)
-            language_from_data = data.get("language")
-            language_str = language_from_data if language_from_data else self._language_str
+            is_final = data["is_final"]
 
             if not text and not is_final:
                 return
@@ -359,12 +291,9 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
                 self._event_ch.send_nowait(start_event)
 
             speech_data = stt.SpeechData(
-                language=LanguageCode(language_str)
-                if language_str is not None
-                else LanguageCode("en"),
+                language=self._language or LanguageCode("en"),
                 start_time=start_time,
                 end_time=end_time,
-                confidence=data.get("probability", 1.0),
                 text=text,
                 words=timed_words,
             )
@@ -374,7 +303,7 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(
                             type=stt.SpeechEventType.RECOGNITION_USAGE,
-                            request_id=request_id,
+                            request_id=self._request_id,
                             recognition_usage=stt.RecognitionUsage(
                                 audio_duration=self._speech_duration,
                             ),
@@ -384,7 +313,7 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
 
                 event = stt.SpeechEvent(
                     type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                    request_id=request_id,
+                    request_id=self._request_id,
                     alternatives=[speech_data],
                 )
                 self._event_ch.send_nowait(event)
@@ -396,7 +325,7 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
             else:
                 event = stt.SpeechEvent(
                     type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                    request_id=request_id,
+                    request_id=self._request_id,
                     alternatives=[speech_data],
                 )
                 self._event_ch.send_nowait(event)
@@ -430,14 +359,23 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
         """
         # not changing the model and reconnecting since that is likely unexpected behavior
         if is_given(model) and model != self._model:
-            warnings.warn(
-                "Cartesia STT update_options() ignores the model kwarg. Construct a new STT instance to change the model.",
-                DeprecationWarning,
-                stacklevel=2,
+            logger.warning(
+                "Cartesia STT update_options() ignores the model kwarg. Construct a new STT instance to change the model."
             )
 
         if is_given(language):
-            change_language_str_to = LanguageCode(language).language
-            if change_language_str_to != self._language_str:
-                self._language_str = change_language_str_to
+            language_code = LanguageCode(language)
+
+            current_api_language_param = (
+                _get_api_language_param_from_language_code(language_code=self._language)
+                if self._language is not None
+                else None
+            )
+            api_language_param = _get_api_language_param_from_language_code(
+                language_code=language_code
+            )
+
+            self._language = language_code
+
+            if current_api_language_param != api_language_param:
                 self._reconnect_event.set()

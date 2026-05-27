@@ -1,0 +1,402 @@
+# Copyright 2023 LiveKit, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from __future__ import annotations
+
+import asyncio
+import json
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+from urllib.parse import urlencode
+
+import aiohttp
+
+from livekit import rtc
+from livekit.agents import (
+    APIConnectOptions,
+    LanguageCode,
+    stt,
+    utils,
+)
+from livekit.agents._exceptions import APIConnectionError
+from livekit.agents.types import NOT_GIVEN, NotGivenOr, TimedString
+from livekit.agents.utils import is_given
+
+from ..constants import (
+    API_AUTH_HEADER,
+    API_VERSION,
+    API_VERSION_HEADER,
+    REQUEST_ID_HEADER,
+    USER_AGENT,
+)
+from ..log import logger
+from ..models import STTEncoding, STTLanguages, STTModels
+from .cartesia_recognize_stream import CartesiaRecognizeStream
+
+if TYPE_CHECKING:
+    from .._types.stt_websocket import STTEventMessage
+
+
+def _get_api_language_param_from_language_code(language_code: LanguageCode) -> str:
+    """API expects an ISO 639-1 language code (without region)"""
+    return language_code.language
+
+
+@dataclass
+class _TranscriptBuffer:
+    text: list[str]
+    start_time: float
+    words: list[TimedString] | None = None
+    """None indicates that the API never returned the "word" property.
+
+    This is more strict that empty arrays since
+    it indicates that the model doesn't support words vs there are no words.
+    """
+
+
+class TranscribeOnFlushRecognizeStream(CartesiaRecognizeStream):
+    """Cartesia STT stream implementation for ``cartesia.STT(behavior="transcribe_on_flush")``.
+
+    This implementation requires you to call :meth:`flush`
+    when the user is done speaking to trigger transcription.
+    It also does not emit :class:`~stt.SpeechEventType.START_OF_SPEECH` or :class:`~stt.SpeechEventType.END_OF_SPEECH`.
+
+    Use ``cartesia.STT(behavior="turn_detecting")`` instead
+    if you do not know when the user is done speaking.
+
+    See also:
+        - [API Reference](https://docs.cartesia.ai/api-reference/stt/stt)
+        - [Compare STT Endpoints](https://docs.cartesia.ai/use-the-api/compare-stt-endpoints)
+    """
+
+    def __init__(
+        self,
+        *,
+        stt: stt.STT,
+        conn_options: APIConnectOptions,
+        sample_rate: int,
+        encoding: STTEncoding,
+        audio_chunk_duration_ms: int,
+        model: STTModels | str,
+        api_key: str,
+        ws_base_url: str,
+        session: aiohttp.ClientSession,
+        language: LanguageCode | None,
+    ) -> None:
+        super().__init__(stt=stt, conn_options=conn_options, sample_rate=sample_rate)
+        self._encoding = encoding
+        self._sample_rate = sample_rate
+        self._audio_chunk_duration_ms = audio_chunk_duration_ms
+        self._model = model
+        self._api_key = api_key
+        self._ws_base_url = ws_base_url
+        self._session = session
+        self._language = language
+        self._request_id = ""
+        self._reconnect_event = asyncio.Event()
+        self._buffered_transcript_chunks: list[str] = []
+
+        # input audio duration for usage recognition
+        self._speech_duration: float = 0
+
+        self._transcript_buffer: _TranscriptBuffer | None = None
+        # the last word timestamp we've seen
+        self._last_speech_end_time: float = 0
+
+    async def _run(self) -> None:
+        if self._input_ch.closed:
+            return
+
+        closing_ws = False
+        # Reset per-connection state so a transport-error retry starts fresh.
+        self._speech_duration = 0
+        self._transcript_buffer = None
+        self._last_speech_end_time = 0
+
+        async def keepalive_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            try:
+                while True:
+                    await ws.ping()
+                    await asyncio.sleep(30)
+            except Exception:
+                return
+
+        @utils.log_exceptions(logger=logger)
+        async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            nonlocal closing_ws
+
+            samples_per_chunk = self._sample_rate * self._audio_chunk_duration_ms // 1000
+            audio_bstream = utils.audio.AudioByteStream(
+                sample_rate=self._sample_rate,
+                num_channels=1,
+                samples_per_channel=samples_per_chunk,
+            )
+
+            async for data in self._input_ch:
+                frames: list[rtc.AudioFrame | TranscribeOnFlushRecognizeStream._FlushSentinel] = []
+                if isinstance(data, rtc.AudioFrame):
+                    frames.extend(audio_bstream.write(data.data.tobytes()))
+                elif isinstance(data, self._FlushSentinel):
+                    frames.extend(audio_bstream.flush())
+                    frames.append(data)
+
+                for frame in frames:
+                    if isinstance(frame, self._FlushSentinel):
+                        await ws.send_str("finalize")
+                    else:
+                        self._speech_duration += frame.duration
+                        await ws.send_bytes(frame.data.tobytes())
+
+            for frame in audio_bstream.flush():
+                self._speech_duration += frame.duration
+                await ws.send_bytes(frame.data.tobytes())
+
+            closing_ws = True
+            await ws.send_str("close")
+
+        @utils.log_exceptions(logger=logger)
+        async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            nonlocal closing_ws
+            while True:
+                msg = await ws.receive()
+                if msg.type in (
+                    aiohttp.WSMsgType.CLOSED,
+                    aiohttp.WSMsgType.CLOSE,
+                    aiohttp.WSMsgType.CLOSING,
+                ):
+                    if closing_ws or self._session.closed:
+                        return
+                    raise APIConnectionError(
+                        message=(
+                            "Cartesia STT connection closed unexpectedly "
+                            f"(close_code={ws.close_code}, "
+                            f"data={msg.data!r}, extra={msg.extra!r})"
+                        ),
+                        retryable=True,
+                    )
+
+                if msg.type != aiohttp.WSMsgType.TEXT:
+                    logger.warning("unexpected Cartesia STT message type %s", msg.type)
+                    continue
+
+                try:
+                    data: STTEventMessage = json.loads(msg.data)
+                except Exception:
+                    logger.exception("failed to parse Cartesia STT message")
+                else:
+                    self._process_stream_event(data)
+
+        ws: aiohttp.ClientWebSocketResponse | None = None
+
+        while True:
+            try:
+                ws = await self._connect_ws()
+                tasks = [
+                    asyncio.create_task(send_task(ws)),
+                    asyncio.create_task(recv_task(ws)),
+                    asyncio.create_task(keepalive_task(ws)),
+                ]
+                tasks_group = asyncio.gather(*tasks)
+                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
+
+                try:
+                    done, _ = await asyncio.wait(
+                        (tasks_group, wait_reconnect_task),
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+
+                    for task in done:
+                        if task != wait_reconnect_task:
+                            task.result()
+
+                    if wait_reconnect_task not in done:
+                        break
+
+                    self._reconnect_event.clear()
+                finally:
+                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
+                    tasks_group.cancel()
+                    tasks_group.exception()  # retrieve the exception
+            finally:
+                if ws is not None:
+                    await ws.close()
+
+    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
+        params = {
+            "model": self._model,
+            "sample_rate": str(self._sample_rate),
+            "encoding": self._encoding,
+        }
+
+        if self._language is not None:
+            params["language"] = _get_api_language_param_from_language_code(
+                language_code=self._language
+            )
+
+        ws_url = f"{self._ws_base_url}/stt/websocket?{urlencode(params)}"
+
+        try:
+            ws = await asyncio.wait_for(
+                self._session.ws_connect(
+                    ws_url,
+                    headers={
+                        API_VERSION_HEADER: API_VERSION,
+                        API_AUTH_HEADER: self._api_key,
+                        "User-Agent": USER_AGENT,
+                    },
+                ),
+                self._conn_options.timeout,
+            )
+            self._request_id = ws._response.headers.get(REQUEST_ID_HEADER) or ""
+            logger.debug(
+                "Established new Cartesia STT WebSocket connection",
+                extra={"cartesia_request_id": self._request_id},
+            )
+        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
+            raise APIConnectionError("failed to connect to cartesia") from e
+        return ws
+
+    def _get_buffered_speech_data(self) -> stt.SpeechData:
+        if self._transcript_buffer is None:
+            return stt.SpeechData(
+                language=self._language or LanguageCode("en"),
+                text="",
+            )
+        return stt.SpeechData(
+            language=self._language or LanguageCode("en"),
+            start_time=self._transcript_buffer.start_time,
+            end_time=self._last_speech_end_time,
+            text="".join(self._transcript_buffer.text),
+            words=self._transcript_buffer.words,
+        )
+
+    def _process_stream_event(self, data: STTEventMessage) -> None:
+        """Process incoming WebSocket messages.
+
+        See https://docs.cartesia.ai/api-reference/stt/stt.
+        """
+        if request_id := data.get("request_id"):
+            self._request_id = request_id
+
+        if data["type"] == "transcript":
+            # word timestamps are often within the audio window, so we track time separately
+            if self._last_speech_end_time == 0.0:
+                self._last_speech_end_time = self.start_time_offset
+
+            if not data["is_final"]:
+                return
+
+            # track time
+            start_time = self._last_speech_end_time
+            self._last_speech_end_time += data.get("duration", 0)
+
+            # append text
+            # track buffer start time if this was the first transcript event
+            if self._transcript_buffer is None:
+                self._transcript_buffer = _TranscriptBuffer(
+                    text=[data["text"]], start_time=start_time
+                )
+            else:
+                self._transcript_buffer.text.append(data["text"])
+
+            # append words
+            words = data.get("words", None)
+            if words is not None:
+                if self._transcript_buffer.words is None:
+                    self._transcript_buffer.words = []
+                self._transcript_buffer.words.extend(
+                    TimedString(
+                        text=word.get("word", ""),
+                        start_time=word.get("start", 0) + self.start_time_offset,
+                        end_time=word.get("end", 0) + self.start_time_offset,
+                        start_time_offset=self.start_time_offset,
+                    )
+                    for word in words
+                )
+
+            if not self._event_ch.closed:
+                self._event_ch.send_nowait(
+                    stt.SpeechEvent(
+                        type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                        request_id=self._request_id,
+                        alternatives=[self._get_buffered_speech_data()],
+                    )
+                )
+        elif data["type"] == "flush_done":
+            if not self._event_ch.closed:
+                if self._speech_duration > 0:
+                    self._event_ch.send_nowait(
+                        stt.SpeechEvent(
+                            type=stt.SpeechEventType.RECOGNITION_USAGE,
+                            request_id=self._request_id,
+                            recognition_usage=stt.RecognitionUsage(
+                                audio_duration=self._speech_duration,
+                            ),
+                        )
+                    )
+                    self._speech_duration = 0
+                self._event_ch.send_nowait(
+                    stt.SpeechEvent(
+                        type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                        request_id=self._request_id,
+                        alternatives=[self._get_buffered_speech_data()],
+                    )
+                )
+            self._transcript_buffer = None
+        elif data["type"] == "done":
+            logger.debug("Received done acknowledgment from Cartesia STT - session closing")
+
+        elif data["type"] == "error":
+            message = data.get("message") or "unknown error from cartesia"
+            status_code = data.get("code") or 500
+            logger.warning("cartesia sent an error", extra={"data": data})
+            if status_code >= 500:
+                raise APIConnectionError(message=message, retryable=True)
+        else:
+            logger.warning("received unexpected message from Cartesia STT: %s", data)
+
+    def update_options(
+        self,
+        *,
+        language: NotGivenOr[STTLanguages | str] = NOT_GIVEN,
+        model: NotGivenOr[str] = NOT_GIVEN,
+    ) -> None:
+        """Change Cartesia STT options. Use sparingly; this will interrupt transcription.
+
+        Args:
+            language: Used to change the language to match what the user is speaking.
+            model: Deprecated. This is a no-op. Construct a new STT instance to change the model.
+        """
+        # not changing the model and reconnecting since that is likely unexpected behavior
+        if is_given(model) and model != self._model:
+            logger.warning(
+                "Cartesia STT update_options() ignores the model kwarg. Construct a new STT instance to change the model."
+            )
+
+        if is_given(language):
+            language_code = LanguageCode(language)
+
+            current_api_language_param = (
+                _get_api_language_param_from_language_code(language_code=self._language)
+                if self._language is not None
+                else None
+            )
+            api_language_param = _get_api_language_param_from_language_code(
+                language_code=language_code
+            )
+
+            self._language = language_code
+
+            if current_api_language_param != api_language_param:
+                self._reconnect_event.set()
