@@ -27,6 +27,7 @@ from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -335,6 +336,8 @@ class SpeechStream(stt.SpeechStream):
                     tasks_group.cancel()
                     tasks_group.exception()
 
+            except APIError:
+                raise
             except asyncio.TimeoutError as e:
                 logger.error(
                     f"Timeout during Soniox Speech-to-Text API connection/initialization: {e}"
@@ -486,7 +489,8 @@ class SpeechStream(stt.SpeechStream):
 
                 try:
                     content = json.loads(msg.data)
-                    tokens = content["tokens"]
+                    has_error = bool(content.get("error_code") or content.get("error_message"))
+                    tokens = content.get("tokens", []) if has_error else content["tokens"]
 
                     non_final = _TokenAccumulator()
                     non_final_original = _TokenAccumulator()
@@ -572,28 +576,35 @@ class SpeechStream(stt.SpeechStream):
                         )
 
                     # 3) on error or finish, flush any remaining final tokens.
-                    if (
-                        content.get("finished")
-                        or content.get("error_code")
-                        or content.get("error_message")
-                    ):
+                    if content.get("finished") or has_error:
                         send_endpoint_transcript()
                         self._report_processed_audio_duration(total_audio_proc_ms)
 
-                    if content.get("error_code") or content.get("error_message"):
-                        logger.error(
-                            f"WebSocket error: {content.get('error_code')}"
-                            f" - {content.get('error_message')}"
+                    if has_error:
+                        err_code = content.get("error_code")
+                        err_msg = content.get("error_message", "Unknown Soniox STT error")
+                        logger.error(f"WebSocket error: {err_code} - {err_msg}")
+                        status_code = int(err_code) if isinstance(err_code, int) else -1
+                        if isinstance(err_code, str) and err_code.isdigit():
+                            status_code = int(err_code)
+                        raise APIStatusError(
+                            f"Soniox STT error: {err_code} - {err_msg}",
+                            status_code=status_code,
+                            body=content,
                         )
 
                     if content.get("finished"):
                         logger.debug("Transcription finished")
 
+                except APIError:
+                    raise
                 except Exception as e:
                     logger.exception(f"Error processing message: {e}")
 
         except asyncio.CancelledError:
             # Normal shutdown — don't trigger reconnect.
+            raise
+        except APIError:
             raise
         except aiohttp.ClientError as e:
             logger.error(f"WebSocket error while receiving: {e}")
