@@ -56,6 +56,7 @@ from .events import (
     AgentState,
     AgentStateChangedEvent,
     ErrorEvent,
+    FunctionToolsCalledEvent,
     FunctionToolsExecutedEvent,
     MetricsCollectedEvent,
     SessionUsageUpdatedEvent,
@@ -2503,6 +2504,21 @@ class AgentActivity(RecognitionHooks):
         )
         tasks.append(llm_task)
 
+        def _emit_function_tools_called(task: asyncio.Task[Any]) -> None:
+            if task.cancelled() or task.exception() is not None:
+                return
+            all_called = (
+                list(llm_gen_data.generated_functions)
+                + list(llm_gen_data.generated_provider_function_calls)
+            )
+            if all_called:
+                self._session.emit(
+                    "function_tools_called",
+                    FunctionToolsCalledEvent(function_calls=all_called),
+                )
+
+        llm_task.add_done_callback(_emit_function_tools_called)
+
         text_tee = utils.aio.itertools.tee(llm_gen_data.text_ch, 2)
         tts_text_input, tr_input = text_tee
 
@@ -3297,12 +3313,23 @@ class AgentActivity(RecognitionHooks):
             async for fnc in fnc_stream_for_tracing:
                 function_calls.append(fnc)
 
-        tasks.append(
-            asyncio.create_task(
-                _read_fnc_stream(),
-                name="AgentActivity.realtime_generation.read_fnc_stream",
-            )
+        read_fnc_task = asyncio.create_task(
+            _read_fnc_stream(),
+            name="AgentActivity.realtime_generation.read_fnc_stream",
         )
+        tasks.append(read_fnc_task)
+
+        def _emit_function_tools_called(task: asyncio.Task[Any]) -> None:
+            if task.cancelled() or task.exception() is not None:
+                return
+            all_called = list(function_calls) + list(generation_ev.provider_function_calls)
+            if all_called:
+                self._session.emit(
+                    "function_tools_called",
+                    FunctionToolsCalledEvent(function_calls=all_called),
+                )
+
+        read_fnc_task.add_done_callback(_emit_function_tools_called)
 
         def _tool_execution_started_cb(fnc_call: llm.FunctionCall) -> None:
             speech_handle._item_added([fnc_call])

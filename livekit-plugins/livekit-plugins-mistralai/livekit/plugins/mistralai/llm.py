@@ -218,10 +218,12 @@ class LLMStream(llm.LLMStream):
         self._tool_ctx = llm.ToolContext(tools)
         self._emitted_tool_calls: set[str] = set()
         self._provider_tool_args: dict[str, str] = {}
+        self._provider_tool_names: dict[str, str] = {}
 
     async def _run(self) -> None:
         self._emitted_tool_calls = set()
         self._provider_tool_args = {}
+        self._provider_tool_names = {}
         retryable = True
 
         try:
@@ -354,6 +356,7 @@ class LLMStream(llm.LLMStream):
 
         if isinstance(data, ToolExecutionStartedEvent):
             self._provider_tool_args[data.id] = data.arguments
+            self._provider_tool_names[data.id] = data.name
 
         elif isinstance(data, ToolExecutionDeltaEvent):
             if data.id not in self._provider_tool_args:
@@ -362,9 +365,26 @@ class LLMStream(llm.LLMStream):
 
         elif isinstance(data, ToolExecutionDoneEvent):
             args = self._provider_tool_args.pop(data.id, "")
+            name = self._provider_tool_names.pop(data.id, data.name)
             logger.debug(
                 "executed provider tool",
-                extra={"function": data.name, "arguments": args, "info": data.info},
+                extra={"function": name, "arguments": args, "info": data.info},
+            )
+            chunks.append(
+                ChatChunk(
+                    id=data.id,
+                    delta=llm.ChoiceDelta(
+                        role="assistant",
+                        tool_calls=[
+                            llm.FunctionToolCall(
+                                name=name,
+                                arguments=args,
+                                call_id=data.id,
+                                provider_executed=True,
+                            )
+                        ],
+                    ),
+                )
             )
 
         return chunks

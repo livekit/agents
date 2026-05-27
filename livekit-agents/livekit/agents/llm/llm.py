@@ -55,6 +55,10 @@ class FunctionToolCall(BaseModel):
     name: str
     arguments: str
     call_id: str
+    provider_executed: bool = False
+    """True if the LLM provider executed this tool server-side (e.g. xAI
+    WebSearch, Mistral built-ins). These calls are surfaced through the
+    ``function_tools_called`` event but never executed locally."""
     extra: dict[str, Any] | None = None
     """Provider-specific extra data (e.g., Google thought signatures)."""
 

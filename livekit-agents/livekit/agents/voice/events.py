@@ -95,6 +95,7 @@ EventTypes = Literal[
     "conversation_item_added",
     "agent_false_interruption",
     "overlapping_speech",
+    "function_tools_called",
     "function_tools_executed",
     "metrics_collected",
     "session_usage_updated",
@@ -170,6 +171,20 @@ class _TypeDiscriminator(BaseModel):
 class ConversationItemAddedEvent(BaseModel):
     type: Literal["conversation_item_added"] = "conversation_item_added"
     item: ChatMessage | AgentHandoff | _TypeDiscriminator
+    created_at: float = Field(default_factory=time.time)
+
+
+class FunctionToolsCalledEvent(BaseModel):
+    """Emitted once per turn with every tool the model called, including tools
+    executed by the provider (e.g. xAI WebSearch, Mistral built-ins, Anthropic
+    server-side tools).
+
+    For locally-executed tools, ``function_tools_executed`` fires afterward
+    with outputs. Provider tools do not appear in ``function_tools_executed``.
+    """
+
+    type: Literal["function_tools_called"] = "function_tools_called"
+    function_calls: list[FunctionCall]
     created_at: float = Field(default_factory=time.time)
 
 
@@ -278,6 +293,7 @@ AgentEvent = Annotated[
     | MetricsCollectedEvent
     | SessionUsageUpdatedEvent
     | ConversationItemAddedEvent
+    | FunctionToolsCalledEvent
     | FunctionToolsExecutedEvent
     | SpeechCreatedEvent
     | ErrorEvent
