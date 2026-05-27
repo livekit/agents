@@ -226,6 +226,7 @@ class _ParticipantInputStream(Generic[T], ABC):
             if self._on_track_available(publication.track, publication, participant):
                 return
 
+
 class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], AudioInput):
     def __init__(
         self,
