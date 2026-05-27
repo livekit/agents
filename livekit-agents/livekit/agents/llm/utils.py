@@ -559,7 +559,7 @@ def _prepare_function_arguments(
     else:
         raise ValueError(f"Unsupported function tool type: {type(fnc)}")
 
-    # inject RunContext (or subclasses like AsyncRunContext) if needed
+    # inject RunContext (or subclasses) if needed
     context_dict = {}
     for param_name, _ in signature.parameters.items():
         type_hint = type_hints[param_name]

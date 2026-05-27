@@ -6,7 +6,15 @@ import pytest
 from pydantic import BaseModel, Field
 
 from livekit.agents import Agent
-from livekit.agents.llm import ProviderTool, Tool, ToolContext, ToolError, Toolset, function_tool
+from livekit.agents.llm import (
+    ProviderTool,
+    Tool,
+    ToolContext,
+    ToolError,
+    ToolFlag,
+    Toolset,
+    function_tool,
+)
 from livekit.agents.llm._strict import to_strict_json_schema
 from livekit.agents.llm.utils import (
     build_legacy_openai_schema,
@@ -1203,7 +1211,7 @@ class TestHasCancellableTool:
     def test_one_cancellable_tool_returns_true(self):
         from livekit.agents.voice.tool_executor import has_cancellable_tool
 
-        @function_tool(allow_cancellation=True)
+        @function_tool(flags=ToolFlag.CANCELLABLE)
         async def long_running() -> str:
             return "done"
 
@@ -1213,7 +1221,7 @@ class TestHasCancellableTool:
         from livekit.agents.llm.async_toolset import AsyncToolset
         from livekit.agents.voice.tool_executor import has_cancellable_tool
 
-        @function_tool(allow_cancellation=True)
+        @function_tool(flags=ToolFlag.CANCELLABLE)
         async def long_running() -> str:
             return "done"
 

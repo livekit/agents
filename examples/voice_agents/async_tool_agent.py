@@ -71,7 +71,7 @@ class TravelAgent(Agent):
     async def on_enter(self):
         self.session.generate_reply(instructions="Greet the user and introduce yourself.")
 
-    @llm.function_tool(allow_cancellation=True, on_duplicate="confirm")
+    @llm.function_tool(flags=llm.ToolFlag.CANCELLABLE, on_duplicate="confirm")
     async def book_flight(self, ctx: RunContext, origin: str, destination: str, date: str) -> str:
         """Called when user wants to book a flight.
 
@@ -121,7 +121,7 @@ class TravelAgent(Agent):
 
     # -- Tool 2: Tour guide via web search --
 
-    @llm.function_tool(allow_cancellation=True, on_duplicate="confirm")
+    @llm.function_tool(flags=llm.ToolFlag.CANCELLABLE, on_duplicate="confirm")
     async def tour_guide(self, ctx: RunContext, destination: str, interests: str) -> str:
         """Called when user wants to know about a destination, including
         sightseeing spots, restaurants, local food, nightlife, or neighborhood tips.

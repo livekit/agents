@@ -388,7 +388,7 @@ class AgentActivity(RecognitionHooks):
 
         tools = self._session.tools + self._agent.tools + self._mcp_tools
         # auto-expose cancel_task / get_running_tasks when any tool opts in via
-        # allow_cancellation=True. always-on (not per-turn) so the LLM-visible
+        # ToolFlag.CANCELLABLE. always-on (not per-turn) so the LLM-visible
         # schema stays stable across turns and the prompt cache stays warm
         if has_cancellable_tool(tools):
             tools = [*tools, cancel_task, get_running_tasks]

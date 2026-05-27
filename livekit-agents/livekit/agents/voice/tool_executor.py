@@ -159,7 +159,7 @@ async def cancel_task(call_id: str) -> str:
 
 
 def has_cancellable_tool(tools: Sequence[Tool | Toolset]) -> bool:
-    """Return True if any tool (or nested toolset tool) sets ``allow_cancellation=True``."""
+    """Return True if any tool (or nested toolset tool) has ``ToolFlag.CANCELLABLE``."""
     for tool in tools:
         if isinstance(tool, (FunctionTool, RawFunctionTool)):
             if tool.info.allow_cancellation:

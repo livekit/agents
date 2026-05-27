@@ -1,21 +1,33 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from ..log import logger
 from ..utils.misc import is_given
-from ..voice.events import RunContext as AsyncRunContext
 from ..voice.tool_executor import AsyncToolPrompts, _resolve_async_tool_prompts, _ToolExecutor
 from .tool_context import FunctionTool, RawFunctionTool, Tool, Toolset
 
 if TYPE_CHECKING:
     from ..voice.agent_activity import AgentActivity
     from ..voice.agent_session import AgentSession
+    from ..voice.events import RunContext as AsyncRunContext  # noqa: F401
 
-# AsyncRunContext is a backwards-compat alias — the unified RunContext now carries
-# the same surface, so user tools typing `ctx: AsyncRunContext` keep working
+# AsyncRunContext is a deprecated alias for RunContext kept for one release so user
+# tools typing ``ctx: AsyncRunContext`` keep working. __getattr__ surfaces a runtime
+# warning to nudge migration to ``RunContext``.
 __all__ = ["AsyncRunContext", "AsyncToolset"]
+
+
+def __getattr__(name: str) -> Any:
+    if name == "AsyncRunContext":
+        from ..voice.events import RunContext
+
+        logger.warning(
+            "AsyncRunContext is deprecated; import RunContext from livekit.agents directly"
+        )
+        return RunContext
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 class AsyncToolset(Toolset):
@@ -28,7 +40,7 @@ class AsyncToolset(Toolset):
 
     Example::
 
-        @function_tool(on_duplicate="confirm", allow_cancellation=True)
+        @function_tool(on_duplicate="confirm", flags=ToolFlag.CANCELLABLE)
         async def book_flight(ctx, origin: str, destination: str) -> dict:
             await ctx.update(f"Looking up flights {origin} → {destination}...")
             flights = await search(origin, destination)

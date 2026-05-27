@@ -152,6 +152,7 @@ class StopResponse(Exception):
 class ToolFlag(Flag):
     NONE = 0
     IGNORE_ON_ENTER = auto()
+    CANCELLABLE = auto()
 
 
 DuplicateMode = Literal["allow", "reject", "replace", "confirm"]
@@ -163,7 +164,10 @@ class FunctionToolInfo:
     description: str | None
     flags: ToolFlag
     on_duplicate: DuplicateMode = "allow"
-    allow_cancellation: bool = False
+
+    @property
+    def allow_cancellation(self) -> bool:
+        return ToolFlag.CANCELLABLE in self.flags
 
 
 class RawFunctionDescription(TypedDict):
@@ -188,7 +192,10 @@ class RawFunctionToolInfo:
     raw_schema: dict[str, Any]
     flags: ToolFlag
     on_duplicate: DuplicateMode = "allow"
-    allow_cancellation: bool = False
+
+    @property
+    def allow_cancellation(self) -> bool:
+        return ToolFlag.CANCELLABLE in self.flags
 
 
 CONFIRM_DUPLICATE_PARAM = "lk_agents_confirm_duplicate"
@@ -267,7 +274,6 @@ def function_tool(
     raw_schema: RawFunctionDescription | dict[str, Any],
     flags: ToolFlag = ToolFlag.NONE,
     on_duplicate: DuplicateMode = "allow",
-    allow_cancellation: bool = False,
 ) -> RawFunctionTool[_P, _R]: ...
 
 
@@ -278,7 +284,6 @@ def function_tool(
     raw_schema: RawFunctionDescription | dict[str, Any],
     flags: ToolFlag = ToolFlag.NONE,
     on_duplicate: DuplicateMode = "allow",
-    allow_cancellation: bool = False,
 ) -> Callable[[Callable[_P, _R]], RawFunctionTool[_P, _R]]: ...
 
 
@@ -290,7 +295,6 @@ def function_tool(
     description: str | None = None,
     flags: ToolFlag = ToolFlag.NONE,
     on_duplicate: DuplicateMode = "allow",
-    allow_cancellation: bool = False,
 ) -> FunctionTool[_P, _R]: ...
 
 
@@ -302,7 +306,6 @@ def function_tool(
     description: str | None = None,
     flags: ToolFlag = ToolFlag.NONE,
     on_duplicate: DuplicateMode = "allow",
-    allow_cancellation: bool = False,
 ) -> Callable[[Callable[_P, _R]], FunctionTool[_P, _R]]: ...
 
 
@@ -314,7 +317,6 @@ def function_tool(
     raw_schema: RawFunctionDescription | dict[str, Any] | None = None,
     flags: ToolFlag = ToolFlag.NONE,
     on_duplicate: DuplicateMode = "allow",
-    allow_cancellation: bool = False,
 ) -> (
     FunctionTool[_P, _R]
     | RawFunctionTool[_P, _R]
@@ -341,7 +343,6 @@ def function_tool(
             raw_schema=schema,
             flags=flags,
             on_duplicate=on_duplicate,
-            allow_cancellation=allow_cancellation,
         )
         return RawFunctionTool(func, info)
 
@@ -358,7 +359,6 @@ def function_tool(
             description=description or docstring.description,
             flags=flags,
             on_duplicate=on_duplicate,
-            allow_cancellation=allow_cancellation,
         )
         return FunctionTool(wrapped, info)
 
