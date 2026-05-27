@@ -3,7 +3,7 @@ import json
 from typing import Annotated, Any, Literal
 
 import pytest
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from livekit.agents import Agent
 from livekit.agents.llm import ProviderTool, Tool, ToolContext, ToolError, Toolset, function_tool
@@ -337,6 +337,26 @@ class TestToolExecution:
             "title": "RawToolInAgentArgs",
             "type": "object",
         }
+
+    def test_field_constraints_preserved(self):
+        # Field(...) constraints (ge/le/pattern/...) live in FieldInfo.metadata,
+        # not its attributes; they must survive the signature -> pydantic model
+        # conversion so the model both advertises and enforces them.
+        @function_tool
+        async def book(count: Annotated[int, Field(ge=1, le=10, description="how many")]) -> str:
+            """Book a thing."""
+            return "ok"
+
+        model = function_arguments_to_pydantic_model(book)
+        prop = model.model_json_schema()["properties"]["count"]
+        assert prop["minimum"] == 1
+        assert prop["maximum"] == 10
+        assert prop["description"] == "how many"
+
+        model(count=5)  # within bounds
+        for bad in (0, 11):
+            with pytest.raises(ValidationError):
+                model(count=bad)
 
     async def test_tool_execution(self):
         args, kwargs = prepare_function_arguments(
