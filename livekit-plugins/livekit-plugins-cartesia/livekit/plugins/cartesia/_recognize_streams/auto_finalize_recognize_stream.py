@@ -47,15 +47,16 @@ if TYPE_CHECKING:
     from .._types.stt_turns_websocket import STTEventMessage
 
 
-class TurnDetectingRecognizeStream(CartesiaRecognizeStream):
+class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
     """
-    Cartesia STT stream implementation for ``cartesia.STT(behavior="turn_detecting")``.
+    Cartesia STT stream implementation for ``cartesia.STT(final_transcript_mode="auto")``.
 
     This implementation ignores :meth:`flush`.
     Final transcripts are emitted when the STT model detects :class:`~stt.SpeechEventType.END_OF_SPEECH`.
 
-    Use ``cartesia.STT(behavior="transcribe_on_flush")`` instead
-    if you call :meth:`flush` to get the final transcript.
+    Use ``cartesia.STT(final_transcript_mode="emit_on_flush")`` instead
+    if your code knows when it needs :class:`~stt.SpeechEventType.FINAL_TRANSCRIPT`
+    to be emitted by Cartesia STT.
 
     See also:
         - [API Reference](https://docs.cartesia.ai/api-reference/stt/turns/websocket)
@@ -120,7 +121,7 @@ class TurnDetectingRecognizeStream(CartesiaRecognizeStream):
                         await ws.send_bytes(frame.data.tobytes())
                 elif isinstance(data, self._FlushSentinel):
                     logger.warning(
-                        'Cartesia STT stream.flush() was ignored. Use cartesia.STT(behavior="transcribe_on_flush") instead if you only expect a final transcript after stream.flush() is called.'
+                        'Cartesia STT stream.flush() was ignored. Use cartesia.STT(final_transcript_mode="emit_on_flush") instead if you only expect a final transcript after stream.flush() is called.'
                     )
 
             for frame in audio_bstream.flush():

@@ -1,9 +1,9 @@
-"""Cartesia STT transcribe on flush use-case: manual turn detection with Silero VAD.
+"""Cartesia STT final transcript on flush use-case: manual turn detection with Silero VAD.
 
 This example showcases advanced usage.
 If you're building your first voice agent, try examples/other/cartesia.py
 
-When configured to "transcribe_on_flush", Cartesia STT only emits a
+When configured to "emit_on_flush", Cartesia STT only emits a
 :attr:`~livekit.agents.stt.SpeechEventType.FINAL_TRANSCRIPT` when *you* call
 :meth:`~livekit.agents.stt.RecognizeStream.flush`.
 
@@ -16,14 +16,14 @@ This example shows how you can decide turn boundaries yourself with your own VAD
     we call ``stt_stream.flush()`` to close out the turn and get its transcript.
 
 Note: this is *not* how ``AgentSession`` works. The session never calls ``flush()``, so
-``transcribe_on_flush`` is meant for code that drives a ``RecognizeStream`` directly, like this.
+``emit_on_flush`` is meant for code that drives a ``RecognizeStream`` directly, like this.
 
 The audio is generated with ``cartesia.TTS`` so the example is self-contained. Several short
 utterances are concatenated with silence gaps so the VAD sees distinct turns.
 
 Run with ``CARTESIA_API_KEY`` set:
 
-    uv run examples/other/cartesia_transcribe_on_flush_vad.py
+    uv run examples/other/cartesia_emit_on_flush_vad.py
 """
 
 from __future__ import annotations
@@ -90,7 +90,7 @@ async def build_timeline(tts: cartesia.TTS) -> list[rtc.AudioFrame]:
 async def main() -> None:
     load_dotenv()
 
-    logger = logging.getLogger("cartesia-transcribe-on-flush-vad")
+    logger = logging.getLogger("cartesia-final-transcript-on-flush-vad")
 
     logging.basicConfig(level=logging.INFO)
 
@@ -101,7 +101,7 @@ async def main() -> None:
         tts = cartesia.TTS(model="sonic-3.5", http_session=http_session)
         speech_to_text = cartesia.STT(
             model="ink-2",
-            behavior="transcribe_on_flush",
+            final_transcript_mode="emit_on_flush",
             http_session=http_session,
         )
 

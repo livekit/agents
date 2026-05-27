@@ -65,14 +65,21 @@ class _TranscriptBuffer:
     """
 
 
-class TranscribeOnFlushRecognizeStream(CartesiaRecognizeStream):
-    """Cartesia STT stream implementation for ``cartesia.STT(behavior="transcribe_on_flush")``.
+class FlushFinalizeRecognizeStream(CartesiaRecognizeStream):
+    """Cartesia STT stream implementation for ``cartesia.STT(final_transcript_mode="emit_on_flush")``.
 
-    This implementation requires you to call :meth:`flush`
-    when the user is done speaking to trigger transcription.
-    It also does not emit :class:`~stt.SpeechEventType.START_OF_SPEECH` or :class:`~stt.SpeechEventType.END_OF_SPEECH`.
+    This implementation only emits :class:`~stt.SpeechEventType.FINAL_TRANSCRIPT`
+    after you call :meth:`flush`.
+    Until then, this emits :class:`~stt.SpeechEventType.INTERIM_TRANSCRIPT`.
 
-    Use ``cartesia.STT(behavior="turn_detecting")`` instead
+    This does not emit :class:`~stt.SpeechEventType.START_OF_SPEECH`
+    or :class:`~stt.SpeechEventType.END_OF_SPEECH`.
+
+    You should use ``cartesia.STT(final_transcript_mode="emit_on_flush")``
+    if your code knows when it needs :class:`~stt.SpeechEventType.FINAL_TRANSCRIPT`
+    to be emitted by Cartesia STT.
+
+    Use ``cartesia.STT(final_transcript_mode="auto")`` instead
     if you do not know when the user is done speaking.
 
     See also:
@@ -158,7 +165,7 @@ class TranscribeOnFlushRecognizeStream(CartesiaRecognizeStream):
             )
 
             async for data in self._input_ch:
-                frames: list[rtc.AudioFrame | TranscribeOnFlushRecognizeStream._FlushSentinel] = []
+                frames: list[rtc.AudioFrame | FlushFinalizeRecognizeStream._FlushSentinel] = []
                 if isinstance(data, rtc.AudioFrame):
                     frames.extend(audio_bstream.write(data.data.tobytes()))
                 elif isinstance(data, self._FlushSentinel):

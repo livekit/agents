@@ -53,13 +53,13 @@ def _get_api_language_param_from_language_code(language_code: LanguageCode) -> s
 
 
 class LegacyRecognizeStream(CartesiaRecognizeStream):
-    """Cartesia STT stream implementation for ``ink-whisper`` when the ``behavior`` kwarg is omitted.
+    """Cartesia STT stream implementation for ``ink-whisper`` when the ``final_transcript_mode`` kwarg is omitted.
 
     See also:
         https://docs.cartesia.ai/api-reference/stt/stt
 
     .. deprecated::
-        Use ``cartesia.STT(behavior="turn_detecting")`` or ``cartesia.STT(behavior="transcribe_on_flush")`` instead.
+        Use ``cartesia.STT(final_transcript_mode="auto")`` or ``cartesia.STT(final_transcript_mode="emit_on_flush")`` instead.
     """
 
     def __init__(
@@ -130,7 +130,7 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
                     frames.append(data)
                     if not self._input_ch.closed:
                         logger.warning(
-                            'Cartesia STT now has better support for stream.flush(). Try it out by using cartesia.STT(behavior="transcribe_on_flush"). This will prevent final transcripts from being emitted until stream.flush() is called.'
+                            'Cartesia STT now has better support for stream.flush(). Try it out by using cartesia.STT(final_transcript_mode="emit_on_flush"). This will cause final transcripts to be emitted whenever stream.flush() is called rather than emitting partial transcripts as they come.'
                         )
 
                 for frame in frames:
@@ -362,7 +362,7 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
             language: Used to change the language to match what the user is speaking.
             model: Deprecated. This is a no-op. Construct a new STT instance to change the model.
         """
-        # not changing the model and reconnecting since that is likely unexpected behavior
+        # not changing the model and reconnecting since that is likely unexpected final_transcript_mode
         if is_given(model) and model != self._model:
             logger.warning(
                 "Cartesia STT update_options() ignores the model kwarg. Construct a new STT instance to change the model."

@@ -1,8 +1,8 @@
-"""Cartesia STT transcribe on flush use-case: WER example.
+"""Cartesia STT final transcript on flush use-case: WER example.
 
 If you're building your first voice agent, try examples/other/cartesia.py
 
-When configured to "transcribe_on_flush", Cartesia STT only emits a
+When configured to "emit_on_flush", Cartesia STT only emits a
 :attr:`~livekit.agents.stt.SpeechEventType.FINAL_TRANSCRIPT` when *you* call
 :meth:`~livekit.agents.stt.RecognizeStream.flush`.
 
@@ -14,12 +14,12 @@ and score the final transcripts.
 
 This script is fully self-contained: it synthesizes the reference audio with
 ``cartesia.TTS`` (so the TTS input text doubles as the WER reference), feeds it to
-``cartesia.STT(behavior="transcribe_on_flush")``, flushes once per segment, and prints the
+``cartesia.STT(final_transcript_mode="emit_on_flush")``, flushes once per segment, and prints the
 word error rate.
 
 Run with ``CARTESIA_API_KEY`` set:
 
-    uv run examples/other/cartesia_transcribe_on_flush_eval.py
+    uv run examples/other/cartesia_emit_on_flush_eval.py
 """
 
 from __future__ import annotations
@@ -78,7 +78,7 @@ async def transcribe_segment(
 ) -> str:
     """Push one segment, flush, and return the resulting final transcript."""
     stream.push_frame(audio)
-    # transcribe_on_flush emits exactly one FINAL_TRANSCRIPT per flush().
+    # emit_on_flush emits exactly one FINAL_TRANSCRIPT per flush().
     stream.flush()
     async for ev in stream:
         if ev.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
@@ -91,7 +91,7 @@ async def transcribe_segment(
 async def main() -> None:
     load_dotenv()
 
-    logger = logging.getLogger("cartesia-transcribe-on-flush-eval")
+    logger = logging.getLogger("cartesia-final-transcript-on-flush-eval")
 
     logging.basicConfig(level=logging.INFO)
 
@@ -99,7 +99,7 @@ async def main() -> None:
         tts = cartesia.TTS(model="sonic-3.5", http_session=http_session)
         speech_to_text = cartesia.STT(
             model="ink-2",
-            behavior="transcribe_on_flush",
+            final_transcript_mode="emit_on_flush",
             http_session=http_session,
         )
 
