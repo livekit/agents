@@ -44,7 +44,7 @@ from .constants import AUDIO_ENCODING
 from .log import logger
 from .models import STTEncoding, STTLanguages, STTModels
 
-_ResolvedBehavior = Literal["auto", "emit_on_flush", "legacy"]
+_ResolvedFinalTranscriptMode = Literal["auto", "emit_on_flush", "legacy"]
 
 
 def _is_whisper_model(model: STTModels | str) -> bool:
@@ -197,7 +197,7 @@ class STT(stt.STT):
 
         is_whisper = _is_whisper_model(resolved_model)
 
-        resolved_final_transcript_mode: _ResolvedBehavior
+        resolved_final_transcript_mode: _ResolvedFinalTranscriptMode
         if is_given(final_transcript_mode):
             resolved_final_transcript_mode = final_transcript_mode
         elif not is_whisper:
@@ -223,7 +223,7 @@ class STT(stt.STT):
 
         self._api_key = resolved_api_key
         self._audio_chunk_duration_ms = audio_chunk_duration_ms
-        self._final_transcript_mode: _ResolvedBehavior = resolved_final_transcript_mode
+        self._final_transcript_mode: _ResolvedFinalTranscriptMode = resolved_final_transcript_mode
         self._encoding: STTEncoding = encoding
         self._language = language_code
         self._model = resolved_model
