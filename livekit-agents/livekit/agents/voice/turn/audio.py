@@ -210,7 +210,9 @@ class _AudioTurnDetectorStream:
         if not self._transport.transport_ready() or self._status == _Status.ACTIVE:
             return
         if self._preemptive_request_id is None:
-            logger.warning("eot detector not warmed up before activation")
+            logger.trace(
+                "eot detector not warmed up before activation, likely due to overlapping speech"
+            )
             self.warmup()
         self._status = _Status.ACTIVE
         if self._preemptive_prediction is not None:

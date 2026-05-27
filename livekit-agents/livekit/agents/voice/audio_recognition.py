@@ -238,6 +238,8 @@ class AudioRecognition:
         # audio streaming turn detection
         self._turn_detector_stream: _AudioTurnDetectorStream | None = None
         self._turn_detection_atask: asyncio.Task[None] | None = None
+        # avoid duplicate fires during each active window
+        self._last_emitted_prediction: TurnDetectionEvent | None = None
         # set on VAD START_OF_SPEECH, cleared on END_OF_SPEECH. Lets an
         # in-flight EOU wait abort if the user starts speaking again.
         self._user_speaking_event = asyncio.Event()
@@ -787,6 +789,7 @@ class AudioRecognition:
         self._last_speaking_time = None
         self._vad_speech_started = False
         self._user_turn_committed = False
+        self._last_emitted_prediction = None
 
         # any cached prediction on the audio stream belongs to the turn we
         # just cleared — flush it so the next predict starts fresh.
@@ -1327,26 +1330,31 @@ class AudioRecognition:
                             },
                         )
 
-                        inference_duration = (
-                            prediction_event.inference_duration
-                            if prediction_event is not None
-                            and prediction_event.inference_duration is not None
-                            else 0.0
-                        )
-                        # end of speech -> prediction receive time
-                        delay = (
-                            time.time() - last_speaking_time
-                            if last_speaking_time is not None
-                            else 0.0
-                        )
-                        self._hooks.on_eot_prediction(
-                            EotPredictionEvent(
-                                probability=end_of_turn_probability or 0.0,
-                                threshold=unlikely_threshold or 0.0,
-                                inference_duration=inference_duration,
-                                delay=delay,
+                        if (
+                            prediction_event is None
+                            or prediction_event is not self._last_emitted_prediction
+                        ):
+                            self._last_emitted_prediction = prediction_event
+                            inference_duration = (
+                                prediction_event.inference_duration
+                                if prediction_event is not None
+                                and prediction_event.inference_duration is not None
+                                else 0.0
                             )
-                        )
+                            # end of speech -> prediction receive time
+                            delay = (
+                                time.time() - last_speaking_time
+                                if last_speaking_time is not None
+                                else 0.0
+                            )
+                            self._hooks.on_eot_prediction(
+                                EotPredictionEvent(
+                                    probability=end_of_turn_probability or 0.0,
+                                    threshold=unlikely_threshold or 0.0,
+                                    inference_duration=inference_duration,
+                                    delay=delay,
+                                )
+                            )
                         if (
                             prediction_event is not None
                             and prediction_event.detection_delay is not None

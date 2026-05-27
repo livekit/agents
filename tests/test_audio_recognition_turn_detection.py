@@ -238,6 +238,7 @@ def _make_full_recognition_for_eou() -> AudioRecognition:
     ar._user_turn_committed = False
     ar._vad = None
     ar._last_language = None
+    ar._last_emitted_prediction = None
     ar._closing = asyncio.Event()
     return ar
 
@@ -288,6 +289,129 @@ class TestSpeakingGuardRace:
         # predict_end_of_turn should not have been awaited — the guard
         # bailed before the bounce task started.
         assert ar._turn_detector_stream.predict_end_of_turn.call_count == 0
+
+
+class TestEotPredictionDedup:
+    """Both EOU triggers in a turn (vad EOS + stt final) read the same cached
+    ``TurnDetectionEvent`` from the audio stream. ``on_eot_prediction`` must
+    fire exactly once for that single prediction."""
+
+    async def test_vad_then_stt_emits_eot_prediction_once(self) -> None:
+        """Regression for duplicate ``EotPredictionEvent``: the vad-trigger
+        bounce emits and then parks in the endpointing sleep; the stt-trigger
+        cancels it and runs a second bounce that reads the *same* cached
+        prediction. Without identity dedup both bounces emit; with it, only
+        the first does."""
+        ar = _make_full_recognition_for_eou()
+        chat_ctx = _make_chat_ctx_stub()
+
+        # One prediction per inference window — both triggers read this object
+        # by reference via ``turn_detector_stream.last_prediction``.
+        cached = TurnDetectionEvent(
+            type="eot_prediction",
+            last_speaking_time=time.time(),
+            end_of_turn_probability=0.2,  # below 0.5 threshold → endpointing max_delay
+            inference_duration=0.05,
+            detection_delay=0.1,
+        )
+        ar._turn_detector_stream.last_prediction = cached
+
+        # vad trigger: bounce emits, then parks in the ~0.5s endpointing sleep.
+        ar._run_eou_detection(chat_ctx, trigger="vad")
+        for _ in range(5):
+            await asyncio.sleep(0)
+        await asyncio.sleep(0.02)
+        assert ar._hooks.on_eot_prediction.call_count == 1
+
+        # stt trigger: cancels the parked vad bounce and runs a fresh one that
+        # reads the same cached prediction. Dedup must suppress a second emit.
+        ar._run_eou_detection(chat_ctx, trigger="stt")
+        for _ in range(5):
+            await asyncio.sleep(0)
+        await asyncio.sleep(0.02)
+
+        assert ar._hooks.on_eot_prediction.call_count == 1
+        assert ar._last_emitted_prediction is cached
+
+        if ar._end_of_turn_task is not None:
+            await aio.cancel_and_wait(ar._end_of_turn_task)
+
+    async def test_no_cached_prediction_emits_every_bounce(self) -> None:
+        """When there's no cached ``TurnDetectionEvent`` (``last_prediction`` is
+        ``None`` — text-based detectors, or an audio timeout), each bounce must
+        still emit: identity dedup only applies to a shared cached object."""
+        ar = _make_full_recognition_for_eou()
+        ar._turn_detector_stream.last_prediction = None
+        chat_ctx = _make_chat_ctx_stub()
+
+        ar._run_eou_detection(chat_ctx, trigger="vad")
+        for _ in range(5):
+            await asyncio.sleep(0)
+        await asyncio.sleep(0.02)
+        assert ar._hooks.on_eot_prediction.call_count == 1
+
+        ar._run_eou_detection(chat_ctx, trigger="stt")
+        for _ in range(5):
+            await asyncio.sleep(0)
+        await asyncio.sleep(0.02)
+        assert ar._hooks.on_eot_prediction.call_count == 2
+
+        if ar._end_of_turn_task is not None:
+            await aio.cancel_and_wait(ar._end_of_turn_task)
+
+    async def test_text_detector_emits_every_bounce(self) -> None:
+        """A text-based detector (not an ``_AudioTurnDetector``) has no
+        streaming inference window — ``last_prediction`` is ``None`` — so it
+        emits ``on_eot_prediction`` on every bounce, never deduped."""
+        ar = _make_full_recognition_for_eou()
+        # Swap the audio detector for a text one and give it a transcript so
+        # ``_run_eou_detection`` selects the text detector.
+        text_detector = MagicMock()  # not an _AudioTurnDetector
+        text_detector.supports_language = AsyncMock(return_value=True)
+        text_detector.predict_end_of_turn = AsyncMock(return_value=0.2)
+        text_detector.unlikely_threshold = AsyncMock(return_value=0.5)
+        text_detector.last_prediction = None
+        ar._turn_detector = text_detector
+        ar._turn_detector_stream = None
+        ar._audio_transcript = "hello there"
+        chat_ctx = _make_chat_ctx_stub()
+
+        ar._run_eou_detection(chat_ctx, trigger="vad")
+        for _ in range(5):
+            await asyncio.sleep(0)
+        await asyncio.sleep(0.02)
+        assert ar._hooks.on_eot_prediction.call_count == 1
+
+        ar._run_eou_detection(chat_ctx, trigger="stt")
+        for _ in range(5):
+            await asyncio.sleep(0)
+        await asyncio.sleep(0.02)
+        assert ar._hooks.on_eot_prediction.call_count == 2
+
+        if ar._end_of_turn_task is not None:
+            await aio.cancel_and_wait(ar._end_of_turn_task)
+
+    async def test_clear_user_turn_allows_next_turn_to_emit(self) -> None:
+        """``clear_user_turn`` resets the dedup guard so the next turn's first
+        prediction (a distinct object) emits again."""
+        ar = _make_full_recognition_for_eou()
+        prev = TurnDetectionEvent(
+            type="eot_prediction",
+            last_speaking_time=time.time(),
+            end_of_turn_probability=0.2,
+        )
+        ar._last_emitted_prediction = prev
+
+        # Wire only the bits ``clear_user_turn`` touches beyond the eou helper.
+        ar._audio_interim_transcript = ""
+        ar._audio_preflight_transcript = ""
+        ar._stt_request_ids = []
+        ar._turn_detector_stream.flush = MagicMock()
+        ar.update_stt = MagicMock()  # type: ignore[method-assign]
+
+        ar.clear_user_turn()
+
+        assert ar._last_emitted_prediction is None
 
 
 class _FakeVad:
