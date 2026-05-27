@@ -726,7 +726,9 @@ class _Connection:
                     continue
 
                 data = json.loads(msg.data)
-                context_id = data.get("contextId")
+                # ElevenLabs currently sends snake_case context IDs on the websocket API,
+                # while older responses and some examples use camelCase.
+                context_id = data.get("contextId") or data.get("context_id")
                 ctx = self._context_data.get(context_id) if context_id is not None else None
 
                 if error := data.get("error"):
@@ -741,6 +743,13 @@ class _Connection:
                     continue
 
                 if ctx is None:
+                    if data.get("type") == "flush_done":
+                        logger.debug(
+                            "ignoring elevenlabs flush_done message for inactive context",
+                            extra={"context_id": context_id, "data": data},
+                        )
+                        continue
+
                     logger.warning(
                         "unexpected message received from elevenlabs tts", extra={"data": data}
                     )
