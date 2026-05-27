@@ -54,7 +54,9 @@ class AudioTurnDetector(_AudioTurnDetector):
         self,
         *,
         backend: NotGivenOr[_Backend] = NOT_GIVEN,
-        unlikely_threshold: NotGivenOr[float | dict[LanguageCode | str, float]] = NOT_GIVEN,
+        unlikely_threshold: NotGivenOr[
+            float | dict[LanguageCode | str, float]
+        ] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
@@ -68,13 +70,17 @@ class AudioTurnDetector(_AudioTurnDetector):
         resolved_backend: _Backend = (
             backend
             if is_given(backend)
-            else ("cloud" if os.environ.get("LIVEKIT_REMOTE_EOT_URL") else "local")
+            else ("cloud" if utils.is_hosted() else "local")
         )
 
         cloud_opts: _CloudTransportOptions | None = None
 
         if resolved_backend == "cloud":
-            lk_base_url = utils.resolve_env_var(base_url, "LIVEKIT_REMOTE_EOT_URL", default="")
+            lk_base_url = utils.resolve_env_var(
+                base_url,
+                "LIVEKIT_INFERENCE_URL",
+                default="https://agent-gateway.livekit.cloud/v1",
+            )
             lk_api_key = utils.resolve_env_var(
                 api_key, "LIVEKIT_INFERENCE_API_KEY", "LIVEKIT_API_KEY", default=""
             )
@@ -86,7 +92,7 @@ class AudioTurnDetector(_AudioTurnDetector):
             )
             missing: list[str] = []
             if not lk_base_url:
-                missing.append("LIVEKIT_REMOTE_EOT_URL")
+                missing.append("LIVEKIT_INFERENCE_URL")
             if not lk_api_key:
                 missing.append("LIVEKIT_API_KEY")
             if not lk_api_secret:
@@ -94,7 +100,7 @@ class AudioTurnDetector(_AudioTurnDetector):
             if missing:
                 if auto:
                     logger.warning(
-                        "LIVEKIT_REMOTE_EOT_URL is set but %s missing; "
+                        "LIVEKIT_INFERENCE_URL is set but %s missing; "
                         "falling back to local backend",
                         ", ".join(missing),
                     )
