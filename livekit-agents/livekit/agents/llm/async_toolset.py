@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any
 
 from ..log import logger
 from ..utils.misc import is_given
 from ..voice.tool_executor import AsyncToolPrompts, _resolve_async_tool_prompts, _ToolExecutor
-from .tool_context import FunctionTool, RawFunctionTool, Tool, Toolset
+from .tool_context import DuplicateMode, Tool, Toolset
 
 if TYPE_CHECKING:
     from ..voice.agent_activity import AgentActivity
@@ -50,50 +50,24 @@ class AsyncToolset(Toolset):
         session = AgentSession(tools=[AsyncToolset(id="booking", tools=[book_flight])])
     """
 
-    # deprecated; kept for backwards type-import compatibility
-    DuplicateMode = Literal["allow", "replace", "reject", "confirm"]
-
     def __init__(
         self,
         *,
         id: str,
         tools: Sequence[Tool] | None = None,
         async_tool_prompts: AsyncToolPrompts | None = None,
+        # deprecated
         on_duplicate_call: DuplicateMode | None = None,
     ) -> None:
-        super().__init__(id=id, tools=tools)
-
         if on_duplicate_call is not None:
-            logger.warning(
-                "AsyncToolset(on_duplicate_call=...) is deprecated; set on_duplicate "
-                "on @function_tool per tool instead."
+            raise TypeError(
+                "AsyncToolset(on_duplicate_call=...) has been deprecated; "
+                "set `on_duplicate=...` on each @function_tool instead."
             )
 
-            for child in self._iter_function_tools():
-                if child.info.on_duplicate != on_duplicate_call:
-                    logger.warning(
-                        "overwriting on_duplicate=%s on tool %s with %s",
-                        child.info.on_duplicate,
-                        child.info.name,
-                        on_duplicate_call,
-                    )
-                    child.info.on_duplicate = on_duplicate_call
-
+        super().__init__(id=id, tools=tools)
         self._tool_prompts_override: AsyncToolPrompts | None = async_tool_prompts
         self._executor = _ToolExecutor(owning_activity=None)
-
-    def _iter_function_tools(self) -> list[FunctionTool | RawFunctionTool]:
-        out: list[FunctionTool | RawFunctionTool] = []
-
-        def walk(tools: Sequence[Tool | Toolset]) -> None:
-            for tool in tools:
-                if isinstance(tool, (FunctionTool, RawFunctionTool)):
-                    out.append(tool)
-                elif isinstance(tool, Toolset):
-                    walk(tool.tools)
-
-        walk(self.tools)
-        return out
 
     def _attach_activity(self, *, activity: AgentActivity | None, session: AgentSession) -> None:
         """Bind this toolset to a scope. ``activity=None`` makes it session-scoped

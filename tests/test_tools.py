@@ -1463,43 +1463,6 @@ class TestToolExecutorLifecycle:
         assert run_ctx._first_update_fut is None
 
 
-class TestAsyncToolsetOnDuplicateInheritance:
-    """`AsyncToolset(on_duplicate_call=...)` overrides child tools' on_duplicate."""
-
-    def test_inherits_value_onto_default_tool(self, caplog):
-        import logging
-
-        from livekit.agents.llm.async_toolset import AsyncToolset
-
-        @function_tool
-        async def plain_tool() -> str:
-            """p"""
-            return "ok"
-
-        with caplog.at_level(logging.WARNING, logger="livekit.agents"):
-            AsyncToolset(id="t", tools=[plain_tool], on_duplicate_call="reject")
-
-        assert plain_tool.info.on_duplicate == "reject"
-        assert any("deprecated" in r.message for r in caplog.records)
-
-    def test_overrides_existing_per_tool_value(self, caplog):
-        """Toolset-level setting wins over a previously-set per-tool value."""
-        import logging
-
-        from livekit.agents.llm.async_toolset import AsyncToolset
-
-        @function_tool(on_duplicate="reject")
-        async def opinionated_tool() -> str:
-            """o"""
-            return "ok"
-
-        with caplog.at_level(logging.WARNING, logger="livekit.agents"):
-            AsyncToolset(id="t", tools=[opinionated_tool], on_duplicate_call="confirm")
-
-        assert opinionated_tool.info.on_duplicate == "confirm"
-        assert any("overwriting" in r.message for r in caplog.records)
-
-
 class TestAgentSessionWaitForIdle:
     def test_raises_runtime_error_when_no_activity(self):
         """wait_for_idle raises instead of spinning when no activity has started."""
