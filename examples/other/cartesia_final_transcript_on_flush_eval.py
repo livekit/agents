@@ -19,7 +19,7 @@ word error rate.
 
 Run with ``CARTESIA_API_KEY`` set:
 
-    uv run examples/other/cartesia_emit_on_flush_eval.py
+    uv run examples/other/cartesia_final_transcript_on_flush_eval.py
 """
 
 from __future__ import annotations

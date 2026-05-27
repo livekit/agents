@@ -362,7 +362,7 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
             language: Used to change the language to match what the user is speaking.
             model: Deprecated. This is a no-op. Construct a new STT instance to change the model.
         """
-        # not changing the model and reconnecting since that is likely unexpected final_transcript_mode
+        # not changing the model and reconnecting since that is likely unexpected behavior
         if is_given(model) and model != self._model:
             logger.warning(
                 "Cartesia STT update_options() ignores the model kwarg. Construct a new STT instance to change the model."

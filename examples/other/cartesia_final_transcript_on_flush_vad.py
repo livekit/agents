@@ -23,7 +23,7 @@ utterances are concatenated with silence gaps so the VAD sees distinct turns.
 
 Run with ``CARTESIA_API_KEY`` set:
 
-    uv run examples/other/cartesia_emit_on_flush_vad.py
+    uv run examples/other/cartesia_final_transcript_on_flush_vad.py
 """
 
 from __future__ import annotations
