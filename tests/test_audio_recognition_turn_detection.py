@@ -22,6 +22,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from livekit.agents import vad
 from livekit.agents.utils import aio
 from livekit.agents.voice.audio_recognition import AudioRecognition
 from livekit.agents.voice.turn import (
@@ -129,6 +130,64 @@ class TestSpeakingGuardRace:
         # predict_end_of_turn should not have been awaited — the guard
         # bailed before the bounce task started.
         assert ar._turn_detector_stream.predict_end_of_turn.call_count == 0
+
+
+def _inference_done(*, raw_speech: float) -> vad.VADEvent:
+    """An ``INFERENCE_DONE`` event carrying ``raw_speech`` accumulated speech and no
+    silence — the shape the silero/inference VAD emits each inference window."""
+    return vad.VADEvent(
+        type=vad.VADEventType.INFERENCE_DONE,
+        samples_index=0,
+        timestamp=0.0,
+        speech_duration=0.0,
+        silence_duration=0.0,
+        raw_accumulated_speech=raw_speech,
+        raw_accumulated_silence=0.0,
+    )
+
+
+class TestSubThresholdSpeakingSpike:
+    """A noise spike can push ``raw_accumulated_speech`` above zero on ``INFERENCE_DONE``
+    without ever reaching ``START_OF_SPEECH`` — so no ``END_OF_SPEECH`` fires to clear
+    ``_user_speaking_event``. It must be cleared when speech drops back to zero, or the
+    speaking-guard aborts every subsequent ``_AudioTurnDetector`` commit forever."""
+
+    async def test_subthreshold_spike_is_cleared(self) -> None:
+        ar = _make_full_recognition_for_eou()
+
+        # spike crosses the activation threshold: event gets set, no SOS.
+        await ar._on_vad_event(_inference_done(raw_speech=0.1))
+        assert ar._user_speaking_event.is_set()
+
+        # spike subsides before min_speech_duration: accumulation resets to 0.
+        await ar._on_vad_event(_inference_done(raw_speech=0.0))
+        assert not ar._user_speaking_event.is_set()
+
+    async def test_zero_speech_during_confirmed_turn_keeps_event(self) -> None:
+        """Inside a confirmed turn (post-SOS, ``_speaking`` True) a momentary zero-speech
+        window must NOT clear the event — ``END_OF_SPEECH`` owns the clear there."""
+        ar = _make_full_recognition_for_eou()
+        ar._speaking = True
+        ar._user_speaking_event.set()
+
+        await ar._on_vad_event(_inference_done(raw_speech=0.0))
+        assert ar._user_speaking_event.is_set()
+
+    async def test_stale_spike_does_not_block_next_commit(self) -> None:
+        """End-to-end symptom: after a spike sets-then-clears, the EOU bounce must run to
+        completion instead of being aborted by a stuck ``_user_speaking_event``."""
+        ar = _make_full_recognition_for_eou()
+
+        await ar._on_vad_event(_inference_done(raw_speech=0.1))
+        await ar._on_vad_event(_inference_done(raw_speech=0.0))
+        assert not ar._user_speaking_event.is_set()
+
+        chat_ctx = _make_chat_ctx_stub()
+        ar._run_eou_detection(chat_ctx, trigger="vad")
+        assert ar._end_of_turn_task is not None
+        await ar._end_of_turn_task
+
+        ar._hooks.on_end_of_turn.assert_called_once()
 
 
 class TestEotPredictionDedup:

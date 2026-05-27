@@ -1137,6 +1137,11 @@ class AudioRecognition:
                 if self._speech_start_time is None:
                     self._speech_start_time = time.time() - ev.raw_accumulated_speech
                 self._user_speaking_event.set()
+            elif not self._speaking:
+                # a sub-threshold speech spike can set _user_speaking_event without ever
+                # reaching START_OF_SPEECH, so no END_OF_SPEECH will fire to clear it. Clear
+                # it here once speech drops back to zero (confirmed turns are cleared by EOS).
+                self._user_speaking_event.clear()
 
             if ev.raw_accumulated_silence >= MIN_SILENCE_DURATION_MS / 1000 and self._speaking:
                 if (
