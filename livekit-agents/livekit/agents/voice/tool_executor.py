@@ -52,9 +52,9 @@ Summarize the results naturally. Do NOT repeat information you have already told
 # used when newer items have been appended after the pending update — the agent
 # may have already verbalized the result in its most recent turn.
 REPLY_INSTRUCTIONS_MAYBE_COVERED = """New results arrived from background tool calls (call_ids: {call_ids}).
-Review your most recent assistant messages.
-- If your previous messages already conveyed these results to the user after the updates arrived, \
-    return an empty response (no text at all).
+Review your most recent assistant messages and check what you have already conveyed:
+- If they already cover all of these results, return an empty response (no text at all).
+- If they cover only part of the results, summarize the remaining parts with a natural transition.
 - Otherwise, summarize the results with a natural transition.
 Do NOT repeat information you have already told the user."""
 
