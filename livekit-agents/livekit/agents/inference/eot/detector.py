@@ -26,6 +26,7 @@ from ...voice.turn import (
     _AudioTurnDetector,
     _AudioTurnDetectorStream,
 )
+from .._utils import get_default_inference_url
 from .languages import materialize_thresholds, rescale_for_local_fallback
 from .transports import (
     _AudioTurnDetectionTransport,
@@ -79,7 +80,7 @@ class AudioTurnDetector(_AudioTurnDetector):
             lk_base_url = utils.resolve_env_var(
                 base_url,
                 "LIVEKIT_INFERENCE_URL",
-                default="https://agent-gateway.livekit.cloud/v1",
+                default=get_default_inference_url(),
             )
             lk_api_key = utils.resolve_env_var(
                 api_key, "LIVEKIT_INFERENCE_API_KEY", "LIVEKIT_API_KEY", default=""

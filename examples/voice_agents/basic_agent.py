@@ -89,6 +89,7 @@ async def entrypoint(ctx: JobContext) -> None:
             # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
             # See more at https://docs.livekit.io/agents/build/turns
             turn_detection=AudioTurnDetector(),
+            # turn_detection=MultilingualModel(),
             interruption={
                 # sometimes background noise could interrupt the agent session, these are considered false positive interruptions
                 # when it's detected, you may resume the agent's speech
