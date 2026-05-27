@@ -110,7 +110,7 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
         ``timeout`` seconds. Pass ``timeout=None`` to wait indefinitely.
         """
         if self._wait_avatar_join_task is None:
-            # TODO: fix when this called before the room is connected
+            # TODO(long): fix when this called before the room is connected
             return
         if timeout is None:
             await self._wait_avatar_join_task
@@ -138,10 +138,6 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
                     )
 
         if self._agent_session:
-            # detach the avatar's audio sink while preserving wrappers above
-            # (TranscriptSynchronizer, RecorderAudioOutput) so a subsequent
-            # AvatarSession.start() can re-attach into the same chain
-            self._agent_session.output.set_audio_sink(None, preserve_wrappers=True)
             self._agent_session.off("conversation_item_added", self._on_conversation_item_added)
             self._agent_session = None
 
