@@ -595,9 +595,7 @@ async def _execute_tools_task(
                     make_tool_output(
                         fnc_call=fnc_call,
                         output=None,
-                        exception=ToolError(
-                            f"Error parsing arguments for `{fnc_call.name}`: {e}"
-                        ),
+                        exception=ToolError(f"Error parsing arguments for `{fnc_call.name}`: {e}"),
                     )
                 )
                 continue
