@@ -218,32 +218,36 @@ class TranscribeOnFlushRecognizeStream(CartesiaRecognizeStream):
         while True:
             try:
                 ws = await self._connect_ws()
-                tasks = [
-                    asyncio.create_task(send_task(ws)),
-                    asyncio.create_task(recv_task(ws)),
-                    asyncio.create_task(keepalive_task(ws)),
-                ]
-                tasks_group = asyncio.gather(*tasks)
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
+
+                send = asyncio.create_task(send_task(ws))
+                recv = asyncio.create_task(recv_task(ws))
+                keepalive = asyncio.create_task(keepalive_task(ws))
+                wait_reconnect = asyncio.create_task(self._reconnect_event.wait())
+                tasks = [send, recv, keepalive, wait_reconnect]
+
+                # Only race send/recv against the reconnect signal. keepalive sleeps up to 30s
+                # between pings, so including it here would block teardown for up to 30s after
+                # send/recv have already finished.
+                send_recv_group = asyncio.gather(send, recv)
 
                 try:
                     done, _ = await asyncio.wait(
-                        (tasks_group, wait_reconnect_task),
+                        (send_recv_group, wait_reconnect),
                         return_when=asyncio.FIRST_COMPLETED,
                     )
 
                     for task in done:
-                        if task != wait_reconnect_task:
+                        if task != wait_reconnect:
                             task.result()
 
-                    if wait_reconnect_task not in done:
+                    if wait_reconnect not in done:
                         break
 
                     self._reconnect_event.clear()
                 finally:
-                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
-                    tasks_group.cancel()
-                    tasks_group.exception()  # retrieve the exception
+                    await utils.aio.gracefully_cancel(*tasks)
+                    send_recv_group.cancel()
+                    send_recv_group.exception()  # retrieve the exception
             finally:
                 if ws is not None:
                     await ws.close()
