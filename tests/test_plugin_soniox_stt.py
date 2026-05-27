@@ -20,7 +20,9 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import aiohttp
+import pytest
 
+from livekit.agents import APIStatusError
 from livekit.agents.language import LanguageCode
 from livekit.agents.stt import SpeechData, SpeechEventType
 
@@ -421,6 +423,26 @@ async def test_interim_transcript_no_translation_populates_source_runs():
     assert sd.source_texts == ["こんにちは、", "My name is Sam."]
     assert sd.target_languages is None
     assert sd.target_texts is None
+
+
+async def test_recv_messages_raises_on_server_error_frame():
+    stream = _make_stream(translation=None)
+    stream._ws = _FakeWebSocket(
+        [
+            {
+                "error_code": 401,
+                "error_message": "Incorrect API key provided",
+                "total_audio_proc_ms": 0,
+            }
+        ]
+    )
+
+    with pytest.raises(APIStatusError) as exc_info:
+        await asyncio.wait_for(stream._recv_messages_task(), timeout=1.0)
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.retryable is False
+    assert exc_info.value.body is not None
 
 
 # --- Non-translation mode -------------------------------------------------
