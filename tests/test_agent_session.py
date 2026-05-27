@@ -1133,6 +1133,103 @@ async def test_unknown_function_call() -> None:
     assert "Unknown function: nonexistent_tool" in error_outputs[0].output
 
 
+async def test_invalid_tool_arguments_surface_as_tool_error() -> None:
+    """When the LLM emits a tool call with invalid arguments (missing required
+    field, wrong type, malformed JSON, etc.), the faulty turn must NOT be
+    stripped from the conversation. Instead the schema error is wrapped in a
+    ToolError so the model receives a descriptive message and can self-correct
+    on the next turn."""
+    speed = 5.0
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "What's the weather?")
+    # get_weather requires `location: str` — emit a call with no args so it
+    # fails pydantic validation.
+    actions.add_llm(
+        content="",
+        tool_calls=[
+            FunctionToolCall(name="get_weather", arguments="{}", call_id="1"),
+        ],
+    )
+
+    session = create_session(actions, speed_factor=speed)
+    agent = MyAgent()
+
+    tool_executed_events: list[FunctionToolsExecutedEvent] = []
+    session.on("function_tools_executed", tool_executed_events.append)
+
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    # Event was emitted with both the call AND a non-None output (i.e., not stripped).
+    assert len(tool_executed_events) == 1
+    ev = tool_executed_events[0]
+    assert len(ev.function_calls) == 1
+    assert ev.function_calls[0].name == "get_weather"
+    assert ev.function_call_outputs[0] is not None
+    output = ev.function_call_outputs[0]
+    assert output.is_error is True
+
+    # The model must see a descriptive, schema-specific error — NOT the generic
+    # "An internal error occurred" string we reserve for unexpected exceptions.
+    assert "An internal error occurred" not in output.output
+    assert "get_weather" in output.output
+    # Pydantic validation error references the missing field.
+    assert "location" in output.output
+
+    # The faulty call AND its error output must both end up in chat history so
+    # the LLM can see what it did wrong on the next turn (not stripped).
+    items = agent.chat_ctx.items
+    function_calls = [i for i in items if i.type == "function_call"]
+    function_call_outputs = [i for i in items if i.type == "function_call_output"]
+    assert len(function_calls) == 1
+    assert function_calls[0].name == "get_weather"
+    assert function_calls[0].call_id == "1"
+    assert len(function_call_outputs) == 1
+    assert function_call_outputs[0].call_id == "1"
+    assert function_call_outputs[0].is_error is True
+
+
+async def test_tool_internal_exception_returns_generic_error() -> None:
+    """When a tool body raises a non-ToolError exception, the model receives
+    the generic "An internal error occurred" message so we don't leak internal
+    details. Validation-error path is tested separately."""
+
+    class _BrokenToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="You are a helpful assistant.")
+
+        @function_tool
+        async def get_weather(self, location: str) -> str:
+            """Always blows up."""
+            raise RuntimeError("kaboom: secret database password leaked")
+
+    speed = 5.0
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "What's the weather in Tokyo?")
+    actions.add_llm(
+        content="",
+        tool_calls=[
+            FunctionToolCall(name="get_weather", arguments='{"location": "Tokyo"}', call_id="1"),
+        ],
+    )
+
+    session = create_session(actions, speed_factor=speed)
+    agent = _BrokenToolAgent()
+
+    tool_executed_events: list[FunctionToolsExecutedEvent] = []
+    session.on("function_tools_executed", tool_executed_events.append)
+
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    assert len(tool_executed_events) == 1
+    output = tool_executed_events[0].function_call_outputs[0]
+    assert output is not None
+    assert output.is_error is True
+    # Generic message — the RuntimeError details must NOT leak to the model.
+    assert output.output == "An internal error occurred"
+    assert "kaboom" not in output.output
+    assert "secret" not in output.output
+
+
 # helpers
 
 

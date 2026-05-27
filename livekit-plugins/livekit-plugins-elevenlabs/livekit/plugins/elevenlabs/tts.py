@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import dataclasses
 import json
 import os
@@ -89,7 +90,7 @@ class PronunciationDictionaryLocator:
     version_id: str
 
 
-DEFAULT_VOICE_ID = "l7kNoIfnJKPg7779LI2t"
+DEFAULT_VOICE_ID = "hpp4J3VqNfWAUOO0d1Us"
 API_BASE_URL_V1 = "https://api.elevenlabs.io/v1"
 AUTHORIZATION_HEADER = "xi-api-key"
 WS_INACTIVITY_TIMEOUT = 180
@@ -429,6 +430,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         waiter: asyncio.Future[None] = asyncio.get_event_loop().create_future()
         connection.register_stream(self, output_emitter, waiter)
+        context_closed = False
 
         async def _input_task() -> None:
             async for data in self._input_ch:
@@ -439,6 +441,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             sent_tokenizer_stream.end_input()
 
         async def _sentence_stream_task() -> None:
+            nonlocal context_closed
+
             flush_on_chunk = (
                 isinstance(self._opts.word_tokenizer, tokenize.SentenceTokenizer)
                 and is_given(self._opts.auto_mode)
@@ -480,6 +484,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             connection.send_content(_SynthesizeContent(self._context_id, "", flush=True))
             connection.close_context(self._context_id)
+            context_closed = True
 
         input_t = asyncio.create_task(_input_task())
         stream_t = asyncio.create_task(_sentence_stream_task())
@@ -495,6 +500,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         finally:
             output_emitter.end_segment()
             await utils.aio.gracefully_cancel(input_t, stream_t)
+            if not context_closed:
+                with contextlib.suppress(Exception):
+                    connection.close_context(self._context_id)
             await sent_tokenizer_stream.aclose()
 
 
