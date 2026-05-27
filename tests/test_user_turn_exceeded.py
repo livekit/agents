@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from livekit.agents import Agent, UserTurnExceededEvent
+from livekit.agents.voice.transcription.synchronizer import _SyncedAudioOutput
 
 from .fake_session import FakeActions, create_session, run_session
 
@@ -184,3 +185,98 @@ async def test_callback_receives_correct_event_data() -> None:
     assert ev.transcript == transcript
     assert ev.accumulated_transcript == transcript
     assert ev.duration >= 0
+
+
+async def test_skipped_when_new_turns_blocked() -> None:
+    """During the update_agent() transition window (_new_turns_blocked=True), the
+    exceeded event must not schedule a callback on the old activity — otherwise the
+    old agent responds and the handoff is delayed waiting on its speech task."""
+    speed = 5.0
+    agent = _CapturingAgent()
+
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 1.5, "hello world", stt_delay=0.2)
+    actions.add_llm("OK", ttft=0.1, duration=0.1)
+    actions.add_tts(0.5, ttfb=0.1, duration=0.1)
+
+    session = create_session(
+        actions,
+        speed_factor=speed,
+        turn_handling={"user_turn_limit": {"max_words": 3}},
+    )
+    await session.start(agent)
+    transcription_sync = (
+        session.output.audio._synchronizer
+        if isinstance(session.output.audio, _SyncedAudioOutput)
+        else None
+    )
+    try:
+        activity = session._activity
+        assert activity is not None
+
+        # simulate the transition window opened by update_agent()
+        activity._new_turns_blocked = True
+
+        ev = UserTurnExceededEvent(
+            transcript="one two three four",
+            accumulated_transcript="one two three four",
+            accumulated_word_count=4,
+            duration=1.0,
+        )
+        activity.on_user_turn_exceeded(ev)
+
+        assert activity._user_turn_exceeded_atask is None
+        assert agent.exceeded_events == []
+    finally:
+        await session.aclose()
+        if transcription_sync is not None:
+            await transcription_sync.aclose()
+
+
+async def test_inflight_task_aborts_when_handoff_starts() -> None:
+    """If _user_turn_exceeded_task is already in its wait phase when update_agent()
+    flips _new_turns_blocked, the task must self-abort before invoking the user's
+    callback (so the old agent doesn't respond and drain isn't delayed)."""
+    speed = 5.0
+    agent = _CapturingAgent()
+
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 1.5, "hello world", stt_delay=0.2)
+    actions.add_llm("OK", ttft=0.1, duration=0.1)
+    actions.add_tts(0.5, ttfb=0.1, duration=0.1)
+
+    session = create_session(
+        actions,
+        speed_factor=speed,
+        turn_handling={"user_turn_limit": {"max_words": 3}},
+    )
+    await session.start(agent)
+    transcription_sync = (
+        session.output.audio._synchronizer
+        if isinstance(session.output.audio, _SyncedAudioOutput)
+        else None
+    )
+    try:
+        activity = session._activity
+        assert activity is not None
+
+        ev = UserTurnExceededEvent(
+            transcript="one two three four",
+            accumulated_transcript="one two three four",
+            accumulated_word_count=4,
+            duration=1.0,
+        )
+        # schedule normally — task enters the wait phase
+        activity.on_user_turn_exceeded(ev)
+        task = activity._user_turn_exceeded_atask
+        assert task is not None
+
+        # transition starts while the task is waiting
+        activity._new_turns_blocked = True
+
+        await asyncio.wait_for(task, timeout=2.0)
+        assert agent.exceeded_events == []
+    finally:
+        await session.aclose()
+        if transcription_sync is not None:
+            await transcription_sync.aclose()
