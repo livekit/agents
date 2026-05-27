@@ -59,7 +59,7 @@ class VAD(vad.VAD):
         *,
         model: VADModels = "silero",
         min_speech_duration: float = 0.05,
-        min_silence_duration: float = 0.1,
+        min_silence_duration: float = 0.25,
         prefix_padding_duration: float = 0.5,
         max_buffered_speech: float = 60.0,
         activation_threshold: float = 0.5,
