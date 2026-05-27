@@ -1,3 +1,18 @@
+"""A LiveKit voice agent powered by Cartesia speech-to-text and text-to-speech.
+
+Requires ``CARTESIA_API_KEY`` from https://play.cartesia.ai/keys
+and one of:
+
+- ``LIVEKIT_INFERENCE_API_KEY`` + ``LIVEKIT_INFERENCE_API_SECRET``
+- or ``ANTHROPIC_API_KEY``
+- or ``GOOGLE_API_KEY``
+- or ``OPENAI_API_KEY``
+
+Run with:
+
+    uv run examples/other/cartesia.py
+"""
+
 import logging
 import os
 from collections.abc import Callable
