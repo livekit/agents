@@ -705,6 +705,7 @@ class AudioRecognition:
         self._last_speaking_time = None
         self._vad_speech_started = False
         self._user_turn_committed = False
+        self._turn_tracker = _UserTurnTracker()
 
         # end any in-progress user_turn span so the next speech starts a fresh one
         if self._user_turn_span is not None and self._user_turn_span.is_recording():

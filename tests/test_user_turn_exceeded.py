@@ -114,6 +114,51 @@ async def test_reset_on_agent_speaking() -> None:
     assert len(agent.exceeded_events) == 0
 
 
+async def test_no_accumulation_after_clear_user_turn() -> None:
+    """Turns discarded via clear_user_turn() (e.g. push-to-talk cancel) must not
+    contribute to the next turn's accumulated word count or duration."""
+    speed = 5.0
+    agent = _CapturingAgent()
+
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 1.5, "one two three", stt_delay=0.2)
+    actions.add_llm("reply", ttft=0.1, duration=0.1)
+    actions.add_tts(0.5, ttfb=0.1, duration=0.1)
+
+    session = create_session(
+        actions,
+        speed_factor=speed,
+        turn_handling={"user_turn_limit": {"max_words": 5}},
+    )
+
+    synchronizer = (
+        session.output.audio._synchronizer
+        if isinstance(session.output.audio, _SyncedAudioOutput)
+        else None
+    )
+
+    try:
+        await session.start(agent)
+
+        # turn 1: 3 words accumulate in the tracker via the normal path
+        recognition = session._activity._audio_recognition  # type: ignore[union-attr]
+        recognition._check_user_turn_limit("one two three")
+        assert recognition._turn_tracker.words == 3
+        assert len(agent.exceeded_events) == 0
+
+        # discard turn 1 (push-to-talk cancel)
+        session.clear_user_turn()
+
+        # turn 2: 3 more words. With the bug, words would be 6 (>=5) and fire the event.
+        recognition._check_user_turn_limit("four five six")
+        assert recognition._turn_tracker.words == 3
+        assert len(agent.exceeded_events) == 0
+    finally:
+        await session.aclose()
+        if synchronizer is not None:
+            await synchronizer.aclose()
+
+
 async def test_accumulation_across_interrupted_turns() -> None:
     """When a user turn completes and the user interrupts the agent before it speaks,
     the previous turn is committed to chat context and the exceeded event's
