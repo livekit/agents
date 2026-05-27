@@ -39,6 +39,7 @@ from .realtime import (
     RemoteItemAddedEvent,
 )
 from .tool_context import (
+    DictProviderTool,
     FunctionTool,
     ProviderTool,
     RawFunctionTool,
@@ -88,6 +89,7 @@ __all__ = [
     "is_raw_function_tool",
     "RawFunctionTool",
     "ProviderTool",
+    "DictProviderTool",
     "ToolContext",
     "ToolError",
     "StopResponse",

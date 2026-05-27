@@ -218,9 +218,14 @@ def to_fnc_ctx(tool_ctx: llm.ToolContext, *, strict: bool = True) -> list[dict[s
     return schemas
 
 
-def to_responses_fnc_ctx(tool_ctx: llm.ToolContext, *, strict: bool = True) -> list[dict[str, Any]]:
-    from livekit.plugins import openai
-
+def to_responses_fnc_ctx(
+    tool_ctx: llm.ToolContext,
+    *,
+    strict: bool = True,
+    provider_tool_type: type[llm.DictProviderTool],
+) -> list[dict[str, Any]]:
+    # the caller passes its plugin's ProviderTool subclass so this core helper doesn't import any
+    # plugin to recognize server-side provider tools (web_search, x_search, ...).
     schemas: list[dict[str, Any]] = []
     for tool in tool_ctx.flatten():
         if isinstance(tool, llm.RawFunctionTool):
@@ -230,7 +235,7 @@ def to_responses_fnc_ctx(tool_ctx: llm.ToolContext, *, strict: bool = True) -> l
         elif isinstance(tool, llm.FunctionTool):
             schema = llm.utils.build_legacy_openai_schema(tool, internally_tagged=True)
             schemas.append(schema)
-        elif isinstance(tool, openai.tools.OpenAITool):
+        elif isinstance(tool, provider_tool_type):
             schemas.append(tool.to_dict())
 
     return schemas

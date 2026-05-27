@@ -1,13 +1,11 @@
-from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
 
-from livekit.agents import ProviderTool
+from livekit.agents import DictProviderTool
 
 
-class MistralTool(ProviderTool, ABC):
-    @abstractmethod
-    def to_dict(self) -> dict[str, Any]: ...
+class MistralTool(DictProviderTool):
+    """Base class for Mistral server-side provider tools."""
 
 
 @dataclass

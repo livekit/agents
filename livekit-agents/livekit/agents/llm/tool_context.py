@@ -48,6 +48,13 @@ class ProviderTool(Tool):
         return self._id
 
 
+class DictProviderTool(ProviderTool):
+    """A provider tool whose schema serializes to a plain dict (e.g. openai, xAI)."""
+
+    @abstractmethod
+    def to_dict(self) -> dict[str, Any]: ...
+
+
 class Toolset:
     @dataclass
     class ToolCalledEvent:
@@ -503,7 +510,16 @@ class ToolContext:
 
     @overload
     def parse_function_tools(
-        self, format: Literal["openai", "openai.responses"], *, strict: bool = True
+        self, format: Literal["openai"], *, strict: bool = True
+    ) -> list[dict[str, Any]]: ...
+
+    @overload
+    def parse_function_tools(
+        self,
+        format: Literal["openai.responses"],
+        *,
+        strict: bool = True,
+        provider_tool_type: type[DictProviderTool],
     ) -> list[dict[str, Any]]: ...
 
     @overload
