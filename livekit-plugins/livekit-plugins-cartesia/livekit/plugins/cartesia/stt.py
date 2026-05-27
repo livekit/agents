@@ -36,15 +36,12 @@ from livekit.agents.utils import is_given
 
 from ._recognize_streams.auto_finalize_recognize_stream import AutoFinalizeRecognizeStream
 from ._recognize_streams.cartesia_recognize_stream import CartesiaRecognizeStream
-from ._recognize_streams.flush_finalize_recognize_stream import (
-    FlushFinalizeRecognizeStream,
-)
 from ._recognize_streams.legacy_recognize_stream import LegacyRecognizeStream
 from .constants import AUDIO_ENCODING
 from .log import logger
 from .models import STTEncoding, STTLanguages, STTModels
 
-_ResolvedFinalTranscriptMode = Literal["auto", "emit_on_flush", "legacy"]
+_ResolvedFinalTranscriptMode = Literal["auto", "legacy"]
 
 
 def _is_whisper_model(model: STTModels | str) -> bool:
@@ -81,22 +78,13 @@ class STT(stt.STT):
         from livekit.plugins import cartesia
 
         session = AgentSession(
-            stt=cartesia.STT(final_transcript_mode="auto"),
+            stt=cartesia.STT(),
             llm=LLM(),  # choose your favorite LLM
             tts=cartesia.TTS(),
             turn_handling={
                 "turn_detection": "stt",
             },
         )
-        ```
-
-        ```# Transcribe on flush()
-        from livekit.plugins import cartesia
-
-        stream = cartesia.STT(final_transcript_mode="emit_on_flush")
-
-        def on_user_end_of_speech():
-            stream.flush()
         ```
     """
 
@@ -105,7 +93,6 @@ class STT(stt.STT):
         *,
         model: NotGivenOr[STTModels | str] = NOT_GIVEN,
         sample_rate: int = 16000,
-        final_transcript_mode: NotGivenOr[Literal["auto", "emit_on_flush"]] = NOT_GIVEN,
         api_key: str | None = None,
         audio_chunk_duration_ms: int = 160,
         http_session: aiohttp.ClientSession | None = None,
@@ -133,10 +120,6 @@ class STT(stt.STT):
                 Defaults to ``ink-2`` if language is ``en``.
                 Defaults to ``ink-whisper`` for other languages.
             sample_rate: The sample rate of the audio in Hz. Defaults to 16 kHz.
-            final_transcript_mode: How you would like to receive FINAL_TRANSCRIPT speech events.
-                Use ``emit_on_flush`` to get the final transcript after calling ``stream.flush()``
-                (only interim transcripts will be emitted before ``stream.flush()``).
-                Otherwise, use `auto`. Defaults to `auto` if ``model`` supports it.
             api_key: The Cartesia API key. If not provided, it will be read from
                 the ``CARTESIA_API_KEY`` environment variable.
             audio_chunk_duration_ms: Duration in milliseconds of each audio chunk
@@ -150,7 +133,6 @@ class STT(stt.STT):
 
         Raises:
             ValueError: If no API key is provided or found in environment variables.
-            ValueError: If ``model="ink-whisper"`` is used with ``final_transcript_mode="auto"``.
 
         Examples:
 
@@ -159,23 +141,13 @@ class STT(stt.STT):
             from livekit.plugins import cartesia
 
             session = AgentSession(
-                stt=cartesia.STT(final_transcript_mode="auto"),
+                stt=cartesia.STT(),
                 llm=LLM(),  # choose your favorite LLM
                 tts=cartesia.TTS(),
                 turn_handling={
                     "turn_detection": "stt",
                 },
             )
-            ```
-
-            ```# Transcribe on flush()
-            from livekit.plugins import cartesia
-
-            stt = cartesia.STT(final_transcript_mode="emit_on_flush")
-            stream = stt.stream()
-
-            def on_user_end_of_speech():
-                stream.flush()
             ```
         """
         resolved_api_key = api_key or os.environ.get("CARTESIA_API_KEY")
@@ -198,18 +170,10 @@ class STT(stt.STT):
         is_whisper = _is_whisper_model(resolved_model)
 
         resolved_final_transcript_mode: _ResolvedFinalTranscriptMode
-        if is_given(final_transcript_mode):
-            resolved_final_transcript_mode = final_transcript_mode
-        elif not is_whisper:
-            # auto finalize is the norm in LiveKit and results in better turn detection
-            resolved_final_transcript_mode = "auto"
-        else:
+        if is_whisper:
             resolved_final_transcript_mode = "legacy"
-
-        if is_whisper and resolved_final_transcript_mode == "auto":
-            raise ValueError(
-                f'Unsupported model final_transcript_mode: cartesia.STT(model="{model}", final_transcript_mode="auto"). Switch to model="ink-2" or omit final_transcript_mode.'
-            )
+        else:
+            resolved_final_transcript_mode = "auto"
 
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -290,19 +254,6 @@ class STT(stt.STT):
                     session=session,
                     language=resolved_language or LanguageCode("en"),
                 )
-            case "emit_on_flush":
-                stream = FlushFinalizeRecognizeStream(
-                    stt=self,
-                    conn_options=conn_options,
-                    sample_rate=self._sample_rate,
-                    encoding=self._encoding,
-                    audio_chunk_duration_ms=self._audio_chunk_duration_ms,
-                    model=self._model,
-                    api_key=self._api_key,
-                    ws_base_url=self._ws_base_url,
-                    session=session,
-                    language=resolved_language,
-                )
             case "legacy":
                 stream = LegacyRecognizeStream(
                     stt=self,
@@ -318,8 +269,8 @@ class STT(stt.STT):
                 )
             case _:
                 _exhaustive_check: Never = self._final_transcript_mode
-                raise ValueError(
-                    f"Cartesia STT has unexpected kwarg final_transcript_mode={_exhaustive_check}"
+                raise RuntimeError(
+                    f"Cartesia STT has unexpected final_transcript_mode={_exhaustive_check}"
                 )
 
         self._streams.add(stream)

@@ -49,14 +49,10 @@ if TYPE_CHECKING:
 
 class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
     """
-    Cartesia STT stream implementation for ``cartesia.STT(final_transcript_mode="auto")``.
+    Cartesia STT stream implementation with turn detection.
 
     This implementation ignores :meth:`flush`.
     Final transcripts are emitted when the STT model detects :class:`~stt.SpeechEventType.END_OF_SPEECH`.
-
-    Use ``cartesia.STT(final_transcript_mode="emit_on_flush")`` instead
-    if your code knows when it needs :class:`~stt.SpeechEventType.FINAL_TRANSCRIPT`
-    to be emitted by Cartesia STT.
 
     See also:
         - [API Reference](https://docs.cartesia.ai/api-reference/stt/turns/websocket)
@@ -121,7 +117,7 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
                         await ws.send_bytes(frame.data.tobytes())
                 elif isinstance(data, self._FlushSentinel):
                     logger.warning(
-                        'Cartesia STT stream.flush() was ignored. Use cartesia.STT(final_transcript_mode="emit_on_flush") instead if you only expect a final transcript after stream.flush() is called.'
+                        "Cartesia STT stream.flush() was ignored. See https://docs.cartesia.ai/use-the-api/compare-stt-endpoints for details."
                     )
 
             for frame in audio_bstream.flush():

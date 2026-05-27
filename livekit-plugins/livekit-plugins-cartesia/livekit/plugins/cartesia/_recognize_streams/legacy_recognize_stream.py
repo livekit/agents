@@ -53,13 +53,10 @@ def _get_api_language_param_from_language_code(language_code: LanguageCode) -> s
 
 
 class LegacyRecognizeStream(CartesiaRecognizeStream):
-    """Cartesia STT stream implementation for ``ink-whisper`` when the ``final_transcript_mode`` kwarg is omitted.
+    """Cartesia STT stream implementation for ``ink-whisper``.
 
     See also:
         https://docs.cartesia.ai/api-reference/stt/stt
-
-    .. deprecated::
-        Use ``cartesia.STT(final_transcript_mode="auto")`` or ``cartesia.STT(final_transcript_mode="emit_on_flush")`` instead.
     """
 
     def __init__(
@@ -128,10 +125,6 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
                 elif isinstance(data, self._FlushSentinel):
                     frames.extend(audio_bstream.flush())
                     frames.append(data)
-                    if not self._input_ch.closed:
-                        logger.warning(
-                            'Cartesia STT now has better support for stream.flush(). Try it out by using cartesia.STT(final_transcript_mode="emit_on_flush"). This will cause final transcripts to be emitted whenever stream.flush() is called rather than emitting partial transcripts as they come.'
-                        )
 
                 for frame in frames:
                     if isinstance(frame, self._FlushSentinel):
