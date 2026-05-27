@@ -128,9 +128,10 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
                 elif isinstance(data, self._FlushSentinel):
                     frames.extend(audio_bstream.flush())
                     frames.append(data)
-                    logger.warning(
-                        'Cartesia STT now has better support for stream.flush(). Try it out by using cartesia.STT(behavior="transcribe_on_flush"). This will prevent final transcripts from being emitted until stream.flush() is called.'
-                    )
+                    if not self._input_ch.closed:
+                        logger.warning(
+                            'Cartesia STT now has better support for stream.flush(). Try it out by using cartesia.STT(behavior="transcribe_on_flush"). This will prevent final transcripts from being emitted until stream.flush() is called.'
+                        )
 
                 for frame in frames:
                     if isinstance(frame, self._FlushSentinel):

@@ -71,8 +71,10 @@ STTs: list[Callable[[], stt.STT]] = [
         # spitch,
     ]
 ] + [
+    pytest.param(lambda: cartesia.STT(model="ink-whisper"), id="livekit.plugins.cartesia__legacy"),
     pytest.param(
-        lambda: cartesia.STT(model="ink-whisper"), id="ink-whisper@livekit.plugins.cartesia"
+        lambda: cartesia.STT(behavior="transcribe_on_flush"),
+        id="livekit.plugins.cartesia__transcribe_on_flush",
     ),
     pytest.param(lambda: deepgram.STTv2(), id="livekit.plugins.deepgram.STTv2"),
     pytest.param(

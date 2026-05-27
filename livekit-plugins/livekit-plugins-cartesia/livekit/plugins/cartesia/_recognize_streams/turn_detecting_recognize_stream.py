@@ -128,7 +128,7 @@ class TurnDetectingRecognizeStream(CartesiaRecognizeStream):
                 await ws.send_bytes(frame.data.tobytes())
 
             self._closing_ws = True
-            await ws.send_str(json.dumps({"type": "close"}))
+            await ws.send_str('{"type":"close"}')
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -176,32 +176,25 @@ class TurnDetectingRecognizeStream(CartesiaRecognizeStream):
 
         try:
             ws = await self._connect_ws()
-            tasks = [
-                asyncio.create_task(send_task(ws)),
-                asyncio.create_task(recv_task(ws)),
-                asyncio.create_task(keepalive_task(ws)),
-            ]
+            send = asyncio.create_task(send_task(ws))
+            recv = asyncio.create_task(recv_task(ws))
+            keepalive = asyncio.create_task(keepalive_task(ws))
+            tasks = [send, recv, keepalive]
             try:
-                await asyncio.gather(*tasks)
+                # Only wait on send/recv. keepalive_task sleeps up to 30s
+                # between pings, so awaiting it here would keep gather() (and
+                # the teardown/finalization below) blocked for up to 30s after
+                # send/recv have already finished.
+                await asyncio.gather(send, recv)
             finally:
                 await utils.aio.gracefully_cancel(*tasks)
+                self._send_recognition_usage_event()
                 # If the websocket dropped mid-turn, flush the partial
                 # transcript as a FINAL_TRANSCRIPT so the consumer can finalize
                 # the turn instead of losing it. In the normal close path the
                 # server sends turn.end first and _speaking is already False.
                 if self._speaking:
                     if not self._event_ch.closed:
-                        if self._speech_duration > 0:
-                            self._event_ch.send_nowait(
-                                stt.SpeechEvent(
-                                    type=stt.SpeechEventType.RECOGNITION_USAGE,
-                                    request_id=self._request_id,
-                                    recognition_usage=stt.RecognitionUsage(
-                                        audio_duration=self._speech_duration,
-                                    ),
-                                )
-                            )
-                            self._speech_duration = 0.0
                         if self._current_transcript:
                             self._send_transcript_event(
                                 stt.SpeechEventType.FINAL_TRANSCRIPT, self._current_transcript
@@ -261,6 +254,19 @@ class TurnDetectingRecognizeStream(CartesiaRecognizeStream):
             )
         )
 
+    def _send_recognition_usage_event(self) -> None:
+        if self._speech_duration > 0 and not self._event_ch.closed:
+            self._event_ch.send_nowait(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.RECOGNITION_USAGE,
+                    request_id=self._request_id,
+                    recognition_usage=stt.RecognitionUsage(
+                        audio_duration=self._speech_duration,
+                    ),
+                )
+            )
+            self._speech_duration = 0
+
     def _process_stream_event(self, data: STTEventMessage) -> None:
         if request_id := data.get("request_id"):
             self._request_id = request_id
@@ -318,19 +324,9 @@ class TurnDetectingRecognizeStream(CartesiaRecognizeStream):
                 return
             transcript = data["transcript"] or self._current_transcript
 
+            self._send_recognition_usage_event()
+            self._send_transcript_event(stt.SpeechEventType.FINAL_TRANSCRIPT, transcript)
             if not self._event_ch.closed:
-                if self._speech_duration > 0:
-                    self._event_ch.send_nowait(
-                        stt.SpeechEvent(
-                            type=stt.SpeechEventType.RECOGNITION_USAGE,
-                            request_id=self._request_id,
-                            recognition_usage=stt.RecognitionUsage(
-                                audio_duration=self._speech_duration,
-                            ),
-                        )
-                    )
-                    self._speech_duration = 0.0
-                self._send_transcript_event(stt.SpeechEventType.FINAL_TRANSCRIPT, transcript)
                 self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
             self._speaking = False

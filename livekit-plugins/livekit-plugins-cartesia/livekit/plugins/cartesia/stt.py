@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import warnings
 import weakref
@@ -150,7 +151,7 @@ class STT(stt.STT):
 
         Raises:
             ValueError: If no API key is provided or found in environment variables.
-            ValueError: If ``ink-whisper`` is used with ``transcribe_on_flush``.
+            ValueError: If ``ink-whisper`` is used with ``turn_detecting``.
 
         Examples:
 
@@ -231,9 +232,7 @@ class STT(stt.STT):
         self._session = http_session
         self._ws_base_url = _base_url_to_ws_base_url(base_url=base_url)
 
-        self._streams = weakref.WeakSet[
-            TurnDetectingRecognizeStream | TranscribeOnFlushRecognizeStream | LegacyRecognizeStream
-        ]()
+        self._streams = weakref.WeakSet[CartesiaRecognizeStream]()
 
         self._warn_on_unexpected_args(language=self._language)
 
@@ -326,7 +325,15 @@ class STT(stt.STT):
         return stream
 
     async def aclose(self) -> None:
-        pass  # todo
+        """Close every stream created by :meth:`stream`.
+
+        The HTTP session is left open: it is either supplied by the caller or
+        owned by the shared HTTP context, so it is not ours to close.
+        """
+        streams = list(self._streams)
+        self._streams.clear()
+        # return_exceptions=True so one stream failing to close doesn't abandon the rest
+        await asyncio.gather(*(stream.aclose() for stream in streams), return_exceptions=True)
 
     def update_options(
         self,

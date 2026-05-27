@@ -105,14 +105,28 @@ class TranscribeOnFlushRecognizeStream(CartesiaRecognizeStream):
         self._language = language
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
-        self._buffered_transcript_chunks: list[str] = []
 
         # input audio duration for usage recognition
         self._speech_duration: float = 0
 
+        # buffered parts waiting to be flushed
         self._transcript_buffer: _TranscriptBuffer | None = None
+
         # the last word timestamp we've seen
         self._last_speech_end_time: float = 0
+
+    def _send_recognition_usage_event(self) -> None:
+        if self._speech_duration > 0 and not self._event_ch.closed:
+            self._event_ch.send_nowait(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.RECOGNITION_USAGE,
+                    request_id=self._request_id,
+                    recognition_usage=stt.RecognitionUsage(
+                        audio_duration=self._speech_duration,
+                    ),
+                )
+            )
+            self._speech_duration = 0
 
     async def _run(self) -> None:
         if self._input_ch.closed:
@@ -153,6 +167,7 @@ class TranscribeOnFlushRecognizeStream(CartesiaRecognizeStream):
 
                 for frame in frames:
                     if isinstance(frame, self._FlushSentinel):
+                        self._send_recognition_usage_event()
                         await ws.send_str("finalize")
                     else:
                         self._speech_duration += frame.duration
@@ -162,6 +177,7 @@ class TranscribeOnFlushRecognizeStream(CartesiaRecognizeStream):
                 self._speech_duration += frame.duration
                 await ws.send_bytes(frame.data.tobytes())
 
+            self._send_recognition_usage_event()
             closing_ws = True
             await ws.send_str("close")
 
@@ -335,17 +351,6 @@ class TranscribeOnFlushRecognizeStream(CartesiaRecognizeStream):
                 )
         elif data["type"] == "flush_done":
             if not self._event_ch.closed:
-                if self._speech_duration > 0:
-                    self._event_ch.send_nowait(
-                        stt.SpeechEvent(
-                            type=stt.SpeechEventType.RECOGNITION_USAGE,
-                            request_id=self._request_id,
-                            recognition_usage=stt.RecognitionUsage(
-                                audio_duration=self._speech_duration,
-                            ),
-                        )
-                    )
-                    self._speech_duration = 0
                 self._event_ch.send_nowait(
                     stt.SpeechEvent(
                         type=stt.SpeechEventType.FINAL_TRANSCRIPT,
