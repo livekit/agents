@@ -504,8 +504,6 @@ async def _execute_tools_task(
     output, and later updates / the final return are coalesced into deferred replies.
     """
 
-    from pydantic_core import from_json
-
     from .agent import _set_activity_task_info
     from .events import RunContext
     from .run_result import _MockToolsContextVar
@@ -578,28 +576,37 @@ async def _execute_tools_task(
                 continue
 
             # parse up front so the executor doesn't repeat the work, and so
-            # invalid JSON surfaces as a tool error instead of inside the lock
+            # invalid JSON surfaces as a tool error instead of inside the lock.
+            # parse_function_arguments adds json_repair fallback + chat-template
+            # token cleanup for misbehaving open-weight models.
+            json_args = fnc_call.arguments or "{}"
             try:
-                raw_args = from_json(fnc_call.arguments or "{}")
-                while isinstance(raw_args, str):
-                    raw_args = from_json(raw_args)
-                if raw_args is None:
-                    raw_args = {}
-                elif not isinstance(raw_args, dict):
-                    raise ValueError(
-                        f"expected dict from function arguments, got {type(raw_args).__name__}"
-                    )
-            except Exception as e:
-                logger.exception(
-                    f"tried to call AI function `{fnc_call.name}` with invalid arguments",
+                raw_args = llm_utils.parse_function_arguments(json_args)
+            except ValueError as e:
+                logger.warning(
+                    f"invalid arguments for AI function `{fnc_call.name}`: {e}",
                     extra={
                         "function": fnc_call.name,
                         "arguments": fnc_call.arguments,
                         "speech_id": speech_handle.id,
                     },
                 )
-                _tool_completed(make_tool_output(fnc_call=fnc_call, output=None, exception=e))
+                _tool_completed(
+                    make_tool_output(
+                        fnc_call=fnc_call,
+                        output=None,
+                        exception=ToolError(
+                            f"Error parsing arguments for `{fnc_call.name}`: {e}"
+                        ),
+                    )
+                )
                 continue
+
+            # write canonical JSON back so subsequent LLM turns see valid JSON
+            # even if the original was repaired
+            canonical = json.dumps(raw_args, default=str)
+            if canonical != json_args:
+                fnc_call.arguments = canonical
 
             if not tool_output.first_tool_started_fut.done():
                 tool_output.first_tool_started_fut.set_result(None)
@@ -610,18 +617,18 @@ async def _execute_tools_task(
                     type(session.current_agent), {}
                 )
                 mock = mock_tools.get(fnc_call.name)
+                mocked = mock is not None
 
                 run_ctx = RunContext(
                     session=session, speech_handle=speech_handle, function_call=fnc_call
                 )
 
                 logger.debug(
-                    "executing tool",
+                    "executing mock tool" if mocked else "executing tool",
                     extra={
                         "function": fnc_call.name,
                         "arguments": fnc_call.arguments,
                         "speech_id": speech_handle.id,
-                        "mocked": mock is not None,
                     },
                 )
 

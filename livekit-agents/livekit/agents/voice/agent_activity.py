@@ -637,11 +637,13 @@ class AgentActivity(RecognitionHooks):
         resources = _ReusableResources()
 
         try:
-            # stt pipeline
+            # stt pipeline; only reuse with the default stt_node, a custom override may
+            # access the old self.session/activity inside the yield loop after detach
             if (
                 self._audio_recognition
                 and self.stt is not None
-                and type(self.agent).stt_node is type(new_activity.agent).stt_node
+                and type(self.agent).stt_node is Agent.stt_node
+                and type(new_activity.agent).stt_node is Agent.stt_node
                 and self.stt is new_activity.stt
             ):
                 resources.stt_pipeline = await self._audio_recognition.detach_stt()
@@ -1081,14 +1083,19 @@ class AgentActivity(RecognitionHooks):
 
         should_discard: bool = aec_warmup_active or uninterruptible_speech_active
 
-        if not should_discard:
-            if self._rt_session is not None:
-                self._rt_session.push_audio(frame)
+        # When discarding, substitute silence on the paths that would otherwise
+        # see contaminated/echoed audio (STT, realtime model) so the downstream
+        # stream stays continuous. VAD, AMD and the interruption detector keep
+        # receiving the real frame so they can still react to the user.
+        stt_frame: rtc.AudioFrame | None = None
+        if should_discard:
+            stt_frame = utils.audio.silence_frame_like(frame)
 
-        # Always forward to _audio_recognition for VAD, even when discarding STT/LLM
-        # VAD needs frames to detect speech end and update user state correctly
+        if self._rt_session is not None:
+            self._rt_session.push_audio(stt_frame if stt_frame is not None else frame)
+
         if self._audio_recognition is not None:
-            self._audio_recognition.push_audio(frame, skip_stt=should_discard)
+            self._audio_recognition.push_audio(frame, stt_frame=stt_frame)
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
         if not self._started:
@@ -2189,6 +2196,16 @@ class AgentActivity(RecognitionHooks):
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=eou_metrics))
 
     def on_user_turn_exceeded(self, ev: UserTurnExceededEvent) -> None:
+        if self._scheduling_paused or self._new_turns_blocked:
+            logger.warning(
+                "skipping user turn exceeded, speech scheduling is paused",
+                extra={
+                    "num_words": ev.accumulated_word_count,
+                    "duration": ev.duration,
+                },
+            )
+            return
+
         if self._user_turn_exceeded_locked:
             return  # user callback is executing, drop
 
@@ -2229,6 +2246,11 @@ class AgentActivity(RecognitionHooks):
             self._session.off("agent_state_changed", _on_agent_state_changed)
             if not wait_inactive.done():
                 wait_inactive.cancel()
+
+        # re-check after the wait phase: if a handoff started in the meantime,
+        # don't fire the callback on this now-stale activity.
+        if self._scheduling_paused or self._new_turns_blocked:
+            return
 
         # custom callback, locked - don't cancel user's callback
         logger.debug(

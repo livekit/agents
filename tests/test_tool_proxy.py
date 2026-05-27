@@ -215,17 +215,15 @@ class TestToolProxyToolset:
         )
         await ts.setup()
 
-        with pytest.raises(ToolError, match="invalid parameters") as exc_info:
+        with pytest.raises(ToolError, match="Error parsing arguments") as exc_info:
             await ts._handle_call(_mock_ctx(), {"name": "weather_tool", "parameters": {}})
 
         error_msg = exc_info.value.message
         print(f"Missing arg error: {error_msg}")
 
         # Error message should contain the missing field name and indicate it's required
-        error_data = json.loads(error_msg.split(":", 1)[1].strip())
-        field_names = [err["loc"][0] for err in error_data]
-        assert "city" in field_names
-        assert any(err["type"] == "missing" for err in error_data)
+        assert "city" in error_msg
+        assert "type=missing" in error_msg
 
     async def test_call_wrong_type_arg_raises_tool_error(self, capsys):
         """Wrong argument type produces a detailed ToolError for the LLM."""
@@ -235,7 +233,7 @@ class TestToolProxyToolset:
         )
         await ts.setup()
 
-        with pytest.raises(ToolError, match="invalid parameters") as exc_info:
+        with pytest.raises(ToolError, match="Error parsing arguments") as exc_info:
             await ts._handle_call(
                 _mock_ctx(),
                 {"name": "forecast_tool", "parameters": {"city": "Tokyo", "days": "not_a_number"}},
@@ -245,10 +243,8 @@ class TestToolProxyToolset:
         print(f"Wrong type error: {error_msg}")
 
         # Error message should contain the field name and indicate a type parsing issue
-        error_data = json.loads(error_msg.split(":", 1)[1].strip())
-        field_names = [err["loc"][0] for err in error_data]
-        assert "days" in field_names
-        assert any("int" in err["type"] for err in error_data)
+        assert "days" in error_msg
+        assert "int_parsing" in error_msg
 
     async def test_call_tool_propagates_tool_error(self):
         """ToolError raised inside a tool is re-raised as-is."""
