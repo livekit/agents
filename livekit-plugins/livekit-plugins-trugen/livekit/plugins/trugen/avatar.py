@@ -127,10 +127,13 @@ class AvatarSession(BaseAvatarSession):
         logger.debug("Starting Realtime Avatar Session")
         await self._start_session(livekit_url, livekit_token)
 
-        agent_session.output.audio = DataStreamAudioOutput(
-            room=room,
-            destination_identity=self._avatar_participant_identity,
-            wait_remote_track=rtc.TrackKind.KIND_VIDEO,
+        agent_session.output.set_audio_sink(
+            DataStreamAudioOutput(
+                room=room,
+                destination_identity=self._avatar_participant_identity,
+                wait_remote_track=rtc.TrackKind.KIND_VIDEO,
+            ),
+            preserve_wrappers=True,
         )
 
     async def _start_session(self, livekit_url: str, livekit_token: str) -> None:

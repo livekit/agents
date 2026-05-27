@@ -145,11 +145,14 @@ class AvatarSession(BaseAvatarSession):
             )
             session_task_mapping[room.name] = self.conversation_id
 
-            agent_session.output.audio = DataStreamAudioOutput(
-                room=room,
-                destination_identity="listener",
-                sample_rate=SAMPLE_RATE,
-                # wait_remote_track=rtc.TrackKind.KIND_VIDEO,
+            agent_session.output.set_audio_sink(
+                DataStreamAudioOutput(
+                    room=room,
+                    destination_identity="listener",
+                    sample_rate=SAMPLE_RATE,
+                    # wait_remote_track=rtc.TrackKind.KIND_VIDEO,
+                ),
+                preserve_wrappers=True,
             )
         except AvatarTalkException as e:
             logger.error(e)

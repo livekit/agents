@@ -138,11 +138,14 @@ class AvatarSession(BaseAvatarSession):
         def _on_agent_session_close(_: Any) -> None:
             self._ensure_end_session_task()
 
-        agent_session.output.audio = DataStreamAudioOutput(
-            room=room,
-            destination_identity=self._avatar_participant_identity,
-            wait_remote_track=rtc.TrackKind.KIND_VIDEO,
-            sample_rate=SAMPLE_RATE,
+        agent_session.output.set_audio_sink(
+            DataStreamAudioOutput(
+                room=room,
+                destination_identity=self._avatar_participant_identity,
+                wait_remote_track=rtc.TrackKind.KIND_VIDEO,
+                sample_rate=SAMPLE_RATE,
+            ),
+            preserve_wrappers=True,
         )
 
     async def _create_session(self, livekit_url: str, livekit_token: str, room_name: str) -> None:

@@ -153,12 +153,15 @@ class AvatarSession(BaseAvatarSession):
 
         self._room = room
 
-        agent_session.output.audio = DataStreamAudioOutput(
-            room=room,
-            destination_identity=self._avatar_participant_identity,
-            sample_rate=SAMPLE_RATE,
-            wait_remote_track=rtc.TrackKind.KIND_VIDEO,
-            clear_buffer_timeout=None,
+        agent_session.output.set_audio_sink(
+            DataStreamAudioOutput(
+                room=room,
+                destination_identity=self._avatar_participant_identity,
+                sample_rate=SAMPLE_RATE,
+                wait_remote_track=rtc.TrackKind.KIND_VIDEO,
+                clear_buffer_timeout=None,
+            ),
+            preserve_wrappers=True,
         )
 
     async def set_emotion(self, emotion: Emotion) -> None:
