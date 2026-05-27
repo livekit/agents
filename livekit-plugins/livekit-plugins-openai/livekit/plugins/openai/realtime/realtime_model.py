@@ -48,6 +48,7 @@ from openai.types.realtime import (
     ConversationItemDeletedEvent,
     ConversationItemDeleteEvent,
     ConversationItemInputAudioTranscriptionCompletedEvent,
+    ConversationItemInputAudioTranscriptionDeltaEvent,
     ConversationItemInputAudioTranscriptionFailedEvent,
     ConversationItemTruncateEvent,
     InputAudioBufferAppendEvent,
@@ -807,6 +808,9 @@ class RealtimeSession(
         self._item_delete_future: dict[str, asyncio.Future] = {}
         self._item_create_future: dict[str, asyncio.Future] = {}
 
+        # accumulates partial input-audio transcripts per (item_id, content_index)
+        self._input_transcript_accumulators: dict[str, dict[int, str]] = {}
+
         self._current_generation: _ResponseGeneration | None = None
         self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
 
@@ -854,6 +858,7 @@ class RealtimeSession(
             )
             old_chat_ctx = self._remote_chat_ctx
             self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
+            self._input_transcript_accumulators.clear()
             events.extend(self._create_update_chat_ctx_events(chat_ctx))
 
             try:
@@ -1064,10 +1069,9 @@ class RealtimeSession(
                             ConversationItemDeletedEvent.construct(**event)
                         )
                     elif event["type"] == "conversation.item.input_audio_transcription.delta":
-                        # currently incoming transcripts are transcribed only after the user stops speaking
-                        # it's not very useful to emit these as the transcribe process takes place within ~100ms
-                        # when they handle streaming transcriptions, we'll handle it then.
-                        pass
+                        self._handle_conversion_item_input_audio_transcription_delta(
+                            ConversationItemInputAudioTranscriptionDeltaEvent.construct(**event)
+                        )
                     elif event["type"] == "conversation.item.input_audio_transcription.completed":
                         self._handle_conversion_item_input_audio_transcription_completed(
                             ConversationItemInputAudioTranscriptionCompletedEvent.construct(**event)
@@ -1746,6 +1750,8 @@ class RealtimeSession(
     def _handle_conversion_item_deleted(self, event: ConversationItemDeletedEvent) -> None:
         assert event.item_id is not None, "item_id is None"
 
+        self._input_transcript_accumulators.pop(event.item_id, None)
+
         try:
             self._remote_chat_ctx.delete(event.item_id)
         except ValueError as e:
@@ -1759,9 +1765,38 @@ class RealtimeSession(
             else:
                 fut.set_result(None)
 
+    def _handle_conversion_item_input_audio_transcription_delta(
+        self, event: ConversationItemInputAudioTranscriptionDeltaEvent
+    ) -> None:
+        if not event.delta:
+            return
+
+        content_index = event.content_index or 0
+        by_index = self._input_transcript_accumulators.setdefault(event.item_id, {})
+        accumulated = by_index.get(content_index, "") + event.delta
+        by_index[content_index] = accumulated
+
+        self.emit(
+            "input_audio_transcription_completed",
+            llm.InputTranscriptionCompleted(
+                item_id=event.item_id, transcript=accumulated, is_final=False
+            ),
+        )
+
+    def _clear_transcript_accumulator(self, item_id: str, content_index: int) -> str | None:
+        by_index = self._input_transcript_accumulators.get(item_id)
+        if by_index is None:
+            return None
+        partial = by_index.pop(content_index, None)
+        if not by_index:
+            self._input_transcript_accumulators.pop(item_id, None)
+        return partial
+
     def _handle_conversion_item_input_audio_transcription_completed(
         self, event: ConversationItemInputAudioTranscriptionCompletedEvent
     ) -> None:
+        self._clear_transcript_accumulator(event.item_id, event.content_index or 0)
+
         confidence = calculate_confidence_from_logprobs(event.logprobs)
 
         if remote_item := self._remote_chat_ctx.get(event.item_id):
@@ -1785,6 +1820,17 @@ class RealtimeSession(
         logger.error(
             f"{self._realtime_model._provider_label} failed to transcribe input audio",
             extra={"error": event.error},
+        )
+
+        # close any open partial stream so consumers waiting for is_final don't hang
+        partial = self._clear_transcript_accumulator(event.item_id, event.content_index or 0)
+        if partial is None:
+            return
+        self.emit(
+            "input_audio_transcription_completed",
+            llm.InputTranscriptionCompleted(
+                item_id=event.item_id, transcript=partial, is_final=True
+            ),
         )
 
     def _handle_response_text_delta(self, event: ResponseTextDeltaEvent) -> None:
