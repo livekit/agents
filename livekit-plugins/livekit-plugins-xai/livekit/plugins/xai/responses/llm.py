@@ -11,10 +11,15 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 from livekit.plugins import openai
 
+from ..tools import XAITool
+
 XAI_BASE_URL = "https://api.x.ai/v1"
 
 
 class LLM(openai.responses.LLM):
+    # xAI's server-side tools (web_search, x_search, file_search) subclass XAITool.
+    _provider_tool_type = XAITool
+
     def __init__(
         self,
         *,
