@@ -7,8 +7,8 @@ Used by cloud-transport tests to drive ``_CloudTransport.run`` deterministically
   protobufs, and yields scripted server frames from ``receive()``.
 - ``ControlledCloudTransport`` overrides ``_connect_ws`` so each connect
   attempt is scripted: an exception is raised, ``None`` returns the fake ws.
-- ``make_stream(...)`` wires a unified ``_AudioTurnDetectorStreamImpl`` in
-  cloud mode with a controlled transport.
+- ``make_stream(...)`` constructs an ``_AudioTurnDetectorStream`` in cloud
+  mode bound to a controlled transport.
 - ``wait_until_connected(...)`` blocks until the transport's ``_ws`` is set,
   so tests can assert against post-connect state without arbitrary sleeps.
 """
@@ -21,10 +21,12 @@ from unittest.mock import MagicMock
 
 import aiohttp
 
-from livekit.agents.inference.eot.detector import _AudioTurnDetectorStreamImpl
+from livekit.agents.inference.eot.base import (
+    TurnDetectorOptions,
+    _AudioTurnDetectorStream,
+)
 from livekit.agents.inference.eot.transports import _CloudTransport, _CloudTransportOptions
 from livekit.agents.types import APIConnectOptions
-from livekit.agents.voice.turn import TurnDetectorOptions
 from livekit.protocol.agent_pb.agent_inference import ClientMessage
 
 
@@ -94,7 +96,7 @@ def make_stream(
     connect_script: list[BaseException | None] | None = None,
     max_retry: int = 3,
     retry_interval: float = 0.0,
-) -> tuple[_AudioTurnDetectorStreamImpl, FakeTurnDetectorWS, ControlledCloudTransport]:
+) -> tuple[_AudioTurnDetectorStream, FakeTurnDetectorWS, ControlledCloudTransport]:
     """Construct a cloud-mode stream with a controlled transport.
 
     Returns the stream, the fake ws, and the transport so callers can read
@@ -122,21 +124,12 @@ def make_stream(
         cloud_opts=cloud_opts,
         http_session=session_mock,
     )
-    stream = _AudioTurnDetectorStreamImpl.__new__(_AudioTurnDetectorStreamImpl)
-    # Manually wire the impl so we can inject the controlled transport
-    # before super().__init__ kicks off the main task.
-    stream._backend = "cloud"
-    stream._cloud_opts = cloud_opts
-    stream._user_threshold = None
-    stream._http_session = session_mock
-    stream._is_fallback = False
-    stream._warned_cloud_failure = False
-    stream._warned_local_failure = False
-    stream._transport_task = None
-    # Now run the FSM base __init__ (kicks off _main_task → _run, also binds transport).
-    from livekit.agents.voice.turn import _AudioTurnDetectorStream
-
-    _AudioTurnDetectorStream.__init__(stream, detector=detector, opts=opts, transport=transport)
+    stream = _AudioTurnDetectorStream(
+        detector=detector,
+        opts=opts,
+        transport=transport,
+        backend="cloud",
+    )
     return stream, fake_ws, transport
 
 

@@ -1,7 +1,9 @@
-"""Audio EOT (end-of-turn) detector base, stream state machine, and the
-transport Protocol that concrete cloud/local backends implement.
+"""Audio EOT detector base, the merged stream state machine (with built-in
+cloud→local fallback), and the transport Protocol concrete backends satisfy.
 
-Concrete implementations live in ``livekit.agents.inference.eot``.
+Lives next to its transports rather than in ``voice/turn`` so the
+fallback logic is a peer of the transports it switches between rather than a
+template-method-across-packages.
 """
 
 from __future__ import annotations
@@ -9,8 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
-import weakref
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Literal, Protocol, runtime_checkable
 
@@ -25,10 +26,16 @@ from ...types import (
     APIConnectOptions,
 )
 from ...utils import aio
-from .base import TurnDetectionEvent
+from ...voice.turn import TurnDetectionEvent
+from .languages import rescale_for_local_fallback
 
 DEFAULT_SAMPLE_RATE: int = 16000
-MIN_SILENCE_DURATION_MS = 200
+
+_Backend = Literal["cloud", "local"]
+_WIRE_MODEL: dict[_Backend, str] = {
+    "cloud": "eot-audio",
+    "local": "eot-audio-mini",
+}
 
 
 class _Status(str, Enum):
@@ -48,11 +55,23 @@ class TurnDetectorOptions:
     thresholds: dict[str, float] = field(default_factory=dict)
 
 
+@runtime_checkable
+class _AudioTurnDetectionTransport(Protocol):
+    async def run(self) -> None: ...
+
+    def start_inference(self, request_id: str) -> None: ...
+    def stop_inference(self, *, reason: str | None) -> None: ...
+    def push_frame(self, frame: rtc.AudioFrame) -> None: ...
+    def flush(self) -> None: ...
+
+    def attach(self, stream: _AudioTurnDetectorStream) -> None: ...
+    def detach(self) -> None: ...
+
+
 class _AudioTurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
     def __init__(self, *, opts: TurnDetectorOptions) -> None:
         super().__init__()
         self._opts = opts
-        self._streams: weakref.WeakSet[_AudioTurnDetectorStream] = weakref.WeakSet()
 
     @property
     def model(self) -> str:
@@ -70,48 +89,17 @@ class _AudioTurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
         raise NotImplementedError
 
     async def unlikely_threshold(self, language: LanguageCode | None) -> float | None:
-        # `language=None` means "unknown" — treat as English so callers without
-        # a detected language still get a working threshold. Explicit unknown
-        # codes (e.g. "vi") still miss the dict and return None, so
-        # `supports_language` returns False for unsupported languages.
         lang_key = language.language if language is not None else "en"
         return self._opts.thresholds.get(lang_key)
 
     async def supports_language(self, language: LanguageCode | None) -> bool:
         return await self.unlikely_threshold(language) is not None
 
-    async def aclose(self) -> None:
-        for stream in list(self._streams):
-            await stream.aclose()
-        self._streams.clear()
-
-
-@runtime_checkable
-class _AudioTurnDetectionTransport(Protocol):
-    """Transport adapter for ``_AudioTurnDetectorStream`` — owns the I/O
-    (WebSocket session, in-process predict, etc.). The stream calls these
-    methods directly; transports report predictions back via
-    ``stream._handle_prediction(request_id, probability, ...)``.
-    """
-
-    def bind(self, stream: _AudioTurnDetectorStream) -> None: ...
-    async def run(self) -> None: ...
-    def start_inference(self, request_id: str) -> None: ...
-    async def push_frame(self, frame: rtc.AudioFrame) -> None: ...
-    async def flush(self, sentinel: _AudioTurnDetectorStream._FlushSentinel) -> None: ...
-    def stop_inference(self, *, reason: str | None) -> None: ...
-    def detach(self) -> None: ...
-    def transport_ready(self) -> bool: ...
-
 
 class _AudioTurnDetectorStream:
     @dataclass
     class _FlushSentinel:
         reason: str | None = None
-        # TODO: @chenghao-mou wire this in
-        # Trailing audio (ms) to retain on flush — preserves VAD-onset pre-roll
-        # so the next turn starts with a few frames of context.
-        keep_tail_ms: int = 0
 
     def __init__(
         self,
@@ -119,11 +107,19 @@ class _AudioTurnDetectorStream:
         detector: _AudioTurnDetector,
         opts: TurnDetectorOptions,
         transport: _AudioTurnDetectionTransport,
+        backend: _Backend = "local",
     ) -> None:
         self._detector = detector
         self._opts = opts
         self._transport = transport
-        self._transport.bind(self)
+        self._transport.attach(self)
+
+        self._backend: _Backend = backend
+        self._is_fallback = False
+        self._warned_cloud_failure = False
+        self._warned_local_failure = False
+        self._transport_task: asyncio.Task[None] | None = None
+        self._fallback_requested = False
 
         self._audio_input_sample_rate: int | None = None
         self._audio_input_num_channels: int | None = None
@@ -135,21 +131,32 @@ class _AudioTurnDetectorStream:
         self._preemptive_request_fut: asyncio.Future[float] | None = None
         self._last_prediction: TurnDetectionEvent | None = None
         self._last_language: LanguageCode | None = None
-        self._user_turn_started: bool = True
+        self._user_turn_committed: bool = False
         self._late_predict_warned: bool = False
 
         self._tasks: set[asyncio.Task[None]] = set()
         self._task = asyncio.create_task(self._main_task())
 
-    # region: _TurnDetector Protocol proxies
+    # region: detector proxies
 
     @property
     def model(self) -> str:
-        return self._detector.model
+        # Self-contained (does not proxy to the detector): the stream owns its
+        # active backend, so after a fallback this reports "local" while the
+        # detector — and any sibling stream — stay independent.
+        return _WIRE_MODEL[self._backend]
 
     @property
     def provider(self) -> str:
         return self._detector.provider
+
+    @property
+    def backend(self) -> _Backend:
+        return self._backend
+
+    @property
+    def is_fallback(self) -> bool:
+        return self._is_fallback
 
     async def unlikely_threshold(self, language: LanguageCode | None) -> float | None:
         lang_key = language.language if language is not None else "en"
@@ -158,7 +165,7 @@ class _AudioTurnDetectorStream:
     async def supports_language(self, language: LanguageCode | None) -> bool:
         return await self.unlikely_threshold(language) is not None
 
-    def set_language(self, language: LanguageCode | None) -> None:
+    def update_language(self, language: LanguageCode | None) -> None:
         """Record the most recent detected language so the inline
         early-deactivation check can resolve the unlikely-EOT threshold.
         Pushed by ``AudioRecognition`` on each STT transcript."""
@@ -204,7 +211,7 @@ class _AudioTurnDetectorStream:
         return self._preemptive_request_fut
 
     def activate(self, trigger: str | None = None) -> None:
-        if not self._transport.transport_ready() or self._status == _Status.ACTIVE:
+        if self._status == _Status.ACTIVE:
             return
         if self._preemptive_request_id is None:
             logger.trace(
@@ -222,8 +229,12 @@ class _AudioTurnDetectorStream:
             self.deactivate(trigger="positive eou prediction")
 
     def deactivate(self, trigger: str | None = None) -> None:
-        if not self._transport.transport_ready():
-            return
+        # Set the turn flag before any early returns: callers (VAD SOS, in
+        # particular) rely on deactivate re-arming the stream even when there's
+        # no in-flight inference to stop. ``flush`` overrides this back to True
+        # after calling us to mark the turn as committed, blocking late
+        # ``predict_end_of_turn`` calls until the next deactivate re-arms it.
+        self._user_turn_committed = False
         if self._preemptive_request_id is None and self._status == _Status.IDLE:
             return
         self._preemptive_request_id = None
@@ -234,7 +245,7 @@ class _AudioTurnDetectorStream:
         self._status = _Status.IDLE
         self._transport.stop_inference(reason=trigger)
 
-    def flush(self, reason: str | None = None, *, keep_tail_ms: int = 0) -> None:
+    def flush(self, reason: str | None = None) -> None:
         # Idempotent: a second call sends another sentinel that transports
         # treat as a no-op (cloud: redundant session_flush; local: empty trim).
         if self._audio_ch.closed:
@@ -242,24 +253,15 @@ class _AudioTurnDetectorStream:
 
         for resampled_frame in self._flush_audio_resampler():
             self._audio_ch.send_nowait(resampled_frame)
-        self._audio_ch.send_nowait(
-            _AudioTurnDetectorStream._FlushSentinel(reason=reason, keep_tail_ms=keep_tail_ms)
-        )
+        self._audio_ch.send_nowait(_AudioTurnDetectorStream._FlushSentinel(reason=reason))
         # Turn boundary — the cached prediction belongs to the turn we just
         # closed and must not leak into the next one.
         self._last_prediction = None
-        # Close the user turn: until the next ``on_speech_started()`` signal,
-        # ``predict_end_of_turn`` short-circuits.
-        self._user_turn_started = False
         self.deactivate(trigger=reason)
-
-    def on_speech_started(self) -> None:
-        """Signal that a fresh user utterance has started. Opens the user
-        turn so ``predict_end_of_turn`` runs normally again, and deactivates
-        any in-flight inference for the now-stale prior window — the next
-        VAD silence/end-of-speech will warm up and activate a fresh one."""
-        self._user_turn_started = True
-        self.deactivate(trigger="vad sos")
+        # Commit the turn after deactivate so the flag override sticks; until
+        # the next VAD SOS (which calls deactivate again) ``predict_end_of_turn``
+        # short-circuits.
+        self._user_turn_committed = True
 
     # endregion
 
@@ -373,7 +375,7 @@ class _AudioTurnDetectorStream:
         if self._last_prediction is not None:
             return self._last_prediction.end_of_turn_probability
 
-        if not self._user_turn_started:
+        if self._user_turn_committed:
             if not self._late_predict_warned:
                 self._late_predict_warned = True
                 logger.warning(
@@ -414,7 +416,11 @@ class _AudioTurnDetectorStream:
                 with contextlib.suppress(asyncio.InvalidStateError):
                     fut.set_result(1.0)
             self.deactivate(trigger="predict_end_of_turn timeout")
-            self._on_predict_timeout()
+            # Cloud predict timeout = transport failure; promote local for the
+            # rest of the session and let the next call retry on the new
+            # transport.
+            if self._backend == "cloud":
+                self._fall_back_to_local(reason=asyncio.TimeoutError("predict_end_of_turn"))
             # Positive default so min_endpointing_delay applies.
             return 1.0
 
@@ -423,6 +429,7 @@ class _AudioTurnDetectorStream:
     # region: teardown
 
     async def aclose(self) -> None:
+        self._transport.detach()
         self.end_input()
         await aio.cancel_and_wait(self._task)
         await aio.cancel_and_wait(*self._tasks)
@@ -435,7 +442,7 @@ class _AudioTurnDetectorStream:
 
     # endregion
 
-    # region: main task scaffolding
+    # region: main task + fallback
 
     async def _main_task(self) -> None:
         await self._run()
@@ -443,29 +450,92 @@ class _AudioTurnDetectorStream:
     async def _drain_audio_channel(self) -> None:
         async for item in self._audio_ch:
             if isinstance(item, _AudioTurnDetectorStream._FlushSentinel):
-                await self._transport.flush(item)
+                self._transport.flush()
             else:
-                await self._transport.push_frame(item)
-
-    # endregion
-
-    # region: subclass hooks
+                self._transport.push_frame(item)
 
     async def _run(self) -> None:
-        """Default: hand control to the transport. Subclasses override for
-        cross-transport orchestration (e.g. cloud→local fallback)."""
-        await self._transport.run()
+        """Run the active transport, retrying on cloud failure by swapping in
+        a local transport in-place. ``local`` backends just run the transport
+        once and surface failures to the caller via ``_handle_prediction``
+        (default 1.0)."""
+        while True:
+            task = asyncio.create_task(self._transport.run())
+            self._transport_task = task
+            try:
+                await task
+                return
+            except asyncio.CancelledError:
+                # _fall_back_to_local sets _fallback_requested before cancelling
+                # this child task; any other cancellation (e.g. aclose cancelling
+                # the parent) leaves the flag unset and propagates.
+                if self._fallback_requested:
+                    self._fallback_requested = False
+                    continue
+                if not task.done():
+                    await aio.cancel_and_wait(task)
+                raise
+            except Exception as e:  # noqa: BLE001 — any cloud error degrades to local
+                if self._backend == "cloud":
+                    self._fall_back_to_local(reason=e)
+                    continue
+                self._on_local_failure(reason=e)
+                return
 
-    def _on_predict_timeout(self) -> None:  # noqa: B027
-        """Genuine event: ``predict_end_of_turn`` timed out. Subclasses may
-        override to react (e.g. promote local on cloud timeout)."""
-        pass
+    def _fall_back_to_local(self, *, reason: BaseException) -> None:
+        # Lazy import: transports.py imports this module for the Protocol and
+        # constants, so importing it at module load would cycle.
+        from .transports import _LocalTransport
 
-    def detach(self) -> None:  # noqa: B027
-        """Synchronously release this stream's registration on its owning
-        detector, so a replacement stream can be created before this one's
-        async teardown finishes. Base is a no-op; detectors that enforce
-        single-stream ownership override it. Idempotent."""
-        pass
+        if not self._warned_cloud_failure:
+            logger.warning(
+                "cloud audio eot failed (%s); falling back to local mini model",
+                reason,
+            )
+            self._warned_cloud_failure = True
+
+        self._emit_default_for_inflight()
+        self._transport.detach()
+        new_opts = replace(
+            self._opts,
+            thresholds=rescale_for_local_fallback(self._opts.thresholds),
+        )
+        self._opts = new_opts
+        # Write the post-fallback state back to the owning detector so its
+        # ``backend``/``model``/``unlikely_threshold`` views (read by EOU
+        # metrics and ``audio_recognition``) reflect the swap without needing
+        # a proxy layer back through this stream.
+        self._detector._opts = new_opts
+        from .detector import AudioTurnDetector
+
+        if isinstance(self._detector, AudioTurnDetector):
+            self._detector._backend = "local"
+        self._transport = _LocalTransport(opts=self._opts)
+        self._transport.attach(self)
+        self._backend = "local"
+        self._is_fallback = True
+        # If transport.run() is still in flight (e.g. predict timeout while
+        # the cloud session was otherwise idle), signal+cancel so _run loops
+        # onto the local transport. Without this the orphaned WS lingers until
+        # the gateway closes it for inactivity and the ensuing error surfaces
+        # as a misleading log.
+        task = self._transport_task
+        if task is not None and not task.done():
+            self._fallback_requested = True
+            task.cancel()
+
+    def _on_local_failure(self, *, reason: BaseException) -> None:
+        if not self._warned_local_failure:
+            logger.warning(
+                "local audio eot mini failed (%s); defaulting to 1.0 and retrying on next turn",
+                reason,
+            )
+            self._warned_local_failure = True
+        self._emit_default_for_inflight()
+
+    def _emit_default_for_inflight(self) -> None:
+        request_id = self._preemptive_request_id
+        if request_id is not None:
+            self._handle_prediction(request_id, 1.0)
 
     # endregion

@@ -198,11 +198,6 @@ class EOUPlugin(Plugin):
 
 
 class EOUModelBase(ABC):
-    # Text-based detectors resolve inline in ``predict_end_of_turn`` and have
-    # no streaming window to expose metadata from. Kept as a class attribute so
-    # the ``_TurnDetector`` protocol can read it uniformly.
-    last_prediction: Any = None
-
     def __init__(
         self,
         model_type: EOUModelType = "en",  # default to smaller, english-only model

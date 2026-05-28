@@ -18,7 +18,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import weakref
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -26,15 +25,15 @@ import pytest
 
 from livekit.agents._exceptions import APIConnectionError
 from livekit.agents.inference.eot import AudioTurnDetector
-from livekit.agents.inference.eot.detector import _AudioTurnDetectorStreamImpl
-from livekit.agents.inference.eot.languages import CLOUD_LANGUAGES, LOCAL_LANGUAGES
-from livekit.agents.inference.eot.transports import (
+from livekit.agents.inference.eot.base import (
+    TurnDetectorOptions,
     _AudioTurnDetectionTransport,
-    _LocalTransport,
+    _AudioTurnDetectorStream,
 )
+from livekit.agents.inference.eot.languages import CLOUD_LANGUAGES, LOCAL_LANGUAGES
+from livekit.agents.inference.eot.transports import _LocalTransport
 from livekit.agents.language import LanguageCode
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
-from livekit.agents.voice.turn import TurnDetectorOptions, _AudioTurnDetectorStream
 
 
 async def _wait_for(predicate: Any, *, ticks: int = 20) -> None:
@@ -78,11 +77,8 @@ class _ScriptedTransport:
         self.stream_ref: Any = None
         self.events: list[tuple[str, Any]] = []
 
-    def bind(self, stream: _AudioTurnDetectorStream) -> None:
+    def attach(self, stream: _AudioTurnDetectorStream) -> None:
         self.stream_ref = stream
-
-    def transport_ready(self) -> bool:
-        return True
 
     async def run(self) -> None:
         self.run_calls += 1
@@ -97,11 +93,11 @@ class _ScriptedTransport:
     def start_inference(self, request_id: str) -> None:
         self.events.append(("start_inference", request_id))
 
-    async def push_frame(self, frame: Any) -> None:
+    def push_frame(self, frame: Any) -> None:
         self.events.append(("push_frame", frame))
 
-    async def flush(self, sentinel: Any) -> None:
-        self.events.append(("flush", sentinel))
+    def flush(self) -> None:
+        self.events.append(("flush", None))
 
     def stop_inference(self, *, reason: str | None) -> None:
         self.events.append(("stop_inference", reason))
@@ -122,41 +118,24 @@ def _make_stream_with_transport(
     *,
     backend: str = "cloud",
     user_threshold: NotGivenOr[float | dict[str, float]] = NOT_GIVEN,
-) -> _AudioTurnDetectorStreamImpl:
-    """Construct a stream bypassing the constructor's transport allocation,
-    so we can inject a scripted transport before the FSM main task starts.
-
-    ``user_threshold`` is materialized into ``opts.thresholds`` the same way
-    the real constructor would — the stream's threshold lookup reads its own
-    ``opts.thresholds``."""
+) -> _AudioTurnDetectorStream:
+    """Construct a stream wired to a scripted transport. The stream's
+    threshold lookup reads ``opts.thresholds`` — materialize them here the
+    same way the real constructor would, so cloud/local distinction is
+    preserved without going through the detector."""
     from livekit.agents.inference.eot.languages import materialize_thresholds
-    from livekit.agents.inference.eot.transports import _CloudTransportOptions
-    from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
     detector = MagicMock()
     detector.model = "eot-audio" if backend == "cloud" else "eot-audio-mini"
     detector.provider = "livekit"
 
     opts = _make_opts(materialize_thresholds(user_threshold, backend))  # type: ignore[arg-type]
-    stream = _AudioTurnDetectorStreamImpl.__new__(_AudioTurnDetectorStreamImpl)
-    stream._backend = backend  # type: ignore[assignment]
-    stream._cloud_opts = (
-        _CloudTransportOptions(
-            base_url="ws://test",
-            api_key="x",
-            api_secret="x",
-            conn_options=DEFAULT_API_CONNECT_OPTIONS,
-        )
-        if backend == "cloud"
-        else None
+    return _AudioTurnDetectorStream(
+        detector=detector,
+        opts=opts,
+        transport=transport,
+        backend=backend,  # type: ignore[arg-type]
     )
-    stream._http_session = None
-    stream._is_fallback = False
-    stream._warned_cloud_failure = False
-    stream._warned_local_failure = False
-    stream._transport_task = None
-    _AudioTurnDetectorStream.__init__(stream, detector=detector, opts=opts, transport=transport)
-    return stream
 
 
 class TestAutoSelect:
@@ -185,36 +164,6 @@ class TestAutoSelect:
             detector = AudioTurnDetector()
             # env said cloud, but creds absent → silent downgrade
             assert detector.backend == "local"
-
-
-class TestSingleStreamOwnership:
-    async def test_second_stream_rejected_until_first_retired(self) -> None:
-        """The detector drives one stream at a time: a second stream() while
-        the first is still registered raises; retiring the first re-allows it."""
-        with _clean_env(LIVEKIT_REMOTE_EOT_URL=None):
-            detector = AudioTurnDetector(backend="local")
-        with patch.object(_LocalTransport, "run", new=lambda self: asyncio.sleep(0)):
-            s1 = detector.stream()
-            with pytest.raises(RuntimeError):
-                detector.stream()
-
-            # Synchronous detach alone frees the slot (what update_turn_detector
-            # does before scheduling the old stream's async aclose).
-            s1.detach()
-            s2 = detector.stream()
-            await s1.aclose()
-            await s2.aclose()
-
-    async def test_aclose_releases_slot(self) -> None:
-        with _clean_env(LIVEKIT_REMOTE_EOT_URL=None):
-            detector = AudioTurnDetector(backend="local")
-        with patch.object(_LocalTransport, "run", new=lambda self: asyncio.sleep(0)):
-            s1 = detector.stream()
-            await s1.aclose()
-            assert detector._active_stream() is None
-            # A fresh stream is accepted after the previous one closed.
-            s2 = detector.stream()
-            await s2.aclose()
 
 
 class TestExplicitBackendErrors:
@@ -270,12 +219,9 @@ class TestFallback:
 class TestDetectorViewAfterFallback:
     async def test_detector_model_and_threshold_follow_fallback(self) -> None:
         """After cloud→local fallback the detector view (read by EOU metrics
-        and by ``audio_recognition`` when it consults the detector directly)
-        must report the post-fallback backend + rescaled thresholds.
-
-        The detector derives these from its live stream rather than a
-        write-back, so the stream is registered as the active one (exactly
-        what ``detector.stream()`` does) before driving the fallback."""
+        and by ``audio_recognition``) must report the post-fallback backend +
+        rescaled thresholds. The stream's fallback writes ``_backend`` and
+        ``_opts`` back to its owning detector so no proxy layer is needed."""
         with _clean_env(
             LIVEKIT_REMOTE_EOT_URL="ws://gateway",
             LIVEKIT_API_KEY="k",
@@ -288,20 +234,12 @@ class TestDetectorViewAfterFallback:
 
         transport = _ScriptedTransport(run_behavior="raise", run_exc=APIConnectionError("boom"))
         with patch.object(_LocalTransport, "run", new=lambda self: asyncio.sleep(0)):
-            stream = _AudioTurnDetectorStreamImpl.__new__(_AudioTurnDetectorStreamImpl)
-            stream._backend = "cloud"
-            stream._cloud_opts = None
-            stream._http_session = None
-            stream._is_fallback = False
-            stream._warned_cloud_failure = False
-            stream._warned_local_failure = False
-            stream._transport_task = None
-            _AudioTurnDetectorStream.__init__(
-                stream, detector=detector, opts=detector._opts, transport=transport
+            stream = _AudioTurnDetectorStream(
+                detector=detector,
+                opts=detector._opts,
+                transport=transport,
+                backend="cloud",
             )
-            # Register as the detector's active stream (what stream() does) so
-            # the detector's model/backend/threshold views resolve through it.
-            detector._active_stream_ref = weakref.ref(stream)
             await _wait_for(lambda: stream.backend == "local")
 
             assert detector.model == "eot-audio-mini"

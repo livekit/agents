@@ -1,27 +1,41 @@
-"""Endpointing / interruption / preemptive-generation / user-turn-limit
-configuration and the text-based ``_TurnDetector`` Protocol.
+"""Turn-handling configuration plus the structural Protocols that voice/ uses
+to talk to turn detectors.
 
-Audio EOT machinery (``_AudioTurnDetector`` + transports + stream) lives in
-``.audio``. ``TurnDetectionMode`` (the user-facing union) is composed in the
-package ``__init__`` so both halves of the union are in scope.
+Two detector flavours:
+
+- ``_TurnDetector`` — text-based, resolves inline in ``predict_end_of_turn``.
+- ``_StreamingTurnDetector`` — owns a per-session stream object that holds an
+  in-flight inference window. The only concrete impl today is audio
+  (``AudioTurnDetector`` in :mod:`livekit.agents.inference.eot`); the
+  "streaming" naming is for the contract, not the input modality. Voice/
+  depends on this Protocol only, so the dependency direction stays
+  voice/ → typing-only, inference/ → voice/turn for the runtime contract.
 """
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal, Protocol
+from typing import Literal, Protocol, runtime_checkable
 
 from typing_extensions import TypedDict
 
-from ...language import LanguageCode
-from ...llm import ChatContext
-from ...types import NOT_GIVEN, NotGivenOr
-from ...utils import is_given
+from livekit import rtc
 
-if TYPE_CHECKING:
-    # Resolved lazily — defined in the package ``__init__`` since the union
-    # spans both base and audio modules.
-    from . import TurnDetectionMode  # noqa: F401
+from ..language import LanguageCode
+from ..llm import ChatContext
+from ..types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    NotGivenOr,
+)
+from ..utils import is_given
+
+MIN_SILENCE_DURATION_MS = 200
+"""VAD min-silence used by ``AudioRecognition`` when an audio EOT detector is
+active. Lives here because it is a turn-handling tuning constant rather than
+an audio-stream internal."""
 
 
 @dataclass
@@ -44,12 +58,6 @@ class _TurnDetector(Protocol):
     def provider(self) -> str:
         return "unknown"
 
-    # None for text-based detectors that resolve inline in ``predict_end_of_turn``
-    # and have no streaming inference window to expose metadata from.
-    @property
-    def last_prediction(self) -> TurnDetectionEvent | None:
-        return None
-
     # TODO: Move those two functions to EOU ctor (capabilities dataclass)
     async def unlikely_threshold(self, language: LanguageCode | None) -> float | None: ...
     async def supports_language(self, language: LanguageCode | None) -> bool: ...
@@ -57,6 +65,76 @@ class _TurnDetector(Protocol):
     async def predict_end_of_turn(
         self, chat_ctx: ChatContext, *, timeout: float | None = None
     ) -> float: ...
+
+
+@runtime_checkable
+class _StreamingTurnDetectorStream(_TurnDetector, Protocol):
+    # allow None chat_ctx for the streaming model
+    async def predict_end_of_turn(
+        self, chat_ctx: ChatContext | None = None, *, timeout: float | None = None
+    ) -> float: ...
+
+    @property
+    def is_active(self) -> bool: ...
+    @property
+    def is_inference_running(self) -> bool: ...
+    @property
+    def preemptive_request_id(self) -> str | None: ...
+    @property
+    def last_prediction(self) -> TurnDetectionEvent | None: ...
+
+    def update_language(self, language: LanguageCode | None) -> None: ...
+
+    def warmup(self) -> asyncio.Future[float]: ...
+    def activate(self, trigger: str | None = None) -> None: ...
+    def deactivate(self, trigger: str | None = None) -> None: ...
+    def flush(self, reason: str | None = None) -> None: ...
+    def push_audio(self, frame: rtc.AudioFrame) -> None: ...
+    def end_input(self) -> None: ...
+    async def aclose(self) -> None: ...
+
+
+@runtime_checkable
+class _StreamingTurnDetector(Protocol):
+    """Turn detector that hands out a per-session stream instead of resolving
+    inline. Per-language threshold lookups (``unlikely_threshold`` /
+    ``supports_language``) live on the stream, not the detector — after a
+    cloud→local fallback they need to reflect the active backend's rescaled
+    view, which is per-session state.
+
+    Event subscription (``on``/``off``) is intentionally not part of this
+    Protocol — concrete impls satisfy it via ``rtc.EventEmitter``, and the
+    one subscription site in ``AgentActivity`` narrows on both this Protocol
+    and ``rtc.EventEmitter`` to assemble the contract at the call site."""
+
+    @property
+    def model(self) -> str: ...
+    @property
+    def provider(self) -> str: ...
+
+    def stream(
+        self,
+        *,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> _StreamingTurnDetectorStream: ...
+
+
+TurnDetectionMode = (
+    Literal["stt", "vad", "realtime_llm", "manual"] | _TurnDetector | _StreamingTurnDetector
+)
+"""
+The mode of turn detection to use.
+
+- "stt": use speech-to-text result to detect the end of the user's turn
+- "vad": use VAD to detect the start and end of the user's turn
+- "realtime_llm": use server-side turn detection provided by the realtime LLM
+- "manual": manually manage the turn detection
+- _TurnDetector: use the default mode with the provided turn detector
+
+(default) If not provided, automatically choose the best mode based on
+    available models (realtime_llm -> vad -> stt -> manual)
+If the needed model (VAD, STT, or RealtimeModel) is not provided, fallback to the default mode.
+"""
 
 
 class EndpointingOptions(TypedDict, total=False):

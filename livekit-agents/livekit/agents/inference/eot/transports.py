@@ -47,13 +47,13 @@ from ...metrics import EOTInferenceMetrics
 from ...metrics.base import Metadata
 from ...types import APIConnectOptions
 from ...utils import aio
-from ...voice.turn import (
+from .._utils import create_access_token, get_inference_headers
+from .base import (
     DEFAULT_SAMPLE_RATE,
     TurnDetectorOptions,
     _AudioTurnDetectionTransport,
     _AudioTurnDetectorStream,
 )
-from .._utils import create_access_token, get_inference_headers
 
 if TYPE_CHECKING:
     from .detector import AudioTurnDetector
@@ -106,12 +106,8 @@ class _CloudTransport:
         self._send_ch: aio.Chan[ClientMessage] | None = None
         self._stream_ref: weakref.ref[_AudioTurnDetectorStream] | None = None
 
-    def bind(self, stream: _AudioTurnDetectorStream) -> None:
+    def attach(self, stream: _AudioTurnDetectorStream) -> None:
         self._stream_ref = weakref.ref(stream)
-
-    def transport_ready(self) -> bool:
-        ws = self._ws
-        return ws is not None and not ws.closed
 
     def start_inference(self, request_id: str) -> None:
         self._send_message(ClientMessage(inference_start=InferenceStart(request_id=request_id)))
@@ -122,7 +118,7 @@ class _CloudTransport:
         msg = ClientMessage(inference_stop=InferenceStop(), created_at=created_at)
         self._send_message(msg)
 
-    async def push_frame(self, frame: rtc.AudioFrame) -> None:
+    def push_frame(self, frame: rtc.AudioFrame) -> None:
         pcm_bytes = bytes(frame.data)
         if not pcm_bytes:
             return
@@ -138,9 +134,7 @@ class _CloudTransport:
             )
         )
 
-    async def flush(self, sentinel: _AudioTurnDetectorStream._FlushSentinel) -> None:
-        # TODO: @chenghao-mou forward sentinel.keep_tail_ms once SessionFlush
-        # supports it server-side (local backend already honors it).
+    def flush(self) -> None:
         self._send_message(ClientMessage(session_flush=SessionFlush()))
 
     def detach(self) -> None:
@@ -385,11 +379,8 @@ class _LocalTransport:
         self._stream_ref: weakref.ref[_AudioTurnDetectorStream] | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
 
-    def bind(self, stream: _AudioTurnDetectorStream) -> None:
+    def attach(self, stream: _AudioTurnDetectorStream) -> None:
         self._stream_ref = weakref.ref(stream)
-
-    def transport_ready(self) -> bool:
-        return True
 
     def start_inference(self, request_id: str) -> None:
         task = asyncio.create_task(self._predict(request_id, self._buf.read()))
@@ -410,13 +401,12 @@ class _LocalTransport:
             return
         stream._handle_prediction(request_id, prob, inference_duration=inference_duration)
 
-    async def push_frame(self, frame: rtc.AudioFrame) -> None:
+    def push_frame(self, frame: rtc.AudioFrame) -> None:
         self._buf.push_frame(frame)
 
-    async def flush(self, sentinel: _AudioTurnDetectorStream._FlushSentinel) -> None:
-        keep_samples = sentinel.keep_tail_ms * DEFAULT_SAMPLE_RATE // 1000
-        if len(self._buf) > keep_samples:
-            self._buf.shift(len(self._buf) - keep_samples)
+    def flush(self) -> None:
+        if len(self._buf) > 0:
+            self._buf.shift(len(self._buf))
 
     def stop_inference(self, *, reason: str | None) -> None:
         return

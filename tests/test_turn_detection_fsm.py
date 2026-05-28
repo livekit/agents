@@ -15,7 +15,7 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import MagicMock
 
-from livekit.agents.voice.turn import (
+from livekit.agents.inference.eot.base import (
     TurnDetectorOptions,
     _AudioTurnDetectorStream,
     _Status,
@@ -29,15 +29,12 @@ class _FakeTransport:
         self.events: list[tuple[str, ...]] = []
         self._stream: _AudioTurnDetectorStream | None = None
 
-    def bind(self, stream: _AudioTurnDetectorStream) -> None:
+    def attach(self, stream: _AudioTurnDetectorStream) -> None:
         self._stream = stream
 
     async def run(self) -> None:
         assert self._stream is not None
         await self._stream._drain_audio_channel()
-
-    def transport_ready(self) -> bool:
-        return True
 
     def start_inference(self, request_id: str) -> None:
         self.events.append(("start_inference", request_id))
@@ -45,10 +42,10 @@ class _FakeTransport:
     def stop_inference(self, *, reason: str | None) -> None:
         self.events.append(("stop_inference", reason or ""))
 
-    async def push_frame(self, frame: Any) -> None:
+    def push_frame(self, frame: Any) -> None:
         pass
 
-    async def flush(self, sentinel: Any) -> None:
+    def flush(self) -> None:
         pass
 
     def detach(self) -> None:
@@ -283,17 +280,17 @@ class TestAudioTurnDetectionFSM:
 
 
 class TestPredictOnSilenceGuard:
-    """``predict_end_of_turn`` short-circuits to a positive default when no
-    fresh ``on_speech_started()`` signal has arrived since the last
-    ``flush()``. Covers the late-STT-after-commit case: the audio EOT model
-    already committed (so flush ran); a stray STT final arrives before any
-    new speech; running predict would just wait on silence."""
+    """``predict_end_of_turn`` short-circuits to a positive default when the
+    user turn is committed and no fresh VAD SOS (``deactivate(trigger="vad sos")``)
+    has re-armed the stream. Covers the late-STT-after-commit case: the audio
+    EOT model already committed (so flush ran); a stray STT final arrives
+    before any new speech; running predict would just wait on silence."""
 
     async def test_predict_short_circuits_after_flush(self) -> None:
         s = _make_stream()
         try:
             s.flush(reason="turn committed")
-            # No on_speech_started since the flush — predict must short-circuit
+            # No SOS deactivate since the flush — predict must short-circuit
             # without starting an inference window.
             prob = await s.predict_end_of_turn(timeout=1.0)
             assert prob == 1.0
@@ -305,20 +302,20 @@ class TestPredictOnSilenceGuard:
         finally:
             await s.aclose()
 
-    async def test_predict_runs_after_on_speech_started(self) -> None:
-        """``on_speech_started()`` re-arms predict so the next call runs the
-        full warmup → wait → resolve path (and times out here since no
-        prediction is fed in)."""
+    async def test_predict_runs_after_sos_deactivate(self) -> None:
+        """``deactivate(trigger="vad sos")`` re-arms predict so the next call
+        runs the full warmup → wait → resolve path (and times out here since
+        no prediction is fed in)."""
         s = _make_stream()
         try:
             s.flush(reason="turn committed")
-            s.on_speech_started()
+            s.deactivate(trigger="vad sos")
             prob = await s.predict_end_of_turn(timeout=0.01)
             # Timed out → default 1.0, but the warmup actually happened.
             assert prob == 1.0
             starts = [e for e in s.events if e[0] == "start_inference"]
             # One inference window opened by predict_end_of_turn after the
-            # on_speech_started re-arm.
+            # SOS deactivate re-arm.
             assert len(starts) == 1
         finally:
             await s.aclose()
@@ -339,17 +336,16 @@ class TestPredictOnSilenceGuard:
         finally:
             await s.aclose()
 
-    async def test_on_speech_started_deactivates_inflight_inference(self) -> None:
-        """``on_speech_started()`` rolls in the prior ``deactivate(trigger="vad sos")``
-        responsibility — a warmup in flight when speech (re)starts must be
-        torn down so its prediction can't fire for the now-stale window."""
+    async def test_sos_deactivate_tears_down_inflight_inference(self) -> None:
+        """A VAD SOS ``deactivate`` arriving while a warmup is in flight tears
+        it down so its prediction can't fire for the now-stale window."""
         s = _make_stream()
         try:
             s.warmup()
             s.activate()
             assert s.is_inference_running
 
-            s.on_speech_started()
+            s.deactivate(trigger="vad sos")
 
             assert not s.is_inference_running
             assert s._status == _Status.IDLE

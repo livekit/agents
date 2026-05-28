@@ -37,8 +37,8 @@ from .turn import (
     MIN_SILENCE_DURATION_MS,
     TurnDetectionEvent,
     TurnDetectionMode as TurnDetectionMode,
-    _AudioTurnDetector,
-    _AudioTurnDetectorStream,
+    _StreamingTurnDetector,
+    _StreamingTurnDetectorStream,
     _TurnDetector,
 )
 
@@ -234,7 +234,7 @@ class AudioRecognition:
         self._word_tokenizer = tokenize.basic.WordTokenizer()
 
         # streaming audio turn detection
-        self._turn_detector_stream: _AudioTurnDetectorStream | None = None
+        self._turn_detector_stream: _StreamingTurnDetectorStream | None = None
         self._last_emitted_prediction: TurnDetectionEvent | None = None
         self._user_speaking_event = asyncio.Event()
 
@@ -272,12 +272,12 @@ class AudioRecognition:
         self,
         *,
         stt_pipeline: _STTPipeline | None = None,
-        turn_detector_stream: _AudioTurnDetectorStream | None = None,
+        turn_detector_stream: _StreamingTurnDetectorStream | None = None,
     ) -> None:
         self.update_stt(self._stt, pipeline=stt_pipeline)
         self.update_vad(self._vad)
         self.update_interruption_detection(self._interruption_detection)
-        if isinstance(self._turn_detector, _AudioTurnDetector) or self._turn_detector is None:
+        if isinstance(self._turn_detector, _StreamingTurnDetector) or self._turn_detector is None:
             self.update_turn_detector(self._turn_detector, stream=turn_detector_stream)
 
     def stop(self) -> None:
@@ -656,7 +656,7 @@ class AudioRecognition:
                 self._stt_pipeline = None
 
     def _check_vad_silence_requirement(self) -> None:
-        if not isinstance(self._turn_detector, _AudioTurnDetector) or self._vad is None:
+        if not isinstance(self._turn_detector, _StreamingTurnDetector) or self._vad is None:
             return
         if (current := getattr(self._vad, "min_silence_duration", None)) is None:
             return
@@ -737,9 +737,9 @@ class AudioRecognition:
 
     def update_turn_detector(
         self,
-        detector: _TurnDetector | _AudioTurnDetector | None,
+        detector: _TurnDetector | _StreamingTurnDetector | None,
         *,
-        stream: _AudioTurnDetectorStream | None = None,
+        stream: _StreamingTurnDetectorStream | None = None,
     ) -> None:
         """Update the turn detector and turn detector stream if possible.
 
@@ -751,22 +751,19 @@ class AudioRecognition:
         self._check_vad_silence_requirement()
 
         if (old_stream := self._turn_detector_stream) is not None and old_stream is not stream:
-            old_stream.detach()
             task = asyncio.create_task(old_stream.aclose())
             task.add_done_callback(lambda _: self._tasks.discard(task))
             self._tasks.add(task)
         if stream is None:
-            stream = detector.stream() if isinstance(detector, _AudioTurnDetector) else None
+            stream = detector.stream() if isinstance(detector, _StreamingTurnDetector) else None
         self._turn_detector_stream = stream
 
-    def detach_turn_detector(self) -> _AudioTurnDetectorStream | None:
+    def detach_turn_detector(self) -> _StreamingTurnDetectorStream | None:
         """Detach the turn detector stream for handoff to another AudioRecognition.
 
         Returns the live stream (transport run loop intact) without closing it.
         The caller passes it to the new AudioRecognition via
-        ``start(..., turn_detector_stream=stream)``. The stream stays attached to
-        its detector, retaining the detector's single-stream slot, so the new
-        AudioRecognition must adopt it rather than open a second stream.
+        ``start(..., turn_detector_stream=stream)``.
         """
         stream = self._turn_detector_stream
         self._turn_detector_stream = None
@@ -965,7 +962,7 @@ class AudioRecognition:
             ):
                 self._last_language = language
                 if self._turn_detector_stream is not None:
-                    self._turn_detector_stream.set_language(language)
+                    self._turn_detector_stream.update_language(language)
 
             self._final_transcript_received.set()
             if not transcript:
@@ -1040,7 +1037,7 @@ class AudioRecognition:
             ):
                 self._last_language = language
                 if self._turn_detector_stream is not None:
-                    self._turn_detector_stream.set_language(language)
+                    self._turn_detector_stream.update_language(language)
 
             if not transcript:
                 return
@@ -1147,7 +1144,9 @@ class AudioRecognition:
             self._user_speaking_event.set()
 
             if self._turn_detector_stream is not None:
-                self._turn_detector_stream.on_speech_started()
+                # VAD SOS — drop the prior turn's stale inference and re-arm
+                # ``predict_end_of_turn`` for the new utterance.
+                self._turn_detector_stream.deactivate(trigger="vad sos")
 
             if self._end_of_turn_task is not None:
                 self._end_of_turn_task.cancel()
@@ -1228,11 +1227,11 @@ class AudioRecognition:
         turn_detector = (
             (
                 self._turn_detector_stream
-                if isinstance(self._turn_detector, _AudioTurnDetector)
+                if isinstance(self._turn_detector, _StreamingTurnDetector)
                 else self._turn_detector
             )
             if self._turn_detection_mode != "manual"
-            and (self._audio_transcript or isinstance(self._turn_detector, _AudioTurnDetector))
+            and (self._audio_transcript or isinstance(self._turn_detector, _StreamingTurnDetector))
             else None  # disable EOU model if manual turn detection enabled
         )
 
@@ -1257,8 +1256,13 @@ class AudioRecognition:
                         tracer.start_as_current_span("eou_detection") as eou_detection_span,
                     ):
                         end_of_turn_probability = 0.0
-                        # reuse prediction from the audio eot model if available
-                        from_cache = turn_detector.last_prediction is not None
+                        # reuse prediction from the audio eot model if available.
+                        # Only streaming detectors expose a cached window prediction;
+                        # text detectors resolve inline and have nothing to reuse.
+                        from_cache = (
+                            isinstance(turn_detector, _StreamingTurnDetectorStream)
+                            and turn_detector.last_prediction is not None
+                        )
                         try:
                             end_of_turn_probability = await turn_detector.predict_end_of_turn(
                                 chat_ctx,
@@ -1275,7 +1279,11 @@ class AudioRecognition:
                         except Exception:
                             logger.exception("Error predicting end of turn")
 
-                        prediction_event: TurnDetectionEvent | None = turn_detector.last_prediction
+                        prediction_event: TurnDetectionEvent | None = (
+                            turn_detector.last_prediction
+                            if isinstance(turn_detector, _StreamingTurnDetectorStream)
+                            else None
+                        )
 
                         eou_detection_span.set_attributes(
                             {
@@ -1437,8 +1445,8 @@ class AudioRecognition:
 
                 if self._turn_detector_stream is not None:
                     # flush() also clears the stream's cached prediction and
-                    # closes the user turn until the next ``on_speech_started()``
-                    # signal.
+                    # commits the user turn until the next VAD SOS deactivate
+                    # call re-arms it.
                     self._turn_detector_stream.flush(reason="turn committed")
 
             self._user_turn_committed = False
@@ -1488,7 +1496,7 @@ class AudioRecognition:
 
         task_func = (
             _bounce_eou_task_with_speaking_guard
-            if isinstance(self._turn_detector, _AudioTurnDetector)
+            if isinstance(self._turn_detector, _StreamingTurnDetector)
             else _bounce_eou_task
         )
         # copy the last_speaking_time before awaiting (the value can change)

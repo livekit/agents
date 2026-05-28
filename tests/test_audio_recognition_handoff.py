@@ -7,7 +7,7 @@ from livekit import rtc
 from livekit.agents import Agent
 from livekit.agents.voice.agent import ModelSettings
 from livekit.agents.voice.agent_activity import AgentActivity
-from livekit.agents.voice.turn import _AudioTurnDetector
+from livekit.agents.voice.turn import _StreamingTurnDetector
 
 
 def _make_activity(agent: Agent, stt: object, turn_detection: object = None) -> MagicMock:
@@ -164,7 +164,7 @@ async def _detach_turn_detector_if_reusable(old: MagicMock, new: MagicMock) -> o
 
 async def test_turn_detector_reusable_same_instance() -> None:
     """Same AudioTurnDetector instance carries over → live stream is detached for reuse."""
-    shared_detector = MagicMock(spec=_AudioTurnDetector)
+    shared_detector = MagicMock(spec=_StreamingTurnDetector)
     old = _make_activity(Agent(instructions="a"), MagicMock(), turn_detection=shared_detector)
     new = _make_activity(Agent(instructions="b"), MagicMock(), turn_detection=shared_detector)
 
@@ -176,10 +176,10 @@ async def test_turn_detector_reusable_same_instance() -> None:
 async def test_turn_detector_not_reusable_different_instance() -> None:
     """Different detector instances → not reusable (old stream torn down normally)."""
     old = _make_activity(
-        Agent(instructions="a"), MagicMock(), turn_detection=MagicMock(spec=_AudioTurnDetector)
+        Agent(instructions="a"), MagicMock(), turn_detection=MagicMock(spec=_StreamingTurnDetector)
     )
     new = _make_activity(
-        Agent(instructions="b"), MagicMock(), turn_detection=MagicMock(spec=_AudioTurnDetector)
+        Agent(instructions="b"), MagicMock(), turn_detection=MagicMock(spec=_StreamingTurnDetector)
     )
 
     result = await _detach_turn_detector_if_reusable(old, new)
@@ -189,7 +189,7 @@ async def test_turn_detector_not_reusable_different_instance() -> None:
 
 async def test_turn_detector_not_reusable_when_new_opts_out() -> None:
     """New agent resolves to no turn detection (e.g. realtime server-side) → not reusable."""
-    shared_detector = MagicMock(spec=_AudioTurnDetector)
+    shared_detector = MagicMock(spec=_StreamingTurnDetector)
     old = _make_activity(Agent(instructions="a"), MagicMock(), turn_detection=shared_detector)
     new = _make_activity(Agent(instructions="b"), MagicMock(), turn_detection=None)
 

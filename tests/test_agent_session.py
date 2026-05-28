@@ -1442,11 +1442,11 @@ async def test_user_supplied_vad_clears_default_flag() -> None:
 async def test_default_turn_detection_builds_default_eot() -> None:
     """No turn_detection given → session auto-provisions a default AudioTurnDetector."""
     from livekit.agents.voice.agent_session import AgentSession
-    from livekit.agents.voice.turn import _AudioTurnDetector
+    from livekit.agents.voice.turn import _StreamingTurnDetector
 
     session = AgentSession()
     try:
-        assert isinstance(session.turn_detection, _AudioTurnDetector)
+        assert isinstance(session.turn_detection, _StreamingTurnDetector)
     finally:
         await session.aclose()
 

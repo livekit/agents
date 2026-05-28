@@ -27,7 +27,8 @@ from livekit.agents.utils import aio
 from livekit.agents.voice.audio_recognition import AudioRecognition
 from livekit.agents.voice.turn import (
     TurnDetectionEvent,
-    _AudioTurnDetector,
+    _StreamingTurnDetector,
+    _StreamingTurnDetectorStream,
 )
 
 # ---------------------------------------------------------------------------
@@ -46,11 +47,14 @@ def _make_full_recognition_for_eou() -> AudioRecognition:
     ar._audio_transcript = ""
     ar._turn_detection_mode = "vad"
 
-    # turn_detector must be an _AudioTurnDetector for the speaking-guard
+    # turn_detector must be an _StreamingTurnDetector for the speaking-guard
     # variant to be chosen.
-    ar._turn_detector = MagicMock(spec=_AudioTurnDetector)
+    ar._turn_detector = MagicMock(spec=_StreamingTurnDetector)
 
-    stream_mock = MagicMock()
+    # spec= on _StreamingTurnDetectorStream so the runtime_checkable isinstance
+    # narrowing in audio_recognition's last_prediction reads sees the mock as
+    # the streaming flavor.
+    stream_mock = MagicMock(spec=_StreamingTurnDetectorStream)
     stream_mock.supports_language = AsyncMock(return_value=True)
     stream_mock.predict_end_of_turn = AsyncMock(return_value=0.0)
     stream_mock.unlikely_threshold = AsyncMock(return_value=0.5)
@@ -150,7 +154,7 @@ class TestSubThresholdSpeakingSpike:
     """A noise spike can push ``raw_accumulated_speech`` above zero on ``INFERENCE_DONE``
     without ever reaching ``START_OF_SPEECH`` — so no ``END_OF_SPEECH`` fires to clear
     ``_user_speaking_event``. It must be cleared when speech drops back to zero, or the
-    speaking-guard aborts every subsequent ``_AudioTurnDetector`` commit forever."""
+    speaking-guard aborts every subsequent ``_StreamingTurnDetector`` commit forever."""
 
     async def test_subthreshold_spike_is_cleared(self) -> None:
         ar = _make_full_recognition_for_eou()
@@ -259,13 +263,13 @@ class TestEotPredictionDedup:
             await aio.cancel_and_wait(ar._end_of_turn_task)
 
     async def test_text_detector_emits_every_bounce(self) -> None:
-        """A text-based detector (not an ``_AudioTurnDetector``) has no
+        """A text-based detector (not an ``_StreamingTurnDetector``) has no
         streaming inference window — ``last_prediction`` is ``None`` — so it
         emits ``on_eot_prediction`` on every bounce, never deduped."""
         ar = _make_full_recognition_for_eou()
         # Swap the audio detector for a text one and give it a transcript so
         # ``_run_eou_detection`` selects the text detector.
-        text_detector = MagicMock()  # not an _AudioTurnDetector
+        text_detector = MagicMock()  # not an _StreamingTurnDetector
         text_detector.supports_language = AsyncMock(return_value=True)
         text_detector.predict_end_of_turn = AsyncMock(return_value=0.2)
         text_detector.unlikely_threshold = AsyncMock(return_value=0.5)
@@ -343,7 +347,7 @@ class TestVadMinSilenceRequirement:
     def test_low_min_silence_with_audio_detector_raises(self) -> None:
         ar = _make_recognition_for_validation()
         ar._vad = _FakeVad(min_silence_duration=0.1)
-        ar._turn_detector = MagicMock(spec=_AudioTurnDetector)
+        ar._turn_detector = MagicMock(spec=_StreamingTurnDetector)
 
         with pytest.raises(ValueError, match="min_silence_duration"):
             ar._check_vad_silence_requirement()
@@ -351,21 +355,21 @@ class TestVadMinSilenceRequirement:
     def test_adequate_min_silence_passes(self) -> None:
         ar = _make_recognition_for_validation()
         ar._vad = _FakeVad(min_silence_duration=0.5)
-        ar._turn_detector = MagicMock(spec=_AudioTurnDetector)
+        ar._turn_detector = MagicMock(spec=_StreamingTurnDetector)
 
         ar._check_vad_silence_requirement()  # must not raise
 
     def test_non_audio_detector_skips(self) -> None:
         ar = _make_recognition_for_validation()
         ar._vad = _FakeVad(min_silence_duration=0.05)
-        ar._turn_detector = MagicMock()  # not an _AudioTurnDetector
+        ar._turn_detector = MagicMock()  # not an _StreamingTurnDetector
 
         ar._check_vad_silence_requirement()  # must not raise
 
     def test_no_vad_skips(self) -> None:
         ar = _make_recognition_for_validation()
         ar._vad = None
-        ar._turn_detector = MagicMock(spec=_AudioTurnDetector)
+        ar._turn_detector = MagicMock(spec=_StreamingTurnDetector)
 
         ar._check_vad_silence_requirement()  # must not raise
 
@@ -374,7 +378,7 @@ class TestVadMinSilenceRequirement:
         validated, so the pairing is allowed (no raise)."""
         ar = _make_recognition_for_validation()
         ar._vad = MagicMock(spec=[])  # no min_silence_duration attribute
-        ar._turn_detector = MagicMock(spec=_AudioTurnDetector)
+        ar._turn_detector = MagicMock(spec=_StreamingTurnDetector)
 
         ar._check_vad_silence_requirement()  # must not raise
 
@@ -386,7 +390,7 @@ class TestVadMinSilenceRequirement:
         ar._tasks = set()
         ar._vad = _FakeVad(min_silence_duration=0.1)
 
-        detector = MagicMock(spec=_AudioTurnDetector)
+        detector = MagicMock(spec=_StreamingTurnDetector)
 
         with pytest.raises(ValueError, match="min_silence_duration"):
             ar.update_turn_detector(detector)

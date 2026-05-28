@@ -82,8 +82,8 @@ from .speech_handle import DEFAULT_INPUT_DETAILS, InputDetails, SpeechHandle
 from .turn import (
     EndpointingOptions,
     TurnDetectionMode,
-    _AudioTurnDetector,
-    _AudioTurnDetectorStream,
+    _StreamingTurnDetector,
+    _StreamingTurnDetectorStream,
 )
 
 if TYPE_CHECKING:
@@ -108,7 +108,7 @@ _OnEnterContextVar = contextvars.ContextVar["_OnEnterData"]("agents_activity_on_
 class _ReusableResources:
     stt_pipeline: _STTPipeline | None = None
     rt_session: llm.RealtimeSession | None = None
-    turn_detector_stream: _AudioTurnDetectorStream | None = None
+    turn_detector_stream: _StreamingTurnDetectorStream | None = None
 
     async def cleanup(self) -> None:
         tasks = []
@@ -242,7 +242,7 @@ class AgentActivity(RecognitionHooks):
         self, turn_detection: TurnDetectionMode | None
     ) -> TurnDetectionMode | None:
         if turn_detection is not None and not isinstance(turn_detection, str):
-            if isinstance(turn_detection, _AudioTurnDetector):
+            if isinstance(turn_detection, _StreamingTurnDetector):
                 if self.vad is None:
                     logger.warning(
                         "AudioTurnDetector requires a VAD model. Pass vad=inference.VAD() to AgentSession/Agent or turn_detection=None to disable"
@@ -654,7 +654,7 @@ class AgentActivity(RecognitionHooks):
             # reuse the stream during a handoff whenever we can
             if (
                 self._audio_recognition
-                and isinstance(self._turn_detection, _AudioTurnDetector)
+                and isinstance(self._turn_detection, _StreamingTurnDetector)
                 and self._turn_detection is new_activity._turn_detection
             ):
                 resources.turn_detector_stream = self._audio_recognition.detach_turn_detector()
@@ -733,7 +733,12 @@ class AgentActivity(RecognitionHooks):
             self._interruption_detector.on("error", self._on_error)
             self._interruption_detector.on("overlapping_speech", self._on_overlap_speech_ended)
 
-        if isinstance(self._turn_detection, _AudioTurnDetector):
+        # Subscription requires an EventEmitter — the streaming Protocol stays
+        # focused on streaming concerns and doesn't redeclare on/off. Both
+        # narrows together identify "streaming detector that emits metrics."
+        if isinstance(self._turn_detection, _StreamingTurnDetector) and isinstance(
+            self._turn_detection, rtc.EventEmitter
+        ):
             self._turn_detection.on("metrics_collected", self._on_metrics_collected)
 
         if self.mcp_servers:
@@ -1024,7 +1029,9 @@ class AgentActivity(RecognitionHooks):
             self._interruption_detector.off("error", self._on_error)
             self._interruption_detector.off("overlapping_speech", self._on_overlap_speech_ended)
 
-        if isinstance(self._turn_detection, _AudioTurnDetector):
+        if isinstance(self._turn_detection, _StreamingTurnDetector) and isinstance(
+            self._turn_detection, rtc.EventEmitter
+        ):
             self._turn_detection.off("metrics_collected", self._on_metrics_collected)
 
         if self._rt_session is not None:
