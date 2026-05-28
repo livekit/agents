@@ -2,13 +2,14 @@
 
 from livekit.agents import Plugin
 
+from . import tools
 from .llm import LLM
 from .log import logger
 from .stt import STT
 from .tts import TTS
 from .version import __version__
 
-__all__ = ["LLM", "STT", "TTS", "__version__"]
+__all__ = ["LLM", "STT", "TTS", "tools", "__version__"]
 
 
 class MistralAIPlugin(Plugin):

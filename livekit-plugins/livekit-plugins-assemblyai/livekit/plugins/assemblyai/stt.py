@@ -19,6 +19,7 @@ import asyncio
 import dataclasses
 import json
 import os
+import time
 import weakref
 from dataclasses import dataclass
 from typing import Literal
@@ -57,6 +58,8 @@ class STTOptions:
     min_turn_silence: NotGivenOr[int] = NOT_GIVEN
     max_turn_silence: NotGivenOr[int] = NOT_GIVEN
     format_turns: NotGivenOr[bool] = NOT_GIVEN
+    continuous_partials: NotGivenOr[bool] = NOT_GIVEN
+    interruption_delay: NotGivenOr[int] = NOT_GIVEN
     keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN
     prompt: NotGivenOr[str] = NOT_GIVEN
     vad_threshold: NotGivenOr[float] = NOT_GIVEN
@@ -83,6 +86,8 @@ class STT(stt.STT):
         min_turn_silence: NotGivenOr[int] = NOT_GIVEN,
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
         format_turns: NotGivenOr[bool] = NOT_GIVEN,
+        continuous_partials: NotGivenOr[bool] = NOT_GIVEN,
+        interruption_delay: NotGivenOr[int] = NOT_GIVEN,
         keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
         prompt: NotGivenOr[str] = NOT_GIVEN,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
@@ -107,6 +112,19 @@ class STT(stt.STT):
                 Defaults to 0.4.
             min_turn_silence: Minimum silence in ms before a confident end-of-turn is finalized.
             min_end_of_turn_silence_when_confident: Deprecated. Use min_turn_silence instead.
+            continuous_partials: Whether to emit additional partial transcripts during long
+                turns at a steady ~3 second cadence. By default, partials are emitted at
+                two points: one at 750 ms after turn start (configurable via
+                `interruption_delay`), and one each time silence exceeds
+                `min_turn_silence` without ending the turn. When enabled (default in
+                LiveKit; AssemblyAI server defaults to False), additional partials covering
+                the full turn transcript are emitted approximately every 3 seconds while
+                speech continues, on top of those baseline partials. Only supported with
+                the 'u3-rt-pro' model.
+            interruption_delay: How soon the first early partial is emitted, in ms.
+                Range 0–1000, default 500. Lower values produce faster time-to-first-token
+                for barge-in; higher values produce more confident first partials. Only
+                supported with the 'u3-rt-pro' model.
         """
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -123,6 +141,22 @@ class STT(stt.STT):
 
         if is_given(prompt) and model != "u3-rt-pro":
             raise ValueError("The 'prompt' parameter is only supported with the 'u3-rt-pro' model.")
+
+        if is_given(continuous_partials) and model != "u3-rt-pro":
+            raise ValueError(
+                "The 'continuous_partials' parameter is only supported with the 'u3-rt-pro' model."
+            )
+
+        if is_given(interruption_delay) and model != "u3-rt-pro":
+            raise ValueError(
+                "The 'interruption_delay' parameter is only supported with the 'u3-rt-pro' model."
+            )
+
+        # LiveKit defaults continuous_partials to True (vs. AssemblyAI's server default of
+        # False) for steady-cadence partials. This parameter is only supported for
+        # u3-rt-pro, enforced by the validation above.
+        if not is_given(continuous_partials) and model == "u3-rt-pro":
+            continuous_partials = True
 
         self._base_url = base_url
         assemblyai_api_key = api_key if is_given(api_key) else os.environ.get("ASSEMBLYAI_API_KEY")
@@ -158,6 +192,8 @@ class STT(stt.STT):
             min_turn_silence=min_turn_silence,
             max_turn_silence=max_turn_silence,
             format_turns=format_turns,
+            continuous_partials=continuous_partials,
+            interruption_delay=interruption_delay,
             keyterms_prompt=keyterms_prompt,
             prompt=prompt,
             vad_threshold=vad_threshold,
@@ -219,6 +255,8 @@ class STT(stt.STT):
         prompt: NotGivenOr[str] = NOT_GIVEN,
         keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
+        continuous_partials: NotGivenOr[bool] = NOT_GIVEN,
+        interruption_delay: NotGivenOr[int] = NOT_GIVEN,
         # Deprecated — use min_turn_silence instead
         min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
@@ -244,6 +282,10 @@ class STT(stt.STT):
             self._opts.keyterms_prompt = keyterms_prompt
         if is_given(vad_threshold):
             self._opts.vad_threshold = vad_threshold
+        if is_given(continuous_partials):
+            self._opts.continuous_partials = continuous_partials
+        if is_given(interruption_delay):
+            self._opts.interruption_delay = interruption_delay
 
         for stream in self._streams:
             stream.update_options(
@@ -254,6 +296,8 @@ class STT(stt.STT):
                 prompt=prompt,
                 keyterms_prompt=keyterms_prompt,
                 vad_threshold=vad_threshold,
+                continuous_partials=continuous_partials,
+                interruption_delay=interruption_delay,
             )
 
 
@@ -282,6 +326,7 @@ class SpeechStream(stt.SpeechStream):
         self._config_update_queue: asyncio.Queue[dict] = asyncio.Queue()
         self._session_id: str | None = None
         self._expires_at: int | None = None
+        self._last_frame_sent_at: float | None = None
 
     @property
     def session_id(self) -> str | None:
@@ -306,6 +351,8 @@ class SpeechStream(stt.SpeechStream):
         prompt: NotGivenOr[str] = NOT_GIVEN,
         keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
+        continuous_partials: NotGivenOr[bool] = NOT_GIVEN,
+        interruption_delay: NotGivenOr[int] = NOT_GIVEN,
         # Deprecated — use min_turn_silence instead
         min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
@@ -331,6 +378,10 @@ class SpeechStream(stt.SpeechStream):
             self._opts.keyterms_prompt = keyterms_prompt
         if is_given(vad_threshold):
             self._opts.vad_threshold = vad_threshold
+        if is_given(continuous_partials):
+            self._opts.continuous_partials = continuous_partials
+        if is_given(interruption_delay):
+            self._opts.interruption_delay = interruption_delay
 
         # Send UpdateConfiguration message over the active websocket
         config_msg: dict = {"type": "UpdateConfiguration"}
@@ -344,6 +395,10 @@ class SpeechStream(stt.SpeechStream):
             config_msg["min_turn_silence"] = min_turn_silence
         if is_given(end_of_turn_confidence_threshold):
             config_msg["end_of_turn_confidence_threshold"] = end_of_turn_confidence_threshold
+        if is_given(continuous_partials):
+            config_msg["continuous_partials"] = continuous_partials
+        if is_given(interruption_delay):
+            config_msg["interruption_delay"] = interruption_delay
         if is_given(vad_threshold):
             config_msg["vad_threshold"] = vad_threshold
 
@@ -360,6 +415,7 @@ class SpeechStream(stt.SpeechStream):
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
+            anchored = False
 
             samples_per_buffer = self._opts.sample_rate // round(1 / self._opts.buffer_size_seconds)
             audio_bstream = utils.audio.AudioByteStream(
@@ -378,8 +434,16 @@ class SpeechStream(stt.SpeechStream):
                     frames = audio_bstream.write(data.data.tobytes())
 
                 for frame in frames:
+                    if not anchored:
+                        # Anchor the stream's wall-clock to the moment just
+                        # before the first frame is sent — aligned with the
+                        # server's stream-relative zero used by
+                        # SpeechStarted.timestamp.
+                        self.start_time = time.time()
+                        anchored = True
                     self._speech_duration += frame.duration
                     await ws.send_bytes(frame.data.tobytes())
+                    self._last_frame_sent_at = time.time()
 
             closing_ws = True
             logger.debug("AssemblyAI sending close message session=%s", self._session_id)
@@ -404,6 +468,17 @@ class SpeechStream(stt.SpeechStream):
                             consecutive_timeouts * 5,
                             self._session_id,
                         )
+                        # If the send side is also idle, the stall is upstream
+                        # of this plugin (no audio reaching us). Otherwise
+                        # frames are flowing and the stall is downstream.
+                        if self._last_frame_sent_at is not None:
+                            send_idle_s = time.time() - self._last_frame_sent_at
+                            if send_idle_s >= 15:
+                                logger.warning(
+                                    "AssemblyAI no audio frames sent for %.0fs session=%s",
+                                    send_idle_s,
+                                    self._session_id,
+                                )
                     continue
 
                 if msg.type in (
@@ -492,6 +567,12 @@ class SpeechStream(stt.SpeechStream):
             "encoding": self._opts.encoding,
             "speech_model": self._opts.speech_model,
             "format_turns": self._opts.format_turns if is_given(self._opts.format_turns) else None,
+            "continuous_partials": self._opts.continuous_partials
+            if is_given(self._opts.continuous_partials)
+            else None,
+            "interruption_delay": self._opts.interruption_delay
+            if is_given(self._opts.interruption_delay)
+            else None,
             "end_of_turn_confidence_threshold": self._opts.end_of_turn_confidence_threshold
             if is_given(self._opts.end_of_turn_confidence_threshold)
             else None,
@@ -554,7 +635,21 @@ class SpeechStream(stt.SpeechStream):
             return
 
         if message_type == "SpeechStarted":
-            self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+            # SpeechStarted can arrive well after actual speech onset. The
+            # `timestamp` field carries the server VAD's onset time in stream-
+            # relative ms. Convert to wall-clock by adding self.start_time
+            # (the stream's wall-clock anchor) so the framework records an
+            # accurate _speech_start_time instead of message arrival.
+            timestamp_ms = data.get("timestamp")
+            speech_start_time: float | None = None
+            if timestamp_ms is not None:
+                speech_start_time = self.start_time + timestamp_ms / 1000
+            self._event_ch.send_nowait(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.START_OF_SPEECH,
+                    speech_start_time=speech_start_time,
+                )
+            )
             return
 
         if message_type == "Termination":

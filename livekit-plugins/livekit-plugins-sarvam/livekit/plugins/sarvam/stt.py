@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import enum
 import json
+import logging
 import os
 import platform
 import weakref
@@ -124,6 +125,7 @@ class ModelConfig:
         supports_prompt: Whether the model accepts prompt parameter.
         supports_mode: Whether the model accepts mode parameter.
         supports_language: Whether the model accepts language parameter.
+        supports_vad_params: Whether the model accepts fine-grained VAD parameters.
         default_language: Default language code (None = auto-detect).
         default_mode: Default mode (None = not applicable).
         use_translate_endpoint: Whether to use speech_to_text_translate_streaming endpoint.
@@ -134,6 +136,7 @@ class ModelConfig:
     supports_prompt: bool
     supports_mode: bool
     supports_language: bool
+    supports_vad_params: bool
     default_language: str | None
     default_mode: str | None
     use_translate_endpoint: bool
@@ -146,6 +149,7 @@ MODEL_CONFIGS: dict[str, ModelConfig] = {
         supports_prompt=False,
         supports_mode=False,
         supports_language=True,
+        supports_vad_params=False,
         default_language="unknown",
         default_mode=None,
         use_translate_endpoint=False,
@@ -156,6 +160,7 @@ MODEL_CONFIGS: dict[str, ModelConfig] = {
         supports_prompt=True,
         supports_mode=False,
         supports_language=False,
+        supports_vad_params=False,
         default_language=None,
         default_mode=None,
         use_translate_endpoint=True,
@@ -166,6 +171,7 @@ MODEL_CONFIGS: dict[str, ModelConfig] = {
         supports_prompt=True,
         supports_mode=True,
         supports_language=True,
+        supports_vad_params=True,
         default_language="en-IN",
         default_mode="transcribe",
         use_translate_endpoint=False,
@@ -253,6 +259,14 @@ def _model_supports_mode(model: str) -> bool:
     return False
 
 
+def _model_supports_vad_params(model: str) -> bool:
+    """Check whether the model supports fine-grained VAD parameters."""
+    model_config = _get_model_config(model)
+    if model_config:
+        return model_config.supports_vad_params
+    return False
+
+
 class ConnectionState(enum.Enum):
     """WebSocket connection states."""
 
@@ -287,6 +301,16 @@ class SarvamSTTOptions:
     sample_rate: int = 16000
     flush_signal: bool | None = None
     input_audio_codec: str | None = None
+    positive_speech_threshold: float | None = None
+    negative_speech_threshold: float | None = None
+    min_speech_frames: int | None = None
+    first_turn_min_speech_frames: int | None = None
+    negative_frames_count: int | None = None
+    negative_frames_window: int | None = None
+    start_speech_volume_threshold: float | None = None
+    interrupt_min_speech_frames: int | None = None
+    pre_speech_pad_frames: int | None = None
+    num_initial_ignored_frames: int | None = None
 
     def __post_init__(self) -> None:
         """Set URLs based on model if not explicitly provided."""
@@ -318,6 +342,32 @@ def _get_urls_for_model(model: str) -> tuple[str, str]:
     if model_config and model_config.use_translate_endpoint:
         return SARVAM_STT_TRANSLATE_BASE_URL, SARVAM_STT_TRANSLATE_STREAMING_URL
     return SARVAM_STT_BASE_URL, SARVAM_STT_STREAMING_URL
+
+
+def _extract_confidence(
+    payload: dict,
+    instance_logger: logging.Logger,
+) -> float:
+    """Read Sarvam's ``language_probability`` from a response payload.
+
+    Returns the value as a float when present and numeric. Falls back to
+    ``1.0`` when the field is absent, ``None``, or has an unexpected type
+    (defensive — the field is documented for the REST endpoint but not
+    explicitly for streaming, so contract drift is logged for visibility).
+    """
+    value = payload.get("language_probability")
+    # bool is a subclass of int — exclude explicitly so that an accidental
+    # JSON `false` doesn't silently become ``confidence=0.0``. Same pattern
+    # as livekit-plugins-slng/.../stt.py.
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    if value is not None:
+        instance_logger.debug(
+            "Unexpected language_probability type: %s (value=%r); falling back to confidence=1.0",
+            type(value).__name__,
+            value,
+        )
+    return 1.0
 
 
 def _calculate_audio_duration(
@@ -359,6 +409,28 @@ def _build_websocket_url(base_url: str, opts: SarvamSTTOptions) -> str:
         params["mode"] = opts.mode
     if opts.input_audio_codec:
         params["input_audio_codec"] = opts.input_audio_codec
+
+    if _model_supports_vad_params(opts.model):
+        if opts.positive_speech_threshold is not None:
+            params["positive_speech_threshold"] = str(opts.positive_speech_threshold)
+        if opts.negative_speech_threshold is not None:
+            params["negative_speech_threshold"] = str(opts.negative_speech_threshold)
+        if opts.min_speech_frames is not None:
+            params["min_speech_frames"] = str(opts.min_speech_frames)
+        if opts.first_turn_min_speech_frames is not None:
+            params["first_turn_min_speech_frames"] = str(opts.first_turn_min_speech_frames)
+        if opts.negative_frames_count is not None:
+            params["negative_frames_count"] = str(opts.negative_frames_count)
+        if opts.negative_frames_window is not None:
+            params["negative_frames_window"] = str(opts.negative_frames_window)
+        if opts.start_speech_volume_threshold is not None:
+            params["start_speech_volume_threshold"] = str(opts.start_speech_volume_threshold)
+        if opts.interrupt_min_speech_frames is not None:
+            params["interrupt_min_speech_frames"] = str(opts.interrupt_min_speech_frames)
+        if opts.pre_speech_pad_frames is not None:
+            params["pre_speech_pad_frames"] = str(opts.pre_speech_pad_frames)
+        if opts.num_initial_ignored_frames is not None:
+            params["num_initial_ignored_frames"] = str(opts.num_initial_ignored_frames)
 
     return f"{base_url}?{urlencode(params)}"
 
@@ -425,6 +497,16 @@ class STT(stt.STT):
         sample_rate: int = 16000,
         flush_signal: bool | None = None,
         input_audio_codec: str | None = None,
+        positive_speech_threshold: float | None = None,
+        negative_speech_threshold: float | None = None,
+        min_speech_frames: int | None = None,
+        first_turn_min_speech_frames: int | None = None,
+        negative_frames_count: int | None = None,
+        negative_frames_window: int | None = None,
+        start_speech_volume_threshold: float | None = None,
+        interrupt_min_speech_frames: int | None = None,
+        pre_speech_pad_frames: int | None = None,
+        num_initial_ignored_frames: int | None = None,
     ) -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -453,6 +535,16 @@ class STT(stt.STT):
             sample_rate=sample_rate,
             flush_signal=flush_signal,
             input_audio_codec=input_audio_codec,
+            positive_speech_threshold=positive_speech_threshold,
+            negative_speech_threshold=negative_speech_threshold,
+            min_speech_frames=min_speech_frames,
+            first_turn_min_speech_frames=first_turn_min_speech_frames,
+            negative_frames_count=negative_frames_count,
+            negative_frames_window=negative_frames_window,
+            start_speech_volume_threshold=start_speech_volume_threshold,
+            interrupt_min_speech_frames=interrupt_min_speech_frames,
+            pre_speech_pad_frames=pre_speech_pad_frames,
+            num_initial_ignored_frames=num_initial_ignored_frames,
         )
         self._session = http_session
         self._logger = logger.getChild(self.__class__.__name__)
@@ -633,7 +725,7 @@ class STT(stt.STT):
                         text=transcript_text,
                         start_time=start_time,
                         end_time=end_time,
-                        confidence=1.0,  # Sarvam doesn't provide confidence score in this response
+                        confidence=_extract_confidence(response_json, self._logger),
                     )
                 ]
 
@@ -668,6 +760,16 @@ class STT(stt.STT):
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
         flush_signal: NotGivenOr[bool] = NOT_GIVEN,
         input_audio_codec: NotGivenOr[str] = NOT_GIVEN,
+        positive_speech_threshold: NotGivenOr[float] = NOT_GIVEN,
+        negative_speech_threshold: NotGivenOr[float] = NOT_GIVEN,
+        min_speech_frames: NotGivenOr[int] = NOT_GIVEN,
+        first_turn_min_speech_frames: NotGivenOr[int] = NOT_GIVEN,
+        negative_frames_count: NotGivenOr[int] = NOT_GIVEN,
+        negative_frames_window: NotGivenOr[int] = NOT_GIVEN,
+        start_speech_volume_threshold: NotGivenOr[float] = NOT_GIVEN,
+        interrupt_min_speech_frames: NotGivenOr[int] = NOT_GIVEN,
+        pre_speech_pad_frames: NotGivenOr[int] = NOT_GIVEN,
+        num_initial_ignored_frames: NotGivenOr[int] = NOT_GIVEN,
     ) -> SpeechStream:
         """Create a streaming transcription session."""
         opts_language, opts_model, opts_mode = self._resolve_opts(
@@ -689,6 +791,54 @@ class STT(stt.STT):
         opts_input_codec = (
             input_audio_codec if is_given(input_audio_codec) else self._opts.input_audio_codec
         )
+        opts_positive_speech = (
+            positive_speech_threshold
+            if is_given(positive_speech_threshold)
+            else self._opts.positive_speech_threshold
+        )
+        opts_negative_speech = (
+            negative_speech_threshold
+            if is_given(negative_speech_threshold)
+            else self._opts.negative_speech_threshold
+        )
+        opts_min_speech = (
+            min_speech_frames if is_given(min_speech_frames) else self._opts.min_speech_frames
+        )
+        opts_first_turn = (
+            first_turn_min_speech_frames
+            if is_given(first_turn_min_speech_frames)
+            else self._opts.first_turn_min_speech_frames
+        )
+        opts_neg_count = (
+            negative_frames_count
+            if is_given(negative_frames_count)
+            else self._opts.negative_frames_count
+        )
+        opts_neg_window = (
+            negative_frames_window
+            if is_given(negative_frames_window)
+            else self._opts.negative_frames_window
+        )
+        opts_vol_threshold = (
+            start_speech_volume_threshold
+            if is_given(start_speech_volume_threshold)
+            else self._opts.start_speech_volume_threshold
+        )
+        opts_interrupt = (
+            interrupt_min_speech_frames
+            if is_given(interrupt_min_speech_frames)
+            else self._opts.interrupt_min_speech_frames
+        )
+        opts_pre_pad = (
+            pre_speech_pad_frames
+            if is_given(pre_speech_pad_frames)
+            else self._opts.pre_speech_pad_frames
+        )
+        opts_initial_ignored = (
+            num_initial_ignored_frames
+            if is_given(num_initial_ignored_frames)
+            else self._opts.num_initial_ignored_frames
+        )
         single_attempt_conn_options = self._single_attempt_conn_options(conn_options)
 
         # Create options for the stream
@@ -702,6 +852,16 @@ class STT(stt.STT):
             sample_rate=opts_sample_rate,
             flush_signal=opts_flush_signal,
             input_audio_codec=opts_input_codec,
+            positive_speech_threshold=opts_positive_speech,
+            negative_speech_threshold=opts_negative_speech,
+            min_speech_frames=opts_min_speech,
+            first_turn_min_speech_frames=opts_first_turn,
+            negative_frames_count=opts_neg_count,
+            negative_frames_window=opts_neg_window,
+            start_speech_volume_threshold=opts_vol_threshold,
+            interrupt_min_speech_frames=opts_interrupt,
+            pre_speech_pad_frames=opts_pre_pad,
+            num_initial_ignored_frames=opts_initial_ignored,
         )
 
         # Create a fresh session for this stream to avoid conflicts
@@ -1313,8 +1473,10 @@ class SpeechStream(stt.SpeechStream):
         transcript_data = data.get("data", {})
         transcript_text = transcript_data.get("transcript", "")
         language = LanguageCode(transcript_data.get("language_code", ""))
-        request_id = transcript_data.get("request_id", "")
         self._maybe_set_server_request_id(transcript_data)
+        # Prefer the per-message request_id from the server; fall back to the
+        # session-wide server request_id captured from an earlier message.
+        request_id = transcript_data.get("request_id") or self._server_request_id or ""
 
         if not transcript_text:
             self._logger.debug("Received empty transcript", extra=self._build_log_context())
@@ -1323,13 +1485,13 @@ class SpeechStream(stt.SpeechStream):
         try:
             # Create usage event with proper metrics extraction
             metrics = transcript_data.get("metrics", {})
-            request_data = {
-                "original_id": request_id,
-                "processing_latency": metrics.get("processing_latency", 0.0),
-            }
+            # request_data = {
+            #     "original_id": request_id,
+            #     "processing_latency": metrics.get("processing_latency", 0.0),
+            # }
             usage_event = stt.SpeechEvent(
                 type=stt.SpeechEventType.RECOGNITION_USAGE,
-                request_id=json.dumps(request_data),
+                request_id=request_id,
                 recognition_usage=stt.RecognitionUsage(
                     audio_duration=metrics.get("audio_duration", 0.0),
                 ),
@@ -1342,6 +1504,7 @@ class SpeechStream(stt.SpeechStream):
                 text=transcript_text,
                 start_time=transcript_data.get("speech_start", 0.0),
                 end_time=transcript_data.get("speech_end", 0.0),
+                confidence=_extract_confidence(transcript_data, self._logger),
             )
 
             # Create final transcript event with request_id

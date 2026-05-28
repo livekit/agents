@@ -83,11 +83,6 @@ class STT(stt.STT):
                 When not provided, Silero VAD is auto-loaded with default settings. Only used with realtime models.
         """
         resolved_model = model if is_given(model) else DEFAULT_MODEL
-        resolved_language = LanguageCode(language) if is_given(language) else None
-        resolved_context_bias = context_bias if is_given(context_bias) else None
-        resolved_target_streaming_delay_ms = (
-            target_streaming_delay_ms if is_given(target_streaming_delay_ms) else None
-        )
         is_realtime = _is_realtime(resolved_model)
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -99,9 +94,11 @@ class STT(stt.STT):
         )
         self._opts = _STTOptions(
             model=resolved_model,
-            language=resolved_language,
-            context_bias=resolved_context_bias,
-            target_streaming_delay_ms=resolved_target_streaming_delay_ms,
+            language=LanguageCode(language) if is_given(language) else None,
+            context_bias=context_bias if is_given(context_bias) else None,
+            target_streaming_delay_ms=target_streaming_delay_ms
+            if is_given(target_streaming_delay_ms)
+            else None,
         )
 
         if is_realtime and vad is None:
@@ -127,10 +124,18 @@ class STT(stt.STT):
 
     async def _connect_ws(self, timeout: float) -> RealtimeConnection:
         rt = RealtimeTranscription(self._client.sdk_configuration)
+        http_headers = None
+        cfg = self._client.sdk_configuration
+        client_headers = getattr(cfg.async_client, "headers", None) or getattr(
+            cfg.client, "headers", None
+        )
+        if client_headers:
+            http_headers = dict(client_headers)
         return await asyncio.wait_for(
             rt.connect(
                 model=self._opts.model,
                 target_streaming_delay_ms=self._opts.target_streaming_delay_ms,
+                http_headers=http_headers,
             ),
             timeout=timeout,
         )

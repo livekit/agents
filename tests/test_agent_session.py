@@ -1,20 +1,34 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
 from livekit.agents import (
     Agent,
+    AgentFalseInterruptionEvent,
     AgentStateChangedEvent,
     ConversationItemAddedEvent,
+    LanguageCode,
     MetricsCollectedEvent,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
     function_tool,
+    inference,
+    vad,
 )
-from livekit.agents.llm import FunctionToolCall
+from livekit.agents.llm import (
+    FunctionToolCall,
+)
 from livekit.agents.llm.chat_context import ChatContext, ChatMessage
+from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
+from livekit.agents.utils import aio
+from livekit.agents.voice.agent_activity import AgentActivity
+from livekit.agents.voice.audio_recognition import AudioRecognition, _EndOfTurnInfo
+from livekit.agents.voice.endpointing import BaseEndpointing
 from livekit.agents.voice.events import FunctionToolsExecutedEvent
 from livekit.agents.voice.io import PlaybackFinishedEvent
 
@@ -345,7 +359,6 @@ async def test_interruption_by_text_input() -> None:
     assert len(playback_finished_events) == 2
     assert playback_finished_events[0].interrupted is True
 
-    print(agent_state_events)
     assert len(agent_state_events) == 7
     assert agent_state_events[0].old_state == "initializing"
     assert agent_state_events[0].new_state == "listening"
@@ -434,6 +447,98 @@ async def test_interruption_before_speaking(
     assert agent.chat_ctx.items[3].type == "message"
     assert agent.chat_ctx.items[3].role == "user"
     assert agent.chat_ctx.items[3].text_content == "Stop!"
+
+
+async def test_interrupt_before_speaking_with_pausable_audio() -> None:
+    """
+    Regression test for https://github.com/livekit/agents/issues/5509
+    User turn starting while the agent is ``thinking`` must pause the
+    pausable output so the stale reply never promotes to ``speaking``.
+    """
+    speed = 5.0
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Tell me a story.")
+    actions.add_llm("Here is a long story for you ... the end.", duration=1.0)
+    actions.add_tts(10.0)
+    actions.add_user_speech(3.0, 4.0, "Stop!", stt_delay=0.2)
+
+    session = create_session(actions, speed_factor=speed, can_pause_audio=True)
+    agent = MyAgent()
+
+    agent_state_events: list[AgentStateChangedEvent] = []
+    playback_finished_events: list[PlaybackFinishedEvent] = []
+    session.on("agent_state_changed", agent_state_events.append)
+    session.output.audio.on("playback_finished", playback_finished_events.append)
+
+    t_origin = await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    # core assertion: the stale reply never promotes to "speaking"
+    assert not any(ev.new_state == "speaking" for ev in agent_state_events), (
+        "stale reply should have been paused before the first frame reached the transport"
+    )
+
+    # state sequence mirrors test_interruption_before_speaking (can_pause=False variant),
+    # proving the pause path is observationally equivalent to the interrupt path
+    assert len(agent_state_events) == 5
+    assert agent_state_events[0].old_state == "initializing"
+    assert agent_state_events[0].new_state == "listening"
+    assert agent_state_events[1].new_state == "thinking"
+    assert agent_state_events[2].new_state == "listening"
+    check_timestamp(agent_state_events[2].created_at - t_origin, 3.5, speed_factor=speed)
+
+    # nothing audible reached the transport — the pause cleanup emits a single
+    # playback_finished with interrupted=True and playback_position=0
+    assert len(playback_finished_events) == 1
+    assert playback_finished_events[0].interrupted is True
+    assert playback_finished_events[0].playback_position == 0.0
+
+    # stale assistant reply is dropped; chat_ctx holds user turn 1 and (after
+    # the on_final_transcript commit) user turn 2
+    user_messages = [
+        item for item in agent.chat_ctx.items if item.type == "message" and item.role == "user"
+    ]
+    assert [m.text_content for m in user_messages] == ["Tell me a story.", "Stop!"]
+    assert not any(
+        item.type == "message" and item.role == "assistant" for item in agent.chat_ctx.items
+    )
+
+
+async def test_false_interruption_before_speaking_resumes() -> None:
+    """
+    Brief VAD-only noise during ``thinking`` must pause then resume on VAD EOS,
+    letting the stale reply play through normally.
+    """
+    speed = 5.0
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Tell me a story.")
+    actions.add_llm("Here is a short reply.", ttft=0.05, duration=0.05)
+    actions.add_tts(5.0, ttfb=0.05, duration=0.05)
+    # brief VAD-only noise — same shape as the can_pause=False test, different capability
+    actions.add_user_speech(3.0, 3.3, "")
+
+    session = create_session(actions, speed_factor=speed, can_pause_audio=True)
+    agent = MyAgent()
+
+    agent_state_events: list[AgentStateChangedEvent] = []
+    playback_finished_events: list[PlaybackFinishedEvent] = []
+    session.on("agent_state_changed", agent_state_events.append)
+    session.output.audio.on("playback_finished", playback_finished_events.append)
+
+    t_origin = await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    # the agent resumes and speaks the reply after the false interruption clears
+    speaking_events = [ev for ev in agent_state_events if ev.new_state == "speaking"]
+    assert len(speaking_events) == 1
+
+    # playout was postponed: the noise ran 3.0–3.3s, so "speaking" should fire at
+    # ~3.8s (resume on VAD EOS=3.3s + 0.5s min_silence_duration)
+    check_timestamp(speaking_events[0].created_at - t_origin, 3.8, speed_factor=speed)
+
+    # the reply plays to completion (not interrupted); playback_position covers the
+    # full audio duration
+    assert len(playback_finished_events) == 1
+    assert playback_finished_events[0].interrupted is False
+    check_timestamp(playback_finished_events[0].playback_position, 5.0, speed_factor=speed)
 
 
 async def test_generate_reply() -> None:
@@ -571,6 +676,301 @@ async def test_aec_warmup() -> None:
     # interruption delayed to 5.5s (EOU), not 4.5s (VAD was blocked by warmup)
     speaking_to_listening = next(e for e in agent_state_events[3:] if e.new_state == "listening")
     check_timestamp(speaking_to_listening.created_at - t_origin, 5.5, speed_factor=speed)
+
+
+async def test_start_boundary_does_not_block_vad_interruption() -> None:
+    """backchannel boundary should not interfere with VAD-based interruption when adaptive
+    detection is not active. The cooldown timer runs but has no effect on the VAD path.
+
+    This validates that the backchannel_boundary config is properly handled and doesn't
+    regress normal interruption behavior.
+    """
+    speed = 5.0
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Tell me a story.")
+    actions.add_llm("Here is a long story for you ... the end.")
+    actions.add_tts(15.0)  # playout starts at ~3.5s
+    # user speaks at 4.0-5.0s — within the 1s warmup window (3.5 + 1.0 = 4.5s expiry)
+    # VAD interruption at 4.0 + 0.5 = 4.5s (warmup does NOT block VAD)
+    actions.add_user_speech(4.0, 5.0, "Stop!", stt_delay=0.2)
+
+    session = create_session(
+        actions,
+        speed_factor=speed,
+        extra_kwargs={"aec_warmup_duration": None},
+    )
+    agent = MyAgent()
+
+    agent_state_events: list[AgentStateChangedEvent] = []
+    playback_finished_events: list[PlaybackFinishedEvent] = []
+    session.on("agent_state_changed", agent_state_events.append)
+    session.output.audio.on("playback_finished", playback_finished_events.append)
+
+    t_origin = await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    assert len(playback_finished_events) == 1
+    assert playback_finished_events[0].interrupted is True
+
+    assert agent_state_events[0].new_state == "listening"
+    assert agent_state_events[1].new_state == "thinking"
+    assert agent_state_events[2].new_state == "speaking"
+    # VAD interruption fires normally at ~4.5s (warmup doesn't block VAD path)
+    speaking_to_listening = next(e for e in agent_state_events[3:] if e.new_state == "listening")
+    check_timestamp(speaking_to_listening.created_at - t_origin, 4.5, speed_factor=speed)
+
+
+async def test_backchannel_boundary_suppresses_start_boundary_backchannel() -> None:
+    actions = FakeActions()
+    session = create_session(
+        actions,
+        turn_handling={"interruption": {"backchannel_boundary": (0.05, 0.0)}},
+    )
+    hooks = _TestRecognitionHooks()
+    recognition = AudioRecognition(
+        session,
+        hooks=hooks,
+        endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
+        stt=None,
+        vad=None,
+        interruption_detection=None,
+        turn_detection="vad",
+    )
+
+    try:
+        recognition.on_start_of_agent_speech(started_at=time.time())
+        # backchannels during the cooldown are dropped (they are a no-op anyway,
+        # but this guards against the gate firing on `on_interruption`)
+        await recognition._on_overlap_speech_event(_backchannel_event())
+        assert hooks.interruptions == []
+
+        # a real interruption during the cooldown must still fire
+        await recognition._on_overlap_speech_event(_interruption_event())
+        assert len(hooks.interruptions) == 1
+
+        # after cooldown, both event types behave normally
+        await asyncio.sleep(0.06)
+        await recognition._on_overlap_speech_event(_backchannel_event())
+        await recognition._on_overlap_speech_event(_interruption_event())
+        assert len(hooks.interruptions) == 2
+    finally:
+        await _close_test_session(session)
+
+
+async def _make_stt_eos_recognition() -> AudioRecognition:
+    return AudioRecognition(
+        create_session(FakeActions()),
+        hooks=_TestRecognitionHooks(),
+        endpointing=BaseEndpointing(min_delay=0.0, max_delay=0.0),
+        stt=None,
+        vad=None,
+        interruption_detection=None,
+        turn_detection="stt",
+    )
+
+
+async def test_stt_eos_resets_active_vad_stream_without_restarting_vad() -> None:
+    recognition = await _make_stt_eos_recognition()
+    recognition._speaking = True
+    recognition._vad_speech_started = True
+    recognition._vad = MagicMock()
+    resettable_stream = MagicMock()
+    recognition._vad_stream = resettable_stream
+
+    try:
+        with patch.object(recognition, "update_vad") as update_vad:
+            await recognition._on_stt_event(SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
+
+        resettable_stream.flush.assert_called_once_with()
+        update_vad.assert_not_called()
+        assert recognition._vad_stream is resettable_stream
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
+async def test_stt_eos_falls_back_to_update_vad_when_no_active_stream() -> None:
+    recognition = await _make_stt_eos_recognition()
+    recognition._speaking = True
+    recognition._vad_speech_started = True
+    recognition._vad = MagicMock()
+    recognition._vad_stream = None
+
+    try:
+        with patch.object(recognition, "update_vad") as update_vad:
+            await recognition._on_stt_event(SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
+
+        update_vad.assert_called_once_with(recognition._vad)
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
+async def test_backchannel_boundary_releases_end_boundary_transcript() -> None:
+    actions = FakeActions()
+    session = create_session(
+        actions,
+        turn_handling={"interruption": {"backchannel_boundary": (0.0, 0.5)}},
+    )
+    recognition = AudioRecognition(
+        session,
+        hooks=_TestRecognitionHooks(),
+        endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
+        stt=None,
+        vad=None,
+        interruption_detection=None,
+        turn_detection="vad",
+    )
+    recognition._interruption_enabled = True
+    recognition._interruption_ch = aio.Chan[inference.InterruptionDataFrameType]()
+    input_started_at = time.time() - 10.0
+    recognition._input_started_at = input_started_at
+
+    try:
+        recognition.on_start_of_agent_speech(started_at=time.time())
+        speech_ended_at = time.time()
+        recognition.on_end_of_agent_speech(ignore_user_transcript_until=speech_ended_at)
+
+        assert not recognition._should_hold_stt_event(
+            _final_transcript_event(
+                text="near the boundary",
+                start_time=speech_ended_at - input_started_at - 0.25,
+                end_time=speech_ended_at - input_started_at,
+            )
+        )
+        assert recognition._should_hold_stt_event(
+            _final_transcript_event(
+                text="before the boundary",
+                start_time=speech_ended_at - input_started_at - 0.75,
+                end_time=speech_ended_at - input_started_at - 0.5,
+            )
+        )
+    finally:
+        recognition._interruption_ch.close()
+        await _close_test_session(session)
+
+
+async def test_interruption_detection_error_is_not_session_error() -> None:
+    actions = FakeActions()
+    session = create_session(actions)
+    activity = AgentActivity(MyAgent(), session)
+    fallback = Mock()
+    activity._fallback_to_vad_interruption = fallback
+    error_events: list[object] = []
+    session.on("error", error_events.append)
+
+    try:
+        recoverable = inference.InterruptionDetectionError(
+            label="test",
+            error=RuntimeError("temporary failure"),
+            recoverable=True,
+        )
+        activity._on_error(recoverable)
+
+        unrecoverable = inference.InterruptionDetectionError(
+            label="test",
+            error=RuntimeError("adaptive unavailable"),
+            recoverable=False,
+        )
+        activity._on_error(unrecoverable)
+
+        assert error_events == []
+        fallback.assert_called_once_with(unrecoverable)
+    finally:
+        await _close_test_session(session)
+
+
+async def test_vad_fallback_uses_next_vad_inference_event(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    actions = FakeActions()
+    session = create_session(actions)
+    activity = AgentActivity(MyAgent(), session)
+    error = inference.InterruptionDetectionError(
+        label="test",
+        error=RuntimeError("adaptive unavailable"),
+        recoverable=False,
+    )
+
+    audio_recognition = MagicMock()
+    current_speech = MagicMock()
+    current_speech.interrupted = False
+    current_speech.allow_interruptions = True
+
+    activity._audio_recognition = audio_recognition
+    activity._current_speech = current_speech
+    activity._interruption_detection_enabled = True
+    activity._interruption_by_audio_activity_enabled = False
+    activity._default_interruption_by_audio_activity_enabled = True
+
+    caplog.set_level(logging.INFO, logger="livekit.agents")
+
+    try:
+        activity._fallback_to_vad_interruption(error)
+
+        audio_recognition.update_interruption_detection.assert_called_once_with(None)
+        current_speech.interrupt.assert_not_called()
+        assert activity._interruption_detection_enabled is False
+        assert activity._interruption_by_audio_activity_enabled is True
+
+        activity.on_vad_inference_done(
+            vad.VADEvent(
+                type=vad.VADEventType.INFERENCE_DONE,
+                samples_index=0,
+                timestamp=time.time(),
+                speech_duration=session.options.interruption["min_duration"] - 0.01,
+                silence_duration=0.0,
+                speaking=True,
+            )
+        )
+        current_speech.interrupt.assert_not_called()
+
+        activity.on_vad_inference_done(
+            vad.VADEvent(
+                type=vad.VADEventType.INFERENCE_DONE,
+                samples_index=0,
+                timestamp=time.time(),
+                speech_duration=session.options.interruption["min_duration"],
+                silence_duration=0.0,
+                speaking=True,
+            )
+        )
+        current_speech.interrupt.assert_called_once_with()
+        assert any(
+            record.levelno == logging.INFO
+            and "falling back to VAD-based interruption" in record.message
+            for record in caplog.records
+        )
+        assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
+    finally:
+        await _close_test_session(session)
+
+
+async def test_force_flush_held_transcripts_emits_buffered_events() -> None:
+    actions = FakeActions()
+    session = create_session(actions)
+    hooks = _TestRecognitionHooks()
+    recognition = AudioRecognition(
+        session,
+        hooks=hooks,
+        endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
+        stt=None,
+        vad=None,
+        interruption_detection=None,
+        turn_detection="manual",
+    )
+    recognition._transcript_buffer.append(
+        _final_transcript_event(text="held transcript", start_time=0.0, end_time=1.0)
+    )
+
+    try:
+        await recognition._flush_held_transcripts(cooldown=0.0, force=True)
+
+        assert hooks.final_transcripts == ["held transcript"]
+        assert not recognition._transcript_buffer
+    finally:
+        await _close_test_session(session)
 
 
 @pytest.mark.parametrize(
@@ -733,20 +1133,266 @@ async def test_unknown_function_call() -> None:
     assert "Unknown function: nonexistent_tool" in error_outputs[0].output
 
 
+async def test_invalid_tool_arguments_surface_as_tool_error() -> None:
+    """When the LLM emits a tool call with invalid arguments (missing required
+    field, wrong type, malformed JSON, etc.), the faulty turn must NOT be
+    stripped from the conversation. Instead the schema error is wrapped in a
+    ToolError so the model receives a descriptive message and can self-correct
+    on the next turn."""
+    speed = 5.0
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "What's the weather?")
+    # get_weather requires `location: str` — emit a call with no args so it
+    # fails pydantic validation.
+    actions.add_llm(
+        content="",
+        tool_calls=[
+            FunctionToolCall(name="get_weather", arguments="{}", call_id="1"),
+        ],
+    )
+
+    session = create_session(actions, speed_factor=speed)
+    agent = MyAgent()
+
+    tool_executed_events: list[FunctionToolsExecutedEvent] = []
+    session.on("function_tools_executed", tool_executed_events.append)
+
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    # Event was emitted with both the call AND a non-None output (i.e., not stripped).
+    assert len(tool_executed_events) == 1
+    ev = tool_executed_events[0]
+    assert len(ev.function_calls) == 1
+    assert ev.function_calls[0].name == "get_weather"
+    assert ev.function_call_outputs[0] is not None
+    output = ev.function_call_outputs[0]
+    assert output.is_error is True
+
+    # The model must see a descriptive, schema-specific error — NOT the generic
+    # "An internal error occurred" string we reserve for unexpected exceptions.
+    assert "An internal error occurred" not in output.output
+    assert "get_weather" in output.output
+    # Pydantic validation error references the missing field.
+    assert "location" in output.output
+
+    # The faulty call AND its error output must both end up in chat history so
+    # the LLM can see what it did wrong on the next turn (not stripped).
+    items = agent.chat_ctx.items
+    function_calls = [i for i in items if i.type == "function_call"]
+    function_call_outputs = [i for i in items if i.type == "function_call_output"]
+    assert len(function_calls) == 1
+    assert function_calls[0].name == "get_weather"
+    assert function_calls[0].call_id == "1"
+    assert len(function_call_outputs) == 1
+    assert function_call_outputs[0].call_id == "1"
+    assert function_call_outputs[0].is_error is True
+
+
+async def test_tool_internal_exception_returns_generic_error() -> None:
+    """When a tool body raises a non-ToolError exception, the model receives
+    the generic "An internal error occurred" message so we don't leak internal
+    details. Validation-error path is tested separately."""
+
+    class _BrokenToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="You are a helpful assistant.")
+
+        @function_tool
+        async def get_weather(self, location: str) -> str:
+            """Always blows up."""
+            raise RuntimeError("kaboom: secret database password leaked")
+
+    speed = 5.0
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "What's the weather in Tokyo?")
+    actions.add_llm(
+        content="",
+        tool_calls=[
+            FunctionToolCall(name="get_weather", arguments='{"location": "Tokyo"}', call_id="1"),
+        ],
+    )
+
+    session = create_session(actions, speed_factor=speed)
+    agent = _BrokenToolAgent()
+
+    tool_executed_events: list[FunctionToolsExecutedEvent] = []
+    session.on("function_tools_executed", tool_executed_events.append)
+
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    assert len(tool_executed_events) == 1
+    output = tool_executed_events[0].function_call_outputs[0]
+    assert output is not None
+    assert output.is_error is True
+    # Generic message — the RuntimeError details must NOT leak to the model.
+    assert output.output == "An internal error occurred"
+    assert "kaboom" not in output.output
+    assert "secret" not in output.output
+
+
 # helpers
 
 
+class _TestRecognitionHooks:
+    def __init__(self) -> None:
+        self.interruptions: list[inference.OverlappingSpeechEvent] = []
+        self.final_transcripts: list[str] = []
+
+    def on_interruption(self, ev: inference.OverlappingSpeechEvent) -> None:
+        self.interruptions.append(ev)
+
+    def on_start_of_speech(self, ev: object, speech_start_time: float) -> None:
+        pass
+
+    def on_vad_inference_done(self, ev: object) -> None:
+        pass
+
+    def on_end_of_speech(self, ev: object) -> None:
+        pass
+
+    def on_interim_transcript(self, ev: SpeechEvent, *, speaking: bool | None) -> None:
+        pass
+
+    def on_final_transcript(self, ev: SpeechEvent, *, speaking: bool | None = None) -> None:
+        self.final_transcripts.append(ev.alternatives[0].text)
+
+    def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool:
+        return True
+
+    def on_preemptive_generation(self, info: object) -> None:
+        pass
+
+    def retrieve_chat_ctx(self) -> ChatContext:
+        return ChatContext.empty()
+
+
+def _interruption_event() -> inference.OverlappingSpeechEvent:
+    return inference.OverlappingSpeechEvent(
+        type="overlapping_speech",
+        is_interruption=True,
+        overlap_started_at=time.time(),
+        detected_at=time.time(),
+    )
+
+
+def _backchannel_event() -> inference.OverlappingSpeechEvent:
+    return inference.OverlappingSpeechEvent(
+        type="overlapping_speech",
+        is_interruption=False,
+        overlap_started_at=time.time(),
+        detected_at=time.time(),
+    )
+
+
+def _final_transcript_event(*, text: str, start_time: float, end_time: float) -> SpeechEvent:
+    return SpeechEvent(
+        type=SpeechEventType.FINAL_TRANSCRIPT,
+        alternatives=[
+            SpeechData(
+                text=text,
+                language=LanguageCode(""),
+                start_time=start_time,
+                end_time=end_time,
+            )
+        ],
+    )
+
+
+async def _close_test_session(session: object) -> None:
+    await session.aclose()
+    audio_output = session.output.audio
+    synchronizer = getattr(audio_output, "_synchronizer", None)
+    if synchronizer is not None:
+        await synchronizer.aclose()
+
+
 def check_timestamp(
-    t_event: float, t_target: float, *, speed_factor: float = 1.0, max_abs_diff: float = 0.75
+    t_event: float,
+    t_target: float,
+    *,
+    speed_factor: float = 1.0,
+    max_abs_diff: float = 0.75,
+    min_real_time_diff: float = 0.3,
 ) -> None:
     """
     Check if the event timestamp is within the target timestamp +/- max_abs_diff.
     The event timestamp is scaled by the speed factor.
+
+    ``max_abs_diff`` is expressed in scaled time. A real-time floor of
+    ``min_real_time_diff`` (wallclock seconds) is also applied so high
+    ``speed_factor`` values don't compress the effective tolerance below the
+    scheduling-jitter noise floor on CI runners — without this, the real-time
+    tolerance is ``max_abs_diff / speed_factor``, which at speed=5 is only
+    150 ms and routinely flakes.
     """
-    t_event = t_event * speed_factor
+    t_event_scaled = t_event * speed_factor
+    effective_diff = max(max_abs_diff, min_real_time_diff * speed_factor)
     print(
-        f"check_timestamp: t_event: {t_event}, t_target: {t_target}, max_abs_diff: {max_abs_diff}"
+        f"check_timestamp: t_event={t_event_scaled} (real {t_event:.3f}s), "
+        f"t_target={t_target}, effective_diff={effective_diff} "
+        f"(max_abs_diff={max_abs_diff}, min_real_time_diff={min_real_time_diff})"
     )
-    assert abs(t_event - t_target) <= max_abs_diff, (
-        f"event timestamp {t_event} is not within {max_abs_diff} of target {t_target}"
+    assert abs(t_event_scaled - t_target) <= effective_diff, (
+        f"event timestamp {t_event_scaled} is not within {effective_diff} of target {t_target} "
+        f"(real-time tolerance {effective_diff / speed_factor:.3f}s)"
     )
+
+
+async def test_silent_tool_call_pause_state_does_not_leak_into_tool_reply() -> None:
+    speed = 5.0
+    actions = FakeActions()
+    actions.add_user_speech(0.1, 0.2, "What's the weather in Tokyo?", stt_delay=0.05)
+
+    # Silent tool-call step: no spoken preamble/audio before the function call.
+    actions.add_llm(
+        content="",
+        tool_calls=[
+            FunctionToolCall(
+                name="get_weather",
+                arguments='{"location": "Tokyo"}',
+                call_id="1",
+            )
+        ],
+        ttft=0.05,
+        duration=1.0,
+    )
+
+    # VAD-only speech starts during the silent tool-call generation and remains
+    # active after the tool reply starts.
+    actions.add_user_speech(0.85, 2.0, "", stt_delay=0.05)
+
+    actions.add_llm(
+        content="The weather in Tokyo is sunny today.",
+        input="The weather in Tokyo is sunny today.",
+        ttft=0.0,
+        duration=0.0,
+    )
+    actions.add_tts(0.5, ttfb=0.0, duration=0.0)
+
+    session = create_session(
+        actions,
+        speed_factor=speed,
+        can_pause_audio=True,
+        turn_handling={"interruption": {"false_interruption_timeout": 0.2 / speed}},
+    )
+    agent = MyAgent()
+
+    agent_state_events: list[AgentStateChangedEvent] = []
+    false_interruption_events: list[AgentFalseInterruptionEvent] = []
+
+    session.on("agent_state_changed", agent_state_events.append)
+    session.on("agent_false_interruption", false_interruption_events.append)
+
+    await asyncio.wait_for(
+        run_session(session, agent, drain_delay=0.8 / speed),
+        timeout=SESSION_TIMEOUT,
+    )
+
+    transitions = [(ev.old_state, ev.new_state) for ev in agent_state_events]
+    silent_step_finished = transitions.index(("speaking", "listening"))
+
+    # Before the fix this is ("listening", "thinking") because the pause state
+    # captured during the silent tool-call step leaks into the tool reply.
+    assert transitions[silent_step_finished + 1] == ("listening", "speaking")
+    assert false_interruption_events
+    assert false_interruption_events[-1].resumed is True

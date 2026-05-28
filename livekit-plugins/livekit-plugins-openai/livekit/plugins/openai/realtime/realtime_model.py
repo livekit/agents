@@ -9,7 +9,7 @@ import os
 import time
 import weakref
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal, overload
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
@@ -48,6 +48,7 @@ from openai.types.realtime import (
     ConversationItemDeletedEvent,
     ConversationItemDeleteEvent,
     ConversationItemInputAudioTranscriptionCompletedEvent,
+    ConversationItemInputAudioTranscriptionDeltaEvent,
     ConversationItemInputAudioTranscriptionFailedEvent,
     ConversationItemTruncateEvent,
     InputAudioBufferAppendEvent,
@@ -793,6 +794,8 @@ class RealtimeSession(
     def __init__(self, realtime_model: RealtimeModel) -> None:
         super().__init__(realtime_model)
         self._realtime_model: RealtimeModel = realtime_model
+        # per-session copy of opts so update_options can diff against session's own state
+        self._opts = replace(realtime_model._opts)
         self._tools = llm.ToolContext.empty()
         self._msg_ch = utils.aio.Chan[RealtimeClientEvent | dict[str, Any]]()
         self._input_resampler: rtc.AudioResampler | None = None
@@ -804,6 +807,9 @@ class RealtimeSession(
         self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
         self._item_delete_future: dict[str, asyncio.Future] = {}
         self._item_create_future: dict[str, asyncio.Future] = {}
+
+        # accumulates partial input-audio transcripts per (item_id, content_index)
+        self._input_transcript_accumulators: dict[str, dict[int, str]] = {}
 
         self._current_generation: _ResponseGeneration | None = None
         self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
@@ -824,12 +830,12 @@ class RealtimeSession(
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
         num_retries: int = 0
-        max_retries = self._realtime_model._opts.conn_options.max_retry
+        max_retries = self._opts.conn_options.max_retry
 
         async def _reconnect() -> None:
             logger.debug(
                 f"reconnecting to {self._realtime_model._provider_label}",
-                extra={"max_session_duration": self._realtime_model._opts.max_session_duration},
+                extra={"max_session_duration": self._opts.max_session_duration},
             )
 
             events: list[RealtimeClientEvent | dict[str, Any]] = []
@@ -852,6 +858,7 @@ class RealtimeSession(
             )
             old_chat_ctx = self._remote_chat_ctx
             self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
+            self._input_transcript_accumulators.clear()
             events.extend(self._create_update_chat_ctx_events(chat_ctx))
 
             try:
@@ -862,10 +869,7 @@ class RealtimeSession(
                             by_alias=True, exclude_unset=True, exclude_defaults=False
                         )
 
-                    if (
-                        self._realtime_model._opts.is_azure
-                        and self._realtime_model._opts.api_version
-                    ):
+                    if self._opts.is_azure and self._opts.api_version:
                         _normalize_azure_client_event(ev)
 
                     self.emit("openai_client_event_queued", ev)
@@ -910,9 +914,7 @@ class RealtimeSession(
                 else:
                     self._emit_error(e, recoverable=True)
 
-                    retry_interval = self._realtime_model._opts.conn_options._interval_for_retry(
-                        num_retries
-                    )
+                    retry_interval = self._opts.conn_options._interval_for_retry(num_retries)
                     logger.warning(
                         f"{self._realtime_model._provider_label} connection failed, retrying in {retry_interval}s",
                         exc_info=e,
@@ -929,21 +931,21 @@ class RealtimeSession(
 
     async def _create_ws_conn(self) -> aiohttp.ClientWebSocketResponse:
         headers = {"User-Agent": "LiveKit Agents"}
-        if self._realtime_model._opts.is_azure:
-            if self._realtime_model._opts.entra_token:
-                headers["Authorization"] = f"Bearer {self._realtime_model._opts.entra_token}"
+        if self._opts.is_azure:
+            if self._opts.entra_token:
+                headers["Authorization"] = f"Bearer {self._opts.entra_token}"
 
-            if self._realtime_model._opts.api_key:
-                headers["api-key"] = self._realtime_model._opts.api_key
+            if self._opts.api_key:
+                headers["api-key"] = self._opts.api_key
         else:
-            headers["Authorization"] = f"Bearer {self._realtime_model._opts.api_key}"
+            headers["Authorization"] = f"Bearer {self._opts.api_key}"
 
         url = process_base_url(
-            self._realtime_model._opts.base_url,
-            self._realtime_model._opts.model,
-            is_azure=self._realtime_model._opts.is_azure,
-            api_version=self._realtime_model._opts.api_version,
-            azure_deployment=self._realtime_model._opts.azure_deployment,
+            self._opts.base_url,
+            self._opts.model,
+            is_azure=self._opts.is_azure,
+            api_version=self._opts.api_version,
+            azure_deployment=self._opts.azure_deployment,
         )
 
         if lk_oai_debug:
@@ -953,7 +955,7 @@ class RealtimeSession(
         try:
             ws = await asyncio.wait_for(
                 self._realtime_model._ensure_http_session().ws_connect(url=url, headers=headers),
-                self._realtime_model._opts.conn_options.timeout,
+                self._opts.conn_options.timeout,
             )
             self._report_connection_acquired(time.perf_counter() - t0)
             return ws
@@ -981,10 +983,7 @@ class RealtimeSession(
 
                     # Azure uses "text" for assistant content parts, while
                     # the new API uses "output_text" for assistant content.
-                    if (
-                        self._realtime_model._opts.is_azure
-                        and self._realtime_model._opts.api_version
-                    ):
+                    if self._opts.is_azure and self._opts.api_version:
                         _normalize_azure_client_event(msg)
 
                     self.emit("openai_client_event_queued", msg)
@@ -1027,7 +1026,7 @@ class RealtimeSession(
                 # Azure OpenAI uses old-style event names from the beta API.
                 # Normalize them to the current OpenAI event names so the rest
                 # of the handler code only needs to deal with one set of names.
-                if self._realtime_model._opts.is_azure:
+                if self._opts.is_azure:
                     event_type = event.get("type", "")
                     normalized = _AZURE_EVENT_MAPPING.get(event_type)
                     if normalized is not None:
@@ -1070,10 +1069,9 @@ class RealtimeSession(
                             ConversationItemDeletedEvent.construct(**event)
                         )
                     elif event["type"] == "conversation.item.input_audio_transcription.delta":
-                        # currently incoming transcripts are transcribed only after the user stops speaking
-                        # it's not very useful to emit these as the transcribe process takes place within ~100ms
-                        # when they handle streaming transcriptions, we'll handle it then.
-                        pass
+                        self._handle_conversion_item_input_audio_transcription_delta(
+                            ConversationItemInputAudioTranscriptionDeltaEvent.construct(**event)
+                        )
                     elif event["type"] == "conversation.item.input_audio_transcription.completed":
                         self._handle_conversion_item_input_audio_transcription_completed(
                             ConversationItemInputAudioTranscriptionCompletedEvent.construct(**event)
@@ -1114,9 +1112,9 @@ class RealtimeSession(
             asyncio.create_task(_send_task(), name="_send_task"),
         ]
         wait_reconnect_task: asyncio.Task | None = None
-        if self._realtime_model._opts.max_session_duration is not None:
+        if self._opts.max_session_duration is not None:
             wait_reconnect_task = asyncio.create_task(
-                asyncio.sleep(self._realtime_model._opts.max_session_duration),
+                asyncio.sleep(self._opts.max_session_duration),
                 name="_timeout_task",
             )
             tasks.append(wait_reconnect_task)
@@ -1146,7 +1144,7 @@ class RealtimeSession(
         and returns a dict (since AzureSessionUpdateEvent is not part of
         the RealtimeClientEvent union).
         """
-        if self._realtime_model._opts.is_azure and self._realtime_model._opts.api_version:
+        if self._opts.is_azure and self._opts.api_version:
             # legacy Azure API: convert to old flat format
             return AzureSessionUpdateEvent(
                 type="session.update",
@@ -1163,8 +1161,8 @@ class RealtimeSession(
     def _create_session_update_event(self) -> SessionUpdateEvent | dict[str, Any]:
         audio_format = realtime.realtime_audio_formats.AudioPCM(rate=SAMPLE_RATE, type="audio/pcm")
         # they do not support both text and audio modalities, it'll respond in audio + transcript
-        modality = "audio" if "audio" in self._realtime_model._opts.modalities else "text"
-        opts = self._realtime_model._opts
+        modality = "audio" if "audio" in self._opts.modalities else "text"
+        opts = self._opts
 
         session = RealtimeSessionCreateRequest(
             type="realtime",
@@ -1223,30 +1221,30 @@ class RealtimeSession(
         has_changes = False
 
         if is_given(tool_choice):
-            current_oai = to_oai_tool_choice(self._realtime_model._opts.tool_choice)
+            current_oai = to_oai_tool_choice(self._opts.tool_choice)
             next_oai = to_oai_tool_choice(tool_choice)
-            self._realtime_model._opts.tool_choice = tool_choice
+            self._opts.tool_choice = tool_choice
             if current_oai != next_oai:
                 session.tool_choice = next_oai
                 has_changes = True
 
         if is_given(max_response_output_tokens):
-            if self._realtime_model._opts.max_response_output_tokens != max_response_output_tokens:
+            if self._opts.max_response_output_tokens != max_response_output_tokens:
                 session.max_output_tokens = max_response_output_tokens
                 has_changes = True
-            self._realtime_model._opts.max_response_output_tokens = max_response_output_tokens
+            self._opts.max_response_output_tokens = max_response_output_tokens
 
         if is_given(tracing):
-            if self._realtime_model._opts.tracing != tracing:
+            if self._opts.tracing != tracing:
                 session.tracing = tracing  # type: ignore[assignment]
                 has_changes = True
-            self._realtime_model._opts.tracing = tracing
+            self._opts.tracing = tracing
 
         if is_given(truncation):
-            if self._realtime_model._opts.truncation != truncation:
+            if self._opts.truncation != truncation:
                 session.truncation = truncation
                 has_changes = True
-            self._realtime_model._opts.truncation = truncation
+            self._opts.truncation = truncation
 
         has_audio_config = False
         audio_output = RealtimeAudioConfigOutput()
@@ -1254,38 +1252,35 @@ class RealtimeSession(
         audio_config = RealtimeAudioConfig(output=audio_output, input=audio_input)
 
         if is_given(voice):
-            if self._realtime_model._opts.voice != voice:
+            if self._opts.voice != voice:
                 audio_output.voice = voice
                 has_audio_config = True
-            self._realtime_model._opts.voice = voice
+            self._opts.voice = voice
 
         if is_given(turn_detection):
-            if self._realtime_model._opts.turn_detection != turn_detection:
+            if self._opts.turn_detection != turn_detection:
                 audio_input.turn_detection = turn_detection
                 has_audio_config = True
-            self._realtime_model._opts.turn_detection = turn_detection
+            self._opts.turn_detection = turn_detection
 
         if is_given(input_audio_transcription):
-            if self._realtime_model._opts.input_audio_transcription != input_audio_transcription:
+            if self._opts.input_audio_transcription != input_audio_transcription:
                 audio_input.transcription = input_audio_transcription
                 has_audio_config = True
-            self._realtime_model._opts.input_audio_transcription = input_audio_transcription
+            self._opts.input_audio_transcription = input_audio_transcription
 
         if is_given(input_audio_noise_reduction):
             input_audio_noise_reduction = to_noise_reduction(input_audio_noise_reduction)
-            if (
-                self._realtime_model._opts.input_audio_noise_reduction
-                != input_audio_noise_reduction
-            ):
+            if self._opts.input_audio_noise_reduction != input_audio_noise_reduction:
                 audio_input.noise_reduction = input_audio_noise_reduction
                 has_audio_config = True
-            self._realtime_model._opts.input_audio_noise_reduction = input_audio_noise_reduction
+            self._opts.input_audio_noise_reduction = input_audio_noise_reduction
 
         if is_given(speed):
-            if self._realtime_model._opts.speed != speed:
+            if self._opts.speed != speed:
                 audio_output.speed = speed
                 has_audio_config = True
-            self._realtime_model._opts.speed = speed
+            self._opts.speed = speed
 
         if has_audio_config:
             session.audio = audio_config
@@ -1451,7 +1446,7 @@ class RealtimeSession(
             event_id=utils.shortuuid("tools_update_"),
             session=RealtimeSessionCreateRequest.model_construct(
                 type="realtime",
-                model=self._realtime_model._opts.model,
+                model=self._opts.model,
                 tools=oai_tools,  # type: ignore
             ),
         )
@@ -1541,7 +1536,15 @@ class RealtimeSession(
                 fut.set_exception(llm.RealtimeError("generate_reply timed out."))
 
         handle = asyncio.get_event_loop().call_later(10.0, _on_timeout)
-        fut.add_done_callback(lambda _: handle.cancel())
+
+        def _on_fut_done(f: asyncio.Future[llm.GenerationCreatedEvent]) -> None:
+            handle.cancel()
+            self._response_created_futures.pop(event_id, None)
+            if f.cancelled():
+                # response.create was already sent; cancel the response server-side
+                self.send_event(ResponseCancelEvent(type="response.cancel"))
+
+        fut.add_done_callback(_on_fut_done)
         return fut
 
     @property
@@ -1604,7 +1607,7 @@ class RealtimeSession(
             generation.text_ch.close()
             generation.audio_ch.close()
             if not generation.modalities.done():
-                generation.modalities.set_result(self._realtime_model._opts.modalities)
+                generation.modalities.set_result(self._opts.modalities)
 
         self._current_generation.function_ch.close()
         self._current_generation.message_ch.close()
@@ -1645,9 +1648,7 @@ class RealtimeSession(
     def _handle_input_audio_buffer_speech_stopped(
         self, _: InputAudioBufferSpeechStoppedEvent
     ) -> None:
-        user_transcription_enabled = (
-            self._realtime_model._opts.input_audio_transcription is not None
-        )
+        user_transcription_enabled = self._opts.input_audio_transcription is not None
         self.emit(
             "input_speech_stopped",
             llm.InputSpeechStoppedEvent(user_transcription_enabled=user_transcription_enabled),
@@ -1749,6 +1750,8 @@ class RealtimeSession(
     def _handle_conversion_item_deleted(self, event: ConversationItemDeletedEvent) -> None:
         assert event.item_id is not None, "item_id is None"
 
+        self._input_transcript_accumulators.pop(event.item_id, None)
+
         try:
             self._remote_chat_ctx.delete(event.item_id)
         except ValueError as e:
@@ -1762,9 +1765,38 @@ class RealtimeSession(
             else:
                 fut.set_result(None)
 
+    def _handle_conversion_item_input_audio_transcription_delta(
+        self, event: ConversationItemInputAudioTranscriptionDeltaEvent
+    ) -> None:
+        if not event.delta:
+            return
+
+        content_index = event.content_index or 0
+        by_index = self._input_transcript_accumulators.setdefault(event.item_id, {})
+        accumulated = by_index.get(content_index, "") + event.delta
+        by_index[content_index] = accumulated
+
+        self.emit(
+            "input_audio_transcription_completed",
+            llm.InputTranscriptionCompleted(
+                item_id=event.item_id, transcript=accumulated, is_final=False
+            ),
+        )
+
+    def _clear_transcript_accumulator(self, item_id: str, content_index: int) -> str | None:
+        by_index = self._input_transcript_accumulators.get(item_id)
+        if by_index is None:
+            return None
+        partial = by_index.pop(content_index, None)
+        if not by_index:
+            self._input_transcript_accumulators.pop(item_id, None)
+        return partial
+
     def _handle_conversion_item_input_audio_transcription_completed(
         self, event: ConversationItemInputAudioTranscriptionCompletedEvent
     ) -> None:
+        self._clear_transcript_accumulator(event.item_id, event.content_index or 0)
+
         confidence = calculate_confidence_from_logprobs(event.logprobs)
 
         if remote_item := self._remote_chat_ctx.get(event.item_id):
@@ -1788,6 +1820,17 @@ class RealtimeSession(
         logger.error(
             f"{self._realtime_model._provider_label} failed to transcribe input audio",
             extra={"error": event.error},
+        )
+
+        # close any open partial stream so consumers waiting for is_final don't hang
+        partial = self._clear_transcript_accumulator(event.item_id, event.content_index or 0)
+        if partial is None:
+            return
+        self.emit(
+            "input_audio_transcription_completed",
+            llm.InputTranscriptionCompleted(
+                item_id=event.item_id, transcript=partial, is_final=True
+            ),
         )
 
     def _handle_response_text_delta(self, event: ResponseTextDeltaEvent) -> None:
@@ -1857,7 +1900,7 @@ class RealtimeSession(
             item_generation.audio_ch.close()
             if not item_generation.modalities.done():
                 # in case message modalities is not set, this shouldn't happen
-                item_generation.modalities.set_result(self._realtime_model._opts.modalities)
+                item_generation.modalities.set_result(self._opts.modalities)
 
     def _handle_function_call(self, item: RealtimeConversationItemFunctionCall) -> None:
         assert self._current_generation is not None, "current_generation is None"
@@ -1892,7 +1935,7 @@ class RealtimeSession(
             if not generation.audio_ch.closed:
                 generation.audio_ch.close()
             if not generation.modalities.done():
-                generation.modalities.set_result(self._realtime_model._opts.modalities)
+                generation.modalities.set_result(self._opts.modalities)
 
         self._current_generation.function_ch.close()
         self._current_generation.message_ch.close()
@@ -1983,13 +2026,20 @@ class RealtimeSession(
                 recoverable=True,
             )
         elif event.response.status in {"cancelled", "incomplete"}:
+            status_details = event.response.status_details
+            status_type = status_details.type if status_details else None
+            status_reason = status_details.reason if status_details else None
             logger.debug(
-                "%s response done but not complete with status: %s",
+                "%s response done but not complete with status: %s (type=%s, reason=%s)",
                 provider_label,
                 event.response.status,
+                status_type,
+                status_reason,
                 extra={
                     "event_id": event.response.id,
                     "event_response_status": event.response.status,
+                    "event_response_status_type": status_type,
+                    "event_response_status_reason": status_reason,
                 },
             )
         else:
@@ -2004,6 +2054,14 @@ class RealtimeSession(
             f"{provider_label} returned an error: {event.error}",
             extra={"error": event.error},
         )
+
+        if (event_id := event.error.event_id) and (
+            fut := self._response_created_futures.pop(event_id, None)
+        ):
+            # set exception for the response future if it exists
+            if not fut.done():
+                fut.set_exception(llm.RealtimeError(event.error.message))
+
         self._emit_error(
             APIError(
                 message=f"{provider_label} returned an error",
@@ -2012,8 +2070,6 @@ class RealtimeSession(
             ),
             recoverable=True,
         )
-
-        # TODO: set exception for the response future if it exists
 
     def _emit_error(self, error: Exception, recoverable: bool) -> None:
         self.emit(

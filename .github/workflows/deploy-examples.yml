@@ -1,0 +1,207 @@
+name: Deploy Examples
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch or ref to deploy from (default: main)"
+        type: string
+        required: false
+        default: "main"
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy ${{ matrix.example }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        example: [healthcare, survey, frontdesk, drive-thru, inference, avatar]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ inputs.ref || 'main' }}
+
+      - name: Install LiveKit CLI
+        run: |
+          curl -sSL https://get.livekit.io/cli | bash
+          lk --version
+
+      - name: Add LiveKit Cloud project
+        env:
+          LIVEKIT_URL: ${{ secrets.LIVEKIT_EXAMPLES_URL }}
+          LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_EXAMPLES_API_KEY }}
+          LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_EXAMPLES_API_SECRET }}
+        run: |
+          lk project add examples \
+            --url "$LIVEKIT_URL" \
+            --api-key "$LIVEKIT_API_KEY" \
+            --api-secret "$LIVEKIT_API_SECRET" \
+            --default
+
+      - name: Regenerate livekit.toml from playground.yaml
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 <<'PY'
+          import yaml
+          from pathlib import Path
+          data = yaml.safe_load(Path("examples/playground.yaml").read_text())
+          subdomain = data["project"]["subdomain"]
+          slug = "${{ matrix.example }}"
+          entry = data["examples"][slug]
+          toml = (
+              "[project]\n"
+              f'  subdomain = "{subdomain}"\n'
+              "\n"
+              "[agent]\n"
+              f'  id = "{entry["agent_id"]}"\n'
+          )
+          Path(f"examples/{slug}/livekit.toml").write_text(toml)
+          print(f"wrote examples/{slug}/livekit.toml")
+          PY
+
+      - name: Build secrets file
+        working-directory: examples/${{ matrix.example }}
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          LEMONSLICE_API_KEY: ${{ secrets.LEMONSLICE_API_KEY }}
+        run: |
+          : > .env.deploy
+          # Register the agent under a deterministic name so the playground
+          # can dispatch to it explicitly. Matches the slug in playground.yaml.
+          echo "LIVEKIT_AGENT_NAME=${{ matrix.example }}" >> .env.deploy
+          case "${{ matrix.example }}" in
+            healthcare)
+              keys="OPENAI_API_KEY"
+              ;;
+            avatar)
+              keys="LEMONSLICE_API_KEY"
+              ;;
+            *)
+              keys=""
+              ;;
+          esac
+          for k in $keys; do
+            val="${!k}"
+            if [ -n "$val" ]; then
+              echo "${k}=${val}" >> .env.deploy
+            fi
+          done
+
+      - name: Deploy ${{ matrix.example }}
+        working-directory: examples/${{ matrix.example }}
+        run: |
+          args=()
+          if [ -s .env.deploy ]; then
+            args+=(--secrets-file .env.deploy)
+          fi
+          lk agent deploy "${args[@]}" .
+
+  publish-manifest:
+    name: Publish examples manifest to agents-jukebox
+    runs-on: ubuntu-latest
+    needs: deploy
+    if: ${{ always() && !cancelled() }}
+    steps:
+      - name: Checkout agents
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ inputs.ref || 'main' }}
+          path: agents
+
+      - name: Setup Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.12"
+
+      - run: python -m pip install --quiet pyyaml
+
+      - name: Build manifest
+        run: |
+          python <<'PY' > examples-manifest.json
+          # The playground links out to GitHub for source / README; we only
+          # need the yaml metadata in the manifest now.
+          #
+          # ensure_ascii=True keeps any non-ASCII codepoint (e.g. the
+          # FontAwesome private-use glyphs `` in view titles) as
+          # literal `\uXXXX` escapes in the JSON. Without it they get
+          # written as raw UTF-8 bytes that look like invisible blanks
+          # in any editor without the FA font, making the manifest
+          # diffs unreadable.
+          import json, yaml
+          from pathlib import Path
+          root = Path("agents/examples")
+          m = yaml.safe_load((root / "playground.yaml").read_text())
+          print(json.dumps(m, indent=2, ensure_ascii=True))
+          PY
+
+      - name: Checkout agents-jukebox
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          repository: livekit/agents-jukebox
+          token: ${{ secrets.JUKEBOX_BOT_TOKEN }}
+          path: jukebox
+
+      - name: Open / refresh manifest PR
+        working-directory: jukebox
+        env:
+          GH_TOKEN: ${{ secrets.JUKEBOX_BOT_TOKEN }}
+        run: |
+          mkdir -p next/public
+          cp ../examples-manifest.json next/public/examples-manifest.json
+          git config user.name "livekit-examples-bot"
+          git config user.email "examples-bot@livekit.io"
+          git add next/public/examples-manifest.json
+          if git diff --cached --quiet; then
+            echo "Manifest unchanged, nothing to commit."
+            exit 0
+          fi
+          branch="bot/refresh-examples-manifest"
+          # `main` is protected — push to a bot branch and open a PR.
+          git checkout -B "$branch"
+          git commit -m "chore: refresh examples manifest"
+          # Plain `--force`: the bot branch is fully bot-managed and
+          # rewritten on every deploy. `--force-with-lease` aborts with
+          # "stale info" here because actions/checkout does a shallow
+          # clone of `main` only, so there's no remote-tracking ref for
+          # the bot branch for the lease check to compare against.
+          git push --force origin "$branch"
+
+          # Open the PR if one doesn't already exist for this head; `gh pr view`
+          # finds open *or* closed PRs, so filter by state.
+          existing=$(gh pr list \
+            --repo livekit/agents-jukebox \
+            --head "$branch" \
+            --state open \
+            --json number \
+            --jq '.[0].number // empty')
+          if [ -z "$existing" ]; then
+            gh pr create \
+              --repo livekit/agents-jukebox \
+              --base main \
+              --head "$branch" \
+              --title "chore: refresh examples manifest" \
+              --body "Auto-generated by the livekit/agents Deploy Examples workflow. Replays the latest \`examples/playground.yaml\` into \`next/public/examples-manifest.json\`."
+          else
+            echo "Re-using open PR #$existing on $branch."
+          fi
+
+          # Auto-merge once the branch protection's required checks (if any)
+          # pass. Best-effort: if the repo doesn't allow auto-merge, or a
+          # required review is missing, we keep the PR open for manual
+          # merge rather than failing the deploy.
+          if ! gh pr merge \
+                --repo livekit/agents-jukebox \
+                --auto \
+                --squash \
+                "$branch"; then
+            echo "::warning::Auto-merge could not be enabled on $branch — merge the PR manually."
+          fi

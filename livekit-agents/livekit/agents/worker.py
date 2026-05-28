@@ -39,7 +39,7 @@ from livekit import api, rtc
 from livekit.protocol import agent, models
 
 from . import ipc, telemetry, utils
-from ._exceptions import AssignmentTimeoutError
+from ._exceptions import APIStatusError, AssignmentTimeoutError
 from .inference_runner import _InferenceRunner
 from .job import (
     JobAcceptArguments,
@@ -215,7 +215,9 @@ class ServerOptions:
     permissions: WorkerPermissions = field(default_factory=WorkerPermissions)
     """Permissions that the agent should join the room with."""
     agent_name: str = ""
-    """Set agent_name to enable explicit dispatch. When explicit dispatch is enabled, jobs will not be dispatched to rooms automatically. Instead, you can either specify the agent(s) to be dispatched in the end-user's token, or use the AgentDispatch.createDispatch API"""  # noqa: E501
+    """Set agent_name to enable explicit dispatch. When explicit dispatch is enabled, jobs will not be dispatched to rooms automatically. Instead, you can either specify the agent(s) to be dispatched in the end-user's token, or use the AgentDispatch.createDispatch API.
+
+    By default it uses ``LIVEKIT_AGENT_NAME`` from environment"""  # noqa: E501
     worker_type: WorkerType = WorkerType.ROOM
     """Whether to spin up an agent for each room or publisher."""
     max_retry: int = 16
@@ -356,6 +358,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._http_proxy = http_proxy
         self._log_level = _validate_and_normalize_log_level(log_level)
         self._agent_name = ""
+        self._agent_name_is_env = False
         self._server_type = ServerType.ROOM
         self._id = "unregistered"
 
@@ -494,7 +497,15 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._entrypoint_fnc = f
             self._request_fnc = on_request
             self._session_end_fnc = on_session_end
-            self._agent_name = agent_name
+            if agent_name:
+                self._agent_name = agent_name
+                self._agent_name_is_env = False
+            elif os.environ.get("LIVEKIT_AGENT_NAME"):
+                self._agent_name = os.environ["LIVEKIT_AGENT_NAME"]
+                self._agent_name_is_env = True
+            else:
+                self._agent_name = ""
+                self._agent_name_is_env = False
             self._server_type = type
             return f
 
@@ -630,6 +641,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 body = json.dumps(
                     {
                         "agent_name": self._agent_name,
+                        "agent_name_is_env": self._agent_name_is_env,
                         "worker_type": agent.JobType.Name(self._server_type.value),
                         "worker_load": self._worker_load,
                         "active_jobs": len(self.active_jobs),
@@ -1085,7 +1097,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 retry_count += 1
 
                 logger.warning(
-                    f"failed to connect to livekit, retrying in {retry_delay}s", exc_info=e
+                    f"failed to connect to livekit, retrying in {retry_delay}s",
+                    extra={"retry_count": retry_count, "max_retry": self._max_retry, "error": e},
                 )
                 await asyncio.sleep(retry_delay)
             finally:
@@ -1124,10 +1137,24 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     if closing_ws:
                         return
 
-                    raise Exception("worker connection closed unexpectedly")
+                    raise APIStatusError(
+                        message="worker connection closed unexpectedly",
+                        status_code=ws.close_code or -1,
+                        body=f"{msg.data=} {msg.extra=}",
+                    )
 
                 if msg.type != aiohttp.WSMsgType.BINARY:
-                    logger.warning("unexpected message type: %s", msg.type)
+                    ws_data = str(msg.data)
+                    if len(ws_data) > 128:
+                        ws_data = ws_data[:128] + f"...(+{len(ws_data) - 128} more)"
+                    logger.warning(
+                        "unexpected message type: %s",
+                        msg.type,
+                        extra={
+                            "type": msg.type.name,
+                            "ws_data": ws_data,
+                        },
+                    )
                     continue
 
                 data = msg.data

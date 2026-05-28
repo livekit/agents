@@ -739,6 +739,7 @@ class AudioEmitter:
         self._started = False
         self._num_segments = 0
         self._audio_durations: list[float] = []  # track durations per segment
+        self._provider_request_ids: list[str] = []  # deduped provider-known segment ids
 
     def pushed_duration(self, idx: int = -1) -> float:
         return (
@@ -803,7 +804,26 @@ class AudioEmitter:
                 "with stream=True"
             )
 
+        self._note_provider_request_id(segment_id)
         return self.__start_segment(segment_id=segment_id)
+
+    def _note_provider_request_id(self, context_id: str) -> None:
+        """Record a provider-known id for this stream on the current span.
+
+        Exposed on the `tts_request_run` span as `lk.provider_request_ids` so users
+        can correlate traces with the provider's server-side logs for debugging.
+        `start_segment()` calls this automatically; plugins can also call it when
+        the provider-known id becomes available later (e.g. from a response
+        message's `request_id`/`session_id` field after start_segment).
+        """
+        if not context_id or context_id in self._provider_request_ids:
+            return
+        self._provider_request_ids.append(context_id)
+        current_span = trace.get_current_span()
+        if current_span.is_recording():
+            current_span.set_attribute(
+                trace_types.ATTR_PROVIDER_REQUEST_IDS, self._provider_request_ids
+            )
 
     def __start_segment(self, *, segment_id: str) -> None:
         if not self._started:
@@ -1172,11 +1192,17 @@ class AudioEmitter:
                         audio_decoder.push(data)
                     elif decode_atask:
                         if isinstance(data, AudioEmitter._FlushSegment):
-                            if audio_decoder:
-                                audio_decoder.end_input()
-                                await decode_atask
-                                _flush_frame()
-                                audio_decoder = None
+                            # don't tear the decoder down here. flush_if_delayed
+                            # can fire mid-stream while a stateful codec
+                            # (WAV/OGG/MP3) is in the middle of a file; ending
+                            # input would discard the parser, and the next
+                            # bytes — a pure PCM/Opus packet continuation
+                            # without a fresh container header — would fail to
+                            # parse against a freshly-created decoder. The only
+                            # purpose of FlushSegment here is to release the
+                            # held-back tail so a slow upstream doesn't starve
+                            # the consumer.
+                            _flush_frame()
 
                         elif isinstance(data, AudioEmitter._EndSegment) and segment_ctx:
                             if audio_decoder:

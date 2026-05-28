@@ -87,6 +87,7 @@ from .voice import (
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
+    UserTurnExceededEvent,
     avatar,
     io,
     room_io,
@@ -95,7 +96,7 @@ from .voice import (
 from .voice.amd import (
     AMD,
     AMDCategory,
-    AMDResult,
+    AMDPredictionEvent,
 )
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
 from .voice.room_io import RoomInputOptions, RoomIO, RoomOutputOptions
@@ -116,6 +117,7 @@ from .voice.turn import (
     InterruptionOptions,
     PreemptiveGenerationOptions,
     TurnHandlingOptions,
+    UserTurnLimitOptions,
 )
 from .worker import (
     AgentServer,
@@ -232,11 +234,13 @@ __all__ = [
     "AgentHandoffEvent",
     "AMD",
     "AMDCategory",
-    "AMDResult",
+    "AMDPredictionEvent",
     "TurnHandlingOptions",
     "EndpointingOptions",
     "InterruptionOptions",
     "PreemptiveGenerationOptions",
+    "UserTurnLimitOptions",
+    "UserTurnExceededEvent",
 ]
 
 # Cleanup docs of unexported modules

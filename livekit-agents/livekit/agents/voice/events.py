@@ -4,7 +4,7 @@ import time
 from enum import Enum, unique
 from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_serializer, model_validator
 from typing_extensions import Self
 
 from ..inference.interruption import (
@@ -174,6 +174,16 @@ class ConversationItemAddedEvent(BaseModel):
 
 
 class FunctionToolsExecutedEvent(BaseModel):
+    """Emitted after a batch of function tools finishes executing.
+
+    ``function_calls`` and ``function_call_outputs`` are parallel lists: the
+    output at a given index belongs to the call at the same index. When an
+    output is present, its ``call_id`` matches the paired function call's
+    ``call_id``. A ``None`` output means the function call did not produce a
+    value that should be sent back to the LLM, such as when a tool raises
+    ``StopResponse`` or returns an invalid output.
+    """
+
     type: Literal["function_tools_executed"] = "function_tools_executed"
     function_calls: list[FunctionCall]
     function_call_outputs: list[FunctionCallOutput | None]
@@ -182,6 +192,7 @@ class FunctionToolsExecutedEvent(BaseModel):
     _handoff_required: bool = PrivateAttr(default=False)
 
     def zipped(self) -> list[tuple[FunctionCall, FunctionCallOutput | None]]:
+        """Return calls paired with outputs by list position."""
         return list(zip(self.function_calls, self.function_call_outputs, strict=False))
 
     def cancel_tool_reply(self) -> None:
@@ -219,12 +230,40 @@ class SpeechCreatedEvent(BaseModel):
     created_at: float = Field(default_factory=time.time)
 
 
+class UserTurnExceededEvent(BaseModel):
+    type: Literal["user_turn_exceeded"] = "user_turn_exceeded"
+    transcript: str
+    """Transcript from the current (uncommitted) user turn only.
+    Previous turns in the accumulation window are already in the chat context."""
+    accumulated_transcript: str
+    """Full transcript since the start of user speaking."""
+    accumulated_word_count: int
+    """Total word count since the start of user speaking."""
+    duration: float
+    """Duration of the user turn in seconds."""
+    created_at: float = Field(default_factory=time.time)
+
+
 class ErrorEvent(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     type: Literal["error"] = "error"
     error: LLMError | STTError | TTSError | RealtimeModelError | InterruptionDetectionError | Any
     source: LLM | STT | TTS | RealtimeModel | AdaptiveInterruptionDetector | Any
     created_at: float = Field(default_factory=time.time)
+
+    @field_serializer("source")
+    def _serialize_source(self, source: Any) -> Any:
+        if isinstance(source, (LLM, STT, TTS, RealtimeModel, AdaptiveInterruptionDetector)):
+            return {"model": source.model, "provider": source.provider}
+        if isinstance(source, BaseModel):
+            return source.model_dump()
+        return repr(source)
+
+    @field_serializer("error")
+    def _serialize_error(self, error: Any) -> Any:
+        if isinstance(error, BaseModel):
+            return error.model_dump()
+        return repr(error)
 
 
 @unique

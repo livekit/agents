@@ -1,26 +1,31 @@
-import argparse
 import logging
-import sys
+import os
 from dataclasses import asdict, dataclass
-from functools import partial
 
 import httpx
 from dotenv import load_dotenv
 
 from livekit import api, rtc
-from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli
+from livekit.agents import (
+    Agent,
+    AgentServer,
+    AgentSession,
+    ConversationItemAddedEvent,
+    JobContext,
+    cli,
+    inference,
+)
 from livekit.agents.voice.avatar import DataStreamAudioOutput
-from livekit.agents.voice.io import PlaybackFinishedEvent
+from livekit.agents.voice.io import PlaybackFinishedEvent, PlaybackStartedEvent
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
-from livekit.plugins import openai
+from livekit.plugins import silero
 
 load_dotenv()
 
 logger = logging.getLogger("avatar-example")
-logger.setLevel(logging.INFO)
 
-server = AgentServer()
 AVATAR_IDENTITY = "avatar_worker"
+AVATAR_DISPATCHER_URL = os.getenv("AVATAR_DISPATCHER_URL", "http://localhost:8089/launch")
 
 
 @dataclass
@@ -58,31 +63,34 @@ async def launch_avatar(ctx: JobContext, avatar_dispatcher_url: str, avatar_iden
     logger.info("Avatar handshake completed")
 
 
-async def entrypoint(ctx: JobContext, avatar_dispatcher_url: str):
+server = AgentServer()
+
+
+@server.rtc_session()
+async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
     agent = Agent(instructions="Talk to me!")
     session = AgentSession(
-        llm=openai.realtime.RealtimeModel(),
-        # stt=deepgram.STT(),
-        # llm=openai.LLM(model="gpt-4.1-mini"),
-        # tts=cartesia.TTS(),
+        stt=inference.STT("deepgram/nova-3"),
+        llm=inference.LLM("google/gemini-2.5-flash"),
+        tts=inference.TTS("cartesia/sonic-3"),
+        vad=silero.VAD.load(),
         resume_false_interruption=False,
     )
 
-    await launch_avatar(ctx, avatar_dispatcher_url, AVATAR_IDENTITY)
+    await launch_avatar(ctx, AVATAR_DISPATCHER_URL, AVATAR_IDENTITY)
     session.output.audio = DataStreamAudioOutput(
         ctx.room,
         destination_identity=AVATAR_IDENTITY,
         # (optional) wait for the avatar to publish video track before generating a reply
         wait_remote_track=rtc.TrackKind.KIND_VIDEO,
+        # the example avatar_runner uses AvatarRunner which sends lk.playback_started
+        wait_playback_start=True,
     )
 
     # start agent with room input and room text output
-    await session.start(
-        agent=agent,
-        room=ctx.room,
-    )
+    await session.start(agent=agent, room=ctx.room)
 
     @session.output.audio.on("playback_finished")
     def on_playback_finished(ev: PlaybackFinishedEvent) -> None:
@@ -95,12 +103,24 @@ async def entrypoint(ctx: JobContext, avatar_dispatcher_url: str):
             },
         )
 
+    @session.output.audio.on("playback_started")
+    def on_playback_started(ev: PlaybackStartedEvent) -> None:
+        # the avatar should notify when the audio playback is started
+        logger.info(
+            "playback_started",
+            extra={"created_at": ev.created_at},
+        )
+
+    @session.on("conversation_item_added")
+    def on_conversation_item_added(ev: ConversationItemAddedEvent) -> None:
+        if ev.item.type == "message" and ev.item.role == "assistant":
+            logger.info(
+                "agent response metrics",
+                extra={"metrics": ev.item.metrics},
+            )
+
+    await session.generate_reply(instructions="say hello to the user")
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--avatar-url", type=str, default="http://localhost:8089/launch")
-    args, remaining_args = parser.parse_known_args()
-    sys.argv = sys.argv[:1] + remaining_args
-
-    server.rtc_session(partial(entrypoint, avatar_dispatcher_url=args.avatar_url))
     cli.run_app(server)

@@ -110,12 +110,16 @@ unit-tests:
 		tests/test_room.py \
 		tests/test_room_io.py \
 		tests/test_audio_recognition_handoff.py \
+		tests/test_audio_recognition_push_audio.py \
 		tests/test_utils/test_audio_array_buffer.py \
 		tests/test_utils/test_bounded_dict.py \
 		tests/test_interruption/test_overlapping_speech_event.py \
 		tests/test_tool_search.py \
 		tests/test_tool_proxy.py \
-		tests/test_session_host.py
+		tests/test_endpointing.py \
+		tests/test_amd_classifier.py \
+		tests/test_session_host.py \
+		tests/test_http_context_helper.py
 
 # ============================================
 # Development Workflows

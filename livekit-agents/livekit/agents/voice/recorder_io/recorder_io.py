@@ -17,6 +17,7 @@ import numpy as np
 from livekit import rtc
 
 from ...log import logger
+from ...utils.audio import silence_frame as _create_silence_frame
 from .. import io
 
 if TYPE_CHECKING:
@@ -26,6 +27,7 @@ if TYPE_CHECKING:
 
 
 WRITE_INTERVAL = 2.5
+FFMPEG_STRICT_LEVEL = "experimental"
 
 
 class RecorderIO:
@@ -146,9 +148,24 @@ class RecorderIO:
         self._output_path.parent.mkdir(parents=True, exist_ok=True)
 
         container = av.open(self._output_path, mode="w", format="ogg")
-        stream: av.AudioStream = container.add_stream(
-            "opus", rate=self._sample_rate, layout="stereo"
-        )  # type: ignore
+
+        # prefer libopus; fallback to native opus only if necessary
+        try:
+            av.Codec("libopus", "w")
+            codec_name = "libopus"
+        except av.codec.codec.UnknownCodecError:
+            logger.trace("libopus codec is not available, using opus")
+            codec_name = "opus"
+
+        stream: av.AudioStream = container.add_stream(  # type: ignore
+            codec_name,
+            rate=self._sample_rate,
+            layout="stereo",
+        )
+
+        # native ffmpeg opus encoder is experimental
+        if codec_name == "opus":
+            stream.codec_context.options["strict"] = FFMPEG_STRICT_LEVEL
 
         in_resampler: rtc.AudioResampler | None = None
         out_resampler: rtc.AudioResampler | None = None
@@ -515,16 +532,6 @@ class RecorderAudioOutput(io.AudioOutput):
     def clear_buffer(self) -> None:
         if self.next_in_chain:
             self.next_in_chain.clear_buffer()
-
-
-def _create_silence_frame(duration: float, sample_rate: int, num_channels: int) -> rtc.AudioFrame:
-    samples = int(duration * sample_rate)
-    return rtc.AudioFrame(
-        data=b"\x00\x00" * samples * num_channels,
-        num_channels=num_channels,
-        samples_per_channel=samples,
-        sample_rate=sample_rate,
-    )
 
 
 def _split_frame(frame: rtc.AudioFrame, position: float) -> tuple[rtc.AudioFrame, rtc.AudioFrame]:

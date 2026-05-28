@@ -11,8 +11,9 @@ import tiktoken
 from livekit import rtc
 from livekit.agents import utils
 
-TEST_AUDIO_FILEPATH = os.path.join(os.path.dirname(__file__), "long.mp3")
-TEST_AUDIO_TRANSCRIPT = pathlib.Path(os.path.dirname(__file__), "long_transcript.txt").read_text()
+_TESTS_DIR = os.path.dirname(os.path.dirname(__file__))
+TEST_AUDIO_FILEPATH = os.path.join(_TESTS_DIR, "long.mp3")
+TEST_AUDIO_TRANSCRIPT = pathlib.Path(_TESTS_DIR, "long_transcript.txt").read_text()
 
 
 def wer(hypothesis: str, reference: str) -> float:
