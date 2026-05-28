@@ -424,6 +424,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             num_idle_processes=options.num_idle_processes,
             shutdown_process_timeout=options.shutdown_process_timeout,
             session_end_timeout=options.session_end_timeout,
+            session_close_timeout=options.session_close_timeout,
             initialize_process_timeout=options.initialize_process_timeout,
             permissions=options.permissions,
             max_retry=options.max_retry,
