@@ -827,7 +827,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         num_idle_processes: NotGivenOr[int] = NOT_GIVEN,
         shutdown_process_timeout: float = 10.0,
         session_end_timeout: float = 300.0,
-        session_close_timeout: float = 60.0,
+        session_close_timeout: NotGivenOr[float] = NOT_GIVEN,
         initialize_process_timeout: float = 10.0,
     ) -> None:
         if not self._closed:
