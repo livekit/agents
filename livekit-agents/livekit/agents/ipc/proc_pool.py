@@ -62,7 +62,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         self._target_idle_processes = num_idle_processes
 
         self._init_sem = asyncio.Semaphore(MAX_CONCURRENT_INITIALIZATIONS)
-        self._warmed_proc_queue = asyncio.Queue[JobExecutor]()
+        self._warmed_proc_queue = asyncio.Queue[JobExecutor | None]()
         self._executors: list[JobExecutor] = []
         self._spawn_tasks: set[asyncio.Task[None]] = set()
         self._close_tasks: set[asyncio.Task[None]] = set()
@@ -82,6 +82,11 @@ class ProcPool(utils.EventEmitter[EventTypes]):
             (x for x in self._executors if x.running_job and x.running_job.job.id == job_id),
             None,
         )
+
+    def _discard_finished_spawn_tasks(self) -> None:
+        for task in tuple(self._spawn_tasks):
+            if task.done():
+                self._spawn_tasks.discard(task)
 
     async def start(self) -> None:
         if self._started:
@@ -114,6 +119,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         for attempt in range(MAX_ATTEMPTS):
             self._jobs_waiting_for_process += 1
             try:
+                self._discard_finished_spawn_tasks()
                 if (
                     self._warmed_proc_queue.empty()
                     and len(self._spawn_tasks) < self._jobs_waiting_for_process
@@ -130,6 +136,22 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                     )
 
                 proc = await self._warmed_proc_queue.get()
+                if proc is None:
+                    if attempt == MAX_ATTEMPTS - 1:
+                        logger.error(
+                            "failed to acquire process for job after %d attempts",
+                            MAX_ATTEMPTS,
+                            extra={"job_id": info.job.id},
+                        )
+                        raise RuntimeError(
+                            f"no process became available after {MAX_ATTEMPTS} attempts"
+                        )
+
+                    logger.warning(
+                        "process failed to initialize, retrying with a new process",
+                        extra={"job_id": info.job.id, "attempt": attempt + 1},
+                    )
+                    continue
             finally:
                 self._jobs_waiting_for_process -= 1
 
@@ -222,6 +244,8 @@ class ProcPool(utils.EventEmitter[EventTypes]):
             self._executors.remove(proc)
             await proc.aclose()
             self.emit("process_closed", proc)
+            if self._jobs_waiting_for_process > 0:
+                self._warmed_proc_queue.put_nowait(None)
             return
 
         monitor_task = asyncio.create_task(self._monitor_process_task(proc))
@@ -240,6 +264,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
     async def _main_task(self) -> None:
         try:
             while not self._closed:
+                self._discard_finished_spawn_tasks()
                 current_pending = self._warmed_proc_queue.qsize() + len(self._spawn_tasks)
                 target = max(
                     min(self._target_idle_processes, self._default_num_idle_processes),
