@@ -1,12 +1,16 @@
+from abc import abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from livekit.agents import DictProviderTool
+from livekit.agents import ProviderTool
 from openai.types import responses
 
 
-class OpenAITool(DictProviderTool):
+class OpenAITool(ProviderTool):
     """Base class for OpenAI server-side provider tools."""
+
+    @abstractmethod
+    def to_dict(self) -> dict[str, Any]: ...
 
 
 @dataclass

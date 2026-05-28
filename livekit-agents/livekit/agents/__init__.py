@@ -50,7 +50,6 @@ from .llm.chat_context import (
     FunctionCallOutput,
 )
 from .llm.tool_context import (
-    DictProviderTool,
     FunctionTool,
     ProviderTool,
     StopResponse,
@@ -155,7 +154,6 @@ __all__ = [
     "FunctionTool",
     "function_tool",
     "ProviderTool",
-    "DictProviderTool",
     "ChatContext",
     "ChatItem",
     "room_io",

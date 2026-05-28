@@ -42,7 +42,6 @@ from openai.types.shared_params import ResponsesModel
 
 from ..log import logger
 from ..models import _supports_reasoning_effort
-from ..tools import OpenAITool
 
 ServiceTier = Literal["auto", "default", "flex", "scale", "priority"]
 Verbosity = Literal["low", "medium", "high"]
@@ -152,10 +151,6 @@ class _LLMOptions:
 
 
 class LLM(llm.LLM):
-    # the plugin's ProviderTool subclass; subclasses (e.g. xAI) override this so server-side
-    # provider tools are recognized when serializing the request. See to_responses_fnc_ctx.
-    _provider_tool_type: type[llm.DictProviderTool] = OpenAITool
-
     def __init__(
         self,
         *,
@@ -413,7 +408,6 @@ class LLMStream(llm.LLMStream):
             self._tool_ctx.parse_function_tools(
                 "openai.responses",
                 strict=self._strict_tool_schema,
-                provider_tool_type=self._llm._provider_tool_type,
             ),
         )
 

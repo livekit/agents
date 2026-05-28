@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+from abc import abstractmethod
 from dataclasses import dataclass
 from typing import Any
 
-from livekit.agents import DictProviderTool
+from livekit.agents import ProviderTool
 
 
-class AnthropicTool(DictProviderTool):
+class AnthropicTool(ProviderTool):
     """Base class for Anthropic server-side provider tools."""
+
+    @abstractmethod
+    def to_dict(self) -> dict[str, Any]: ...
 
     @property
     def beta_flag(self) -> str | None:
