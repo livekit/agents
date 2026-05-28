@@ -16,6 +16,7 @@ from livekit import rtc
 
 from .. import inference, llm, stt, tokenize, utils, vad
 from .._exceptions import APIError
+from ..inference.eot.base import MIN_SILENCE_DURATION_MS
 from ..inference.interruption import (
     _AgentSpeechEndedSentinel,
     _AgentSpeechStartedSentinel,
@@ -34,7 +35,6 @@ from ._utils import _set_participant_attributes
 from .endpointing import BaseEndpointing
 from .events import EotPredictionEvent, UserTurnExceededEvent
 from .turn import (
-    MIN_SILENCE_DURATION_MS,
     TurnDetectionEvent,
     TurnDetectionMode as TurnDetectionMode,
     _StreamingTurnDetector,
@@ -663,9 +663,8 @@ class AudioRecognition:
         required = (MIN_SILENCE_DURATION_MS + 50) / 1000
         if current < required:
             raise ValueError(
-                f"vad min_silence_duration={current}s is too low for the audio "
-                f"end-of-turn detector. Raise the VAD's "
-                f"min_silence_duration to at least {required}s."
+                f"vad min_silence_duration={current}s is too low for the AudioTurnDetector. "
+                f"Raise the VAD's min_silence_duration to at least {required}s."
             )
 
     def update_vad(self, vad: vad.VAD | None) -> None:
@@ -765,8 +764,7 @@ class AudioRecognition:
         The caller passes it to the new AudioRecognition via
         ``start(..., turn_detector_stream=stream)``.
         """
-        stream = self._turn_detector_stream
-        self._turn_detector_stream = None
+        stream, self._turn_detector_stream = self._turn_detector_stream, None
         return stream
 
     def clear_user_turn(self) -> None:
@@ -1144,8 +1142,6 @@ class AudioRecognition:
             self._user_speaking_event.set()
 
             if self._turn_detector_stream is not None:
-                # VAD SOS — drop the prior turn's stale inference and re-arm
-                # ``predict_end_of_turn`` for the new utterance.
                 self._turn_detector_stream.deactivate(trigger="vad sos")
 
             if self._end_of_turn_task is not None:
@@ -1165,9 +1161,6 @@ class AudioRecognition:
                     self._speech_start_time = time.time() - ev.raw_accumulated_speech
                 self._user_speaking_event.set()
             elif not self._speaking:
-                # a sub-threshold speech spike can set _user_speaking_event without ever
-                # reaching START_OF_SPEECH, so no END_OF_SPEECH will fire to clear it. Clear
-                # it here once speech drops back to zero (confirmed turns are cleared by EOS).
                 self._user_speaking_event.clear()
 
             if ev.raw_accumulated_silence >= MIN_SILENCE_DURATION_MS / 1000 and self._speaking:
@@ -1257,8 +1250,6 @@ class AudioRecognition:
                     ):
                         end_of_turn_probability = 0.0
                         # reuse prediction from the audio eot model if available.
-                        # Only streaming detectors expose a cached window prediction;
-                        # text detectors resolve inline and have nothing to reuse.
                         from_cache = (
                             isinstance(turn_detector, _StreamingTurnDetectorStream)
                             and turn_detector.last_prediction is not None
@@ -1444,9 +1435,6 @@ class AudioRecognition:
                     self._last_speaking_time = None
 
                 if self._turn_detector_stream is not None:
-                    # flush() also clears the stream's cached prediction and
-                    # commits the user turn until the next VAD SOS deactivate
-                    # call re-arms it.
                     self._turn_detector_stream.flush(reason="turn committed")
 
             self._user_turn_committed = False

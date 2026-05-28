@@ -1,10 +1,4 @@
-"""Audio EOT transports: cloud (WebSocket) + local (livekit-local-inference).
-
-The native model singleton is loaded once at module import via the
-``livekit.local_inference`` pybind11 constructor — weight pages are resident
-before this module finishes importing and inherited via COW by forked job
-processes.
-"""
+"""Audio EOT transports: cloud (WebSocket) + local (livekit-local-inference)."""
 
 from __future__ import annotations
 
@@ -79,7 +73,6 @@ class _CloudTransportOptions:
     conn_options: APIConnectOptions
 
 
-# Native model operates on up to 1.2 s of 16 kHz s16le PCM per predict.
 _CLIENT_BUFFER_SECONDS = 1.2
 _CLIENT_BUFFER_SAMPLES = int(_CLIENT_BUFFER_SECONDS * DEFAULT_SAMPLE_RATE)
 
@@ -138,9 +131,6 @@ class _CloudTransport:
         self._send_message(ClientMessage(session_flush=SessionFlush()))
 
     def detach(self) -> None:
-        # Signal close: detach send_ch + ws ref. The actual ws.close() awaits
-        # in run()'s finally clause, reached transitively via the FSM's
-        # cancel_and_wait on the main task.
         if self._send_ch is not None:
             self._send_ch.close()
         self._ws = None
@@ -306,9 +296,6 @@ class _CloudTransport:
             async for msg in send_ch:
                 if ws.closed:
                     return
-                # Preserve caller-stamped `created_at` (audio/inference_stop
-                # stamp at enqueue time so detection_delay reflects FIFO drain).
-                # Stamp only if unset (e.g. inference_start).
                 if not msg.HasField("created_at"):
                     created_at = Timestamp()
                     created_at.GetCurrentTime()

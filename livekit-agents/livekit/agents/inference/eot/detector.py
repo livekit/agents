@@ -33,9 +33,6 @@ __all__ = ["AudioTurnDetector"]
 
 
 class AudioTurnDetector(_AudioTurnDetector):
-    """Audio end-of-turn detector. Auto-selects cloud when
-    ``LIVEKIT_REMOTE_EOT_URL`` is set, local otherwise."""
-
     def __init__(
         self,
         *,
@@ -48,8 +45,6 @@ class AudioTurnDetector(_AudioTurnDetector):
         http_session: aiohttp.ClientSession | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
-        # auto = caller didn't pin a backend; missing cloud creds warn-and-fall-back
-        # instead of raising.
         auto = not is_given(backend)
         resolved_backend: _Backend = (
             backend
@@ -125,8 +120,6 @@ class AudioTurnDetector(_AudioTurnDetector):
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> _AudioTurnDetectorStream:
-        # Per-stream override for conn_options (e.g. an override at call site)
-        # is layered on top of the detector-level cloud options.
         cloud_opts = (
             replace(self._cloud_opts, conn_options=conn_options)
             if self._cloud_opts is not None

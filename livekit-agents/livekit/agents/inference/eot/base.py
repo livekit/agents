@@ -31,6 +31,11 @@ from .languages import rescale_for_local_fallback
 
 DEFAULT_SAMPLE_RATE: int = 16000
 
+MIN_SILENCE_DURATION_MS = 200
+"""Minimum VAD silence the audio EOT detector needs before it will warm up an
+inference window. Enforced against the caller-supplied VAD's
+``min_silence_duration`` in ``AudioRecognition``."""
+
 _Backend = Literal["cloud", "local"]
 _WIRE_MODEL: dict[_Backend, str] = {
     "cloud": "eot-audio",

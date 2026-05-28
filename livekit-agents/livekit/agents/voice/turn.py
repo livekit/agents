@@ -1,17 +1,3 @@
-"""Turn-handling configuration plus the structural Protocols that voice/ uses
-to talk to turn detectors.
-
-Two detector flavours:
-
-- ``_TurnDetector`` — text-based, resolves inline in ``predict_end_of_turn``.
-- ``_StreamingTurnDetector`` — owns a per-session stream object that holds an
-  in-flight inference window. The only concrete impl today is audio
-  (``AudioTurnDetector`` in :mod:`livekit.agents.inference.eot`); the
-  "streaming" naming is for the contract, not the input modality. Voice/
-  depends on this Protocol only, so the dependency direction stays
-  voice/ → typing-only, inference/ → voice/turn for the runtime contract.
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -31,11 +17,6 @@ from ..types import (
     NotGivenOr,
 )
 from ..utils import is_given
-
-MIN_SILENCE_DURATION_MS = 200
-"""VAD min-silence used by ``AudioRecognition`` when an audio EOT detector is
-active. Lives here because it is a turn-handling tuning constant rather than
-an audio-stream internal."""
 
 
 @dataclass
@@ -100,12 +81,7 @@ class _StreamingTurnDetector(Protocol):
     inline. Per-language threshold lookups (``unlikely_threshold`` /
     ``supports_language``) live on the stream, not the detector — after a
     cloud→local fallback they need to reflect the active backend's rescaled
-    view, which is per-session state.
-
-    Event subscription (``on``/``off``) is intentionally not part of this
-    Protocol — concrete impls satisfy it via ``rtc.EventEmitter``, and the
-    one subscription site in ``AgentActivity`` narrows on both this Protocol
-    and ``rtc.EventEmitter`` to assemble the contract at the call site."""
+    view, which is per-session state."""
 
     @property
     def model(self) -> str: ...

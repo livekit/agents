@@ -245,8 +245,8 @@ class AgentActivity(RecognitionHooks):
             if isinstance(turn_detection, _StreamingTurnDetector):
                 if self.vad is None:
                     logger.warning(
-                        "AudioTurnDetector requires a VAD model. Pass vad=inference.VAD() to AgentSession/Agent or turn_detection=None to disable"
-                        " the default AudioTurnDetector"
+                        "AudioTurnDetector requires a VAD model. Pass vad=inference.VAD() to AgentSession/Agent"
+                        " or turn_detection=None to disable the default AudioTurnDetector"
                     )
                     return None
 
@@ -302,8 +302,7 @@ class AgentActivity(RecognitionHooks):
                 )
                 mode = None
 
-            # fallback to VAD if server side turn detection is disabled and VAD is available
-            # (only when the user explicitly supplied a VAD, ignoring default VAD).
+            # fallback to VAD if server side turn detection is disabled and user supplied VAD is available
             if (
                 not llm_model.capabilities.turn_detection
                 and vad_model is not None
@@ -733,12 +732,7 @@ class AgentActivity(RecognitionHooks):
             self._interruption_detector.on("error", self._on_error)
             self._interruption_detector.on("overlapping_speech", self._on_overlap_speech_ended)
 
-        # Subscription requires an EventEmitter — the streaming Protocol stays
-        # focused on streaming concerns and doesn't redeclare on/off. Both
-        # narrows together identify "streaming detector that emits metrics."
-        if isinstance(self._turn_detection, _StreamingTurnDetector) and isinstance(
-            self._turn_detection, rtc.EventEmitter
-        ):
+        if isinstance(self._turn_detection, inference.AudioTurnDetector):
             self._turn_detection.on("metrics_collected", self._on_metrics_collected)
 
         if self.mcp_servers:
@@ -1029,9 +1023,7 @@ class AgentActivity(RecognitionHooks):
             self._interruption_detector.off("error", self._on_error)
             self._interruption_detector.off("overlapping_speech", self._on_overlap_speech_ended)
 
-        if isinstance(self._turn_detection, _StreamingTurnDetector) and isinstance(
-            self._turn_detection, rtc.EventEmitter
-        ):
+        if isinstance(self._turn_detection, inference.AudioTurnDetector):
             self._turn_detection.off("metrics_collected", self._on_metrics_collected)
 
         if self._rt_session is not None:
