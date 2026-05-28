@@ -26,6 +26,7 @@ class _ProcOpts:
     initialize_timeout: float
     close_timeout: float
     session_end_timeout: float
+    session_close_timeout: float
     ping_interval: float
     high_ping_threshold: float
     http_proxy: str | None
@@ -42,6 +43,7 @@ class ThreadJobExecutor:
         initialize_timeout: float,
         close_timeout: float,
         session_end_timeout: float,
+        session_close_timeout: float,
         ping_interval: float,
         high_ping_threshold: float,
         http_proxy: str | None,
@@ -55,6 +57,7 @@ class ThreadJobExecutor:
             initialize_timeout=initialize_timeout,
             close_timeout=close_timeout,
             session_end_timeout=session_end_timeout,
+            session_close_timeout=session_close_timeout,
             ping_interval=ping_interval,
             high_ping_threshold=high_ping_threshold,
             http_proxy=http_proxy,
@@ -134,6 +137,7 @@ class ThreadJobExecutor:
                     job_entrypoint_fnc=self._opts.job_entrypoint_fnc,
                     session_end_fnc=self._opts.session_end_fnc,
                     session_end_timeout=self._opts.session_end_timeout,
+                    session_close_timeout=self._opts.session_close_timeout,
                     user_arguments=self._user_args,
                     join_fnc=_on_join,
                 )

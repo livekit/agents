@@ -185,6 +185,37 @@ async def _job_entrypoint(job_ctx: JobContext) -> None:
         start_args.update_ev.notify()
 
 
+async def _job_entrypoint_session_aclose_hangs(job_ctx: JobContext) -> None:
+    """Plant a fake AgentSession whose aclose() hangs forever; the
+    session_close_timeout must fire so shutdown callbacks still run."""
+    start_args: _StartArgs = job_ctx.proc.user_arguments
+
+    async def _job_shutdown() -> None:
+        with start_args.shutdown_counter.get_lock():
+            start_args.shutdown_counter.value += 1
+
+    job_ctx.add_shutdown_callback(_job_shutdown)
+
+    class _HangingSession:
+        async def aclose(self) -> None:
+            await asyncio.Event().wait()  # never resolves
+
+    job_ctx._primary_agent_session = _HangingSession()  # type: ignore[assignment]
+
+    # _on_session_end touches session.history and make_session_report, which
+    # would crash on our minimal fake. Bypass it so the assertion is purely
+    # about the aclose-timeout → shutdown-callback path.
+    async def _noop_session_end() -> None:
+        return None
+
+    job_ctx._on_session_end = _noop_session_end  # type: ignore[method-assign]
+
+    with start_args.entrypoint_counter.get_lock():
+        start_args.entrypoint_counter.value += 1
+
+    job_ctx.shutdown("trigger hang in session.aclose()")
+
+
 async def _job_entrypoint_raises_after_shutdown(job_ctx: JobContext) -> None:
     """Reproduces the room-disconnect race: _shutdown_fut is set before the
     entrypoint task unwinds, then the entrypoint raises while _run_job_task
@@ -242,6 +273,7 @@ async def test_proc_pool():
         initialize_timeout=20.0,
         close_timeout=20.0,
         session_end_timeout=300.0,
+        session_close_timeout=60.0,
         inference_executor=None,
         memory_warn_mb=0,
         memory_limit_mb=0,
@@ -324,6 +356,7 @@ async def test_slow_initialization():
         initialize_timeout=1.0,
         close_timeout=20.0,
         session_end_timeout=300.0,
+        session_close_timeout=60.0,
         inference_executor=None,
         memory_warn_mb=0,
         memory_limit_mb=0,
@@ -375,6 +408,7 @@ def _create_proc(
     close_timeout: float,
     mp_ctx: BaseContext,
     initialize_timeout: float = 20.0,
+    session_close_timeout: float = 60.0,
     job_entrypoint_fnc: Callable[[JobContext], object] = _job_entrypoint,
 ) -> tuple[ipc.job_proc_executor.ProcJobExecutor, _StartArgs]:
     start_args = _new_start_args(mp_ctx)
@@ -386,6 +420,7 @@ def _create_proc(
         initialize_timeout=initialize_timeout,
         close_timeout=close_timeout,
         session_end_timeout=300.0,
+        session_close_timeout=session_close_timeout,
         memory_warn_mb=0,
         memory_limit_mb=0,
         ping_interval=2.5,
@@ -428,6 +463,32 @@ async def test_job_slow_shutdown():
     # process is killed when there is a job with slow timeout
     assert proc.exitcode != 0, "process should have been killed"
     assert proc.killed
+
+
+async def test_shutdown_callback_runs_when_session_aclose_hangs():
+    """Regression test: when AgentSession.aclose() blocks indefinitely during
+    job shutdown, the session_close_timeout must fire and user-registered
+    shutdown callbacks must still run."""
+    mp_ctx = mp.get_context("spawn")
+    proc, start_args = _create_proc(
+        close_timeout=20.0,
+        session_close_timeout=2.0,
+        mp_ctx=mp_ctx,
+        job_entrypoint_fnc=_job_entrypoint_session_aclose_hangs,
+    )
+    await proc.start()
+    await proc.initialize()
+
+    fake_job = _generate_fake_job()
+    await proc.launch_job(fake_job)
+    await _poll_until(lambda: start_args.entrypoint_counter.value >= 1)
+    await proc.aclose()
+
+    assert proc.exitcode == 0, "process should have exited cleanly"
+    assert not proc.killed
+    assert start_args.shutdown_counter.value == 1, (
+        "shutdown callback must run even when session.aclose() hangs"
+    )
 
 
 async def test_shutdown_callback_runs_when_entrypoint_raises():
