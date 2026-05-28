@@ -732,6 +732,7 @@ async def test_backchannel_boundary_suppresses_start_boundary_backchannel() -> N
         endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
         stt=None,
         vad=None,
+        using_default_vad=False,
         interruption_detection=None,
         turn_detection="vad",
     )
@@ -763,6 +764,7 @@ async def _make_stt_eos_recognition() -> AudioRecognition:
         endpointing=BaseEndpointing(min_delay=0.0, max_delay=0.0),
         stt=None,
         vad=None,
+        using_default_vad=False,
         interruption_detection=None,
         turn_detection="stt",
     )
@@ -819,6 +821,7 @@ async def test_backchannel_boundary_releases_end_boundary_transcript() -> None:
         endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
         stt=None,
         vad=None,
+        using_default_vad=False,
         interruption_detection=None,
         turn_detection="vad",
     )
@@ -957,6 +960,7 @@ async def test_force_flush_held_transcripts_emits_buffered_events() -> None:
         endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
         stt=None,
         vad=None,
+        using_default_vad=False,
         interruption_detection=None,
         turn_detection="manual",
     )
@@ -1404,7 +1408,7 @@ async def test_default_vad_is_auto_provisioned() -> None:
     session = AgentSession()
     try:
         assert session.vad is not None
-        assert session.vad.is_default is True
+        assert session._using_default_vad is True
     finally:
         await session.aclose()
 
@@ -1415,21 +1419,56 @@ async def test_explicit_vad_none_opts_out() -> None:
     session = AgentSession(vad=None)
     try:
         assert session.vad is None
+        assert session._using_default_vad is False
     finally:
         await session.aclose()
 
 
-async def test_user_supplied_vad_keeps_is_default_false() -> None:
+async def test_user_supplied_vad_clears_default_flag() -> None:
     from livekit.agents.voice.agent_session import AgentSession
 
     from .fake_vad import FakeVAD
 
     user_vad = FakeVAD(fake_user_speeches=[])
-    assert user_vad.is_default is False
 
     session = AgentSession(vad=user_vad)
     try:
         assert session.vad is user_vad
-        assert session.vad.is_default is False
+        assert session._using_default_vad is False
+    finally:
+        await session.aclose()
+
+
+async def test_default_turn_detection_builds_default_eot() -> None:
+    """No turn_detection given → session auto-provisions a default AudioTurnDetector."""
+    from livekit.agents.voice.agent_session import AgentSession
+    from livekit.agents.voice.turn import _AudioTurnDetector
+
+    session = AgentSession()
+    try:
+        assert isinstance(session.turn_detection, _AudioTurnDetector)
+    finally:
+        await session.aclose()
+
+
+async def test_turn_detection_none_opts_out() -> None:
+    """Explicit None opts out of turn detection (no default detector built)."""
+    from livekit.agents.voice.agent_session import AgentSession
+
+    session = AgentSession(turn_handling={"turn_detection": None})
+    try:
+        assert session.turn_detection is None
+    finally:
+        await session.aclose()
+
+
+async def test_user_supplied_turn_detector_passes_through() -> None:
+    from livekit.agents import inference
+    from livekit.agents.voice.agent_session import AgentSession
+
+    user_detector = inference.AudioTurnDetector(backend="local")
+    session = AgentSession(turn_handling={"turn_detection": user_detector})
+    try:
+        assert session.turn_detection is user_detector
     finally:
         await session.aclose()

@@ -150,6 +150,7 @@ class AudioRecognition:
         endpointing: BaseEndpointing,
         stt: io.STTNode | None,
         vad: vad.VAD | None,
+        using_default_vad: bool,
         interruption_detection: inference.AdaptiveInterruptionDetector | None,
         turn_detection: TurnDetectionMode | None,
         stt_model: str | None = None,
@@ -166,6 +167,7 @@ class AudioRecognition:
         self._turn_detector = turn_detection if not isinstance(turn_detection, str) else None
         self._stt = stt
         self._vad = vad
+        self._using_default_vad = using_default_vad
         self._stt_model = stt_model
         self._stt_provider = stt_provider
         self._turn_detection_mode = turn_detection if isinstance(turn_detection, str) else None
@@ -266,12 +268,17 @@ class AudioRecognition:
                     self._end_of_turn_task = None
                     self._user_turn_committed = False
 
-    def start(self, *, stt_pipeline: _STTPipeline | None = None) -> None:
+    def start(
+        self,
+        *,
+        stt_pipeline: _STTPipeline | None = None,
+        turn_detector_stream: _AudioTurnDetectorStream | None = None,
+    ) -> None:
         self.update_stt(self._stt, pipeline=stt_pipeline)
         self.update_vad(self._vad)
         self.update_interruption_detection(self._interruption_detection)
         if isinstance(self._turn_detector, _AudioTurnDetector) or self._turn_detector is None:
-            self.update_turn_detector(self._turn_detector)
+            self.update_turn_detector(self._turn_detector, stream=turn_detector_stream)
 
     def stop(self) -> None:
         self.update_stt(None)
@@ -286,11 +293,6 @@ class AudioRecognition:
             and self._interruption_ch is not None
             and not self._interruption_ch.closed
         )
-
-    @property
-    def _has_user_vad(self) -> bool:
-        """True if vad is user provided."""
-        return self._vad is not None and not self._vad.is_default
 
     # region: boundary for adaptive interruption detection
 
@@ -733,19 +735,42 @@ class AudioRecognition:
             self._interruption_detection is not None and self._vad is not None
         )
 
-    def update_turn_detector(self, detector: _TurnDetector | _AudioTurnDetector | None) -> None:
-        """Update the turn detector and turn detector stream if possible."""
+    def update_turn_detector(
+        self,
+        detector: _TurnDetector | _AudioTurnDetector | None,
+        *,
+        stream: _AudioTurnDetectorStream | None = None,
+    ) -> None:
+        """Update the turn detector and turn detector stream if possible.
+
+        When *stream* is provided it is adopted as-is (handoff reuse) instead of
+        opening a fresh stream on *detector*; the live transport stream — and its
+        per-session cloud->local fallback state — survives the handoff.
+        """
         self._turn_detector = detector
         self._check_vad_silence_requirement()
 
-        if (old_stream := self._turn_detector_stream) is not None:
+        if (old_stream := self._turn_detector_stream) is not None and old_stream is not stream:
             old_stream.detach()
             task = asyncio.create_task(old_stream.aclose())
             task.add_done_callback(lambda _: self._tasks.discard(task))
             self._tasks.add(task)
-        self._turn_detector_stream = (
-            detector.stream() if isinstance(detector, _AudioTurnDetector) else None
-        )
+        if stream is None:
+            stream = detector.stream() if isinstance(detector, _AudioTurnDetector) else None
+        self._turn_detector_stream = stream
+
+    def detach_turn_detector(self) -> _AudioTurnDetectorStream | None:
+        """Detach the turn detector stream for handoff to another AudioRecognition.
+
+        Returns the live stream (transport run loop intact) without closing it.
+        The caller passes it to the new AudioRecognition via
+        ``start(..., turn_detector_stream=stream)``. The stream stays attached to
+        its detector, retaining the detector's single-stream slot, so the new
+        AudioRecognition must adopt it rather than open a second stream.
+        """
+        stream = self._turn_detector_stream
+        self._turn_detector_stream = None
+        return stream
 
     def clear_user_turn(self) -> None:
         self._audio_transcript = ""
@@ -949,7 +974,8 @@ class AudioRecognition:
             self._hooks.on_final_transcript(
                 ev,
                 speaking=self._speaking
-                if self._has_user_vad or self._turn_detection_mode == "stt"
+                if (self._vad is not None and not self._using_default_vad)
+                or self._turn_detection_mode == "stt"
                 else None,
             )
             if self._session.amd is not None:
@@ -968,7 +994,7 @@ class AudioRecognition:
             self._audio_interim_transcript = ""
             self._audio_preflight_transcript = ""
 
-            if not self._has_user_vad or self._last_speaking_time is None:
+            if self._vad is None or self._using_default_vad or self._last_speaking_time is None:
                 # vad disabled or missed a speech, use stt timestamp
                 self._last_speaking_time = stt_last_speaking_time
 
@@ -1001,7 +1027,8 @@ class AudioRecognition:
             self._hooks.on_interim_transcript(
                 ev,
                 speaking=self._speaking
-                if self._has_user_vad or self._turn_detection_mode == "stt"
+                if (self._vad is not None and not self._using_default_vad)
+                or self._turn_detection_mode == "stt"
                 else None,
             )
             transcript = ev.alternatives[0].text
@@ -1029,7 +1056,7 @@ class AudioRecognition:
             self._audio_preflight_transcript = (self._audio_transcript + " " + transcript).lstrip()
             self._audio_interim_transcript = transcript
 
-            if not self._has_user_vad or self._last_speaking_time is None:
+            if self._vad is None or self._using_default_vad or self._last_speaking_time is None:
                 # vad disabled or missed a speech, use stt timestamp
                 self._last_speaking_time = stt_last_speaking_time
 
@@ -1047,7 +1074,8 @@ class AudioRecognition:
             self._hooks.on_interim_transcript(
                 ev,
                 speaking=self._speaking
-                if self._has_user_vad or self._turn_detection_mode == "stt"
+                if (self._vad is not None and not self._using_default_vad)
+                or self._turn_detection_mode == "stt"
                 else None,
             )
             self._audio_interim_transcript = ev.alternatives[0].text
@@ -1079,7 +1107,7 @@ class AudioRecognition:
 
             self._speaking = False
             self._user_turn_committed = True
-            if not self._has_user_vad or self._last_speaking_time is None:
+            if self._vad is None or self._using_default_vad or self._last_speaking_time is None:
                 # vad disabled or missed a speech, use stt timestamp
                 self._last_speaking_time = stt_last_speaking_time
 

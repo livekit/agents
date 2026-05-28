@@ -79,7 +79,12 @@ from .generation import (
     update_instructions,
 )
 from .speech_handle import DEFAULT_INPUT_DETAILS, InputDetails, SpeechHandle
-from .turn import EndpointingOptions, TurnDetectionMode, _AudioTurnDetector
+from .turn import (
+    EndpointingOptions,
+    TurnDetectionMode,
+    _AudioTurnDetector,
+    _AudioTurnDetectorStream,
+)
 
 if TYPE_CHECKING:
     from ..llm import mcp
@@ -103,6 +108,7 @@ _OnEnterContextVar = contextvars.ContextVar["_OnEnterData"]("agents_activity_on_
 class _ReusableResources:
     stt_pipeline: _STTPipeline | None = None
     rt_session: llm.RealtimeSession | None = None
+    turn_detector_stream: _AudioTurnDetectorStream | None = None
 
     async def cleanup(self) -> None:
         tasks = []
@@ -112,6 +118,9 @@ class _ReusableResources:
         if self.rt_session is not None:
             tasks.append(self.rt_session.aclose())
             self.rt_session = None
+        if self.turn_detector_stream is not None:
+            tasks.append(self.turn_detector_stream.aclose())
+            self.turn_detector_stream = None
 
         if tasks:
             outputs = await asyncio.gather(*tasks, return_exceptions=True)
@@ -233,11 +242,21 @@ class AgentActivity(RecognitionHooks):
         self, turn_detection: TurnDetectionMode | None
     ) -> TurnDetectionMode | None:
         if turn_detection is not None and not isinstance(turn_detection, str):
-            if isinstance(turn_detection, _AudioTurnDetector) and self.vad is None:
-                raise ValueError(
-                    "AudioTurnDetector requires a VAD model; pass vad=inference.VAD() to AgentSession/Agent."
-                )
-            # return directly if turn_detection is _TurnDetector
+            if isinstance(turn_detection, _AudioTurnDetector):
+                if self.vad is None:
+                    logger.warning(
+                        "AudioTurnDetector requires a VAD model. Pass vad=inference.VAD() to AgentSession/Agent or turn_detection=None to disable"
+                        " the default AudioTurnDetector"
+                    )
+                    return None
+
+                if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.turn_detection:
+                    logger.warning(
+                        "turn_detection is an AudioTurnDetector, but the LLM is a RealtimeModel "
+                        "with server-side turn detection enabled, ignoring the turn_detection setting"
+                    )
+                    return None
+
             return turn_detection
 
         mode = turn_detection if isinstance(turn_detection, str) else None
@@ -288,7 +307,7 @@ class AgentActivity(RecognitionHooks):
             if (
                 not llm_model.capabilities.turn_detection
                 and vad_model is not None
-                and not vad_model.is_default
+                and not self.using_default_vad
                 and mode is None
             ):
                 mode = "vad"
@@ -632,6 +651,14 @@ class AgentActivity(RecognitionHooks):
             ):
                 resources.stt_pipeline = await self._audio_recognition.detach_stt()
 
+            # reuse the stream during a handoff whenever we can
+            if (
+                self._audio_recognition
+                and isinstance(self._turn_detection, _AudioTurnDetector)
+                and self._turn_detection is new_activity._turn_detection
+            ):
+                resources.turn_detector_stream = self._audio_recognition.detach_turn_detector()
+
             # rt session
             if (
                 self._rt_session is not None
@@ -806,7 +833,7 @@ class AgentActivity(RecognitionHooks):
         wired_vad = self.vad
         if (
             wired_vad is not None
-            and wired_vad.is_default
+            and self.using_default_vad
             and isinstance(self.llm, llm.RealtimeModel)
             and self.llm.capabilities.turn_detection
         ):
@@ -816,18 +843,27 @@ class AgentActivity(RecognitionHooks):
             hooks=self,
             stt=self._agent.stt_node if self.stt else None,
             vad=wired_vad,
+            using_default_vad=self.using_default_vad,
             interruption_detection=self._interruption_detector,
             endpointing=create_endpointing(self.endpointing_opts),
             turn_detection=self._turn_detection,
             stt_model=self.stt.model if self.stt else None,
             stt_provider=self.stt.provider if self.stt else None,
         )
-        if reuse_resources and reuse_resources.stt_pipeline is not None:
+        stt_pipeline = reuse_resources.stt_pipeline if reuse_resources else None
+        turn_detector_stream = reuse_resources.turn_detector_stream if reuse_resources else None
+        if stt_pipeline is not None:
             logger.debug("reusing STT pipeline from previous activity")
-            self._audio_recognition.start(stt_pipeline=reuse_resources.stt_pipeline)
-            reuse_resources.stt_pipeline = None  # ownership transferred
-        else:
-            self._audio_recognition.start()
+        if turn_detector_stream is not None:
+            logger.debug("reusing turn detector stream from previous activity")
+        self._audio_recognition.start(
+            stt_pipeline=stt_pipeline,
+            turn_detector_stream=turn_detector_stream,
+        )
+        if reuse_resources:
+            # ownership transferred to the new AudioRecognition
+            reuse_resources.stt_pipeline = None
+            reuse_resources.turn_detector_stream = None
 
     @tracer.start_as_current_span("drain_agent_activity")
     async def drain(
@@ -1564,7 +1600,7 @@ class AgentActivity(RecognitionHooks):
         self._session.emit("overlapping_speech", ev)
 
     def _on_input_speech_started(self, _: llm.InputSpeechStartedEvent) -> None:
-        if self.vad is None or self.vad.is_default:
+        if self.vad is None or self.using_default_vad:
             self._session._update_user_state("speaking")
             if self._audio_recognition:
                 self._audio_recognition.on_start_of_speech(
@@ -1582,7 +1618,7 @@ class AgentActivity(RecognitionHooks):
             )
 
     def _on_input_speech_stopped(self, ev: llm.InputSpeechStoppedEvent) -> None:
-        if self.vad is None or self.vad.is_default:
+        if self.vad is None or self.using_default_vad:
             if self._audio_recognition:
                 self._audio_recognition.on_end_of_speech(
                     ended_at=time.time(),
@@ -3844,16 +3880,18 @@ class AgentActivity(RecognitionHooks):
     def vad(self) -> vad.VAD | None:
         return self._agent.vad if is_given(self._agent.vad) else self._session.vad
 
+    @property
+    def using_default_vad(self) -> bool:
+        if is_given(self._agent.vad):
+            return False
+        return self._session._using_default_vad
+
     def _resolve_interruption_detection(self) -> inference.AdaptiveInterruptionDetector | None:
-        # Adaptive interruption is opt-in (or opt-in-by-environment); we don't
-        # want a framework-default VAD to silently flip eligibility on for
-        # users who never configured a VAD themselves.
-        user_vad = self.vad is not None and not self.vad.is_default
         if not (
             self.stt is not None
             and self.stt.capabilities.aligned_transcript
             and self.stt.capabilities.streaming
-            and user_vad
+            and self.vad is not None
             and self._turn_detection not in ("manual", "realtime_llm")
             and not isinstance(self.llm, llm.RealtimeModel)
         ):

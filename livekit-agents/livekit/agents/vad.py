@@ -78,7 +78,6 @@ class VAD(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
         super().__init__()
         self._capabilities = capabilities
         self._label = f"{type(self).__module__}.{type(self).__name__}"
-        self._is_default = False
 
     @property
     def model(self) -> str:
@@ -91,18 +90,6 @@ class VAD(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
     @property
     def capabilities(self) -> VADCapabilities:
         return self._capabilities
-
-    @property
-    def is_default(self) -> bool:
-        """True iff this VAD instance was auto-provisioned by ``AgentSession``.
-
-        Set by the framework when constructing the default VAD; never set by
-        user code. Call sites that activate behaviour just because a VAD is
-        present (e.g. realtime turn-detection fallback, adaptive interruption,
-        STT-hook ``speaking=`` payload) should treat a default-VAD instance as
-        if no VAD were configured.
-        """
-        return self._is_default
 
     @abstractmethod
     def stream(self) -> VADStream: ...

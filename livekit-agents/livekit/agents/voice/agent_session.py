@@ -198,12 +198,6 @@ class VoiceActivityVideoSampler:
 DEFAULT_TTS_TEXT_TRANSFORMS: list[TextTransforms] = ["filter_markdown", "filter_emoji"]
 
 
-def _build_default_vad() -> vad.VAD:
-    instance = inference.VAD(model="silero")
-    instance._is_default = True
-    return instance
-
-
 class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @deprecate_params(
         {
@@ -364,7 +358,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         interruption = _resolve_interruption(turn_handling.get("interruption"))
         preemptive_gen = _resolve_preemptive_generation(turn_handling.get("preemptive_generation"))
         user_turn_limit = _resolve_user_turn_limit(turn_handling.get("user_turn_limit"))
-        raw_turn_detection = turn_handling.get("turn_detection", None)
+        raw_turn_detection: TurnDetectionMode | None = turn_handling.get(
+            "turn_detection", inference.AudioTurnDetector()
+        )
 
         # This is the "global" chat_context, it holds the entire conversation history
         self._chat_ctx = ChatContext.empty()
@@ -404,8 +400,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             tts = inference.TTS.from_model_string(tts)
 
         self._stt = stt or None
+        self._using_default_vad = not is_given(vad)
         if not is_given(vad):
-            vad = _build_default_vad()
+            vad = inference.VAD(model="silero")
         self._vad = vad or None
         self._llm = llm or None
         self._tts = tts or None

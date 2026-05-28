@@ -67,7 +67,9 @@ class AudioTurnDetector(_AudioTurnDetector):
         # instead of raising.
         auto = not is_given(backend)
         resolved_backend: _Backend = (
-            backend if is_given(backend) else ("cloud" if utils.is_hosted() else "local")
+            backend
+            if is_given(backend)
+            else ("cloud" if (utils.is_hosted() or utils.is_dev_mode()) else "local")
         )
 
         cloud_opts: _CloudTransportOptions | None = None
