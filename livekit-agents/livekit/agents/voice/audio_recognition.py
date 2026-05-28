@@ -655,8 +655,13 @@ class AudioRecognition:
                 self._tasks.add(task)
                 self._stt_pipeline = None
 
-    def _check_vad_silence_requirement(self) -> None:
-        if not isinstance(self._turn_detector, _StreamingTurnDetector) or self._vad is None:
+    def _check_vad_silence_requirement(
+        self,
+        detector: NotGivenOr[_TurnDetector | _StreamingTurnDetector | None] = NOT_GIVEN,
+    ) -> None:
+        if not is_given(detector):
+            detector = self._turn_detector
+        if not isinstance(detector, _StreamingTurnDetector) or self._vad is None:
             return
         if (current := getattr(self._vad, "min_silence_duration", None)) is None:
             return
@@ -746,8 +751,8 @@ class AudioRecognition:
         opening a fresh stream on *detector*; the live transport stream — and its
         per-session cloud->local fallback state — survives the handoff.
         """
+        self._check_vad_silence_requirement(detector)
         self._turn_detector = detector
-        self._check_vad_silence_requirement()
 
         if (old_stream := self._turn_detector_stream) is not None and old_stream is not stream:
             task = asyncio.create_task(old_stream.aclose())
