@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 from abc import abstractmethod
+from typing import TYPE_CHECKING
 
 from livekit.agents import (
     stt,
@@ -6,6 +9,9 @@ from livekit.agents import (
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 
 from ..models import STTLanguages
+
+if TYPE_CHECKING:
+    from livekit.agents.types import NotGivenOr
 
 
 class CartesiaRecognizeStream(stt.RecognizeStream):

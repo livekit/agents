@@ -16,32 +16,37 @@ from __future__ import annotations
 
 import asyncio
 import os
-import warnings
 import weakref
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING
 
 import aiohttp
-from typing_extensions import Never
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
-    APIConnectOptions,
     LanguageCode,
     stt,
     utils,
 )
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
-from livekit.agents.utils import is_given
+from livekit.agents.types import NOT_GIVEN
 
 from ._recognize_streams.auto_finalize_recognize_stream import AutoFinalizeRecognizeStream
 from ._recognize_streams.cartesia_recognize_stream import CartesiaRecognizeStream
 from ._recognize_streams.legacy_recognize_stream import LegacyRecognizeStream
 from .constants import AUDIO_ENCODING
 from .log import logger
-from .models import STTEncoding, STTLanguages, STTModels
 
-_ResolvedFinalTranscriptMode = Literal["auto", "legacy"]
+if TYPE_CHECKING:
+    from typing import Literal
+
+    from typing_extensions import Never
+
+    from livekit.agents import APIConnectOptions
+    from livekit.agents.types import NotGivenOr
+
+    from .models import STTEncoding, STTLanguages, STTModels
+
+    _ResolvedFinalTranscriptMode = Literal["auto", "legacy"]
 
 
 def _is_whisper_model(model: STTModels | str) -> bool:
@@ -160,7 +165,7 @@ class STT(stt.STT):
         language_code = None if language is None else LanguageCode(language)
 
         # TODO: default all languages to ink-2 once they are supported
-        if is_given(model):
+        if utils.is_given(model):
             resolved_model = model
         elif language_code is None or language_code.language == "en":
             resolved_model = "ink-2"
@@ -224,7 +229,7 @@ class STT(stt.STT):
         language: NotGivenOr[STTLanguages | str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> CartesiaRecognizeStream:
-        if is_given(language):
+        if utils.is_given(language):
             resolved_language = LanguageCode(language)
         elif self._language is not None:
             resolved_language = LanguageCode(self._language)
@@ -290,26 +295,24 @@ class STT(stt.STT):
     def update_options(
         self,
         *,
-        model: NotGivenOr[STTModels | str] = NOT_GIVEN,
         language: NotGivenOr[STTLanguages | str] = NOT_GIVEN,
+        model: NotGivenOr[STTModels | str] = NOT_GIVEN,
     ) -> None:
         """Change Cartesia STT options.
 
         Also propagates changes to all :class:`SpeechStream` created by :meth:`stream`.
 
         Args:
-            model: Deprecated. This is a no-op. Construct a new STT instance to change the model.
             language: Used to change the language to match what the user is speaking.
                 Ink 2 does not have multi-lingual support yet and only works with English.
+            model: Deprecated. This is a no-op. Construct a new STT instance to change the model.
         """
-        if is_given(model) and model != self._model:
-            warnings.warn(
-                "Cartesia STT update_options() ignores the model kwarg. Construct a new STT instance to change the model.",
-                DeprecationWarning,
-                stacklevel=2,
+        if utils.is_given(model) and model != self._model:
+            logger.warning(
+                "Cartesia STT update_options() ignores the model kwarg. Construct a new STT instance to change the model."
             )
 
-        if is_given(language):
+        if utils.is_given(language):
             self._language = LanguageCode(language)
             self._warn_on_unexpected_args(language=self._language)
 

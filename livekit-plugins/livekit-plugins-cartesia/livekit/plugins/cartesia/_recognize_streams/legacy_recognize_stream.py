@@ -23,14 +23,12 @@ import aiohttp
 
 from livekit import rtc
 from livekit.agents import (
-    APIConnectOptions,
+    APIConnectionError,
     LanguageCode,
     stt,
     utils,
 )
-from livekit.agents._exceptions import APIConnectionError
-from livekit.agents.types import NOT_GIVEN, NotGivenOr, TimedString
-from livekit.agents.utils import is_given
+from livekit.agents.types import NOT_GIVEN, TimedString
 
 from ..constants import (
     API_AUTH_HEADER,
@@ -40,11 +38,92 @@ from ..constants import (
     USER_AGENT,
 )
 from ..log import logger
-from ..models import STTEncoding, STTLanguages, STTModels
 from .cartesia_recognize_stream import CartesiaRecognizeStream
 
 if TYPE_CHECKING:
-    from .._types.stt_websocket import STTEventMessage
+    from typing import Literal
+
+    from typing_extensions import NotRequired, TypedDict
+
+    from livekit.agents import APIConnectOptions
+    from livekit.agents.types import NotGivenOr
+
+    from ..models import STTEncoding, STTLanguages, STTModels
+
+    class STTWord(TypedDict):
+        """Word-level timestamp from Cartesia STT.
+
+        Attributes:
+            word: The transcribed word.
+            start: Start time in seconds.
+            end: End time in seconds.
+        """
+
+        word: str
+        start: float
+        end: float
+
+    class STTTranscriptEvent(TypedDict):
+        """Transcript chunk for the current connection.
+
+        Each event is a delta from the last chunk with ``is_final=True``, not the
+        cumulative transcript.
+
+        Attributes:
+            type: Event discriminator.
+            is_final: Whether ``text`` is finalized.
+            request_id: Unique identifier for this WebSocket connection.
+            text: Transcribed text delta.
+            duration: Duration of the audio in seconds.
+            words: Optional word-level timestamps.
+        """
+
+        type: Literal["transcript"]
+        is_final: bool
+        request_id: str
+        text: str
+        duration: NotRequired[float]
+        words: NotRequired[list[STTWord]]
+
+    class STTFlushDoneEvent(TypedDict):
+        """Acknowledgment for the ``finalize`` command.
+
+        Attributes:
+            type: Event discriminator.
+            request_id: Unique identifier for this WebSocket connection.
+        """
+
+        type: Literal["flush_done"]
+        request_id: str
+
+    class STTDoneEvent(TypedDict):
+        """Acknowledgment for the ``close`` command; session is closing.
+
+        Attributes:
+            type: Event discriminator.
+            request_id: Unique identifier for this WebSocket connection.
+        """
+
+        type: Literal["done"]
+        request_id: str
+
+    class STTErrorEvent(TypedDict):
+        """Error event sent by the server.
+
+        Attributes:
+            type: Event discriminator.
+            code: HTTP-style status code; values >= 500 are treated as retryable.
+            message: Human-readable error message.
+            request_id: Unique identifier for this WebSocket connection.
+        """
+
+        type: Literal["error"]
+        code: NotRequired[int]
+        message: NotRequired[str]
+        request_id: NotRequired[str]
+
+    STTEventMessage = STTTranscriptEvent | STTFlushDoneEvent | STTDoneEvent | STTErrorEvent
+    """Server-sent message on the ``/stt/websocket`` endpoint."""
 
 
 def _get_api_language_param_from_language_code(language_code: LanguageCode) -> str:
@@ -356,12 +435,12 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
             model: Deprecated. This is a no-op. Construct a new STT instance to change the model.
         """
         # not changing the model and reconnecting since that is likely unexpected behavior
-        if is_given(model) and model != self._model:
+        if utils.is_given(model) and model != self._model:
             logger.warning(
                 "Cartesia STT update_options() ignores the model kwarg. Construct a new STT instance to change the model."
             )
 
-        if is_given(language):
+        if utils.is_given(language):
             language_code = LanguageCode(language)
 
             current_api_language_param = (
