@@ -45,22 +45,25 @@ LOCAL_LANGUAGES: dict[str, float] = {
     "zh": 0.3550,
 }
 
-Backend = Literal["cloud", "local"]
-_BASE: dict[Backend, dict[str, float]] = {"cloud": CLOUD_LANGUAGES, "local": LOCAL_LANGUAGES}
+TurnDetectorModels = Literal["turn-detector", "turn-detector-mini"]
+_BASE: dict[TurnDetectorModels, dict[str, float]] = {
+    "turn-detector": CLOUD_LANGUAGES,
+    "turn-detector-mini": LOCAL_LANGUAGES,
+}
 
 
 def materialize_thresholds(
     user_value: NotGivenOr[float | dict[LanguageCode | str, float]],
-    backend: Backend,
+    model: TurnDetectorModels,
 ) -> dict[str, float]:
-    """Resolve user override + per-backend defaults into a complete per-language map.
+    """Resolve user override + per-model defaults into a complete per-language map.
 
-    - NOT_GIVEN: returns the bare backend table.
+    - NOT_GIVEN: returns the bare per-model table.
     - scalar: fills every language with the same value.
     - dict: overrides per-language (keys go through ``LanguageCode`` so
       "English"/"en"/"en-US" collapse to "en"); unmapped languages keep the default.
     """
-    base = _BASE[backend]
+    base = _BASE[model]
     if not is_given(user_value):
         return dict(base)
     if isinstance(user_value, dict):

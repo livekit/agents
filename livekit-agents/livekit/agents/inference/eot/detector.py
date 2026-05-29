@@ -18,15 +18,13 @@ from ...types import (
 from ...utils import is_given
 from .._utils import get_default_inference_url
 from .base import (
-    _WIRE_MODEL,
     DEFAULT_SAMPLE_RATE,
     TurnDetectorOptions,
     _AudioTurnDetectionTransport,
     _AudioTurnDetector,
     _AudioTurnDetectorStream,
-    _Backend,
 )
-from .languages import materialize_thresholds
+from .languages import TurnDetectorModels, materialize_thresholds
 from .transports import _CloudTransport, _CloudTransportOptions, _LocalTransport
 
 __all__ = ["AudioTurnDetector"]
@@ -36,7 +34,7 @@ class AudioTurnDetector(_AudioTurnDetector):
     def __init__(
         self,
         *,
-        backend: NotGivenOr[_Backend] = NOT_GIVEN,
+        model: NotGivenOr[TurnDetectorModels] = NOT_GIVEN,
         unlikely_threshold: NotGivenOr[float | dict[LanguageCode | str, float]] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
@@ -45,16 +43,20 @@ class AudioTurnDetector(_AudioTurnDetector):
         http_session: aiohttp.ClientSession | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
-        auto = not is_given(backend)
-        resolved_backend: _Backend = (
-            backend
-            if is_given(backend)
-            else ("cloud" if (utils.is_hosted() or utils.is_dev_mode()) else "local")
+        auto = not is_given(model)
+        resolved_model: TurnDetectorModels = (
+            model
+            if is_given(model)
+            else (
+                "turn-detector"
+                if (utils.is_hosted() or utils.is_dev_mode())
+                else "turn-detector-mini"
+            )
         )
 
         cloud_opts: _CloudTransportOptions | None = None
 
-        if resolved_backend == "cloud":
+        if resolved_model == "turn-detector":
             lk_base_url = utils.resolve_env_var(
                 base_url,
                 "LIVEKIT_INFERENCE_URL",
@@ -80,13 +82,13 @@ class AudioTurnDetector(_AudioTurnDetector):
                 if auto:
                     logger.warning(
                         "LIVEKIT_INFERENCE_URL is set but %s missing; "
-                        "falling back to local backend",
+                        "falling back to the turn-detector-mini model",
                         ", ".join(missing),
                     )
-                    resolved_backend = "local"
+                    resolved_model = "turn-detector-mini"
                 else:
                     raise ValueError(
-                        f"AudioTurnDetector(backend='cloud') requires "
+                        f"AudioTurnDetector(model='turn-detector') requires "
                         f"{', '.join(missing)} (env or constructor argument)."
                     )
             else:
@@ -99,21 +101,17 @@ class AudioTurnDetector(_AudioTurnDetector):
 
         opts = TurnDetectorOptions(
             sample_rate=sample_rate,
-            thresholds=materialize_thresholds(unlikely_threshold, resolved_backend),
+            thresholds=materialize_thresholds(unlikely_threshold, resolved_model),
         )
         super().__init__(opts=opts)
 
-        self._backend: _Backend = resolved_backend
+        self._model: TurnDetectorModels = resolved_model
         self._cloud_opts = cloud_opts
         self._http_session = http_session
 
     @property
-    def model(self) -> str:
-        return _WIRE_MODEL[self._backend]
-
-    @property
-    def backend(self) -> _Backend:
-        return self._backend
+    def model(self) -> TurnDetectorModels:
+        return self._model
 
     def stream(
         self,
@@ -127,8 +125,8 @@ class AudioTurnDetector(_AudioTurnDetector):
         )
 
         transport: _AudioTurnDetectionTransport
-        if self._backend == "cloud":
-            assert cloud_opts is not None, "cloud backend requires cloud_opts"
+        if self._model == "turn-detector":
+            assert cloud_opts is not None, "turn-detector requires cloud_opts"
             transport = _CloudTransport(
                 detector=self,
                 opts=self._opts,
@@ -142,5 +140,5 @@ class AudioTurnDetector(_AudioTurnDetector):
             detector=self,
             opts=self._opts,
             transport=transport,
-            backend=self._backend,
+            model=self._model,
         )

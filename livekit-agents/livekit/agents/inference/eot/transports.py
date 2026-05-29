@@ -78,7 +78,7 @@ _CLIENT_BUFFER_SAMPLES = int(_CLIENT_BUFFER_SECONDS * DEFAULT_SAMPLE_RATE)
 
 
 class _CloudTransport:
-    """WebSocket transport for `eot-audio`."""
+    """WebSocket transport for `turn-detector`."""
 
     def __init__(
         self,
@@ -355,7 +355,7 @@ class _CloudTransport:
 
 
 class _LocalTransport:
-    """In-process ctypes transport for `eot-audio-mini`."""
+    """In-process ctypes transport for `turn-detector-mini`."""
 
     def __init__(self, *, opts: TurnDetectorOptions) -> None:
         self._opts = opts

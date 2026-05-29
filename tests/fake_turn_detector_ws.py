@@ -104,7 +104,7 @@ def make_stream(
     """
     fake_ws = fake_ws or FakeTurnDetectorWS()
     detector = MagicMock()
-    detector.model = "eot-audio-cloud"
+    detector.model = "turn-detector"
     detector.provider = "livekit"
     session_mock = MagicMock()
     session_mock.closed = False
@@ -128,7 +128,7 @@ def make_stream(
         detector=detector,
         opts=opts,
         transport=transport,
-        backend="cloud",
+        model="turn-detector",
     )
     return stream, fake_ws, transport
 

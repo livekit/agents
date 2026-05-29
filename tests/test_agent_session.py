@@ -1466,7 +1466,7 @@ async def test_user_supplied_turn_detector_passes_through() -> None:
     from livekit.agents import inference
     from livekit.agents.voice.agent_session import AgentSession
 
-    user_detector = inference.AudioTurnDetector(backend="local")
+    user_detector = inference.AudioTurnDetector(model="turn-detector-mini")
     session = AgentSession(turn_handling={"turn_detection": user_detector})
     try:
         assert session.turn_detection is user_detector

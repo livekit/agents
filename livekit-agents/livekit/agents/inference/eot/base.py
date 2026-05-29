@@ -27,7 +27,7 @@ from ...types import (
 )
 from ...utils import aio
 from ...voice.turn import TurnDetectionEvent
-from .languages import rescale_for_local_fallback
+from .languages import TurnDetectorModels, rescale_for_local_fallback
 
 DEFAULT_SAMPLE_RATE: int = 16000
 
@@ -35,12 +35,6 @@ MIN_SILENCE_DURATION_MS = 200
 """Minimum VAD silence the audio EOT detector needs before it will warm up an
 inference window. Enforced against the caller-supplied VAD's
 ``min_silence_duration`` in ``AudioRecognition``."""
-
-_Backend = Literal["cloud", "local"]
-_WIRE_MODEL: dict[_Backend, str] = {
-    "cloud": "eot-audio",
-    "local": "eot-audio-mini",
-}
 
 
 class _Status(str, Enum):
@@ -79,7 +73,7 @@ class _AudioTurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
         self._opts = opts
 
     @property
-    def model(self) -> str:
+    def model(self) -> TurnDetectorModels:
         raise NotImplementedError
 
     @property
@@ -112,14 +106,14 @@ class _AudioTurnDetectorStream:
         detector: _AudioTurnDetector,
         opts: TurnDetectorOptions,
         transport: _AudioTurnDetectionTransport,
-        backend: _Backend = "local",
+        model: TurnDetectorModels = "turn-detector-mini",
     ) -> None:
         self._detector = detector
         self._opts = opts
         self._transport = transport
         self._transport.attach(self)
 
-        self._backend: _Backend = backend
+        self._model: TurnDetectorModels = model
         self._is_fallback = False
         self._warned_cloud_failure = False
         self._warned_local_failure = False
@@ -145,19 +139,15 @@ class _AudioTurnDetectorStream:
     # region: detector proxies
 
     @property
-    def model(self) -> str:
+    def model(self) -> TurnDetectorModels:
         # Self-contained (does not proxy to the detector): the stream owns its
-        # active backend, so after a fallback this reports "local" while the
-        # detector — and any sibling stream — stay independent.
-        return _WIRE_MODEL[self._backend]
+        # active model, so after a fallback this reports "turn-detector-mini"
+        # while the detector — and any sibling stream — stay independent.
+        return self._model
 
     @property
     def provider(self) -> str:
         return self._detector.provider
-
-    @property
-    def backend(self) -> _Backend:
-        return self._backend
 
     @property
     def is_fallback(self) -> bool:
@@ -421,10 +411,10 @@ class _AudioTurnDetectorStream:
                 with contextlib.suppress(asyncio.InvalidStateError):
                     fut.set_result(1.0)
             self.deactivate(trigger="predict_end_of_turn timeout")
-            # Cloud predict timeout = transport failure; promote local for the
-            # rest of the session and let the next call retry on the new
+            # Cloud predict timeout = transport failure; promote the mini model
+            # for the rest of the session and let the next call retry on the new
             # transport.
-            if self._backend == "cloud":
+            if self._model == "turn-detector":
                 self._fall_back_to_local(reason=asyncio.TimeoutError("predict_end_of_turn"))
             # Positive default so min_endpointing_delay applies.
             return 1.0
@@ -461,9 +451,9 @@ class _AudioTurnDetectorStream:
 
     async def _run(self) -> None:
         """Run the active transport, retrying on cloud failure by swapping in
-        a local transport in-place. ``local`` backends just run the transport
-        once and surface failures to the caller via ``_handle_prediction``
-        (default 1.0)."""
+        a local transport in-place. ``turn-detector-mini`` just runs the
+        transport once and surfaces failures to the caller via
+        ``_handle_prediction`` (default 1.0)."""
         while True:
             task = asyncio.create_task(self._transport.run())
             self._transport_task = task
@@ -481,7 +471,7 @@ class _AudioTurnDetectorStream:
                     await aio.cancel_and_wait(task)
                 raise
             except Exception as e:  # noqa: BLE001 — any cloud error degrades to local
-                if self._backend == "cloud":
+                if self._model == "turn-detector":
                     self._fall_back_to_local(reason=e)
                     continue
                 self._on_local_failure(reason=e)
@@ -507,17 +497,17 @@ class _AudioTurnDetectorStream:
         )
         self._opts = new_opts
         # Write the post-fallback state back to the owning detector so its
-        # ``backend``/``model``/``unlikely_threshold`` views (read by EOU
-        # metrics and ``audio_recognition``) reflect the swap without needing
-        # a proxy layer back through this stream.
+        # ``model``/``unlikely_threshold`` views (read by EOU metrics and
+        # ``audio_recognition``) reflect the swap without needing a proxy
+        # layer back through this stream.
         self._detector._opts = new_opts
         from .detector import AudioTurnDetector
 
         if isinstance(self._detector, AudioTurnDetector):
-            self._detector._backend = "local"
+            self._detector._model = "turn-detector-mini"
         self._transport = _LocalTransport(opts=self._opts)
         self._transport.attach(self)
-        self._backend = "local"
+        self._model = "turn-detector-mini"
         self._is_fallback = True
         # If transport.run() is still in flight (e.g. predict timeout while
         # the cloud session was otherwise idle), signal+cancel so _run loops
