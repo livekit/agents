@@ -401,7 +401,7 @@ class LLM(llm.LLM):
 
         if is_given(self._opts.cached_content):
             extra["cached_content"] = self._opts.cached_content
-    
+
         if is_given(self._opts.media_resolution):
             extra["media_resolution"] = self._opts.media_resolution
 
@@ -462,6 +462,18 @@ class LLMStream(llm.LLMStream):
             if tools_config and not using_cache:
                 self._extra_kwargs["tools"] = tools_config
             elif using_cache:
+                dropped = [k for k in ("tools", "tool_config") if k in self._extra_kwargs]
+                if tools_config and "tools" not in dropped:
+                    dropped.append("tools")
+                if extra_data.system_messages:
+                    dropped.append("system_instruction")
+                if dropped:
+                    logger.warning(
+                        "dropping %s from Gemini request because cached_content=%r is set; "
+                        "these fields must be baked into the CachedContent resource",
+                        dropped,
+                        self._extra_kwargs.get("cached_content"),
+                    )
                 self._extra_kwargs.pop("tools", None)
                 self._extra_kwargs.pop("tool_config", None)
             http_options = self._llm._opts.http_options or types.HttpOptions(
