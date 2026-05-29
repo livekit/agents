@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from livekit.agents import Plugin
 from livekit.agents.inference_runner import _InferenceRunner
 
-from .base import EOUModelBase, EOUPlugin, _EUORunnerBase
+from .base import EOUModelBase, _EUORunnerBase
 from .models import EOUModelType
 
 
@@ -33,4 +32,3 @@ class EnglishModel(EOUModelBase):
 
 
 _InferenceRunner.register_runner(_EUORunnerEn)
-Plugin.register_plugin(EOUPlugin(_EUORunnerEn))

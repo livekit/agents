@@ -83,6 +83,7 @@ class _LLMOptions:
     safety_settings: NotGivenOr[list[types.SafetySettingOrDict]]
     service_tier: NotGivenOr[types.ServiceTier]
     cached_content: NotGivenOr[str]
+    media_resolution: NotGivenOr[types.MediaResolution]
 
 
 BLOCKED_REASONS = [
@@ -121,6 +122,7 @@ class LLM(llm.LLM):
         safety_settings: NotGivenOr[list[types.SafetySettingOrDict]] = NOT_GIVEN,
         service_tier: NotGivenOr[types.ServiceTier] = NOT_GIVEN,
         cached_content: NotGivenOr[str] = NOT_GIVEN,
+        media_resolution: NotGivenOr[types.MediaResolution] = NOT_GIVEN,
         credentials: google.auth.credentials.Credentials | None = None,
     ) -> None:
         """
@@ -154,6 +156,7 @@ class LLM(llm.LLM):
             safety_settings (list[SafetySettingOrDict], optional): Safety settings for content filtering. Defaults to None.
             service_tier (types.ServiceTier, optional): The service tier for the request (e.g. types.ServiceTier.PRIORITY). Defaults to None.
             cached_content (str, optional): Resource name of an explicit context cache to attach to every request from this LLM instance, e.g. ``"cachedContents/abc123"`` for the Gemini API or ``"projects/<project>/locations/<location>/cachedContents/abc123"`` for VertexAI. The cache must already exist — create it via ``client.caches.create(...)`` and pass the returned ``name``. Gemini rejects ``generateContent`` requests that combine ``cached_content`` with ``system_instruction``, ``tools``, or ``tool_config``, so when this option is set the plugin bakes those fields out of every outgoing request; the cache resource itself must contain whichever of them the model needs (typically the system prompt and the tool schemas). Useful for long-lived static prefixes where implicit caching is unreliable. See https://ai.google.dev/gemini-api/docs/caching for details and minimum prefix-token requirements. Defaults to None.
+            media_resolution (types.MediaResolution, optional): The media resolution for the request. Defaults to None.
         """  # noqa: E501
         super().__init__()
         gcp_project = project if is_given(project) else os.environ.get("GOOGLE_CLOUD_PROJECT")
@@ -228,6 +231,7 @@ class LLM(llm.LLM):
             safety_settings=safety_settings,
             service_tier=service_tier,
             cached_content=cached_content,
+            media_resolution=media_resolution,
         )
         self._client = Client(
             api_key=gemini_api_key,
@@ -397,6 +401,9 @@ class LLM(llm.LLM):
 
         if is_given(self._opts.cached_content):
             extra["cached_content"] = self._opts.cached_content
+            
+        if is_given(self._opts.media_resolution):
+            extra["media_resolution"] = self._opts.media_resolution
 
         return LLMStream(
             self,

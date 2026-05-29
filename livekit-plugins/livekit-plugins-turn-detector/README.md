@@ -49,7 +49,7 @@ session = AgentSession(
 This plugin requires model files. Before starting your agent for the first time, or when building Docker images for deployment, run the following command to download the model files:
 
 ```bash
-python my_agent.py download-files
+python -m livekit.agents download-files
 ```
 
 ## Downloaded model files

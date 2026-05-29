@@ -341,7 +341,12 @@ _OutboundMsg = _StartConfig | _SendText | _CancelStream
 class _StreamData:
     emitter: tts.AudioEmitter
     waiter: asyncio.Future[None]
+    opts: _TTSOptions
     audio_ended: bool = False
+    # Client cancel and server abort produce identical `terminated` messages.
+    # This flag is how recv loop tells them apart.
+    cancel_sent: bool = False
+    config_sent: bool = False
 
 
 class _Connection:
@@ -421,8 +426,8 @@ class _Connection:
         if stream_id in self._streams:
             raise ValueError(f"stream_id {stream_id} already registered")
 
-        self._streams[stream_id] = _StreamData(emitter=emitter, waiter=waiter)
-        self._input_queue.send_nowait(_StartConfig(stream_id=stream_id, opts=opts))
+        # Server starts a per-stream timeout on _StartConfig receipt; we queue it lazily in send_text.
+        self._streams[stream_id] = _StreamData(emitter=emitter, waiter=waiter, opts=opts)
 
     def unregister_stream(self, stream_id: str) -> None:
         self._streams.pop(stream_id, None)
@@ -433,11 +438,38 @@ class _Connection:
     def send_text(self, stream_id: str, text: str, *, text_end: bool = False) -> None:
         if self._closed or stream_id not in self._streams:
             return
+
+        stream = self._streams[stream_id]
+
+        # Empty text would make the server hallucinate audio; handle the two cases locally.
+        if not text:
+            if not text_end:
+                return
+            if not stream.config_sent:
+                # Server doesn't know about this stream; resolve locally.
+                if not stream.waiter.done():
+                    stream.waiter.set_result(None)
+                self._streams.pop(stream_id, None)
+                return
+
+        if not stream.config_sent:
+            stream.config_sent = True
+            self._input_queue.send_nowait(_StartConfig(stream_id=stream_id, opts=stream.opts))
         self._input_queue.send_nowait(_SendText(stream_id=stream_id, text=text, text_end=text_end))
 
     def cancel_stream(self, stream_id: str) -> None:
-        if self._closed or stream_id not in self._streams:
+        if self._closed:
             return
+        stream = self._streams.get(stream_id)
+        if stream is None:
+            return
+        if not stream.config_sent:
+            # Server doesn't know about this stream; resolve locally.
+            if not stream.waiter.done():
+                stream.waiter.set_result(None)
+            self._streams.pop(stream_id, None)
+            return
+        self._streams[stream_id].cancel_sent = True
         self._input_queue.send_nowait(_CancelStream(stream_id=stream_id))
 
     async def _send_loop(self) -> None:
@@ -460,15 +492,12 @@ class _Connection:
                         config["bitrate"] = msg.opts.bitrate
                     await self._ws.send_str(json.dumps(config))
                 elif isinstance(msg, _SendText):
-                    await self._ws.send_str(
-                        json.dumps(
-                            {
-                                "stream_id": msg.stream_id,
-                                "text": msg.text,
-                                "text_end": msg.text_end,
-                            }
-                        )
-                    )
+                    payload: dict[str, Any] = {"stream_id": msg.stream_id}
+                    if msg.text:
+                        payload["text"] = msg.text
+                    if msg.text_end:
+                        payload["text_end"] = True
+                    await self._ws.send_str(json.dumps(payload))
                 elif isinstance(msg, _CancelStream):
                     await self._ws.send_str(
                         json.dumps({"stream_id": msg.stream_id, "cancel": True})
@@ -526,12 +555,17 @@ class _Connection:
                         extra={"stream_id": stream_id},
                     )
                     if not stream.waiter.done():
+                        code: int = resp.get("error_code", 500)
+                        # 408/429 are transient (timeout, rate limit); 5xx is
+                        # server-side. Other 4xx (400/401/402) is config/auth
+                        # and retrying won't help.
+                        retryable = code in (408, 429) or code >= 500
                         stream.waiter.set_exception(
                             APIStatusError(
                                 message=resp.get("error_message", "Unknown error"),
-                                status_code=resp.get("error_code", 500),
-                                request_id=None,
+                                status_code=code,
                                 body=f"stream_id={stream_id} {msg.data}",
+                                retryable=retryable,
                             )
                         )
                     continue
@@ -546,13 +580,29 @@ class _Connection:
                     # block (covers cancel/error paths too).
 
                 if resp.get("terminated"):
-                    if not stream.audio_ended:
-                        logger.debug(
-                            "Soniox TTS stream terminated without audio_end",
-                            extra={"stream_id": stream_id},
-                        )
+                    # Don't clobber an exception already raised on the error_code path.
                     if not stream.waiter.done():
-                        stream.waiter.set_result(None)
+                        # Server aborted on its own - no audio_end, no cancel from us.
+                        server_error = not stream.audio_ended and not stream.cancel_sent
+                        if server_error:
+                            # Raise so the framework retries, otherwise the
+                            # turn completes with no audio (silent muteness).
+                            logger.warning(
+                                "Soniox TTS stream terminated without audio_end",
+                                extra={"stream_id": stream_id},
+                            )
+                            stream.waiter.set_exception(
+                                APIStatusError(
+                                    message=(
+                                        "Soniox TTS stream terminated without producing audio"
+                                    ),
+                                    body=f"stream_id={stream_id}",
+                                    retryable=True,
+                                )
+                            )
+                        else:
+                            # Normal end: audio_end seen, or our own cancel landed.
+                            stream.waiter.set_result(None)
                     self._streams.pop(stream_id, None)
         except Exception as e:
             logger.warning("Soniox TTS recv loop error", exc_info=e)
@@ -572,9 +622,9 @@ class _Connection:
 
     def _fail_all(self, err: BaseException) -> None:
         """Fail all registered streams and mark the connection non-current."""
-        for sd in list(self._streams.values()):
-            if not sd.waiter.done():
-                sd.waiter.set_exception(err)
+        for stream in list(self._streams.values()):
+            if not stream.waiter.done():
+                stream.waiter.set_exception(err)
         self._streams.clear()
         self._is_current = False
 
@@ -585,9 +635,9 @@ class _Connection:
         self._closed = True
         self._is_current = False
 
-        for sd in list(self._streams.values()):
-            if not sd.waiter.done():
-                sd.waiter.set_exception(APIConnectionError("Soniox TTS connection closed"))
+        for stream in list(self._streams.values()):
+            if not stream.waiter.done():
+                stream.waiter.set_exception(APIConnectionError("Soniox TTS connection closed"))
         self._streams.clear()
 
         self._input_queue.close()
