@@ -240,7 +240,10 @@ class TestCachedContentRequestSuppression:
         config = captured["config"]
         assert config.system_instruction is not None
         assert config.tools is not None and len(config.tools) >= 1
+
+
 class TestMediaResolution:
+
     def test_llm_media_resolution_is_passed_to_stream_kwargs(self):
         model = LLM(
             api_key="test-api-key",
