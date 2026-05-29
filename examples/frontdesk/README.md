@@ -6,7 +6,7 @@ For setup instructions and more details, see the [main examples README](../READM
 
 ## Overview
 
-In this example, you will be able to schedule appointments (optionally with cal.com's API if `CAL_API_KEY` is set) and evaluate the agent's performance using `JudgeGroup`. The session will always begin with the agent saying "Hello, I can help you schedule an appointment."
+In this example, you will be able to schedule appointments (optionally with cal.com's API if `CAL_API_KEY` is set) and evaluate the agent's performance using `JudgeGroup`. The session will always begin with the agent saying "Hello, I can help you schedule an appointment!"
 
 ### Scheduling appointments 
 

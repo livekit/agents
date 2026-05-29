@@ -106,11 +106,12 @@ class InterruptionOptions(TypedDict, total=False):
     """Seconds of silence after an interruption before it is
     classified as false. ``None`` disables. Defaults to ``2.0``."""
     backchannel_boundary: float | tuple[float, float] | None
-    """Seconds to suppress adaptive interruption handling when the agent
-    starts or stops speaking each turn to allow for easier turn correction.
-    Use tuple to apply different values for start and end separately.
-    ``None`` disables. Defaults to ``(1.0, 3.5)``. End value should be higher
-    to account for STT transcript timestamp inaccuracy."""
+    """Seconds near the start/end of each agent turn during which overlapping
+    speech classified as a backchannel by the adaptive detector is suppressed
+    (events flagged as interruptions still pass through). Use a tuple to apply
+    different values for start and end separately. ``None`` disables. Defaults
+    to ``(1.0, 1.0)``. End value accounts for STT transcript timestamp
+    inaccuracy."""
 
 
 _INTERRUPTION_DEFAULTS: InterruptionOptions = {
@@ -120,10 +121,7 @@ _INTERRUPTION_DEFAULTS: InterruptionOptions = {
     "min_words": 0,
     "resume_false_interruption": True,
     "false_interruption_timeout": 2.0,
-    "backchannel_boundary": (
-        1.0,
-        3.5,  # higher value for the end as STT timestamps aren't very reliable
-    ),
+    "backchannel_boundary": (1.0, 1.0),
 }
 
 
@@ -157,6 +155,35 @@ _PREEMPTIVE_GENERATION_DEFAULTS: PreemptiveGenerationOptions = {
 }
 
 
+class UserTurnLimitOptions(TypedDict, total=False):
+    """Configuration for detecting when a user has been speaking too long
+    without the agent successfully responding.
+
+    The framework tracks accumulated word count and wall-clock duration
+    across consecutive user turns. Counters only reset when the agent
+    transitions to ``speaking`` state (i.e., produces audio output).
+
+    Both thresholds default to ``None`` (disabled). Set at least one to
+    enable the feature.
+    """
+
+    max_words: int | None
+    """Maximum accumulated word count before triggering. Uses the
+    framework's WordTokenizer for counting. ``None`` disables word-based
+    limiting. Defaults to ``None``."""
+
+    max_duration: float | None
+    """Maximum wall-clock duration (seconds) since the user first started
+    speaking in the current accumulation window. ``None`` disables
+    duration-based limiting. Defaults to ``None``."""
+
+
+_USER_TURN_LIMIT_DEFAULTS: UserTurnLimitOptions = {
+    "max_words": None,
+    "max_duration": None,
+}
+
+
 class TurnHandlingOptions(TypedDict, total=False):
     """Configuration for the turn handling system.
 
@@ -182,6 +209,8 @@ class TurnHandlingOptions(TypedDict, total=False):
     """Interruption handling configuration. Use ``{"enabled": False}`` to disable."""
     preemptive_generation: PreemptiveGenerationOptions
     """Preemptive generation configuration. Use ``{"enabled": False}`` to disable."""
+    user_turn_limit: UserTurnLimitOptions
+    """User turn limit configuration. Use ``{"max_words": 50}`` to enable."""
 
 
 def _resolve_preemptive_generation(
@@ -207,6 +236,15 @@ def _resolve_interruption(
     if config is None:
         return InterruptionOptions(**_INTERRUPTION_DEFAULTS)
     return InterruptionOptions(**{**_INTERRUPTION_DEFAULTS, **config})
+
+
+def _resolve_user_turn_limit(
+    config: UserTurnLimitOptions | None = None,
+) -> UserTurnLimitOptions:
+    """Fill in defaults for missing keys."""
+    if config is None:
+        return UserTurnLimitOptions(**_USER_TURN_LIMIT_DEFAULTS)
+    return UserTurnLimitOptions(**{**_USER_TURN_LIMIT_DEFAULTS, **config})
 
 
 def _migrate_turn_handling(

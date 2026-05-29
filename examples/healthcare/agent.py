@@ -7,7 +7,6 @@ from typing import Annotated
 
 from dotenv import load_dotenv
 from fake_database import FakeDatabase
-from openai import AsyncOpenAI
 from pydantic import Field
 
 from livekit.agents import (
@@ -33,7 +32,7 @@ from livekit.agents.beta.workflows import (
     WarmTransferTask,
 )
 from livekit.agents.llm import ToolError, function_tool
-from livekit.plugins import openai, silero
+from livekit.plugins import silero
 
 logger = logging.getLogger("HealthcareAgent")
 
@@ -53,9 +52,6 @@ GLOBAL_INSTRUCTIONS = "Be succinct and to the point when assisting the user. Nev
 class UserData:
     database: FakeDatabase
     profile: dict | None
-    oai_client: AsyncOpenAI | None = None
-    vector_store_id: str | None = None
-    file_id: str | None = None
 
 
 @dataclass
@@ -183,7 +179,7 @@ _MODIFY_APPT_TEXT_SPECIFIC = (
 _HEALTHCARE_AGENT_BASE_INSTRUCTIONS = (
     "You are a healthcare agent offering assistance to users. Maintain a friendly disposition. "
     "If the user refuses to provide any requested information or does not cooperate, call EndCallTool.\n"
-    "Before scheduling/modifying appointments and retrieving lab results, you will be authenticating the user's information and checking for an existing profile. "
+    "Before scheduling/modifying appointments, you will be authenticating the user's information and checking for an existing profile. "
     "Do not preemptively ask for information (ex. birthday) unless instructed to.\n"
     "Call 'schedule_appointment' to schedule a new appointment. If the user requests to reschedule or cancel their appointment, call 'modify_appointment'.\n"
     "{modality_specific}\n" + GLOBAL_INSTRUCTIONS
@@ -691,40 +687,6 @@ class HealthcareAgent(Agent):
         return confirmation_message
 
     @function_tool()
-    async def retrieve_lab_results(self):
-        """Call if the user wishes to see their latest lab results"""
-        await self.profile_authenticator()
-
-        userdata = self.session.userdata
-        if userdata.oai_client is None:
-            pdf_path = os.path.join(os.path.dirname(__file__), "mock_checkup_report.pdf")
-            if not os.path.isfile(pdf_path):
-                logger.warning(
-                    "To try out this task, 'mock_checkup_report.pdf' must be in the same directory as healthcare_agent.py."
-                )
-                return "No report was found"
-            await self.session.generate_reply(
-                instructions="Inform the user you are fetching their report."
-            )
-            userdata.oai_client = AsyncOpenAI()
-            vector_store = await userdata.oai_client.vector_stores.create(name="lab_reports")
-            userdata.vector_store_id = vector_store.id
-            with open(pdf_path, "rb") as f:
-                file = await userdata.oai_client.files.create(file=f, purpose="assistants")
-            userdata.file_id = file.id
-            await userdata.oai_client.vector_stores.files.create_and_poll(
-                vector_store_id=userdata.vector_store_id, file_id=userdata.file_id
-            )
-
-            filesearch_tool = openai.tools.FileSearch(vector_store_ids=[userdata.vector_store_id])
-            current_tools = [t for t in self.tools if not isinstance(t, openai.tools.FileSearch)]
-            current_tools.append(filesearch_tool)
-            await self.update_tools(current_tools)
-        await self.session.generate_reply(
-            instructions="You now are able to access the user's report, invite any queries regarding it. Keep descriptions short and succinct unless requested otherwise."
-        )
-
-    @function_tool()
     async def retrieve_available_doctors(self) -> None:
         """Call if the user inquires about the available doctors in the network"""
         await self.session.generate_reply(
@@ -790,28 +752,11 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         userdata=userdata,
         stt=inference.STT("deepgram/nova-3", language="multi"),
-        llm=openai.responses.LLM(),
+        llm=inference.LLM("openai/gpt-4.1-mini"),
         tts=inference.TTS("inworld/inworld-tts-1"),
         vad=silero.VAD.load(),
         preemptive_generation=True,
     )
-
-    async def on_session_close() -> None:
-        if userdata.oai_client is None:
-            return
-        try:
-            if userdata.vector_store_id is not None:
-                await userdata.oai_client.vector_stores.delete(userdata.vector_store_id)
-        except Exception:
-            logger.exception("failed to delete vector store")
-        try:
-            if userdata.file_id is not None:
-                await userdata.oai_client.files.delete(userdata.file_id)
-        except Exception:
-            logger.exception("failed to delete file")
-        await userdata.oai_client.close()
-
-    ctx.add_shutdown_callback(on_session_close)
 
     await session.start(
         agent=HealthcareAgent(database=db),

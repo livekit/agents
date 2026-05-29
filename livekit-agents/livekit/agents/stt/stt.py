@@ -69,6 +69,15 @@ class SpeechData:
     source_texts: list[str] | None = None
     """the original transcription segments in the source language(s), when translation is active.
     each entry corresponds to the same-indexed entry in `source_languages`."""
+    target_languages: list[LanguageCode] | None = None
+    """the target language(s) produced by a translation-capable STT service, one entry per
+    consecutive same-language run, parallel to `target_texts`. mirrors `source_languages` /
+    `source_texts` on the source side: `language` holds the dominant (first) target language
+    and `target_languages` carries the fine-grained per-run breakdown.
+    populated when translation is active; None otherwise."""
+    target_texts: list[str] | None = None
+    """the translated transcription segments in the target language(s).
+    each entry corresponds to the same-indexed entry in `target_languages`."""
     metadata: dict[str, Any] | None = None
     """optional plugin-specific metadata (e.g. voice profile, provider diagnostics).
     plugins may populate this with provider-specific data that doesn't map to standard fields."""
@@ -82,6 +91,13 @@ class SpeechData:
                 if not isinstance(lang, LanguageCode) and isinstance(lang, str)
                 else lang
                 for lang in self.source_languages
+            ]
+        if self.target_languages is not None:
+            self.target_languages = [
+                LanguageCode(lang)
+                if not isinstance(lang, LanguageCode) and isinstance(lang, str)
+                else lang
+                for lang in self.target_languages
             ]
 
 

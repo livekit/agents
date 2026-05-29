@@ -56,6 +56,7 @@ class AvatarSession(BaseAvatarSession):
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
+        super().__init__()
         self._avatar_id = avatar_id if is_given(avatar_id) else os.getenv("LIVEAVATAR_AVATAR_ID")
         self._session_id: str | None = None
         self._session_token: str | None = None
@@ -87,6 +88,14 @@ class AvatarSession(BaseAvatarSession):
         self._playback_position = 0.0
         self._session_connected = asyncio.Event()
         self._chunk_interrupted = asyncio.Event()
+
+    @property
+    def avatar_identity(self) -> str:
+        return self._avatar_participant_identity
+
+    @property
+    def provider(self) -> str:
+        return "liveavatar"
 
     async def start(
         self,
