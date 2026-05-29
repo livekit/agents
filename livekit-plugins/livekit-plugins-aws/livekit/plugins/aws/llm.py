@@ -145,7 +145,10 @@ class LLM(llm.LLM):
             if not tools:
                 return None
 
-            # Bedrock has no "none" toolChoice — drop toolConfig and strip tool history below.
+            # Bedrock's toolChoice only accepts auto/any/tool — no "none" equivalent.
+            # When the caller wants no tools for this turn, drop toolConfig entirely;
+            # orphan toolUse/toolResult blocks in history are stripped below so
+            # Bedrock doesn't reject the request.
             if is_given(effective_tool_choice) and effective_tool_choice == "none":
                 return None
 
