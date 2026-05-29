@@ -44,6 +44,13 @@ from .proto import (
     StartJobRequest,
 )
 
+# Defensive timeout for AgentSession.aclose() during job shutdown. Hardcoded for now
+# as a guardrail against close paths that hang indefinitely. If aclose() does not
+# return in this window, the rest of the shutdown sequence (on_session_end,
+# ShuttingDown ack, room.disconnect, shutdown callbacks) runs anyway so user-
+# registered shutdown callbacks are not silently dropped.
+_SESSION_ACLOSE_TIMEOUT = 60.0
+
 
 @dataclass
 class ProcStartArgs:
@@ -51,7 +58,6 @@ class ProcStartArgs:
     job_entrypoint_fnc: Callable[[JobContext], Any]
     session_end_fnc: Callable[[JobContext], Awaitable[None]] | None
     session_end_timeout: float
-    session_close_timeout: float
     user_arguments: Any | None
     mp_cch: socket.socket
     log_cch: socket.socket
@@ -77,7 +83,6 @@ def proc_main(args: ProcStartArgs) -> None:
         args.job_entrypoint_fnc,
         args.session_end_fnc,
         session_end_timeout=args.session_end_timeout,
-        session_close_timeout=args.session_close_timeout,
         executor_type=JobExecutorType.PROCESS,
         user_arguments=args.user_arguments,
     )
@@ -185,7 +190,6 @@ class _JobProc:
         session_end_fnc: Callable[[JobContext], Awaitable[None]] | None,
         *,
         session_end_timeout: float,
-        session_close_timeout: float,
         executor_type: JobExecutorType,
         user_arguments: Any | None = None,
     ) -> None:
@@ -195,7 +199,6 @@ class _JobProc:
         self._job_entrypoint_fnc = job_entrypoint_fnc
         self._session_end_fnc = session_end_fnc
         self._session_end_timeout = session_end_timeout
-        self._session_close_timeout = session_close_timeout
         self._job_task: asyncio.Task[None] | None = None
 
         # used to warn users if both connect and shutdown are not called inside the job_entry
@@ -376,10 +379,12 @@ class _JobProc:
 
         if session := self._job_ctx._primary_agent_session:
             try:
-                await asyncio.wait_for(session.aclose(), timeout=self._session_close_timeout)
+                await asyncio.wait_for(session.aclose(), timeout=_SESSION_ACLOSE_TIMEOUT)
             except asyncio.TimeoutError:
                 logger.error(
-                    "AgentSession.aclose() timed out after %ds", self._session_close_timeout
+                    "AgentSession.aclose() timed out after %.1fs; "
+                    "proceeding with shutdown so registered callbacks still run.",
+                    _SESSION_ACLOSE_TIMEOUT,
                 )
 
         if self._session_end_fnc:
@@ -431,7 +436,6 @@ class ThreadStartArgs:
     job_entrypoint_fnc: Callable[[JobContext], Any]
     session_end_fnc: Callable[[JobContext], Awaitable[None]] | None
     session_end_timeout: float
-    session_close_timeout: float
     join_fnc: Callable[[], None]
     mp_cch: socket.socket
     user_arguments: Any | None
@@ -449,7 +453,6 @@ def thread_main(
             args.job_entrypoint_fnc,
             args.session_end_fnc,
             session_end_timeout=args.session_end_timeout,
-            session_close_timeout=args.session_close_timeout,
             executor_type=JobExecutorType.THREAD,
             user_arguments=args.user_arguments,
         )

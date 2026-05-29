@@ -187,7 +187,12 @@ async def _job_entrypoint(job_ctx: JobContext) -> None:
 
 async def _job_entrypoint_session_aclose_hangs(job_ctx: JobContext) -> None:
     """Plant a fake AgentSession whose aclose() hangs forever; the
-    session_close_timeout must fire so shutdown callbacks still run."""
+    _SESSION_ACLOSE_TIMEOUT guardrail must fire so shutdown callbacks still run."""
+    from livekit.agents.ipc import job_proc_lazy_main
+
+    # Shrink the hardcoded guardrail so the test doesn't wait the full 60s.
+    job_proc_lazy_main._SESSION_ACLOSE_TIMEOUT = 2.0
+
     start_args: _StartArgs = job_ctx.proc.user_arguments
 
     async def _job_shutdown() -> None:
@@ -273,7 +278,6 @@ async def test_proc_pool():
         initialize_timeout=20.0,
         close_timeout=20.0,
         session_end_timeout=300.0,
-        session_close_timeout=60.0,
         inference_executor=None,
         memory_warn_mb=0,
         memory_limit_mb=0,
@@ -356,7 +360,6 @@ async def test_slow_initialization():
         initialize_timeout=1.0,
         close_timeout=20.0,
         session_end_timeout=300.0,
-        session_close_timeout=60.0,
         inference_executor=None,
         memory_warn_mb=0,
         memory_limit_mb=0,
@@ -408,7 +411,6 @@ def _create_proc(
     close_timeout: float,
     mp_ctx: BaseContext,
     initialize_timeout: float = 20.0,
-    session_close_timeout: float = 60.0,
     job_entrypoint_fnc: Callable[[JobContext], object] = _job_entrypoint,
 ) -> tuple[ipc.job_proc_executor.ProcJobExecutor, _StartArgs]:
     start_args = _new_start_args(mp_ctx)
@@ -420,7 +422,6 @@ def _create_proc(
         initialize_timeout=initialize_timeout,
         close_timeout=close_timeout,
         session_end_timeout=300.0,
-        session_close_timeout=session_close_timeout,
         memory_warn_mb=0,
         memory_limit_mb=0,
         ping_interval=2.5,
@@ -467,12 +468,12 @@ async def test_job_slow_shutdown():
 
 async def test_shutdown_callback_runs_when_session_aclose_hangs():
     """Regression test: when AgentSession.aclose() blocks indefinitely during
-    job shutdown, the session_close_timeout must fire and user-registered
-    shutdown callbacks must still run."""
+    job shutdown, the _SESSION_ACLOSE_TIMEOUT guardrail must fire and
+    user-registered shutdown callbacks must still run. The entrypoint shrinks
+    the hardcoded constant to 2s so the test stays fast."""
     mp_ctx = mp.get_context("spawn")
     proc, start_args = _create_proc(
         close_timeout=20.0,
-        session_close_timeout=2.0,
         mp_ctx=mp_ctx,
         job_entrypoint_fnc=_job_entrypoint_session_aclose_hangs,
     )
