@@ -1915,9 +1915,10 @@ class AgentActivity(RecognitionHooks):
 
         # TODO: @chenghao-mou replace this direct call with the public `eot_prediction`
         # event once feat/AGT-2520-multimodal-EOU lands.
-        # Note: amd can consume the turn if it detects machine and interrupt_on_machien is True
         if (amd := self._session._amd) is not None and amd._on_end_of_turn(info):
-            return True
+            # cancel post-verdict preemptive and new generations
+            self._cancel_preemptive_generation()
+            info.skip_reply = True
 
         if self._scheduling_paused or self._new_turns_blocked:
             self._cancel_preemptive_generation()
