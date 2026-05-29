@@ -176,7 +176,7 @@ class LLM(llm.LLM):
         if tool_config:
             opts["toolConfig"] = tool_config
         else:
-            chat_ctx = chat_ctx.apply(exclude_function_call=True)
+            chat_ctx = chat_ctx.copy(exclude_function_call=True)
         messages, extra_data = chat_ctx.to_provider_format(format="aws")
         opts["messages"] = messages
         if extra_data.system_messages:
