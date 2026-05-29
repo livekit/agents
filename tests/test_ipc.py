@@ -14,6 +14,7 @@ from multiprocessing.context import BaseContext
 from typing import ClassVar
 
 import psutil
+import pytest
 
 from livekit.agents import JobContext, JobProcess, ipc, job, utils
 from livekit.agents.ipc.log_queue import LogQueueHandler, LogQueueListener
@@ -404,6 +405,43 @@ async def test_slow_initialization():
 
     for exitcode in exitcodes:
         assert exitcode != 0, "process should have been killed"
+
+
+async def test_proc_pool_launch_job_times_out_when_spawn_never_warms_process(monkeypatch):
+    mp_ctx = mp.get_context("spawn")
+    loop = asyncio.get_running_loop()
+    pool = ipc.proc_pool.ProcPool(
+        initialize_process_fnc=_initialize_proc,
+        job_entrypoint_fnc=_job_entrypoint,
+        session_end_fnc=None,
+        num_idle_processes=0,
+        job_executor_type=job.JobExecutorType.THREAD,
+        initialize_timeout=0.01,
+        close_timeout=20.0,
+        session_end_timeout=300.0,
+        inference_executor=None,
+        memory_warn_mb=0,
+        memory_limit_mb=0,
+        http_proxy=None,
+        mp_ctx=mp_ctx,
+        loop=loop,
+    )
+
+    spawn_attempts = 0
+
+    async def _spawn_fails_without_queue_item() -> None:
+        nonlocal spawn_attempts
+        spawn_attempts += 1
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(pool, "_proc_spawn_task", _spawn_fails_without_queue_item)
+    monkeypatch.setattr(ipc.proc_pool, "WARMED_PROCESS_WAIT_TIMEOUT_BUFFER", 0.0)
+
+    with pytest.raises(RuntimeError, match="no process became available"):
+        await pool.launch_job(_generate_fake_job())
+
+    assert spawn_attempts == 3
+    assert pool._jobs_waiting_for_process == 0
 
 
 def _create_proc(

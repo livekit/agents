@@ -23,6 +23,7 @@ EventTypes = Literal[
 ]
 
 MAX_CONCURRENT_INITIALIZATIONS = min(math.ceil(get_cpu_monitor().cpu_count()), 4)
+WARMED_PROCESS_WAIT_TIMEOUT_BUFFER = 2.0
 
 
 class ProcPool(utils.EventEmitter[EventTypes]):
@@ -129,7 +130,25 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                         extra={"job_id": info.job.id},
                     )
 
-                proc = await self._warmed_proc_queue.get()
+                try:
+                    proc = await asyncio.wait_for(
+                        self._warmed_proc_queue.get(),
+                        timeout=self._initialize_timeout + WARMED_PROCESS_WAIT_TIMEOUT_BUFFER,
+                    )
+                except asyncio.TimeoutError as exc:
+                    if attempt == MAX_ATTEMPTS - 1:
+                        logger.error(
+                            "failed to launch job because no process became available after %d attempts",
+                            MAX_ATTEMPTS,
+                            extra={"job_id": info.job.id},
+                        )
+                        raise RuntimeError("no process became available for the job") from exc
+
+                    logger.warning(
+                        "timed out waiting for warmed process, retrying with a new process",
+                        extra={"job_id": info.job.id, "attempt": attempt + 1},
+                    )
+                    continue
             finally:
                 self._jobs_waiting_for_process -= 1
 
