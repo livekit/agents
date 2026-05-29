@@ -401,7 +401,7 @@ class LLM(llm.LLM):
 
         if is_given(self._opts.cached_content):
             extra["cached_content"] = self._opts.cached_content
-    
+
         if is_given(self._opts.media_resolution):
             extra["media_resolution"] = self._opts.media_resolution
 
@@ -462,9 +462,7 @@ class LLMStream(llm.LLMStream):
             if tools_config and not using_cache:
                 self._extra_kwargs["tools"] = tools_config
             elif using_cache:
-                dropped = [
-                    k for k in ("tools", "tool_config") if k in self._extra_kwargs
-                ]
+                dropped = [k for k in ("tools", "tool_config") if k in self._extra_kwargs]
                 if tools_config and "tools" not in dropped:
                     dropped.append("tools")
                 if extra_data.system_messages:

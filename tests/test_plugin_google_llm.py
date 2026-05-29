@@ -243,7 +243,6 @@ class TestCachedContentRequestSuppression:
 
 
 class TestMediaResolution:
-
     def test_llm_media_resolution_is_passed_to_stream_kwargs(self):
         model = LLM(
             api_key="test-api-key",
