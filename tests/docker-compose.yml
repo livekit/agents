@@ -54,7 +54,6 @@ services:
       - AWS_SECRET_ACCESS_KEY
       - NEUPHONIC_API_KEY
       - RESEMBLE_API_KEY
-      - RESPEECHER_API_KEY
       - SPEECHIFY_API_KEY
       - HUME_API_KEY
       - SPITCH_API_KEY
