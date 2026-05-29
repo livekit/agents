@@ -450,7 +450,7 @@ class RealtimeModel(llm.RealtimeModel):
                     )
                 base_url_val = f"{azure_endpoint.rstrip('/')}/openai"
             else:
-                base_url_val = OPENAI_BASE_URL
+                base_url_val = os.getenv("OPENAI_BASE_URL", OPENAI_BASE_URL)
 
         self._opts = _RealtimeOptions(
             model=model,
