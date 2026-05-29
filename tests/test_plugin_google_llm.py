@@ -6,6 +6,7 @@ import pytest
 from google.genai import types
 
 from livekit.agents import llm
+from livekit.agents.llm import ChatContext, function_tool
 from livekit.plugins.google.llm import LLM, LLMStream
 from livekit.plugins.google.realtime.realtime_api import RealtimeModel, RealtimeSession
 
