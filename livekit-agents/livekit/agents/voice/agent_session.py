@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import time
-from collections.abc import AsyncIterable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterable, Callable, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from contextvars import Token
 from dataclasses import dataclass
@@ -1224,7 +1224,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         return self._activity.interrupt(force=force)
 
-    def _emit_debug_message(self, payload: Mapping[str, Any]) -> None:
+    def _emit_debug_message(self, payload: dict[str, Any]) -> None:
         """:meta private: internal — emit a debug/trace payload to the debugger/recorder."""
         st = Struct()
         ParseDict(payload, st)
