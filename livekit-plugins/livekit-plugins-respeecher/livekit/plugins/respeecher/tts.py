@@ -287,6 +287,7 @@ class ChunkedStream(tts.ChunkedStream):
                     request_id=utils.shortuuid(),
                     sample_rate=self._opts.sample_rate,
                     num_channels=1,
+                    # /tts/bytes returns WAV-wrapped PCM; the WebSocket stream returns raw PCM.
                     mime_type="audio/wav",
                 )
 
