@@ -277,6 +277,23 @@ class TestToolContext:
         ctx6 = ToolContext([mock_tool_1, mock_tool_2])
         assert ctx5 != ctx6
 
+    def test_serialized_tool_order_is_sorted(self):
+        # provider tool definitions are part of the cached prompt prefix, so the
+        # serialized order must be deterministic regardless of input order
+        def tool_name(fmt: str, schema: dict[str, Any]) -> str:
+            if fmt == "openai":
+                return schema["function"]["name"]
+            if fmt == "aws":
+                return schema["toolSpec"]["name"]
+            return schema["name"]
+
+        ctx = ToolContext([mock_tool_3, mock_tool_1, mock_tool_2])
+        for fmt in ("openai", "anthropic", "aws"):
+            names = [tool_name(fmt, s) for s in ctx.parse_function_tools(fmt)]
+            assert names == ["mock_tool_1", "mock_tool_2", "mock_tool_3"], (
+                f"{fmt} tool order not sorted: {names}"
+            )
+
 
 class TestToolExecution:
     def test_function_arguments_to_pydantic_model(self):
