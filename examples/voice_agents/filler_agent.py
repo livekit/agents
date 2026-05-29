@@ -52,18 +52,15 @@ class TravelToolset(AsyncToolset):
             price = random.randint(180, 650)
         logger.info("Found airlines and prices, booking the flight...")
 
-        # phase 2: confirming — a rotating filler, repeats every 10s of idle
+        # phase 2: confirming — rotating fillers, up to 3 fires every 10s of idle
         followups = [
             "Almost there, just confirming.",
             "Still working on it, won't be long.",
             "Hang tight — almost done.",
         ]
-
-        def _filler(step: int) -> str | None:
-            logger.info("Generating filler source for step %d", step)
-            return followups[step] if step < len(followups) else None
-
-        async with ctx.say_filler(_filler, delay=5, interval=10):
+        async with ctx.say_filler(
+            lambda step: followups[step], delay=5, interval=10, max_steps=len(followups)
+        ):
             await asyncio.sleep(40)
             confirmation = f"FL-{random.randint(100000, 999999)}"
 

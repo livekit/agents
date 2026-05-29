@@ -110,13 +110,14 @@ class RunContext(Generic[Userdata_T]):
         Args:
             source: Either a string (spoken via ``session.say``), or a callable
                 ``(step: int) -> SpeechHandle | str | None`` invoked at fire time with
-                the iteration count. Returning ``None`` skips this fire (and stops the
-                loop in one-shot mode); use this to rotate variants or terminate after
-                N fires.
+                the iteration count. Returning ``None`` skips this fire and retries on
+                the next interval; the step counter only advances when a handle is
+                produced. Use ``max_steps`` to cap the total number of fires.
             delay: Continuous-idle dwell required before each fire. ``0`` = fire as
                 soon as the session is next idle.
             interval: Wall-clock cooldown after each fire. ``None`` = fire at most once.
-            max_steps: Maximum number of steps to fire. ``None`` = fire indefinitely.
+            max_steps: Maximum number of fires across the lifetime of the cm.
+                ``None`` = no limit.
         """
         scheduler = _FillerScheduler(
             session=self._session,
