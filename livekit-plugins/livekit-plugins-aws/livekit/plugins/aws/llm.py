@@ -14,7 +14,6 @@
 # limitations under the License.
 from __future__ import annotations
 
-import json
 import os
 from dataclasses import dataclass
 from typing import Any
@@ -35,37 +34,6 @@ from livekit.agents.utils import is_given
 from .log import logger
 
 DEFAULT_TEXT_MODEL = "amazon.nova-2-lite-v1:0"
-
-
-def _flatten_tool_blocks(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Rewrite toolUse/toolResult content blocks as plain text.
-
-    Bedrock Converse rejects requests that contain tool blocks without a
-    matching ``toolConfig``. When tools are intentionally omitted from a turn
-    (e.g. ``tool_choice="none"``), this preserves the history as readable text
-    instead so the model still sees what happened on prior turns.
-    """
-    flattened: list[dict[str, Any]] = []
-    for msg in messages:
-        new_content: list[dict[str, Any]] = []
-        for block in msg.get("content", []):
-            if "toolUse" in block:
-                tu = block["toolUse"]
-                args = json.dumps(tu.get("input", {}), sort_keys=True)
-                new_content.append({"text": f"[Called {tu.get('name', '')} with {args}]"})
-            elif "toolResult" in block:
-                tr = block["toolResult"]
-                parts: list[str] = []
-                for item in tr.get("content", []):
-                    if "text" in item:
-                        parts.append(item["text"])
-                    elif "json" in item:
-                        parts.append(json.dumps(item["json"], sort_keys=True))
-                new_content.append({"text": f"[Tool output: {' '.join(parts)}]"})
-            else:
-                new_content.append(block)
-        flattened.append({**msg, "content": new_content})
-    return flattened
 
 
 @dataclass
@@ -179,8 +147,8 @@ class LLM(llm.LLM):
 
             # Bedrock's toolChoice only accepts auto/any/tool — no "none" equivalent.
             # When the caller wants no tools for this turn, drop toolConfig entirely;
-            # the matching toolUse/toolResult blocks in history are flattened to text
-            # below so Bedrock doesn't reject the request.
+            # orphan toolUse/toolResult blocks in history are stripped below so
+            # Bedrock doesn't reject the request.
             if is_given(effective_tool_choice) and effective_tool_choice == "none":
                 return None
 
@@ -207,9 +175,9 @@ class LLM(llm.LLM):
         tool_config = _get_tool_config()
         if tool_config:
             opts["toolConfig"] = tool_config
+        else:
+            chat_ctx = chat_ctx.apply(exclude_function_call=True)
         messages, extra_data = chat_ctx.to_provider_format(format="aws")
-        if tool_config is None:
-            messages = _flatten_tool_blocks(messages)
         opts["messages"] = messages
         if extra_data.system_messages:
             system_messages: list[dict[str, str | dict]] = [
