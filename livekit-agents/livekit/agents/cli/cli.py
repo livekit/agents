@@ -1958,13 +1958,14 @@ def _build_cli(server: AgentServer) -> typer.Typer:
         _configure_logger(c, logging.DEBUG)
 
         c.print(
-            "[yellow]`download-files` via the agent CLI is deprecated. "
-            "Use `python -m livekit.agents download-files` instead — it discovers installed "
-            "plugins without loading your agent code.[/yellow]"
+            "[yellow]Invoking the download-files command via your agent script is "
+            "deprecated as of 1.5.10. Run it directly against the livekit.agents module "
+            "instead, e.g. `uv run -m livekit.agents download-files`.[/yellow]"
         )
         warnings.warn(
-            "`download-files` via the agent CLI is deprecated. "
-            "Use `python -m livekit.agents download-files` instead.",
+            "Invoking the download-files command via your agent script is deprecated "
+            "as of 1.5.10. Run it directly against the livekit.agents module instead, "
+            "e.g. `uv run -m livekit.agents download-files`.",
             DeprecationWarning,
             stacklevel=2,
         )
