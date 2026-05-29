@@ -417,7 +417,6 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                 elif data.get("type") == "done":
                     if input_ended:
-                        output_emitter.end_segment()
                         break
 
         try:
