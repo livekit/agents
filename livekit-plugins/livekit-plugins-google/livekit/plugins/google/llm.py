@@ -401,7 +401,7 @@ class LLM(llm.LLM):
 
         if is_given(self._opts.cached_content):
             extra["cached_content"] = self._opts.cached_content
-            
+    
         if is_given(self._opts.media_resolution):
             extra["media_resolution"] = self._opts.media_resolution
 
