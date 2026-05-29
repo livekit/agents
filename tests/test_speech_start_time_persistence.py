@@ -26,6 +26,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from livekit.agents import stt
 from livekit.agents.vad import VADEvent, VADEventType
 from livekit.agents.voice.audio_recognition import AudioRecognition
 
@@ -169,3 +170,86 @@ class TestUserTurnStartPersistence:
         # _speech_start_time should now reflect the second burst's start, not the first
         assert audio_recognition._speech_start_time is not None
         assert audio_recognition._speech_start_time > first_burst_speech_start
+
+
+class TestSttSpeechEventEOU:
+    """Test STT speech events trigger EOU correctly without external VAD."""
+
+    def _create_audio_recognition(
+        self,
+        *,
+        turn_detection_mode: str | None = None,
+        vad_base_turn_detection: bool = True,
+    ) -> AudioRecognition:
+        with patch.object(AudioRecognition, "__init__", lambda self, *args, **kwargs: None):
+            audio_recognition = AudioRecognition.__new__(AudioRecognition)
+
+        audio_recognition._turn_detection_mode = turn_detection_mode
+        audio_recognition._turn_detector = None
+        audio_recognition._vad = None
+        audio_recognition._stt = MagicMock()
+        audio_recognition._stt_request_ids = []
+        audio_recognition._interruption_enabled = False
+        audio_recognition._user_turn_committed = False
+        audio_recognition._end_of_turn_task = None
+        audio_recognition._vad_base_turn_detection = vad_base_turn_detection
+
+        audio_recognition._speech_start_time = None
+        audio_recognition._vad_speech_started = False
+        audio_recognition._speaking = False
+        audio_recognition._last_speaking_time = None
+        audio_recognition._last_final_transcript_time = None
+
+        audio_recognition._last_language = None
+        audio_recognition._audio_transcript = ""
+        audio_recognition._audio_interim_transcript = ""
+        audio_recognition._audio_preflight_transcript = ""
+        audio_recognition._final_transcript_confidence = []
+        audio_recognition._final_transcript_received = asyncio.Event()
+
+        audio_recognition._hooks = MagicMock()
+        audio_recognition._session = MagicMock()
+        audio_recognition._session.amd = None
+        audio_recognition._ensure_user_turn_span = MagicMock()
+        audio_recognition._run_eou_detection = MagicMock()
+        audio_recognition._check_user_turn_limit = MagicMock()
+
+        return audio_recognition
+
+    @staticmethod
+    def _stt_event(type_: stt.SpeechEventType, text: str = "hello") -> stt.SpeechEvent:
+        return stt.SpeechEvent(
+            type=type_,
+            alternatives=[stt.SpeechData(text=text, language="en")],
+        )
+
+    @pytest.mark.asyncio
+    async def test_stt_eos_runs_eou_after_final_transcript_for_vad_base_turn_detection(self):
+        audio_recognition = self._create_audio_recognition()
+
+        await audio_recognition._on_stt_event(self._stt_event(stt.SpeechEventType.START_OF_SPEECH))
+        assert audio_recognition._speaking is True
+
+        await audio_recognition._on_stt_event(self._stt_event(stt.SpeechEventType.FINAL_TRANSCRIPT))
+        audio_recognition._run_eou_detection.assert_not_called()
+
+        await audio_recognition._on_stt_event(self._stt_event(stt.SpeechEventType.END_OF_SPEECH))
+
+        assert audio_recognition._speaking is False
+        assert audio_recognition._audio_transcript == "hello"
+        audio_recognition._run_eou_detection.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_stt_eos_does_not_auto_commit_manual_turns(self):
+        audio_recognition = self._create_audio_recognition(
+            turn_detection_mode="manual",
+            vad_base_turn_detection=False,
+        )
+
+        await audio_recognition._on_stt_event(self._stt_event(stt.SpeechEventType.START_OF_SPEECH))
+        await audio_recognition._on_stt_event(self._stt_event(stt.SpeechEventType.FINAL_TRANSCRIPT))
+        await audio_recognition._on_stt_event(self._stt_event(stt.SpeechEventType.END_OF_SPEECH))
+
+        assert audio_recognition._speaking is False
+        assert audio_recognition._audio_transcript == "hello"
+        audio_recognition._run_eou_detection.assert_not_called()
