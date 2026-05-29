@@ -27,6 +27,7 @@ from .classifier import (
     HUMAN_SILENCE_THRESHOLD,
     HUMAN_SPEECH_THRESHOLD,
     MACHINE_SILENCE_THRESHOLD,
+    MAX_ENDPOINTING_DELAY,
     NO_SPEECH_THRESHOLD,
     TIMEOUT,
     AMDCategory,
@@ -449,10 +450,10 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
                 value=_SIP_CALL_STATUS_ACTIVE,
             )
         except RuntimeError as e:
-            # participant dropped or room disconnected before answer — outer
-            # timeout will resolve AMD with detection_timeout
+            # the outer detection timeout will eventually fire
             logger.debug("AMD: SIP answer wait aborted", extra={"reason": str(e)})
             return
+
         if not self._closed:
             self._start_listening()
 
@@ -572,6 +573,11 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             )
 
         if _llm:
+            max_endpointing_delay = (
+                session._activity.max_endpointing_delay
+                if session._activity
+                else MAX_ENDPOINTING_DELAY
+            )
             return _AMDClassifier(
                 _llm,
                 human_speech_threshold=self._opts["human_speech_threshold"],
@@ -582,6 +588,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
                 prompt=self._opts["prompt"],
                 source="amd_stt" if is_given(self._stt) else "stt",
                 wait_until_finished=self._wait_until_finished,
+                max_endpointing_delay=max_endpointing_delay,
             )
 
         return None

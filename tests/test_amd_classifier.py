@@ -29,6 +29,7 @@ def _make_classifier(
     no_speech_threshold: float = 10.0,
     timeout: float = 10.0,
     wait_until_finished: bool = False,
+    max_endpointing_delay: float = 6.0,
 ) -> _AMDClassifier:
     return _AMDClassifier(
         llm or FakeLLM(),
@@ -38,6 +39,7 @@ def _make_classifier(
         no_speech_threshold=no_speech_threshold,
         timeout=timeout,
         wait_until_finished=wait_until_finished,
+        max_endpointing_delay=max_endpointing_delay,
     )
 
 
@@ -450,5 +452,94 @@ class TestAMDClassifier:
         assert len(results) == 1
         assert results[0].category == AMDCategory.UNCERTAIN
         assert results[0].reason == "no_speech_timeout"
+
+        await clf.close()
+
+    async def test_eot_backstop_emits_machine_without_turn_detector(self) -> None:
+        """The synthetic end-of-turn backstop (max_endpointing_delay) lets a
+        machine verdict emit even if on_end_of_turn() is never called."""
+        llm = FakeLLM(fake_responses=[_machine_vm_response("voicemail")])
+        clf = _make_classifier(
+            llm=llm,
+            human_speech_threshold=0.05,
+            machine_silence_threshold=0.2,
+            timeout=5.0,
+            wait_until_finished=True,
+            max_endpointing_delay=0.4,
+        )
+        clf.start_listening()
+        clf.start_detection_timer()
+        results: list[AMDPredictionEvent] = []
+        clf.on("amd_prediction", results.append)
+
+        clf.on_user_speech_started()
+        await asyncio.sleep(0.1)
+        clf.on_user_speech_ended(silence_duration=0.0)
+        clf.push_text("voicemail")
+
+        # silence (0.2) elapses but eot has not yet → still gated
+        await asyncio.sleep(0.3)
+        assert clf._silence_reached is True
+        assert clf._eot_reached is False
+        assert results == []
+
+        # the eot backstop (0.4) fires without any on_end_of_turn() call → emit
+        await asyncio.wait_for(clf._verdict_ready.wait(), timeout=1.0)
+        assert clf._eot_reached is True
+        assert len(results) == 1
+        assert results[0].category == AMDCategory.MACHINE_VM
+
+        await clf.close()
+
+    async def test_detection_timeout_emits_uncertain_when_eot_reached_no_verdict(self) -> None:
+        """wait_until_finished + speech but the LLM never commits a verdict:
+        once eot is reached the greeting has ended, so the detection timeout
+        must emit the uncertain fallback instead of deferring forever."""
+        clf = _make_classifier(
+            human_speech_threshold=0.05,
+            machine_silence_threshold=0.2,
+            timeout=0.4,
+            wait_until_finished=True,
+            max_endpointing_delay=6.0,  # backstop won't fire; eot comes from on_end_of_turn
+        )
+        clf.start_listening()
+        clf.start_detection_timer()
+        results: list[AMDPredictionEvent] = []
+        clf.on("amd_prediction", results.append)
+
+        clf.on_user_speech_started()
+        await asyncio.sleep(0.1)
+        clf.on_user_speech_ended(silence_duration=0.0)
+        # no transcript / no verdict produced; turn ends
+        clf.on_end_of_turn()
+        assert clf._eot_reached is True
+        assert clf._verdict_result is None
+
+        # detection timeout fires with eot already reached → emit uncertain fallback
+        await asyncio.wait_for(clf._verdict_ready.wait(), timeout=1.0)
+        assert len(results) == 1
+        assert results[0].category == AMDCategory.UNCERTAIN
+        assert results[0].reason == "detection_timeout"
+
+        await clf.close()
+
+    async def test_speech_restart_cancels_eot_backstop(self) -> None:
+        """on_user_speech_started cancels the eot backstop and resets the gate."""
+        clf = _make_classifier(human_speech_threshold=0.05, max_endpointing_delay=0.3)
+        clf.start_listening()
+
+        clf.on_user_speech_started()
+        await asyncio.sleep(0.1)
+        clf.on_user_speech_ended(silence_duration=0.0)
+        assert clf._eot_timer is not None
+
+        # user speaks again before the backstop fires
+        clf.on_user_speech_started()
+        assert clf._eot_timer is None
+        assert clf._eot_reached is False
+
+        # well past the original backstop deadline → still not reached
+        await asyncio.sleep(0.4)
+        assert clf._eot_reached is False
 
         await clf.close()
