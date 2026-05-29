@@ -90,6 +90,11 @@ class AsyncRunContext(RunContext[Userdata_T]):
         Args:
             message: The update message for the LLM (e.g. "Found 3 flights, selecting the best option...").
         """
+        # update() is a deliberate agent action — reset any active filler dwell so a
+        # pending filler doesn't race the real update to the speech queue
+        for s in self._filler_schedulers:
+            s.reset_dwell()
+
         if isinstance(message, str):
             message = _template.format(
                 function_name=self.function_call.name,
