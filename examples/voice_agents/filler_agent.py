@@ -52,7 +52,7 @@ class TravelToolset(AsyncToolset):
             price = random.randint(180, 650)
         logger.info("Found airlines and prices, booking the flight...")
 
-        # phase 2: confirming — rotating fillers, up to 3 fires every 10s of idle
+        # phase 2: confirming — rotating fillers, up to 3 fires
         followups = [
             "Almost there, just confirming.",
             "Still working on it, won't be long.",
