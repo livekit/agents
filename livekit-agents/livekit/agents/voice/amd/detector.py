@@ -19,7 +19,6 @@ from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import EventEmitter, aio, is_given
 from ...utils.misc import is_cloud
 from ...utils.participant import (
-    ParticipantAttributeWaitAborted,
     wait_for_participant_attribute,
     wait_for_track_publication,
 )
@@ -449,7 +448,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
                 attribute=_SIP_CALL_STATUS_ATTR,
                 value=_SIP_CALL_STATUS_ACTIVE,
             )
-        except ParticipantAttributeWaitAborted as e:
+        except RuntimeError as e:
             # participant dropped or room disconnected before answer — outer
             # timeout will resolve AMD with detection_timeout
             logger.debug("AMD: SIP answer wait aborted", extra={"reason": str(e)})

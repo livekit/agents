@@ -68,11 +68,6 @@ async def wait_for_agent(
         room.off("connection_state_changed", on_connection_state_changed)
 
 
-class ParticipantAttributeWaitAborted(RuntimeError):
-    """Raised by :func:`wait_for_participant_attribute` when the wait cannot
-    complete (room/participant disconnected or never present)."""
-
-
 async def wait_for_participant_attribute(
     room: rtc.Room,
     *,
@@ -83,14 +78,14 @@ async def wait_for_participant_attribute(
     """Wait until a remote participant's attribute equals ``value``.
 
     Returns immediately if the attribute is already set. Raises
-    :class:`ParticipantAttributeWaitAborted` if the room is not connected, the
-    participant is not present, the participant disconnects, or the room
-    disconnects before the attribute is set.
+    :class:`RuntimeError` if the room is not connected, the participant is not
+    present, the participant disconnects, or the room disconnects before the
+    attribute is set.
     """
     if not room.isconnected():
-        raise ParticipantAttributeWaitAborted("room is not connected")
+        raise RuntimeError("room is not connected")
     if identity not in room.remote_participants:
-        raise ParticipantAttributeWaitAborted(f"participant {identity!r} is not in the room")
+        raise RuntimeError(f"participant {identity!r} is not in the room")
 
     fut: asyncio.Future[None] = asyncio.Future()
 
@@ -108,17 +103,13 @@ async def wait_for_participant_attribute(
     def _on_participant_disconnected(p: rtc.RemoteParticipant) -> None:
         if p.identity == identity and not fut.done():
             fut.set_exception(
-                ParticipantAttributeWaitAborted(
-                    f"participant {identity!r} disconnected while waiting for {attribute}"
-                )
+                RuntimeError(f"participant {identity!r} disconnected while waiting for {attribute}")
             )
 
     def _on_connection_state_changed(state: int) -> None:
         if state == rtc.ConnectionState.CONN_DISCONNECTED and not fut.done():
             fut.set_exception(
-                ParticipantAttributeWaitAborted(
-                    f"room disconnected while waiting for {identity!r} {attribute}"
-                )
+                RuntimeError(f"room disconnected while waiting for {identity!r} {attribute}")
             )
 
     room.on("participant_attributes_changed", _on_attributes_changed)
