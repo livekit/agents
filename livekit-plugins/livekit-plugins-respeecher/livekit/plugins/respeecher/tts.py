@@ -165,6 +165,14 @@ class TTS(tts.TTS):
         )
         self._retired_pools: list[utils.ConnectionPool[aiohttp.ClientWebSocketResponse]] = []
 
+    @property
+    def model(self) -> str:
+        return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        return "Respeecher"
+
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
         # WebSocket protocol does not support custom headers, using query parameter
