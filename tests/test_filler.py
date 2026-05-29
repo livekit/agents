@@ -448,5 +448,3 @@ async def test_ctx_update_resets_pending_filler_dwell() -> None:
         fires_late = len(session.say_calls)
     assert fires_mid == 0
     assert fires_late == 1
-
-
