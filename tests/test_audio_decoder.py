@@ -11,6 +11,7 @@ import pytest
 from livekit.agents import inference
 from livekit.agents.stt import SpeechEventType
 from livekit.agents.utils.codecs import AudioStreamDecoder, StreamBuffer
+from livekit.agents.utils.misc import is_cloud
 
 from .utils import wer
 
@@ -19,8 +20,10 @@ TEST_AUDIO_FILEPATH = os.path.join(os.path.dirname(__file__), "change-sophie.opu
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(
-    os.getenv("LIVEKIT_API_KEY") is None or os.getenv("LIVEKIT_API_SECRET") is None,
-    reason="LIVEKIT_API_KEY/LIVEKIT_API_SECRET not set",
+    os.getenv("LIVEKIT_API_KEY") is None
+    or os.getenv("LIVEKIT_API_SECRET") is None
+    or not is_cloud(os.getenv("LIVEKIT_URL", "")),
+    reason="LiveKit cloud credentials are invalid",
 )
 async def test_decode_and_transcribe():
     # Skip if test file doesn't exist
