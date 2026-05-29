@@ -27,10 +27,7 @@ class MyAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
             instructions=(
-                "You are reaching out to a customer with a phone call. "
-                "You are calling to see if they are home. "
-                "You might encounter an answering machine with a DTMF menu or IVR system. "
-                "If you do, you will try to leave a message to ask them to call back."
+                "You are reaching out to a customer with a phone call. You might encounter voice mail prompt or IVR systems. The goal is to reach to a human."
             ),
         )
 

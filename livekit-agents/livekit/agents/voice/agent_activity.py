@@ -1913,6 +1913,13 @@ class AgentActivity(RecognitionHooks):
         # IMPORTANT: This method is sync to avoid it being cancelled by the AudioRecognition
         # We explicitly create a new task here
 
+        # TODO: @chenghao-mou replace this direct call with the public `eot_prediction`
+        # event once feat/AGT-2520-multimodal-EOU lands.
+        if (amd := self._session._amd) is not None and amd._on_end_of_turn(info):
+            # cancel post-verdict preemptive and new generations
+            self._cancel_preemptive_generation()
+            info.skip_reply = True
+
         if self._scheduling_paused or self._new_turns_blocked:
             self._cancel_preemptive_generation()
             logger.warning(
