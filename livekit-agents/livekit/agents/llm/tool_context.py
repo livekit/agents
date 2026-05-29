@@ -517,7 +517,7 @@ class ToolContext:
         format: Literal["openai.responses"],
         *,
         strict: bool = True,
-        provider_tool_type: type[ProviderTool],
+        provider_tool_type: type[ProviderTool] | None = None,
     ) -> list[dict[str, Any]]: ...
 
     @overload
