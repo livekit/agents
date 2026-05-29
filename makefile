@@ -86,6 +86,7 @@ unit-tests:
 	@echo "$(BOLD)$(CYAN)Running unit tests...$(RESET)"
 	PYTHONPATH="$$PWD" uv run pytest \
 		tests/test_agent_session.py \
+		tests/test_agent_session_close.py \
 		tests/test_aio.py \
 		tests/test_audio_decoder.py \
 		tests/test_chat_ctx.py \
