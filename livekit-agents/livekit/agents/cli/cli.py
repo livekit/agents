@@ -68,7 +68,7 @@ class _ToggleMode(Exception):
     pass
 
 
-class _ExitCli(BaseException):
+class _ExitCli(KeyboardInterrupt):
     pass
 
 
@@ -1178,6 +1178,8 @@ def _text_mode(c: AgentsConsole) -> None:
                 key_read_cb=_key_read,
                 placeholder="Type to talk to your agent",
             )
+        except _ExitCli:
+            raise
         except KeyboardInterrupt:
             break
 

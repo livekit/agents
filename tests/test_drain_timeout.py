@@ -178,9 +178,9 @@ class TestDrainTimeout:
         """SIGTERM/SIGINT should not be eaten by broad Exception handlers.
 
         Issue #4664 showed _ExitCli being raised from a signal handler while
-        _memory_monitor_task() was inside psutil. Because _ExitCli inherited
-        from Exception, the blanket ``except Exception`` here swallowed the
-        shutdown signal and left the worker running instead of draining.
+        _memory_monitor_task() was inside psutil. _ExitCli must stay outside
+        Exception so blanket ``except Exception`` blocks do not swallow the
+        shutdown signal and leave the worker running instead of draining.
         """
         proc = _make_supervised_proc()
         proc._pid = 123
@@ -200,3 +200,23 @@ class TestDrainTimeout:
                 asyncio.get_event_loop().run_until_complete(proc._memory_monitor_task())
 
         mock_exception.assert_not_called()
+
+    def test_exitcli_propagates_from_asyncio_callback_frame(self) -> None:
+        """asyncio.Handle._run re-raises KeyboardInterrupt subclasses.
+
+        This covers the race where a signal handler raises _ExitCli while the
+        loop is running an arbitrary callback frame.
+        """
+        loop = asyncio.new_event_loop()
+        done: asyncio.Future[None] = loop.create_future()
+
+        def _raise_exit() -> None:
+            raise _ExitCli()
+
+        try:
+            loop.call_soon(_raise_exit)
+            loop.call_later(0.01, done.set_result, None)
+            with pytest.raises(_ExitCli):
+                loop.run_until_complete(done)
+        finally:
+            loop.close()
