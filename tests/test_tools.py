@@ -288,11 +288,20 @@ class TestToolContext:
             return schema["name"]
 
         ctx = ToolContext([mock_tool_3, mock_tool_1, mock_tool_2])
-        for fmt in ("openai", "anthropic", "aws"):
+        for fmt in ("openai", "openai.responses", "anthropic", "aws", "google"):
             names = [tool_name(fmt, s) for s in ctx.parse_function_tools(fmt)]
             assert names == ["mock_tool_1", "mock_tool_2", "mock_tool_3"], (
                 f"{fmt} tool order not sorted: {names}"
             )
+
+        # provider tools are part of the same cached prefix (e.g. openai responses
+        # api flattens function + provider tools together), so they must also be
+        # order-invariant
+        provider_a = DummyProviderTool("provider_a")
+        provider_b = DummyProviderTool("provider_b")
+        provider_c = DummyProviderTool("provider_c")
+        ctx = ToolContext([provider_c, provider_a, provider_b])
+        assert [t.id for t in ctx.provider_tools] == ["provider_a", "provider_b", "provider_c"]
 
 
 class TestToolExecution:
