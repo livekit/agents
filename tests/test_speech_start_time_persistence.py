@@ -209,6 +209,7 @@ class TestSttSpeechEndTiming:
         audio_recognition._session.amd = None
         audio_recognition._ensure_user_turn_span = MagicMock()
         audio_recognition._run_eou_detection = MagicMock()
+        audio_recognition._check_user_turn_limit = MagicMock()
 
         return audio_recognition
 
@@ -238,7 +239,7 @@ class TestSttSpeechEndTiming:
 
         assert audio_recognition._stt_end_of_speech_received is True
         assert stt_eos_time == 10.0
-        assert audio_recognition._last_final_transcript_time == 10.6
+        assert audio_recognition._last_final_transcript_time == 10.7
         assert audio_recognition._last_speaking_time == stt_eos_time
 
     @pytest.mark.asyncio
@@ -259,7 +260,7 @@ class TestSttSpeechEndTiming:
                 self._stt_event(stt.SpeechEventType.END_OF_SPEECH)
             )
 
-        assert fallback_transcript_time == 20.1
+        assert fallback_transcript_time == 20.0
         assert audio_recognition._stt_end_of_speech_received is True
         assert audio_recognition._last_speaking_time == 30.0
         assert audio_recognition._run_eou_detection.call_count == 2
@@ -278,8 +279,8 @@ class TestSttSpeechEndTiming:
             )
 
         assert audio_recognition._stt_end_of_speech_received is False
-        assert audio_recognition._last_final_transcript_time == 20.1
-        assert audio_recognition._last_speaking_time == 20.2
+        assert audio_recognition._last_final_transcript_time == 20.2
+        assert audio_recognition._last_speaking_time == 20.0
 
     @pytest.mark.asyncio
     async def test_external_vad_timestamp_is_not_overwritten(self):
@@ -288,12 +289,12 @@ class TestSttSpeechEndTiming:
 
         with patch(
             "livekit.agents.voice.audio_recognition.time.time",
-            side_effect=[20.0, 20.1],
+            side_effect=[20.0, 20.1, 20.2],
         ):
             await audio_recognition._on_stt_event(
                 self._stt_event(stt.SpeechEventType.FINAL_TRANSCRIPT)
             )
 
         assert audio_recognition._stt_end_of_speech_received is False
-        assert audio_recognition._last_final_transcript_time == 20.1
+        assert audio_recognition._last_final_transcript_time == 20.2
         assert audio_recognition._last_speaking_time == 10.0

@@ -181,6 +181,18 @@ class InterruptionMetrics(_BaseMetrics):
     metadata: Metadata | None = None
 
 
+class AvatarMetrics(_BaseMetrics):
+    type: Literal["avatar_metrics"] = "avatar_metrics"
+    timestamp: float
+    playback_latency: float = 0
+    """Delay between forwarding the first audio frame to the avatar and the playback started."""
+    session_started_time: float | None = None
+    """Time when the avatar session was started."""
+    avatar_joined_time: float | None = None
+    """Time when the avatar participant joined and started video track."""
+    metadata: Metadata | None = None
+
+
 AgentMetrics = (
     STTMetrics
     | LLMMetrics
@@ -189,4 +201,5 @@ AgentMetrics = (
     | EOUMetrics
     | RealtimeModelMetrics
     | InterruptionMetrics
+    | AvatarMetrics
 )

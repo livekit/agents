@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from unittest.mock import MagicMock, Mock
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
@@ -719,7 +719,7 @@ async def test_start_boundary_does_not_block_vad_interruption() -> None:
     check_timestamp(speaking_to_listening.created_at - t_origin, 4.5, speed_factor=speed)
 
 
-async def test_backchannel_boundary_suppresses_start_boundary_interruption() -> None:
+async def test_backchannel_boundary_suppresses_start_boundary_backchannel() -> None:
     actions = FakeActions()
     session = create_session(
         actions,
@@ -738,16 +738,73 @@ async def test_backchannel_boundary_suppresses_start_boundary_interruption() -> 
 
     try:
         recognition.on_start_of_agent_speech(started_at=time.time())
-        await recognition._on_overlap_speech_event(_interruption_event())
-
+        # backchannels during the cooldown are dropped (they are a no-op anyway,
+        # but this guards against the gate firing on `on_interruption`)
+        await recognition._on_overlap_speech_event(_backchannel_event())
         assert hooks.interruptions == []
 
-        await asyncio.sleep(0.06)
+        # a real interruption during the cooldown must still fire
         await recognition._on_overlap_speech_event(_interruption_event())
-
         assert len(hooks.interruptions) == 1
+
+        # after cooldown, both event types behave normally
+        await asyncio.sleep(0.06)
+        await recognition._on_overlap_speech_event(_backchannel_event())
+        await recognition._on_overlap_speech_event(_interruption_event())
+        assert len(hooks.interruptions) == 2
     finally:
         await _close_test_session(session)
+
+
+async def _make_stt_eos_recognition() -> AudioRecognition:
+    return AudioRecognition(
+        create_session(FakeActions()),
+        hooks=_TestRecognitionHooks(),
+        endpointing=BaseEndpointing(min_delay=0.0, max_delay=0.0),
+        stt=None,
+        vad=None,
+        interruption_detection=None,
+        turn_detection="stt",
+    )
+
+
+async def test_stt_eos_resets_active_vad_stream_without_restarting_vad() -> None:
+    recognition = await _make_stt_eos_recognition()
+    recognition._speaking = True
+    recognition._vad_speech_started = True
+    recognition._vad = MagicMock()
+    resettable_stream = MagicMock()
+    recognition._vad_stream = resettable_stream
+
+    try:
+        with patch.object(recognition, "update_vad") as update_vad:
+            await recognition._on_stt_event(SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
+
+        resettable_stream.flush.assert_called_once_with()
+        update_vad.assert_not_called()
+        assert recognition._vad_stream is resettable_stream
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
+async def test_stt_eos_falls_back_to_update_vad_when_no_active_stream() -> None:
+    recognition = await _make_stt_eos_recognition()
+    recognition._speaking = True
+    recognition._vad_speech_started = True
+    recognition._vad = MagicMock()
+    recognition._vad_stream = None
+
+    try:
+        with patch.object(recognition, "update_vad") as update_vad:
+            await recognition._on_stt_event(SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
+
+        update_vad.assert_called_once_with(recognition._vad)
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
 
 
 async def test_backchannel_boundary_releases_end_boundary_transcript() -> None:
@@ -1076,6 +1133,103 @@ async def test_unknown_function_call() -> None:
     assert "Unknown function: nonexistent_tool" in error_outputs[0].output
 
 
+async def test_invalid_tool_arguments_surface_as_tool_error() -> None:
+    """When the LLM emits a tool call with invalid arguments (missing required
+    field, wrong type, malformed JSON, etc.), the faulty turn must NOT be
+    stripped from the conversation. Instead the schema error is wrapped in a
+    ToolError so the model receives a descriptive message and can self-correct
+    on the next turn."""
+    speed = 5.0
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "What's the weather?")
+    # get_weather requires `location: str` — emit a call with no args so it
+    # fails pydantic validation.
+    actions.add_llm(
+        content="",
+        tool_calls=[
+            FunctionToolCall(name="get_weather", arguments="{}", call_id="1"),
+        ],
+    )
+
+    session = create_session(actions, speed_factor=speed)
+    agent = MyAgent()
+
+    tool_executed_events: list[FunctionToolsExecutedEvent] = []
+    session.on("function_tools_executed", tool_executed_events.append)
+
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    # Event was emitted with both the call AND a non-None output (i.e., not stripped).
+    assert len(tool_executed_events) == 1
+    ev = tool_executed_events[0]
+    assert len(ev.function_calls) == 1
+    assert ev.function_calls[0].name == "get_weather"
+    assert ev.function_call_outputs[0] is not None
+    output = ev.function_call_outputs[0]
+    assert output.is_error is True
+
+    # The model must see a descriptive, schema-specific error — NOT the generic
+    # "An internal error occurred" string we reserve for unexpected exceptions.
+    assert "An internal error occurred" not in output.output
+    assert "get_weather" in output.output
+    # Pydantic validation error references the missing field.
+    assert "location" in output.output
+
+    # The faulty call AND its error output must both end up in chat history so
+    # the LLM can see what it did wrong on the next turn (not stripped).
+    items = agent.chat_ctx.items
+    function_calls = [i for i in items if i.type == "function_call"]
+    function_call_outputs = [i for i in items if i.type == "function_call_output"]
+    assert len(function_calls) == 1
+    assert function_calls[0].name == "get_weather"
+    assert function_calls[0].call_id == "1"
+    assert len(function_call_outputs) == 1
+    assert function_call_outputs[0].call_id == "1"
+    assert function_call_outputs[0].is_error is True
+
+
+async def test_tool_internal_exception_returns_generic_error() -> None:
+    """When a tool body raises a non-ToolError exception, the model receives
+    the generic "An internal error occurred" message so we don't leak internal
+    details. Validation-error path is tested separately."""
+
+    class _BrokenToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="You are a helpful assistant.")
+
+        @function_tool
+        async def get_weather(self, location: str) -> str:
+            """Always blows up."""
+            raise RuntimeError("kaboom: secret database password leaked")
+
+    speed = 5.0
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "What's the weather in Tokyo?")
+    actions.add_llm(
+        content="",
+        tool_calls=[
+            FunctionToolCall(name="get_weather", arguments='{"location": "Tokyo"}', call_id="1"),
+        ],
+    )
+
+    session = create_session(actions, speed_factor=speed)
+    agent = _BrokenToolAgent()
+
+    tool_executed_events: list[FunctionToolsExecutedEvent] = []
+    session.on("function_tools_executed", tool_executed_events.append)
+
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    assert len(tool_executed_events) == 1
+    output = tool_executed_events[0].function_call_outputs[0]
+    assert output is not None
+    assert output.is_error is True
+    # Generic message — the RuntimeError details must NOT leak to the model.
+    assert output.output == "An internal error occurred"
+    assert "kaboom" not in output.output
+    assert "secret" not in output.output
+
+
 # helpers
 
 
@@ -1116,6 +1270,15 @@ def _interruption_event() -> inference.OverlappingSpeechEvent:
     return inference.OverlappingSpeechEvent(
         type="overlapping_speech",
         is_interruption=True,
+        overlap_started_at=time.time(),
+        detected_at=time.time(),
+    )
+
+
+def _backchannel_event() -> inference.OverlappingSpeechEvent:
+    return inference.OverlappingSpeechEvent(
+        type="overlapping_speech",
+        is_interruption=False,
         overlap_started_at=time.time(),
         detected_at=time.time(),
     )

@@ -17,6 +17,7 @@ import numpy as np
 from livekit import rtc
 
 from ...log import logger
+from ...utils.audio import silence_frame as _create_silence_frame
 from .. import io
 
 if TYPE_CHECKING:
@@ -531,16 +532,6 @@ class RecorderAudioOutput(io.AudioOutput):
     def clear_buffer(self) -> None:
         if self.next_in_chain:
             self.next_in_chain.clear_buffer()
-
-
-def _create_silence_frame(duration: float, sample_rate: int, num_channels: int) -> rtc.AudioFrame:
-    samples = int(duration * sample_rate)
-    return rtc.AudioFrame(
-        data=b"\x00\x00" * samples * num_channels,
-        num_channels=num_channels,
-        samples_per_channel=samples,
-        sample_rate=sample_rate,
-    )
 
 
 def _split_frame(frame: rtc.AudioFrame, position: float) -> tuple[rtc.AudioFrame, rtc.AudioFrame]:
