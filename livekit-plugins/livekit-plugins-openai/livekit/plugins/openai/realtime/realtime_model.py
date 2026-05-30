@@ -734,7 +734,8 @@ def process_base_url(
     azure_deployment: str | None = None,
     api_version: str | None = None,
 ) -> str:
-    if url.startswith("http"):
+    scheme_rewritten = url.startswith("http")
+    if scheme_rewritten:
         url = url.replace("http", "ws", 1)
 
     parsed_url = urlparse(url)
@@ -749,11 +750,15 @@ def process_base_url(
             path = "/openai/v1/realtime"
         else:
             path = parsed_url.path
+        passthrough = False
     else:
         if not parsed_url.path or path_stripped in ["", "/v1", "/openai", "/openai/v1"]:
             path = path_stripped + "/realtime"
+            passthrough = False
         else:
             path = parsed_url.path
+            # already-formed wss/ws URLs with a custom path are passed through unchanged
+            passthrough = not scheme_rewritten
 
     if is_azure:
         query_params.pop("api-version", None)  # remove from endpoint URL if present
@@ -768,7 +773,7 @@ def process_base_url(
                 query_params["model"] = [azure_deployment]
 
     else:
-        if "model" not in query_params:
+        if not passthrough and "model" not in query_params:
             query_params["model"] = [model]
 
     new_query = urlencode(query_params, doseq=True)
