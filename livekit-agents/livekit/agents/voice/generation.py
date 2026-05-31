@@ -146,6 +146,9 @@ async def _llm_inference_task(
             if data.ttft is None:
                 data.ttft = time.perf_counter() - start_time
 
+            if chunk.usage is not None:
+                data.usage = chunk.usage.model_dump()
+
             # io.LLMNode can either return a string or a ChatChunk
             if isinstance(chunk, str):
                 data.generated_text += chunk
@@ -184,9 +187,6 @@ async def _llm_inference_task(
                 if chunk.delta.content:
                     data.generated_text += chunk.delta.content
                     text_ch.send_nowait(chunk.delta.content)
-
-                if chunk.usage is not None:
-                    data.usage = chunk.usage.model_dump()
 
             elif isinstance(chunk, FlushSentinel):
                 text_ch.send_nowait(chunk)
@@ -303,6 +303,10 @@ async def _tts_inference_task(
 
             audio_ch.send_nowait(audio_frame)
             audio_duration += audio_frame.duration
+
+        # if start_time is not None and data.ttlb is None:
+        #     data.ttlb = time.perf_counter() - start_time
+
         return audio_duration
 
     input_tee = itertools.tee(input, 2)
