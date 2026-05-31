@@ -22,7 +22,7 @@ from ..llm import (
     ToolError,
     utils as llm_utils,
 )
-from ..llm.chat_context import Instructions
+from ..llm.chat_context import Instructions, TokenUsage
 from ..log import logger
 from ..telemetry import trace_types, tracer
 from ..types import USERDATA_TIMED_TRANSCRIPT, FlushSentinel, NotGivenOr
@@ -53,6 +53,8 @@ class _LLMGenerationData:
     id: str = field(default_factory=lambda: utils.shortuuid("item_"))
     started_fut: asyncio.Future[None] = field(default_factory=asyncio.Future)
     ttft: float | None = None
+    ttlt: float | None = None
+    usage: TokenUsage | None = None
 
 
 def perform_llm_inference(
@@ -183,12 +185,16 @@ async def _llm_inference_task(
                     data.generated_text += chunk.delta.content
                     text_ch.send_nowait(chunk.delta.content)
 
+                if chunk.usage is not None:
+                    data.usage = chunk.usage.model_dump()
+
             elif isinstance(chunk, FlushSentinel):
                 text_ch.send_nowait(chunk)
             else:
                 logger.warning(
                     f"LLM node returned an unexpected type: {type(chunk)}",
                 )
+        data.ttlt = time.perf_counter() - start_time
     finally:
         if isinstance(llm_node, _ACloseable):
             await llm_node.aclose()

@@ -257,6 +257,26 @@ class MetricsMetadata(TypedDict, total=False):
     model_provider: str
 
 
+
+
+class TokenUsage(TypedDict, total=False):
+    completion_tokens: int
+    """The number of tokens in the completion."""
+    prompt_tokens: int
+    """The number of tokens read from the cache."""
+    total_tokens: int
+    """The number of input tokens used (includes cached tokens)."""
+    prompt_cached_tokens: int
+    """The number of cached input tokens used."""
+    cache_creation_tokens: int
+    """The number of tokens used to create the cache."""
+    cache_read_tokens: int
+    """The total number of tokens used (completion + prompt tokens)."""
+    service_tier: str | None
+    """The service tier used for processing the request (e.g. 'default', 'priority', 'flex').
+    Returned by providers that support tiered processing (e.g. OpenAI)."""
+
+
 class MetricsReport(TypedDict, total=False):
     started_speaking_at: float
     stopped_speaking_at: float
@@ -281,6 +301,18 @@ class MetricsReport(TypedDict, total=False):
 
     llm_node_ttft: float
     """Time taken for the `llm_node` to return the first token
+
+    Assistant `ChatMessage` only
+    """
+
+    llm_node_ttlt: float
+    """Time taken for the `llm_node` to return the last token
+
+    Assistant `ChatMessage` only
+    """
+
+    llm_node_usage: TokenUsage
+    """LLM usage metrics
 
     Assistant `ChatMessage` only
     """
