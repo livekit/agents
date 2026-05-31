@@ -323,6 +323,12 @@ class MetricsReport(TypedDict, total=False):
     Assistant `ChatMessage` only
     """
 
+    tts_node_ttlb: float
+    """Time taken for the `tts_node` to return the last chunk of audio (after the first text token has been sent)
+
+    Assistant `ChatMessage` only
+    """
+
     playback_latency: float
     """Delay between forwarding the first audio frame and the `AudioOutput` reporting
     playback started. Near-zero for the default room output (self-reported when the frame

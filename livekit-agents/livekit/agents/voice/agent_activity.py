@@ -2748,6 +2748,9 @@ class AgentActivity(RecognitionHooks):
         if tts_gen_data and tts_gen_data.ttfb is not None:
             assistant_metrics["tts_node_ttfb"] = tts_gen_data.ttfb
 
+        if tts_gen_data and tts_gen_data.ttlb is not None:
+            assistant_metrics["tts_node_ttlb"] = tts_gen_data.ttlb
+
         if stopped_speaking_at and started_speaking_at:
             assistant_metrics["started_speaking_at"] = started_speaking_at
             assistant_metrics["stopped_speaking_at"] = stopped_speaking_at
