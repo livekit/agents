@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 
 from dotenv import load_dotenv
 
@@ -15,8 +16,14 @@ class MyAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
             instructions=(
-                "You can retrieve data via the MCP server. The interface is voice-based: "
-                "accept spoken user queries and respond with synthesized speech."
+                "You are a friendly travel assistant that communicates via voice. "
+                "Avoid emojis and markdown — speak naturally and concisely. "
+                "Use the get_weather tool when the user asks about the weather somewhere. "
+                "Use the book_flight tool when the user wants to book a flight; it takes "
+                "a couple of minutes and will report progress along the way — narrate the "
+                "updates naturally and don't make up flight details. "
+                "Don't repeat information you have already said in the conversation. "
+                f"Today is {datetime.now().strftime('%Y-%m-%d %A')}"
             ),
         )
 
@@ -39,7 +46,16 @@ async def entrypoint(ctx: JobContext):
         turn_detection=MultilingualModel(),
         tools=[
             mcp.MCPToolset(
-                id="mcp_toolset_1", mcp_server=mcp.MCPServerHTTP(url="http://localhost:8000/sse")
+                id="mcp_toolset_1",
+                mcp_server=mcp.MCPServerHTTP(
+                    url="http://localhost:8000/sse",
+                    # book_flight takes ~70s; bump the per-request timeout above that.
+                    client_session_timeout_seconds=120,
+                ),
+                # Only book_flight is long-running; get_weather can block the reply.
+                # Pass `True` (the default) to make every MCP tool non-blocking, or
+                # `False` to fall back to fully blocking execution.
+                nonblocking_tools=["book_flight"],
             )
         ],
     )

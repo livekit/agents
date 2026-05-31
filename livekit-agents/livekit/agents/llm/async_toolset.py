@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, get_origin, get_type_hints
 
@@ -185,13 +186,15 @@ class AsyncToolset(Toolset):
             self._wrap_tool(t) if isinstance(t, FunctionTool | RawFunctionTool) else t
             for t in self._tools
         ]
-        self._tools.extend([get_running_tasks, cancel_task])
-
         self._running_tasks: dict[str, _RunningTask] = {}
 
         # speech delivery — shared across all tools in this toolset
         self._pending_updates: list[_PendingUpdate] = []
         self._reply_task: asyncio.Task[None] | None = None
+
+    @property
+    def tools(self) -> Sequence[Tool | Toolset]:
+        return [*self._tools, get_running_tasks, cancel_task]
 
     async def cancel(self, call_id: str) -> bool:
         task = self._running_tasks.get(call_id)
