@@ -413,12 +413,16 @@ async def test_proc_pool_launch_job_raises_when_all_spawns_fail(monkeypatch):
         mp_ctx=mp_ctx,
         loop=loop,
     )
+    await pool.start()
 
-    with pytest.raises(RuntimeError, match="no process became available"):
-        await pool.launch_job(_generate_fake_job())
+    try:
+        with pytest.raises(RuntimeError, match="no process became available"):
+            await pool.launch_job(_generate_fake_job())
 
-    assert pool._jobs_waiting_for_process == 0
-    assert len(pool.processes) == 0
+        assert pool._jobs_waiting_for_process == 0
+        assert len(pool.processes) == 0
+    finally:
+        await pool.aclose()
 
 
 def _create_proc(
