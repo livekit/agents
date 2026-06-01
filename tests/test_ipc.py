@@ -14,6 +14,7 @@ from multiprocessing.context import BaseContext
 from typing import ClassVar
 
 import psutil
+import pytest
 
 from livekit.agents import JobContext, JobProcess, ipc, job, utils
 from livekit.agents.ipc.log_queue import LogQueueHandler, LogQueueListener
@@ -404,6 +405,60 @@ async def test_slow_initialization():
 
     for exitcode in exitcodes:
         assert exitcode != 0, "process should have been killed"
+
+
+async def test_proc_pool_launch_job_raises_when_all_spawns_fail(monkeypatch):
+    """When every spawn task fails to initialize, launch_job should raise
+    instead of hanging on an empty warmed-process queue. Reproduces #5868."""
+
+    class FailingProc:
+        running_job = None
+
+        def __init__(self, **kwargs):
+            pass
+
+        async def start(self) -> None:
+            pass
+
+        async def initialize(self) -> None:
+            raise TimeoutError("init timed out")
+
+        async def aclose(self) -> None:
+            pass
+
+        def logging_extra(self) -> dict:
+            return {}
+
+    monkeypatch.setattr(ipc.proc_pool.job_proc_executor, "ProcJobExecutor", FailingProc)
+
+    mp_ctx = mp.get_context("spawn")
+    loop = asyncio.get_running_loop()
+    pool = ipc.proc_pool.ProcPool(
+        job_executor_type=job.JobExecutorType.PROCESS,
+        initialize_process_fnc=_initialize_proc,
+        job_entrypoint_fnc=_job_entrypoint,
+        session_end_fnc=None,
+        num_idle_processes=0,
+        initialize_timeout=0.1,
+        close_timeout=20.0,
+        session_end_timeout=300.0,
+        inference_executor=None,
+        memory_warn_mb=0,
+        memory_limit_mb=0,
+        http_proxy=None,
+        mp_ctx=mp_ctx,
+        loop=loop,
+    )
+    await pool.start()
+
+    try:
+        with pytest.raises(RuntimeError, match="no process became available"):
+            await pool.launch_job(_generate_fake_job())
+
+        assert pool._jobs_waiting_for_process == 0
+        assert len(pool.processes) == 0
+    finally:
+        await pool.aclose()
 
 
 def _create_proc(
