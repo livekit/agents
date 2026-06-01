@@ -25,7 +25,7 @@ from ..llm import (
 from ..llm.chat_context import Instructions
 from ..log import logger
 from ..telemetry import trace_types, tracer
-from ..types import USERDATA_TIMED_TRANSCRIPT, FlushSentinel, NotGivenOr
+from ..types import USERDATA_TIMED_TRANSCRIPT, FlushSentinel, FlushSentinelText, NotGivenOr
 from ..utils import aio, is_given
 from ..utils.aio import itertools
 from . import io
@@ -356,6 +356,10 @@ async def _text_forwarding_task(
 ) -> None:
     try:
         async for delta in source:
+            # don't forward FlushSentinelText as transcription text
+            if isinstance(delta, FlushSentinelText):
+                continue
+
             out.text += delta
             if text_output is not None:
                 await text_output.capture_text(delta)

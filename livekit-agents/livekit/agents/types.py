@@ -47,8 +47,21 @@ The key for the timed transcripts in the audio frame userdata.
 _T = TypeVar("_T")
 
 
+@dataclass
 class FlushSentinel:
-    pass
+    id: str | None = None
+    """Optional tag, echoed on the FlushSentinelText seen in the transcription node."""
+
+
+class FlushSentinelText(str):
+    """Empty-string marker for a FlushSentinel boundary, readable in the transcription node."""
+
+    id: str | None
+
+    def __new__(cls, *, id: str | None = None) -> "FlushSentinelText":
+        self = super().__new__(cls, "")
+        self.id = id
+        return self
 
 
 class NotGiven:

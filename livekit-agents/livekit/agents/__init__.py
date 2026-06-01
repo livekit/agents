@@ -63,6 +63,7 @@ from .types import (
     NOT_GIVEN,
     APIConnectOptions,
     FlushSentinel,
+    FlushSentinelText,
     NotGiven,
     NotGivenOr,
 )
@@ -207,6 +208,7 @@ __all__ = [
     "AudioConfig",
     "PlayHandle",
     "FlushSentinel",
+    "FlushSentinelText",
     "LanguageCode",
     "io",
     "avatar",

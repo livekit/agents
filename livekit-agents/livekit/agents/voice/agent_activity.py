@@ -34,7 +34,7 @@ from ..metrics import (
 )
 from ..telemetry import otel_metrics, trace_types, tracer, utils as trace_utils
 from ..tokenize.basic import split_words
-from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
+from ..types import NOT_GIVEN, FlushSentinel, FlushSentinelText, NotGivenOr
 from ..utils.misc import is_given
 from ._utils import _set_participant_attributes
 from .agent import (
@@ -2633,6 +2633,8 @@ class AgentActivity(RecognitionHooks):
         ) -> AsyncIterable[str]:
             async for chunk in llm_output:
                 if isinstance(chunk, FlushSentinel):
+                    # surface the boundary marker into the transcription node
+                    yield FlushSentinelText(id=chunk.id)
                     continue
                 yield chunk
 
