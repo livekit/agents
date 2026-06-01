@@ -7,7 +7,11 @@ format `[SPEAKER_ID]TEXT[/SPEAKER_ID]` for testing.
 
 import re
 
+import pytest
+
 from livekit.agents import LanguageCode, stt
+
+pytestmark = pytest.mark.unit
 
 
 class TestSpeakerIdGrouping:

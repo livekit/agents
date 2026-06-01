@@ -1,7 +1,6 @@
 import asyncio
 import dataclasses
 import logging
-import re
 from pathlib import Path
 
 import pytest
@@ -13,31 +12,49 @@ from .toxic_proxy import Toxiproxy
 
 TEST_CONNECT_OPTIONS = dataclasses.replace(DEFAULT_API_CONNECT_OPTIONS, retry_interval=0.0)
 
-# Matches `pytest.mark.unit` so we can detect unit-marked modules *statically*,
-# without importing them. This lets `--unit` skip modules with heavy/optional
-# imports (cloud SDKs, bs4, ...) that would otherwise crash collection.
-_UNIT_MARKER_RE = re.compile(r"pytest\.mark\.unit\b")
+# Test categories, each exposed as a `--<category>` flag and a `pytest.mark.<category>`
+# marker. Provider-specific categories also accept an argument, e.g.
+# `pytestmark = pytest.mark.plugin("anthropic")`, selectable via `--plugin anthropic`.
+CATEGORIES = ("unit", "plugin", "realtime", "stt", "tts", "evals")
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
-    parser.addoption(
-        "--unit",
-        action="store_true",
-        default=False,
-        help="Only collect test modules marked as unit tests "
-        "(`pytestmark = pytest.mark.unit`). Non-unit modules are skipped before "
-        "import, so their optional dependencies are never required.",
-    )
+    group = parser.getgroup("categories", "test category selection")
+    for category in CATEGORIES:
+        group.addoption(
+            f"--{category}",
+            nargs="?",
+            const=True,
+            default=None,
+            metavar="PROVIDER",
+            help=f"select only `{category}` tests; optionally narrow to a single "
+            f"provider/target (e.g. --{category} <name>). Repeatable categories are unioned.",
+        )
+
+
+def _selected_categories(config: pytest.Config) -> dict[str, object]:
+    # category -> True (whole category) or a provider string (single target)
+    selected: dict[str, object] = {}
+    for category in CATEGORIES:
+        value = config.getoption(f"--{category}")
+        if value is not None:
+            selected[category] = value
+    return selected
 
 
 def pytest_ignore_collect(collection_path: Path, config: pytest.Config) -> bool | None:
-    if not config.getoption("--unit"):
-        return None
+    """Skip non-selected modules *before* importing them.
 
-    # only decide on test modules; let pytest handle directories/other files
-    if collection_path.is_dir() or not collection_path.name.startswith("test_"):
+    Marker selection alone can't do this: pytest must import a module to read its
+    markers, and some modules fail to import without optional/cloud deps. So we
+    detect the category marker by a plain substring scan of the source instead.
+    """
+    selected = _selected_categories(config)
+    if not selected:
         return None
-    if collection_path.suffix != ".py":
+    if collection_path.is_dir() or collection_path.suffix != ".py":
+        return None
+    if not collection_path.name.startswith("test_"):
         return None
 
     try:
@@ -45,8 +62,38 @@ def pytest_ignore_collect(collection_path: Path, config: pytest.Config) -> bool 
     except OSError:
         return None
 
-    # ignore (don't import) modules that aren't marked as unit tests
-    return _UNIT_MARKER_RE.search(source) is None
+    # ignore the module only if it carries none of the selected categories' markers;
+    # otherwise return None (defer) so --ignore and other plugins still apply.
+    if any(f"pytest.mark.{category}" in source for category in selected):
+        return None
+    return True
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Apply provider-argument filtering once modules are imported.
+
+    `--plugin anthropic` keeps only items whose `plugin` marker carries "anthropic"
+    in its args; a bare `--plugin` keeps the whole category.
+    """
+    selected = _selected_categories(config)
+    if not selected:
+        return
+
+    kept, deselected = [], []
+    for item in items:
+        keep = False
+        for category, target in selected.items():
+            for marker in item.iter_markers(category):
+                if target is True or target in marker.args:
+                    keep = True
+                    break
+            if keep:
+                break
+        (kept if keep else deselected).append(item)
+
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
+        items[:] = kept
 
 
 @pytest.fixture

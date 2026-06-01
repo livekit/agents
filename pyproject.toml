@@ -94,6 +94,8 @@ dev = [
     "tiktoken>=0.9.0",
     "pytest-xdist>=3.8.0",
     "playwright>=1.58.0",
+    "beautifulsoup4",
+    "markdownify",
 ]
 docs = ["pdoc3", "setuptools", "beautifulsoup4", "markdownify"]
 
@@ -127,8 +129,14 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 addopts = ["--import-mode=importlib", "--ignore=examples"]
 pythonpath = ["."]
+testpaths = ["tests"]
 markers = [
-    "unit: marks a test module as a unit test (no cloud credentials or optional deps); select with `--unit` (see tests/conftest.py)",
+    "unit: fast tests with no external providers (select with --unit)",
+    "plugin(name): provider integration test for `name` (select with --plugin [name])",
+    "realtime(name): realtime-model test, optionally for provider `name` (--realtime [name])",
+    "stt(name): speech-to-text test, optionally for provider `name` (--stt [name])",
+    "tts(name): text-to-speech test, optionally for provider `name` (--tts [name])",
+    "evals: behavioral evals run against the LiveKit inference gateway (--evals)",
 ]
 
 

@@ -29,6 +29,8 @@ import pytest
 from livekit.agents.vad import VADEvent, VADEventType
 from livekit.agents.voice.audio_recognition import AudioRecognition
 
+pytestmark = pytest.mark.unit
+
 
 class TestUserTurnStartPersistence:
     """Test cases for `AudioRecognition._user_turn_start` lifecycle."""

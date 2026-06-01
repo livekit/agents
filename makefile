@@ -84,7 +84,7 @@ fix: format lint-fix ## Run format and lint checks and fix issues automatically 
 
 unit-tests: ## Run unit tests (modules marked with `pytestmark = pytest.mark.unit`)
 	@echo "$(BOLD)$(CYAN)Running unit tests...$(RESET)"
-	PYTHONPATH="$$PWD" uv run pytest --unit tests/ $(PYTEST_ARGS)
+	PYTHONPATH="$$PWD" uv run pytest --unit $(PYTEST_ARGS)
 
 # ============================================
 # Development Workflows

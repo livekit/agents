@@ -15,6 +15,8 @@ import pytest
 
 from livekit.agents.voice.audio_recognition import AudioRecognition
 
+pytestmark = pytest.mark.unit
+
 
 class TestAudioRecognitionAclose:
     """Test cases for AudioRecognition.aclose() handling cancelled tasks."""

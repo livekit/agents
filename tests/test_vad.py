@@ -7,6 +7,8 @@ from livekit.plugins import silero
 
 from . import utils
 
+pytestmark = pytest.mark.unit
+
 SAMPLE_RATES = [16000, 44100]  # test multiple input sample rates
 
 

@@ -10,6 +10,8 @@ import pytest
 from livekit.agents.stt import SpeechEventType
 from livekit.agents.types import NOT_GIVEN
 
+pytestmark = pytest.mark.plugin("assemblyai")
+
 
 async def test_vad_threshold_default():
     """Test vad_threshold is not set by default."""
