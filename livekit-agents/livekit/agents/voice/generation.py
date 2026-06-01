@@ -49,6 +49,10 @@ class _LLMGenerationData:
     function_ch: aio.Chan[llm.FunctionCall]
     generated_text: str = ""
     generated_functions: list[llm.FunctionCall] = field(default_factory=list)
+    generated_provider_function_calls: list[llm.FunctionCall] = field(default_factory=list)
+    """Tool calls the provider executed itself (e.g. xAI WebSearch, Mistral
+    built-ins). Surfaced through ``function_tools_called``; never executed
+    locally."""
     generated_extra: dict[str, Any] = field(default_factory=dict)
     id: str = field(default_factory=lambda: utils.shortuuid("item_"))
     started_fut: asyncio.Future[None] = field(default_factory=asyncio.Future)
@@ -156,6 +160,17 @@ async def _llm_inference_task(
                 if chunk.delta.tool_calls:
                     for tool in chunk.delta.tool_calls:
                         if tool.type != "function":
+                            continue
+
+                        if tool.provider_executed:
+                            fnc_call = llm.FunctionCall(
+                                id=f"{data.id}/provider_fnc_{len(data.generated_provider_function_calls)}",
+                                call_id=tool.call_id,
+                                name=tool.name,
+                                arguments=tool.arguments,
+                                extra=tool.extra or {},
+                            )
+                            data.generated_provider_function_calls.append(fnc_call)
                             continue
 
                         # lazily update the tool_ctx in case tools changed in the middle of `llm_node`
