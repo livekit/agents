@@ -254,3 +254,41 @@ jobs:
     with:
       ref: ${{ inputs.branch || github.event.pull_request.merge_commit_sha }}
     secrets: inherit
+
+  dispatch-downstream-bumps:
+    name: Bump livekit-agents in downstream repos
+    needs: [publish]
+    # Only fire for stable releases merged via a release/vX.Y.Z PR.
+    # RC head refs look like release/v1.5.13rc1 and won't match the regex below.
+    # Republish retries should use internal-actions' workflow_dispatch fallback.
+    if: |
+      always()
+      && needs.publish.result == 'success'
+      && github.event_name == 'pull_request'
+      && github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve stable version from head ref
+        id: version
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          version="${HEAD_REF#release/v}"
+          if ! echo "$version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::notice::Head ref '$HEAD_REF' is not a stable release — skipping downstream bump."
+            exit 0
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch to internal-actions
+        if: steps.version.outputs.version != ''
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_DISPATCH_TOKEN }}
+          TARGET_REPO: ${{ vars.TARGET_REPO }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh api -X POST "repos/${TARGET_REPO}/dispatches" \
+            -f event_type="livekit-agents-published" \
+            -f client_payload[version]="$VERSION" \
+            -f client_payload[source_repo]="${{ github.repository }}" \
+            -f client_payload[source_sha]="${{ github.event.pull_request.merge_commit_sha }}"
