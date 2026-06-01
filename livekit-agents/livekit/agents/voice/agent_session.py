@@ -1231,7 +1231,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return self._activity.interrupt(force=force)
 
     @asynccontextmanager
-    async def claim_user_turn(self) -> AsyncIterator[None]:
+    async def _claim_user_turn(self) -> AsyncIterator[None]:
         """Declare a programmatic user-driven turn.
 
         Pins ``user_state`` to ``"speaking"`` and holds ``wait_for_inactive``
