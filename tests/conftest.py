@@ -1,6 +1,8 @@
 import asyncio
 import dataclasses
 import logging
+import re
+from pathlib import Path
 
 import pytest
 
@@ -10,6 +12,41 @@ from livekit.agents.cli import log
 from .toxic_proxy import Toxiproxy
 
 TEST_CONNECT_OPTIONS = dataclasses.replace(DEFAULT_API_CONNECT_OPTIONS, retry_interval=0.0)
+
+# Matches `pytest.mark.unit` so we can detect unit-marked modules *statically*,
+# without importing them. This lets `--unit` skip modules with heavy/optional
+# imports (cloud SDKs, bs4, ...) that would otherwise crash collection.
+_UNIT_MARKER_RE = re.compile(r"pytest\.mark\.unit\b")
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--unit",
+        action="store_true",
+        default=False,
+        help="Only collect test modules marked as unit tests "
+        "(`pytestmark = pytest.mark.unit`). Non-unit modules are skipped before "
+        "import, so their optional dependencies are never required.",
+    )
+
+
+def pytest_ignore_collect(collection_path: Path, config: pytest.Config) -> bool | None:
+    if not config.getoption("--unit"):
+        return None
+
+    # only decide on test modules; let pytest handle directories/other files
+    if collection_path.is_dir() or not collection_path.name.startswith("test_"):
+        return None
+    if collection_path.suffix != ".py":
+        return None
+
+    try:
+        source = collection_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+    # ignore (don't import) modules that aren't marked as unit tests
+    return _UNIT_MARKER_RE.search(source) is None
 
 
 @pytest.fixture

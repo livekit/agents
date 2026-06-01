@@ -30,7 +30,7 @@ test: up
 	$(MAKE) down
 
 unit-tests:
-	uv run pytest tests/ --ignore=tests/test_realtime --ignore=tests/test_stt.py --ignore=tests/test_tts.py -x -v $(PYTEST_ARGS)
+	uv run pytest --unit tests/ -x -v $(PYTEST_ARGS)
 
 realtime-tests:
 	uv run pytest tests/test_realtime/ -v $(PYTEST_ARGS)

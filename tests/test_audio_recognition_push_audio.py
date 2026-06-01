@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
+
 from livekit import rtc
 from livekit.agents.voice.audio_recognition import AudioRecognition
+
+pytestmark = pytest.mark.unit
 
 
 def _make_frame(byte: int = 0x11, samples: int = 160, sample_rate: int = 16000) -> rtc.AudioFrame:
