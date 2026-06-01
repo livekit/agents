@@ -291,4 +291,4 @@ jobs:
             -f event_type="livekit-agents-published" \
             -f client_payload[version]="$VERSION" \
             -f client_payload[source_repo]="${{ github.repository }}" \
-            -f client_payload[source_sha]="${{ github.sha }}"
+            -f client_payload[source_sha]="${{ github.event.pull_request.merge_commit_sha }}"
