@@ -39,6 +39,14 @@ from livekit import api, rtc
 
 from .. import llm
 from .._exceptions import CLIError
+from ..diagnostics import (
+    DiagnosticContext,
+    DiagnosticSeverity,
+    build_diagnostics_table,
+    collect_diagnostics,
+    diagnostic_report_to_json,
+    report_exit_code,
+)
 from ..job import JobExecutorType
 from ..log import logger
 from ..plugin import Plugin
@@ -1501,6 +1509,14 @@ def _run_console(
     c.record = record
 
     _configure_logger(c, log_level)
+    _run_preflight(
+        server=server,
+        mode="console",
+        console=c,
+        console_audio=mode == "audio",
+        input_device=input_device,
+        output_device=output_device,
+    )
     c.print("Starting console mode 🚀", tag="Agents")
 
     if c.record:
@@ -1519,7 +1535,8 @@ def _run_console(
         # c.print(f"Importing from {import_data.module_data.extra_sys_path}")
         # c.print(" ")
 
-        c._validate_device_or_raise(input_device=input_device, output_device=output_device)
+        if mode == "audio":
+            c._validate_device_or_raise(input_device=input_device, output_device=output_device)
 
         exit_triggered = False
 
@@ -1592,6 +1609,17 @@ def _run_worker(server: AgentServer, args: proto.CliArgs, jupyter: bool = False)
             signal.signal(sig, _handle_exit)
 
     _configure_logger(c, args.log_level)
+    _apply_cli_server_options(
+        server,
+        url=args.url,
+        api_key=args.api_key,
+        api_secret=args.api_secret,
+    )
+    _run_preflight(
+        server=server,
+        mode="dev" if args.devmode else "start",
+        console=c,
+    )
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -1663,6 +1691,97 @@ class LogLevel(str, enum.Enum):
     critical = "CRITICAL"
 
 
+def _apply_cli_server_options(
+    server: AgentServer,
+    *,
+    url: str | None = None,
+    api_key: str | None = None,
+    api_secret: str | None = None,
+) -> None:
+    update_kwargs: dict[str, Any] = {}
+    if url:
+        update_kwargs["ws_url"] = url
+    if api_key:
+        update_kwargs["api_key"] = api_key
+    if api_secret:
+        update_kwargs["api_secret"] = api_secret
+
+    if update_kwargs:
+        server.update_options(**update_kwargs)
+
+
+def _resolved_livekit_api_options(
+    server: AgentServer,
+    *,
+    url: str | None = None,
+    api_key: str | None = None,
+    api_secret: str | None = None,
+) -> tuple[str, str, str]:
+    return (
+        str(url or server._ws_url or ""),
+        str(api_key or server._api_key or ""),
+        str(api_secret or server._api_secret or ""),
+    )
+
+
+def _diagnostic_context(
+    server: AgentServer,
+    *,
+    mode: Literal["doctor", "console", "dev", "start", "connect"] = "doctor",
+    online: bool = False,
+    deep: bool = False,
+    strict: bool = False,
+    console_audio: bool = True,
+    input_device: str | int | None = None,
+    output_device: str | int | None = None,
+) -> DiagnosticContext:
+    return DiagnosticContext(
+        mode=mode,
+        online=online,
+        deep=deep,
+        strict=strict,
+        env=os.environ.copy(),
+        registered_plugins=tuple(Plugin.registered_plugins),
+        server=server,
+        console_audio=console_audio,
+        input_device=input_device,
+        output_device=output_device,
+    )
+
+
+def _run_preflight(
+    *,
+    server: AgentServer,
+    mode: Literal["console", "dev", "start", "connect"],
+    console: AgentsConsole | None,
+    console_audio: bool = True,
+    input_device: str | int | None = None,
+    output_device: str | int | None = None,
+) -> None:
+    report = collect_diagnostics(
+        _diagnostic_context(
+            server,
+            mode=mode,
+            console_audio=console_audio,
+            input_device=input_device,
+            output_device=output_device,
+        )
+    )
+    blocking = [result for result in report.results if result.severity == DiagnosticSeverity.FATAL]
+    notable = [result for result in report.results if result.severity != DiagnosticSeverity.OK]
+
+    if notable:
+        if console is None:
+            Console().print(build_diagnostics_table(report))
+        else:
+            console.print(build_diagnostics_table(report))
+
+    # Preflight only blocks on fatal setup errors. Non-fatal errors still surface
+    # in the table but should not prevent an otherwise valid worker from starting.
+    if blocking:
+        raise typer.Exit(code=1)
+
+
 def _build_cli(server: AgentServer) -> typer.Typer:
     app = typer.Typer(rich_markup_mode="rich")
 
@@ -1676,6 +1795,45 @@ def _build_cli(server: AgentServer) -> typer.Typer:
 
     _start_log_default = LogLevel(ServerEnvOption.getvalue(server.log_level, False))
     _dev_log_default = LogLevel(ServerEnvOption.getvalue(server.log_level, True))
+
+    @app.command()
+    def doctor(
+        *,
+        json_output: Annotated[
+            bool,
+            typer.Option("--json", help="Emit a stable JSON diagnostics report."),
+        ] = False,
+        online: Annotated[
+            bool,
+            typer.Option(help="Run safe online connectivity checks."),
+        ] = False,
+        deep: Annotated[
+            bool,
+            typer.Option(help="Run plugin-declared deep checks that are safe to execute."),
+        ] = False,
+        strict: Annotated[
+            bool,
+            typer.Option(help="Return a failing exit code for warnings."),
+        ] = False,
+    ) -> None:
+        """
+        Run [bold]LiveKit Agents[/bold] first-run diagnostics.
+        """
+        report = collect_diagnostics(
+            _diagnostic_context(
+                server,
+                mode="doctor",
+                online=online,
+                deep=deep,
+                strict=strict,
+            )
+        )
+        if json_output:
+            typer.echo(diagnostic_report_to_json(report))
+        else:
+            Console().print(build_diagnostics_table(report))
+
+        raise typer.Exit(code=report_exit_code(report))
 
     @app.command()
     def console(
@@ -1907,6 +2065,16 @@ def _build_cli(server: AgentServer) -> typer.Typer:
 
         c = AgentsConsole.get_instance()
         _configure_logger(c, log_level.value)
+        _apply_cli_server_options(server, url=url, api_key=api_key, api_secret=api_secret)
+        _run_preflight(server=server, mode="connect", console=c)
+        resolved_url, resolved_api_key, resolved_api_secret = _resolved_livekit_api_options(
+            server,
+            url=url,
+            api_key=api_key,
+            api_secret=api_secret,
+        )
+        if not (resolved_url and resolved_api_key and resolved_api_secret):
+            raise CLIError("LiveKit credentials are required for connect mode")
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -1917,7 +2085,9 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             nonlocal _task
 
             async def simulate_job() -> None:
-                async with api.LiveKitAPI(url, api_key, api_secret) as lk_api:
+                async with api.LiveKitAPI(
+                    resolved_url, resolved_api_key, resolved_api_secret
+                ) as lk_api:
                     room_request = api.ListRoomsRequest(names=[room])
                     active_room = await lk_api.room.list_rooms(room_request)
 

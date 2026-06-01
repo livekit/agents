@@ -17,6 +17,8 @@
 See https://docs.livekit.io/agents/integrations/tts/elevenlabs/ for more information.
 """
 
+from typing import TYPE_CHECKING
+
 from .models import STTRealtimeSampleRates, TTSEncoding, TTSModels
 from .stt import STT, SpeechStream
 from .tts import DEFAULT_VOICE_ID, TTS, PronunciationDictionaryLocator, Voice, VoiceSettings
@@ -40,10 +42,22 @@ from livekit.agents import Plugin
 
 from .log import logger
 
+if TYPE_CHECKING:
+    from livekit.agents.diagnostics import PluginDiagnosticInfo
+
 
 class ElevenLabsPlugin(Plugin):
     def __init__(self) -> None:
         super().__init__(__name__, __version__, __package__, logger)
+
+    def diagnostic_info(self) -> "PluginDiagnosticInfo":
+        from livekit.agents.diagnostics import PluginCapability, PluginDiagnosticInfo
+
+        return PluginDiagnosticInfo(
+            capabilities=[PluginCapability.STT, PluginCapability.TTS],
+            required_env_vars=["ELEVEN_API_KEY"],
+            docs_url="https://docs.livekit.io/agents/integrations/tts/elevenlabs/",
+        )
 
 
 Plugin.register_plugin(ElevenLabsPlugin())

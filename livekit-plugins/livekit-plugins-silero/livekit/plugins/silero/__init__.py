@@ -17,6 +17,8 @@
 See https://docs.livekit.io/agents/build/turns/vad/ for more information.
 """
 
+from typing import TYPE_CHECKING
+
 from .vad import VAD, VADStream
 from .version import __version__
 
@@ -26,10 +28,22 @@ from livekit.agents import Plugin
 
 from .log import logger
 
+if TYPE_CHECKING:
+    from livekit.agents.diagnostics import PluginDiagnosticInfo
+
 
 class SileroPlugin(Plugin):
     def __init__(self) -> None:
         super().__init__(__name__, __version__, __package__, logger)
+
+    def diagnostic_info(self) -> "PluginDiagnosticInfo":
+        from livekit.agents.diagnostics import PluginCapability, PluginDiagnosticInfo
+
+        return PluginDiagnosticInfo(
+            capabilities=[PluginCapability.VAD],
+            downloadable_files=["Silero VAD model"],
+            docs_url="https://docs.livekit.io/agents/build/turns/vad/",
+        )
 
 
 Plugin.register_plugin(SileroPlugin())

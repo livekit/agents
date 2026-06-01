@@ -18,6 +18,15 @@ session = AgentSession(
 
 **Note:** Realtime models (e.g., `openai.realtime.RealtimeModel`) are not supported by LiveKit Inference and must use the plugin directly. See the [Real-time Models](#-real-time-models) examples in `voice_agents/`.
 
+### Choosing model access
+
+| Option | Choose when | Credentials |
+| --- | --- | --- |
+| LiveKit Cloud Inference | You want the default examples to work with one LiveKit Cloud project and a unified model API. | `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` |
+| Provider plugin | You need provider-specific features, models, or account controls. | Provider API key, such as `OPENAI_API_KEY` |
+| Realtime model | You need a provider's realtime speech-to-speech API. | Provider API key |
+| Self-hosted model | You run model services in your own infrastructure. | Your service URL and any service-specific credentials |
+
 ## 📁 Example Categories
 
 ### 🎙️ [Voice Agents](./voice_agents/)
@@ -54,7 +63,7 @@ To run the examples, you'll need:
 
 - A [LiveKit Cloud](https://cloud.livekit.io) account or a local [LiveKit server](https://github.com/livekit/livekit)
 - API keys for the model providers you want to use in a `.env` file
-- Python 3.9 or higher
+- Python 3.10 or higher
 - [uv](https://docs.astral.sh/uv/)
 
 ### Environment file
@@ -84,6 +93,14 @@ uv sync --all-extras --dev
 
 ### Running an individual example
 
+Check your setup before running an example:
+
+```bash
+uv run examples/voice_agents/basic_agent.py doctor
+```
+
+Use `--json` for machine-readable output, `--online` for a safe LiveKit network check, `--deep` for plugin-declared checks, and `--strict` to fail on warnings.
+
 Run an example agent:
 
 ```bash
@@ -93,6 +110,17 @@ uv run examples/voice_agents/basic_agent.py console
 Your agent is now running in the console.
 
 For frontend support, use the [Agents playground](https://agents-playground.livekit.io) or the [starter apps](https://docs.livekit.io/agents/start/frontend/#starter-apps).
+
+### CLI modes
+
+| Command | Use for |
+| --- | --- |
+| `console` | Test the agent locally in the terminal. |
+| `dev` | Run a development worker for LiveKit clients with auto-reload. |
+| `start` | Run a production worker. |
+| `connect` | Attach the agent to a specific LiveKit room. |
+| `download-files` | Download plugin assets before first run or container startup. |
+| `doctor` | Diagnose local setup, credentials, and optional online checks. |
 
 ## 📖 Additional Resources
 
