@@ -50,6 +50,24 @@ from .log import logger
 from .version import __version__ as lk_version
 
 
+def _extract_segment_confidence(segment: dict[str, Any]) -> float:
+    confidence = segment.get("confidence")
+    if isinstance(confidence, int | float):
+        return float(confidence)
+
+    fragments = segment.get("fragments") or []
+    fragment_confidences = [
+        float(fragment["confidence"])
+        for fragment in fragments
+        if isinstance(fragment, dict) and isinstance(fragment.get("confidence"), int | float)
+    ]
+
+    if fragment_confidences:
+        return sum(fragment_confidences) / len(fragment_confidences)
+
+    return 0.0
+
+
 class TurnDetectionMode(str, Enum):
     """Endpoint and turn detection handling mode.
 
@@ -828,7 +846,7 @@ class SpeechStream(stt.RecognizeStream):
                 start_time=segment.get("metadata", {}).get("start_time", 0)
                 + self.start_time_offset,
                 end_time=segment.get("metadata", {}).get("end_time", 0) + self.start_time_offset,
-                confidence=1.0,
+                confidence=_extract_segment_confidence(segment),
             )
 
             # Create speech event
