@@ -9,38 +9,22 @@ Real-time noise reduction for LiveKit voice agents using [Krisp's VIVA SDK](http
 ## Installation
 
 ```bash
-# Install the plugin
 pip install livekit-plugins-krisp
-
-# Install krisp-audio SDK separately (required for actual usage)
 ```
 
-**Note:** The `krisp-audio` package is a proprietary SDK not available on public PyPI. 
-It must be obtained and installed separately from Krisp (https://krisp.ai/developers/).
+That's it. The default backend is bundled with the plugin and authenticates through
+LiveKit Cloud using the room's credentials — no separate SDK download, license key,
+or model file is required.
 
-## Prerequisites
-
-### Required for All Features
-
-1. **Krisp Audio SDK**: `pip install krisp-audio`
-2. **License Key**: Obtain a license key from Krisp and set it as an environment variable:
-   ```bash
-   export KRISP_VIVA_SDK_LICENSE_KEY=your-license-key-here
-   ```
-
-### For Noise Reduction
-
-1. **Noise Reduction Model**: Obtain a noise reduction or voice isolation `.kef` model file from Krisp
-2. **Set environment variable**:
-   ```bash
-   export KRISP_VIVA_FILTER_MODEL_PATH=/path/to/noise_model.kef
-   ```
+> Using the [Krisp license alternative](#alternative-krisp-license-auth) instead?
+> That path has additional prerequisites — see below.
 
 ## Quick Start
 
-### Human-to-Bot Noise Cancellation / Voice Isolation (Recommended)
-
-For cleaning up user audio before STT/VAD processing using the FrameProcessor approach:
+By default, `KrispVivaFilterFrameProcessor` uses **LiveKit Cloud** authentication: the
+bundled backend ships the noise-reduction model and authenticates against LiveKit Cloud
+using the room JWT the agent framework hands to the FrameProcessor automatically. There
+is nothing to configure.
 
 ```python
 from livekit.agents import AgentSession, Agent, JobContext, room_io
@@ -48,21 +32,21 @@ from livekit.plugins import krisp, silero, openai
 
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
-    # Create Krisp FrameProcessor
+    # Default: LiveKit Cloud auth + bundled model. No keys or model files.
     processor = krisp.KrispVivaFilterFrameProcessor(
         noise_suppression_level=100,  # 0-100
         frame_duration_ms=10,
         sample_rate=16000,
     )
-    
+
     session = AgentSession(
         vad=silero.VAD.load(),
         stt=openai.STT(),
         llm=openai.LLM(model="gpt-4o-mini"),
         tts=openai.TTS(),
     )
-    
-    # Start session with RoomIO and pass FrameProcessor directly
+
+    # Start session with RoomIO and pass the FrameProcessor directly
     await session.start(
         agent=MyAgent(),
         room=ctx.room,
@@ -78,22 +62,66 @@ async def entrypoint(ctx: JobContext):
 
 **Audio Pipeline:** `Room → RoomIO (with KrispVivaFilterFrameProcessor) → VAD → STT → LLM`
 
-
 ## Configuration
 
 ### KrispVivaFilterFrameProcessor Parameters
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `model_path` | str | env var | Path to noise reduction `.kef` model |
+| `auth_provider` | `LiveKitCloudAuthProvider \| KrispLicenseAuthProvider` | `LiveKitCloudAuthProvider` | Authentication backend. Defaults to LiveKit Cloud. See [the alternative](#alternative-krisp-license-auth). |
 | `noise_suppression_level` | int | 100 | Noise reduction intensity (0-100) |
 | `frame_duration_ms` | int | 10 | Frame size: 10, 15, 20, 30, or 32ms |
-| `sample_rate` | int | None | Optional: pre-initialize with sample rate |
+| `sample_rate` | int | None | Optional: pre-initialize with sample rate (defaults to 16000 Hz) |
+| `model_path` | str | None | **Deprecated.** Use `auth_provider=krisp.auth.krisp_license(model_path=...)`. License-mode only. |
 
 ### Supported Sample Rates
 
 8000, 16000, 24000, 32000, 44100, 48000 Hz
 
+## Alternative: Krisp License Auth
+
+> **Most users should use the default LiveKit Cloud path above.** This alternative is for
+> running the public Krisp SDK directly with your own Krisp license — for example, when
+> not deploying on LiveKit Cloud.
+
+This path uses the public `krisp_audio` wheel together with a Krisp license key and a
+`.kef` model file that you obtain from Krisp.
+
+### Prerequisites
+
+1. **Krisp Audio SDK** — proprietary, not on public PyPI. Obtain and install it
+   separately from [Krisp](https://krisp.ai/developers/):
+   ```bash
+   pip install krisp-audio
+   ```
+2. **License key**:
+   ```bash
+   export KRISP_VIVA_SDK_LICENSE_KEY=your-license-key-here
+   ```
+3. **Noise-reduction model** — a `.kef` model file from Krisp:
+   ```bash
+   export KRISP_VIVA_FILTER_MODEL_PATH=/path/to/noise_model.kef
+   ```
+
+### Usage
+
+Select the license backend by passing `auth_provider`:
+
+```python
+from livekit.plugins import krisp
+
+processor = krisp.KrispVivaFilterFrameProcessor(
+    auth_provider=krisp.auth.krisp_license(
+        license_key="...",                    # or KRISP_VIVA_SDK_LICENSE_KEY
+        model_path="/path/to/noise_model.kef",  # or KRISP_VIVA_FILTER_MODEL_PATH
+    ),
+    noise_suppression_level=100,
+    frame_duration_ms=10,
+    sample_rate=16000,
+)
+```
+
+`license_key` and `model_path` fall back to the environment variables above when omitted.
 
 ## Important Notes
 
@@ -112,23 +140,23 @@ The filter validates frame sizes and raises `ValueError` if incorrect.
 - Session created once (on first use or if `sample_rate` provided)
 - Call `close()` when done to free resources
 
-### Shared SDK Management
-
-The plugin uses `KrispSDKManager` to manage the Krisp SDK instance:
-
-- **Singleton Pattern**: SDK initialized only once, shared across all components and sessions
-- **Reference Counting**: Tracks active users (filters)
-- **Automatic Cleanup**: SDK destroyed when last component releases its reference
-
 ## Troubleshooting
 
-### "Krisp SDK initialization failed" or Licensing Errors
+### `RuntimeError`: bundled backend missing
+If the default (LiveKit Cloud) backend reports a missing wheel, the install is likely
+broken. Reinstall the plugin:
+```bash
+pip install --force-reinstall livekit-plugins-krisp
+```
+Alternatively, fall back to the [Krisp license auth](#alternative-krisp-license-auth) path.
+
+### "Krisp SDK initialization failed" or licensing errors *(license auth only)*
 Make sure the license key is set:
 ```bash
 export KRISP_VIVA_SDK_LICENSE_KEY=your-license-key-here
 ```
 
-### "Model path must be provided"
+### "Model path must be provided" *(license auth only)*
 ```bash
 export KRISP_VIVA_FILTER_MODEL_PATH=/path/to/model.kef
 ```
@@ -136,12 +164,10 @@ export KRISP_VIVA_FILTER_MODEL_PATH=/path/to/model.kef
 ### "Unsupported sample rate"
 Supported: 8000, 16000, 24000, 32000, 44100, 48000 Hz
 
-
 ### "Frame size mismatch"
 Ensure your audio frames match the configured `frame_duration_ms`.
-
 For 20ms @ 16kHz, each frame must have exactly 320 samples.
 
 ### Silent output
-- Verify model file is valid
+- Verify the model file is valid *(license auth only)*
 - Test with known noisy audio
