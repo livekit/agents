@@ -191,9 +191,7 @@ class ChunkedStream(tts.ChunkedStream):
     audio before yielding it.
     """
 
-    def __init__(
-        self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions
-    ) -> None:
+    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
@@ -208,9 +206,7 @@ class ChunkedStream(tts.ChunkedStream):
         )
 
         try:
-            async with self._tts._pool.connection(
-                timeout=self._conn_options.timeout
-            ) as ws:
+            async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
                 request = _build_request(self._opts, self._input_text)
                 await ws.send_str(json.dumps(request))
 
@@ -236,13 +232,9 @@ class ChunkedStream(tts.ChunkedStream):
                         try:
                             data = json.loads(msg.data)
                             if isinstance(data, dict) and data.get("type") == "error":
-                                raise APIError(
-                                    f"Lokutor error: {data.get('message', 'unknown')}"
-                                )
+                                raise APIError(f"Lokutor error: {data.get('message', 'unknown')}")
                         except json.JSONDecodeError:
-                            logger.warning(
-                                "unexpected text message: %s", msg.data[:200]
-                            )
+                            logger.warning("unexpected text message: %s", msg.data[:200])
 
                 output_emitter.flush()
         except asyncio.TimeoutError:
@@ -280,9 +272,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         output_emitter.start_segment(segment_id=request_id)
 
         try:
-            async with self._tts._pool.connection(
-                timeout=self._conn_options.timeout
-            ) as ws:
+            async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
                 self._acquire_time = self._tts._pool.last_acquire_time
                 self._connection_reused = self._tts._pool.last_connection_reused
 
@@ -316,17 +306,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                                 break
                             try:
                                 data = json.loads(msg.data)
-                                if (
-                                    isinstance(data, dict)
-                                    and data.get("type") == "error"
-                                ):
+                                if isinstance(data, dict) and data.get("type") == "error":
                                     raise APIError(
                                         f"Lokutor error: {data.get('message', 'unknown')}"
                                     )
                             except json.JSONDecodeError:
-                                logger.warning(
-                                    "unexpected text message: %s", msg.data[:200]
-                                )
+                                logger.warning("unexpected text message: %s", msg.data[:200])
 
                     output_emitter.flush()
 

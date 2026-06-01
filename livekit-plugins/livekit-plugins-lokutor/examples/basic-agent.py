@@ -8,8 +8,8 @@ Run:
   python examples/basic-agent.py
 """
 
-from livekit.agents import AgentSession, Agent
-from livekit.plugins import lokutor, openai, deepgram, silero
+from livekit.agents import Agent, AgentSession
+from livekit.plugins import deepgram, lokutor, openai, silero
 
 
 async def main():
@@ -35,4 +35,5 @@ async def main():
 
 if __name__ == "__main__":
     import asyncio
+
     asyncio.run(main())

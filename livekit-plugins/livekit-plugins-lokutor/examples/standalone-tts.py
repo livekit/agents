@@ -9,6 +9,7 @@ import asyncio
 import os
 
 import aiohttp
+
 from livekit import rtc
 from livekit.plugins import lokutor
 
@@ -44,9 +45,7 @@ async def main():
                     wf.setsampwidth(2)
                     wf.setframerate(combined.sample_rate)
                     wf.writeframes(combined.data.tobytes())
-                print(
-                    f"Saved output.wav ({combined.sample_rate} Hz, {combined.duration:.2f}s)"
-                )
+                print(f"Saved output.wav ({combined.sample_rate} Hz, {combined.duration:.2f}s)")
             else:
                 print("No audio generated")
 

@@ -169,9 +169,7 @@ def test_synthesize_returns_chunked_stream():
         return MagicMock()
 
     tts = TTS(api_key="test-key")
-    with patch(
-        "livekit.agents.tts.tts.asyncio.create_task", side_effect=_fake_create_task
-    ):
+    with patch("livekit.agents.tts.tts.asyncio.create_task", side_effect=_fake_create_task):
         stream = tts.synthesize("hello")
     assert isinstance(stream, ChunkedStream)
 
@@ -179,25 +177,22 @@ def test_synthesize_returns_chunked_stream():
 def test_stream_returns_synthesize_stream():
     from unittest.mock import MagicMock, patch
 
+    from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
     from livekit.plugins.lokutor import TTS
     from livekit.plugins.lokutor.tts import SynthesizeStream
-    from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
     def _fake_create_task(coro, *args, **kwargs):
         coro.close()
         return MagicMock()
 
     tts = TTS(api_key="test-key")
-    with patch(
-        "livekit.agents.tts.tts.asyncio.create_task", side_effect=_fake_create_task
-    ):
+    with patch("livekit.agents.tts.tts.asyncio.create_task", side_effect=_fake_create_task):
         stream = tts.stream(conn_options=DEFAULT_API_CONNECT_OPTIONS)
     assert isinstance(stream, SynthesizeStream)
 
 
 def test_build_request_includes_language():
-    from livekit.plugins.lokutor.tts import _build_request
-    from livekit.plugins.lokutor.tts import _TTSOptions
+    from livekit.plugins.lokutor.tts import _build_request, _TTSOptions
 
     opts = _TTSOptions(
         api_key="key",
@@ -219,8 +214,7 @@ def test_build_request_includes_language():
 
 
 def test_build_request_without_language():
-    from livekit.plugins.lokutor.tts import _build_request
-    from livekit.plugins.lokutor.tts import _TTSOptions
+    from livekit.plugins.lokutor.tts import _build_request, _TTSOptions
 
     opts = _TTSOptions(
         api_key="key",
