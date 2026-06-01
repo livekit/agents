@@ -24,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        example: [healthcare, survey, frontdesk, drive-thru, inference]
+        example: [healthcare, survey, frontdesk, drive-thru, inference, avatar]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
@@ -72,6 +72,7 @@ jobs:
         working-directory: examples/${{ matrix.example }}
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          LEMONSLICE_API_KEY: ${{ secrets.LEMONSLICE_API_KEY }}
         run: |
           : > .env.deploy
           # Register the agent under a deterministic name so the playground
@@ -80,6 +81,9 @@ jobs:
           case "${{ matrix.example }}" in
             healthcare)
               keys="OPENAI_API_KEY"
+              ;;
+            avatar)
+              keys="LEMONSLICE_API_KEY"
               ;;
             *)
               keys=""

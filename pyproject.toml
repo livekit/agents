@@ -23,6 +23,7 @@ livekit-plugins-fal = { workspace = true }
 livekit-plugins-fireworksai = { workspace = true }
 livekit-plugins-fishaudio = { workspace = true }
 livekit-plugins-gladia = { workspace = true }
+livekit-plugins-gnani = { workspace = true }
 livekit-plugins-google = { workspace = true }
 livekit-plugins-groq = { workspace = true }
 livekit-plugins-hedra = { workspace = true }
@@ -44,6 +45,7 @@ livekit-plugins-nvidia = { workspace = true }
 livekit-plugins-openai = { workspace = true }
 livekit-plugins-perplexity = { workspace = true }
 livekit-plugins-resemble = { workspace = true }
+livekit-plugins-respeecher = { workspace = true }
 livekit-plugins-rime = { workspace = true }
 livekit-plugins-runway = { workspace = true }
 livekit-plugins-rtzr = { workspace = true }

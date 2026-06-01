@@ -3,10 +3,10 @@ import json
 from typing import Annotated, Any, Literal
 
 import pytest
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from livekit.agents import Agent
-from livekit.agents.llm import ProviderTool, Tool, ToolContext, Toolset, function_tool
+from livekit.agents.llm import ProviderTool, Tool, ToolContext, ToolError, Toolset, function_tool
 from livekit.agents.llm._strict import to_strict_json_schema
 from livekit.agents.llm.utils import (
     build_legacy_openai_schema,
@@ -277,6 +277,32 @@ class TestToolContext:
         ctx6 = ToolContext([mock_tool_1, mock_tool_2])
         assert ctx5 != ctx6
 
+    def test_serialized_tool_order_is_sorted(self):
+        # provider tool definitions are part of the cached prompt prefix, so the
+        # serialized order must be deterministic regardless of input order
+        def tool_name(fmt: str, schema: dict[str, Any]) -> str:
+            if fmt == "openai":
+                return schema["function"]["name"]
+            if fmt == "aws":
+                return schema["toolSpec"]["name"]
+            return schema["name"]
+
+        ctx = ToolContext([mock_tool_3, mock_tool_1, mock_tool_2])
+        for fmt in ("openai", "openai.responses", "anthropic", "aws", "google"):
+            names = [tool_name(fmt, s) for s in ctx.parse_function_tools(fmt)]
+            assert names == ["mock_tool_1", "mock_tool_2", "mock_tool_3"], (
+                f"{fmt} tool order not sorted: {names}"
+            )
+
+        # provider tools are part of the same cached prefix (e.g. openai responses
+        # api flattens function + provider tools together), so they must also be
+        # order-invariant
+        provider_a = DummyProviderTool("provider_a")
+        provider_b = DummyProviderTool("provider_b")
+        provider_c = DummyProviderTool("provider_c")
+        ctx = ToolContext([provider_c, provider_a, provider_b])
+        assert [t.id for t in ctx.provider_tools] == ["provider_a", "provider_b", "provider_c"]
+
 
 class TestToolExecution:
     def test_function_arguments_to_pydantic_model(self):
@@ -338,6 +364,26 @@ class TestToolExecution:
             "type": "object",
         }
 
+    def test_field_constraints_preserved(self):
+        # Field(...) constraints (ge/le/pattern/...) live in FieldInfo.metadata,
+        # not its attributes; they must survive the signature -> pydantic model
+        # conversion so the model both advertises and enforces them.
+        @function_tool
+        async def book(count: Annotated[int, Field(ge=1, le=10, description="how many")]) -> str:
+            """Book a thing."""
+            return "ok"
+
+        model = function_arguments_to_pydantic_model(book)
+        prop = model.model_json_schema()["properties"]["count"]
+        assert prop["minimum"] == 1
+        assert prop["maximum"] == 10
+        assert prop["description"] == "how many"
+
+        model(count=5)  # within bounds
+        for bad in (0, 11):
+            with pytest.raises(ValidationError):
+                model(count=bad)
+
     async def test_tool_execution(self):
         args, kwargs = prepare_function_arguments(
             fnc=mock_tool_1, json_arguments='{"arg1": "test", "opt_arg2": "test2"}'
@@ -390,20 +436,184 @@ class TestToolExecution:
         assert output == {"arg1": "test", "opt_arg2": None}
 
     def test_unexpected_arguments(self):
-        with pytest.raises(ValueError, match="validation error"):
+        with pytest.raises(ToolError, match="validation error"):
             prepare_function_arguments(fnc=mock_tool_1, json_arguments='{"opt_arg2": "test2"}')
 
-        with pytest.raises(ValueError, match="Received no value for required parameter"):
+        with pytest.raises(ToolError, match="Received no value for required parameter"):
             prepare_function_arguments(fnc=mock_tool_2, json_arguments='{"arg1": null}')
 
-        with pytest.raises(ValueError, match="validation error"):
+        with pytest.raises(ToolError, match="validation error"):
             prepare_function_arguments(fnc=mock_tool_2, json_arguments='{"arg1": "d"}')
 
         agent = DummyAgent()
-        with pytest.raises(ValueError, match="validation error"):
+        with pytest.raises(ToolError, match="validation error"):
             prepare_function_arguments(
                 fnc=agent.mock_tool_in_agent, json_arguments='{"opt_arg2": "test2"}'
             )
+
+    def test_repairs_malformed_json_arguments(self):
+        """LLMs occasionally emit syntactically invalid JSON for tool calls.
+        We should recover via json_repair instead of giving up immediately."""
+        # Missing closing brace.
+        args, kwargs = prepare_function_arguments(
+            fnc=mock_tool_1, json_arguments='{"arg1": "hi", "opt_arg2": "yo"'
+        )
+        assert args == ("hi", "yo")
+
+        # Unquoted-style payload (json_repair handles loose forms).
+        args, kwargs = prepare_function_arguments(fnc=mock_tool_1, json_arguments="{arg1: 'hi'}")
+        assert args == ("hi", None)
+
+    def test_unrepairable_json_arguments_raise(self):
+        """If json_repair can't recover anything meaningful, the error should
+        be surfaced as a ToolError so the LLM can self-correct on the next turn."""
+        with pytest.raises(ToolError, match="could not parse"):
+            prepare_function_arguments(fnc=mock_tool_1, json_arguments="not json at all")
+
+    def test_repairs_gemma_template_token_leak(self):
+        """Gemma chat-template tokens (<|...|>) sometimes leak into function-call
+        arguments, producing unparseable JSON. The repair pass should both fix
+        the JSON shape AND strip the leaked tokens so the original payload
+        (an order id, here) survives the round-trip cleanly."""
+
+        @function_tool
+        async def remove_order_item(order_id: list[str]) -> str:
+            return ",".join(order_id)
+
+        # Real failing payload captured from a Gemma 4 deployment. The model
+        # tried to emit `{"order_id": ["O_WAAB70"]}` but `<|"|"` template
+        # tokens leaked around the value, breaking the JSON (the string is
+        # never properly closed before `]}`).
+        leaked = '{"order_id": ["<|\\"|\\"O_WAAB70<|\\"|\\"]}'
+
+        args, kwargs = prepare_function_arguments(fnc=remove_order_item, json_arguments=leaked)
+        assert args == (["O_WAAB70"],), f"expected order_id=['O_WAAB70'], got {args}"
+
+    def test_strip_template_tokens_leaves_clean_strings_alone(self):
+        """Token stripping should only kick in on the repair path; well-formed
+        arguments that happen to contain `<|...|>` substrings should pass through
+        unmodified (we only run the strip pass when json_repair was triggered)."""
+        args, _ = prepare_function_arguments(fnc=mock_tool_1, json_arguments='{"arg1": "<|safe|>"}')
+        assert args == ("<|safe|>", None)
+
+    def test_parse_function_arguments_strict(self):
+        """parse_function_arguments should accept valid JSON unchanged."""
+        from livekit.agents.llm.utils import parse_function_arguments
+
+        assert parse_function_arguments('{"a": 1, "b": [2, 3]}') == {"a": 1, "b": [2, 3]}
+        # Empty/None payloads normalize to {}.
+        assert parse_function_arguments("{}") == {}
+        assert parse_function_arguments("null") == {}
+
+    def test_parse_function_arguments_non_dict_raises(self):
+        """parse_function_arguments must reject non-dict shapes (the caller
+        always expects a kwarg-style mapping)."""
+        from livekit.agents.llm.utils import parse_function_arguments
+
+        with pytest.raises(ValueError, match="expected dict"):
+            parse_function_arguments("[1, 2, 3]")
+        # Bare JSON strings hit the Nova-Sonic double-encoded unwrap path,
+        # which raises a more specific error.
+        with pytest.raises(ValueError, match="non-JSON string"):
+            parse_function_arguments('"just a string"')
+
+    def test_prepare_function_arguments_accepts_pre_parsed_dict(self):
+        """Callers that already parsed the JSON (e.g. _execute_tools_task after
+        canonicalizing fnc_call.arguments) can pass the dict directly. Must
+        behave the same as passing the equivalent JSON string."""
+        from_string = prepare_function_arguments(
+            fnc=mock_tool_1, json_arguments='{"arg1": "hi", "opt_arg2": "yo"}'
+        )
+        from_dict = prepare_function_arguments(
+            fnc=mock_tool_1, json_arguments={"arg1": "hi", "opt_arg2": "yo"}
+        )
+        assert from_string == from_dict == (("hi", "yo"), {})
+
+    @pytest.mark.asyncio
+    async def test_execute_function_call_preserves_valid_argument_structure(self):
+        """Canonicalization may normalize whitespace, but for already-valid JSON
+        the *structure* (keys, values) must round-trip identically. The repair
+        path must not silently alter legitimate arguments."""
+        from livekit.agents.llm.llm import FunctionToolCall
+        from livekit.agents.llm.utils import execute_function_call
+
+        tool_ctx = ToolContext([mock_tool_1])
+        original_args = '{"arg1": "hello", "opt_arg2": "world"}'
+        tool_call = FunctionToolCall(
+            name="mock_tool_1", arguments=original_args, call_id="call-valid-1"
+        )
+
+        result = await execute_function_call(tool_call, tool_ctx)
+        assert result.fnc_call_out is not None
+        assert result.fnc_call_out.is_error is False
+
+        # Whatever ended up in fnc_call.arguments must decode to the same dict.
+        assert json.loads(result.fnc_call.arguments) == {"arg1": "hello", "opt_arg2": "world"}
+
+    @pytest.mark.asyncio
+    async def test_execute_function_call_canonicalizes_repaired_arguments(self):
+        """After a successful repair, the FunctionCall's `arguments` should be
+        rewritten to canonical JSON so the next LLM turn doesn't see the
+        broken string in conversation history (which would fail re-serialization
+        and cause 5xx from providers like Vertex)."""
+        from livekit.agents.llm.llm import FunctionToolCall
+        from livekit.agents.llm.utils import execute_function_call
+
+        @function_tool
+        async def remove_order_item(order_id: list[str]) -> str:
+            return ",".join(order_id)
+
+        tool_ctx = ToolContext([remove_order_item])
+        raw_broken = '{"order_id": ["<|\\"|\\"O_WAAB70<|\\"|\\"]}'
+        tool_call = FunctionToolCall(
+            name="remove_order_item",
+            arguments=raw_broken,
+            call_id="call-canon-1",
+        )
+
+        result = await execute_function_call(tool_call, tool_ctx)
+        assert result.fnc_call_out is not None
+        assert result.fnc_call_out.is_error is False
+        assert result.fnc_call_out.output == "O_WAAB70"
+
+        # The arguments stored on the FunctionCall should now be valid JSON
+        # that re-serializes cleanly to the repaired payload — so subsequent
+        # LLM turns don't choke on broken syntax in the history.
+        assert result.fnc_call.arguments != raw_broken
+        parsed = json.loads(result.fnc_call.arguments)
+        assert parsed == {"order_id": ["O_WAAB70"]}
+
+    @pytest.mark.asyncio
+    async def test_execute_function_call_canonicalizes_when_validation_fails(self):
+        """When JSON parses (possibly via repair) but pydantic validation then
+        fails, fnc_call.arguments must STILL be canonicalized — otherwise the
+        broken raw payload propagates into chat history and the next LLM turn
+        gets a 5xx from providers that re-serialize."""
+        from livekit.agents.llm.llm import FunctionToolCall
+        from livekit.agents.llm.utils import execute_function_call
+
+        @function_tool
+        async def take_int(arg1: int) -> str:
+            return str(arg1)
+
+        tool_ctx = ToolContext([take_int])
+        # malformed JSON that json_repair can fix, but the value is the wrong
+        # type for pydantic validation (string where int is required)
+        raw_broken = '{arg1: "not_an_int"}'
+        tool_call = FunctionToolCall(
+            name="take_int", arguments=raw_broken, call_id="call-validate-fail"
+        )
+
+        result = await execute_function_call(tool_call, tool_ctx)
+
+        # Validation failed
+        assert result.fnc_call_out is not None
+        assert result.fnc_call_out.is_error is True
+
+        # But fnc_call.arguments was canonicalized despite the validation error
+        assert result.fnc_call.arguments != raw_broken
+        parsed = json.loads(result.fnc_call.arguments)
+        assert parsed == {"arg1": "not_an_int"}
 
 
 class TestNoParametersSchema:
