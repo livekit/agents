@@ -3,7 +3,7 @@ import json
 from typing import Annotated, Any, Literal
 
 import pytest
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from livekit.agents import Agent
 from livekit.agents.llm import (
@@ -285,6 +285,32 @@ class TestToolContext:
         ctx6 = ToolContext([mock_tool_1, mock_tool_2])
         assert ctx5 != ctx6
 
+    def test_serialized_tool_order_is_sorted(self):
+        # provider tool definitions are part of the cached prompt prefix, so the
+        # serialized order must be deterministic regardless of input order
+        def tool_name(fmt: str, schema: dict[str, Any]) -> str:
+            if fmt == "openai":
+                return schema["function"]["name"]
+            if fmt == "aws":
+                return schema["toolSpec"]["name"]
+            return schema["name"]
+
+        ctx = ToolContext([mock_tool_3, mock_tool_1, mock_tool_2])
+        for fmt in ("openai", "openai.responses", "anthropic", "aws", "google"):
+            names = [tool_name(fmt, s) for s in ctx.parse_function_tools(fmt)]
+            assert names == ["mock_tool_1", "mock_tool_2", "mock_tool_3"], (
+                f"{fmt} tool order not sorted: {names}"
+            )
+
+        # provider tools are part of the same cached prefix (e.g. openai responses
+        # api flattens function + provider tools together), so they must also be
+        # order-invariant
+        provider_a = DummyProviderTool("provider_a")
+        provider_b = DummyProviderTool("provider_b")
+        provider_c = DummyProviderTool("provider_c")
+        ctx = ToolContext([provider_c, provider_a, provider_b])
+        assert [t.id for t in ctx.provider_tools] == ["provider_a", "provider_b", "provider_c"]
+
 
 class TestToolExecution:
     def test_function_arguments_to_pydantic_model(self):
@@ -345,6 +371,26 @@ class TestToolExecution:
             "title": "RawToolInAgentArgs",
             "type": "object",
         }
+
+    def test_field_constraints_preserved(self):
+        # Field(...) constraints (ge/le/pattern/...) live in FieldInfo.metadata,
+        # not its attributes; they must survive the signature -> pydantic model
+        # conversion so the model both advertises and enforces them.
+        @function_tool
+        async def book(count: Annotated[int, Field(ge=1, le=10, description="how many")]) -> str:
+            """Book a thing."""
+            return "ok"
+
+        model = function_arguments_to_pydantic_model(book)
+        prop = model.model_json_schema()["properties"]["count"]
+        assert prop["minimum"] == 1
+        assert prop["maximum"] == 10
+        assert prop["description"] == "how many"
+
+        model(count=5)  # within bounds
+        for bad in (0, 11):
+            with pytest.raises(ValidationError):
+                model(count=bad)
 
     async def test_tool_execution(self):
         args, kwargs = prepare_function_arguments(
