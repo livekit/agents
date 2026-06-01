@@ -102,7 +102,7 @@ def _build_inner(
             # The closed-source wheel is itself a FrameProcessor; it handles
             # auth via _on_credentials_updated and bundles the model.
             # TODO: confirm exact class name with the wheel author.
-            from krisp_audio_livekit_internal import (  # type: ignore[import-not-found]
+            from livekit.plugins.krisp_internal import (  # type: ignore[import-not-found]
                 KrispVivaFilterFrameProcessor as _CloudKrispFrameProcessor,
             )
         except ModuleNotFoundError as e:
