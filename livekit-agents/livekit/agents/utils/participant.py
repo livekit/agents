@@ -118,9 +118,12 @@ async def wait_for_participant_attribute(
 
     try:
         # check after registering so an attribute set between check and subscribe
-        # cannot slip past
+        # cannot slip past. presence is authoritative too: if the participant vanished
+        # in between, reject rather than await a future that only settles on disconnect.
         existing = room.remote_participants.get(identity)
-        if existing and existing.attributes.get(attribute) == value:
+        if existing is None:
+            raise RuntimeError(f"participant {identity!r} is not in the room")
+        if existing.attributes.get(attribute) == value:
             return
         await fut
     finally:
