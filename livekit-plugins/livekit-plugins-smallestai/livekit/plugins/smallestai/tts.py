@@ -55,6 +55,7 @@ class _TTSOptions:
     output_format: TTSEncoding | str
     base_url: str
     ws_url: str
+    word_timestamps: bool
 
 
 class TTS(tts.TTS):
@@ -70,6 +71,7 @@ class TTS(tts.TTS):
         output_format: TTSEncoding | str = "pcm",
         base_url: str = SMALLEST_BASE_URL,
         ws_url: str = SMALLEST_WS_URL,
+        word_timestamps: bool = False,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         """
@@ -92,6 +94,12 @@ class TTS(tts.TTS):
                 "ulaw", "alaw"). WebSocket streaming always returns PCM.
             base_url: Base URL for the Smallest AI HTTP API.
             ws_url: WebSocket URL for low-latency streaming synthesis.
+            word_timestamps: When True, the server interleaves word_timestamp events
+                with audio chunks on WebSocket streaming; each carries {id, word,
+                start, end} where start/end are seconds relative to the audio stream
+                start. Supported on base-queue English + Hindi voices (meher, devansh,
+                kartik, maithili, liam, avery). Other voice families silently emit no
+                word events. Defaults to False.
             http_session: An existing aiohttp ClientSession to use.
         """
         super().__init__(
@@ -120,6 +128,7 @@ class TTS(tts.TTS):
             output_format=output_format,
             base_url=base_url,
             ws_url=ws_url,
+            word_timestamps=word_timestamps,
         )
         self._session = http_session
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
@@ -167,6 +176,7 @@ class TTS(tts.TTS):
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
         output_format: NotGivenOr[TTSEncoding | str] = NOT_GIVEN,
+        word_timestamps: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         """Update TTS options."""
         if is_given(model):
@@ -181,6 +191,8 @@ class TTS(tts.TTS):
             self._opts.language = LanguageCode(language)
         if is_given(output_format):
             self._opts.output_format = output_format
+        if is_given(word_timestamps):
+            self._opts.word_timestamps = word_timestamps
 
     def synthesize(
         self,
@@ -307,6 +319,9 @@ class SynthesizeStream(tts.SynthesizeStream):
             else self._opts.language,
         }
 
+        if self._opts.word_timestamps:
+            payload["word_timestamps"] = True
+
         async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
             self._acquire_time = self._tts._pool.last_acquire_time
             self._connection_reused = self._tts._pool.last_connection_reused
@@ -337,6 +352,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                     audio_b64 = event.get("data", {}).get("audio")
                     if audio_b64:
                         output_emitter.push(base64.b64decode(audio_b64))
+                elif status == "word_timestamp":
+                    pass  # per-word timing events; no dedicated frame type in livekit-agents
                 elif status == "complete":
                     output_emitter.end_segment()
                     break
