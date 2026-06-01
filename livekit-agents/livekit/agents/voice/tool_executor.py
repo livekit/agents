@@ -15,6 +15,7 @@ from ..llm.tool_context import (
     DuplicateMode,
     FunctionTool,
     RawFunctionTool,
+    StopResponse,
     Tool,
     ToolError,
     Toolset,
@@ -279,10 +280,6 @@ class _ToolExecutor:
                 return
             except Exception as e:
                 output = e
-                logger.exception(
-                    "error in tool execution",
-                    extra={"call_id": call_id, "function": fnc_name},
-                )
 
             if not first_update_fut.done():
                 # tool returned without ctx.update() — surface the result to dispatch
@@ -292,7 +289,20 @@ class _ToolExecutor:
                     first_update_fut.set_result(output)
                 return
 
-            if output is None:
+            if isinstance(output, BaseException):
+                if isinstance(output, ToolError):
+                    logger.warning(
+                        "ToolError while executing tool: %s",
+                        output.message,
+                        extra={"function": fnc_name, "call_id": call_id},
+                    )
+                elif not isinstance(output, StopResponse):
+                    logger.exception(
+                        "exception occurred while executing tool",
+                        extra={"function": fnc_name, "call_id": call_id},
+                    )
+
+            if output is None or isinstance(output, StopResponse):
                 return
 
             # the first update has already been returned to dispatch, so an Agent
