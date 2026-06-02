@@ -28,7 +28,7 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 from livekit.agents.voice.generation import remove_instructions
-from openai.types import Reasoning, realtime
+from openai.types import realtime
 from openai.types.beta.realtime.session import (
     InputAudioNoiseReduction,
     InputAudioTranscription,
@@ -65,6 +65,7 @@ from openai.types.realtime import (
     RealtimeConversationItemFunctionCall,
     RealtimeErrorEvent,
     RealtimeFunctionTool,
+    RealtimeReasoning,
     RealtimeResponseCreateParams,
     RealtimeSessionCreateRequest,
     ResponseAudioDeltaEvent,
@@ -197,10 +198,8 @@ def _oai_session_to_azure(session: RealtimeSessionCreateRequest) -> AzureSession
         mapped["max_response_output_tokens"] = session.max_output_tokens
     if session.tracing is not None:
         mapped["tracing"] = session.tracing
-    # reasoning is carried as an extra field, see `_create_session_update_event`
-    reasoning = (session.model_extra or {}).get("reasoning")
-    if reasoning is not None:
-        mapped["reasoning"] = reasoning
+    if session.reasoning is not None:
+        mapped["reasoning"] = session.reasoning
 
     return AzureSession.model_construct(**mapped)
 
@@ -230,7 +229,7 @@ class _RealtimeOptions:
     max_response_output_tokens: int | Literal["inf"] | None
     tracing: Tracing | None
     truncation: RealtimeTruncation | None
-    reasoning: Reasoning | None
+    reasoning: RealtimeReasoning | None
     api_key: str | None
     base_url: str
     is_azure: bool
@@ -288,7 +287,7 @@ class RealtimeModel(llm.RealtimeModel):
         speed: NotGivenOr[float] = NOT_GIVEN,
         tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
         truncation: NotGivenOr[RealtimeTruncation | None] = NOT_GIVEN,
-        reasoning: NotGivenOr[Reasoning | None] = NOT_GIVEN,
+        reasoning: NotGivenOr[RealtimeReasoning | None] = NOT_GIVEN,
         api_key: str | None = None,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
@@ -321,7 +320,7 @@ class RealtimeModel(llm.RealtimeModel):
         speed: NotGivenOr[float] = NOT_GIVEN,
         tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
         truncation: NotGivenOr[RealtimeTruncation | None] = NOT_GIVEN,
-        reasoning: NotGivenOr[Reasoning | None] = NOT_GIVEN,
+        reasoning: NotGivenOr[RealtimeReasoning | None] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
@@ -348,7 +347,7 @@ class RealtimeModel(llm.RealtimeModel):
         speed: NotGivenOr[float] = NOT_GIVEN,
         tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
         truncation: NotGivenOr[RealtimeTruncation | None] = NOT_GIVEN,
-        reasoning: NotGivenOr[Reasoning | None] = NOT_GIVEN,
+        reasoning: NotGivenOr[RealtimeReasoning | None] = NOT_GIVEN,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
         azure_deployment: str | None = None,
@@ -373,7 +372,7 @@ class RealtimeModel(llm.RealtimeModel):
             speed (float | NotGiven): Audio playback speed multiplier.
             tracing (Tracing | None | NotGiven): Tracing configuration for OpenAI Realtime.
             truncation (RealtimeTruncation | None | NotGiven): Truncation configuration for OpenAI Realtime.
-            reasoning (Reasoning | None | NotGiven): Reasoning configuration for reasoning-capable realtime models (e.g. ``gpt-realtime-2``), e.g. ``Reasoning(effort="low")``. Effort values: "minimal", "low", "medium", "high", "xhigh".
+            reasoning (RealtimeReasoning | None | NotGiven): Reasoning config for reasoning-capable models (e.g. ``gpt-realtime-2``), e.g. ``RealtimeReasoning(effort="low")``.
             api_key (str | None): OpenAI API key. If None and not using Azure, read from OPENAI_API_KEY.
             http_session (aiohttp.ClientSession | None): Optional shared HTTP session.
             azure_deployment (str | None): Azure deployment name. Presence of any Azure-specific option enables Azure mode.
@@ -520,7 +519,7 @@ class RealtimeModel(llm.RealtimeModel):
         ] = NOT_GIVEN,
         speed: NotGivenOr[float] = NOT_GIVEN,
         tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
-        reasoning: NotGivenOr[Reasoning | None] = NOT_GIVEN,
+        reasoning: NotGivenOr[RealtimeReasoning | None] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,  # deprecated, unused in v1
@@ -542,7 +541,7 @@ class RealtimeModel(llm.RealtimeModel):
             turn_detection (RealtimeAudioInputTurnDetection | TurnDetection | None | NotGiven): Server-side VAD; defaults to Azure-optimized values when not provided.
             speed (float | NotGiven): Audio playback speed multiplier.
             tracing (Tracing | None | NotGiven): Tracing configuration for OpenAI Realtime.
-            reasoning (Reasoning | None | NotGiven): Reasoning configuration for reasoning-capable realtime models, e.g. ``Reasoning(effort="low")``.
+            reasoning (RealtimeReasoning | None | NotGiven): Reasoning config for reasoning-capable models, e.g. ``RealtimeReasoning(effort="low")``.
             http_session (aiohttp.ClientSession | None): Optional shared HTTP session.
             max_session_duration (float | None | NotGiven): Seconds before recycling the connection.
             temperature (float | NotGiven): Deprecated; ignored by Realtime v1.
@@ -678,7 +677,7 @@ class RealtimeModel(llm.RealtimeModel):
         speed: NotGivenOr[float] = NOT_GIVEN,
         tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
         truncation: NotGivenOr[RealtimeTruncation | None] = NOT_GIVEN,
-        reasoning: NotGivenOr[Reasoning | None] = NOT_GIVEN,
+        reasoning: NotGivenOr[RealtimeReasoning | None] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,  # deprecated, unused in v1
     ) -> None:
         if is_given(voice):
@@ -1208,9 +1207,7 @@ class RealtimeSession(
         if opts.truncation is not None:
             session.truncation = opts.truncation
         if opts.reasoning is not None:
-            # reasoning is not a typed field on RealtimeSessionCreateRequest; the model
-            # allows extra fields, so set it directly and let it serialize as-is
-            session.reasoning = opts.reasoning  # type: ignore
+            session.reasoning = opts.reasoning
 
         return self._wrap_session_update(
             event_id=utils.shortuuid("session_update_"), session=session
@@ -1238,7 +1235,7 @@ class RealtimeSession(
         speed: NotGivenOr[float] = NOT_GIVEN,
         tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
         truncation: NotGivenOr[RealtimeTruncation | None] = NOT_GIVEN,
-        reasoning: NotGivenOr[Reasoning | None] = NOT_GIVEN,
+        reasoning: NotGivenOr[RealtimeReasoning | None] = NOT_GIVEN,
     ) -> None:
         session = RealtimeSessionCreateRequest(type="realtime")
         has_changes = False
@@ -1271,9 +1268,8 @@ class RealtimeSession(
 
         if is_given(reasoning):
             if self._opts.reasoning != reasoning:
-                # reasoning is an extra field, see `_create_session_update_event`;
-                # setting it to None clears reasoning server-side
-                session.reasoning = reasoning  # type: ignore
+                # setting reasoning to None clears it server-side
+                session.reasoning = reasoning
                 has_changes = True
             self._opts.reasoning = reasoning
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from openai.types.shared import Reasoning
+from openai.types.realtime import RealtimeReasoning
 
 from livekit.agents.types import APIConnectOptions
 from livekit.plugins.openai.realtime.realtime_model import RealtimeModel
@@ -27,23 +27,7 @@ async def test_reasoning_in_session_update() -> None:
     model = RealtimeModel(
         model="gpt-realtime-2",
         api_key="sk-test",
-        reasoning=Reasoning(effort="low"),
-        conn_options=_NO_RETRY,
-    )
-    try:
-        session = _session_update_payload(model)
-        assert session["reasoning"] == {"effort": "low"}
-    finally:
-        await model.aclose()
-
-
-async def test_reasoning_accepts_dict_at_runtime() -> None:
-    # the feature request uses a dict (``reasoning={"effort": "low"}``); like
-    # openai.responses.LLM, the typed surface is ``Reasoning`` but a dict still serializes.
-    model = RealtimeModel(
-        model="gpt-realtime-2",
-        api_key="sk-test",
-        reasoning={"effort": "low"},  # type: ignore[arg-type]
+        reasoning=RealtimeReasoning(effort="low"),
         conn_options=_NO_RETRY,
     )
     try:
@@ -69,7 +53,7 @@ async def test_reasoning_in_azure_legacy_session_update() -> None:
         api_key="sk-test",
         api_version="2025-08-28",
         base_url="https://example.openai.azure.com/openai",
-        reasoning=Reasoning(effort="medium"),
+        reasoning=RealtimeReasoning(effort="medium"),
         conn_options=_NO_RETRY,
     )
     try:
@@ -83,12 +67,12 @@ async def test_update_options_changes_reasoning() -> None:
     model = RealtimeModel(
         model="gpt-realtime-2",
         api_key="sk-test",
-        reasoning=Reasoning(effort="low"),
+        reasoning=RealtimeReasoning(effort="low"),
         conn_options=_NO_RETRY,
     )
     try:
-        model.update_options(reasoning=Reasoning(effort="high"))
-        assert model._opts.reasoning == Reasoning(effort="high")
+        model.update_options(reasoning=RealtimeReasoning(effort="high"))
+        assert model._opts.reasoning == RealtimeReasoning(effort="high")
 
         session = _session_update_payload(model)
         assert session["reasoning"] == {"effort": "high"}
