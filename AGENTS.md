@@ -52,11 +52,6 @@ pytest.mark.unit`, etc.) — collection fails with a hint if it lacks one. Run
 pytest with the `--allow-uncategorized` option to temporarily disable this rule
 (CI keeps it on by default).
 
-Known-broken tests stay collected and visible via
-`@pytest.mark.xfail(strict=True, reason=...)` rather than being deleted or
-silently skipped — `strict` flips CI red the moment the underlying bug is fixed,
-forcing the marker's removal.
-
 ### Running Agents
 ```bash
 python myagent.py console   # Terminal mode with local audio I/O (no server needed)
