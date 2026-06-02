@@ -2,6 +2,7 @@ import asyncio
 import dataclasses
 import logging
 import re
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -78,16 +79,14 @@ def _plural(n: int, noun: str) -> str:
     return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
 
 
-def _iter_test_files(config: pytest.Config) -> list[Path]:
+def _iter_test_files(config: pytest.Config) -> Iterator[Path]:
     rootdir = Path(str(config.rootdir))
-    files: list[Path] = []
     for testpath in config.getini("testpaths") or ["tests"]:
         base = rootdir / testpath
         if base.is_dir():
-            files.extend(sorted(base.rglob("test_*.py")))
+            yield from sorted(base.rglob("test_*.py"))
         elif base.is_file() and base.name.startswith("test_"):
-            files.append(base)
-    return files
+            yield base
 
 
 def _uncategorized_modules(config: pytest.Config) -> list[Path]:
