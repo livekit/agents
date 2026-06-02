@@ -297,10 +297,12 @@ class _ToolExecutor:
                         extra={"function": fnc_name, "call_id": call_id},
                     )
                 elif not isinstance(output, StopResponse):
-                    logger.exception(
+                    logger.error(
                         "exception occurred while executing tool",
                         extra={"function": fnc_name, "call_id": call_id},
+                        exc_info=output,
                     )
+
 
             if output is None or isinstance(output, StopResponse):
                 return
