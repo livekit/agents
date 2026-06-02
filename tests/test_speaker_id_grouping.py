@@ -67,8 +67,7 @@ class TestSpeakerIdGrouping:
 
     @pytest.mark.xfail(
         strict=True,
-        reason="trailing whitespace in fragment text is not stripped before wrapping; "
-        "expectation and code disagree (see AGT speaker-id grouping)",
+        reason="trailing whitespace in the fragment text is not stripped before wrapping",
     )
     def test_two_speakers_simple_alternation(self):
         """Test simple alternation between two speakers."""
@@ -103,8 +102,7 @@ class TestSpeakerIdGrouping:
 
     @pytest.mark.xfail(
         strict=True,
-        reason="_process_fragments calls re.match() on a None speaker_id -> TypeError; "
-        "None is not guarded before the ignore-pattern check",
+        reason="_process_fragments runs re.match() on a None speaker_id -> TypeError",
     )
     def test_none_speaker_id(self):
         """Test handling fragments with None speaker_id."""

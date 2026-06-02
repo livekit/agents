@@ -7,7 +7,7 @@ from livekit.plugins import silero
 
 from . import utils
 
-# needs the silero ONNX model (loaded at import), so it is not a hermetic unit test
+# loads the silero ONNX model at import
 pytestmark = pytest.mark.plugin("silero")
 
 SAMPLE_RATES = [16000, 44100]  # test multiple input sample rates

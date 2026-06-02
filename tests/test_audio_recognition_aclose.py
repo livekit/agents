@@ -101,9 +101,8 @@ class TestAudioRecognitionAclose:
 
     @pytest.mark.xfail(
         strict=True,
-        reason="_create_audio_recognition() builds a partial instance without "
-        "_stt_pipeline; aclose() touches self._stt_pipeline -> AttributeError. "
-        "Mock setup is stale w.r.t. AudioRecognition.__init__.",
+        reason="aclose() accesses self._stt_pipeline, which _create_audio_recognition() "
+        "does not set -> AttributeError",
     )
     @pytest.mark.asyncio
     async def test_aclose_handles_precancelled_tasks_gracefully(self):
