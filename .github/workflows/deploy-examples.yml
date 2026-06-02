@@ -157,8 +157,8 @@ jobs:
         run: |
           mkdir -p next/public
           cp ../examples-manifest.json next/public/examples-manifest.json
-          git config user.name "livekit-examples-bot"
-          git config user.email "examples-bot@livekit.io"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add next/public/examples-manifest.json
           if git diff --cached --quiet; then
             echo "Manifest unchanged, nothing to commit."
