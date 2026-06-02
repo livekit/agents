@@ -16,6 +16,7 @@ These providers work with pre-configured avatars using unique avatar identifiers
 - **[LiveAvatar](./liveavatar/)** - [Platform](https://www.liveavatar.com/)
 - **[Protoface](./protoface/)** - [Platform](https://protoface.com/)
 - **[Simli](./simli/)** - [Platform](https://app.simli.com/)
+- **[Spatius](./spatius/)** - [Platform](https://www.spatius.ai/) | [Integration Guide](https://docs.spatius.ai)
 - **[Tavus](./tavus/)** - [Platform](https://www.tavus.io/)
 - **[TruGen](./trugen/)** - [Platform](https://app.trugen.ai/)
 

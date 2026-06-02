@@ -1,0 +1,739 @@
+# Copyright 2026 LiveKit, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from __future__ import annotations
+
+import asyncio
+import os
+import time
+from collections import deque
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+from livekit import api, rtc
+from livekit.agents import (
+    NOT_GIVEN,
+    AgentSession,
+    NotGivenOr,
+    get_job_context,
+    utils,
+)
+from livekit.agents.voice.avatar import (
+    AudioSegmentEnd,
+    AvatarSession as BaseAvatarSession,
+    QueueAudioOutput,
+)
+from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
+from spatius import AvatarSession as SpatiusSDKSession, LiveKitEgressConfig, new_avatar_session
+from spatius.proto.generated import message_pb2 as _message_pb2
+
+from .log import logger
+
+message_pb2: Any = _message_pb2
+
+DEFAULT_REGION = "us-west"
+DEFAULT_SAMPLE_RATE = 24000
+MIN_COMPLETION_TIMEOUT_SECONDS = 3.0
+COMPLETION_TIMEOUT_BUFFER_SECONDS = 2.0
+ACTIVE_SEGMENT_IDLE_END_SECONDS = 1.0
+DEFAULT_SESSION_TTL = timedelta(hours=1)
+LIVEKIT_AVATAR_PUBLISH_SOURCES = ["camera", "microphone"]
+_AVATAR_AGENT_IDENTITY = "spatius-avatar-agent"
+_AVATAR_AGENT_NAME = "spatius-avatar-agent"
+
+
+class SpatiusException(Exception):
+    """Exception raised for Spatius avatar integration errors."""
+
+
+@dataclass
+class _SegmentState:
+    req_id: str
+    pushed_duration: float = 0.0
+    first_frame_at: float | None = None
+    completion_timeout_task: asyncio.Task[None] | None = None
+
+
+class AvatarSession(BaseAvatarSession):
+    """A Spatius avatar session.
+
+    The LiveKit agent produces speech as usual. This plugin forwards the TTS audio
+    to Spatius, and the Spatius avatar worker joins the LiveKit room to publish
+    synchronized avatar audio/video.
+    """
+
+    def __init__(
+        self,
+        *,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        app_id: NotGivenOr[str] = NOT_GIVEN,
+        avatar_id: NotGivenOr[str] = NOT_GIVEN,
+        region: NotGivenOr[str] = NOT_GIVEN,
+        console_endpoint_url: NotGivenOr[str] = NOT_GIVEN,
+        ingress_endpoint_url: NotGivenOr[str] = NOT_GIVEN,
+        avatar_participant_identity: NotGivenOr[str] = NOT_GIVEN,
+        avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
+        idle_timeout_seconds: int = 0,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+    ) -> None:
+        super().__init__()
+
+        resolved_api_key = api_key if utils.is_given(api_key) else os.getenv("SPATIUS_API_KEY")
+        if not resolved_api_key:
+            raise SpatiusException(
+                "api_key must be set either by passing it to AvatarSession or "
+                "by setting the SPATIUS_API_KEY environment variable"
+            )
+
+        resolved_app_id = app_id if utils.is_given(app_id) else os.getenv("SPATIUS_APP_ID")
+        if not resolved_app_id:
+            raise SpatiusException(
+                "app_id must be set either by passing it to AvatarSession or "
+                "by setting the SPATIUS_APP_ID environment variable"
+            )
+
+        resolved_avatar_id = (
+            avatar_id if utils.is_given(avatar_id) else os.getenv("SPATIUS_AVATAR_ID")
+        )
+        if not resolved_avatar_id:
+            raise SpatiusException(
+                "avatar_id must be set either by passing it to AvatarSession or "
+                "by setting the SPATIUS_AVATAR_ID environment variable"
+            )
+
+        if idle_timeout_seconds < 0:
+            raise SpatiusException("idle_timeout_seconds must be greater than or equal to 0")
+        if utils.is_given(sample_rate) and sample_rate <= 0:
+            raise SpatiusException("sample_rate must be greater than 0")
+
+        self._api_key = str(resolved_api_key)
+        self._app_id = str(resolved_app_id)
+        self._avatar_id = str(resolved_avatar_id)
+        self._region = str(
+            region if utils.is_given(region) else os.getenv("SPATIUS_REGION", DEFAULT_REGION)
+        )
+        self._console_endpoint_url = str(
+            console_endpoint_url
+            if utils.is_given(console_endpoint_url)
+            else os.getenv("SPATIUS_CONSOLE_ENDPOINT", "")
+        )
+        self._ingress_endpoint_url = str(
+            ingress_endpoint_url
+            if utils.is_given(ingress_endpoint_url)
+            else os.getenv("SPATIUS_INGRESS_ENDPOINT", "")
+        )
+        self._avatar_participant_identity = str(
+            avatar_participant_identity
+            if utils.is_given(avatar_participant_identity)
+            else _AVATAR_AGENT_IDENTITY
+        )
+        self._avatar_participant_name = str(
+            avatar_participant_name
+            if utils.is_given(avatar_participant_name)
+            else _AVATAR_AGENT_NAME
+        )
+        self._idle_timeout_seconds = idle_timeout_seconds
+        self._sample_rate = sample_rate if utils.is_given(sample_rate) else None
+
+        self._spatius_session: SpatiusSDKSession | None = None
+        self._agent_session: AgentSession | None = None
+        self._audio_buffer: QueueAudioOutput | None = None
+        self._original_audio_output: Any | None = None
+        self._original_audio_tail: Any | None = None
+        self._audio_output_attached = False
+        self._user_state_changed_handler_registered = False
+        self._session_close_handler_registered = False
+        self._interrupt_task: asyncio.Task[None] | None = None
+        self._main_task: asyncio.Task | None = None
+        self._initialized = False
+        self._segments: dict[str, _SegmentState] = {}
+        self._pending_segment_ids: deque[str] = deque()
+        self._active_req_id: str | None = None
+        self._active_segment_idle_end_task: asyncio.Task[None] | None = None
+        self._segment_finalize_lock = asyncio.Lock()
+
+    @property
+    def avatar_identity(self) -> str:
+        return self._avatar_participant_identity
+
+    @property
+    def provider(self) -> str:
+        return "spatius"
+
+    async def start(
+        self,
+        agent_session: AgentSession,
+        room: rtc.Room,
+        *,
+        livekit_url: NotGivenOr[str] = NOT_GIVEN,
+        livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
+        livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
+    ) -> None:
+        """Start the Spatius avatar session and attach it to the agent output."""
+        if self._initialized:
+            logger.warning("Avatar session already initialized")
+            return
+
+        await super().start(agent_session, room)
+
+        resolved_livekit_url = (
+            livekit_url if utils.is_given(livekit_url) else os.getenv("LIVEKIT_URL")
+        )
+        resolved_livekit_api_key = (
+            livekit_api_key if utils.is_given(livekit_api_key) else os.getenv("LIVEKIT_API_KEY")
+        )
+        resolved_livekit_api_secret = (
+            livekit_api_secret
+            if utils.is_given(livekit_api_secret)
+            else os.getenv("LIVEKIT_API_SECRET")
+        )
+        if (
+            not resolved_livekit_url
+            or not resolved_livekit_api_key
+            or not resolved_livekit_api_secret
+        ):
+            raise SpatiusException(
+                "livekit_url, livekit_api_key, and livekit_api_secret must be set "
+                "by arguments or environment variables"
+            )
+
+        room_name = room.name
+        local_participant_identity = self._resolve_local_participant_identity(room)
+        logger.debug(
+            "starting Spatius avatar session",
+            extra={"room": room_name, "region": self._region},
+        )
+
+        egress_attributes = {ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity}
+        livekit_token = (
+            api.AccessToken(
+                api_key=str(resolved_livekit_api_key),
+                api_secret=str(resolved_livekit_api_secret),
+            )
+            .with_kind("agent")
+            .with_identity(self._avatar_participant_identity)
+            .with_name(self._avatar_participant_name)
+            .with_ttl(DEFAULT_SESSION_TTL)
+            .with_attributes(egress_attributes)
+            .with_grants(
+                api.VideoGrants(
+                    room_join=True,
+                    room=room_name,
+                    can_subscribe=False,
+                    can_publish_data=False,
+                    can_publish_sources=LIVEKIT_AVATAR_PUBLISH_SOURCES,
+                )
+            )
+            .to_jwt()
+        )
+
+        livekit_egress = LiveKitEgressConfig(
+            url=str(resolved_livekit_url),
+            api_token=livekit_token,
+            room_name=room_name,
+            publisher_id=self._avatar_participant_identity,
+            extra_attributes=egress_attributes,
+            idle_timeout=self._idle_timeout_seconds,
+        )
+
+        resolved_sample_rate = self._sample_rate
+        if resolved_sample_rate is None:
+            resolved_sample_rate = (
+                agent_session.tts.sample_rate if agent_session.tts else DEFAULT_SAMPLE_RATE
+            )
+        if resolved_sample_rate <= 0:
+            raise SpatiusException("sample_rate must be greater than 0")
+
+        self._agent_session = agent_session
+        self._original_audio_output = agent_session.output.audio
+        self._original_audio_tail = self._get_audio_sink_proxy_tail(agent_session.output.audio)
+
+        try:
+            self._spatius_session = new_avatar_session(
+                api_key=self._api_key,
+                app_id=self._app_id,
+                avatar_id=self._avatar_id,
+                region=self._region,
+                console_endpoint_url=self._console_endpoint_url,
+                ingress_endpoint_url=self._ingress_endpoint_url,
+                expire_at=datetime.now(timezone.utc) + DEFAULT_SESSION_TTL,
+                livekit_egress=livekit_egress,
+                sample_rate=resolved_sample_rate,
+                transport_frames=self._on_transport_frame,
+            )
+            await self._spatius_session.init()
+            await self._spatius_session.start()
+
+            self._audio_buffer = QueueAudioOutput(sample_rate=resolved_sample_rate)
+            await self._audio_buffer.start()
+            self._audio_buffer.on("clear_buffer", self._on_clear_buffer)  # type: ignore[arg-type]
+
+            agent_session.output.replace_audio_tail(self._audio_buffer)
+            self._audio_output_attached = True
+            self._main_task = asyncio.create_task(
+                self._run_main_task(),
+                name="spatius_avatar_audio_forwarder",
+            )
+            self._initialized = True
+
+            agent_session.on("user_state_changed", self._on_user_state_changed)
+            self._user_state_changed_handler_registered = True
+            agent_session.on("close", self._on_session_close)
+            self._session_close_handler_registered = True
+
+        except asyncio.CancelledError:
+            await self.aclose()
+            raise
+        except Exception as e:
+            logger.debug("Spatius avatar session startup failed", exc_info=True)
+            await self.aclose()
+            raise SpatiusException(
+                self._build_start_error_message(
+                    error=e,
+                    room_name=room_name,
+                    sample_rate=resolved_sample_rate,
+                )
+            ) from None
+
+    def _build_start_error_message(
+        self,
+        *,
+        error: Exception,
+        room_name: str,
+        sample_rate: int,
+    ) -> str:
+        return (
+            "Failed to start Spatius avatar session. "
+            "Check Spatius credentials, LiveKit room auth/token configuration, "
+            "region/endpoint URLs, and outbound network access. "
+            f"room={room_name}, avatar_id={self._avatar_id}, region={self._region}, "
+            f"sample_rate={sample_rate}. Reason: {self._format_error_reason(error)}"
+        )
+
+    @staticmethod
+    def _resolve_local_participant_identity(room: rtc.Room) -> str:
+        job_ctx = get_job_context(required=False)
+        if job_ctx is not None:
+            return job_ctx.local_participant_identity
+        if room.isconnected():
+            return room.local_participant.identity
+        raise SpatiusException("failed to get local participant identity")
+
+    @staticmethod
+    def _find_audio_sink_proxy(audio_output: Any | None) -> Any | None:
+        current = audio_output
+        seen: set[int] = set()
+        while current is not None and id(current) not in seen:
+            seen.add(id(current))
+            if current.__class__.__name__ == "_AudioSinkProxy" and callable(
+                getattr(current, "set_next_in_chain", None)
+            ):
+                return current
+            current = getattr(current, "next_in_chain", None)
+        return None
+
+    @classmethod
+    def _get_audio_sink_proxy_tail(cls, audio_output: Any | None) -> Any | None:
+        proxy = cls._find_audio_sink_proxy(audio_output)
+        if proxy is None:
+            return None
+        return proxy.next_in_chain
+
+    @staticmethod
+    def _format_error_reason(error: BaseException) -> str:
+        root_error = error
+        seen_errors: set[int] = set()
+
+        while id(root_error) not in seen_errors:
+            seen_errors.add(id(root_error))
+            next_error = root_error.__cause__ or (
+                None if root_error.__suppress_context__ else root_error.__context__
+            )
+            if next_error is None:
+                break
+            root_error = next_error
+
+        message = str(root_error) or str(error)
+        if message:
+            return f"{type(root_error).__name__}: {message}"
+        return type(root_error).__name__
+
+    async def _run_main_task(self) -> None:
+        if not self._audio_buffer or not self._spatius_session:
+            return
+
+        try:
+            async for item in self._audio_buffer:
+                if isinstance(item, rtc.AudioFrame):
+                    await self._send_audio_frame(item)
+                elif isinstance(item, AudioSegmentEnd):
+                    if not await self._finalize_active_segment(source="segment_end"):
+                        logger.debug("Avatar segment end received without an active request")
+        except asyncio.CancelledError:
+            logger.debug("Spatius avatar audio forwarder cancelled")
+        except Exception as e:
+            logger.error("Error in Spatius avatar audio forwarder", exc_info=e)
+
+    async def _send_audio_frame(self, frame: rtc.AudioFrame) -> None:
+        if not self._spatius_session:
+            return
+
+        previous_req_id = self._active_req_id
+        req_id = await self._spatius_session.send_audio(audio=bytes(frame.data), end=False)
+        if previous_req_id and previous_req_id != req_id:
+            logger.warning(
+                "Avatar request ID changed while streaming audio",
+                extra={"previous": previous_req_id, "current": req_id},
+            )
+            previous_segment = self._segments.get(previous_req_id)
+            if previous_segment is not None:
+                self._mark_segment_waiting_for_completion(previous_segment)
+
+        segment = self._segments.get(req_id)
+        if segment is None:
+            segment = _SegmentState(req_id=req_id)
+            self._segments[req_id] = segment
+
+        if segment.first_frame_at is None:
+            segment.first_frame_at = time.time()
+            logger.debug("Spatius avatar first audio frame", extra={"request_id": req_id})
+
+        segment.pushed_duration += frame.duration
+        self._active_req_id = req_id
+        self._schedule_active_segment_idle_end()
+
+    def _cancel_active_segment_idle_end(self) -> None:
+        if self._active_segment_idle_end_task and not self._active_segment_idle_end_task.done():
+            self._active_segment_idle_end_task.cancel()
+        self._active_segment_idle_end_task = None
+
+    def _schedule_active_segment_idle_end(self) -> None:
+        active_req_id = self._active_req_id
+        if active_req_id is None:
+            return
+
+        self._cancel_active_segment_idle_end()
+        self._active_segment_idle_end_task = asyncio.create_task(
+            self._wait_for_active_segment_idle_end(active_req_id, ACTIVE_SEGMENT_IDLE_END_SECONDS),
+            name=f"spatius_idle_segment_end_{active_req_id}",
+        )
+
+    async def _wait_for_active_segment_idle_end(self, req_id: str, timeout: float) -> None:
+        try:
+            await asyncio.sleep(timeout)
+        except asyncio.CancelledError:
+            return
+
+        if self._active_req_id != req_id:
+            return
+        if req_id in self._pending_segment_ids:
+            return
+        if req_id not in self._segments:
+            return
+        if await self._finalize_active_segment(source="idle_timeout"):
+            logger.warning(
+                "Avatar segment end marker missing; forcing finalization",
+                extra={"request_id": req_id, "idle_timeout": timeout},
+            )
+
+    async def _finalize_active_segment(self, *, source: str) -> bool:
+        if self._active_req_id is None or not self._spatius_session:
+            return False
+
+        async with self._segment_finalize_lock:
+            active_req_id = self._active_req_id
+            if active_req_id is None:
+                return False
+
+            self._cancel_active_segment_idle_end()
+            req_id = await self._spatius_session.send_audio(audio=b"", end=True)
+            if req_id != active_req_id:
+                logger.warning(
+                    "Avatar request ID changed while finalizing segment",
+                    extra={"expected": active_req_id, "actual": req_id, "source": source},
+                )
+
+            self._active_req_id = None
+            active_segment = self._segments.pop(active_req_id, None)
+            segment = self._segments.get(req_id)
+
+            if active_segment is None and segment is None:
+                return True
+            if segment is None:
+                if active_segment is None:
+                    return True
+                active_segment.req_id = req_id
+                segment = active_segment
+                self._segments[req_id] = segment
+            elif active_segment is not None and segment is not active_segment:
+                segment.pushed_duration = max(
+                    segment.pushed_duration, active_segment.pushed_duration
+                )
+                if segment.first_frame_at is None:
+                    segment.first_frame_at = active_segment.first_frame_at
+
+            self._mark_segment_waiting_for_completion(segment)
+            return True
+
+    def _mark_segment_waiting_for_completion(self, segment: _SegmentState) -> None:
+        if segment.req_id not in self._pending_segment_ids:
+            self._pending_segment_ids.append(segment.req_id)
+
+        if segment.completion_timeout_task and not segment.completion_timeout_task.done():
+            segment.completion_timeout_task.cancel()
+
+        timeout = self._compute_completion_timeout(segment)
+        segment.completion_timeout_task = asyncio.create_task(
+            self._wait_for_segment_completion_timeout(segment.req_id, timeout),
+            name=f"spatius_segment_timeout_{segment.req_id}",
+        )
+
+    @staticmethod
+    def _compute_completion_timeout(segment: _SegmentState) -> float:
+        if segment.first_frame_at is None:
+            return MIN_COMPLETION_TIMEOUT_SECONDS
+
+        expected_playback_end = segment.first_frame_at + segment.pushed_duration
+        remaining_playback = max(0.0, expected_playback_end - time.time())
+        return max(
+            MIN_COMPLETION_TIMEOUT_SECONDS,
+            remaining_playback + COMPLETION_TIMEOUT_BUFFER_SECONDS,
+        )
+
+    async def _wait_for_segment_completion_timeout(self, req_id: str, timeout: float) -> None:
+        try:
+            await asyncio.sleep(timeout)
+        except asyncio.CancelledError:
+            return
+
+        if self._complete_segment(req_id=req_id, interrupted=False, reason="timeout"):
+            logger.warning(
+                "Avatar segment completion timed out, assuming playback finished",
+                extra={"request_id": req_id, "timeout": timeout},
+            )
+
+    def _on_transport_frame(self, frame: bytes, is_last: bool) -> None:
+        if not is_last:
+            return
+
+        req_id = self._extract_req_id_from_transport_frame(frame)
+        if req_id is not None:
+            if req_id not in self._pending_segment_ids:
+                logger.debug(
+                    "Ignoring provider completion before local segment finalization",
+                    extra={"request_id": req_id},
+                )
+                return
+
+            if not self._complete_segment(req_id=req_id, interrupted=False, reason="provider_end"):
+                logger.debug("Completion event for unknown request", extra={"request_id": req_id})
+            return
+
+        if self._pending_segment_ids:
+            fallback_req_id = self._pending_segment_ids[0]
+            if self._complete_segment(
+                req_id=fallback_req_id,
+                interrupted=False,
+                reason="provider_end_fallback",
+            ):
+                logger.warning(
+                    "Avatar completion event missing request ID; matched oldest pending segment",
+                    extra={"request_id": fallback_req_id},
+                )
+
+    @staticmethod
+    def _extract_req_id_from_transport_frame(frame: bytes) -> str | None:
+        try:
+            envelope = message_pb2.Message()
+            envelope.ParseFromString(frame)
+        except Exception:
+            return None
+
+        if envelope.type != message_pb2.MESSAGE_SERVER_RESPONSE_ANIMATION:
+            return None
+
+        req_id = envelope.server_response_animation.req_id
+        return req_id or None
+
+    def _complete_segment(self, *, req_id: str, interrupted: bool, reason: str) -> bool:
+        segment = self._segments.pop(req_id, None)
+        if segment is None:
+            return False
+
+        self._pending_segment_ids = deque(
+            pending_req_id
+            for pending_req_id in self._pending_segment_ids
+            if pending_req_id != req_id
+        )
+
+        if segment.completion_timeout_task and not segment.completion_timeout_task.done():
+            segment.completion_timeout_task.cancel()
+
+        if self._active_req_id == req_id:
+            self._active_req_id = None
+            self._cancel_active_segment_idle_end()
+
+        playback_position = (
+            self._estimate_interrupted_playback_position(segment)
+            if interrupted
+            else segment.pushed_duration
+        )
+
+        if self._audio_buffer:
+            self._audio_buffer.notify_playback_finished(
+                playback_position=playback_position,
+                interrupted=interrupted,
+            )
+
+        logger.debug(
+            "Spatius avatar segment playback completed",
+            extra={
+                "request_id": req_id,
+                "reason": reason,
+                "interrupted": interrupted,
+                "playback_position": playback_position,
+                "pushed_duration": segment.pushed_duration,
+            },
+        )
+        return True
+
+    @staticmethod
+    def _estimate_interrupted_playback_position(segment: _SegmentState) -> float:
+        if segment.first_frame_at is None:
+            return 0.0
+
+        elapsed = max(0.0, time.time() - segment.first_frame_at)
+        return min(segment.pushed_duration, elapsed)
+
+    def _complete_all_segments(self, *, interrupted: bool, reason: str) -> None:
+        for req_id in list(self._segments.keys()):
+            self._complete_segment(req_id=req_id, interrupted=interrupted, reason=reason)
+
+        self._active_req_id = None
+        self._cancel_active_segment_idle_end()
+        self._pending_segment_ids.clear()
+
+    def _on_clear_buffer(self) -> None:
+        self._schedule_interrupt()
+
+    def _on_user_state_changed(self, ev: Any) -> None:
+        if getattr(ev, "new_state", None) == "speaking":
+            self._schedule_interrupt()
+
+    def _on_session_close(self, _: Any) -> None:
+        asyncio.create_task(self.aclose())
+
+    def _schedule_interrupt(self) -> None:
+        if not self._spatius_session:
+            return
+        if self._active_req_id is None and not self._segments:
+            return
+        if self._interrupt_task and not self._interrupt_task.done():
+            return
+
+        self._interrupt_task = asyncio.create_task(self._handle_interrupt())
+        self._interrupt_task.add_done_callback(self._on_interrupt_task_done)
+
+    def _on_interrupt_task_done(self, task: asyncio.Task[None]) -> None:
+        if self._interrupt_task is task:
+            self._interrupt_task = None
+
+    async def _handle_interrupt(self) -> None:
+        if not self._spatius_session:
+            return
+
+        try:
+            interrupted_id = await self._spatius_session.interrupt()
+
+            async with self._segment_finalize_lock:
+                if (
+                    not self._complete_segment(
+                        req_id=interrupted_id,
+                        interrupted=True,
+                        reason="interrupt",
+                    )
+                    and self._active_req_id is not None
+                ):
+                    self._complete_segment(
+                        req_id=self._active_req_id,
+                        interrupted=True,
+                        reason="interrupt_fallback",
+                    )
+
+                for req_id in list(self._segments.keys()):
+                    self._complete_segment(
+                        req_id=req_id,
+                        interrupted=True,
+                        reason="interrupt_remaining",
+                    )
+
+            logger.debug("Spatius avatar interrupted", extra={"request_id": interrupted_id})
+        except Exception as e:
+            logger.warning("Failed to interrupt Spatius avatar", exc_info=e)
+
+    async def aclose(self) -> None:
+        if self._agent_session and self._user_state_changed_handler_registered:
+            self._agent_session.off("user_state_changed", self._on_user_state_changed)
+            self._user_state_changed_handler_registered = False
+        if self._agent_session and self._session_close_handler_registered:
+            self._agent_session.off("close", self._on_session_close)
+            self._session_close_handler_registered = False
+
+        if self._interrupt_task:
+            await utils.aio.cancel_and_wait(self._interrupt_task)
+            self._interrupt_task = None
+
+        if self._main_task:
+            self._main_task.cancel()
+            try:
+                await self._main_task
+            except asyncio.CancelledError:
+                pass
+            self._main_task = None
+
+        self._cancel_active_segment_idle_end()
+        self._complete_all_segments(interrupted=True, reason="session_close")
+
+        if self._agent_session and self._audio_buffer and self._audio_output_attached:
+            current_proxy = self._find_audio_sink_proxy(self._agent_session.output.audio)
+            if current_proxy is not None and current_proxy.next_in_chain is self._audio_buffer:
+                if self._original_audio_tail is not None:
+                    self._agent_session.output.replace_audio_tail(self._original_audio_tail)
+                else:
+                    self._agent_session.output.audio = self._original_audio_output
+            elif self._agent_session.output.audio is self._audio_buffer:
+                self._agent_session.output.audio = self._original_audio_output
+
+        self._audio_output_attached = False
+        self._original_audio_output = None
+        self._original_audio_tail = None
+
+        if self._audio_buffer:
+            await self._audio_buffer.aclose()
+            self._audio_buffer = None
+
+        if self._spatius_session:
+            try:
+                await self._spatius_session.close()
+                logger.debug("Spatius avatar session closed")
+            except Exception as e:
+                logger.warning("Error closing Spatius avatar session", exc_info=e)
+            finally:
+                self._spatius_session = None
+
+        await super().aclose()
+
+        self._initialized = False
+        self._agent_session = None

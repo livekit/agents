@@ -70,6 +70,7 @@ members = [
     "livekit-plugins-slng",
     "livekit-plugins-smallestai",
     "livekit-plugins-soniox",
+    "livekit-plugins-spatius",
     "livekit-plugins-speechify",
     "livekit-plugins-speechmatics",
     "livekit-plugins-spitch",
@@ -2021,6 +2022,9 @@ smallestai = [
 soniox = [
     { name = "livekit-plugins-soniox" },
 ]
+spatius = [
+    { name = "livekit-plugins-spatius" },
+]
 speechify = [
     { name = "livekit-plugins-speechify" },
 ]
@@ -2122,6 +2126,7 @@ requires-dist = [
     { name = "livekit-plugins-slng", marker = "extra == 'slng'", editable = "livekit-plugins/livekit-plugins-slng" },
     { name = "livekit-plugins-smallestai", marker = "extra == 'smallestai'", editable = "livekit-plugins/livekit-plugins-smallestai" },
     { name = "livekit-plugins-soniox", marker = "extra == 'soniox'", editable = "livekit-plugins/livekit-plugins-soniox" },
+    { name = "livekit-plugins-spatius", marker = "extra == 'spatius'", editable = "livekit-plugins/livekit-plugins-spatius" },
     { name = "livekit-plugins-speechify", marker = "extra == 'speechify'", editable = "livekit-plugins/livekit-plugins-speechify" },
     { name = "livekit-plugins-speechmatics", marker = "extra == 'speechmatics'", editable = "livekit-plugins/livekit-plugins-speechmatics" },
     { name = "livekit-plugins-spitch", marker = "extra == 'spitch'", editable = "livekit-plugins/livekit-plugins-spitch" },
@@ -2153,7 +2158,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hedra", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "minimax", "mistralai", "murf", "neuphonic", "nltk", "nvidia", "openai", "perplexity", "phonic", "protoface", "resemble", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "speechify", "speechmatics", "spitch", "tavus", "trugen", "turn-detector", "ultravox", "upliftai", "xai"]
+provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hedra", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "minimax", "mistralai", "murf", "neuphonic", "nltk", "nvidia", "openai", "perplexity", "phonic", "protoface", "resemble", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "tavus", "trugen", "turn-detector", "ultravox", "upliftai", "xai"]
 
 [[package]]
 name = "livekit-api"
@@ -3040,6 +3045,20 @@ dependencies = [
 requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
 
 [[package]]
+name = "livekit-plugins-spatius"
+source = { editable = "livekit-plugins/livekit-plugins-spatius" }
+dependencies = [
+    { name = "livekit-agents" },
+    { name = "spatius" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "livekit-agents", editable = "livekit-agents" },
+    { name = "spatius", specifier = ">=1.0.2" },
+]
+
+[[package]]
 name = "livekit-plugins-speechify"
 source = { editable = "livekit-plugins/livekit-plugins-speechify" }
 dependencies = [
@@ -3648,6 +3667,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/a2/6e/371856a3fb9d31ca8dac321cda606860fa4548858c0cc45d9d1d4ca2628b/mypy_extensions-1.1.0.tar.gz", hash = "sha256:52e68efc3284861e772bbcd66823fde5ae21fd2fdb51c62a211403730b916558", size = 6343, upload-time = "2025-04-22T14:54:24.164Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/79/7b/2c79738432f5c924bef5071f933bcc9efd0473bac3b4aa584a6f7c1c8df8/mypy_extensions-1.1.0-py3-none-any.whl", hash = "sha256:1be4cccdb0f2482337c4743e60421de3a356cd97508abadd57d47403e94f5505", size = 4963, upload-time = "2025-04-22T14:54:22.983Z" },
+]
+
+[[package]]
+name = "nanoid"
+version = "2.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/b7/9d/0250bf5935d88e214df469d35eccc0f6ff7e9db046fc8a9aeb4b2a192775/nanoid-2.0.0.tar.gz", hash = "sha256:5a80cad5e9c6e9ae3a41fa2fb34ae189f7cb420b2a5d8f82bd9d23466e4efa68", size = 3290, upload-time = "2018-11-20T14:45:51.578Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2e/0d/8630f13998638dc01e187fadd2e5c6d42d127d08aeb4943d231664d6e539/nanoid-2.0.0-py3-none-any.whl", hash = "sha256:90aefa650e328cffb0893bbd4c236cfd44c48bc1f2d0b525ecc53c3187b653bb", size = 5844, upload-time = "2018-11-20T14:45:50.165Z" },
 ]
 
 [[package]]
@@ -5353,6 +5381,21 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/47/2c/0a5f6f8ee0d5589e48c7640213ed5175d52cf540a06725b628cc1a45d6ce/soupsieve-2.8.4.tar.gz", hash = "sha256:e121fd02e975c695e4e9e8774a5ee35d74714b59307868dcc5319ad2d9e3328e", size = 121110, upload-time = "2026-05-24T13:55:57.154Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/5e/f5/0c41cb68dcae6b7de4fac4188a3a9589e21fb31df21ea3a2e888db95e6c9/soupsieve-2.8.4-py3-none-any.whl", hash = "sha256:e7e6b0769c8f51ed59acab6e994b00621096cfb1c640a7509295987388fbaf65", size = 37304, upload-time = "2026-05-24T13:55:55.406Z" },
+]
+
+[[package]]
+name = "spatius"
+version = "1.0.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "nanoid" },
+    { name = "protobuf" },
+    { name = "websockets" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d5/9b/96c1d2051879e93efd6d30e0b0a141f54f28539d54d49b523713e6173aca/spatius-1.0.2.tar.gz", hash = "sha256:58bd31e58ee757ec416d85d679eac337bf9e805527f9bda0ab2223b7ba492b13", size = 136362, upload-time = "2026-06-09T11:05:35.457Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/39/f1/d3d6f827c6bcd7b587c8845f3529ca1e7789d32454b9b48fde691b9a5709/spatius-1.0.2-py3-none-any.whl", hash = "sha256:ebff283714222023111643491e40faf9e358e6898b563ea3fcc4871b3aebec38", size = 22363, upload-time = "2026-06-09T11:05:34.322Z" },
 ]
 
 [[package]]
