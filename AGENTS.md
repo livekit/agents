@@ -48,9 +48,9 @@ uv run pytest --list-categories         # list every module grouped by category,
 ```
 
 **Adding a test:** give the new module a category marker (`pytestmark =
-pytest.mark.unit`, etc.) — collection fails with a hint if it lacks one. During
-local development you can bypass the check with `--allow-uncategorized`; CI keeps
-enforcement on (the default), so don't rely on it.
+pytest.mark.unit`, etc.) — collection fails with a hint if it lacks one. Run
+pytest with the `--allow-uncategorized` option to temporarily disable this rule
+(CI keeps it on by default).
 
 Known-broken tests stay collected and visible via
 `@pytest.mark.xfail(strict=True, reason=...)` rather than being deleted or

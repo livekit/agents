@@ -25,16 +25,17 @@ _CATEGORY_RE = re.compile(r"pytest\.mark\.(" + "|".join(CATEGORIES) + r")\b")
 # a module "has tests" if it declares any (non-commented) test function or Test class.
 _HAS_TESTS_RE = re.compile(r"^\s*(?:async\s+)?def test|^\s*class Test", re.MULTILINE)
 
-_CATEGORY_HINT = (
-    "Every test module must declare its category with a module-level marker, e.g.:\n\n"
-    "    pytestmark = pytest.mark.unit              # fast, no external providers\n"
-    '    pytestmark = pytest.mark.plugin("openai")  # provider integration test\n'
-    "    pytestmark = pytest.mark.stt               # speech-to-text suite\n"
-    "    pytestmark = pytest.mark.tts               # text-to-speech suite\n"
-    '    pytestmark = pytest.mark.realtime("nvidia")  # realtime-model test\n'
-    "    pytestmark = pytest.mark.evals             # inference-gateway evals\n\n"
-    "Escape hatch for local development (never on CI): pytest --allow-uncategorized"
-)
+_CATEGORY_HINT = """\
+Every test module must declare its category with a module-level marker, e.g.:
+
+    pytestmark = pytest.mark.unit              # fast, no external providers
+    pytestmark = pytest.mark.plugin("openai")  # provider integration test
+    pytestmark = pytest.mark.stt               # speech-to-text suite
+    pytestmark = pytest.mark.tts               # text-to-speech suite
+    pytestmark = pytest.mark.realtime("nvidia")  # realtime-model test
+    pytestmark = pytest.mark.evals             # inference-gateway evals
+
+Run pytest with the --allow-uncategorized option to temporarily disable this rule."""
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -59,8 +60,8 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--allow-uncategorized",
         action="store_true",
         default=False,
-        help="escape hatch: allow test modules without a category marker. For local "
-        "development only — CI must keep enforcement on (the default).",
+        help="allow test modules without a category marker, temporarily disabling "
+        "the categorization rule (CI keeps it on by default).",
     )
 
 
