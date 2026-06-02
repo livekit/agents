@@ -195,7 +195,8 @@ class SupervisedProc(ABC):
             mp_cch.close()
 
             self._pid = self._proc.pid
-            self._proc_sentinel = os.dup(self._proc.sentinel)
+            if sys.platform != "win32":
+                self._proc_sentinel = os.dup(self._proc.sentinel)
             self._join_fut = asyncio.Future[None]()
 
             def _sync_run() -> None:
@@ -281,8 +282,9 @@ class SupervisedProc(ABC):
 
         self._closing = True
 
-        loop = asyncio.get_running_loop()
-        loop.add_reader(self._proc_sentinel, self._on_exit_resolve_futures)
+        if sys.platform != "win32" and hasattr(self, "_proc_sentinel"):
+            loop = asyncio.get_running_loop()
+            loop.add_reader(self._proc_sentinel, self._on_exit_resolve_futures)
 
         try:
             with contextlib.suppress(duplex_unix.DuplexClosed):
@@ -319,8 +321,10 @@ class SupervisedProc(ABC):
                 if self._supervise_atask:
                     await asyncio.shield(self._supervise_atask)
         finally:
-            loop.remove_reader(self._proc_sentinel)
-            os.close(self._proc_sentinel)
+            if hasattr(self, "_proc_sentinel"):
+                loop = asyncio.get_running_loop()
+                loop.remove_reader(self._proc_sentinel)
+                os.close(self._proc_sentinel)
 
     async def kill(self) -> None:
         """forcefully kill the supervised process"""
@@ -410,6 +414,8 @@ class SupervisedProc(ABC):
         await self._join_fut
         self._exitcode = self._proc.exitcode
         self._proc.close()
+        if hasattr(self, "_proc_sentinel"):
+            os.close(self._proc_sentinel)
         await aio.cancel_and_wait(ping_task, read_ipc_task, main_task)
 
         if memory_monitor_task is not None:
