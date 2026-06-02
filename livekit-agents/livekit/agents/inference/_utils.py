@@ -52,11 +52,11 @@ def get_inference_headers() -> dict[str, str]:
         from ..job import get_job_context
 
         ctx = get_job_context()
-        if ctx.job.room.sid:
-            headers[HEADER_ROOM_ID] = ctx.job.room.sid
-        if ctx.job.id:
-            headers[HEADER_JOB_ID] = ctx.job.id
-        if agent_sid := ctx.agent.sid:
+        if isinstance(room_sid := ctx.job.room.sid, str) and room_sid:
+            headers[HEADER_ROOM_ID] = room_sid
+        if isinstance(job_id := ctx.job.id, str) and job_id:
+            headers[HEADER_JOB_ID] = job_id
+        if isinstance(agent_sid := ctx.agent.sid, str) and agent_sid:
             headers[HEADER_AGENT_ID] = agent_sid
     except RuntimeError:
         pass
