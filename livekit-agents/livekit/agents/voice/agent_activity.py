@@ -1582,10 +1582,6 @@ class AgentActivity(RecognitionHooks):
         )
 
         if ev.is_final:
-            # forward to AMD only when there's no session STT: with one, _on_stt_event
-            # already forwards the transcript (source="stt") and a second forward here
-            # would double-feed the classifier. without a session STT this realtime
-            # path is AMD's only transcript source.
             if self.stt is None and (amd := self._session._amd) is not None:
                 amd._on_transcript(ev.transcript)
 

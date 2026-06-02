@@ -420,9 +420,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
                     None,
                 )
             if publisher is None:
-                # publisher gone (disconnected in the race window): nothing to gate on.
-                # start listening so the no-speech timer settles AMD instead of
-                # stranding it until the detection_timeout.
+                # publisher gone start listening so the no-speech timer settles faster
                 self._start_listening()
                 return
 
@@ -453,10 +451,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
                 value=_SIP_CALL_STATUS_ACTIVE,
             )
         except RuntimeError as e:
-            # SIP participant disconnected before going active: no audio remains, so
-            # fall through and let the no-speech timer settle AMD instead of stranding
-            # it until the detection timeout. (Cancellation during teardown raises
-            # CancelledError, which propagates here rather than landing in this branch.)
+            # SIP participant disconnected before going active, default to detection timeout
             logger.debug(
                 "AMD: SIP answer wait failed; starting to listen", extra={"reason": str(e)}
             )
