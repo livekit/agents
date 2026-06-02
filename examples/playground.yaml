@@ -295,7 +295,7 @@ examples:
 
   avatar:
     title: Avatar
-    description: Talk to a LemonSlice avatar. Pick anyone from the dropdown to swap who you're chatting with, from a music teacher to a Pixar fox.
+    description: Talk to a LemonSlice avatar. Pick anyone from the dropdown to swap who you're chatting with, from Leila to a Pixar fox.
     # LemonSlice brand \u2014 yellow-500 from the LK palette.
     accent: "#F9E71F"
     agent_id: CA_dzjZwsBsRKzZ
@@ -332,20 +332,14 @@ examples:
     controls:
       - rpc: set_avatar
         label: Persona
-        default: influencer
+        default: leila
         options:
-          - { value: influencer, label: Influencer }
+          - { value: leila, label: Leila }
+          - { value: jess, label: Jess }
           - { value: software_engineer, label: Software Engineer }
-          - { value: music_teacher, label: Music Teacher }
           - { value: social_worker, label: Social Worker }
-          - { value: joyce, label: Joyce }
-          - { value: iris, label: Iris }
           - { value: ai_therapist, label: AI Therapist }
           - { value: management_consultant, label: Management Consultant }
           - { value: shopping_assistant, label: Shopping Assistant }
           - { value: cat_girl, label: Cat Girl }
-          - { value: mock_interviewer_legal, label: "Mock Interviewer (Legal)" }
           - { value: mr_fox, label: Mr Fox }
-          - { value: monroe, label: Monroe }
-          - { value: fortnite_guide, label: Fortnite Guide }
-          - { value: kitten_tutor, label: Kitten Tutor }
