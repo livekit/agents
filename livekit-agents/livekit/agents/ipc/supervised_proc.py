@@ -275,6 +275,12 @@ class SupervisedProc(ABC):
         if not self._shutting_down_fut.done():
             self._shutting_down_fut.set_result(None)
 
+    def _close_sentinel(self) -> None:
+        """Close the dup'd sentinel fd exactly once."""
+        if hasattr(self, "_proc_sentinel"):
+            os.close(self._proc_sentinel)
+            del self._proc_sentinel
+
     async def aclose(self) -> None:
         """attempt to gracefully close the supervised process"""
         if not self.started:
