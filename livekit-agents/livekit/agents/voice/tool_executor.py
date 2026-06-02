@@ -84,25 +84,43 @@ class ReplyPromptArgs(TypedDict):
     call_ids: list[str]
 
 
-class AsyncToolPrompts(TypedDict, total=False):
-    """System-message templates injected around tool dispatch.
+class AsyncToolOptions(TypedDict, total=False):
+    """System-message templates injected around async tool dispatch.
 
     Each field is either a ``str.format()`` template or a callable returning a string,
     with the args typed as ``UpdatePromptArgs`` / ``DuplicatePromptArgs`` /
-    ``ReplyPromptArgs``. Unmentioned keys keep their defaults. Set on ``AgentSession``,
-    ``Agent``, or ``AsyncToolset`` (most specific wins).
+    ``ReplyPromptArgs``. Unmentioned keys keep their defaults.
     """
 
-    update: str | Callable[[UpdatePromptArgs], str]
+    update_template: str | Callable[[UpdatePromptArgs], str]
     """Wraps a user-provided ``ctx.update(message)`` string before it lands in chat_ctx."""
-    duplicate_reject: str | Callable[[DuplicatePromptArgs], str]
+    duplicate_reject_template: str | Callable[[DuplicatePromptArgs], str]
     """Sent to the LLM when ``on_duplicate='reject'`` blocks a duplicate call."""
-    duplicate_confirm: str | Callable[[DuplicatePromptArgs], str]
+    duplicate_confirm_template: str | Callable[[DuplicatePromptArgs], str]
     """Sent to the LLM when ``on_duplicate='confirm'`` requires re-call with confirmation."""
-    reply_at_tail: str | Callable[[ReplyPromptArgs], str]
+    reply_at_tail_template: str | Callable[[ReplyPromptArgs], str]
     """Instruction for the deferred reply when the pending update is still the tail of chat_ctx."""
-    reply_maybe_covered: str | Callable[[ReplyPromptArgs], str]
+    reply_maybe_covered_template: str | Callable[[ReplyPromptArgs], str]
     """Instruction for the deferred reply when newer items came after the pending update."""
+
+
+class ToolHandlingOptions(TypedDict, total=False):
+    """Configuration for the tool handling system.
+
+    Can be passed as a plain dict::
+
+        AgentSession(
+            tool_handling={
+                "async_options": {"update_template": "..."},
+            },
+        )
+
+    Set on ``AgentSession``, ``Agent``, or ``AsyncToolset`` (most specific wins).
+    """
+
+    async_options: AsyncToolOptions
+    """Templates injected around async tool dispatch (``ctx.update()``, duplicate
+    handling, coalesced replies). Unmentioned keys keep their defaults."""
 
 
 def _render(template: str | Callable[[Any], str], args: dict[str, Any]) -> str:
@@ -112,22 +130,22 @@ def _render(template: str | Callable[[Any], str], args: dict[str, Any]) -> str:
     return template.format(**args)
 
 
-_ASYNC_TOOL_PROMPTS_DEFAULTS: AsyncToolPrompts = {
-    "update": UPDATE_TEMPLATE,
-    "duplicate_reject": DUPLICATE_REJECT,
-    "duplicate_confirm": DUPLICATE_CONFIRM,
-    "reply_at_tail": REPLY_INSTRUCTIONS_AT_TAIL,
-    "reply_maybe_covered": REPLY_INSTRUCTIONS_MAYBE_COVERED,
+_ASYNC_TOOL_OPTIONS_DEFAULTS: AsyncToolOptions = {
+    "update_template": UPDATE_TEMPLATE,
+    "duplicate_reject_template": DUPLICATE_REJECT,
+    "duplicate_confirm_template": DUPLICATE_CONFIRM,
+    "reply_at_tail_template": REPLY_INSTRUCTIONS_AT_TAIL,
+    "reply_maybe_covered_template": REPLY_INSTRUCTIONS_MAYBE_COVERED,
 }
 
 
-def _resolve_async_tool_prompts(
-    config: AsyncToolPrompts | None = None,
-) -> AsyncToolPrompts:
-    """Return a fully-populated ``AsyncToolPrompts`` with defaults filled in for absent keys."""
+def _resolve_async_tool_options(
+    config: AsyncToolOptions | None = None,
+) -> AsyncToolOptions:
+    """Return a fully-populated ``AsyncToolOptions`` with defaults filled in for absent keys."""
     if config is None:
-        return AsyncToolPrompts(**_ASYNC_TOOL_PROMPTS_DEFAULTS)
-    return AsyncToolPrompts(**{**_ASYNC_TOOL_PROMPTS_DEFAULTS, **config})
+        return AsyncToolOptions(**_ASYNC_TOOL_OPTIONS_DEFAULTS)
+    return AsyncToolOptions(**{**_ASYNC_TOOL_OPTIONS_DEFAULTS, **config})
 
 
 # shared across all executors so the cancel_task / get_running_tasks companion tools
@@ -200,7 +218,7 @@ class _ToolExecutor:
         self,
         *,
         owning_activity: AgentActivity | None = None,
-        async_tool_prompts: AsyncToolPrompts | None = None,
+        async_tool_options: AsyncToolOptions | None = None,
     ) -> None:
         self._running_tasks: dict[str, _RunningTask] = {}
         self._duplicate_check_lock = asyncio.Lock()
@@ -209,14 +227,14 @@ class _ToolExecutor:
         self._reply_task: asyncio.Task[None] | None = None
 
         self._owning_activity: AgentActivity | None = owning_activity
-        self._tool_prompts: AsyncToolPrompts = _resolve_async_tool_prompts(async_tool_prompts)
+        self._tool_options: AsyncToolOptions = _resolve_async_tool_options(async_tool_options)
 
     def set_owning_activity(self, activity: AgentActivity | None) -> None:
         self._owning_activity = activity
 
-    def set_tool_prompts(self, prompts: AsyncToolPrompts) -> None:
-        """Replace the prompt templates. Caller must pre-resolve defaults."""
-        self._tool_prompts = prompts
+    def set_tool_options(self, options: AsyncToolOptions) -> None:
+        """Replace the async tool templates. Caller must pre-resolve defaults."""
+        self._tool_options = options
 
     @property
     def has_running_tasks(self) -> bool:
@@ -302,7 +320,6 @@ class _ToolExecutor:
                         extra={"function": fnc_name, "call_id": call_id},
                         exc_info=output,
                     )
-
 
             if output is None or isinstance(output, StopResponse):
                 return
@@ -467,9 +484,9 @@ class _ToolExecutor:
         # directly; otherwise let the LLM decide whether it already covered this
         at_tail = (items := target_agent.chat_ctx.items) and items[-1].id == pending_items[-1].id
         template = (
-            self._tool_prompts["reply_at_tail"]
+            self._tool_options["reply_at_tail_template"]
             if at_tail
-            else self._tool_prompts["reply_maybe_covered"]
+            else self._tool_options["reply_maybe_covered_template"]
         )
 
         call_ids = [item.call_id for item in pending_items if item.type == "function_call_output"]
@@ -550,10 +567,10 @@ class _ToolExecutor:
                 "fnc_calls_text": "\n".join(fnc_calls_json),
             }
             if on_duplicate == "reject":
-                return _render(self._tool_prompts["duplicate_reject"], dict(args))
+                return _render(self._tool_options["duplicate_reject_template"], dict(args))
 
             if on_duplicate == "confirm" and not confirm_duplicate:
-                return _render(self._tool_prompts["duplicate_confirm"], dict(args))
+                return _render(self._tool_options["duplicate_confirm_template"], dict(args))
 
         return None
 

@@ -5,7 +5,11 @@ from typing import TYPE_CHECKING, Any
 
 from ..log import logger
 from ..utils.misc import is_given
-from ..voice.tool_executor import AsyncToolPrompts, _resolve_async_tool_prompts, _ToolExecutor
+from ..voice.tool_executor import (
+    ToolHandlingOptions,
+    _resolve_async_tool_options,
+    _ToolExecutor,
+)
 from .tool_context import DuplicateMode, Tool, Toolset
 
 if TYPE_CHECKING:
@@ -55,7 +59,7 @@ class AsyncToolset(Toolset):
         *,
         id: str,
         tools: Sequence[Tool] | None = None,
-        async_tool_prompts: AsyncToolPrompts | None = None,
+        tool_handling: ToolHandlingOptions | None = None,
         # deprecated
         on_duplicate_call: DuplicateMode | None = None,
     ) -> None:
@@ -66,7 +70,9 @@ class AsyncToolset(Toolset):
             )
 
         super().__init__(id=id, tools=tools)
-        self._tool_prompts_override: AsyncToolPrompts | None = async_tool_prompts
+        self._async_tool_options_override = (
+            tool_handling.get("async_options") if tool_handling is not None else None
+        )
         self._executor = _ToolExecutor(owning_activity=None)
 
     def _attach_activity(self, *, activity: AgentActivity | None, session: AgentSession) -> None:
@@ -74,13 +80,13 @@ class AsyncToolset(Toolset):
         (replies survive handoff); otherwise replies stay with ``activity``'s agent."""
         self._executor.set_owning_activity(activity)
 
-        if self._tool_prompts_override is not None:
-            resolved = _resolve_async_tool_prompts(self._tool_prompts_override)
-        elif activity is not None and is_given(activity._agent._async_tool_prompts):
-            resolved = _resolve_async_tool_prompts(activity._agent._async_tool_prompts)
+        if self._async_tool_options_override is not None:
+            resolved = _resolve_async_tool_options(self._async_tool_options_override)
+        elif activity is not None and is_given(activity._agent._async_tool_options):
+            resolved = _resolve_async_tool_options(activity._agent._async_tool_options)
         else:
-            resolved = session._async_tool_prompts
-        self._executor.set_tool_prompts(resolved)
+            resolved = session._async_tool_options
+        self._executor.set_tool_options(resolved)
 
     async def aclose(self) -> None:
         await super().aclose()

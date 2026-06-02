@@ -965,51 +965,57 @@ class TestConfirmDuplicateSchema:
         assert result == {"origin": "NYC", "destination": "Tokyo"}
 
 
-class TestAsyncToolPrompts:
-    """``AsyncToolPrompts`` resolution, override layering, and routing."""
+class TestAsyncToolOptions:
+    """``AsyncToolOptions`` resolution, override layering, and routing."""
 
     def test_resolve_defaults_filled(self):
         from livekit.agents.voice.tool_executor import (
-            _ASYNC_TOOL_PROMPTS_DEFAULTS,
-            _resolve_async_tool_prompts,
+            _ASYNC_TOOL_OPTIONS_DEFAULTS,
+            _resolve_async_tool_options,
         )
 
         # None → all defaults
-        resolved = _resolve_async_tool_prompts(None)
-        assert resolved == _ASYNC_TOOL_PROMPTS_DEFAULTS
+        resolved = _resolve_async_tool_options(None)
+        assert resolved == _ASYNC_TOOL_OPTIONS_DEFAULTS
 
     def test_resolve_partial_fills_missing_with_defaults(self):
         from livekit.agents.voice.tool_executor import (
-            _ASYNC_TOOL_PROMPTS_DEFAULTS,
-            _resolve_async_tool_prompts,
+            _ASYNC_TOOL_OPTIONS_DEFAULTS,
+            _resolve_async_tool_options,
         )
 
-        resolved = _resolve_async_tool_prompts({"update": "custom-update"})
-        assert resolved["update"] == "custom-update"
+        resolved = _resolve_async_tool_options({"update_template": "custom-update"})
+        assert resolved["update_template"] == "custom-update"
         # other keys retain the module default
-        assert resolved["duplicate_reject"] == _ASYNC_TOOL_PROMPTS_DEFAULTS["duplicate_reject"]
-        assert resolved["reply_at_tail"] == _ASYNC_TOOL_PROMPTS_DEFAULTS["reply_at_tail"]
+        assert (
+            resolved["duplicate_reject_template"]
+            == _ASYNC_TOOL_OPTIONS_DEFAULTS["duplicate_reject_template"]
+        )
+        assert (
+            resolved["reply_at_tail_template"]
+            == _ASYNC_TOOL_OPTIONS_DEFAULTS["reply_at_tail_template"]
+        )
 
-    def test_executor_uses_resolved_prompts(self):
+    def test_executor_uses_resolved_options(self):
         from livekit.agents.voice.tool_executor import _ToolExecutor
 
-        executor = _ToolExecutor(async_tool_prompts={"duplicate_reject": "rejected!"})
-        assert executor._tool_prompts["duplicate_reject"] == "rejected!"
+        executor = _ToolExecutor(async_tool_options={"duplicate_reject_template": "rejected!"})
+        assert executor._tool_options["duplicate_reject_template"] == "rejected!"
         # unspecified key falls back to default, NOT to anything else
-        assert "{function_name}" in executor._tool_prompts["update"]
+        assert "{function_name}" in executor._tool_options["update_template"]
 
     @staticmethod
     def _mock_scope(session_update: str = "session", agent_update: str | None = None):
         # minimal stand-ins for what AsyncToolset._attach_activity reads from
         from livekit.agents.types import NOT_GIVEN
-        from livekit.agents.voice.tool_executor import _resolve_async_tool_prompts
+        from livekit.agents.voice.tool_executor import _resolve_async_tool_options
 
         class _Session:
-            _async_tool_prompts = _resolve_async_tool_prompts({"update": session_update})
+            _async_tool_options = _resolve_async_tool_options({"update_template": session_update})
 
         class _Agent:
-            _async_tool_prompts = (
-                {"update": agent_update} if agent_update is not None else NOT_GIVEN
+            _async_tool_options = (
+                {"update_template": agent_update} if agent_update is not None else NOT_GIVEN
             )
 
         class _Activity:
@@ -1023,11 +1029,11 @@ class TestAsyncToolPrompts:
         ts = AsyncToolset(
             id="t",
             tools=[mock_tool_1],
-            async_tool_prompts={"update": "toolset-own"},
+            tool_handling={"async_options": {"update_template": "toolset-own"}},
         )
         session, activity = self._mock_scope(agent_update="agent")
         ts._attach_activity(activity=activity, session=session)
-        assert ts._executor._tool_prompts["update"] == "toolset-own"
+        assert ts._executor._tool_options["update_template"] == "toolset-own"
 
     def test_toolset_inherits_agent_when_no_override(self):
         from livekit.agents.llm.async_toolset import AsyncToolset
@@ -1035,9 +1041,9 @@ class TestAsyncToolPrompts:
         ts = AsyncToolset(id="t", tools=[mock_tool_1])
         session, activity = self._mock_scope(agent_update="agent")
         ts._attach_activity(activity=activity, session=session)
-        # whole-value override: only `update` was given on agent, the rest fall
-        # back to module defaults (NOT to session_prompts)
-        assert ts._executor._tool_prompts["update"] == "agent"
+        # whole-value override: only `update_template` was given on agent, the rest fall
+        # back to module defaults (NOT to session options)
+        assert ts._executor._tool_options["update_template"] == "agent"
 
     def test_toolset_inherits_session_when_no_agent_no_override(self):
         from livekit.agents.llm.async_toolset import AsyncToolset
@@ -1045,17 +1051,17 @@ class TestAsyncToolPrompts:
         ts = AsyncToolset(id="t", tools=[mock_tool_1])
         session, activity = self._mock_scope()
         ts._attach_activity(activity=activity, session=session)
-        assert ts._executor._tool_prompts["update"] == "session"
+        assert ts._executor._tool_options["update_template"] == "session"
 
     def test_session_scoped_toolset_skips_agent(self):
         # _attach_activity(activity=None) marks the toolset as session-scoped;
-        # agent prompts are ignored even if present.
+        # agent options are ignored even if present.
         from livekit.agents.llm.async_toolset import AsyncToolset
 
         ts = AsyncToolset(id="t", tools=[mock_tool_1])
         session, _activity = self._mock_scope(agent_update="agent-should-be-ignored")
         ts._attach_activity(activity=None, session=session)
-        assert ts._executor._tool_prompts["update"] == "session"
+        assert ts._executor._tool_options["update_template"] == "session"
         assert ts._executor._owning_activity is None
 
     def test_build_executor_map_routes_toolset_tools(self):
@@ -1090,24 +1096,27 @@ class TestAsyncToolPrompts:
         mapping2 = _build_executor_map(toolsets=[plain], default=default)
         assert mapping2["mock_tool_3"] is default
 
-    def test_session_stores_resolved_prompts(self):
-        # session-level prompts are resolved and stored at __init__; the actual
+    def test_session_stores_resolved_options(self):
+        # session-level options are resolved and stored at __init__; the actual
         # wiring onto toolset executors happens later at activity start (so
         # toolsets added after session.__init__ are picked up).
         from livekit.agents.voice.agent_session import AgentSession
 
-        session = AgentSession(async_tool_prompts={"update": "from-session"})
-        assert session._async_tool_prompts["update"] == "from-session"
+        session = AgentSession(tool_handling={"async_options": {"update_template": "from-session"}})
+        assert session._async_tool_options["update_template"] == "from-session"
         # other keys fall back to defaults, not to anything else
-        assert "{function_name}" in session._async_tool_prompts["duplicate_reject"]
+        assert "{function_name}" in session._async_tool_options["duplicate_reject_template"]
 
-    def test_agent_stores_raw_prompts(self):
+    def test_agent_stores_raw_options(self):
         from livekit.agents.utils.misc import is_given
         from livekit.agents.voice.agent import Agent
 
-        agent = Agent(instructions="x", async_tool_prompts={"update": "from-agent"})
-        assert is_given(agent._async_tool_prompts)
-        assert agent._async_tool_prompts["update"] == "from-agent"
+        agent = Agent(
+            instructions="x",
+            tool_handling={"async_options": {"update_template": "from-agent"}},
+        )
+        assert is_given(agent._async_tool_options)
+        assert agent._async_tool_options["update_template"] == "from-agent"
 
 
 # --- helpers for executor / RunContext tests ----------------------------------
@@ -1198,7 +1207,7 @@ class TestRunContextUpdate:
         assert ctx._updates[0][1].output == "[fn/orig] hello"
 
 
-class TestAsyncToolPromptsRendering:
+class TestAsyncToolOptionsRendering:
     """``_render`` dispatches between ``str.format`` and callable templates."""
 
     def test_render_string(self):

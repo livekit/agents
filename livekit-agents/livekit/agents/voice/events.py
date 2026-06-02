@@ -151,7 +151,7 @@ class RunContext(Generic[Userdata_T]):
         if isinstance(message, str):
             if template is None:
                 if self._executor is not None:
-                    template = self._executor._tool_prompts["update"]
+                    template = self._executor._tool_options["update_template"]
                 else:
                     from .tool_executor import UPDATE_TEMPLATE
 

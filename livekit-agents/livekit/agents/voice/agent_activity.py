@@ -78,7 +78,7 @@ from .generation import (
     update_instructions,
 )
 from .speech_handle import DEFAULT_INPUT_DETAILS, InputDetails, SpeechHandle
-from .tool_executor import _resolve_async_tool_prompts, _ToolExecutor
+from .tool_executor import _resolve_async_tool_options, _ToolExecutor
 from .turn import EndpointingOptions, TurnDetectionMode
 
 if TYPE_CHECKING:
@@ -188,12 +188,12 @@ class AgentActivity(RecognitionHooks):
 
         # activity-scoped executor: cancels cancellable tools / awaits the rest on drain,
         # and delivers replies to this activity's agent
-        if is_given(self._agent._async_tool_prompts):
-            activity_prompts = _resolve_async_tool_prompts(self._agent._async_tool_prompts)
+        if is_given(self._agent._async_tool_options):
+            activity_options = _resolve_async_tool_options(self._agent._async_tool_options)
         else:
-            activity_prompts = self._session._async_tool_prompts
+            activity_options = self._session._async_tool_options
         self._tool_executor = _ToolExecutor(
-            owning_activity=self, async_tool_prompts=activity_prompts
+            owning_activity=self, async_tool_options=activity_options
         )
 
         self._user_turn_exceeded_atask: asyncio.Task[None] | None = None
