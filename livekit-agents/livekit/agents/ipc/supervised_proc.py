@@ -195,6 +195,7 @@ class SupervisedProc(ABC):
             mp_cch.close()
 
             self._pid = self._proc.pid
+            self._proc_sentinel = os.dup(self._proc.sentinel)
             self._join_fut = asyncio.Future[None]()
 
             def _sync_run() -> None:
@@ -266,44 +267,61 @@ class SupervisedProc(ABC):
             self._initialize_fut.set_exception(e)
             raise
 
+    def _on_exit_resolve_futures(self) -> None:
+        """Called via add_reader when the process exits."""
+        if not self._shutdown_ack_fut.done():
+            self._shutdown_ack_fut.set_result(None)
+        if not self._shutting_down_fut.done():
+            self._shutting_down_fut.set_result(None)
+
     async def aclose(self) -> None:
         """attempt to gracefully close the supervised process"""
         if not self.started:
             return
 
         self._closing = True
-        with contextlib.suppress(duplex_unix.DuplexClosed):
-            await channel.asend_message(self._pch, proto.ShutdownRequest())
+
+        loop = asyncio.get_running_loop()
+        loop.add_reader(self._proc_sentinel, self._on_exit_resolve_futures)
 
         try:
-            await asyncio.wait_for(self._shutdown_ack_fut, timeout=self._opts.close_timeout)
-        except asyncio.TimeoutError:
-            logger.error(
-                "process did not ack shutdown in time, killing process",
-                extra=self.logging_extra(),
-            )
-            await self._send_dump_signal()
-            await self._send_kill_signal()
+            with contextlib.suppress(duplex_unix.DuplexClosed):
+                await channel.asend_message(self._pch, proto.ShutdownRequest())
 
-        if not self._shutting_down_fut.done():
-            await self._shutting_down_fut
-
-        if self._supervise_atask and not self._supervise_atask.done():
             try:
                 await asyncio.wait_for(
-                    asyncio.shield(self._supervise_atask), timeout=self._opts.close_timeout
+                    self._shutdown_ack_fut, timeout=self._opts.close_timeout
                 )
             except asyncio.TimeoutError:
                 logger.error(
-                    "process did not exit in time, killing process",
+                    "process did not ack shutdown in time, killing process",
                     extra=self.logging_extra(),
                 )
                 await self._send_dump_signal()
                 await self._send_kill_signal()
 
-        async with self._lock:
-            if self._supervise_atask:
-                await asyncio.shield(self._supervise_atask)
+            if not self._shutting_down_fut.done():
+                await self._shutting_down_fut
+
+            if self._supervise_atask and not self._supervise_atask.done():
+                try:
+                    await asyncio.wait_for(
+                        asyncio.shield(self._supervise_atask),
+                        timeout=self._opts.close_timeout,
+                    )
+                except asyncio.TimeoutError:
+                    logger.error(
+                        "process did not exit in time, killing process",
+                        extra=self.logging_extra(),
+                    )
+                    await self._send_dump_signal()
+                    await self._send_kill_signal()
+
+            async with self._lock:
+                if self._supervise_atask:
+                    await asyncio.shield(self._supervise_atask)
+        finally:
+            loop.remove_reader(self._proc_sentinel)
 
     async def kill(self) -> None:
         """forcefully kill the supervised process"""
