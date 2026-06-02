@@ -398,7 +398,10 @@ class _JobProc:
             except Exception:
                 logger.exception("error while executing the on_session_end callback")
 
-        await self._job_ctx._on_session_end()
+        try:
+            await self._job_ctx._on_session_end()
+        except Exception:
+            logger.exception("error in job_ctx._on_session_end")
 
         await self._client.send(ShuttingDown())
 

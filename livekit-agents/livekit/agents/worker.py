@@ -333,6 +333,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._api_secret = api_secret or os.environ.get("LIVEKIT_API_SECRET") or ""
 
         self._worker_token = os.environ.get("LIVEKIT_WORKER_TOKEN") or ""  # hosted agents
+        self._deployment = os.environ.get("LIVEKIT_AGENT_DEPLOYMENT") or ""  # hosted agents
 
         self._host = host
         self._port = port
@@ -642,6 +643,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     {
                         "agent_name": self._agent_name,
                         "agent_name_is_env": self._agent_name_is_env,
+                        "deployment": self._deployment,
                         "worker_type": agent.JobType.Name(self._server_type.value),
                         "worker_load": self._worker_load,
                         "active_jobs": len(self.active_jobs),
@@ -1065,6 +1067,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     )
                 )
                 req.register.agent_name = self._agent_name
+                req.register.deployment = self._deployment
                 req.register.version = __version__
                 await ws.send_bytes(req.SerializeToString())
 
@@ -1215,6 +1218,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             "registered worker",
             extra={
                 "agent_name": self._agent_name,
+                "deployment": self._deployment,
                 "id": reg.worker_id,
                 "url": self._ws_url,
                 "region": reg.server_info.region,

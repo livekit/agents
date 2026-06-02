@@ -261,6 +261,12 @@ class JobContext:
         otel_metrics.flush_turn_metrics(session.history)
 
         c = AgentsConsole.get_instance()
+
+        # in case AgentSession.aclose() was cancelled due to timeout
+        if (recorder_io := session._recorder_io) and recorder_io.recording:
+            logger.warning("recorder_io is still recording at session end, closing it")
+            await recorder_io.aclose()
+
         report = self.make_session_report(session)
 
         # console recording, dump data to a local file
