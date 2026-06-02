@@ -597,11 +597,6 @@ class ToolContext:
         for tool in itertools.chain(tools, find_function_tools(self)):
             add_tool(tool)
 
-        # https://developers.openai.com/cookbook/examples/prompt_caching101#example-1-caching-tools-and-multi-turn-conversations
-        # "When caching tools, it is important that the tool definitions and their order remain identical for them to be included in the prompt prefix."
-        self._fnc_tools_map = dict(sorted(self._fnc_tools_map.items()))
-        self._provider_tools.sort(key=lambda t: t.id)
-
     def copy(self) -> ToolContext:
         return ToolContext(self._tools.copy())
 
