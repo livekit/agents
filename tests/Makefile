@@ -30,7 +30,7 @@ test: up
 	$(MAKE) down
 
 unit-tests:
-	uv run pytest --unit -x -v $(PYTEST_ARGS)
+	uv run pytest --unit --plugin --evals --docs -x -v $(PYTEST_ARGS)
 
 realtime-tests:
 	uv run pytest --realtime -v $(PYTEST_ARGS)
