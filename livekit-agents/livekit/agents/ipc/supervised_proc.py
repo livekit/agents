@@ -320,6 +320,7 @@ class SupervisedProc(ABC):
                     await asyncio.shield(self._supervise_atask)
         finally:
             loop.remove_reader(self._proc_sentinel)
+            os.close(self._proc_sentinel)
 
     async def kill(self) -> None:
         """forcefully kill the supervised process"""
