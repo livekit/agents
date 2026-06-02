@@ -289,9 +289,7 @@ class SupervisedProc(ABC):
                 await channel.asend_message(self._pch, proto.ShutdownRequest())
 
             try:
-                await asyncio.wait_for(
-                    self._shutdown_ack_fut, timeout=self._opts.close_timeout
-                )
+                await asyncio.wait_for(self._shutdown_ack_fut, timeout=self._opts.close_timeout)
             except asyncio.TimeoutError:
                 logger.error(
                     "process did not ack shutdown in time, killing process",
