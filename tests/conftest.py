@@ -14,10 +14,22 @@ from .toxic_proxy import Toxiproxy
 
 TEST_CONNECT_OPTIONS = dataclasses.replace(DEFAULT_API_CONNECT_OPTIONS, retry_interval=0.0)
 
-# Test categories, each exposed as a `--<category>` flag and a `pytest.mark.<category>`
-# marker. Provider-specific categories also accept an argument, e.g.
-# `pytestmark = pytest.mark.plugin("anthropic")`, selectable via `--plugin anthropic`.
-CATEGORIES = ("unit", "plugin", "realtime", "stt", "tts", "evals", "docs")
+# Category names are the pytest markers declared in pyproject.toml — the single
+# source of truth. They're read from the file rather than via config.getini()
+# because the --<category> options are registered in pytest_addoption, which runs
+# before pytest has parsed the ini file.
+_PYPROJECT = Path(__file__).resolve().parents[1] / "pyproject.toml"
+
+
+def _load_categories() -> tuple[str, ...]:
+    block = re.search(r"(?ms)^markers\s*=\s*\[(.*?)^\s*\]", _PYPROJECT.read_text(encoding="utf-8"))
+    names = re.findall(r'^\s*"(\w+)', block.group(1), re.MULTILINE) if block else []
+    if not names:
+        raise RuntimeError(f"no pytest markers found in {_PYPROJECT}")
+    return tuple(dict.fromkeys(names))
+
+
+CATEGORIES = _load_categories()
 
 # matches `pytest.mark.<category>` anywhere in a module's source (module-level
 # `pytestmark = ...` or per-test `@pytest.mark.<category>` decorators).
@@ -25,18 +37,11 @@ _CATEGORY_RE = re.compile(r"pytest\.mark\.(" + "|".join(CATEGORIES) + r")\b")
 # a module "has tests" if it declares any (non-commented) test function or Test class.
 _HAS_TESTS_RE = re.compile(r"^\s*(?:async\s+)?def test|^\s*class Test", re.MULTILINE)
 
-_CATEGORY_HINT = """\
-Every test module must declare its category with a module-level marker, e.g.:
-
-    pytestmark = pytest.mark.unit              # fast, no external providers
-    pytestmark = pytest.mark.plugin("openai")  # provider integration test
-    pytestmark = pytest.mark.stt               # speech-to-text suite
-    pytestmark = pytest.mark.tts               # text-to-speech suite
-    pytestmark = pytest.mark.realtime("nvidia")  # realtime-model test
-    pytestmark = pytest.mark.evals             # inference-gateway evals
-    pytestmark = pytest.mark.docs              # docs-build tooling (.github/)
-
-Run pytest with the --allow-uncategorized option to temporarily disable this rule."""
+_CATEGORY_HINT = (
+    "Every test module must declare its category with a module-level marker, one of:\n\n"
+    + "\n".join(f"    pytestmark = pytest.mark.{c}" for c in CATEGORIES)
+    + "\n\nRun pytest with the --allow-uncategorized option to temporarily disable this rule."
+)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
