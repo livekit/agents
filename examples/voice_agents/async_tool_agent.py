@@ -5,6 +5,8 @@ from datetime import datetime
 
 from dotenv import load_dotenv
 
+from livekit.agents.beta.workflows import GetEmailTask
+
 try:
     from ddgs import DDGS
 except ImportError as e:
@@ -67,9 +69,13 @@ class TravelAgent(Agent):
             "openai/gpt-5.4", extra_kwargs={"reasoning_effort": "medium"}
         )
         self._ddgs = DDGS()
+        self._user_email: str | None = None
 
     async def on_enter(self):
-        self.session.generate_reply(instructions="Greet the user and introduce yourself.")
+        # self.session.generate_reply(instructions="Greet the user and introduce yourself.")
+        self.session.generate_reply(
+            user_input="I want to book a flight from New York to Beijing on June 15th."
+        )
 
     @llm.function_tool(flags=llm.ToolFlag.CANCELLABLE, on_duplicate="confirm")
     async def book_flight(self, ctx: RunContext, origin: str, destination: str, date: str) -> str:
@@ -107,6 +113,16 @@ class TravelAgent(Agent):
         )
 
         # Phase 2: confirming booking
+        if self._user_email is None:
+            logger.info("Getting user's email address")
+            async with ctx.foreground():
+                ctx.session.say("We will need your email address to confirm the flight booking.")
+                email = await GetEmailTask(
+                    extra_instructions="You are capturing the email address of the user for the flight booking."
+                )
+            self._user_email = email.email_address
+            logger.info(f"User's email address: {self._user_email}")
+
         await asyncio.sleep(40)
 
         logger.info("Flight booked")
@@ -116,7 +132,8 @@ class TravelAgent(Agent):
         #  It was $289 and your confirmation number is FL-847293."
         return (
             f"Flight booked! {cheapest} from {origin} to {destination} on {date}. "
-            f"Price: ${prices[cheapest]}. Confirmation: {confirmation}."
+            f"Price: ${prices[cheapest]}. Confirmation: {confirmation}. "
+            f"The details will be sent to your email."
         )
 
     # -- Tool 2: Tour guide via web search --

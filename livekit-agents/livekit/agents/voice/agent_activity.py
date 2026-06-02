@@ -88,6 +88,7 @@ if TYPE_CHECKING:
 
 _AgentActivityContextVar = contextvars.ContextVar["AgentActivity"]("agents_activity")
 _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_handle")
+_IdleHoldContextVar = contextvars.ContextVar[bool]("agents_idle_hold", default=False)
 
 
 class ActivityClosedError(Exception):
@@ -1478,20 +1479,13 @@ class AgentActivity(RecognitionHooks):
             if self._scheduling_paused and len(to_wait) == 0:
                 break
 
-    async def wait_for_idle(self) -> None:
+    async def wait_for_idle(
+        self, *, wait_for_agent: bool = True, wait_for_user: bool = True
+    ) -> None:
         """Wait until this activity has no in-flight agent or user work.
 
         Raises ``ActivityClosedError`` if the activity has terminally closed.
         """
-        if self._closed:
-            raise ActivityClosedError(f"activity {self.agent.label} is closed")
-        await self._wait_for_inactive()
-        if self._closed:
-            raise ActivityClosedError(f"activity {self.agent.label} is closed")
-
-    async def _wait_for_inactive(
-        self, *, wait_for_agent: bool = True, wait_for_user: bool = True
-    ) -> None:
         agent_active = True
         user_active = True
 
@@ -1512,6 +1506,9 @@ class AgentActivity(RecognitionHooks):
                 await self._user_turn_completed_atask
 
         while (wait_for_agent and agent_active) or (wait_for_user and user_active):
+            if self._closed or self._session._closing:
+                raise ActivityClosedError(f"activity {self.agent.label} is closing")
+
             if wait_for_agent:
                 await _wait_for_eou()
 
@@ -1537,6 +1534,15 @@ class AgentActivity(RecognitionHooks):
                 await self._session._user_turn_released.wait()
                 agent_active = wait_for_agent
                 user_active = wait_for_user
+
+            if self._session._idle_holds > 0 and not _IdleHoldContextVar.get():
+                # another caller holds `_wait_for_idle_and_hold` — block until release
+                await self._session._idle_released.wait()
+                agent_active = wait_for_agent
+                user_active = wait_for_user
+
+        if self._closed or self._session._closing:
+            raise ActivityClosedError(f"activity {self.agent.label} is closing")
 
     # -- Realtime Session events --
 
@@ -2246,7 +2252,7 @@ class AgentActivity(RecognitionHooks):
 
         # wait for the EOU-triggered agent response (cancellable by the new user turn exceeded event)
         wait_inactive = asyncio.ensure_future(
-            self._wait_for_inactive(wait_for_agent=True, wait_for_user=False)
+            self.wait_for_idle(wait_for_agent=True, wait_for_user=False)
         )
         try:
             done, _ = await asyncio.wait(

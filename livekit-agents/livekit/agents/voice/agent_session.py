@@ -462,11 +462,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._closing: bool = False
         self._job_context_cb_registered: bool = False
 
-        # count of active `claim_user_turn` scopes. while > 0, `wait_for_inactive`
+        # count of active `claim_user_turn` scopes. while > 0, `wait_for_idle`
         # is held open and `user_state` is pinned to "speaking"
         self._user_turn_claims: int = 0
         self._user_turn_released: asyncio.Event = asyncio.Event()
         self._user_turn_released.set()
+
+        # count of active `_wait_for_idle_and_hold` scopes; while > 0, non-holder
+        # `wait_for_idle` callers block until release. holder bypasses via contextvar.
+        self._idle_holds: int = 0
+        self._idle_released: asyncio.Event = asyncio.Event()
+        self._idle_released.set()
 
         self._global_run_state: RunResult | None = None
         # TODO(theomonnom): need a better way to expose early assistant metrics
@@ -1240,7 +1246,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     async def _claim_user_turn(self) -> AsyncIterator[None]:
         """Declare a programmatic user-driven turn.
 
-        Pins ``user_state`` to ``"speaking"`` and holds ``wait_for_inactive``
+        Pins ``user_state`` to ``"speaking"`` and holds ``wait_for_idle``
         open until release. On release, ``user_state`` is re-derived from the
         audio path. Reentrant and session-scoped (survives handoff).
 
@@ -1349,10 +1355,22 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     raise
                 continue
 
-    async def wait_for_inactive(self) -> None:
-        logger.warning("wait_for_inactive is deprecated, use wait_for_idle instead")
-        if self._activity is not None:
-            await self._activity._wait_for_inactive()
+    @asynccontextmanager
+    async def _wait_for_idle_and_hold(self) -> AsyncIterator[AgentActivity]:
+        """Wait for idle, then block other ``wait_for_idle`` callers until exit."""
+        from .agent_activity import _IdleHoldContextVar
+
+        activity = await self.wait_for_idle()
+        self._idle_holds += 1
+        self._idle_released.clear()
+        token = _IdleHoldContextVar.set(True)
+        try:
+            yield activity
+        finally:
+            _IdleHoldContextVar.reset(token)
+            self._idle_holds -= 1
+            if self._idle_holds == 0:
+                self._idle_released.set()
 
     async def _update_activity(
         self,

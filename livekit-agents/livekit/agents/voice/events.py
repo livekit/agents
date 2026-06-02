@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from enum import Enum, unique
 from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal, TypeVar
 
@@ -32,6 +33,7 @@ from ..tts import TTS, TTSError
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
+    from .agent_activity import AgentActivity
     from .agent_session import AgentSession
     from .tool_executor import UpdatePromptArgs, _ToolExecutor
 
@@ -96,6 +98,36 @@ class RunContext(Generic[Userdata_T]):
         this method only waits for the assistant's spoken response prior running
         this tool to finish playing."""
         await self.speech_handle._wait_for_generation(step_idx=self._initial_step_idx)
+
+    @asynccontextmanager
+    async def foreground(self) -> AsyncIterator[AgentActivity]:
+        """Wait for idle, then hold the floor while interactive work runs.
+
+        Use cases:
+
+        - wrap an ``await AgentTask()`` so it doesn't race with current speech
+          or another tool's queued reply
+        - wrap a direct ``generate_reply`` / ``say`` for the same reason
+        - group multiple interactive calls so no deferred tool reply lands between them
+
+        On enter, drains this tool's pending deferred reply first so its speech
+        plays before the floor is held — keeps chat order matching code order.
+        """
+        await self._drain_pending_reply()
+        async with self._session._wait_for_idle_and_hold() as activity:
+            yield activity
+
+    async def _drain_pending_reply(self) -> None:
+        """Wait for this tool's pending deferred reply to finish delivery, if any."""
+        if self._executor is None:
+            return
+        reply_task = self._executor._reply_task
+        if reply_task is None or reply_task.done():
+            return
+        try:
+            await asyncio.shield(reply_task)
+        except Exception:
+            pass  # reply task's own errors aren't our concern
 
     async def update(
         self,
