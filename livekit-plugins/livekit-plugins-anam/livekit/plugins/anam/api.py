@@ -14,7 +14,7 @@ from livekit.agents import (
 
 from .errors import AnamException
 from .log import logger
-from .types import PersonaConfig
+from .types import PersonaConfig, SessionOptions
 
 DEFAULT_API_URL = "https://api.anam.ai"
 
@@ -62,10 +62,19 @@ class AnamAPI:
             await self._session.close()
 
     async def create_session_token(
-        self, persona_config: PersonaConfig, livekit_url: str, livekit_token: str
+        self,
+        persona_config: PersonaConfig,
+        livekit_url: str,
+        livekit_token: str,
+        session_options: SessionOptions | None = None,
     ) -> str:
         """
         Creates a session token to authorize starting an engine session.
+
+        Args:
+            session_options: Optional per-session output options (e.g. explicit
+                video dimensions) forwarded to Anam as ``sessionOptions``. When
+                ``None``, Anam uses the avatar model's default output.
 
         Returns:
             The created session token (a JWT string).
@@ -80,13 +89,26 @@ class AnamAPI:
         if persona_config.avatarModel:
             persona_config_payload["avatarModel"] = persona_config.avatarModel
 
-        payload = {
+        payload: dict[str, Any] = {
             "personaConfig": persona_config_payload,
         }
         payload["environment"] = {
             "livekitUrl": livekit_url,
             "livekitToken": livekit_token,
         }
+
+        if session_options is not None:
+            # Anam's public API speaks camelCase pixel dimensions. Send both or
+            # neither; Anam rejects a half pair and any unsupported pair with an
+            # HTTP 400 (surfaced below as APIStatusError) rather than downgrading.
+            video_options: dict[str, int] = {}
+            if session_options.video_width is not None:
+                video_options["videoWidth"] = session_options.video_width
+            if session_options.video_height is not None:
+                video_options["videoHeight"] = session_options.video_height
+            if video_options:
+                payload["sessionOptions"] = video_options
+
         headers = {
             "Authorization": f"Bearer {self._api_key}",  # Use API Key here
             "Content-Type": "application/json",
