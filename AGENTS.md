@@ -40,6 +40,7 @@ it.
 | `pytest.mark.tts` | `--tts` | cross-provider text-to-speech suite (`tests/test_tts.py`) |
 | `pytest.mark.realtime("name")` | `--realtime [name]` | realtime-model test |
 | `pytest.mark.evals` | `--evals` | behavioral evals against the LiveKit inference gateway |
+| `pytest.mark.docs` | `--docs` | tests for the docs-build tooling under `.github/` |
 
 ```bash
 uv run pytest --unit                    # the CI unit gate (no cloud accounts)
