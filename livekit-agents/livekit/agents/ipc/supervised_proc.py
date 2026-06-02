@@ -330,7 +330,7 @@ class SupervisedProc(ABC):
             if hasattr(self, "_proc_sentinel"):
                 loop = asyncio.get_running_loop()
                 loop.remove_reader(self._proc_sentinel)
-                os.close(self._proc_sentinel)
+                self._close_sentinel()
 
     async def kill(self) -> None:
         """forcefully kill the supervised process"""
@@ -420,8 +420,7 @@ class SupervisedProc(ABC):
         await self._join_fut
         self._exitcode = self._proc.exitcode
         self._proc.close()
-        if hasattr(self, "_proc_sentinel"):
-            os.close(self._proc_sentinel)
+        self._close_sentinel()
         await aio.cancel_and_wait(ping_task, read_ipc_task, main_task)
 
         if memory_monitor_task is not None:
