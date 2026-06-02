@@ -52,13 +52,14 @@ from ._utils import (
 )
 
 SAMPLE_RATE = 16000
-THRESHOLD = 0.5
-MIN_INTERRUPTION_DURATION = 0.025 * 2  # 25ms per frame, 2 consecutive frames
+THRESHOLD = 0.656
 MAX_AUDIO_DURATION = 3  # 3 seconds
 DETECTION_INTERVAL = 0.1  # 0.1 second
 AUDIO_PREFIX_DURATION = 1.0  # 1.0 second
 REMOTE_INFERENCE_TIMEOUT = 0.7  # 700ms
-_FRAMES_PER_SECOND = 40
+# they are used only to compute MIN_INTERRUPTION_DURATION * _FRAMES_PER_SECOND = min_frames (2 by default)
+MIN_INTERRUPTION_DURATION = 0.010 * 2  # 10ms per frame, any 2 frames
+_FRAMES_PER_SECOND = 100
 
 
 class InterruptionDetectionError(BaseModel):
