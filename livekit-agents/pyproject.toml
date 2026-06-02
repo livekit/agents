@@ -121,6 +121,7 @@ slng = ["livekit-plugins-slng>=1.6.4"]
 soniox = ["livekit-plugins-soniox>=1.6.4"]
 speechify = ["livekit-plugins-speechify>=1.6.4"]
 speechmatics = ["livekit-plugins-speechmatics>=1.6.4"]
+spatius = ["livekit-plugins-spatius>=1.6.4"]
 spitch = ["livekit-plugins-spitch>=1.6.4"]
 tavus = ["livekit-plugins-tavus>=1.6.4"]
 trugen = ["livekit-plugins-trugen>=1.6.4"]
@@ -131,7 +132,6 @@ gradium = ["livekit-plugins-gradium>=1.6.4"]
 xai = ["livekit-plugins-xai>=1.6.4"]
 phonic = ["livekit-plugins-phonic>=1.6.4"]
 did = ["livekit-plugins-did>=1.6.4"]
-
 
 [project.urls]
 Documentation = "https://docs.livekit.io"
