@@ -1,6 +1,7 @@
 import asyncio
 import dataclasses
 import logging
+import re
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,23 @@ TEST_CONNECT_OPTIONS = dataclasses.replace(DEFAULT_API_CONNECT_OPTIONS, retry_in
 # `pytestmark = pytest.mark.plugin("anthropic")`, selectable via `--plugin anthropic`.
 CATEGORIES = ("unit", "plugin", "realtime", "stt", "tts", "evals")
 
+# matches `pytest.mark.<category>` anywhere in a module's source (module-level
+# `pytestmark = ...` or per-test `@pytest.mark.<category>` decorators).
+_CATEGORY_RE = re.compile(r"pytest\.mark\.(" + "|".join(CATEGORIES) + r")\b")
+# a module "has tests" if it declares any (non-commented) test function or Test class.
+_HAS_TESTS_RE = re.compile(r"^\s*(?:async\s+)?def test|^\s*class Test", re.MULTILINE)
+
+_CATEGORY_HINT = (
+    "Every test module must declare its category with a module-level marker, e.g.:\n\n"
+    "    pytestmark = pytest.mark.unit              # fast, no external providers\n"
+    '    pytestmark = pytest.mark.plugin("openai")  # provider integration test\n'
+    "    pytestmark = pytest.mark.stt               # speech-to-text suite\n"
+    "    pytestmark = pytest.mark.tts               # text-to-speech suite\n"
+    '    pytestmark = pytest.mark.realtime("nvidia")  # realtime-model test\n'
+    "    pytestmark = pytest.mark.evals             # inference-gateway evals\n\n"
+    "Escape hatch for local development (never on CI): pytest --allow-uncategorized"
+)
+
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     group = parser.getgroup("categories", "test category selection")
@@ -30,6 +48,99 @@ def pytest_addoption(parser: pytest.Parser) -> None:
             help=f"select only `{category}` tests; optionally narrow to a single "
             f"provider/target (e.g. --{category} <name>). Repeatable categories are unioned.",
         )
+    group.addoption(
+        "--list-categories",
+        action="store_true",
+        default=False,
+        help="list every test module grouped by category, then exit (no tests run).",
+    )
+    group.addoption(
+        "--allow-uncategorized",
+        action="store_true",
+        default=False,
+        help="escape hatch: allow test modules without a category marker. For local "
+        "development only — CI must keep enforcement on (the default).",
+    )
+
+
+def _read_source(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def _module_categories(source: str) -> set[str]:
+    return set(_CATEGORY_RE.findall(source))
+
+
+def _iter_test_files(config: pytest.Config) -> list[Path]:
+    rootdir = Path(str(config.rootdir))
+    files: list[Path] = []
+    for testpath in config.getini("testpaths") or ["tests"]:
+        base = rootdir / testpath
+        if base.is_dir():
+            files.extend(sorted(base.rglob("test_*.py")))
+        elif base.is_file() and base.name.startswith("test_"):
+            files.append(base)
+    return files
+
+
+def _uncategorized_modules(config: pytest.Config) -> list[Path]:
+    """Test files that contain tests but declare no category marker."""
+    offenders: list[Path] = []
+    for path in _iter_test_files(config):
+        source = _read_source(path)
+        if not _HAS_TESTS_RE.search(source):
+            continue  # empty / fully-commented module: nothing to categorize
+        if not _module_categories(source):
+            offenders.append(path)
+    return offenders
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Handle `--list-categories` before any collection/import happens."""
+    if not config.getoption("--list-categories"):
+        return
+
+    rootdir = Path(str(config.rootdir))
+    by_category: dict[str, list[str]] = {c: [] for c in CATEGORIES}
+    uncategorized: list[str] = []
+    for path in _iter_test_files(config):
+        source = _read_source(path)
+        if not _HAS_TESTS_RE.search(source):
+            continue
+        rel = str(path.relative_to(rootdir))
+        cats = _module_categories(source)
+        if not cats:
+            uncategorized.append(rel)
+        for cat in cats:
+            by_category[cat].append(rel)
+
+    lines = ["", "Test categories (select with --<category>):", ""]
+    for category in CATEGORIES:
+        modules = by_category[category]
+        lines.append(f"  {category:<10} {len(modules):>3} module(s)")
+        lines.extend(f"             - {rel}" for rel in modules)
+    if uncategorized:
+        lines.append(f"\n  UNCATEGORIZED {len(uncategorized)} module(s) — run is blocked:")
+        lines.extend(f"             - {rel}" for rel in uncategorized)
+    pytest.exit("\n".join(lines), returncode=0)
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Enforce category markers, then apply provider-argument filtering."""
+    if not config.getoption("--allow-uncategorized"):
+        offenders = _uncategorized_modules(config)
+        if offenders:
+            rootdir = Path(str(config.rootdir))
+            listed = "\n".join(f"  - {p.relative_to(rootdir)}" for p in offenders)
+            raise pytest.UsageError(
+                f"{len(offenders)} test module(s) have no category marker:\n\n"
+                f"{listed}\n\n{_CATEGORY_HINT}"
+            )
+
+    _filter_by_provider(config, items)
 
 
 def _selected_categories(config: pytest.Config) -> dict[str, object]:
@@ -69,7 +180,7 @@ def pytest_ignore_collect(collection_path: Path, config: pytest.Config) -> bool 
     return True
 
 
-def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+def _filter_by_provider(config: pytest.Config, items: list[pytest.Item]) -> None:
     """Apply provider-argument filtering once modules are imported.
 
     `--plugin anthropic` keeps only items whose `plugin` marker carries "anthropic"
