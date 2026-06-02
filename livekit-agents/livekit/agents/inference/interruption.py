@@ -58,7 +58,8 @@ DETECTION_INTERVAL = 0.1  # 0.1 second
 AUDIO_PREFIX_DURATION = 1.0  # 1.0 second
 REMOTE_INFERENCE_TIMEOUT = 0.7  # 700ms
 # they are used only to compute MIN_INTERRUPTION_DURATION * _FRAMES_PER_SECOND = min_frames (2 by default)
-MIN_INTERRUPTION_DURATION = 0.010 * 2  # 10ms per frame, any 2 frames
+FRAME_SIZE = 0.01  # 10ms
+MIN_INTERRUPTION_DURATION = FRAME_SIZE * 2  # 10ms per frame, any 2 frames
 _FRAMES_PER_SECOND = 100
 
 
@@ -1179,7 +1180,7 @@ def _estimate_probability(
     if probabilities is None:
         return 0.0
 
-    n_th = math.ceil(window_size / 0.025)  # 25ms per frame
+    n_th = math.ceil(window_size / FRAME_SIZE)  # 25ms per frame
     if len(probabilities) < n_th:
         return 0.0
 
