@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.unit
+pytestmark = pytest.mark.docs
 
 # The module lives at .github/convert_html_docs.py which isn't a regular
 # package, so we load it by file path.

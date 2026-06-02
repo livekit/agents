@@ -94,8 +94,6 @@ dev = [
     "tiktoken>=0.9.0",
     "pytest-xdist>=3.8.0",
     "playwright>=1.58.0",
-    "beautifulsoup4",
-    "markdownify",
 ]
 docs = ["pdoc3", "setuptools", "beautifulsoup4", "markdownify"]
 
@@ -137,6 +135,7 @@ markers = [
     "stt(name): speech-to-text test, optionally for provider `name` (--stt [name])",
     "tts(name): text-to-speech test, optionally for provider `name` (--tts [name])",
     "evals: behavioral evals run against the LiveKit inference gateway (--evals)",
+    "docs: tests for the docs-build tooling under .github/ (select with --docs)",
 ]
 
 

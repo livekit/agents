@@ -17,7 +17,7 @@ TEST_CONNECT_OPTIONS = dataclasses.replace(DEFAULT_API_CONNECT_OPTIONS, retry_in
 # Test categories, each exposed as a `--<category>` flag and a `pytest.mark.<category>`
 # marker. Provider-specific categories also accept an argument, e.g.
 # `pytestmark = pytest.mark.plugin("anthropic")`, selectable via `--plugin anthropic`.
-CATEGORIES = ("unit", "plugin", "realtime", "stt", "tts", "evals")
+CATEGORIES = ("unit", "plugin", "realtime", "stt", "tts", "evals", "docs")
 
 # matches `pytest.mark.<category>` anywhere in a module's source (module-level
 # `pytestmark = ...` or per-test `@pytest.mark.<category>` decorators).
@@ -34,6 +34,7 @@ Every test module must declare its category with a module-level marker, e.g.:
     pytestmark = pytest.mark.tts               # text-to-speech suite
     pytestmark = pytest.mark.realtime("nvidia")  # realtime-model test
     pytestmark = pytest.mark.evals             # inference-gateway evals
+    pytestmark = pytest.mark.docs              # docs-build tooling (.github/)
 
 Run pytest with the --allow-uncategorized option to temporarily disable this rule."""
 
