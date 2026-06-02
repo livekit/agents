@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import weakref
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -8,7 +9,6 @@ from typing import TYPE_CHECKING, Any
 from typing_extensions import TypedDict
 
 from .. import utils
-from ..job import JobContext, get_job_context
 from ..llm.chat_context import ChatContext, ChatItem
 from ..llm.tool_context import (
     CONFIRM_DUPLICATE_PARAM,
@@ -148,27 +148,28 @@ def _resolve_async_tool_options(
     return AsyncToolOptions(**{**_ASYNC_TOOL_OPTIONS_DEFAULTS, **config})
 
 
-# shared across all executors so the cancel_task / get_running_tasks companion tools
-# see a single job-scoped view
-_RunningTasks: dict[tuple[JobContext | None, str], _RunningTask] = {}
+# session-scoped view shared across executors, so cancel_task / get_running_tasks
+# see all tasks of their session but never a nested session's. weak-keyed so a
+# dropped session can't leak its tasks.
+_RunningTasks: weakref.WeakKeyDictionary[AgentSession, dict[str, _RunningTask]] = (
+    weakref.WeakKeyDictionary()
+)
 
 
 @function_tool
-async def get_running_tasks() -> list[dict]:
+async def get_running_tasks(ctx: RunContext) -> list[dict]:
     """Get the list of running tool calls that are cancellable."""
-    job_ctx = get_job_context(required=False)
     return [
         task.ctx.function_call.model_dump()
-        for (ctx, _), task in list(_RunningTasks.items())
-        if ctx is job_ctx and task.allow_cancellation
+        for task in _RunningTasks.get(ctx.session, {}).values()
+        if task.allow_cancellation
     ]
 
 
 @function_tool
-async def cancel_task(call_id: str) -> str:
+async def cancel_task(ctx: RunContext, call_id: str) -> str:
     """Cancel a running tool call by call_id."""
-    job_ctx = get_job_context(required=False)
-    task = _RunningTasks.get((job_ctx, call_id))
+    task = _RunningTasks.get(ctx.session, {}).get(call_id)
     if task is None:
         raise ToolError(f"Task {call_id} not found")
 
@@ -354,12 +355,13 @@ class _ToolExecutor:
         )
         self._running_tasks[call_id] = running_task
 
-        task_key = (get_job_context(required=False), call_id)
-        _RunningTasks[task_key] = running_task
+        session = run_ctx.session
+        _RunningTasks.setdefault(session, {})[call_id] = running_task
 
         def _on_done(_: asyncio.Task[Any]) -> None:
             self._running_tasks.pop(call_id, None)
-            _RunningTasks.pop(task_key, None)
+            if (session_tasks := _RunningTasks.get(session)) is not None:
+                session_tasks.pop(call_id, None)
             # detach so a stashed RunContext can't drive the executor post-completion
             run_ctx._detach_executor()
 
