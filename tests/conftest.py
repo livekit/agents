@@ -74,6 +74,10 @@ def _module_categories(source: str) -> set[str]:
     return set(_CATEGORY_RE.findall(source))
 
 
+def _plural(n: int, noun: str) -> str:
+    return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
+
+
 def _iter_test_files(config: pytest.Config) -> list[Path]:
     rootdir = Path(str(config.rootdir))
     files: list[Path] = []
@@ -120,10 +124,11 @@ def pytest_configure(config: pytest.Config) -> None:
     lines = ["", "Test categories (select with --<category>):", ""]
     for category in CATEGORIES:
         modules = by_category[category]
-        lines.append(f"  {category:<10} {len(modules):>3} module(s)")
+        lines.append(f"  {category:<8} {_plural(len(modules), 'module')}")
         lines.extend(f"             - {rel}" for rel in modules)
     if uncategorized:
-        lines.append(f"\n  UNCATEGORIZED {len(uncategorized)} module(s) — run is blocked:")
+        blocked = _plural(len(uncategorized), "module")
+        lines.append(f"\n  UNCATEGORIZED {blocked} — run is blocked:")
         lines.extend(f"             - {rel}" for rel in uncategorized)
     pytest.exit("\n".join(lines), returncode=0)
 
@@ -136,8 +141,8 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
             rootdir = Path(str(config.rootdir))
             listed = "\n".join(f"  - {p.relative_to(rootdir)}" for p in offenders)
             raise pytest.UsageError(
-                f"{len(offenders)} test module(s) have no category marker:\n\n"
-                f"{listed}\n\n{_CATEGORY_HINT}"
+                f"Found {_plural(len(offenders), 'test module')} without a "
+                f"category marker:\n\n{listed}\n\n{_CATEGORY_HINT}"
             )
 
     _filter_by_provider(config, items)
