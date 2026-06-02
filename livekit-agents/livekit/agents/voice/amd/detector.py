@@ -420,7 +420,8 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
                     None,
                 )
             if publisher is None:
-                # publisher already gone; outer detection_timeout will resolve AMD
+                # publisher gone start listening so the no-speech timer settles faster
+                self._start_listening()
                 return
 
             if publisher.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
@@ -450,9 +451,10 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
                 value=_SIP_CALL_STATUS_ACTIVE,
             )
         except RuntimeError as e:
-            # the outer detection timeout will eventually fire
-            logger.debug("AMD: SIP answer wait aborted", extra={"reason": str(e)})
-            return
+            # SIP participant disconnected before going active, default to detection timeout
+            logger.debug(
+                "AMD: SIP answer wait failed; starting to listen", extra={"reason": str(e)}
+            )
 
         if not self._closed:
             self._start_listening()

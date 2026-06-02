@@ -291,6 +291,7 @@ class RecorderIO:
         except Exception:
             logger.exception("recorder encode thread failed; recording may be incomplete")
         finally:
+
             def resolve_close_fut() -> None:
                 if not self._close_fut.done():
                     self._close_fut.set_result(None)
