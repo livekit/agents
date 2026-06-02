@@ -1180,7 +1180,7 @@ def _estimate_probability(
     if probabilities is None:
         return 0.0
 
-    n_th = math.ceil(window_size / FRAME_SIZE)  # 25ms per frame
+    n_th = math.ceil(window_size / FRAME_SIZE)  # 10ms per frame
     if len(probabilities) < n_th:
         return 0.0
 
