@@ -278,6 +278,7 @@ class SupervisedProc(ABC):
     def _close_sentinel(self) -> None:
         """Close the dup'd sentinel fd exactly once."""
         if hasattr(self, "_proc_sentinel"):
+            self._loop.remove_reader(self._proc_sentinel)
             os.close(self._proc_sentinel)
             del self._proc_sentinel
 
