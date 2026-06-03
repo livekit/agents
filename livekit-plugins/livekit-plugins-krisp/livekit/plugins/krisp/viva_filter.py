@@ -180,6 +180,7 @@ class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         """Initialize the Krisp frame processor.
 
         Args:
+            noise_suppression_level: Noise suppression level (0-100, default: 100).
             auth_provider: Authentication provider. Defaults to
                 :class:`LiveKitCloudAuthProvider` (LiveKit Cloud auth + bundled
                 model). Pass :class:`KrispLicenseAuthProvider` to use a Krisp
@@ -187,7 +188,6 @@ class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
             model_path: **Deprecated.** Use
                 ``auth_provider=KrispLicenseAuthProvider(model_path=...)``
                 instead. Path to the Krisp model file (``.kef``).
-            noise_suppression_level: Noise suppression level (0-100, default: 100).
             frame_duration_ms: **Deprecated.** The processor now buffers input
                 frames of any size automatically, so this no longer needs to be
                 set. Frame duration in milliseconds (10, 15, 20, 30, or 32).
