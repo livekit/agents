@@ -58,7 +58,6 @@ KNOWN_GEMINI_API_MODELS: frozenset[str] = frozenset(
     {
         "gemini-3.1-flash-live-preview",
         "gemini-2.5-flash-native-audio-preview-12-2025",
-        "gemini-2.5-flash-native-audio-preview-09-2025",
     }
 )
 
@@ -141,6 +140,7 @@ class _RealtimeOptions:
     image_encode_options: NotGivenOr[images.EncodeOptions]
     conn_options: APIConnectOptions
     http_options: NotGivenOr[types.HttpOptions]
+    media_resolution: NotGivenOr[types.MediaResolution] = NOT_GIVEN
     enable_affective_dialog: NotGivenOr[bool] = NOT_GIVEN
     proactivity: NotGivenOr[bool] = NOT_GIVEN
     realtime_input_config: NotGivenOr[types.RealtimeInputConfig] = NOT_GIVEN
@@ -217,6 +217,7 @@ class RealtimeModel(llm.RealtimeModel):
         api_version: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         http_options: NotGivenOr[types.HttpOptions] = NOT_GIVEN,
+        media_resolution: NotGivenOr[types.MediaResolution] = NOT_GIVEN,
         thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN,
         credentials: google.auth.credentials.Credentials | None = None,
     ) -> None:
@@ -249,6 +250,7 @@ class RealtimeModel(llm.RealtimeModel):
             input_audio_transcription (AudioTranscriptionConfig | None, optional): The configuration for input audio transcription. Defaults to None.)
             output_audio_transcription (AudioTranscriptionConfig | None, optional): The configuration for output audio transcription. Defaults to AudioTranscriptionConfig().
             image_encode_options (images.EncodeOptions, optional): The configuration for image encoding. Defaults to DEFAULT_ENCODE_OPTIONS.
+            media_resolution (MediaResolution, optional): The media resolution for the session. Defaults to None.
             enable_affective_dialog (bool, optional): Whether to enable affective dialog. Defaults to False.
             proactivity (bool, optional): Whether to enable proactive audio. Defaults to False.
             realtime_input_config (RealtimeInputConfig, optional): The configuration for realtime input. Defaults to None.
@@ -275,7 +277,19 @@ class RealtimeModel(llm.RealtimeModel):
         ):
             server_turn_detection = False
         modalities = modalities if is_given(modalities) else [types.Modality.AUDIO]
+        use_vertexai = (
+            vertexai
+            if is_given(vertexai)
+            else os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "0").lower() in ["true", "1"]
+        )
+        if not is_given(model):
+            model = (
+                "gemini-live-2.5-flash-native-audio"
+                if use_vertexai
+                else "gemini-2.5-flash-native-audio-preview-12-2025"
+            )
 
+        mutable = "3.1" not in model
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
                 message_truncation=False,
@@ -284,14 +298,12 @@ class RealtimeModel(llm.RealtimeModel):
                 auto_tool_reply_generation=True,
                 audio_output=types.Modality.AUDIO in modalities,
                 manual_function_calls=False,
+                mutable_chat_context=mutable,
+                mutable_instructions=mutable,
+                mutable_tools=False,
+                per_response_tool_choice=False,
             )
         )
-
-        if not is_given(model):
-            if vertexai:
-                model = "gemini-live-2.5-flash-native-audio"
-            else:
-                model = "gemini-2.5-flash-native-audio-preview-12-2025"
 
         gemini_api_key = api_key if is_given(api_key) else os.environ.get("GOOGLE_API_KEY")
         gcp_project = project if is_given(project) else os.environ.get("GOOGLE_CLOUD_PROJECT")
@@ -299,11 +311,6 @@ class RealtimeModel(llm.RealtimeModel):
             location
             if is_given(location)
             else os.environ.get("GOOGLE_CLOUD_LOCATION") or "us-central1"
-        )
-        use_vertexai = (
-            vertexai
-            if is_given(vertexai)
-            else os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "0").lower() in ["true", "1"]
         )
 
         if use_vertexai:
@@ -331,6 +338,12 @@ class RealtimeModel(llm.RealtimeModel):
 
         # Validate model/API compatibility for known models
         _validate_model_api_match(model, use_vertexai)
+
+        if "3.1" in model:
+            logger.warning(
+                f"'{model}' has limited mid-session update support. instructions, chat "
+                "context, and tool updates will not be applied until the next session."
+            )
 
         self._opts = _RealtimeOptions(
             model=model,
@@ -361,6 +374,7 @@ class RealtimeModel(llm.RealtimeModel):
             tool_response_scheduling=tool_response_scheduling,
             conn_options=conn_options,
             http_options=http_options,
+            media_resolution=media_resolution,
             thinking_config=thinking_config,
             session_resumption=session_resumption,
             credentials=credentials,
@@ -555,6 +569,9 @@ class RealtimeSession(llm.RealtimeSession):
                     self._mark_restart_needed()
                     return
 
+            if not self._realtime_model.capabilities.mutable_instructions:
+                return
+
             # Active session exists — send mid-session system instruction update (no reconnect needed)
             logger.debug("Updating instructions mid-session")
             self._send_client_event(
@@ -607,18 +624,20 @@ class RealtimeSession(llm.RealtimeSession):
                 append_ctx.items.append(item)
 
         if append_ctx.items:
-            turns_dict, _ = append_ctx.copy(exclude_function_call=True).to_provider_format(
-                format="google", inject_dummy_user_message=False
-            )
-            # we are not generating, and do not need to inject
-            turns = [types.Content.model_validate(turn) for turn in turns_dict]
             tool_results = get_tool_results_for_realtime(
                 append_ctx,
                 vertexai=self._opts.vertexai,
                 tool_response_scheduling=self._opts.tool_response_scheduling,
             )
-            if turns:
-                self._send_client_event(types.LiveClientContent(turns=turns, turn_complete=False))
+            if self._realtime_model.capabilities.mutable_chat_context:
+                turns_dict, _ = append_ctx.copy(exclude_function_call=True).to_provider_format(
+                    format="google", inject_dummy_user_message=False
+                )
+                turns = [types.Content.model_validate(turn) for turn in turns_dict]
+                if turns:
+                    self._send_client_event(
+                        types.LiveClientContent(turns=turns, turn_complete=False)
+                    )
             if tool_results:
                 self._send_client_event(tool_results)
 
@@ -681,13 +700,32 @@ class RealtimeSession(llm.RealtimeSession):
             self._msg_ch.send_nowait(event)
 
     def generate_reply(
-        self, *, instructions: NotGivenOr[str] = NOT_GIVEN
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
+        if is_given(tools):
+            logger.warning("per-response tools is not supported by Google Realtime API, ignoring")
+        if not self._realtime_model.capabilities.mutable_chat_context:
+            logger.warning(
+                f"generate_reply is not compatible with '{self._opts.model}' and will be ignored."
+            )
+            fut = asyncio.Future[llm.GenerationCreatedEvent]()
+            fut.set_exception(
+                llm.RealtimeError(f"generate_reply is not compatible with '{self._opts.model}'")
+            )
+            return fut
         if self._pending_generation_fut and not self._pending_generation_fut.done():
             logger.warning(
                 "generate_reply called while another generation is pending, cancelling previous."
             )
-            self._pending_generation_fut.cancel("Superseded by new generate_reply call")
+            # clear the slot before cancelling so the done callback doesn't treat it
+            # as an external cancellation and signal the server.
+            old_fut = self._pending_generation_fut
+            self._pending_generation_fut = None
+            old_fut.cancel("Superseded by new generate_reply call")
 
         fut = asyncio.Future[llm.GenerationCreatedEvent]()
         self._pending_generation_fut = fut
@@ -719,7 +757,17 @@ class RealtimeSession(llm.RealtimeSession):
                     self._pending_generation_fut = None
 
         timeout_handle = asyncio.get_event_loop().call_later(5.0, _on_timeout)
-        fut.add_done_callback(lambda _: timeout_handle.cancel())
+
+        def _on_fut_done(f: asyncio.Future[llm.GenerationCreatedEvent]) -> None:
+            timeout_handle.cancel()
+            is_current = self._pending_generation_fut is fut
+            if is_current:
+                self._pending_generation_fut = None
+            if f.cancelled() and is_current:
+                # external cancel: signal interrupt to Gemini via activity_start
+                self.interrupt()
+
+        fut.add_done_callback(_on_fut_done)
 
         return fut
 
@@ -790,9 +838,11 @@ class RealtimeSession(llm.RealtimeSession):
             session = None
             try:
                 logger.debug("connecting to Gemini Realtime API...")
+                t0 = time.perf_counter()
                 async with self._client.aio.live.connect(
                     model=self._opts.model, config=config
                 ) as session:
+                    self._report_connection_acquired(time.perf_counter() - t0)
                     async with self._session_lock:
                         self._active_session = session
 
@@ -818,12 +868,13 @@ class RealtimeSession(llm.RealtimeSession):
                             exclude_empty_message=True,
                             exclude_config_update=True,
                         ).to_provider_format(format="google", inject_dummy_user_message=False)
-                        if turns_dict:
-                            turns = [types.Content.model_validate(turn) for turn in turns_dict]
+                        turns = [types.Content.model_validate(turn) for turn in turns_dict]
+                        if turns:
                             await session.send_client_content(
                                 turns=turns,  # type: ignore
                                 turn_complete=False,
                             )
+
                     # queue up existing chat context
                     send_task = asyncio.create_task(
                         self._send_task(session), name="gemini-realtime-send"
@@ -1022,9 +1073,16 @@ class RealtimeSession(llm.RealtimeSession):
     def _build_connect_config(self) -> types.LiveConnectConfig:
         temp = self._opts.temperature if is_given(self._opts.temperature) else None
 
-        tools_config = create_tools_config(self._tools, tool_behavior=self._opts.tool_behavior)
+        tools_config = create_tools_config(
+            self._tools,
+            tool_behavior=self._opts.tool_behavior,
+            use_parameters_json_schema=False,
+        )
         conf = types.LiveConnectConfig(
             response_modalities=self._opts.response_modalities,
+            history_config=types.HistoryConfig(initial_history_in_client_content=True)
+            if not self._realtime_model.capabilities.mutable_chat_context
+            else None,
             generation_config=types.GenerationConfig(
                 candidate_count=self._opts.candidate_count,
                 temperature=temp,
@@ -1041,6 +1099,9 @@ class RealtimeSession(llm.RealtimeSession):
                 else None,
                 thinking_config=self._opts.thinking_config
                 if is_given(self._opts.thinking_config)
+                else None,
+                media_resolution=self._opts.media_resolution
+                if is_given(self._opts.media_resolution)
                 else None,
             ),
             system_instruction=types.Content(parts=[types.Part(text=self._opts.instructions)])

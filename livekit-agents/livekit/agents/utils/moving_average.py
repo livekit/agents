@@ -21,6 +21,7 @@ class MovingAverage:
         return self._sum / self.size()
 
     def reset(self) -> None:
+        self._hist = [0.0] * len(self._hist)
         self._count = 0
         self._sum = 0
 

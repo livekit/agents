@@ -59,9 +59,10 @@ class Toolset:
         ctx: RunContext
         output: Any | Exception | None
 
-    def __init__(self, *, id: str, tools: list[Tool | Toolset] | None = None) -> None:
+    def __init__(self, *, id: str, tools: Sequence[Tool | Toolset] | None = None) -> None:
         self._id = id
-        self._tools: Sequence[Tool | Toolset] = tools or []
+        self._tools: Sequence[Tool | Toolset] = list(tools) if tools is not None else []
+        self._tools.extend(find_function_tools(self))
 
     @property
     def id(self) -> str:
@@ -89,7 +90,7 @@ class Toolset:
         toolsets (passed to ``AgentSession(tools=...)``) are closed only when the
         ``AgentSession`` shuts down.
         """
-        toolsets = [tool for tool in self.tools if isinstance(tool, Toolset)]
+        toolsets = [tool for tool in self._tools if isinstance(tool, Toolset)]
         if toolsets:
             await asyncio.gather(*(toolset.aclose() for toolset in toolsets))
 
@@ -470,8 +471,11 @@ class ToolContext:
                 self._provider_tools.append(tool)
 
             elif isinstance(tool, (FunctionTool, RawFunctionTool)):
-                if tool.info.name in self._fnc_tools_map:
-                    raise ValueError(f"duplicate function name: {tool.info.name}")
+                existing = self._fnc_tools_map.get(tool.info.name)
+                if existing is not None:
+                    if existing is not tool:
+                        raise ValueError(f"duplicate function name: {tool.info.name}")
+                    return  # same instance, skip
                 self._fnc_tools_map[tool.info.name] = tool
 
             elif isinstance(tool, Toolset):
@@ -499,7 +503,16 @@ class ToolContext:
 
     @overload
     def parse_function_tools(
-        self, format: Literal["openai", "openai.responses"], *, strict: bool = True
+        self, format: Literal["openai"], *, strict: bool = True
+    ) -> list[dict[str, Any]]: ...
+
+    @overload
+    def parse_function_tools(
+        self,
+        format: Literal["openai.responses"],
+        *,
+        strict: bool = True,
+        provider_tool_type: type[ProviderTool] | None = None,
     ) -> list[dict[str, Any]]: ...
 
     @overload
@@ -508,6 +521,7 @@ class ToolContext:
         format: Literal["google"],
         *,
         tool_behavior: _provider_format.google.TOOL_BEHAVIOR | None = None,
+        use_parameters_json_schema: bool = True,
     ) -> list[dict[str, Any]]: ...
 
     @overload

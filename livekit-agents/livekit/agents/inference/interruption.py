@@ -41,7 +41,6 @@ from ..utils import (
     aio,
     http_context,
     is_given,
-    log_exceptions,
     shortuuid,
 )
 from ._utils import (
@@ -49,6 +48,7 @@ from ._utils import (
     STAGING_INFERENCE_URL,
     create_access_token,
     get_default_inference_url,
+    get_inference_headers,
 )
 
 SAMPLE_RATE = 16000
@@ -469,7 +469,6 @@ class InterruptionStreamBase(ABC):
     @abstractmethod
     async def _run(self) -> None: ...
 
-    @log_exceptions(logger=logger)
     async def _main_task(self) -> None:
         max_retries = self._conn_options.max_retry
 
@@ -759,7 +758,6 @@ class InterruptionHttpStream(InterruptionStreamBase):
         finally:
             await aio.cancel_and_wait(*tasks)
 
-    @log_exceptions(logger=logger)
     async def predict(self, waveform: np.ndarray) -> InterruptionResponse:
         created_at = perf_counter_ns()
         try:
@@ -1126,7 +1124,8 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
         if base_url.startswith(("http://", "https://")):
             base_url = base_url.replace("http", "ws", 1)
         headers = {
-            "Authorization": f"Bearer {create_access_token(self._opts.api_key, self._opts.api_secret)}"
+            **get_inference_headers(),
+            "Authorization": f"Bearer {create_access_token(self._opts.api_key, self._opts.api_secret)}",
         }
         try:
             ws = await asyncio.wait_for(

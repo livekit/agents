@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from ..llm import LLM, ChatContext, function_tool, utils as llm_utils
@@ -16,6 +16,8 @@ class JudgmentResult:
     """The judgment verdict: 'pass', 'fail', or 'maybe' (uncertain)."""
     reasoning: str
     """Chain-of-thought reasoning for the judgment."""
+    instructions: str = field(default="")
+    """The evaluation criteria/instructions used by the judge."""
 
     @property
     def passed(self) -> bool:
@@ -146,7 +148,50 @@ async def _evaluate_with_llm(llm: LLM, prompt: str) -> JudgmentResult:
 
 
 class Judge:
-    def __init__(self, *, llm: LLM | None = None, instructions: str, name: str = "custom") -> None:
+    """Base class for custom evaluation judges.
+
+    Subclass and override :meth:`evaluate` to implement deterministic
+    or programmatic checks that don't need an LLM::
+
+        class CitationJudge(Judge):
+            def __init__(self):
+                super().__init__(name="citation")
+
+            async def evaluate(self, *, chat_ctx, reference=None, llm=None):
+                has_citation = any(
+                    "[source]" in (m.text_content or "") for m in chat_ctx.messages
+                )
+                return JudgmentResult(
+                    verdict="pass" if has_citation else "fail",
+                    reasoning="Found citation markers" if has_citation else "No citations",
+                )
+    """
+
+    def __init__(self, *, name: str) -> None:
+        self._name = name
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    async def evaluate(
+        self,
+        *,
+        chat_ctx: ChatContext,
+        reference: ChatContext | None = None,
+        llm: LLM | None = None,
+    ) -> JudgmentResult:
+        """Evaluate a conversation and return a judgment.
+
+        Must be overridden in subclasses.
+        """
+        raise NotImplementedError(f"Judge '{self._name}' does not implement evaluate().")
+
+
+class _LLMJudge:
+    """LLM-based judge that evaluates a conversation against instructions."""
+
+    def __init__(self, *, llm: LLM | None = None, instructions: str, name: str) -> None:
         self._llm = llm
         self._instructions = instructions
         self._name = name
@@ -166,7 +211,7 @@ class Judge:
         if effective_llm is None:
             raise ValueError(
                 f"No LLM provided for judge '{self._name}'. "
-                "Pass llm to evaluate_session() or to the judge factory."
+                "Pass llm to JudgeGroup or to the judge constructor."
             )
         prompt_parts = [
             f"Criteria: {self._instructions}",
@@ -185,7 +230,9 @@ class Judge:
             ]
         )
 
-        return await _evaluate_with_llm(effective_llm, "\n".join(prompt_parts))
+        result = await _evaluate_with_llm(effective_llm, "\n".join(prompt_parts))
+        result.instructions = self._instructions
+        return result
 
 
 class _TaskCompletionJudge:
@@ -213,7 +260,7 @@ class _TaskCompletionJudge:
         if effective_llm is None:
             raise ValueError(
                 "No LLM provided for judge 'task_completion'. "
-                "Pass llm to evaluate_session() or to the judge factory."
+                "Pass llm to JudgeGroup or to the judge constructor."
             )
 
         instructions = _get_latest_instructions(chat_ctx)
@@ -224,10 +271,13 @@ class _TaskCompletionJudge:
                 "Evaluation may be less accurate without knowing the agent's goal."
             )
 
-        prompt_parts = [
-            "Evaluate if the agent completed its goal based on its instructions.",
-            "",
-        ]
+        criteria = (
+            "Evaluate if the agent completed its goal based on its instructions. "
+            "Task completed, appropriately handed off, or correctly declined = pass. "
+            "User's need ignored, no resolution, gave up without handoff = fail."
+        )
+
+        prompt_parts = [criteria, ""]
 
         if instructions:
             prompt_parts.extend([f"Agent Instructions:\n{instructions}", ""])
@@ -238,16 +288,9 @@ class _TaskCompletionJudge:
             reference = reference.copy(exclude_instructions=True)
             prompt_parts.extend(["", f"Reference:\n{_format_chat_ctx(reference)}"])
 
-        prompt_parts.extend(
-            [
-                "",
-                "Did the agent complete what it was instructed to do?",
-                "Consider: task completed, appropriately handed off, or correctly declined = pass",
-                "User's need ignored, no resolution, gave up without handoff = fail",
-            ]
-        )
-
-        return await _evaluate_with_llm(effective_llm, "\n".join(prompt_parts))
+        result = await _evaluate_with_llm(effective_llm, "\n".join(prompt_parts))
+        result.instructions = criteria
+        return result
 
 
 class _HandoffJudge:
@@ -283,14 +326,18 @@ class _HandoffJudge:
         if effective_llm is None:
             raise ValueError(
                 "No LLM provided for judge 'handoff'. "
-                "Pass llm to evaluate_session() or to the judge factory."
+                "Pass llm to JudgeGroup or to the judge constructor."
             )
 
+        criteria = (
+            "Evaluate if the conversation maintained context across agent handoffs. "
+            "Handoffs can be silent or explicit, either is acceptable. "
+            "Remembered info (names, details, requests) = pass. "
+            "Break in continuity, repeated questions, context lost = fail."
+        )
+
         prompt_parts = [
-            "Evaluate if the conversation maintained context across agent handoffs.",
-            "",
-            "Note: Handoffs can be silent (user doesn't notice) or explicit "
-            "(agent announces 'transferring you to...'). Either is acceptable.",
+            criteria,
             "",
             f"Conversation:\n{_format_chat_ctx(chat_ctx)}",
         ]
@@ -299,16 +346,9 @@ class _HandoffJudge:
             reference = reference.copy(exclude_instructions=True)
             prompt_parts.extend(["", f"Reference:\n{_format_chat_ctx(reference)}"])
 
-        prompt_parts.extend(
-            [
-                "",
-                "Did the new agent preserve context from the conversation?",
-                "Consider: remembered info (names, details, requests) = pass",
-                "Break in continuity, repeated questions, context lost = fail",
-            ]
-        )
-
-        return await _evaluate_with_llm(effective_llm, "\n".join(prompt_parts))
+        result = await _evaluate_with_llm(effective_llm, "\n".join(prompt_parts))
+        result.instructions = criteria
+        return result
 
 
 def task_completion_judge(llm: LLM | None = None) -> _TaskCompletionJudge:
@@ -337,7 +377,7 @@ def handoff_judge(llm: LLM | None = None) -> _HandoffJudge:
     return _HandoffJudge(llm=llm)
 
 
-def accuracy_judge(llm: LLM | None = None) -> Judge:
+def accuracy_judge(llm: LLM | None = None) -> _LLMJudge:
     """Judge that evaluates factual accuracy of information provided.
 
     Focuses on grounding - responses must be supported by function call outputs.
@@ -345,7 +385,7 @@ def accuracy_judge(llm: LLM | None = None) -> Judge:
 
     Useful for: healthcare, insurance, finance - where wrong information has consequences.
     """
-    return Judge(
+    return _LLMJudge(
         llm=llm,
         name="accuracy",
         instructions=(
@@ -357,7 +397,7 @@ def accuracy_judge(llm: LLM | None = None) -> Judge:
     )
 
 
-def tool_use_judge(llm: LLM | None = None) -> Judge:
+def tool_use_judge(llm: LLM | None = None) -> _LLMJudge:
     """Judge that evaluates if the agent used tools correctly.
 
     Checks tool selection, parameter accuracy, output interpretation, and error handling.
@@ -365,7 +405,7 @@ def tool_use_judge(llm: LLM | None = None) -> Judge:
 
     Useful for: any agent with tools - appointment systems, order lookups, CRM integrations.
     """
-    return Judge(
+    return _LLMJudge(
         llm=llm,
         name="tool_use",
         instructions=(
@@ -381,7 +421,7 @@ def tool_use_judge(llm: LLM | None = None) -> Judge:
     )
 
 
-def safety_judge(llm: LLM | None = None) -> Judge:
+def safety_judge(llm: LLM | None = None) -> _LLMJudge:
     """Judge that evaluates if responses are safe, compliant, and appropriate.
 
     Checks for unauthorized advice, improper disclosure, failure to escalate,
@@ -389,7 +429,7 @@ def safety_judge(llm: LLM | None = None) -> Judge:
 
     Useful for: regulated industries, user-facing agents where compliance and tone matter.
     """
-    return Judge(
+    return _LLMJudge(
         llm=llm,
         name="safety",
         instructions=(
@@ -402,7 +442,7 @@ def safety_judge(llm: LLM | None = None) -> Judge:
     )
 
 
-def relevancy_judge(llm: LLM | None = None) -> Judge:
+def relevancy_judge(llm: LLM | None = None) -> _LLMJudge:
     """Judge that evaluates if responses are relevant and on-topic.
 
     Checks if the agent directly addresses what the user asked, stays focused
@@ -410,7 +450,7 @@ def relevancy_judge(llm: LLM | None = None) -> Judge:
 
     Useful for: any conversational agent, scoped agents, customer service.
     """
-    return Judge(
+    return _LLMJudge(
         llm=llm,
         name="relevancy",
         instructions=(
@@ -422,7 +462,7 @@ def relevancy_judge(llm: LLM | None = None) -> Judge:
     )
 
 
-def coherence_judge(llm: LLM | None = None) -> Judge:
+def coherence_judge(llm: LLM | None = None) -> _LLMJudge:
     """Judge that evaluates if responses are coherent and logical.
 
     Checks if the agent presents ideas in an organized manner without
@@ -430,7 +470,7 @@ def coherence_judge(llm: LLM | None = None) -> Judge:
 
     Useful for: complex explanations, multi-turn conversations, technical support.
     """
-    return Judge(
+    return _LLMJudge(
         llm=llm,
         name="coherence",
         instructions=(
@@ -442,7 +482,7 @@ def coherence_judge(llm: LLM | None = None) -> Judge:
     )
 
 
-def conciseness_judge(llm: LLM | None = None) -> Judge:
+def conciseness_judge(llm: LLM | None = None) -> _LLMJudge:
     """Judge that evaluates if responses are appropriately concise.
 
     Critical for voice AI where brevity matters. Checks for unnecessary
@@ -450,7 +490,7 @@ def conciseness_judge(llm: LLM | None = None) -> Judge:
 
     Useful for: voice agents, chat interfaces, any context where user time matters.
     """
-    return Judge(
+    return _LLMJudge(
         llm=llm,
         name="conciseness",
         instructions=(

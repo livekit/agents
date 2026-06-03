@@ -8,7 +8,7 @@ from typing import Any, Literal
 from livekit.agents import llm
 from livekit.agents.log import logger
 
-from .utils import group_tool_calls
+from .utils import convert_mid_conversation_instructions, group_tool_calls
 
 
 @dataclass
@@ -22,6 +22,8 @@ def to_chat_ctx(
     inject_dummy_user_message: bool = True,
     thought_signatures: dict[str, bytes] | None = None,
 ) -> tuple[list[dict], GoogleFormatData]:
+    chat_ctx = convert_mid_conversation_instructions(chat_ctx)
+
     turns: list[dict] = []
     system_messages: list[str] = []
     current_role: str | None = None
@@ -119,6 +121,7 @@ def to_fnc_ctx(
     tool_ctx: llm.ToolContext,
     *,
     tool_behavior: TOOL_BEHAVIOR | None = None,
+    use_parameters_json_schema: bool = True,
 ) -> list[dict[str, Any]]:
     tools: list[dict[str, Any]] = []
     for tool in tool_ctx.function_tools.values():
@@ -127,8 +130,18 @@ def to_fnc_ctx(
             schema = {
                 "name": info.name,
                 "description": info.raw_schema.get("description", ""),
-                "parameters_json_schema": info.raw_schema.get("parameters", {}),
             }
+            if use_parameters_json_schema:
+                schema["parameters_json_schema"] = info.raw_schema.get("parameters", {})
+            else:
+                # Gemini Live doesn't support parameters_json_schema, use the simplified JSON Schema instead
+                # see: https://github.com/googleapis/python-genai/issues/1147
+                from livekit.plugins.google.utils import _GeminiJsonSchema
+
+                schema["parameters"] = (
+                    _GeminiJsonSchema(info.raw_schema.get("parameters", {})).simplify() or None
+                )
+
             if tool_behavior is not None:
                 schema["behavior"] = tool_behavior
             tools.append(schema)

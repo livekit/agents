@@ -17,8 +17,8 @@ class CliArgs:
 
     # TODO(long): these are not actually used?
     url: str | None
-    api_key: str | None
-    api_secret: str | None
+    api_key: str | None = field(repr=False, default=None)
+    api_secret: str | None = field(repr=False, default=None)
 
     devmode: bool = False
     reload: bool = False

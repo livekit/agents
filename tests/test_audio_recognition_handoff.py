@@ -3,10 +3,14 @@ from __future__ import annotations
 from collections.abc import AsyncIterable
 from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
+import pytest
+
 from livekit import rtc
 from livekit.agents import Agent
 from livekit.agents.voice.agent import ModelSettings
 from livekit.agents.voice.agent_activity import AgentActivity
+
+pytestmark = pytest.mark.unit
 
 
 def _make_activity(agent: Agent, stt: object) -> MagicMock:
@@ -15,16 +19,21 @@ def _make_activity(agent: Agent, stt: object) -> MagicMock:
     act._audio_recognition = MagicMock()
     act._audio_recognition.detach_stt = AsyncMock(return_value=MagicMock())
     type(act).stt = PropertyMock(return_value=stt)
+    # rt session reuse checks need these
+    act._rt_session = None
+    type(act).llm = PropertyMock(return_value=None)
+    type(act).tools = PropertyMock(return_value=[])
     return act
 
 
-async def _detach_if_reusable(old: MagicMock, new: MagicMock) -> object | None:
-    """Call the real _detach_stt_pipeline_if_reusable, bypassing the mock."""
-    return await AgentActivity._detach_stt_pipeline_if_reusable(old, new)
+async def _detach_stt_if_reusable(old: MagicMock, new: MagicMock) -> object | None:
+    """Call the real _detach_reusable_resources, return stt_pipeline."""
+    resources = await AgentActivity._detach_reusable_resources(old, new)
+    return resources.stt_pipeline
 
 
 # ---------------------------------------------------------------------------
-# _detach_stt_pipeline_if_reusable
+# STT pipeline reuse via _detach_reusable_resources
 # ---------------------------------------------------------------------------
 
 
@@ -34,7 +43,7 @@ async def test_reusable_same_class_same_stt() -> None:
     old = _make_activity(Agent(instructions="a"), shared_stt)
     new = _make_activity(Agent(instructions="b"), shared_stt)
 
-    result = await _detach_if_reusable(old, new)
+    result = await _detach_stt_if_reusable(old, new)
     assert result is not None  # detach_stt was called
     old._audio_recognition.detach_stt.assert_awaited_once()
 
@@ -44,7 +53,7 @@ async def test_not_reusable_different_stt_instance() -> None:
     old = _make_activity(Agent(instructions="a"), MagicMock())
     new = _make_activity(Agent(instructions="b"), MagicMock())
 
-    result = await _detach_if_reusable(old, new)
+    result = await _detach_stt_if_reusable(old, new)
     assert result is None
 
 
@@ -54,7 +63,7 @@ async def test_not_reusable_no_stt() -> None:
     old = _make_activity(Agent(instructions="a"), None)
     new = _make_activity(Agent(instructions="b"), shared_stt)
 
-    result = await _detach_if_reusable(old, new)
+    result = await _detach_stt_if_reusable(old, new)
     assert result is None
 
 
@@ -77,14 +86,16 @@ async def test_not_reusable_different_stt_node_override() -> None:
     old = _make_activity(AgentA(instructions="a"), shared_stt)
     new = _make_activity(AgentB(instructions="b"), shared_stt)
 
-    result = await _detach_if_reusable(old, new)
+    result = await _detach_stt_if_reusable(old, new)
     assert result is None
 
 
-async def test_reusable_subclass_inherits_stt_node() -> None:
-    """Old agent overrides stt_node; new agent is a subclass that inherits it → reusable.
+async def test_not_reusable_subclass_inherits_custom_stt_node() -> None:
+    """Both agents share a custom stt_node via inheritance → not reusable.
 
-    B(A) does not override stt_node, so B.stt_node is A.stt_node (same object via MRO).
+    The pipeline is bound to the old agent's `self`; a custom stt_node may access
+    self.session/activity inside the yield loop, which raises after detach.
+    Only the default Agent.stt_node is known to be safe to reuse.
     """
     shared_stt = MagicMock()
 
@@ -102,9 +113,8 @@ async def test_reusable_subclass_inherits_stt_node() -> None:
     old = _make_activity(AgentA(instructions="a"), shared_stt)
     new = _make_activity(AgentB(instructions="b"), shared_stt)
 
-    result = await _detach_if_reusable(old, new)
-    assert result is not None
-    old._audio_recognition.detach_stt.assert_awaited_once()
+    result = await _detach_stt_if_reusable(old, new)
+    assert result is None
 
 
 async def test_not_reusable_subclass_overrides_stt_node() -> None:
@@ -126,7 +136,7 @@ async def test_not_reusable_subclass_overrides_stt_node() -> None:
     old = _make_activity(AgentA(instructions="a"), shared_stt)
     new = _make_activity(AgentB(instructions="b"), shared_stt)
 
-    result = await _detach_if_reusable(old, new)
+    result = await _detach_stt_if_reusable(old, new)
     assert result is None
 
 
@@ -137,5 +147,5 @@ async def test_not_reusable_no_audio_recognition() -> None:
     old._audio_recognition = None
     new = _make_activity(Agent(instructions="b"), shared_stt)
 
-    result = await _detach_if_reusable(old, new)
+    result = await _detach_stt_if_reusable(old, new)
     assert result is None

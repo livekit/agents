@@ -32,6 +32,8 @@ from livekit.agents.voice.remote_session import (
 )
 from livekit.protocol.agent_pb import agent_session as agent_pb
 
+pytestmark = pytest.mark.unit
+
 # ---------------------------------------------------------------------------
 # In-memory transport for testing
 # ---------------------------------------------------------------------------
@@ -276,7 +278,7 @@ class TestSessionHostEvents:
     def test_register_session(self, transport: InMemoryTransport, mock_session: MagicMock) -> None:
         host = SessionHost(transport)
         host.register_session(mock_session)
-        assert mock_session.on.call_count == 8
+        assert mock_session.on.call_count == 9
 
     @pytest.mark.asyncio
     async def test_agent_state_changed(self, transport: InMemoryTransport) -> None:
@@ -444,7 +446,7 @@ class TestSessionHostRequests:
         options.interruption = MagicMock(__iter__=lambda s: iter([]))
         options.max_tool_steps = 5
         options.user_away_timeout = 30
-        options.preemptive_generation = False
+        options.preemptive_generation = {"enabled": False}
         options.min_consecutive_speech_delay = 0.5
         options.use_tts_aligned_transcript = True
         options.ivr_detection = False
@@ -589,4 +591,4 @@ class TestSessionHostRequests:
         host.register_session(session)
         await host.start()
         await host.aclose()
-        assert session.off.call_count == 8
+        assert session.off.call_count == 9

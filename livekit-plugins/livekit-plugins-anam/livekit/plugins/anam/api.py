@@ -70,13 +70,18 @@ class AnamAPI:
         Returns:
             The created session token (a JWT string).
         """
+        persona_config_payload = {
+            "type": "ephemeral",
+            "name": persona_config.name,
+            "avatarId": persona_config.avatarId,
+            "llmId": "CUSTOMER_CLIENT_V1",
+        }
+
+        if persona_config.avatarModel:
+            persona_config_payload["avatarModel"] = persona_config.avatarModel
+
         payload = {
-            "personaConfig": {
-                "type": "ephemeral",
-                "name": persona_config.name,
-                "avatarId": persona_config.avatarId,
-                "llmId": "CUSTOMER_CLIENT_V1",
-            },
+            "personaConfig": persona_config_payload,
         }
         payload["environment"] = {
             "livekitUrl": livekit_url,

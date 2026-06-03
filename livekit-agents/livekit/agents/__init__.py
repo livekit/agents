@@ -87,10 +87,16 @@ from .voice import (
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
+    UserTurnExceededEvent,
     avatar,
     io,
     room_io,
     text_transforms,
+)
+from .voice.amd import (
+    AMD,
+    AMDCategory,
+    AMDPredictionEvent,
 )
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
 from .voice.room_io import RoomInputOptions, RoomIO, RoomOutputOptions
@@ -106,7 +112,13 @@ from .voice.run_result import (
     RunResult,
     mock_tools,
 )
-from .voice.turn import EndpointingOptions, InterruptionOptions, TurnHandlingOptions
+from .voice.turn import (
+    EndpointingOptions,
+    InterruptionOptions,
+    PreemptiveGenerationOptions,
+    TurnHandlingOptions,
+    UserTurnLimitOptions,
+)
 from .worker import (
     AgentServer,
     WorkerOptions,
@@ -220,9 +232,15 @@ __all__ = [
     "FunctionCallEvent",
     "FunctionCallOutputEvent",
     "AgentHandoffEvent",
+    "AMD",
+    "AMDCategory",
+    "AMDPredictionEvent",
     "TurnHandlingOptions",
     "EndpointingOptions",
     "InterruptionOptions",
+    "PreemptiveGenerationOptions",
+    "UserTurnLimitOptions",
+    "UserTurnExceededEvent",
 ]
 
 # Cleanup docs of unexported modules

@@ -18,7 +18,6 @@ import asyncio
 import contextlib
 import datetime
 import inspect
-import json
 import math
 import multiprocessing as mp
 import os
@@ -33,13 +32,13 @@ from urllib.parse import urljoin, urlparse
 import aiohttp
 import jwt
 from aiohttp import web
-from google.protobuf.json_format import MessageToDict
+from google.protobuf.json_format import MessageToDict, MessageToJson
 
 from livekit import api, rtc
-from livekit.protocol import agent, models
+from livekit.protocol import agent, agent_worker, models
 
 from . import ipc, telemetry, utils
-from ._exceptions import AssignmentTimeoutError
+from ._exceptions import APIStatusError, AssignmentTimeoutError
 from .inference_runner import _InferenceRunner
 from .job import (
     JobAcceptArguments,
@@ -60,6 +59,7 @@ ASSIGNMENT_TIMEOUT = 7.5
 UPDATE_STATUS_INTERVAL = 2.5
 UPDATE_LOAD_INTERVAL = 0.5
 HEARTBEAT_INTERVAL = 30
+WORKER_PROTOCOL_VERSION = 1
 
 
 def _default_setup_fnc(proc: JobProcess) -> Any:
@@ -208,12 +208,16 @@ class ServerOptions:
     """Number of idle processes to keep warm."""
     shutdown_process_timeout: float = 10.0
     """Maximum amount of time to wait for a job to shut down gracefully"""
+    session_end_timeout: float = 300.0
+    """Maximum amount of time to wait for on_session_end to complete (default: 5 minutes)."""
     initialize_process_timeout: float = 10.0
     """Maximum amount of time to wait for a process to initialize/prewarm"""
     permissions: WorkerPermissions = field(default_factory=WorkerPermissions)
     """Permissions that the agent should join the room with."""
     agent_name: str = ""
-    """Set agent_name to enable explicit dispatch. When explicit dispatch is enabled, jobs will not be dispatched to rooms automatically. Instead, you can either specify the agent(s) to be dispatched in the end-user's token, or use the AgentDispatch.createDispatch API"""  # noqa: E501
+    """Set agent_name to enable explicit dispatch. When explicit dispatch is enabled, jobs will not be dispatched to rooms automatically. Instead, you can either specify the agent(s) to be dispatched in the end-user's token, or use the AgentDispatch.createDispatch API.
+
+    By default it uses ``LIVEKIT_AGENT_NAME`` from environment"""  # noqa: E501
     worker_type: WorkerType = WorkerType.ROOM
     """Whether to spin up an agent for each room or publisher."""
     max_retry: int = 16
@@ -222,11 +226,11 @@ class ServerOptions:
     """URL to connect to the LiveKit server.
 
     By default it uses ``LIVEKIT_URL`` from environment"""
-    api_key: str | None = None
+    api_key: str | None = field(repr=False, default=None)
     """API key to authenticate with LiveKit.
 
     By default it uses ``LIVEKIT_API_KEY`` from environment"""
-    api_secret: str | None = None
+    api_secret: str | None = field(repr=False, default=None)
     """API secret to authenticate with LiveKit.
 
     By default it uses ``LIVEKIT_API_SECRET`` from environment"""
@@ -304,6 +308,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         drain_timeout: int = 1800,
         num_idle_processes: int | ServerEnvOption[int] = _default_num_idle_processes,
         shutdown_process_timeout: float = 10.0,
+        session_end_timeout: float = 300.0,
         initialize_process_timeout: float = 10.0,
         permissions: WorkerPermissions = _default_permissions,
         max_retry: int = 16,
@@ -328,6 +333,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._api_secret = api_secret or os.environ.get("LIVEKIT_API_SECRET") or ""
 
         self._worker_token = os.environ.get("LIVEKIT_WORKER_TOKEN") or ""  # hosted agents
+        self._deployment = os.environ.get("LIVEKIT_AGENT_DEPLOYMENT") or ""  # hosted agents
 
         self._host = host
         self._port = port
@@ -338,6 +344,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._drain_timeout = drain_timeout
         self._num_idle_processes = num_idle_processes
         self._shutdown_process_timeout = shutdown_process_timeout
+        self._session_end_timeout = session_end_timeout
         self._initialize_process_timeout = initialize_process_timeout
         self._permissions = permissions
         self._max_retry = max_retry
@@ -352,6 +359,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._http_proxy = http_proxy
         self._log_level = _validate_and_normalize_log_level(log_level)
         self._agent_name = ""
+        self._agent_name_is_env = False
         self._server_type = ServerType.ROOM
         self._id = "unregistered"
 
@@ -408,6 +416,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             drain_timeout=options.drain_timeout,
             num_idle_processes=options.num_idle_processes,
             shutdown_process_timeout=options.shutdown_process_timeout,
+            session_end_timeout=options.session_end_timeout,
             initialize_process_timeout=options.initialize_process_timeout,
             permissions=options.permissions,
             max_retry=options.max_retry,
@@ -489,7 +498,15 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._entrypoint_fnc = f
             self._request_fnc = on_request
             self._session_end_fnc = on_session_end
-            self._agent_name = agent_name
+            if agent_name:
+                self._agent_name = agent_name
+                self._agent_name_is_env = False
+            elif os.environ.get("LIVEKIT_AGENT_NAME"):
+                self._agent_name = os.environ["LIVEKIT_AGENT_NAME"]
+                self._agent_name_is_env = True
+            else:
+                self._agent_name = ""
+                self._agent_name_is_env = False
             self._server_type = type
             return f
 
@@ -596,6 +613,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 mp_ctx=self._mp_ctx,
                 initialize_timeout=self._initialize_process_timeout,
                 close_timeout=self._shutdown_process_timeout,
+                session_end_timeout=self._session_end_timeout,
                 memory_warn_mb=self._job_memory_warn_mb,
                 memory_limit_mb=self._job_memory_limit_mb,
                 http_proxy=self._http_proxy or None,
@@ -621,16 +639,15 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 return web.Response(text="OK")
 
             async def worker(_: Any) -> web.Response:
-                body = json.dumps(
-                    {
-                        "agent_name": self._agent_name,
-                        "worker_type": agent.JobType.Name(self._server_type.value),
-                        "worker_load": self._worker_load,
-                        "active_jobs": len(self.active_jobs),
-                        "sdk_version": __version__,
-                        "project_type": "python",
-                    }
+                worker_info = agent_worker.WorkerInfo(
+                    worker_type=agent.JobType.Name(self._server_type.value),
+                    agent_name=self._agent_name,
+                    active_jobs=len(self.active_jobs),
+                    sdk_version=__version__,
+                    worker_load=self._worker_load,
+                    protocol_version=WORKER_PROTOCOL_VERSION,
                 )
+                body = MessageToJson(worker_info, preserving_proto_field_name=True)
                 return web.Response(body=body, content_type="application/json")
 
             self._http_server.app.add_routes([web.get("/", health_check)])
@@ -685,6 +702,15 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 "starting worker",
                 extra={"version": __version__, "rtc-version": rtc.__version__},
             )
+
+            for p in Plugin.registered_plugins:
+                logger.info(
+                    "plugin registered",
+                    extra={
+                        "plugin": p.title,
+                        "version": p.version,
+                    },
+                )
 
             if self._mp_ctx_str == "forkserver":
                 plugin_packages = [p.package for p in Plugin.registered_plugins] + ["av"]
@@ -789,6 +815,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         drain_timeout: NotGivenOr[int] = NOT_GIVEN,
         num_idle_processes: NotGivenOr[int] = NOT_GIVEN,
         shutdown_process_timeout: float = 10.0,
+        session_end_timeout: float = 300.0,
         initialize_process_timeout: float = 10.0,
     ) -> None:
         if not self._closed:
@@ -826,6 +853,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
         if is_given(shutdown_process_timeout):
             self._shutdown_process_timeout = shutdown_process_timeout
+
+        if is_given(session_end_timeout):
+            self._session_end_timeout = session_end_timeout
 
     @property
     def id(self) -> str:
@@ -1034,6 +1064,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     )
                 )
                 req.register.agent_name = self._agent_name
+                req.register.deployment = self._deployment
                 req.register.version = __version__
                 await ws.send_bytes(req.SerializeToString())
 
@@ -1066,7 +1097,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 retry_count += 1
 
                 logger.warning(
-                    f"failed to connect to livekit, retrying in {retry_delay}s", exc_info=e
+                    f"failed to connect to livekit, retrying in {retry_delay}s",
+                    extra={"retry_count": retry_count, "max_retry": self._max_retry, "error": e},
                 )
                 await asyncio.sleep(retry_delay)
             finally:
@@ -1105,10 +1137,24 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     if closing_ws:
                         return
 
-                    raise Exception("worker connection closed unexpectedly")
+                    raise APIStatusError(
+                        message="worker connection closed unexpectedly",
+                        status_code=ws.close_code or -1,
+                        body=f"{msg.data=} {msg.extra=}",
+                    )
 
                 if msg.type != aiohttp.WSMsgType.BINARY:
-                    logger.warning("unexpected message type: %s", msg.type)
+                    ws_data = str(msg.data)
+                    if len(ws_data) > 128:
+                        ws_data = ws_data[:128] + f"...(+{len(ws_data) - 128} more)"
+                    logger.warning(
+                        "unexpected message type: %s",
+                        msg.type,
+                        extra={
+                            "type": msg.type.name,
+                            "ws_data": ws_data,
+                        },
+                    )
                     continue
 
                 data = msg.data
@@ -1169,6 +1215,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             "registered worker",
             extra={
                 "agent_name": self._agent_name,
+                "deployment": self._deployment,
                 "id": reg.worker_id,
                 "url": self._ws_url,
                 "region": reg.server_info.region,

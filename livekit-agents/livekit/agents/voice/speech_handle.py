@@ -166,7 +166,12 @@ class SpeechHandle:
 
         if task := asyncio.current_task():
             info = _get_activity_task_info(task)
-            if info and info.function_call and info.speech_handle == self:
+            if (
+                info
+                and info.function_call
+                and info.speech_handle == self
+                and not info.function_call.extra.get("__livekit_agents_tool_pending", False)
+            ):
                 raise RuntimeError(
                     f"cannot call `SpeechHandle.wait_for_playout()` from inside the function tool `{info.function_call.name}` that owns this SpeechHandle. "
                     "This creates a circular wait: the speech handle is waiting for the function tool to complete, "
@@ -270,10 +275,13 @@ class SpeechHandle:
 
     def _mark_done(self) -> None:
         with contextlib.suppress(asyncio.InvalidStateError):
-            # will raise InvalidStateError if the future is already done (interrupted)
             self._done_fut.set_result(None)
-            if self._generations:
-                self._mark_generation_done()  # preemptive generation could be cancelled before being scheduled
+
+        # must be outside the _done_fut suppress block: if _done_fut is already
+        # done, InvalidStateError would suppress the entire block and skip this,
+        # leaving the generation future unresolved and _wait_for_generation stuck.
+        if self._generations:
+            self._mark_generation_done()
 
         if self._interrupt_timeout_handle is not None:
             self._interrupt_timeout_handle.cancel()

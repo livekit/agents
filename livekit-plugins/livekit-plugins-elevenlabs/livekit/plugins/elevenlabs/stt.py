@@ -484,7 +484,7 @@ class SpeechStream(stt.SpeechStream):
         commit_strategy = "manual" if self._opts.server_vad is None else "vad"
         params = [
             f"model_id={self._opts.model_id}",
-            f"encoding=pcm_{self._opts.sample_rate}",
+            f"audio_format=pcm_{self._opts.sample_rate}",
             f"commit_strategy={commit_strategy}",
         ]
 
