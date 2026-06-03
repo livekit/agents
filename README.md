@@ -409,14 +409,16 @@ For more information, see the [examples README](examples/README.md).
 Unit tests are in the `tests` directory and can be run with:
 
 ```shell
+# Run a specific test file
 uv run pytest tests/test_tools.py
+
+# Run all unit tests
+uv run pytest tests/
 ```
 
 Integration tests for each plugin require various API credentials and run automatically in GitHub CI for PRs submitted by project maintainers. See the [tests workflow](.github/workflows/tests.yml) for details.
 
 ### Formatting
-
-This project uses [ruff](https://github.com/astral-sh/ruff) for formatting and linting:
 
 ```shell
 uv run ruff format
