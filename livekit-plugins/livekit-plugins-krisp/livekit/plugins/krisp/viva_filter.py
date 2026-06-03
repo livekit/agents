@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import os
 import warnings
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from livekit import rtc
 
@@ -46,6 +46,30 @@ if not hasattr(rtc, "FrameProcessor"):
 
 _LEGACY_DEPRECATION_SHOWN = False
 _FRAME_PARAMS_DEPRECATION_SHOWN = False
+
+
+class _KrispBackend(Protocol):
+    """Structural type for the backend FrameProcessors the facade forwards to.
+
+    Both backends are ``rtc.FrameProcessor`` implementations that additionally
+    expose a runtime-settable ``noise_suppression_level`` (not part of the base
+    FrameProcessor interface).
+    """
+
+    @property
+    def enabled(self) -> bool: ...
+    @enabled.setter
+    def enabled(self, value: bool) -> None: ...
+    @property
+    def noise_suppression_level(self) -> float: ...
+    @noise_suppression_level.setter
+    def noise_suppression_level(self, value: float) -> None: ...
+    def _process(self, frame: rtc.AudioFrame) -> rtc.AudioFrame: ...
+    def _on_credentials_updated(self, *, token: str, url: str) -> None: ...
+    def _on_stream_info_updated(
+        self, *, room_name: str, participant_identity: str, publication_sid: str
+    ) -> None: ...
+    def _close(self) -> None: ...
 
 
 def _resolve_auth_provider(
@@ -96,7 +120,7 @@ def _build_inner(
     noise_suppression_level: int,
     frame_duration_ms: int,
     sample_rate: int | None,
-) -> rtc.FrameProcessor[rtc.AudioFrame]:
+) -> _KrispBackend:
     """Lazy-import and construct the backend FrameProcessor."""
     if isinstance(provider, LiveKitCloudAuthProvider):
         try:
@@ -113,7 +137,7 @@ def _build_inner(
                 "you have a Krisp license key + .kef model."
             ) from e
 
-        cloud_processor: rtc.FrameProcessor[rtc.AudioFrame] = _CloudKrispFrameProcessor(
+        cloud_processor: _KrispBackend = _CloudKrispFrameProcessor(
             noise_suppression_level=noise_suppression_level,
             frame_duration_ms=frame_duration_ms,
             sample_rate=sample_rate,
@@ -254,6 +278,16 @@ class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
     @enabled.setter
     def enabled(self, value: bool) -> None:
         self._inner.enabled = value
+
+    @property
+    def noise_suppression_level(self) -> float:
+        """Current noise suppression level (0-100)."""
+        return self._inner.noise_suppression_level
+
+    @noise_suppression_level.setter
+    def noise_suppression_level(self, value: float) -> None:
+        """Adjust the noise suppression level (0-100) at runtime."""
+        self._inner.noise_suppression_level = value
 
     # ----- Backwards-compat shims ------------------------------------------
 

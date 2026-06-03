@@ -320,6 +320,16 @@ class _KrispLicenseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
     def enabled(self, value: bool) -> None:
         self._filtering_enabled = value
 
+    @property
+    def noise_suppression_level(self) -> float:
+        return self._noise_suppression_level
+
+    @noise_suppression_level.setter
+    def noise_suppression_level(self, value: float) -> None:
+        # Applied on the next processed frame — the level is passed per-call to
+        # the Krisp session, so no session recreation is needed.
+        self._noise_suppression_level = int(max(0, min(100, value)))
+
     def _close(self) -> None:
         # _close runs on track transitions, not just final destruction. Drop
         # the session (and any buffered audio) here but keep the SDK reference
