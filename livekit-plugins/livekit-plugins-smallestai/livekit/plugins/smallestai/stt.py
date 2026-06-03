@@ -47,8 +47,8 @@ from .version import __version__
 
 NUM_CHANNELS = 1
 # Base URL for the Smallest AI API.
-# Streaming: wss://api.smallest.ai/waves/v1/{model}/get_text
-# Batch:     https://api.smallest.ai/waves/v1/{model}/get_text
+# Streaming: wss://api.smallest.ai/waves/v1/stt/live?model={model}
+# Batch:     https://api.smallest.ai/waves/v1/stt/?model={model}
 SMALLEST_STT_BASE_URL = "https://api.smallest.ai/waves/v1"
 
 # ---------------------------------------------------------------------------
@@ -111,20 +111,27 @@ class STT(stt.STT):
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = SMALLEST_STT_BASE_URL,
     ) -> None:
-        """Create a new instance of Smallest AI Pulse STT.
+        """Create a new instance of Smallest AI STT.
 
         Args:
-            model: STT model to use. Currently only "pulse" is available.
+            model: STT model to use. ``"pulse"`` supports streaming and batch
+                transcription across 38 languages. ``"pulse-pro"`` is a
+                higher-accuracy English-only model available for batch
+                (pre-recorded) transcription only — calling ``stream()`` with
+                ``pulse-pro`` raises ``ValueError``.
             language: BCP-47 language code (e.g. "en", "hi", "fr"). Use "multi"
                 for automatic language detection across 39 supported languages.
+                ``pulse-pro`` only supports ``"en"``.
             sample_rate: Audio sample rate in Hz. Supported: 8000, 16000, 22050,
                 24000, 44100, 48000. Defaults to 16000.
             encoding: PCM encoding of the audio stream. Use "linear16" for raw
                 16-bit PCM (the default and most compatible choice for streaming).
             word_timestamps: Include per-word start/end timestamps and confidence
-                scores in transcripts. Defaults to True.
+                scores in transcripts. Supported by both ``pulse`` and
+                ``pulse-pro``. Defaults to True.
             diarize: Enable speaker diarization. When True, each word includes a
-                speaker ID (integer during streaming). Defaults to False.
+                speaker ID (integer during streaming, string label in batch).
+                Defaults to False.
             eou_timeout_ms: Milliseconds of silence before the server considers an
                 utterance complete and emits a final transcript. Set to 0 to disable
                 server-side end-of-utterance detection, which is recommended when using
@@ -186,6 +193,7 @@ class STT(stt.STT):
     ) -> stt.SpeechEvent:
         config = self._sanitize_options(language=language)
         params: dict[str, Any] = {
+            "model": config.model,
             "language": config.language,
             "encoding": config.encoding,
             "sample_rate": config.sample_rate,
@@ -195,7 +203,7 @@ class STT(stt.STT):
 
         try:
             async with self._ensure_session().post(
-                url=f"{config.base_url}/{config.model}/get_text",
+                url=f"{config.base_url}/stt/",
                 headers={
                     "Authorization": f"Bearer {config.api_key}",
                     "Content-Type": "application/octet-stream",
@@ -232,6 +240,10 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
+        if self._opts.model == "pulse-pro":
+            raise ValueError(
+                "pulse-pro does not support streaming; use recognize() for batch transcription"
+            )
         config = self._sanitize_options(language=language)
         stream = SpeechStream(
             stt=self,
@@ -426,6 +438,7 @@ class SpeechStream(stt.SpeechStream):
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         params: dict[str, Any] = {
+            "model": self._opts.model,
             "language": self._opts.language,
             "encoding": self._opts.encoding,
             "sample_rate": self._opts.sample_rate,
@@ -440,7 +453,7 @@ class SpeechStream(stt.SpeechStream):
             params["eou_timeout_ms"] = self._opts.eou_timeout_ms
         ws_url = (
             self._opts.base_url.replace("https://", "wss://", 1).replace("http://", "ws://", 1)
-            + f"/{self._opts.model}/get_text"
+            + "/stt/live"
             + f"?{urlencode(params)}"
         )
 
