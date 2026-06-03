@@ -133,9 +133,11 @@ class STT(stt.STT):
                 speaker ID (integer during streaming, string label in batch).
                 Defaults to False.
             eou_timeout_ms: Milliseconds of silence before the server considers an
-                utterance complete and emits a final transcript. Set to 0 to disable
-                server-side end-of-utterance detection, which is recommended when using
-                LiveKit's built-in turn detection to minimise latency. Defaults to 0.
+                utterance complete and emits a final transcript. Defaults to 0 (disabled).
+                The server's native default when this parameter is omitted is 800ms —
+                the plugin sends 0 explicitly to disable it, since LiveKit's VAD handles
+                turn detection. Set to a value between 100 and 10000 to enable
+                server-side end-of-utterance detection alongside LiveKit's own logic.
             api_key: Smallest AI API key. Falls back to the SMALLEST_API_KEY
                 environment variable if not provided.
             http_session: An existing aiohttp ClientSession to reuse.
@@ -445,12 +447,10 @@ class SpeechStream(stt.SpeechStream):
             "word_timestamps": str(self._opts.word_timestamps).lower(),
             "diarize": str(self._opts.diarize).lower(),
         }
-        # Only send eou_timeout_ms when explicitly set (non-zero).
-        # When 0, omit the parameter and let the server use its default,
-        # which avoids adding server-side silence latency on top of LiveKit's
-        # own end-of-turn detection.
-        if self._opts.eou_timeout_ms > 0:
-            params["eou_timeout_ms"] = self._opts.eou_timeout_ms
+        # Always send eou_timeout_ms. Default is 0 (disabled) so LiveKit's own
+        # VAD controls turn detection. The server's native default when this
+        # parameter is omitted is 800ms, which would conflict with LiveKit VAD.
+        params["eou_timeout_ms"] = self._opts.eou_timeout_ms
         ws_url = (
             self._opts.base_url.replace("https://", "wss://", 1).replace("http://", "ws://", 1)
             + "/stt/live"
