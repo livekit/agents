@@ -149,3 +149,18 @@ Supported: 8000, 16000, 24000, 32000, 44100, 48000 Hz
 ### Silent output
 - Verify the model file is valid *(license auth only)*
 - Test with known noisy audio
+
+## License
+
+The source code in this package (`livekit-plugins-krisp`) is licensed under the
+**Apache-2.0** license.
+
+The **default backend** is a separate, closed-source wheel (`livekit-plugins-krisp-internal`)
+that is installed automatically as a dependency. It is **proprietary** and distributed under
+the [LiveKit Terms of Service](https://livekit.io/legal/terms-of-service). That wheel bundles
+the Krisp VIVA SDK along with its third-party open-source components, whose attribution
+notices are shipped inside the wheel.
+
+The **Krisp license alternative** (`KrispLicenseAuthProvider`) instead needs a manual install of the proprietary Krisp
+Audio SDK together with your own Krisp license key and model file, governed by your agreement
+with [Krisp](https://krisp.ai).
