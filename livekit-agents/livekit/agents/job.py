@@ -531,6 +531,22 @@ class JobContext:
             _apply_auto_subscribe_opts(self._room, auto_subscribe)
             self._connected = True
 
+    def _track_pending_task(self, task: asyncio.Task[Any], *, name: str) -> None:
+        """Track a fire-and-forget task so its exceptions are surfaced instead of swallowed.
+
+        Callers may still await the returned task to handle errors themselves; this only
+        guarantees that an otherwise unhandled exception is logged rather than silently
+        dropped (e.g. when the returned future is not awaited).
+        """
+        self._pending_tasks.append(task)
+
+        def _on_done(task: asyncio.Task[Any]) -> None:
+            self._pending_tasks.remove(task)
+            if not task.cancelled() and (exc := task.exception()) is not None:
+                logger.error(f"error in {name}", exc_info=exc)
+
+        task.add_done_callback(_on_done)
+
     def delete_room(self, room_name: str | None = None) -> asyncio.Future[api.DeleteRoomResponse]:  # type: ignore
         """Deletes the room and disconnects all participants."""
         if self.is_fake_job():
@@ -553,8 +569,7 @@ class JobContext:
                 logger.exception("unknown error while deleting room")
 
         task = asyncio.create_task(_delete_room())
-        self._pending_tasks.append(task)
-        task.add_done_callback(lambda _: self._pending_tasks.remove(task))
+        self._track_pending_task(task, name="delete_room")
         return task
 
     def add_sip_participant(
@@ -596,8 +611,7 @@ class JobContext:
                 )
             ),
         )
-        self._pending_tasks.append(task)
-        task.add_done_callback(lambda _: self._pending_tasks.remove(task))
+        self._track_pending_task(task, name="add_sip_participant")
         return task
 
     def transfer_sip_participant(
@@ -648,8 +662,7 @@ class JobContext:
                 )
             ),
         )
-        self._pending_tasks.append(task)
-        task.add_done_callback(lambda _: self._pending_tasks.remove(task))
+        self._track_pending_task(task, name="transfer_sip_participant")
         return task
 
     def shutdown(self, reason: str = "") -> None:
@@ -719,9 +732,16 @@ class JobContext:
             task_name = f"part-entry-{p.identity}-{coro.__name__}"
             task = asyncio.create_task(coro(self, p), name=task_name)
             self._participant_tasks[(p.identity, coro)] = task
-            task.add_done_callback(
-                lambda _, coro=coro: self._participant_tasks.pop((p.identity, coro))  # type: ignore
-            )
+
+            def _on_done(task: asyncio.Task[Any], *, coro: Any = coro) -> None:
+                self._participant_tasks.pop((p.identity, coro))
+                if not task.cancelled() and (exc := task.exception()) is not None:
+                    logger.error(
+                        f"error in participant entrypoint {coro.__name__} for '{p.identity}'",
+                        exc_info=exc,
+                    )
+
+            task.add_done_callback(_on_done)
 
     def token_claims(self) -> Claims:
         return api.TokenVerifier().verify(self._info.token, verify_signature=False)
