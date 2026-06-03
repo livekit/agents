@@ -25,6 +25,7 @@ from livekit.agents.inference.eot.base import (
     TurnDetectorOptions,
     _AudioTurnDetectorStream,
 )
+from livekit.agents.inference.eot.languages import ThresholdOptions
 from livekit.agents.inference.eot.transports import _CloudTransport, _CloudTransportOptions
 from livekit.agents.types import APIConnectOptions
 from livekit.protocol.agent_pb.agent_inference import ClientMessage
@@ -108,7 +109,7 @@ def make_stream(
     detector.provider = "livekit"
     session_mock = MagicMock()
     session_mock.closed = False
-    opts = TurnDetectorOptions(sample_rate=16000)
+    opts = TurnDetectorOptions(sample_rate=16000, thresholds=ThresholdOptions("turn-detector"))
     conn_options = APIConnectOptions(max_retry=max_retry, retry_interval=retry_interval)
     cloud_opts = _CloudTransportOptions(
         base_url="",

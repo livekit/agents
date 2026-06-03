@@ -1,4 +1,4 @@
-"""Tests for the unified ``AudioTurnDetector`` (auto-select + fallback).
+"""Tests for the unified ``AudioTurnDetector`` (auto-select + fallback + server defaults).
 
 Covers:
 
@@ -9,8 +9,10 @@ Covers:
 - Fallback persistence across turns.
 - Local-failure handling (default 1.0, retry on next turn).
 - Per-session warning dedupe (one warning per failure mode).
-- Threshold scaling: pass-through for cloud / explicit-local, multiplicative
-  scaling only on actual fallback.
+- Server-provided default thresholds adopted from ``SessionCreated`` (protocol 1.1.13).
+- Override resolution (scalar / dict / none) against the server defaults, the override warning,
+  runtime ``update_options``, and the degenerate (no usable thresholds) → fallback path.
+- Threshold rescaling against the server defaults on actual fallback.
 """
 
 from __future__ import annotations
@@ -23,17 +25,25 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from livekit.agents._exceptions import APIConnectionError
+from livekit.agents._exceptions import APIConnectionError, APIError
 from livekit.agents.inference.eot import AudioTurnDetector
 from livekit.agents.inference.eot.base import (
     TurnDetectorOptions,
     _AudioTurnDetectionTransport,
     _AudioTurnDetectorStream,
 )
-from livekit.agents.inference.eot.languages import CLOUD_LANGUAGES, LOCAL_LANGUAGES
+from livekit.agents.inference.eot.languages import (
+    LOCAL_LANGUAGES,
+    ThresholdOptions,
+    _normalize_overrides,
+)
 from livekit.agents.inference.eot.transports import _LocalTransport
 from livekit.agents.language import LanguageCode
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
+
+# Stand-in for the per-language defaults a 1.1.13 gateway returns in ``SessionCreated``.
+SERVER_THRESHOLDS: dict[str, float] = {"en": 0.56, "ja": 0.37, "fr": 0.575}
+SERVER_DEFAULT_THRESHOLD = 0.5
 
 
 async def _wait_for(predicate: Any, *, ticks: int = 20) -> None:
@@ -106,10 +116,14 @@ class _ScriptedTransport:
         self.events.append(("detach", None))
 
 
-def _make_opts(thresholds: dict[str, float] | None = None) -> TurnDetectorOptions:
+def _make_opts(
+    *,
+    model: str = "turn-detector",
+    user_threshold: NotGivenOr[float | dict[str, float]] = NOT_GIVEN,
+) -> TurnDetectorOptions:
     return TurnDetectorOptions(
         sample_rate=16000,
-        thresholds=thresholds if thresholds is not None else {},
+        thresholds=ThresholdOptions(model, user_threshold),  # type: ignore[arg-type]
     )
 
 
@@ -119,17 +133,18 @@ def _make_stream_with_transport(
     model: str = "turn-detector",
     user_threshold: NotGivenOr[float | dict[str, float]] = NOT_GIVEN,
 ) -> _AudioTurnDetectorStream:
-    """Construct a stream wired to a scripted transport. The stream's
-    threshold lookup reads ``opts.thresholds`` — materialize them here the
-    same way the real constructor would, so the turn-detector / -mini
-    distinction is preserved without going through the detector."""
-    from livekit.agents.inference.eot.languages import materialize_thresholds
+    """Construct a stream wired to a scripted transport.
 
+    The cloud model starts with empty thresholds (its defaults arrive via ``SessionCreated`` —
+    call ``stream._opts.thresholds._update_defaults`` to simulate that). The local mini model resolves its
+    thresholds against ``LOCAL_LANGUAGES`` up front, matching the real constructor."""
     detector = MagicMock()
     detector.model = model
     detector.provider = "livekit"
 
-    opts = _make_opts(materialize_thresholds(user_threshold, model))  # type: ignore[arg-type]
+    opts = _make_opts(model=model, user_threshold=user_threshold)
+    detector._opts = opts
+
     return _AudioTurnDetectorStream(
         detector=detector,
         opts=opts,
@@ -220,8 +235,8 @@ class TestDetectorViewAfterFallback:
     async def test_detector_model_and_threshold_follow_fallback(self) -> None:
         """After cloud→local fallback the detector view (read by EOU metrics
         and by ``audio_recognition``) must report the post-fallback model +
-        rescaled thresholds. The stream's fallback writes ``_model`` and
-        ``_opts`` back to its owning detector so no proxy layer is needed."""
+        rescaled thresholds. The detector and stream share one ``ThresholdOptions``,
+        so the fallback is visible to both without any copy-back."""
         with _clean_env(
             LIVEKIT_REMOTE_EOT_URL="ws://gateway",
             LIVEKIT_API_KEY="k",
@@ -229,10 +244,10 @@ class TestDetectorViewAfterFallback:
         ):
             detector = AudioTurnDetector(unlikely_threshold=0.5)
             assert detector.model == "turn-detector"
-            cloud_threshold = await detector.unlikely_threshold(LanguageCode("en"))
-            assert cloud_threshold == pytest.approx(0.5)
+            # scalar override is resolvable pre-session via the catch-all
+            assert await detector.unlikely_threshold(LanguageCode("en")) == pytest.approx(0.5)
 
-        transport = _ScriptedTransport(run_behavior="raise", run_exc=APIConnectionError("boom"))
+        transport = _ScriptedTransport(run_behavior="idle")
         with patch.object(_LocalTransport, "run", new=lambda self: asyncio.sleep(0)):
             stream = _AudioTurnDetectorStream(
                 detector=detector,
@@ -240,12 +255,16 @@ class TestDetectorViewAfterFallback:
                 transport=transport,
                 model="turn-detector",
             )
+            # server defaults arrive, then the cloud session fails
+            stream._opts.thresholds._update_defaults(
+                dict(SERVER_THRESHOLDS), SERVER_DEFAULT_THRESHOLD
+            )
+            stream._fall_back_to_local(reason=APIConnectionError("boom"))
             await _wait_for(lambda: stream.model == "turn-detector-mini")
 
             assert detector.model == "turn-detector-mini"
-            assert detector.model == "turn-detector-mini"
             local_threshold = await detector.unlikely_threshold(LanguageCode("en"))
-            expected = LOCAL_LANGUAGES["en"] * (0.5 / CLOUD_LANGUAGES["en"])
+            expected = LOCAL_LANGUAGES["en"] * (0.5 / SERVER_THRESHOLDS["en"])
             assert local_threshold == pytest.approx(expected)
 
             await stream.aclose()
@@ -280,7 +299,7 @@ class TestWarningDedupe:
             # Trigger a second fallback path by calling the method directly.
             stream._fall_back_to_local(reason=APIConnectionError("boom2"))
             # Only one warning across both invocations.
-            cloud_warnings = [r for r in caplog.records if "cloud audio eot" in r.getMessage()]
+            cloud_warnings = [r for r in caplog.records if "cloud turn detector" in r.getMessage()]
             assert len(cloud_warnings) == 1
             await stream.aclose()
 
@@ -293,107 +312,221 @@ class TestWarningDedupe:
         # Two local failures back to back.
         stream._on_local_failure(reason=RuntimeError("a"))
         stream._on_local_failure(reason=RuntimeError("b"))
-        local_warnings = [r for r in caplog.records if "local audio eot mini" in r.getMessage()]
+        local_warnings = [
+            r for r in caplog.records if "local audio turn detector" in r.getMessage()
+        ]
         assert len(local_warnings) == 1
         await stream.aclose()
 
 
-class TestThresholdScaling:
-    async def test_detector_threshold_cloud_user_passthrough(self) -> None:
-        """Pre-stream detector lookup in cloud mode returns the user value."""
+class TestResolveThresholds:
+    """Cloud-override resolution against the server defaults, via ThresholdOptions."""
+
+    @staticmethod
+    def _cloud(overrides: Any = NOT_GIVEN) -> ThresholdOptions:
+        # mirror the detector boundary: overrides are normalized before reaching ThresholdOptions
+        opts = ThresholdOptions("turn-detector", _normalize_overrides(overrides))
+        opts._update_defaults(dict(SERVER_THRESHOLDS), SERVER_DEFAULT_THRESHOLD)
+        return opts
+
+    def test_no_override_adopts_server_map_and_fallback(self) -> None:
+        opts = self._cloud()
+        assert opts.thresholds == SERVER_THRESHOLDS
+        assert opts.default_threshold == pytest.approx(SERVER_DEFAULT_THRESHOLD)
+
+    def test_scalar_override_replaces_with_empty_map(self) -> None:
+        opts = self._cloud(0.8)
+        # empty map → every language resolves through the scalar fallback
+        assert opts.thresholds == {}
+        assert opts.default_threshold == pytest.approx(0.8)
+
+    def test_dict_override_layers_on_server_map(self) -> None:
+        opts = self._cloud({"en": 0.7})
+        assert opts.thresholds["en"] == pytest.approx(0.7)
+        # unmapped languages keep the server values + server fallback
+        assert opts.thresholds["ja"] == pytest.approx(SERVER_THRESHOLDS["ja"])
+        assert opts.default_threshold == pytest.approx(SERVER_DEFAULT_THRESHOLD)
+
+    def test_dict_keys_normalized(self) -> None:
+        opts = self._cloud({"English": 0.7, "en-US": 0.7})
+        assert opts.thresholds["en"] == pytest.approx(0.7)
+
+
+class TestServerDefaults:
+    async def test_cloud_thresholds_pending_before_session_created(self) -> None:
+        """A cloud detector has no per-language threshold until ``SessionCreated`` arrives, but
+        reports the language as supported so the first turn isn't skipped."""
+        transport = _ScriptedTransport(run_behavior="idle")
+        stream = _make_stream_with_transport(transport)
+        assert await stream.unlikely_threshold(LanguageCode("en")) is None
+        assert await stream.supports_language(LanguageCode("en")) is True
+        await stream.aclose()
+
+    async def test_cloud_adopts_server_defaults(self) -> None:
+        transport = _ScriptedTransport(run_behavior="idle")
+        stream = _make_stream_with_transport(transport)
+        stream._opts.thresholds._update_defaults(dict(SERVER_THRESHOLDS), SERVER_DEFAULT_THRESHOLD)
+        assert await stream.unlikely_threshold(LanguageCode("en")) == pytest.approx(
+            SERVER_THRESHOLDS["en"]
+        )
+        # language absent from the server map → catch-all default_threshold
+        assert await stream.unlikely_threshold(LanguageCode("de")) == pytest.approx(
+            SERVER_DEFAULT_THRESHOLD
+        )
+        # shared with the owning detector view too
+        assert stream._detector._opts.thresholds.lookup(LanguageCode("en")) == pytest.approx(
+            SERVER_THRESHOLDS["en"]
+        )
+        await stream.aclose()
+
+    async def test_dict_override_layers_on_server_defaults(self) -> None:
+        transport = _ScriptedTransport(run_behavior="idle")
+        stream = _make_stream_with_transport(transport, user_threshold={"en": 0.7, "ja": 0.2})
+        stream._opts.thresholds._update_defaults(dict(SERVER_THRESHOLDS), SERVER_DEFAULT_THRESHOLD)
+        assert await stream.unlikely_threshold(LanguageCode("en")) == pytest.approx(0.7)
+        assert await stream.unlikely_threshold(LanguageCode("ja")) == pytest.approx(0.2)
+        # fr not overridden → server default for fr
+        assert await stream.unlikely_threshold(LanguageCode("fr")) == pytest.approx(
+            SERVER_THRESHOLDS["fr"]
+        )
+        await stream.aclose()
+
+    async def test_degenerate_session_created_raises_without_override(self) -> None:
+        transport = _ScriptedTransport(run_behavior="idle")
+        stream = _make_stream_with_transport(transport)
+        with pytest.raises(APIError):
+            stream._opts.thresholds._update_defaults({}, 0.0)
+        await stream.aclose()
+
+    async def test_degenerate_session_created_raises_even_with_override(self) -> None:
+        # A degenerate server response always degrades to the local model (via APIError), even when
+        # an override is set — the cloud session genuinely produced no usable defaults.
+        transport = _ScriptedTransport(run_behavior="idle")
+        stream = _make_stream_with_transport(transport, user_threshold=0.8)
+        with pytest.raises(APIError):
+            stream._opts.thresholds._update_defaults({}, 0.0)
+        await stream.aclose()
+
+
+class TestOverrideWarning:
+    def test_warning_on_construction_with_override(self, caplog: pytest.LogCaptureFixture) -> None:
+        caplog.set_level(logging.WARNING, logger="livekit.agents")
+        with _clean_env(LIVEKIT_REMOTE_EOT_URL=None):
+            AudioTurnDetector(unlikely_threshold=0.5)
+        warnings = [
+            r for r in caplog.records if "non-default turn detection threshold" in r.getMessage()
+        ]
+        assert len(warnings) == 1
+
+    def test_no_warning_without_override(self, caplog: pytest.LogCaptureFixture) -> None:
+        caplog.set_level(logging.WARNING, logger="livekit.agents")
+        with _clean_env(LIVEKIT_REMOTE_EOT_URL=None):
+            AudioTurnDetector()
+        warnings = [
+            r for r in caplog.records if "non-default turn detection threshold" in r.getMessage()
+        ]
+        assert not warnings
+
+
+class TestUpdateOptions:
+    async def test_update_options_reresolves_active_cloud_stream(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.WARNING, logger="livekit.agents")
         with _clean_env(
             LIVEKIT_REMOTE_EOT_URL="ws://gateway",
             LIVEKIT_API_KEY="k",
             LIVEKIT_API_SECRET="s",
         ):
-            detector = AudioTurnDetector(unlikely_threshold=0.5)
-            assert detector.model == "turn-detector"
-            value = await detector.unlikely_threshold(LanguageCode("en"))
-            assert value == pytest.approx(0.5)
+            detector = AudioTurnDetector()
 
-    async def test_explicit_local_user_threshold_passes_through(self) -> None:
-        """Regression: explicit-local pick should NOT rescale the user
-        threshold against the cloud default — they meant 0.5 literally."""
+        # detector.stream() shares the detector's ThresholdOptions with the stream
+        transport = _ScriptedTransport(run_behavior="idle")
+        with patch("livekit.agents.inference.eot.detector._CloudTransport", return_value=transport):
+            stream = detector.stream()
+        stream._opts.thresholds._update_defaults(dict(SERVER_THRESHOLDS), SERVER_DEFAULT_THRESHOLD)
+        assert await stream.unlikely_threshold(LanguageCode("en")) == pytest.approx(
+            SERVER_THRESHOLDS["en"]
+        )
+
+        detector.update_options(unlikely_threshold=0.7)
+        # the shared resolver re-resolves against the cached server defaults; the stream sees it
+        assert await stream.unlikely_threshold(LanguageCode("en")) == pytest.approx(0.7)
+        warnings = [
+            r for r in caplog.records if "non-default turn detection threshold" in r.getMessage()
+        ]
+        assert len(warnings) == 1
+        await stream.aclose()
+
+    async def test_update_options_local_model(self) -> None:
         with _clean_env(LIVEKIT_REMOTE_EOT_URL=None):
-            detector = AudioTurnDetector(model="turn-detector-mini", unlikely_threshold=0.5)
-            value = await detector.unlikely_threshold(LanguageCode("en"))
-            assert value == pytest.approx(0.5)
+            detector = AudioTurnDetector()
+            assert detector.model == "turn-detector-mini"
+            detector.update_options(unlikely_threshold=0.42)
+            assert await detector.unlikely_threshold(LanguageCode("en")) == pytest.approx(0.42)
 
-    async def test_post_fallback_threshold_rescales_on_stream(self) -> None:
-        """Fallback-only multiplicative scaling: a uniform 0.5 user value gets
-        rescaled per-language as ``local_default[lang] * (0.5 / cloud_default[lang])``."""
-        transport = _ScriptedTransport(run_behavior="raise", run_exc=APIConnectionError("boom"))
+
+class TestThresholdRescaleOnFallback:
+    async def test_scalar_override_rescaled_against_server_on_fallback(self) -> None:
+        transport = _ScriptedTransport(run_behavior="idle")
         with patch.object(_LocalTransport, "run", new=lambda self: asyncio.sleep(0)):
             stream = _make_stream_with_transport(transport, user_threshold=0.5)
+            stream._opts.thresholds._update_defaults(
+                dict(SERVER_THRESHOLDS), SERVER_DEFAULT_THRESHOLD
+            )
+            stream._fall_back_to_local(reason=APIConnectionError("boom"))
             await _wait_for(lambda: stream.model == "turn-detector-mini")
-            assert stream.model == "turn-detector-mini"
             assert stream.is_fallback is True
             value = await stream.unlikely_threshold(LanguageCode("en"))
-            expected = LOCAL_LANGUAGES["en"] * (0.5 / CLOUD_LANGUAGES["en"])
+            expected = LOCAL_LANGUAGES["en"] * (0.5 / SERVER_THRESHOLDS["en"])
             assert value == pytest.approx(expected)
             await stream.aclose()
 
-    async def test_threshold_default_unchanged_when_user_not_set(self) -> None:
-        with _clean_env(
-            LIVEKIT_REMOTE_EOT_URL="ws://gateway",
-            LIVEKIT_API_KEY="k",
-            LIVEKIT_API_SECRET="s",
-        ):
-            detector = AudioTurnDetector()
-            cloud_default = await detector.unlikely_threshold(LanguageCode("en"))
-            assert cloud_default == pytest.approx(CLOUD_LANGUAGES["en"])
-
-        with _clean_env(LIVEKIT_REMOTE_EOT_URL=None):
-            detector = AudioTurnDetector()
-            local_default = await detector.unlikely_threshold(LanguageCode("en"))
-            assert local_default == pytest.approx(LOCAL_LANGUAGES["en"])
-
-
-class TestThresholdDictOverride:
-    async def test_dict_override_applies_per_language(self) -> None:
-        """Cloud mode + dict override: mapped langs use the user value,
-        unmapped langs fall through to the cloud default."""
-        with _clean_env(
-            LIVEKIT_REMOTE_EOT_URL="ws://gateway",
-            LIVEKIT_API_KEY="k",
-            LIVEKIT_API_SECRET="s",
-        ):
-            detector = AudioTurnDetector(unlikely_threshold={"en": 0.55, "ja": 0.25})
-            assert await detector.unlikely_threshold(LanguageCode("en")) == pytest.approx(0.55)
-            assert await detector.unlikely_threshold(LanguageCode("ja")) == pytest.approx(0.25)
-            # `fr` not in the override dict — falls through to cloud default.
-            assert await detector.unlikely_threshold(LanguageCode("fr")) == pytest.approx(
-                CLOUD_LANGUAGES["fr"]
+    async def test_no_override_fallback_uses_local_table(self) -> None:
+        transport = _ScriptedTransport(run_behavior="idle")
+        with patch.object(_LocalTransport, "run", new=lambda self: asyncio.sleep(0)):
+            stream = _make_stream_with_transport(transport)
+            stream._opts.thresholds._update_defaults(
+                dict(SERVER_THRESHOLDS), SERVER_DEFAULT_THRESHOLD
             )
-
-    async def test_dict_keys_normalized_via_language_code(self) -> None:
-        """``English`` / ``en-US`` / ``eng`` all normalize to ``en`` so the
-        override matches the table lookup regardless of how the user spelled it."""
-        with _clean_env(LIVEKIT_REMOTE_EOT_URL=None):
-            detector = AudioTurnDetector(
-                unlikely_threshold={"English": 0.55, "en-US": 0.55, "eng": 0.55}
+            stream._fall_back_to_local(reason=APIConnectionError("boom"))
+            await _wait_for(lambda: stream.model == "turn-detector-mini")
+            # ratio 1.0 → local table unchanged
+            assert await stream.unlikely_threshold(LanguageCode("en")) == pytest.approx(
+                LOCAL_LANGUAGES["en"]
             )
-            # All three keys collapsed to "en"; last write wins, but the
-            # important thing is the lookup picks it up.
-            assert await detector.unlikely_threshold(LanguageCode("en")) == pytest.approx(0.55)
+            await stream.aclose()
 
     async def test_dict_override_rescaled_per_language_on_fallback(self) -> None:
-        """Each dict entry gets its own multiplicative rescale on fallback —
-        ``local_default[lang] * (user[lang] / cloud_default[lang])``."""
-        transport = _ScriptedTransport(run_behavior="raise", run_exc=APIConnectionError("boom"))
+        transport = _ScriptedTransport(run_behavior="idle")
         with patch.object(_LocalTransport, "run", new=lambda self: asyncio.sleep(0)):
             stream = _make_stream_with_transport(transport, user_threshold={"en": 0.55, "ja": 0.25})
+            stream._opts.thresholds._update_defaults(
+                dict(SERVER_THRESHOLDS), SERVER_DEFAULT_THRESHOLD
+            )
+            stream._fall_back_to_local(reason=APIConnectionError("boom"))
             await _wait_for(lambda: stream.model == "turn-detector-mini")
             assert stream.is_fallback is True
             assert await stream.unlikely_threshold(LanguageCode("en")) == pytest.approx(
-                LOCAL_LANGUAGES["en"] * (0.55 / CLOUD_LANGUAGES["en"])
+                LOCAL_LANGUAGES["en"] * (0.55 / SERVER_THRESHOLDS["en"])
             )
             assert await stream.unlikely_threshold(LanguageCode("ja")) == pytest.approx(
-                LOCAL_LANGUAGES["ja"] * (0.25 / CLOUD_LANGUAGES["ja"])
+                LOCAL_LANGUAGES["ja"] * (0.25 / SERVER_THRESHOLDS["ja"])
             )
-            # `fr` not in dict → falls through to plain local default
-            # (no rescaling because no user value).
+            # fr not in dict → server value as effective → plain local default
             assert await stream.unlikely_threshold(LanguageCode("fr")) == pytest.approx(
                 LOCAL_LANGUAGES["fr"]
             )
+            await stream.aclose()
+
+    async def test_fallback_before_session_created_uses_local_materialize(self) -> None:
+        """Cloud fails before any ``SessionCreated`` → no server map to rescale against, so the
+        local table (with the override applied) is used directly."""
+        transport = _ScriptedTransport(run_behavior="raise", run_exc=APIConnectionError("boom"))
+        with patch.object(_LocalTransport, "run", new=lambda self: asyncio.sleep(0)):
+            stream = _make_stream_with_transport(transport, user_threshold=0.42)
+            await _wait_for(lambda: stream.model == "turn-detector-mini")
+            assert stream.is_fallback is True
+            # materialize_local_thresholds(0.42) → 0.42 for every local language
+            assert await stream.unlikely_threshold(LanguageCode("en")) == pytest.approx(0.42)
             await stream.aclose()

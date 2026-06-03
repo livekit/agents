@@ -20,6 +20,8 @@ from livekit.agents.inference.eot.base import (
     _AudioTurnDetectorStream,
     _Status,
 )
+from livekit.agents.inference.eot.languages import ThresholdOptions
+from livekit.agents.types import NOT_GIVEN
 
 
 class _FakeTransport:
@@ -70,7 +72,11 @@ class _FakeBackend(_AudioTurnDetectorStream):
 
 
 def _make_opts(thresholds: dict[str, float] | None = None) -> TurnDetectorOptions:
-    return TurnDetectorOptions(sample_rate=16000, thresholds=thresholds or {})
+    # Seed the resolved thresholds via a local-model dict override so ``lookup`` returns them.
+    overrides = thresholds if thresholds is not None else NOT_GIVEN
+    return TurnDetectorOptions(
+        sample_rate=16000, thresholds=ThresholdOptions("turn-detector-mini", overrides)
+    )
 
 
 def _make_stream(thresholds: dict[str, float] | None = None) -> _FakeBackend:

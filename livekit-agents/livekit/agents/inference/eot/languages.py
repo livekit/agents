@@ -1,32 +1,13 @@
-"""Per-language ``unlikely`` thresholds for the audio EOT detector.
-
-Calibrated separately per checkpoint — do NOT unify CLOUD and LOCAL tables.
-"""
+"""Per-language ``unlikely`` thresholds for the mini detector."""
 
 from __future__ import annotations
 
 from typing import Literal, cast
 
+from ..._exceptions import APIError
 from ...language import LanguageCode
-from ...types import NotGivenOr
+from ...types import NOT_GIVEN, NotGivenOr
 from ...utils.misc import is_given
-
-CLOUD_LANGUAGES: dict[str, float] = {
-    "ar": 0.3550,
-    "de": 0.4950,
-    "en": 0.5600,
-    "es": 0.5900,
-    "fr": 0.5750,
-    "hi": 0.5750,
-    "id": 0.4700,
-    "it": 0.6400,
-    "ja": 0.3700,
-    "ko": 0.6950,
-    "nl": 0.7500,
-    "pt": 0.6650,
-    "tr": 0.6500,
-    "zh": 0.5900,
-}
 
 LOCAL_LANGUAGES: dict[str, float] = {
     "ar": 0.3500,
@@ -46,38 +27,121 @@ LOCAL_LANGUAGES: dict[str, float] = {
 }
 
 TurnDetectorModels = Literal["turn-detector", "turn-detector-mini"]
-_BASE: dict[TurnDetectorModels, dict[str, float]] = {
-    "turn-detector": CLOUD_LANGUAGES,
-    "turn-detector-mini": LOCAL_LANGUAGES,
-}
 
 
-def materialize_thresholds(
-    user_value: NotGivenOr[float | dict[LanguageCode | str, float]],
-    model: TurnDetectorModels,
-) -> dict[str, float]:
-    """Resolve user override + per-model defaults into a complete per-language map.
-
-    - NOT_GIVEN: returns the bare per-model table.
-    - scalar: fills every language with the same value.
-    - dict: overrides per-language (keys go through ``LanguageCode`` so
-      "English"/"en"/"en-US" collapse to "en"); unmapped languages keep the default.
-    """
-    base = _BASE[model]
-    if not is_given(user_value):
-        return dict(base)
-    if isinstance(user_value, dict):
-        norm = {LanguageCode(k).language: float(v) for k, v in user_value.items()}
-        return {lang: norm.get(lang, default) for lang, default in base.items()}
-    # mypy 2.1.0 doesn't narrow NotGivenOr[T | dict] through is_given() above.
-    return dict.fromkeys(base, float(cast(float, user_value)))
+def _normalize_overrides(
+    overrides: NotGivenOr[float | dict[LanguageCode | str, float]],
+) -> NotGivenOr[float | dict[str, float]]:
+    if not is_given(overrides) or not isinstance(overrides, dict):
+        return overrides
+    return {LanguageCode(k).language: float(v) for k, v in overrides.items()}
 
 
-def rescale_for_local_fallback(cloud_thresholds: dict[str, float]) -> dict[str, float]:
-    """Preserve the user's cloud-vs-default ratio when promoting local:
-    ``local = LOCAL[lang] * (cloud_t / CLOUD[lang])`` per language."""
-    return {
-        lang: LOCAL_LANGUAGES[lang] * (cloud_t / CLOUD_LANGUAGES[lang])
-        for lang, cloud_t in cloud_thresholds.items()
-        if lang in LOCAL_LANGUAGES and lang in CLOUD_LANGUAGES and CLOUD_LANGUAGES[lang] != 0
-    }
+class ThresholdOptions:
+    def __init__(
+        self,
+        model: TurnDetectorModels,
+        overrides: NotGivenOr[float | dict[LanguageCode | str, float]] = NOT_GIVEN,
+    ) -> None:
+        self._model = model
+        self._overrides = _normalize_overrides(overrides)
+
+        # server/shipped defaults
+        self._server_thresholds: dict[str, float] | None = None
+        self._server_default: float | None = None
+        if model == "turn-detector-mini":
+            self._server_thresholds = dict(LOCAL_LANGUAGES)
+            self._server_default = LOCAL_LANGUAGES["en"]
+
+        # materialized values
+        self._thresholds: dict[str, float] = {}
+        self._default: float | None = None
+
+        self._resolve()
+
+    @property
+    def model(self) -> TurnDetectorModels:
+        return self._model
+
+    @property
+    def overrides(self) -> NotGivenOr[float | dict[str, float]]:
+        return self._overrides
+
+    @property
+    def thresholds(self) -> dict[str, float]:
+        return self._thresholds
+
+    @property
+    def default_threshold(self) -> float | None:
+        return self._default
+
+    def lookup(self, language: LanguageCode | None) -> float | None:
+        lang_key = language.language if language else "en"
+        return self._thresholds.get(lang_key, self.default_threshold)
+
+    def supports(self, language: LanguageCode | None) -> bool:
+        pending = self._model == "turn-detector" and self._server_thresholds is None
+        return pending or self.lookup(language) is not None
+
+    def update_overrides(
+        self, overrides: NotGivenOr[float | dict[LanguageCode | str, float]]
+    ) -> None:
+        self._overrides = _normalize_overrides(overrides)
+        self._resolve()
+
+    def _update_defaults(self, server_thresholds: dict[str, float], server_default: float) -> None:
+        if not server_thresholds or server_default <= 0:
+            raise APIError(
+                "turn detector session created without usable default thresholds",
+                retryable=False,
+            )
+
+        self._server_thresholds = {
+            LanguageCode(lang).language: round(value, 4)
+            for lang, value in server_thresholds.items()
+        }
+        self._server_default = round(server_default, 4)
+
+        self._resolve()
+
+    def _to_local_fallback(self) -> None:
+        if self._model == "turn-detector-mini":
+            return
+
+        rescaled: dict[str, float] | None = None
+        if server := self._server_thresholds:
+            effective = {lang: self.lookup(LanguageCode(lang)) for lang in server}
+            rescaled = {
+                lang: LOCAL_LANGUAGES[lang] * (active_t / server[lang])
+                for lang, active_t in effective.items()
+                if active_t is not None and lang in LOCAL_LANGUAGES and server[lang] != 0
+            }
+
+        self._model = "turn-detector-mini"
+        self._server_thresholds = dict(LOCAL_LANGUAGES)
+        self._server_default = LOCAL_LANGUAGES["en"]
+        self._resolve()
+
+        if rescaled is not None:
+            self._thresholds = rescaled
+            self._default = self.lookup(LanguageCode("en"))
+
+    def _resolve(self) -> None:
+        scalar_override = is_given(self._overrides) and not isinstance(self._overrides, dict)
+        if self._server_thresholds is None or self._server_default is None:
+            # cloud defaults not received yet; only a scalar override resolves up front
+            self._thresholds = {}
+            self._default = float(cast(float, self._overrides)) if scalar_override else None
+            return
+
+        if not is_given(self._overrides):
+            self._thresholds, self._default = dict(self._server_thresholds), self._server_default
+            return
+
+        if scalar_override:
+            self._thresholds, self._default = {}, float(cast(float, self._overrides))
+            return
+
+        override = cast("dict[str, float]", self._overrides)
+        self._thresholds = {**self._server_thresholds, **override}
+        self._default = self._server_default

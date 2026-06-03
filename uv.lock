@@ -2135,7 +2135,7 @@ requires-dist = [
     { name = "livekit-plugins-ultravox", marker = "extra == 'ultravox'", editable = "livekit-plugins/livekit-plugins-ultravox" },
     { name = "livekit-plugins-upliftai", marker = "extra == 'upliftai'", editable = "livekit-plugins/livekit-plugins-upliftai" },
     { name = "livekit-plugins-xai", marker = "extra == 'xai'", editable = "livekit-plugins/livekit-plugins-xai" },
-    { name = "livekit-protocol", specifier = ">=1.1.9,<2" },
+    { name = "livekit-protocol", specifier = ">=1.1.13,<2" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.24.0,<2" },
     { name = "nest-asyncio", specifier = ">=1.6.0" },
     { name = "numpy", specifier = ">=1.26.0" },
@@ -3145,15 +3145,15 @@ requires-dist = [{ name = "livekit-agents", extras = ["openai"], editable = "liv
 
 [[package]]
 name = "livekit-protocol"
-version = "1.1.9"
+version = "1.1.13"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "protobuf" },
     { name = "types-protobuf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d3/4c/b595bb091251412e746cde82753eed0dc0d7513283eb4f1e513fe7635f64/livekit_protocol-1.1.9.tar.gz", hash = "sha256:b978135198ac9faf25e90e1f07e653d593741da5a606d9a704161dd0dc0bd502", size = 100032, upload-time = "2026-05-19T23:16:58.91Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/65/ed/09cf0419967e1f46b5b84447d29dff58473b13308fafa44456d431d53883/livekit_protocol-1.1.13.tar.gz", hash = "sha256:38eff0dc23ff9d6b7d9d10220b74735a0ec784a4a5196ef02c10c6052f8f7f6c", size = 101474, upload-time = "2026-06-02T22:06:40.34Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/cb/88/9bc89f4322127658632941b193721c47391fb9a208aa0933f69cfb4ceca9/livekit_protocol-1.1.9-py3-none-any.whl", hash = "sha256:8bc581ce1b9aa8c330d3aac3d8143f06992c603d22c473d9b881693cee17799b", size = 122418, upload-time = "2026-05-19T23:16:57.126Z" },
+    { url = "https://files.pythonhosted.org/packages/52/66/d16928af7f7641a4edda734c69cdf1af07b6c5f378d72691580ecf4fe6bd/livekit_protocol-1.1.13-py3-none-any.whl", hash = "sha256:8827860835ae576cd66948f5721c5949a285fe72856ebf67af8e42e368a994e7", size = 125127, upload-time = "2026-06-02T22:06:39.081Z" },
 ]
 
 [[package]]
@@ -4598,7 +4598,7 @@ name = "pyzmq"
 version = "26.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cffi", marker = "implementation_name == 'pypy'" },
+    { name = "cffi", marker = "python_full_version < '3.14' and implementation_name == 'pypy'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/b1/11/b9213d25230ac18a71b39b3723494e57adebe36e066397b961657b3b41c1/pyzmq-26.4.0.tar.gz", hash = "sha256:4bd13f85f80962f91a651a7356fe0472791a5f7a92f227822b5acf44795c626d", size = 278293, upload-time = "2025-04-04T12:05:44.049Z" }
 wheels = [

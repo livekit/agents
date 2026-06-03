@@ -40,7 +40,7 @@ from ...log import logger
 from ...metrics import EOTInferenceMetrics
 from ...metrics.base import Metadata
 from ...types import APIConnectOptions
-from ...utils import aio
+from ...utils import aio, is_given
 from .._utils import create_access_token, get_inference_headers
 from .base import (
     DEFAULT_SAMPLE_RATE,
@@ -190,6 +190,18 @@ class _CloudTransport:
             raise APIConnectionError("failed to connect to turn detector") from e
         return ws
 
+    def _warn_transport_latency(self, msg: ServerMessage) -> None:
+        current_time = Timestamp()
+        current_time.GetCurrentTime()
+        if (
+            transport_latency := current_time.ToMilliseconds()
+            - msg.client_created_at.ToMilliseconds()
+        ) > 500 and msg.client_created_at.ToMilliseconds() > 0:
+            logger.warning(
+                "turn detection transport latency is too high: %sms",
+                transport_latency,
+            )
+
     def _process_message(self, msg: ServerMessage) -> None:
         stream = self._stream_ref() if self._stream_ref is not None else None
         if stream is None:
@@ -229,17 +241,27 @@ class _CloudTransport:
                             ),
                         ),
                     )
-            case "session_created" | "session_closed" | "inference_started" | "inference_stopped":
-                current_time = Timestamp()
-                current_time.GetCurrentTime()
-                if (
-                    transport_latency := current_time.ToMilliseconds()
-                    - msg.client_created_at.ToMilliseconds()
-                ) > 500 and msg.client_created_at.ToMilliseconds() > 0:
-                    logger.warning(
-                        "turn detection transport latency is too high: %sms",
-                        transport_latency,
-                    )
+            case "session_created":
+                self._warn_transport_latency(msg)
+                created = msg.session_created
+                thresholds = stream._opts.thresholds
+                thresholds._update_defaults(
+                    dict(created.default_thresholds), created.default_threshold
+                )
+                logger.debug(
+                    "audio turn detector initialized",
+                    extra={
+                        "model": thresholds.model,
+                        "thresholds": thresholds.thresholds,
+                        "default_threshold": thresholds.default_threshold,
+                        "overrides": thresholds.overrides
+                        if is_given(thresholds.overrides)
+                        else None,
+                    },
+                )
+
+            case "session_closed" | "inference_started" | "inference_stopped":
+                self._warn_transport_latency(msg)
 
             case "error":
                 raise APIStatusError(
@@ -321,6 +343,7 @@ class _CloudTransport:
                         message="turn detector connection closed unexpectedly",
                         status_code=ws.close_code or -1,
                         body=f"{ws_msg.data=} {ws_msg.extra=}",
+                        retryable=False,
                     )
 
                 if ws_msg.type != aiohttp.WSMsgType.BINARY:

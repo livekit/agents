@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass
 from enum import Enum
 from typing import Literal, Protocol, runtime_checkable
 
@@ -27,7 +27,7 @@ from ...types import (
 )
 from ...utils import aio
 from ...voice.turn import TurnDetectionEvent
-from .languages import TurnDetectorModels, rescale_for_local_fallback
+from .languages import ThresholdOptions, TurnDetectorModels
 
 DEFAULT_SAMPLE_RATE: int = 16000
 
@@ -44,14 +44,8 @@ class _Status(str, Enum):
 
 @dataclass
 class TurnDetectorOptions:
-    """Options shared by the audio EOT stream and every transport.
-
-    Cloud-only transport concerns (base URL, credentials, conn options)
-    live on a separate options dataclass owned by the cloud transport.
-    """
-
     sample_rate: int
-    thresholds: dict[str, float] = field(default_factory=dict)
+    thresholds: ThresholdOptions
 
 
 @runtime_checkable
@@ -88,11 +82,10 @@ class _AudioTurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
         raise NotImplementedError
 
     async def unlikely_threshold(self, language: LanguageCode | None) -> float | None:
-        lang_key = language.language if language is not None else "en"
-        return self._opts.thresholds.get(lang_key)
+        return self._opts.thresholds.lookup(language)
 
     async def supports_language(self, language: LanguageCode | None) -> bool:
-        return await self.unlikely_threshold(language) is not None
+        return self._opts.thresholds.supports(language)
 
 
 class _AudioTurnDetectorStream:
@@ -140,9 +133,11 @@ class _AudioTurnDetectorStream:
 
     @property
     def model(self) -> TurnDetectorModels:
-        # Self-contained (does not proxy to the detector): the stream owns its
-        # active model, so after a fallback this reports "turn-detector-mini"
-        # while the detector — and any sibling stream — stay independent.
+        # The stream owns its active model, so after a fallback this reports
+        # "turn-detector-mini". The detector and stream share one mutable
+        # ``ThresholdOptions``, and the cloud→local fallback it performs is
+        # one-way and sticky: once degraded it never returns to cloud, so the
+        # detector view stays consistent for the rest of its lifetime.
         return self._model
 
     @property
@@ -154,26 +149,16 @@ class _AudioTurnDetectorStream:
         return self._is_fallback
 
     async def unlikely_threshold(self, language: LanguageCode | None) -> float | None:
-        lang_key = language.language if language is not None else "en"
-        return self._opts.thresholds.get(lang_key)
+        return self._opts.thresholds.lookup(language)
 
     async def supports_language(self, language: LanguageCode | None) -> bool:
-        return await self.unlikely_threshold(language) is not None
+        return self._opts.thresholds.supports(language)
 
     def update_language(self, language: LanguageCode | None) -> None:
-        """Record the most recent detected language so the inline
-        early-deactivation check can resolve the unlikely-EOT threshold.
-        Pushed by ``AudioRecognition`` on each STT transcript."""
         self._last_language = language
 
     def _is_likely(self, probability: float) -> bool:
-        # A prediction at or above ``unlikely_threshold`` is no longer
-        # "unlikely" — it's a confident end-of-turn. Mirror that method's
-        # None→"en" fallback: an unknown language still gets the English
-        # threshold; an explicitly unsupported code misses the dict and is
-        # never treated as likely.
-        lang_key = self._last_language.language if self._last_language is not None else "en"
-        threshold = self._opts.thresholds.get(lang_key)
+        threshold = self._opts.thresholds.lookup(self._last_language)
         return threshold is not None and probability >= threshold
 
     # endregion
@@ -484,23 +469,14 @@ class _AudioTurnDetectorStream:
 
         if not self._warned_cloud_failure:
             logger.warning(
-                "cloud audio eot failed (%s); falling back to local mini model",
+                "cloud turn detector failed (%s); falling back to local mini model",
                 reason,
             )
             self._warned_cloud_failure = True
 
         self._emit_default_for_inflight()
         self._transport.detach()
-        new_opts = replace(
-            self._opts,
-            thresholds=rescale_for_local_fallback(self._opts.thresholds),
-        )
-        self._opts = new_opts
-        # Write the post-fallback state back to the owning detector so its
-        # ``model``/``unlikely_threshold`` views (read by EOU metrics and
-        # ``audio_recognition``) reflect the swap without needing a proxy
-        # layer back through this stream.
-        self._detector._opts = new_opts
+        self._opts.thresholds._to_local_fallback()
         from .detector import AudioTurnDetector
 
         if isinstance(self._detector, AudioTurnDetector):
@@ -522,7 +498,7 @@ class _AudioTurnDetectorStream:
     def _on_local_failure(self, *, reason: BaseException) -> None:
         if not self._warned_local_failure:
             logger.warning(
-                "local audio eot mini failed (%s); defaulting to 1.0 and retrying on next turn",
+                "local audio turn detector failed (%s); defaulting to 1.0 and retrying on next turn",
                 reason,
             )
             self._warned_local_failure = True

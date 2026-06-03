@@ -1254,7 +1254,7 @@ class AudioRecognition:
                         tracer.start_as_current_span("eou_detection") as eou_detection_span,
                     ):
                         end_of_turn_probability = 0.0
-                        # reuse prediction from the audio eot model if available.
+                        # reuse prediction from the turn detector if available.
                         from_cache = (
                             isinstance(turn_detector, _StreamingTurnDetectorStream)
                             and turn_detector.last_prediction is not None

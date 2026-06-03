@@ -24,7 +24,7 @@ from .base import (
     _AudioTurnDetector,
     _AudioTurnDetectorStream,
 )
-from .languages import TurnDetectorModels, materialize_thresholds
+from .languages import ThresholdOptions, TurnDetectorModels
 from .transports import _CloudTransport, _CloudTransportOptions, _LocalTransport
 
 __all__ = ["AudioTurnDetector"]
@@ -101,7 +101,7 @@ class AudioTurnDetector(_AudioTurnDetector):
 
         opts = TurnDetectorOptions(
             sample_rate=sample_rate,
-            thresholds=materialize_thresholds(unlikely_threshold, resolved_model),
+            thresholds=ThresholdOptions(resolved_model, unlikely_threshold),
         )
         super().__init__(opts=opts)
 
@@ -109,9 +109,28 @@ class AudioTurnDetector(_AudioTurnDetector):
         self._cloud_opts = cloud_opts
         self._http_session = http_session
 
+        self._warn_threshold_override()
+
     @property
     def model(self) -> TurnDetectorModels:
         return self._model
+
+    def _warn_threshold_override(self) -> None:
+        if is_given(overrides := self._opts.thresholds.overrides):
+            logger.warning(
+                "a non-default turn detection threshold was provided "
+                "(unlikely_threshold=%s); the server provides calibrated defaults and "
+                "overriding them may be suboptimal",
+                overrides,
+            )
+
+    def update_options(
+        self,
+        *,
+        unlikely_threshold: NotGivenOr[float | dict[LanguageCode | str, float]] = NOT_GIVEN,
+    ) -> None:
+        self._opts.thresholds.update_overrides(unlikely_threshold)
+        self._warn_threshold_override()
 
     def stream(
         self,
