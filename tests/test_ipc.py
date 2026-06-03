@@ -21,7 +21,14 @@ from livekit.agents.ipc.log_queue import LogQueueHandler, LogQueueListener
 from livekit.agents.utils.aio import duplex_unix
 from livekit.protocol import agent
 
-pytestmark = pytest.mark.unit
+# Drives real subprocesses / IPC and installs process-global signal handlers; it deadlocks and
+# raises _ExitCli when forced to share one event loop with other tests -> never run concurrently.
+# It also reconfigures global logging, so it opts into _restore_logging (see tests/conftest.py).
+pytestmark = [
+    pytest.mark.unit,
+    pytest.mark.no_concurrent,
+    pytest.mark.usefixtures("_restore_logging"),
+]
 
 
 @dataclass

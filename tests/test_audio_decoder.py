@@ -15,7 +15,9 @@ from livekit.agents.utils.misc import is_cloud
 
 from .utils import wer
 
-pytestmark = pytest.mark.unit
+# Decodes audio on background threads / executors with blocking waits; it deadlocks when forced
+# to share one event loop with other tests.
+pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 
 TEST_AUDIO_FILEPATH = os.path.join(os.path.dirname(__file__), "change-sophie.opus")
 

@@ -36,6 +36,9 @@ from .fake_session import FakeActions, create_session, run_session
 
 pytestmark = pytest.mark.unit
 
+# These tests are concurrency-safe but unmarked: they run sequentially by default and
+# concurrently under ``--concurrent`` (or ``LK_TEST_CONCURRENCY=session``). See tests/concurrency.py.
+
 
 class MyAgent(Agent):
     def __init__(

@@ -8,7 +8,14 @@ from typer.testing import CliRunner
 from livekit.agents.cli.cli import _build_cli
 from livekit.agents.worker import AgentServer, ServerEnvOption, ServerOptions
 
-pytestmark = pytest.mark.unit
+# Exercises cli.log.setup_logging, which mutates global logging state, so it opts into
+# _restore_logging (see tests/conftest.py) and runs sequentially (no_concurrent) so that
+# teardown never races a concurrently-running peer's output capture.
+pytestmark = [
+    pytest.mark.unit,
+    pytest.mark.no_concurrent,
+    pytest.mark.usefixtures("_restore_logging"),
+]
 
 
 def _make_server(**kwargs) -> AgentServer:

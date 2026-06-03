@@ -10,6 +10,7 @@ import pytest
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, utils
 from livekit.agents.cli import log
 
+from . import concurrency
 from .toxic_proxy import Toxiproxy
 
 TEST_CONNECT_OPTIONS = dataclasses.replace(DEFAULT_API_CONNECT_OPTIONS, retry_interval=0.0)
@@ -242,9 +243,17 @@ def _logging_baseline():
     return [(logger, logger.level, logger.handlers[:], logger.propagate) for logger in loggers]
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def _restore_logging(_logging_baseline):
-    """Revert global logging a test mutated (e.g. via cli.log.setup_logging)."""
+    """Revert global logging a test mutated (e.g. via cli.log.setup_logging).
+
+    Deliberately **not** autouse: it rewrites the root logger's handlers/levels on
+    teardown, which is global state that would clobber a concurrently-running test's
+    output capture (and the concurrency log router). Only the two modules that actually
+    reconfigure logging opt in -- via ``pytest.mark.usefixtures("_restore_logging")`` --
+    and those modules are also marked ``no_concurrent`` so the teardown never races a peer.
+    See tests/test_cli_log_level.py and tests/test_ipc.py.
+    """
     yield
     for logger, level, handlers, propagate in _logging_baseline:
         logger.setLevel(level)
@@ -307,7 +316,22 @@ def format_task(task) -> str:
 
 
 @pytest.fixture(autouse=True)
-async def fail_on_leaked_tasks():
+async def fail_on_leaked_tasks(request):
+    if concurrency.is_concurrent_member(request.node):
+        # Concurrent group members share one event loop, so we can't diff asyncio.all_tasks()
+        # (it would flag other still-running tests). Instead ask which still-pending tasks were
+        # created by *this* test -- tagged via contextvars, see tests/concurrency.py.
+        yield
+        leaked_tasks = [
+            task
+            for task in concurrency.owned_pending_tasks(request.node.nodeid)
+            if not _is_ignorable_task(task)
+        ]
+        if leaked_tasks:
+            tasks_msg = "\n\n".join(format_task(task) for task in leaked_tasks)
+            pytest.fail("Test leaked tasks:\n\n" + tasks_msg)
+        return
+
     tasks_before = set(asyncio.all_tasks())
 
     yield
@@ -323,3 +347,9 @@ async def fail_on_leaked_tasks():
     if leaked_tasks:
         tasks_msg = "\n\n".join(format_task(task) for task in leaked_tasks)
         pytest.fail("Test leaked tasks:\n\n" + tasks_msg)
+
+
+# Concurrent-test execution is implemented in tests/concurrency.py, loaded as a global
+# plugin via ``-p tests.concurrency`` (see pyproject.toml). It must be global rather than
+# defined here because the underlying plugin dispatches the group protocol through
+# ``session.ihook``, which does not see a subdirectory conftest's hooks.
