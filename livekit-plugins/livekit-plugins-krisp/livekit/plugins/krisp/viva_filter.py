@@ -45,6 +45,7 @@ if not hasattr(rtc, "FrameProcessor"):
     )
 
 _LEGACY_DEPRECATION_SHOWN = False
+_FRAME_PARAMS_DEPRECATION_SHOWN = False
 
 
 def _resolve_auth_provider(
@@ -99,10 +100,7 @@ def _build_inner(
     """Lazy-import and construct the backend FrameProcessor."""
     if isinstance(provider, LiveKitCloudAuthProvider):
         try:
-            # The closed-source wheel is itself a FrameProcessor; it handles
-            # auth via _on_credentials_updated and bundles the model.
-            # TODO: confirm exact class name with the wheel author.
-            from livekit.plugins.krisp_internal import (  # type: ignore[import-not-found]
+            from livekit.plugins.krisp_internal import (
                 KrispVivaFilterFrameProcessor as _CloudKrispFrameProcessor,
             )
         except ModuleNotFoundError as e:
@@ -163,8 +161,6 @@ class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
             room=ctx.room,
             room_options=room_io.RoomOptions(
                 audio_input=room_io.AudioInputOptions(
-                    sample_rate=16000,
-                    frame_size_ms=10,
                     noise_cancellation=processor,
                 ),
             ),
@@ -178,7 +174,7 @@ class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         auth_provider: LiveKitCloudAuthProvider | KrispLicenseAuthProvider | None = None,
         model_path: str | None = None,
         noise_suppression_level: int = 100,
-        frame_duration_ms: int = 10,
+        frame_duration_ms: int | None = None,
         sample_rate: int | None = None,
     ) -> None:
         """Initialize the Krisp frame processor.
@@ -192,8 +188,12 @@ class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
                 ``auth_provider=KrispLicenseAuthProvider(model_path=...)``
                 instead. Path to the Krisp model file (``.kef``).
             noise_suppression_level: Noise suppression level (0-100, default: 100).
-            frame_duration_ms: Frame duration in milliseconds (10, 15, 20, 30, or 32, default: 10).
-            sample_rate: sample rate in Hz. If None, default to 16000 Hz.
+            frame_duration_ms: **Deprecated.** The processor now buffers input
+                frames of any size automatically, so this no longer needs to be
+                set. Frame duration in milliseconds (10, 15, 20, 30, or 32).
+            sample_rate: **Deprecated.** The processor now adapts to the input
+                sample rate automatically, so this no longer needs to be set.
+                Sample rate in Hz.
 
         Raises:
             RuntimeError: If the chosen backend wheel is not installed.
@@ -202,11 +202,24 @@ class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
                 missing or does not have a ``.kef`` extension.
             FileNotFoundError: If the license-mode model file does not exist.
         """
+        if frame_duration_ms is not None or sample_rate is not None:
+            global _FRAME_PARAMS_DEPRECATION_SHOWN
+            if not _FRAME_PARAMS_DEPRECATION_SHOWN:
+                warnings.warn(
+                    "Passing `sample_rate` / `frame_duration_ms` to "
+                    "KrispVivaFilterFrameProcessor is deprecated. The processor "
+                    "now adapts to the input sample rate and frame size "
+                    "automatically.",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
+                _FRAME_PARAMS_DEPRECATION_SHOWN = True
+
         provider = _resolve_auth_provider(auth_provider, model_path)
         self._inner = _build_inner(
             provider,
             noise_suppression_level=noise_suppression_level,
-            frame_duration_ms=frame_duration_ms,
+            frame_duration_ms=frame_duration_ms if frame_duration_ms is not None else 10,
             sample_rate=sample_rate,
         )
 

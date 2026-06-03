@@ -166,8 +166,19 @@ class _KrispLicenseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         self._session: Any | None = None
         self._noise_suppression_level = noise_suppression_level
         self._sample_rate: int | None = None
+        self._chunk_samples: int | None = None
         self._frame_duration_ms = frame_duration_ms
         self._model_path = model_path
+        self._warned_channels = False
+
+        # Adaptive frame-size buffering: krisp processes fixed-size chunks
+        # (``frame_duration_ms`` worth of samples), but input frames may arrive
+        # at any size. Incoming samples accumulate in ``_in_buf``, are processed
+        # one whole chunk at a time, and the results queue in ``_out_buf`` so
+        # each call can emit exactly as many samples as it received (zero-padded
+        # during the brief warm-up before the first full chunk is ready).
+        self._in_buf: np.ndarray = np.empty(0, dtype=np.int16)
+        self._out_buf: np.ndarray = np.empty(0, dtype=np.int16)
 
         try:
             self._module = _KrispLicenseSDKManager.acquire(license_key)
@@ -180,11 +191,14 @@ class _KrispLicenseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
             # Validate frame duration through the manager (raises if unsupported).
             _KrispLicenseSDKManager.frame_duration_enum(frame_duration_ms)
 
+            # Pre-load the model now to fail fast on a bad license/model path.
+            # The session is recreated automatically if the first frame arrives
+            # at a different sample rate.
             init_sample_rate = sample_rate if sample_rate is not None else 16000
             self._create_session(init_sample_rate)
             logger.info(
                 "Krisp frame processor initialized with %dHz session "
-                "(model pre-loaded, will recreate session if different sample rate)",
+                "(adapts to the input sample rate and frame size)",
                 init_sample_rate,
             )
         except Exception:
@@ -194,7 +208,10 @@ class _KrispLicenseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
             raise
 
     def _create_session(self, sample_rate: int) -> None:
-        """Create a new Krisp session with the correct sample rate.
+        """Create a new Krisp session for the given sample rate.
+
+        Also recomputes the per-chunk sample count and resets the frame-size
+        buffers, since both are tied to the sample rate.
 
         Args:
             sample_rate: The sample rate of the audio frames in Hz.
@@ -219,6 +236,10 @@ class _KrispLicenseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         try:
             self._session = self._module.NcInt16.create(nc_cfg)
             self._sample_rate = sample_rate
+            self._chunk_samples = int(sample_rate * self._frame_duration_ms / 1000)
+            # The pending/processed buffers belong to the old rate; start fresh.
+            self._in_buf = np.empty(0, dtype=np.int16)
+            self._out_buf = np.empty(0, dtype=np.int16)
             logger.info("Krisp session created successfully")
         except Exception as e:
             logger.error(f"Failed to create Krisp session: {e}")
@@ -228,48 +249,68 @@ class _KrispLicenseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         if not self._filtering_enabled:
             return frame
 
-        if self._session is None or self._sample_rate != frame.sample_rate:
-            raise ValueError(f"Session not created or sample rate mismatch: {frame.sample_rate}Hz")
-
-        # Verify frame size matches expected duration
-        expected_samples = int((frame.sample_rate * self._frame_duration_ms) / 1000)
-        if frame.samples_per_channel != expected_samples:
-            raise ValueError(
-                f"Frame size mismatch: expected {expected_samples} samples "
-                f"({self._frame_duration_ms}ms @ {frame.sample_rate}Hz), "
-                f"got {frame.samples_per_channel} samples"
-            )
-
-        # Convert frame to numpy array
-        audio_samples = np.frombuffer(frame.data, dtype=np.int16)
-
-        try:
-            # Process through Krisp
-            filtered_samples = self._session.process(audio_samples, self._noise_suppression_level)
-
-            # Validate output
-            if filtered_samples is None or len(filtered_samples) == 0:
-                logger.warning("Krisp returned empty output, using original audio")
-                filtered_samples = audio_samples
-            elif len(filtered_samples) != len(audio_samples):
+        if frame.num_channels != 1:
+            # Krisp NC expects mono audio; pass multi-channel frames through.
+            if not self._warned_channels:
                 logger.warning(
-                    f"Krisp output size mismatch: expected {len(audio_samples)}, "
-                    f"got {len(filtered_samples)}, using original audio"
+                    "Krisp filter not applied: expected mono audio but got %d "
+                    "channels; frames are passed through unprocessed.",
+                    frame.num_channels,
                 )
-                filtered_samples = audio_samples
-
-            # Return filtered frame
-            return rtc.AudioFrame(
-                data=filtered_samples.tobytes(),
-                sample_rate=frame.sample_rate,
-                num_channels=frame.num_channels,
-                samples_per_channel=len(filtered_samples),
-            )
-
-        except Exception as e:
-            logger.error(f"Error processing frame: {e}")
-            # Return original frame on error
+                self._warned_channels = True
             return frame
+
+        # Adapt to the input sample rate, recreating the session on a change.
+        if self._session is None or self._sample_rate != frame.sample_rate:
+            self._create_session(frame.sample_rate)
+
+        assert self._session is not None and self._chunk_samples is not None
+        chunk = self._chunk_samples
+
+        # Accumulate the incoming samples and process every whole chunk that is
+        # now available (the input frame size need not match the chunk size).
+        in_arr = np.frombuffer(frame.data, dtype=np.int16)
+        self._in_buf = np.concatenate((self._in_buf, in_arr))
+
+        n_chunks = len(self._in_buf) // chunk
+        if n_chunks > 0:
+            consumed = n_chunks * chunk
+            pending = self._in_buf[:consumed]
+            self._in_buf = self._in_buf[consumed:].copy()
+
+            processed: list[np.ndarray] = []
+            for i in range(n_chunks):
+                chunk_in = pending[i * chunk : (i + 1) * chunk]
+                try:
+                    chunk_out = self._session.process(chunk_in, self._noise_suppression_level)
+                except Exception as e:
+                    logger.error(f"Error processing frame: {e}")
+                    chunk_out = chunk_in
+                if chunk_out is None or len(chunk_out) != chunk:
+                    logger.warning("Krisp returned unexpected output, using original audio")
+                    chunk_out = chunk_in
+                processed.append(np.asarray(chunk_out, dtype=np.int16))
+
+            self._out_buf = np.concatenate([self._out_buf, *processed])
+
+        # Emit exactly as many samples as we received this call. Before the
+        # first full chunk is ready the deficit is zero-padded; samples in and
+        # out stay balanced over time, so there is no drift.
+        n = frame.samples_per_channel
+        if len(self._out_buf) >= n:
+            out = self._out_buf[:n]
+            self._out_buf = self._out_buf[n:].copy()
+        else:
+            padding = np.zeros(n - len(self._out_buf), dtype=np.int16)
+            out = np.concatenate((padding, self._out_buf))
+            self._out_buf = np.empty(0, dtype=np.int16)
+
+        return rtc.AudioFrame(
+            data=out.tobytes(),
+            sample_rate=frame.sample_rate,
+            num_channels=frame.num_channels,
+            samples_per_channel=len(out),
+        )
 
     @property
     def enabled(self) -> bool:
@@ -281,9 +322,12 @@ class _KrispLicenseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
 
     def _close(self) -> None:
         # _close runs on track transitions, not just final destruction. Drop
-        # the session here but keep the SDK reference until __del__.
+        # the session (and any buffered audio) here but keep the SDK reference
+        # until __del__. A later frame recreates the session on demand.
         if self._session is not None:
             self._session = None
+        self._in_buf = np.empty(0, dtype=np.int16)
+        self._out_buf = np.empty(0, dtype=np.int16)
         logger.debug("Krisp frame processor session closed")
 
     def __del__(self) -> None:

@@ -2327,7 +2327,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "bithuman", specifier = ">=0.5.25,<1.12" },
+    { name = "bithuman", specifier = ">=0.5.25,<3" },
     { name = "livekit-agents", editable = "livekit-agents" },
 ]
 
@@ -3125,9 +3125,9 @@ dependencies = [
     { name = "protobuf" },
     { name = "types-protobuf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/36/fa/1faf45f0e771226121569020ed050f74fd9c96feb0937c9c94595590680f/livekit_protocol-1.1.11.tar.gz", hash = "sha256:2ac65845b99e1f8e43e4f71e9d67ef0c5243ecdf4f30faa2e24e320d5e5f3b93", size = 100874 }
+sdist = { url = "https://files.pythonhosted.org/packages/36/fa/1faf45f0e771226121569020ed050f74fd9c96feb0937c9c94595590680f/livekit_protocol-1.1.11.tar.gz", hash = "sha256:2ac65845b99e1f8e43e4f71e9d67ef0c5243ecdf4f30faa2e24e320d5e5f3b93", size = 100874, upload-time = "2026-05-29T17:51:58.151Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d7/9f/950516146a51ceff9e2dabcec00426f9fc1312b980167c59b9d2be08a13e/livekit_protocol-1.1.11-py3-none-any.whl", hash = "sha256:3c779489819eba15aee3860327fb6cac2f4a58a32ab23067c411fe4852f6b795", size = 123360 },
+    { url = "https://files.pythonhosted.org/packages/d7/9f/950516146a51ceff9e2dabcec00426f9fc1312b980167c59b9d2be08a13e/livekit_protocol-1.1.11-py3-none-any.whl", hash = "sha256:3c779489819eba15aee3860327fb6cac2f4a58a32ab23067c411fe4852f6b795", size = 123360, upload-time = "2026-05-29T17:51:56.944Z" },
 ]
 
 [[package]]
