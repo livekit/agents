@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.docs
+
 # The module lives at .github/convert_html_docs.py which isn't a regular
 # package, so we load it by file path.
 _SCRIPT_PATH = Path(__file__).resolve().parent.parent / ".github" / "convert_html_docs.py"
