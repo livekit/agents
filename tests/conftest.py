@@ -230,6 +230,28 @@ def configure_test():
     log._silence_noisy_loggers()
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _logging_baseline():
+    """Pristine logging state, snapshotted once before any test runs."""
+    loggers = [logging.getLogger()]  # root
+    loggers += [
+        logging.getLogger(name)
+        for name in logging.root.manager.loggerDict
+        if name.startswith("livekit")
+    ]
+    return [(logger, logger.level, logger.handlers[:], logger.propagate) for logger in loggers]
+
+
+@pytest.fixture(autouse=True)
+def _restore_logging(_logging_baseline):
+    """Revert global logging a test mutated (e.g. via cli.log.setup_logging)."""
+    yield
+    for logger, level, handlers, propagate in _logging_baseline:
+        logger.setLevel(level)
+        logger.handlers[:] = handlers
+        logger.propagate = propagate
+
+
 @pytest.fixture
 def toxiproxy():
     toxiproxy = Toxiproxy()
