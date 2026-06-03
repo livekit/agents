@@ -41,6 +41,8 @@ from livekit.agents.inference.eot.transports import _LocalTransport
 from livekit.agents.language import LanguageCode
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 
+pytestmark = pytest.mark.audio_eot
+
 # Stand-in for the per-language defaults a 1.1.13 gateway returns in ``SessionCreated``.
 SERVER_THRESHOLDS: dict[str, float] = {"en": 0.56, "ja": 0.37, "fr": 0.575}
 SERVER_DEFAULT_THRESHOLD = 0.5

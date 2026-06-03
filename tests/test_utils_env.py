@@ -3,6 +3,8 @@ import pytest
 from livekit.agents.types import NOT_GIVEN
 from livekit.agents.utils.env import resolve_env_var
 
+pytestmark = pytest.mark.unit
+
 
 class TestResolveEnvVar:
     """Tests for the resolve_env_var helper contract."""

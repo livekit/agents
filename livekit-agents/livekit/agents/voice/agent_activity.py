@@ -1526,6 +1526,12 @@ class AgentActivity(RecognitionHooks):
 
                 await _wait_for_eou()
 
+            if self._session._user_turn_claims > 0:
+                # `AgentSession.claim_user_turn` is holding idle open
+                await self._session._user_turn_released.wait()
+                agent_active = wait_for_agent
+                user_active = wait_for_user
+
     # -- Realtime Session events --
 
     def _on_metrics_collected(
@@ -1637,6 +1643,9 @@ class AgentActivity(RecognitionHooks):
         )
 
         if ev.is_final:
+            if self.stt is None and ev.transcript and (amd := self._session._amd) is not None:
+                amd._on_transcript(ev.transcript)
+
             # TODO: for realtime models, the created_at field is off. it should be set to when the user started speaking.
             # but we don't have that information here.
             msg = llm.ChatMessage(role="user", content=[ev.transcript], id=ev.item_id)
@@ -1977,6 +1986,13 @@ class AgentActivity(RecognitionHooks):
     def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool:
         # IMPORTANT: This method is sync to avoid it being cancelled by the AudioRecognition
         # We explicitly create a new task here
+
+        # TODO: @chenghao-mou replace this direct call with the public `eot_prediction`
+        # event once feat/AGT-2520-multimodal-EOU lands.
+        if (amd := self._session._amd) is not None and amd._on_end_of_turn(info):
+            # cancel post-verdict preemptive and new generations
+            self._cancel_preemptive_generation()
+            info.skip_reply = True
 
         if self._scheduling_paused or self._new_turns_blocked:
             self._cancel_preemptive_generation()

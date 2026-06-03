@@ -3,11 +3,15 @@ from __future__ import annotations
 from collections.abc import AsyncIterable
 from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
+import pytest
+
 from livekit import rtc
 from livekit.agents import Agent
 from livekit.agents.voice.agent import ModelSettings
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.turn import _StreamingTurnDetector
+
+pytestmark = pytest.mark.unit
 
 
 def _make_activity(agent: Agent, stt: object, turn_detection: object = None) -> MagicMock:

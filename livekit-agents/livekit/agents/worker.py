@@ -18,7 +18,6 @@ import asyncio
 import contextlib
 import datetime
 import inspect
-import json
 import math
 import multiprocessing as mp
 import os
@@ -33,10 +32,10 @@ from urllib.parse import urljoin, urlparse
 import aiohttp
 import jwt
 from aiohttp import web
-from google.protobuf.json_format import MessageToDict
+from google.protobuf.json_format import MessageToDict, MessageToJson
 
 from livekit import api, rtc
-from livekit.protocol import agent, models
+from livekit.protocol import agent, agent_worker, models
 
 from . import ipc, telemetry, utils
 from ._exceptions import APIStatusError, AssignmentTimeoutError
@@ -60,6 +59,7 @@ ASSIGNMENT_TIMEOUT = 7.5
 UPDATE_STATUS_INTERVAL = 2.5
 UPDATE_LOAD_INTERVAL = 0.5
 HEARTBEAT_INTERVAL = 30
+WORKER_PROTOCOL_VERSION = 1
 
 
 def _default_setup_fnc(proc: JobProcess) -> Any:
@@ -333,6 +333,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._api_secret = api_secret or os.environ.get("LIVEKIT_API_SECRET") or ""
 
         self._worker_token = os.environ.get("LIVEKIT_WORKER_TOKEN") or ""  # hosted agents
+        self._deployment = os.environ.get("LIVEKIT_AGENT_DEPLOYMENT") or ""  # hosted agents
 
         self._host = host
         self._port = port
@@ -638,17 +639,15 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 return web.Response(text="OK")
 
             async def worker(_: Any) -> web.Response:
-                body = json.dumps(
-                    {
-                        "agent_name": self._agent_name,
-                        "agent_name_is_env": self._agent_name_is_env,
-                        "worker_type": agent.JobType.Name(self._server_type.value),
-                        "worker_load": self._worker_load,
-                        "active_jobs": len(self.active_jobs),
-                        "sdk_version": __version__,
-                        "project_type": "python",
-                    }
+                worker_info = agent_worker.WorkerInfo(
+                    worker_type=agent.JobType.Name(self._server_type.value),
+                    agent_name=self._agent_name,
+                    active_jobs=len(self.active_jobs),
+                    sdk_version=__version__,
+                    worker_load=self._worker_load,
+                    protocol_version=WORKER_PROTOCOL_VERSION,
                 )
+                body = MessageToJson(worker_info, preserving_proto_field_name=True)
                 return web.Response(body=body, content_type="application/json")
 
             self._http_server.app.add_routes([web.get("/", health_check)])
@@ -1072,6 +1071,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     )
                 )
                 req.register.agent_name = self._agent_name
+                req.register.deployment = self._deployment
                 req.register.version = __version__
                 await ws.send_bytes(req.SerializeToString())
 
@@ -1222,6 +1222,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             "registered worker",
             extra={
                 "agent_name": self._agent_name,
+                "deployment": self._deployment,
                 "id": reg.worker_id,
                 "url": self._ws_url,
                 "region": reg.server_info.region,

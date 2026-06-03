@@ -1,11 +1,13 @@
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
 from livekit.agents import ProviderTool
 
 
-class XAITool(ProviderTool, ABC):
+class XAITool(ProviderTool):
+    """Base class for xAI server-side provider tools."""
+
     @abstractmethod
     def to_dict(self) -> dict[str, Any]: ...
 

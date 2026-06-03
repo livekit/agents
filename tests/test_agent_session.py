@@ -34,6 +34,8 @@ from livekit.agents.voice.io import PlaybackFinishedEvent
 
 from .fake_session import FakeActions, create_session, run_session
 
+pytestmark = pytest.mark.unit
+
 
 class MyAgent(Agent):
     def __init__(

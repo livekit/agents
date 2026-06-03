@@ -12,6 +12,7 @@ deterministically. Covers:
 
 from __future__ import annotations
 
+import pytest
 from livekit import rtc
 from livekit.agents._exceptions import APIConnectionError
 
@@ -20,6 +21,8 @@ from .fake_turn_detector_ws import (
     make_stream,
     wait_until_connected,
 )
+
+pytestmark = pytest.mark.audio_eot
 
 
 def _pcm_frame(samples: int = 320) -> rtc.AudioFrame:

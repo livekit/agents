@@ -31,6 +31,8 @@ from livekit.agents.voice.turn import (
     _StreamingTurnDetectorStream,
 )
 
+pytestmark = pytest.mark.audio_eot
+
 # ---------------------------------------------------------------------------
 # Speaking-guard race
 # ---------------------------------------------------------------------------

@@ -15,6 +15,8 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import MagicMock
 
+import pytest
+
 from livekit.agents.inference.eot.base import (
     TurnDetectorOptions,
     _AudioTurnDetectorStream,
@@ -22,6 +24,8 @@ from livekit.agents.inference.eot.base import (
 )
 from livekit.agents.inference.eot.languages import ThresholdOptions
 from livekit.agents.types import NOT_GIVEN
+
+pytestmark = pytest.mark.audio_eot
 
 
 class _FakeTransport:

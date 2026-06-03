@@ -35,6 +35,8 @@ from livekit.plugins import (
 
 from .utils import make_test_speech, wer
 
+pytestmark = pytest.mark.stt
+
 SAMPLE_RATE = 24000
 WER_THRESHOLD = 0.25
 MAX_RETRIES = 2
@@ -71,6 +73,7 @@ STTs: list[Callable[[], stt.STT]] = [
         # spitch,
     ]
 ] + [
+    pytest.param(lambda: cartesia.STT(model="ink-whisper"), id="livekit.plugins.cartesia._legacy"),
     pytest.param(lambda: deepgram.STTv2(), id="livekit.plugins.deepgram.STTv2"),
     pytest.param(
         lambda: gradium.STT(model_endpoint="wss://us.api.gradium.ai/api/speech/asr"),

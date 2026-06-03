@@ -7,6 +7,9 @@ from livekit.agents.inference import VAD as InferenceVAD
 
 from . import utils
 
+# loads the silero ONNX model at import
+pytestmark = pytest.mark.plugin("silero")
+
 SAMPLE_RATES = [16000, 44100]  # test multiple input sample rates
 
 
