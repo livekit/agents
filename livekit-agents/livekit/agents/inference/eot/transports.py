@@ -305,7 +305,6 @@ class _CloudTransport:
         send_ch: aio.Chan[ClientMessage] = aio.Chan()
         self._send_ch = send_ch
 
-        @utils.log_exceptions(logger=logger)
         async def drain_audio_task() -> None:
             nonlocal closing_ws
             await stream._drain_audio_channel()
@@ -313,7 +312,6 @@ class _CloudTransport:
             self._send_message(ClientMessage(session_close=SessionClose()))
             send_ch.close()
 
-        @utils.log_exceptions(logger=logger)
         async def sender_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             async for msg in send_ch:
                 if ws.closed:
@@ -327,7 +325,6 @@ class _CloudTransport:
                 except (ConnectionResetError, aiohttp.ClientConnectionError):
                     return
 
-        @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
             while True:
