@@ -139,9 +139,13 @@ if __name__ == "__main__":
 
 You'll need the following environment variables for this example:
 
-- LIVEKIT_URL
-- LIVEKIT_API_KEY
-- LIVEKIT_API_SECRET
+LIVEKIT_URL
+LIVEKIT_API_KEY
+LIVEKIT_API_SECRET
+
+You can find these credentials in your [LiveKit Cloud dashboard](https://cloud.livekit.io).
+If you're self-hosting, refer to the [LiveKit server docs](https://docs.livekit.io/home/self-hosting/local/).
+
 
 ### Multi-agent handoff
 
