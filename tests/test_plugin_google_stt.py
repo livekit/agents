@@ -1,3 +1,4 @@
+import pytest
 from google.cloud.speech_v1.types import cloud_speech as cloud_speech_v1
 from google.cloud.speech_v2.types import cloud_speech as cloud_speech_v2
 from google.protobuf.duration_pb2 import Duration
@@ -9,6 +10,8 @@ from livekit.plugins.google.stt import (
     _recognize_response_to_speech_event,  # pyright: ignore[reportPrivateUsage]
     _streaming_recognize_response_to_speech_data,  # pyright: ignore[reportPrivateUsage]
 )
+
+pytestmark = pytest.mark.plugin("google")
 
 
 async def test_streaming_recognize_response_to_speech_data_01():

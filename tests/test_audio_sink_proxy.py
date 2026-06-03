@@ -13,6 +13,8 @@ from livekit.agents.voice.io import (
 
 from .fake_io import FakeAudioOutput
 
+pytestmark = pytest.mark.unit
+
 
 def _make_agent_output() -> AgentOutput:
     return AgentOutput(lambda: None, lambda: None, lambda: None)

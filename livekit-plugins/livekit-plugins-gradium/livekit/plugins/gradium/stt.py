@@ -81,6 +81,7 @@ class STT(stt.STT):
         vad_bucket: int | None = 2,
         vad_flush: bool = True,
         temperature: float | None = None,
+        language: str = "en",
     ):
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -122,6 +123,7 @@ class STT(stt.STT):
             vad_bucket=vad_bucket,
             vad_flush=vad_flush,
             temperature=temperature,
+            language=LanguageCode(language),
         )
 
         if is_given(encoding):
@@ -160,6 +162,8 @@ class STT(stt.STT):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
         config = dataclasses.replace(self._opts)
+        if is_given(language):
+            config.language = LanguageCode(language)
         stream = SpeechStream(
             stt=self,
             conn_options=conn_options,
@@ -419,8 +423,10 @@ class SpeechStream(stt.SpeechStream):
             "model_name": self._model_name,
             "input_format": "pcm",
         }
+        json_config: dict[str, Any] = {"language": self._opts.language.language}
         if self._opts.temperature is not None:
-            setup_msg["json_config"] = {"temp": self._opts.temperature}
+            json_config["temp"] = self._opts.temperature
+        setup_msg["json_config"] = json_config
 
         await ws.send_str(json.dumps(setup_msg))
         return ws

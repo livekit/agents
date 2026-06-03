@@ -4,6 +4,8 @@ import pytest
 
 from livekit.agents.utils.aio.itertools import Tee
 
+pytestmark = pytest.mark.unit
+
 
 async def _async_iter(items):
     for item in items:

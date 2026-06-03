@@ -108,28 +108,64 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         self._closed = True
         await aio.cancel_and_wait(self._main_atask)
 
-    async def launch_job(self, info: RunningJobInfo) -> None:
-        MAX_ATTEMPTS = 3
+    async def _acquire_proc(self, job_id: str) -> JobExecutor:
+        MAX_ACQUIRE_ATTEMPTS = 3
 
-        for attempt in range(MAX_ATTEMPTS):
+        for attempt in range(MAX_ACQUIRE_ATTEMPTS):
+            if (
+                self._warmed_proc_queue.empty()
+                and len(self._spawn_tasks) < self._jobs_waiting_for_process
+            ):
+                # spawn a new process if there are no idle processes
+                task = asyncio.create_task(self._proc_spawn_task())
+                self._spawn_tasks.add(task)
+                task.add_done_callback(self._spawn_tasks.discard)
+
+            if self._warmed_proc_queue.empty():
+                logger.warning(
+                    "no warmed process available for job, waiting for one to be created",
+                    extra={"job_id": job_id},
+                )
+
+            # race the queue against every in-flight spawn task
+            while True:
+                if not self._warmed_proc_queue.empty():
+                    return self._warmed_proc_queue.get_nowait()
+
+                spawns = [t for t in self._spawn_tasks if not t.done()]
+                # retry if all in-flight spawns have completed without producing a proc
+                if not spawns:
+                    break
+
+                get_task = asyncio.ensure_future(self._warmed_proc_queue.get())
+                try:
+                    await asyncio.wait([get_task, *spawns], return_when=asyncio.FIRST_COMPLETED)
+                finally:
+                    if not get_task.done():
+                        get_task.cancel()
+
+                if get_task.done() and not get_task.cancelled():
+                    return get_task.result()
+
+            logger.warning(
+                "all in-flight spawns failed to initialize, retrying",
+                extra={"job_id": job_id, "attempt": attempt + 1},
+            )
+
+        logger.error(
+            "failed to acquire process for job after %d attempts",
+            MAX_ACQUIRE_ATTEMPTS,
+            extra={"job_id": job_id},
+        )
+        raise RuntimeError(f"no process became available after {MAX_ACQUIRE_ATTEMPTS} attempts")
+
+    async def launch_job(self, info: RunningJobInfo) -> None:
+        MAX_LAUNCH_ATTEMPTS = 3
+
+        for attempt in range(MAX_LAUNCH_ATTEMPTS):
             self._jobs_waiting_for_process += 1
             try:
-                if (
-                    self._warmed_proc_queue.empty()
-                    and len(self._spawn_tasks) < self._jobs_waiting_for_process
-                ):
-                    # spawn a new process if there are no idle processes
-                    task = asyncio.create_task(self._proc_spawn_task())
-                    self._spawn_tasks.add(task)
-                    task.add_done_callback(self._spawn_tasks.discard)
-
-                if self._warmed_proc_queue.empty():
-                    logger.warning(
-                        "no warmed process available for job, waiting for one to be created",
-                        extra={"job_id": info.job.id},
-                    )
-
-                proc = await self._warmed_proc_queue.get()
+                proc = await self._acquire_proc(info.job.id)
             finally:
                 self._jobs_waiting_for_process -= 1
 
@@ -141,10 +177,10 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                 close_task = asyncio.create_task(proc.aclose())
                 self._close_tasks.add(close_task)
                 close_task.add_done_callback(self._close_tasks.discard)
-                if attempt == MAX_ATTEMPTS - 1:
+                if attempt == MAX_LAUNCH_ATTEMPTS - 1:
                     logger.error(
                         "failed to launch job on process after %d attempts",
-                        MAX_ATTEMPTS,
+                        MAX_LAUNCH_ATTEMPTS,
                         extra={"job_id": info.job.id},
                     )
                     raise
