@@ -18,6 +18,7 @@ class TestSpeakerIdGrouping:
     """Test cases for speaker ID grouping functionality."""
 
     def _format_text(self, text, speaker_id):
+        text = text.strip()
         if speaker_id:
             return f"[{speaker_id}]{text}[/{speaker_id}]"
         return text
@@ -27,7 +28,7 @@ class TestSpeakerIdGrouping:
         result = ""
         for text, speaker_id in fragments:
             # Skip speakers to ignore
-            if re.match(r"^__[A-Z0-9_]{2,}__$", speaker_id):
+            if speaker_id and re.match(r"^__[A-Z0-9_]{2,}__$", speaker_id):
                 continue
 
             # Create a SpeakerSpeechData object and get formatted text
@@ -65,10 +66,6 @@ class TestSpeakerIdGrouping:
         result = self._process_fragments(fragments)
         assert result == "[S1]In making reservations.[/S1]"
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="trailing whitespace in the fragment text is not stripped before wrapping",
-    )
     def test_two_speakers_simple_alternation(self):
         """Test simple alternation between two speakers."""
         fragments = [
@@ -100,10 +97,6 @@ class TestSpeakerIdGrouping:
             "[S3]Nine[/S3]"
         )
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="_process_fragments runs re.match() on a None speaker_id -> TypeError",
-    )
     def test_none_speaker_id(self):
         """Test handling fragments with None speaker_id."""
         fragments = [

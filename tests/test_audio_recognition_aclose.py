@@ -31,10 +31,13 @@ class TestAudioRecognitionAclose:
         audio_recognition._hooks = MagicMock()
         audio_recognition._closing = asyncio.Event()
         audio_recognition._tasks = set()
-        audio_recognition._stt_atask = None
+        audio_recognition._stt_pipeline = None
+        audio_recognition._stt_consumer_atask = None
         audio_recognition._vad_atask = None
+        audio_recognition._interruption_atask = None
         audio_recognition._commit_user_turn_atask = None
         audio_recognition._end_of_turn_task = None
+        audio_recognition._backchannel_boundary_timer = None
 
         return audio_recognition
 
@@ -99,11 +102,6 @@ class TestAudioRecognitionAclose:
         except asyncio.CancelledError:
             pass
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="aclose() accesses self._stt_pipeline, which _create_audio_recognition() "
-        "does not set -> AttributeError",
-    )
     @pytest.mark.asyncio
     async def test_aclose_handles_precancelled_tasks_gracefully(self):
         """
