@@ -41,7 +41,7 @@ from livekit.agents.voice.avatar import (
 from .log import logger
 
 if TYPE_CHECKING:
-    from bithuman import AsyncBithuman  # type: ignore
+    from bithuman import AsyncBithuman
 
 _logger.remove()
 _logger.add(sys.stdout, level="INFO")

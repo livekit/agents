@@ -904,7 +904,6 @@ class SpeechStream(stt.RecognizeStream):
                 start_time=segment.get("metadata", {}).get("start_time", 0)
                 + self.start_time_offset,
                 end_time=segment.get("metadata", {}).get("end_time", 0) + self.start_time_offset,
-                confidence=1.0,
             )
 
             # Create speech event
