@@ -412,7 +412,7 @@ Unit tests are in the `tests` directory and can be run with:
 # Run a specific test file
 uv run pytest tests/test_tools.py
 
-# Run all unit tests
+# Run all tests
 uv run pytest tests/
 ```
 
