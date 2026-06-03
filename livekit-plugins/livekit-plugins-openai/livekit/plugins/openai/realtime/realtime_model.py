@@ -1249,6 +1249,7 @@ class RealtimeSession(
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         async with self._update_chat_ctx_lock:
             chat_ctx = chat_ctx.copy(
+                exclude_empty_message=True,
                 exclude_handoff=True,
                 exclude_config_update=True,
             )
