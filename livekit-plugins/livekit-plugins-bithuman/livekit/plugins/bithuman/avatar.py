@@ -295,7 +295,7 @@ class AvatarSession(BaseAvatarSession):
         )
         await self._avatar_runner.start()
 
-        agent_session.output.set_audio_sink(audio_buffer, preserve_wrappers=True)
+        agent_session.output.swap_audio_endpoint(audio_buffer)
 
     async def _start_cloud(
         self,
@@ -349,13 +349,12 @@ class AvatarSession(BaseAvatarSession):
         logger.debug("starting avatar session")
         await self._start_cloud_agent(livekit_url, livekit_token, room.name)
 
-        agent_session.output.set_audio_sink(
+        agent_session.output.swap_audio_endpoint(
             DataStreamAudioOutput(
                 room=room,
                 destination_identity=self._avatar_participant_identity,
                 wait_playback_start=False,
             ),
-            preserve_wrappers=True,
         )
 
     async def _start_cloud_agent(

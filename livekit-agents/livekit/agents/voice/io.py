@@ -155,9 +155,7 @@ class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished", "playback_s
         )
 
         # auto-wrap a bare leaf with a _AudioSinkProxy so the leaf can be
-        # hot-swapped later without disturbing wrappers above. wrappers that
-        # cache next_in_chain (e.g. _SyncedAudioOutput) cache the proxy, so
-        # their references stay valid across swaps
+        # hot-swapped later without disturbing wrappers above
         if (
             next_in_chain is not None
             and next_in_chain.next_in_chain is None
@@ -295,9 +293,6 @@ class _AudioSinkProxy(AudioOutput):
     disturbing them. When detached (``next_in_chain`` is None), the proxy acts
     as a no-op sink that still cooperates with the playback-finished protocol
     so upstream wrappers don't hang.
-
-    Only the proxy has a mutable ``next_in_chain`` — regular ``AudioOutput``
-    subclasses store theirs immutably at construction.
     """
 
     def __init__(self, next_in_chain: AudioOutput | None = None) -> None:
@@ -661,25 +656,22 @@ class AgentOutput:
             else:
                 self._audio_sink.on_detached()
 
-    def set_audio_sink(self, sink: AudioOutput | None, *, preserve_wrappers: bool = False) -> None:
-        """Set the audio sink at the bottom of the chain.
+    def swap_audio_endpoint(self, sink: AudioOutput | None) -> None:
+        """Swap the endpoint sink at the bottom of the chain, keeping wrappers attached.
 
-        When ``preserve_wrappers`` is True, walks the chain looking for a
-        :class:`_AudioSinkProxy` and swaps its downstream — leaving wrappers
-        like :class:`TranscriptSynchronizer` and :class:`RecorderAudioOutput`
-        attached. Falls back to ``self.audio = sink`` if no proxy is present
-        (no wrappers, or the chain hasn't been set up yet).
+        Walks the chain looking for a :class:`_AudioSinkProxy` and swaps its
+        downstream — leaving wrappers like :class:`TranscriptSynchronizer` and
+        :class:`RecorderAudioOutput` in place. Falls back to ``self.audio = sink``
+        when no proxy is present (no wrappers, or the chain hasn't been set up yet).
 
-        With the default ``preserve_wrappers=False``, this is exactly
-        equivalent to ``self.audio = sink``.
+        Use ``self.audio = sink`` instead to replace the entire chain.
         """
-        if preserve_wrappers:
-            cur = self._audio_sink
-            while cur is not None:
-                if isinstance(cur, _AudioSinkProxy):
-                    cur.set_next_in_chain(sink)
-                    return
-                cur = cur.next_in_chain
+        cur = self._audio_sink
+        while cur is not None:
+            if isinstance(cur, _AudioSinkProxy):
+                cur.set_next_in_chain(sink)
+                return
+            cur = cur.next_in_chain
         self.audio = sink
 
     @property

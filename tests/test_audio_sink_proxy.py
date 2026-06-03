@@ -110,29 +110,17 @@ def test_auto_wrap_skipped_when_wrapping_a_non_leaf() -> None:
     assert outer.next_in_chain is inner
 
 
-# ---------- set_audio_sink ----------
+# ---------- swap_audio_endpoint ----------
 
 
-def test_set_audio_sink_default_replaces_chain() -> None:
+def test_swap_audio_endpoint_swaps_proxy_inner() -> None:
     leaf_a = FakeAudioOutput()
     leaf_b = FakeAudioOutput()
     output = _make_agent_output()
     wrapper = _PassthroughWrapper(next_in_chain=leaf_a)
     output.audio = wrapper
 
-    output.set_audio_sink(leaf_b)
-
-    assert output.audio is leaf_b
-
-
-def test_set_audio_sink_preserve_wrappers_swaps_proxy_inner() -> None:
-    leaf_a = FakeAudioOutput()
-    leaf_b = FakeAudioOutput()
-    output = _make_agent_output()
-    wrapper = _PassthroughWrapper(next_in_chain=leaf_a)
-    output.audio = wrapper
-
-    output.set_audio_sink(leaf_b, preserve_wrappers=True)
+    output.swap_audio_endpoint(leaf_b)
 
     # wrapper chain intact; only the leaf swapped
     assert output.audio is wrapper
@@ -141,23 +129,23 @@ def test_set_audio_sink_preserve_wrappers_swaps_proxy_inner() -> None:
     assert proxy.next_in_chain is leaf_b
 
 
-def test_set_audio_sink_preserve_wrappers_falls_back_when_no_proxy() -> None:
+def test_swap_audio_endpoint_falls_back_when_no_proxy() -> None:
     leaf = FakeAudioOutput()
     output = _make_agent_output()
     # no wrapper chain yet
 
-    output.set_audio_sink(leaf, preserve_wrappers=True)
+    output.swap_audio_endpoint(leaf)
 
     assert output.audio is leaf
 
 
-def test_set_audio_sink_none_detaches_proxy_inner() -> None:
+def test_swap_audio_endpoint_none_detaches_proxy_inner() -> None:
     leaf = FakeAudioOutput()
     output = _make_agent_output()
     wrapper = _PassthroughWrapper(next_in_chain=leaf)
     output.audio = wrapper
 
-    output.set_audio_sink(None, preserve_wrappers=True)
+    output.swap_audio_endpoint(None)
 
     proxy = wrapper.next_in_chain
     assert isinstance(proxy, _AudioSinkProxy)
