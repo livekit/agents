@@ -13,6 +13,7 @@ deterministically. Covers:
 from __future__ import annotations
 
 import pytest
+
 from livekit import rtc
 from livekit.agents._exceptions import APIConnectionError
 
