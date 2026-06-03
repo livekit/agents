@@ -28,6 +28,8 @@ from livekit.agents.inference.interruption import (
 )
 from livekit.agents.types import APIConnectOptions
 
+pytestmark = pytest.mark.unit
+
 MAX_RETRY = 2
 CONN_OPTIONS = APIConnectOptions(max_retry=MAX_RETRY, retry_interval=0.0, timeout=1.0)
 

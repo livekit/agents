@@ -21,6 +21,8 @@ from livekit.agents.ipc.log_queue import LogQueueHandler, LogQueueListener
 from livekit.agents.utils.aio import duplex_unix
 from livekit.protocol import agent
 
+pytestmark = pytest.mark.unit
+
 
 @dataclass
 class EmptyMessage:

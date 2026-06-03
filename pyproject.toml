@@ -127,6 +127,16 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 addopts = ["--import-mode=importlib", "--ignore=examples"]
 pythonpath = ["."]
+testpaths = ["tests"]
+markers = [
+    "unit: fast tests with no external providers (select with --unit)",
+    "plugin(name): provider integration test for `name` (select with --plugin [name])",
+    "realtime(name): realtime-model test, optionally for provider `name` (--realtime [name])",
+    "stt(name): speech-to-text test, optionally for provider `name` (--stt [name])",
+    "tts(name): text-to-speech test, optionally for provider `name` (--tts [name])",
+    "evals: behavioral evals run against the LiveKit inference gateway (--evals)",
+    "docs: tests for the docs-build tooling under .github/ (select with --docs)",
+]
 
 
 [tool.mypy]

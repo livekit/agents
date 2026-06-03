@@ -10,6 +10,8 @@ from livekit.agents.llm import ChatContext, function_tool
 from livekit.plugins.google.llm import LLM, LLMStream
 from livekit.plugins.google.realtime.realtime_api import RealtimeModel, RealtimeSession
 
+pytestmark = pytest.mark.plugin("google")
+
 
 @pytest.fixture
 def llm_stream():

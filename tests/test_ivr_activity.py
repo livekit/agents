@@ -1,4 +1,8 @@
+import pytest
+
 from livekit.agents.voice.ivr.ivr_activity import TfidfLoopDetector
+
+pytestmark = pytest.mark.unit
 
 
 def _count_loops(transcripts: list[str], detector: TfidfLoopDetector | None = None) -> int:

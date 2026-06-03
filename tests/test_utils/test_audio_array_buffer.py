@@ -6,6 +6,8 @@ import pytest
 from livekit import rtc
 from livekit.agents.utils.audio import AudioArrayBuffer
 
+pytestmark = pytest.mark.unit
+
 
 def _frame(samples: list[int], *, sr: int = 16000, ch: int = 1) -> rtc.AudioFrame:
     data = np.array(samples, dtype=np.int16).tobytes()

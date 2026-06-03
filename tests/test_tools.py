@@ -23,6 +23,8 @@ from livekit.agents.llm.utils import (
     prepare_function_arguments,
 )
 
+pytestmark = pytest.mark.unit
+
 
 class MockOption(str, enum.Enum):
     A = "a"

@@ -10,6 +10,8 @@ import pytest
 
 from livekit.plugins.elevenlabs import tts as elevenlabs_tts
 
+pytestmark = pytest.mark.plugin("elevenlabs")
+
 
 class _FakeWebSocket:
     def __init__(self, messages: list[object]) -> None:
