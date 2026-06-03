@@ -70,7 +70,7 @@ class TTS(tts.TTS):
         speed: float = 1.0,
         language: str = "en",
         output_format: TTSEncoding | str = "pcm",
-        word_timestamps: bool = True,
+        word_timestamps: bool = False,
         base_url: str = SMALLEST_BASE_URL,
         ws_url: str = SMALLEST_WS_URL,
         http_session: aiohttp.ClientSession | None = None,
@@ -94,10 +94,9 @@ class TTS(tts.TTS):
             output_format: Output format for HTTP synthesize() calls ("pcm", "mp3", "wav",
                 "ulaw", "alaw"). WebSocket streaming always returns PCM.
             word_timestamps: Request per-word timing events from the server and emit them
-                as timed transcript entries alongside audio. Enabled by default. Supported
+                as timed transcript entries alongside audio. Disabled by default. Supported
                 on base-queue English + Hindi voices (meher, devansh, kartik, maithili,
-                liam, avery); other voices silently emit no word events so leaving this on
-                is safe regardless of voice.
+                liam, avery); other voices silently emit no word events.
             base_url: Base URL for the Smallest AI HTTP API.
             ws_url: WebSocket URL for low-latency streaming synthesis.
             http_session: An existing aiohttp ClientSession to use.
