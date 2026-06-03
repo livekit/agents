@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, get_origin, get_type_hints
 
@@ -177,6 +178,7 @@ class AsyncToolset(Toolset):
         id: str,
         tools: list[Tool] | None = None,
         on_duplicate_call: DuplicateMode = "confirm",
+        reply_instructions: str | Callable[[list[ChatItem]], str] = REPLY_INSTRUCTIONS,
     ) -> None:
         super().__init__(id=id, tools=tools)
 
@@ -192,6 +194,9 @@ class AsyncToolset(Toolset):
         # speech delivery — shared across all tools in this toolset
         self._pending_updates: list[_PendingUpdate] = []
         self._reply_task: asyncio.Task[None] | None = None
+
+        # instructions to use when delivering a reply from tool updates
+        self._reply_instructions = reply_instructions
 
     async def cancel(self, call_id: str) -> bool:
         task = self._running_tasks.get(call_id)
@@ -348,11 +353,17 @@ class AsyncToolset(Toolset):
             # TODO: use a LLM to verify if another reply is needed?
             return
 
-        pending_call_ids = [
-            item.call_id for item in pending_items if item.type == "function_call_output"
-        ]
+        # format the reply instructions from the pending chat items
+        if callable(self._reply_instructions):
+            instructions = self._reply_instructions(pending_items)
+        else:
+            pending_call_ids = [
+                item.call_id for item in pending_items if item.type == "function_call_output"
+            ]
+            instructions = self._reply_instructions.format(pending_call_ids=pending_call_ids)
+
         session.generate_reply(
-            instructions=REPLY_INSTRUCTIONS.format(pending_call_ids=pending_call_ids),
+            instructions=instructions,
             tool_choice="none",
         )
 
