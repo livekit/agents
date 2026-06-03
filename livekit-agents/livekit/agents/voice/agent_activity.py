@@ -7,8 +7,7 @@ import json
 import time
 from collections.abc import AsyncIterable, Coroutine, Sequence
 from dataclasses import dataclass
-from functools import partial
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any
 
 from opentelemetry import context as otel_context, trace
 
@@ -66,9 +65,11 @@ from .events import (
 from .generation import (
     ToolExecutionOutput,
     _AudioOutput,
+    _ForwardOutput,
     _TextOutput,
     _TTSGenerationData,
     apply_instructions_modality,
+    forward_generation,
     perform_audio_forwarding,
     perform_llm_inference,
     perform_text_forwarding,
@@ -2551,33 +2552,80 @@ class AgentActivity(RecognitionHooks):
         )
         tasks.append(llm_task)
 
-        text_tee = utils.aio.itertools.tee(llm_gen_data.text_ch, 2)
-        tts_text_input, tr_input = text_tee
+        # split the LLM text on FlushSentinel into segments, each spoken independently;
+        # without a FlushSentinel there is a single (continuous) segment
+        @dataclass
+        class _SpeechSegment:
+            text: utils.aio.Chan[str]  # transcript text for this segment
+            tts: _TTSGenerationData | None = None  # audio + timed transcript, when enabled
 
-        tts_task: asyncio.Task[bool] | None = None
-        tts_gen_data: _TTSGenerationData | None = None
+        segment_ch = utils.aio.Chan[_SpeechSegment]()
 
-        async def _start_tts_inference() -> tuple[asyncio.Task[bool], _TTSGenerationData]:
-            await llm_gen_data.started_fut  # make sure tts span starts after llm span
-            tts_task, tts_gen_data = perform_tts_inference(
-                node=self._agent.tts_node,
-                input=tts_text_input,
-                model_settings=model_settings,
-                text_transforms=self._session.options.tts_text_transforms,
-                model=self.tts.model if self.tts else None,
-                provider=self.tts.provider if self.tts else None,
-            )
-            return tts_task, tts_gen_data
+        @utils.log_exceptions(logger=logger)
+        async def _produce_segments() -> None:
+            await llm_gen_data.started_fut  # keep the tts span under the llm span
+            current: _SpeechSegment | None = None
+            tts_text: utils.aio.Chan[str] | None = None
+            prev_tts_task: asyncio.Task[bool] | None = None
 
-        # start preemptive tts inference if enabled
+            async def _start_segment() -> _SpeechSegment:
+                # start this segment's tts; one inference at a time (await the previous),
+                # but the next starts during the previous segment's playout, not after
+                nonlocal tts_text, prev_tts_task
+                tts_data: _TTSGenerationData | None = None
+                tts_text = None
+                if audio_output is not None:
+                    if prev_tts_task is not None:
+                        await prev_tts_task
+                    tts_text = utils.aio.Chan[str]()
+                    prev_tts_task, tts_data = perform_tts_inference(
+                        node=self._agent.tts_node,
+                        input=tts_text,
+                        model_settings=model_settings,
+                        text_transforms=self._session.options.tts_text_transforms,
+                        model=self.tts.model if self.tts else None,
+                        provider=self.tts.provider if self.tts else None,
+                    )
+                    tasks.append(prev_tts_task)
+                seg = _SpeechSegment(text=utils.aio.Chan[str](), tts=tts_data)
+                segment_ch.send_nowait(seg)
+                return seg
+
+            def _end_segment() -> None:
+                nonlocal current, tts_text
+                if current is not None:
+                    current.text.close()
+                if tts_text is not None:
+                    tts_text.close()  # let this segment's TTS inference finish
+                current, tts_text = None, None
+
+            try:
+                async for chunk in llm_gen_data.text_ch:
+                    if isinstance(chunk, FlushSentinel):
+                        _end_segment()
+                        continue
+                    if current is None:
+                        current = await _start_segment()
+                    current.text.send_nowait(chunk)
+                    if tts_text is not None:
+                        tts_text.send_nowait(chunk)
+            finally:
+                _end_segment()
+                segment_ch.close()
+
+        # start synthesis preemptively (before the speech is scheduled) when enabled;
+        # otherwise it starts right after scheduling below
         preemptive_opts = self._session.options.preemptive_generation
+        synthesize_task: asyncio.Task[None] | None = None
         if (
             audio_output is not None
             and preemptive_opts["enabled"]
             and preemptive_opts["preemptive_tts"]
         ):
-            tts_task, tts_gen_data = await _start_tts_inference()
-            tasks.append(tts_task)
+            synthesize_task = asyncio.create_task(
+                _produce_segments(), name="AgentActivity.pipeline_reply.produce_segments"
+            )
+            tasks.append(synthesize_task)
 
         wait_for_scheduled = asyncio.ensure_future(speech_handle._wait_for_scheduled())
         await speech_handle.wait_if_not_interrupted([wait_for_scheduled])
@@ -2593,24 +2641,14 @@ class AgentActivity(RecognitionHooks):
         if speech_handle.interrupted:
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
             await utils.aio.cancel_and_wait(*tasks, wait_for_scheduled)
-            await text_tee.aclose()
             return
 
-        # start tts inference if not already started and audio output is enabled
-        if audio_output is not None and tts_task is None:
-            tts_task, tts_gen_data = await _start_tts_inference()
-            tasks.append(tts_task)
-
-        read_transcript_from_tts = False
-        if (
-            tts_gen_data is not None
-            and self.use_tts_aligned_transcript
-            and (tts := self.tts)
-            and (tts.capabilities.aligned_transcript or not tts.capabilities.streaming)
-            and (timed_texts := await tts_gen_data.timed_texts_fut)
-        ):
-            tr_input = timed_texts
-            read_transcript_from_tts = True
+        # start synthesis now if it wasn't started preemptively
+        if synthesize_task is None:
+            synthesize_task = asyncio.create_task(
+                _produce_segments(), name="AgentActivity.pipeline_reply.produce_segments"
+            )
+            tasks.append(synthesize_task)
 
         self._session._update_agent_state("thinking")
 
@@ -2626,40 +2664,28 @@ class AgentActivity(RecognitionHooks):
         if speech_handle.interrupted:
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
             await utils.aio.cancel_and_wait(*tasks, *authorization_tasks)
-            await text_tee.aclose()
             return
 
         reply_started_at = time.time()
 
-        async def _read_text(
-            llm_output: AsyncIterable[str | FlushSentinel],
-        ) -> AsyncIterable[str]:
-            async for chunk in llm_output:
-                if isinstance(chunk, FlushSentinel):
-                    continue
-                yield chunk
-
-        tr_node = self._agent.transcription_node(_read_text(tr_input), model_settings)
-        tr_node_result = await tr_node if asyncio.iscoroutine(tr_node) else tr_node
-        text_out: _TextOutput | None = None
-        text_forward_task: asyncio.Task | None = None
-        if tr_node_result is not None:
-            text_forward_task, text_out = perform_text_forwarding(
-                text_output=text_output, source=tr_node_result
-            )
-            tasks.append(text_forward_task)
-
         started_speaking_at: float | None = None
         stopped_speaking_at: float | None = None
         started_forwarding_at: float | None = None
+        first_tts_gen_data: _TTSGenerationData | None = None  # first segment's tts, for metrics
 
-        def _on_first_frame(fut: asyncio.Future[float] | asyncio.Future[None]) -> None:
+        def _on_first_frame(
+            fut: asyncio.Future[float] | asyncio.Future[None],
+            audio_out: _AudioOutput | None = None,
+        ) -> None:
             """
             Callback to update the agent state when the first frame is captured:
             1. _AudioOutput.first_frame_fut (float)
             2. _TextOutput.first_text_fut (None)
             """
             nonlocal started_speaking_at, started_forwarding_at
+            # only the first segment's first frame should trigger state transitions
+            if started_speaking_at is not None:
+                return
             try:
                 started_speaking_at = fut.result() or time.time()
                 started_forwarding_at = (
@@ -2675,8 +2701,8 @@ class AgentActivity(RecognitionHooks):
             early_metrics: llm.MetricsReport = {}
             if llm_gen_data.ttft is not None:
                 early_metrics["llm_node_ttft"] = llm_gen_data.ttft
-            if tts_gen_data and tts_gen_data.ttfb is not None:
-                early_metrics["tts_node_ttfb"] = tts_gen_data.ttfb
+            if first_tts_gen_data and first_tts_gen_data.ttfb is not None:
+                early_metrics["tts_node_ttfb"] = first_tts_gen_data.ttfb
             early_metrics["playback_latency"] = started_speaking_at - started_forwarding_at
             if user_metrics and "stopped_speaking_at" in user_metrics:
                 early_metrics["e2e_latency"] = (
@@ -2694,19 +2720,6 @@ class AgentActivity(RecognitionHooks):
                 self._audio_recognition.on_start_of_agent_speech(started_at=started_speaking_at)
             if self.interruption_enabled:
                 self._disable_vad_interruption_soon()
-
-        audio_out: _AudioOutput | None = None
-        if audio_output is not None:
-            assert tts_gen_data is not None
-            # TODO(theomonnom): should the audio be added to the chat_context too?
-            forward_task, audio_out = perform_audio_forwarding(
-                audio_output=audio_output, tts_output=tts_gen_data.audio_ch
-            )
-            tasks.append(forward_task)
-
-            audio_out.first_frame_fut.add_done_callback(_on_first_frame)
-        elif text_out is not None:
-            text_out.first_text_fut.add_done_callback(_on_first_frame)
 
         # messages in RunResult are ordered by the `created_at` field
         def _tool_execution_started_cb(fnc_call: llm.FunctionCall) -> None:
@@ -2730,13 +2743,47 @@ class AgentActivity(RecognitionHooks):
             tool_execution_completed_cb=_tool_execution_completed_cb,
         )
 
-        await speech_handle.wait_if_not_interrupted([*tasks])
+        # use the TTS-aligned timing for the transcript instead of the raw text, when
+        # the TTS supports it (resolved per segment below)
+        use_aligned_transcript = bool(
+            audio_output is not None
+            and self.use_tts_aligned_transcript
+            and (tts := self.tts)
+            and (tts.capabilities.aligned_transcript or not tts.capabilities.streaming)
+        )
 
-        # wait for the end of the playout if the audio is enabled
-        if audio_output is not None:
-            await speech_handle.wait_if_not_interrupted(
-                [asyncio.ensure_future(audio_output.wait_for_playout())]
+        # forward each segment serially: its audio must finish playing before the next
+        # one starts (matches the realtime per-message behavior)
+        segment_outputs: list[_ForwardOutput] = []
+        read_transcript_from_tts = False
+        async for segment in segment_ch:
+            if first_tts_gen_data is None:
+                first_tts_gen_data = segment.tts
+
+            transcript: AsyncIterable[str] = segment.text
+            if (
+                segment.tts is not None
+                and use_aligned_transcript
+                and (timed_texts := await segment.tts.timed_texts_fut)
+            ):
+                transcript = timed_texts
+                read_transcript_from_tts = True
+
+            tr_node = self._agent.transcription_node(transcript, model_settings)
+            text_source = await tr_node if asyncio.iscoroutine(tr_node) else tr_node
+            audio_source = segment.tts.audio_ch if segment.tts else None
+
+            out = await forward_generation(
+                speech_handle=speech_handle,
+                audio_output=audio_output,
+                text_output=text_output,
+                audio_source=audio_source,
+                text_source=text_source,
+                on_first_frame=_on_first_frame,
             )
+            segment_outputs.append(out)
+            if speech_handle.interrupted:
+                break
 
         stopped_speaking_at = time.time()
         assistant_metrics: llm.MetricsReport = {}
@@ -2755,8 +2802,8 @@ class AgentActivity(RecognitionHooks):
         if llm_gen_data.ttft is not None:
             assistant_metrics["llm_node_ttft"] = llm_gen_data.ttft
 
-        if tts_gen_data and tts_gen_data.ttfb is not None:
-            assistant_metrics["tts_node_ttfb"] = tts_gen_data.ttfb
+        if first_tts_gen_data and first_tts_gen_data.ttfb is not None:
+            assistant_metrics["tts_node_ttfb"] = first_tts_gen_data.ttfb
 
         if stopped_speaking_at and started_speaking_at:
             assistant_metrics["started_speaking_at"] = started_speaking_at
@@ -2777,27 +2824,14 @@ class AgentActivity(RecognitionHooks):
             self._agent._chat_ctx.insert(_previous_tools_messages)
             self._session._tool_items_added(_previous_tools_messages)
 
-        forwarded_text = text_out.text if text_out else ""
+        forwarded_text = "".join(out.forwarded_text for out in segment_outputs)
         if speech_handle.interrupted:
+            # forward_generation already cleared the buffer and waited for playout
             await utils.aio.cancel_and_wait(*tasks)
-
-            # if the audio playout was enabled, clear the buffer
-            if audio_output is not None:
-                audio_output.clear_buffer()
-
-                playback_ev = await audio_output.wait_for_playout()
-                if (
-                    audio_out is not None
-                    and audio_out.first_frame_fut.done()
-                    and not audio_out.first_frame_fut.cancelled()
-                ):
-                    # playback_ev is valid only if the first frame was already played
-                    if playback_ev.synchronized_transcript is not None:
-                        forwarded_text = playback_ev.synchronized_transcript
-                else:
-                    forwarded_text = ""
-
-        elif read_transcript_from_tts and text_out and not text_out.text:
+        elif read_transcript_from_tts and any(
+            out.played != "skipped" and out.text_out is not None and not out.text_out.text
+            for out in segment_outputs
+        ):
             logger.warning(
                 "`use_tts_aligned_transcript` is enabled but no agent transcript was returned from tts"
             )
@@ -2831,10 +2865,9 @@ class AgentActivity(RecognitionHooks):
             if self.interruption_enabled:
                 self._restore_interruption_by_audio_activity()
 
-        if audio_out is not None and not audio_out.first_frame_fut.done():
-            audio_out.first_frame_fut.cancel()
-
-        await text_tee.aclose()
+        for out in segment_outputs:
+            if out.audio_out is not None and not out.audio_out.first_frame_fut.done():
+                out.audio_out.first_frame_fut.cancel()
 
         speech_handle._mark_generation_done()  # mark the playout done before waiting for the tool execution  # noqa: E501
 
@@ -3176,24 +3209,14 @@ class AgentActivity(RecognitionHooks):
         @dataclass
         class _MsgOutput:
             msg: MessageGeneration
-            text_out: _TextOutput | None = None
-            audio_out: _AudioOutput | None = None
-            played: Literal["full", "partial", "skipped"] = "skipped"
-            playback_position: float = 0.0
-            synchronized_transcript: str | None = None
+            out: _ForwardOutput
 
         message_outputs: list[_MsgOutput] = []
 
         async def _process_one_message(msg: MessageGeneration) -> _MsgOutput:
-            """Forward audio/text for one message, then wait for its playout.
-
-            Returns when the message has fully played, been interrupted, or
-            never started (e.g. interrupted before the first frame).
-            """
+            """Resolve a message's audio/text sources, then forward and wait for playout."""
             nonlocal read_transcript_from_tts
             assert isinstance(self.llm, llm.RealtimeModel)
-
-            entry = _MsgOutput(msg=msg)
 
             msg_modalities = await msg.modalities
             tts_text_input: AsyncIterable[str] | None = None
@@ -3208,115 +3231,61 @@ class AgentActivity(RecognitionHooks):
             else:
                 tr_text_input = msg.text_stream.__aiter__()
 
-            forward_tasks: list[asyncio.Task[Any]] = []
-            audio_out: _AudioOutput | None = None
-            try:
-                if audio_output is not None:
-                    realtime_audio_result: AsyncIterable[rtc.AudioFrame] | None = None
-                    if tts_text_input is not None:
-                        tts_task, tts_gen_data = perform_tts_inference(
-                            node=self._agent.tts_node,
-                            input=tts_text_input,
-                            model_settings=model_settings,
-                            text_transforms=self._session.options.tts_text_transforms,
-                            model=self.tts.model if self.tts else None,
-                            provider=self.tts.provider if self.tts else None,
-                        )
-
-                        if (
-                            self.use_tts_aligned_transcript
-                            and (tts := self.tts)
-                            and (
-                                tts.capabilities.aligned_transcript
-                                or not tts.capabilities.streaming
-                            )
-                            and (timed_texts := await tts_gen_data.timed_texts_fut)
-                        ):
-                            tr_text_input = timed_texts
-                            read_transcript_from_tts = True
-
-                        tasks.append(tts_task)
-                        realtime_audio_result = tts_gen_data.audio_ch
-                    elif "audio" in msg_modalities:
-                        realtime_audio = self._agent.realtime_audio_output_node(
-                            msg.audio_stream, model_settings
-                        )
-                        realtime_audio_result = (
-                            await realtime_audio
-                            if asyncio.iscoroutine(realtime_audio)
-                            else realtime_audio
-                        )
-                    elif self.llm.capabilities.audio_output:
-                        logger.error(
-                            "Text message received from Realtime API with audio modality. "
-                            "This usually happens when text chat context is synced to the API. "
-                            "Try to add a TTS model as fallback or use text modality with TTS instead."  # noqa: E501
-                        )
-                    else:
-                        logger.warning(
-                            "audio output is enabled but neither tts nor realtime audio is available",  # noqa: E501
-                        )
-
-                    if realtime_audio_result is not None:
-                        forward_task, audio_out = perform_audio_forwarding(
-                            audio_output=audio_output,
-                            tts_output=realtime_audio_result,
-                        )
-                        forward_tasks.append(forward_task)
-                        audio_out.first_frame_fut.add_done_callback(
-                            partial(_on_first_frame, audio_out=audio_out)
-                        )
-                        entry.audio_out = audio_out
-
-                tr_node = self._agent.transcription_node(tr_text_input, model_settings)
-                tr_node_result = await tr_node if asyncio.iscoroutine(tr_node) else tr_node
-                text_out: _TextOutput | None = None
-                if tr_node_result is not None:
-                    text_task, text_out = perform_text_forwarding(
-                        text_output=text_output,
-                        source=tr_node_result,
+            audio_source: AsyncIterable[rtc.AudioFrame] | None = None
+            if audio_output is not None:
+                if tts_text_input is not None:
+                    tts_task, tts_gen_data = perform_tts_inference(
+                        node=self._agent.tts_node,
+                        input=tts_text_input,
+                        model_settings=model_settings,
+                        text_transforms=self._session.options.tts_text_transforms,
+                        model=self.tts.model if self.tts else None,
+                        provider=self.tts.provider if self.tts else None,
                     )
-                    forward_tasks.append(text_task)
-                    entry.text_out = text_out
 
-                if audio_out is None and text_out is not None:
-                    text_out.first_text_fut.add_done_callback(_on_first_frame)
+                    if (
+                        self.use_tts_aligned_transcript
+                        and (tts := self.tts)
+                        and (tts.capabilities.aligned_transcript or not tts.capabilities.streaming)
+                        and (timed_texts := await tts_gen_data.timed_texts_fut)
+                    ):
+                        tr_text_input = timed_texts
+                        read_transcript_from_tts = True
 
-                playout_fut: asyncio.Future[Any] | None = None
-                await speech_handle.wait_if_not_interrupted(list(forward_tasks))
-                if not speech_handle.interrupted and audio_output is not None:
-                    playout_fut = asyncio.ensure_future(audio_output.wait_for_playout())
-                    await speech_handle.wait_if_not_interrupted([playout_fut])
+                    tasks.append(tts_task)
+                    audio_source = tts_gen_data.audio_ch
+                elif "audio" in msg_modalities:
+                    realtime_audio = self._agent.realtime_audio_output_node(
+                        msg.audio_stream, model_settings
+                    )
+                    audio_source = (
+                        await realtime_audio
+                        if asyncio.iscoroutine(realtime_audio)
+                        else realtime_audio
+                    )
+                elif self.llm.capabilities.audio_output:
+                    logger.error(
+                        "Text message received from Realtime API with audio modality. "
+                        "This usually happens when text chat context is synced to the API. "
+                        "Try to add a TTS model as fallback or use text modality with TTS instead."  # noqa: E501
+                    )
+                else:
+                    logger.warning(
+                        "audio output is enabled but neither tts nor realtime audio is available",
+                    )
 
-                if speech_handle.interrupted:
-                    await utils.aio.cancel_and_wait(*forward_tasks)
-                    if audio_output is not None:
-                        audio_output.clear_buffer()
-                        playback_ev = await audio_output.wait_for_playout()
-                        if (
-                            audio_out is not None
-                            and audio_out.first_frame_fut.done()
-                            and not audio_out.first_frame_fut.cancelled()
-                        ):
-                            entry.played = "partial"
-                            entry.playback_position = playback_ev.playback_position
-                            entry.synchronized_transcript = playback_ev.synchronized_transcript
-                        # else: audio never reached the speakers, stays "skipped"
-                    elif text_out is not None and text_out.text:
-                        entry.played = "partial"
-                    return entry
+            tr_node = self._agent.transcription_node(tr_text_input, model_settings)
+            text_source = await tr_node if asyncio.iscoroutine(tr_node) else tr_node
 
-                if audio_output is not None:
-                    assert playout_fut is not None
-                    playback_ev = playout_fut.result()
-                    entry.played = "full"
-                    entry.playback_position = playback_ev.playback_position
-                    entry.synchronized_transcript = playback_ev.synchronized_transcript
-                elif text_out is not None and text_out.text:
-                    entry.played = "full"
-                return entry
-            finally:
-                await utils.aio.cancel_and_wait(*forward_tasks)
+            out = await forward_generation(
+                speech_handle=speech_handle,
+                audio_output=audio_output,
+                text_output=text_output,
+                audio_source=audio_source,
+                text_source=text_source,
+                on_first_frame=_on_first_frame,
+            )
+            return _MsgOutput(msg=msg, out=out)
 
         @utils.log_exceptions(logger=logger)
         async def _process_messages() -> None:
@@ -3327,7 +3296,7 @@ class AgentActivity(RecognitionHooks):
                     break
                 entry = await _process_one_message(msg)
                 message_outputs.append(entry)
-                if entry.played == "partial":
+                if entry.out.played == "partial":
                     break
 
         process_msg_task = asyncio.create_task(
@@ -3425,7 +3394,7 @@ class AgentActivity(RecognitionHooks):
             not speech_handle.interrupted
             and read_transcript_from_tts
             and any(
-                e.played != "skipped" and e.text_out is not None and not e.text_out.text
+                e.out.played != "skipped" and e.out.text_out is not None and not e.out.text_out.text
                 for e in message_outputs
             )
         ):
@@ -3437,21 +3406,19 @@ class AgentActivity(RecognitionHooks):
         trace_text_parts: list[str] = []
         any_skipped = False
         for entry in message_outputs:
-            if entry.played == "skipped":
+            if entry.out.played == "skipped":
                 any_skipped = True
                 continue
 
-            msg_interrupted = entry.played == "partial"
-            forwarded_text = entry.text_out.text if entry.text_out else ""
-            if msg_interrupted and entry.synchronized_transcript is not None:
-                forwarded_text = entry.synchronized_transcript
+            msg_interrupted = entry.out.played == "partial"
+            forwarded_text = entry.out.forwarded_text
 
             if msg_interrupted and self.llm.capabilities.message_truncation:
                 msg_modalities = await entry.msg.modalities
                 self._rt_session.truncate(
                     message_id=entry.msg.message_id,
                     modalities=msg_modalities,
-                    audio_end_ms=int(entry.playback_position * 1000),
+                    audio_end_ms=int(entry.out.playback_position * 1000),
                     audio_transcript=forwarded_text,
                 )
 
@@ -3484,8 +3451,8 @@ class AgentActivity(RecognitionHooks):
                 )
 
         for entry in message_outputs:
-            if entry.audio_out is not None and not entry.audio_out.first_frame_fut.done():
-                entry.audio_out.first_frame_fut.cancel()
+            if entry.out.audio_out is not None and not entry.out.audio_out.first_frame_fut.done():
+                entry.out.audio_out.first_frame_fut.cancel()
 
         for tee in tees:
             await tee.aclose()
