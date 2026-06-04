@@ -334,6 +334,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
         self._worker_token = os.environ.get("LIVEKIT_WORKER_TOKEN") or ""  # hosted agents
         self._deployment = os.environ.get("LIVEKIT_AGENT_DEPLOYMENT") or ""  # hosted agents
+        assert self._worker_token, "missing worker token in this env"
 
         self._host = host
         self._port = port
