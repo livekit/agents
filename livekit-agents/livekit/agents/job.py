@@ -508,6 +508,7 @@ class JobContext:
         encryption: rtc.E2EEOptions | None = None,
         auto_subscribe: AutoSubscribe = AutoSubscribe.SUBSCRIBE_ALL,
         rtc_config: rtc.RtcConfiguration | None = None,
+        single_peer_connection: bool | None = None,
         # deprecated
         e2ee: rtc.E2EEOptions | None = None,
     ) -> None:
@@ -517,6 +518,7 @@ class JobContext:
             encryption: End-to-end encryption options. If provided, the Agent will utilize end-to-end encryption. Note: clients will also need to handle E2EE.
             auto_subscribe: Whether to automatically subscribe to tracks. Default is AutoSubscribe.SUBSCRIBE_ALL.
             rtc_config: Custom RTC configuration to use when connecting to the room.
+            single_peer_connection: Use a single peer connection for both publish and subscribe. When None, uses the default (False).
         """  # noqa: E501
         async with self._lock:
             if self._connected:
@@ -527,6 +529,7 @@ class JobContext:
                 encryption=encryption,
                 auto_subscribe=auto_subscribe == AutoSubscribe.SUBSCRIBE_ALL,
                 rtc_config=rtc_config,
+                single_peer_connection=single_peer_connection,
             )
 
             await self._room.connect(self._info.url, self._info.token, options=room_options)
