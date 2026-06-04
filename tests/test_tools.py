@@ -1457,14 +1457,15 @@ class TestCancelAll:
 
         executor = _ToolExecutor()
         t = _register_fake(executor, "a", "tool_x", allow_cancellation=False)
-        # cancel_task reads from the module-level registry, not the executor's
-        _RunningTasks[(None, "a")] = executor._running_tasks["a"]
+        # cancel_task reads from the module-level registry, keyed by session
+        run_ctx = executor._running_tasks["a"].ctx
+        _RunningTasks[run_ctx.session] = executor._running_tasks
         try:
             with pytest.raises(ToolError, match="not cancellable"):
-                await cancel_task("a")
+                await cancel_task(run_ctx, "a")
             assert not t.cancelled()
         finally:
-            _RunningTasks.pop((None, "a"), None)
+            _RunningTasks.pop(run_ctx.session, None)
             await _cleanup_fakes(t)
 
 
