@@ -27,6 +27,13 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ inputs.ref || github.ref }}
+          # Fetch Git-LFS assets (e.g. examples/drive-thru/bg_noise.mp3) so the
+          # real binaries — not pointer files — get uploaded as the build context
+          # and copied into the image via `COPY . .`. This checkout authenticates
+          # with GITHUB_TOKEN, so its LFS fetch is allowed (unlike pip's anonymous
+          # git clone). Without this the agent crashes at runtime decoding a
+          # 131-byte pointer as audio.
+          lfs: true
 
       - name: Install LiveKit CLI
         run: |
