@@ -254,9 +254,7 @@ class ServerOptions:
 
     By default it uses ``HTTP_PROXY`` or ``HTTPS_PROXY`` from environment
     """
-    multiprocessing_context: Literal["spawn", "forkserver"] = (
-        "spawn" if not sys.platform.startswith("linux") else "forkserver"
-    )
+    multiprocessing_context: Literal["spawn", "forkserver", "fork"] = "fork"
     """The multiprocessing context to use.
 
     By default it uses "spawn" on all platforms, but "forkserver" on Linux.
@@ -318,9 +316,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         host: str = "",  # default to all interfaces
         port: int | ServerEnvOption[int] = _default_port,
         http_proxy: NotGivenOr[str | None] = NOT_GIVEN,
-        multiprocessing_context: Literal["spawn", "forkserver"] = (
-            "spawn" if not sys.platform.startswith("linux") else "forkserver"
-        ),
+        multiprocessing_context: Literal["spawn", "forkserver", "fork"] = "fork",
         setup_fnc: Callable[[JobProcess], Any] | None = None,
         load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = None,
         prometheus_port: int | None = None,

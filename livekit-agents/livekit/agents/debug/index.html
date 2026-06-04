@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LiveKit Agents · memray captures</title>
+    <style>
+      :root { color-scheme: dark; }
+      body {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        background: #0d1117; color: #e6edf3; margin: 0; padding: 2rem;
+      }
+      h1 { font-size: 1.1rem; font-weight: 600; margin: 0 0 0.25rem; }
+      p.sub { color: #8b949e; margin: 0 0 1.5rem; font-size: 0.85rem; }
+      table { border-collapse: collapse; width: 100%; max-width: 980px; }
+      th, td {
+        text-align: left; padding: 0.5rem 0.75rem;
+        border-bottom: 1px solid #21262d; font-size: 0.85rem;
+      }
+      th { color: #8b949e; font-weight: 500; }
+      tr.group td {
+        background: #161b22; color: #8b949e; font-size: 0.8rem;
+        padding-top: 0.9rem; padding-bottom: 0.4rem;
+        border-top: 1px solid #21262d; border-bottom: 1px solid #21262d;
+      }
+      a { color: #58a6ff; text-decoration: none; }
+      a:hover { text-decoration: underline; }
+      code { color: #8b949e; }
+      em { color: #6e7681; font-style: normal; }
+      .hint {
+        margin-top: 1.5rem; max-width: 980px; color: #8b949e;
+        font-size: 0.8rem; line-height: 1.5;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>memray captures</h1>
+    <p class="sub">captures from one or more <code>memray run --follow-fork</code> sessions, grouped by worker</p>
+    <table>
+      <thead>
+        <tr><th>process</th><th>size</th><th>captured</th><th>file</th></tr>
+      </thead>
+      <tbody>
+        <!--CAPTURES-->
+      </tbody>
+    </table>
+    <p class="hint">
+      Each group is one worker invocation; rows underneath are its forked child processes
+      (jobs and the inference process). Click into any flamegraph and switch to the
+      <strong>peak</strong> view — for a flat, non-growing process that peak is essentially
+      the whole resident footprint. Tall native frames (torch, onnxruntime, model weights)
+      are usually the suspects.
+    </p>
+  </body>
+</html>
