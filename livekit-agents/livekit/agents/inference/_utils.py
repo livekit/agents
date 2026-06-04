@@ -6,6 +6,7 @@ import platform
 
 from livekit import api
 
+from ..log import logger
 from ..version import __version__
 
 DEFAULT_INFERENCE_URL = "https://agent-gateway.livekit.cloud/v1"
@@ -58,6 +59,9 @@ def get_inference_headers() -> dict[str, str]:
             headers[HEADER_ROOM_ID] = room_sid
         if isinstance(job_id := ctx.job.id, str) and job_id:
             headers[HEADER_JOB_ID] = job_id
+        # for hosted agents where job context is always present
+        if worker_token := os.getenv("LIVEKIT_WORKER_TOKEN"):
+            headers[HEADER_WORKER_TOKEN] = worker_token
         # ctx.agent resolves to room.local_participant, which raises until the room
         # is connected (STT/TTS may open their websockets before ctx.connect()).
         # isconnected() is the codebase-standard readiness guard (see
@@ -65,10 +69,8 @@ def get_inference_headers() -> dict[str, str]:
         # cleared, so the access below won't raise once isconnected() is True.
         if ctx.room.isconnected() and isinstance(agent_sid := ctx.agent.sid, str) and agent_sid:
             headers[HEADER_AGENT_ID] = agent_sid
-        # for hosted agents where job context is always present
-        if worker_token := os.getenv("LIVEKIT_WORKER_TOKEN"):
-            headers[HEADER_WORKER_TOKEN] = worker_token
-    except RuntimeError:
+    except RuntimeError as e:
+        logger.error(f"hitting error when reading envs: {e}")
         pass
     return headers
 
