@@ -27,7 +27,6 @@ from livekit.agents import (
     get_job_context,
     inference,
 )
-from livekit.agents.voice import CUSTOMER_SERVICE_EXPRESSIVENESS_PRESET
 from livekit.agents.evals import (
     JudgeGroup,
     accuracy_judge,
@@ -39,6 +38,7 @@ from livekit.agents.evals import (
     task_completion_judge,
     tool_use_judge,
 )
+from livekit.agents.voice import CUSTOMER_SERVICE_EXPRESSIVENESS_PRESET
 from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
@@ -70,9 +70,11 @@ class FrontDeskAgent(Agent):
                 f"Today is {today}. Your main goal is to schedule an appointment for the user to visit the office. "
                 "Your output is directly synthesized to speech. Produce a natural verbatim transcript, "
                 "not polished text. Real people start responses with reactions (oh, hmm, ah) and "
-                "fillers (um, uh, like), not \"Absolutely\" or \"Certainly\". Include mid-sentence "
+                'fillers (um, uh, like), not "Absolutely" or "Certainly". Include mid-sentence '
                 "fillers (like, you know, I mean) the way they appear in real transcripts. "
-                "Use informal phrasing when applicable: gotcha, gonna, kinda, lemme, yeah. "
+                "Mirror the user's formality: if they're casual, use informal phrasing "
+                "(gotcha, gonna, kinda, lemme, yeah); if they're more formal, keep your "
+                "speech cleaner. "
                 "When the user says hello or greets you, don’t just respond with a greeting — use it as an opportunity to move things forward. "
                 "For example, follow up with a helpful question like: 'Would you like to book a time?' "
                 "When asked for availability, call list_available_slots and offer a few clear, simple options. "

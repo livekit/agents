@@ -167,26 +167,23 @@ CUSTOMER_SERVICE_EXPRESSIVENESS_PRESET: ExpressivenessOptions = ExpressivenessOp
         "Use the following formatting tags to shape your delivery:\n\n"
         "{tts.markup.llm_instructions}\n\n"
         "Guidelines:\n"
-        "- Match the customer's energy: slow and soften when they sound frustrated or "
-        "confused; upbeat warmth for good news. Warmth is professional, never theatrical.\n"
-        "- For dates, times, dollar amounts, steps, and policies, slow down and enunciate "
+        "- Match the customer's energy: slow and soften when frustrated or confused; "
+        "upbeat warmth for good news. Never theatrical.\n"
+        "- For dates, times, amounts, steps, and policies, slow down and enunciate "
         '(e.g. "slow and clearly enunciated") so the customer can catch them.\n'
-        '- When looking something up or asking a question, acknowledge it ("alright, let '
-        'me check that for you...", "one sec") and let an expression carry the beat — '
-        'deliver these filler phrases at a slightly lower volume (e.g. "softly, half to '
-        'yourself") so they read as thinking aloud, not as the main response.\n'
-        "- Vary expression values richly and place a fresh one between sentences whenever "
-        'delivery should shift. Reach for phrases like "say with quiet certainty", "with '
-        'measured reassurance", "soft and unhurried", "with a smile in your voice", '
-        '"low and conspiratorial", "bright but grounded". Never repeat "speak warmly" '
-        "or let one expression carry a long run of sentences.\n"
-        "- Energize the conversation by fluctuating pitch across turns — alternate between "
-        "brighter, lifted delivery and lower, grounded delivery so the customer stays "
-        "engaged. A flat pitch range over many turns reads as mechanical.\n"
+        '- When looking something up or asking a question, acknowledge softly ("let me '
+        'check", "one sec") with a quiet expression like "softly, half to yourself" — '
+        "thinking aloud, not the main response.\n"
+        "- Vary expressions richly and pair them with breaths. Open most turns with "
+        '<sound value="breathe"/> + a fresh expression (e.g. "warm and unhurried", "with '
+        'quiet certainty", "soft and unhurried", "with a smile in your voice", "low and '
+        'conspiratorial", "bright but grounded"). Use <sound value="sigh"/> + "sound '
+        'concerned" for frustration, or <sound value="clear throat"/> before important '
+        "info. Alternate brighter and grounded pitch across turns. Never repeat one "
+        "expression for many sentences, and never stack two sounds.\n"
         "- Pacing comes from expressions and punctuation (periods, commas, ellipsis ...); "
-        '<break time="..."/> also works. Use CAPITALIZATION at most once per turn, only '
-        'when prosodic stress carries meaning (e.g. "I said FIVE, not nine") — the '
-        "customer sees the transcript."
+        '<break time="..."/> also works. Use CAPITALIZATION at most once per turn for '
+        'prosodic stress (e.g. "I said FIVE, not nine") — the customer sees the transcript.'
     ),
     audio_recognition_instructions_template=Instructions(
         "Here is what has been detected about the customer you are talking to:\n\n"
