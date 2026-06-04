@@ -288,7 +288,7 @@ class AdaptiveInterruptionDetector(
             audio_prefix_duration (float, optional): The audio prefix duration, in seconds, for the interruption detection, defaults to 0.5s.
             detection_interval (float, optional): The interval between detections, in seconds, for the interruption detection, defaults to 0.1s.
             inference_timeout (float, optional): The timeout for the interruption detection, defaults to 1 second.
-            base_url (str, optional): The base URL for the interruption detection, defaults to the shared LIVEKIT_REMOTE_EOT_URL environment variable.
+            base_url (str, optional): The base URL for the interruption detection, defaults to the shared LIVEKIT_INFERENCE_URL environment variable.
             api_key (str, optional): The API key for the interruption detection, defaults to the LIVEKIT_INFERENCE_API_KEY environment variable.
             api_secret (str, optional): The API secret for the interruption detection, defaults to the LIVEKIT_INFERENCE_API_SECRET environment variable.
             http_session (aiohttp.ClientSession, optional): The HTTP session to use for the interruption detection.
@@ -298,7 +298,7 @@ class AdaptiveInterruptionDetector(
             raise ValueError("max_audio_duration must be less than or equal to 3.0 seconds")
 
         lk_base_url = (
-            base_url if base_url else os.getenv("LIVEKIT_INFERNCE_URL", get_default_inference_url())
+            base_url if base_url else os.getenv("LIVEKIT_INFERENCE_URL", get_default_inference_url())
         )
         # Adaptive interruption is inference-gateway-only and always connects over WebSocket,
         # so LiveKit credentials are always required.
@@ -995,10 +995,8 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
         base_url = self._opts.base_url
         if base_url.startswith(("http://", "https://")):
             base_url = base_url.replace("http", "ws", 1)
-        inference_headers = get_inference_headers()
-        logger.info(f"header fields: {','.join(inference_headers)}")
         headers = {
-            **inference_headers,
+            **get_inference_headers(),
             "Authorization": f"Bearer {create_access_token(self._opts.api_key, self._opts.api_secret)}",
         }
         try:

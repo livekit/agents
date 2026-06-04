@@ -6,7 +6,6 @@ import platform
 
 from livekit import api
 
-from ..log import logger
 from ..version import __version__
 
 DEFAULT_INFERENCE_URL = "https://agent-gateway.livekit.cloud/v1"
@@ -69,8 +68,7 @@ def get_inference_headers() -> dict[str, str]:
         # cleared, so the access below won't raise once isconnected() is True.
         if ctx.room.isconnected() and isinstance(agent_sid := ctx.agent.sid, str) and agent_sid:
             headers[HEADER_AGENT_ID] = agent_sid
-    except RuntimeError as e:
-        logger.error(f"hitting error when reading envs: {e}")
+    except RuntimeError:
         pass
     return headers
 

@@ -334,7 +334,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
         self._worker_token = os.environ.get("LIVEKIT_WORKER_TOKEN") or ""  # hosted agents
         self._deployment = os.environ.get("LIVEKIT_AGENT_DEPLOYMENT") or ""  # hosted agents
-        assert self._worker_token, "missing worker token in this env"
 
         self._host = host
         self._port = port
@@ -1069,19 +1068,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     )
                 )
                 req.register.agent_name = self._agent_name
-                # DEBUG(1.5.16 dispatch regression): #5920 started sending `deployment`
-                # in registration. On hosted agents this can change server-side dispatch
-                # routing. Log the value being sent, and skip it to reproduce 1.5.15 wire
-                # behavior. If dispatches resume with this commented out, `deployment` is
-                # the cause and the logged value shows the mismatch.
-                logger.warning(
-                    "registering worker (dispatch debug)",
-                    extra={
-                        "agent_name": self._agent_name,
-                        "deployment": self._deployment,
-                    },
-                )
-                # req.register.deployment = self._deployment
+                req.register.deployment = self._deployment
                 req.register.version = __version__
                 await ws.send_bytes(req.SerializeToString())
 
