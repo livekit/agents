@@ -9,6 +9,8 @@ import pytest
 from livekit.agents.voice.events import AgentStateChangedEvent, UserStateChangedEvent
 from livekit.agents.voice.filler_scheduler import _FillerScheduler
 
+pytestmark = pytest.mark.unit
+
 
 class _FakeSpeechHandle:
     def __init__(self) -> None:
