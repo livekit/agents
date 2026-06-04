@@ -2756,7 +2756,21 @@ class AgentActivity(RecognitionHooks):
         # one starts (matches the realtime per-message behavior)
         segment_outputs: list[_ForwardOutput] = []
         read_transcript_from_tts = False
-        async for segment in segment_ch:
+
+        async def _next_segment() -> _SpeechSegment | None:
+            # wake promptly on interruption so a slow LLM (no segment produced yet)
+            # doesn't delay teardown
+            recv = asyncio.ensure_future(segment_ch.recv())
+            await speech_handle.wait_if_not_interrupted([recv])
+            if speech_handle.interrupted:
+                await utils.aio.cancel_and_wait(recv)
+                return None
+            try:
+                return recv.result()
+            except utils.aio.ChanClosed:
+                return None
+
+        while (segment := await _next_segment()) is not None:
             if first_tts_gen_data is None:
                 first_tts_gen_data = segment.tts
 
