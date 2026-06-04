@@ -72,10 +72,7 @@ class TravelAgent(Agent):
         self._user_email: str | None = None
 
     async def on_enter(self):
-        # self.session.generate_reply(instructions="Greet the user and introduce yourself.")
-        self.session.generate_reply(
-            user_input="I want to book a flight from New York to Beijing on June 15th."
-        )
+        self.session.generate_reply(instructions="Greet the user and introduce yourself.")
 
     @llm.function_tool(flags=llm.ToolFlag.CANCELLABLE, on_duplicate="confirm")
     async def book_flight(self, ctx: RunContext, origin: str, destination: str, date: str) -> str:
@@ -218,7 +215,8 @@ server = AgentServer()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
         stt=inference.STT("deepgram/nova-3"),
-        llm=inference.LLM("openai/gpt-5.3-chat-latest"),
+        # llm=inference.LLM("openai/gpt-5.3-chat-latest"),
+        llm=inference.LLM("google/gemini-3.1-flash-lite"),
         tts=inference.TTS("cartesia/sonic-3", voice="e07c00bc-4134-4eae-9ea4-1a55fb45746b"),
         # llm=google.realtime.RealtimeModel(),
         vad=silero.VAD.load(),

@@ -18,6 +18,7 @@ from ..llm.tool_context import (
     StopResponse,
     Tool,
     ToolError,
+    ToolFlag,
     Toolset,
     function_tool,
 )
@@ -38,12 +39,12 @@ The task is still running, so DON'T make up or give information not included in 
 
 DUPLICATE_REJECT = """Same tool `{function_name}` is already running:
 {fnc_calls_text}
-If you want to cancel the existing one, call `cancel_task` with call_id."""
+If you want to cancel the existing one, call `lk_agents_cancel_task` with call_id."""
 
 DUPLICATE_CONFIRM = """Same tool `{function_name}` is already running:
 {fnc_calls_text}
 Re-call with confirm duplicate True to run a duplicate if needed,
-or if you want to cancel the existing one, call `cancel_task` with call_id."""
+or if you want to cancel the existing one, call `lk_agents_cancel_task` with call_id."""
 
 # used when the pending update is the most recent item in chat_ctx — the agent
 # can't have already talked about it.
@@ -53,11 +54,10 @@ Summarize the results naturally. Do NOT repeat information you have already told
 # used when newer items have been appended after the pending update — the agent
 # may have already verbalized the result in its most recent turn.
 REPLY_INSTRUCTIONS_MAYBE_COVERED = """New results arrived from background tool calls (call_ids: {call_ids}).
-Review your most recent assistant messages and check what you have already conveyed:
-- If they already cover all of these results, return an empty response (no text at all).
-- If they cover only part of the results, summarize the remaining parts with a natural transition.
-- Otherwise, summarize the results with a natural transition.
-Do NOT repeat information you have already told the user."""
+You may have already mentioned them in your most recent replies.
+If you already told the user everything in these results, reply with an empty response (no text at all).
+Otherwise, summarize only what you have not said yet, with a natural transition.
+Never repeat information you have already told the user."""
 
 
 class UpdatePromptArgs(TypedDict):
@@ -156,7 +156,7 @@ _RunningTasks: weakref.WeakKeyDictionary[AgentSession, dict[str, _RunningTask]] 
 )
 
 
-@function_tool
+@function_tool(name="lk_agents_get_running_tasks")
 async def get_running_tasks(ctx: RunContext) -> list[dict]:
     """Get the list of running tool calls that are cancellable."""
     return [
@@ -166,7 +166,7 @@ async def get_running_tasks(ctx: RunContext) -> list[dict]:
     ]
 
 
-@function_tool
+@function_tool(name="lk_agents_cancel_task")
 async def cancel_task(ctx: RunContext, call_id: str) -> str:
     """Cancel a running tool call by call_id."""
     task = _RunningTasks.get(ctx.session, {}).get(call_id)
@@ -182,7 +182,7 @@ def has_cancellable_tool(tools: Sequence[Tool | Toolset]) -> bool:
     """Return True if any tool (or nested toolset tool) has ``ToolFlag.CANCELLABLE``."""
     for tool in tools:
         if isinstance(tool, (FunctionTool, RawFunctionTool)):
-            if tool.info.allow_cancellation:
+            if ToolFlag.CANCELLABLE in tool.info.flags:
                 return True
         elif isinstance(tool, Toolset):
             if has_cancellable_tool(tool.tools):
@@ -258,7 +258,7 @@ class _ToolExecutor:
         fnc_name = run_ctx.function_call.name
         info = tool.info
         on_duplicate: DuplicateMode = info.on_duplicate
-        allow_cancellation: bool = info.allow_cancellation
+        allow_cancellation: bool = ToolFlag.CANCELLABLE in info.flags
 
         confirm_duplicate: bool | None = None
         if on_duplicate == "confirm":

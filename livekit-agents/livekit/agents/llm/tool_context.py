@@ -165,10 +165,6 @@ class FunctionToolInfo:
     flags: ToolFlag
     on_duplicate: DuplicateMode = "allow"
 
-    @property
-    def allow_cancellation(self) -> bool:
-        return ToolFlag.CANCELLABLE in self.flags
-
 
 class RawFunctionDescription(TypedDict):
     """
@@ -192,10 +188,6 @@ class RawFunctionToolInfo:
     raw_schema: dict[str, Any]
     flags: ToolFlag
     on_duplicate: DuplicateMode = "allow"
-
-    @property
-    def allow_cancellation(self) -> bool:
-        return ToolFlag.CANCELLABLE in self.flags
 
 
 CONFIRM_DUPLICATE_PARAM = "lk_agents_confirm_duplicate"
