@@ -7,19 +7,22 @@ in one shot. memray writes files named like::
     memray-agent.py.<parent_pid>.bin             # the worker (parent)
     memray-agent.py.<parent_pid>.bin.<child_pid> # one per fork
 
-This module renders all of them at once and produces an index that groups
-children under their parent so you can tell which capture belongs to which
-process. See ``debug/README.md`` for the end-to-end workflow.
+memray names captures by pid only, so to label a ``.bin`` as job / inference /
+worker this module joins them against the framework's JSON memory logs
+(``--logs``), which record ``pid`` + ``process_kind`` for every process. It
+renders all captures at once into an index grouped by parent worker. See
+``debug/README.md`` for the end-to-end workflow.
 """
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import sys
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -30,38 +33,104 @@ _FILENAME_RE = re.compile(r"^memray-(?P<script>.+?)\.(?P<parent>\d+)\.bin(?:\.(?
 
 
 @dataclass(frozen=True)
+class ProcInfo:
+    """What the framework logged about a pid (see worker / supervised_proc)."""
+
+    kind: str  # "worker" | "job" | "inference"
+    job_id: str | None = None
+    room_id: str | None = None
+    last_memory_mb: float | None = None
+
+
+@dataclass
 class Capture:
     path: Path
     script: str
     parent_pid: int
     child_pid: int | None  # None means this *is* the parent (worker)
+    info: ProcInfo | None = field(default=None)  # filled in from logs, if available
 
     @property
     def is_parent(self) -> bool:
         return self.child_pid is None
 
     @property
+    def pid(self) -> int:
+        """The pid this capture belongs to (the worker's, or the forked child's)."""
+        return self.parent_pid if self.is_parent else self.child_pid  # type: ignore[return-value]
+
+    @property
+    def kind(self) -> str:
+        if self.info is not None:
+            return self.info.kind
+        return "worker" if self.is_parent else "unknown"
+
+    @property
     def label(self) -> str:
-        if self.is_parent:
-            return f"worker pid={self.parent_pid}"
-        return f"child pid={self.child_pid}  (parent={self.parent_pid})"
+        extra = ""
+        if self.info and self.info.job_id:
+            extra = f"  job={self.info.job_id}"
+        return f"{self.kind} pid={self.pid}{extra}"
 
 
-def discover(directory: Path) -> list[Capture]:
-    """Find every memray capture in ``directory``, parsed into Capture records."""
+def load_proc_info(log_paths: Sequence[Path]) -> dict[int, ProcInfo]:
+    """Build a ``pid -> ProcInfo`` map from the worker's JSON memory logs.
+
+    The framework logs a line per process with ``memory_event``, ``pid`` and
+    ``process_kind`` (and ``job_id`` / ``room_id`` for jobs). memray names its
+    capture files by pid only, so this is what lets a ``.bin`` be labelled
+    job / inference / worker. Lines that aren't JSON are ignored; if nothing
+    parses, the caller falls back to pid-only grouping.
+    """
+    out: dict[int, ProcInfo] = {}
+    for log_path in log_paths:
+        try:
+            text = log_path.read_text(errors="replace")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or not line.startswith("{"):
+                continue
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if "memory_event" not in rec or "pid" not in rec or "process_kind" not in rec:
+                continue
+            try:
+                pid = int(rec["pid"])
+            except (TypeError, ValueError):
+                continue
+            out[pid] = ProcInfo(
+                kind=str(rec["process_kind"]),
+                job_id=rec.get("job_id"),
+                room_id=rec.get("room_id"),
+                last_memory_mb=rec.get("memory_usage_mb"),
+            )
+    return out
+
+
+def discover(directory: Path, proc_info: dict[int, ProcInfo] | None = None) -> list[Capture]:
+    """Find every memray capture in ``directory``, parsed into Capture records.
+
+    When ``proc_info`` (from :func:`load_proc_info`) is given, each capture is
+    annotated with its process kind.
+    """
+    proc_info = proc_info or {}
     out: list[Capture] = []
     for p in directory.iterdir():
         m = _FILENAME_RE.match(p.name)
         if not m:
             continue
-        out.append(
-            Capture(
-                path=p,
-                script=m["script"],
-                parent_pid=int(m["parent"]),
-                child_pid=int(m["child"]) if m["child"] else None,
-            )
+        cap = Capture(
+            path=p,
+            script=m["script"],
+            parent_pid=int(m["parent"]),
+            child_pid=int(m["child"]) if m["child"] else None,
         )
+        cap.info = proc_info.get(cap.pid)
+        out.append(cap)
     # group by parent pid; within a group, the worker (no child_pid) first then
     # children in ascending pid order — gives a stable, fork-order-ish listing
     out.sort(key=lambda c: (c.parent_pid, c.child_pid if c.child_pid is not None else -1))
@@ -123,7 +192,9 @@ def _write_index(directory: Path, rendered: Sequence[tuple[Capture, Path | None]
             )
         size = _human_size(cap.path.stat().st_size)
         when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(cap.path.stat().st_mtime))
-        role = "worker" if cap.is_parent else f"child pid={cap.child_pid}"
+        role = f"{cap.kind} pid={cap.pid}"
+        if cap.info and cap.info.job_id:
+            role += f" &nbsp; <code>job={cap.info.job_id}</code>"
         if html is not None:
             link = f'<a href="{html.name}">{role}</a>'
         else:
@@ -138,24 +209,26 @@ def _write_index(directory: Path, rendered: Sequence[tuple[Capture, Path | None]
     return index
 
 
-def _cmd_list(directory: Path) -> int:
-    caps = discover(directory)
+def _cmd_list(directory: Path, proc_info: dict[int, ProcInfo]) -> int:
+    caps = discover(directory, proc_info)
     if not caps:
         print(f"no memray-*.bin captures found in {directory}")
         return 0
     print(f"{len(caps)} capture(s) in {directory}:")
+    if not proc_info:
+        print("  (no --logs given; kinds shown as 'unknown' — pass the worker log to label them)")
     for c in caps:
         size = _human_size(c.path.stat().st_size)
         when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(c.path.stat().st_mtime))
-        print(f"  {c.label:<40} {size:>8}  {when}  {c.path.name}")
+        print(f"  {c.label:<44} {size:>8}  {when}  {c.path.name}")
     return 0
 
 
-def _cmd_report(directory: Path) -> int:
+def _cmd_report(directory: Path, proc_info: dict[int, ProcInfo]) -> int:
     if _load_memray() is None:
         print("memray is not installed. Install with: uv pip install memray", file=sys.stderr)
         return 1
-    caps = discover(directory)
+    caps = discover(directory, proc_info)
     if not caps:
         print(f"no memray-*.bin captures found in {directory}")
         return 0
@@ -168,17 +241,18 @@ def _cmd_report(directory: Path) -> int:
     return 0
 
 
-def _cmd_serve(directory: Path, port: int) -> int:
+def _cmd_serve(directory: Path, proc_info: dict[int, ProcInfo], port: int) -> int:
     import functools
     import http.server
     import socketserver
 
     if _load_memray() is not None:
-        _cmd_report(directory)
+        _cmd_report(directory, proc_info)
     else:
         # no memray, but maybe flamegraph HTMLs already exist
         rendered = [
-            (c, c.path.with_name(c.path.name + ".flamegraph.html")) for c in discover(directory)
+            (c, c.path.with_name(c.path.name + ".flamegraph.html"))
+            for c in discover(directory, proc_info)
         ]
         _write_index(directory, [(c, h if h.exists() else None) for c, h in rendered])
 
@@ -201,25 +275,36 @@ def main(argv: list[str] | None = None) -> int:
     )
     sub = parser.add_subparsers(dest="cmd")
 
+    def _add_common(p: argparse.ArgumentParser) -> None:
+        p.add_argument("dir", nargs="?", help="directory of captures (default: cwd)")
+        p.add_argument(
+            "--logs",
+            action="append",
+            default=[],
+            metavar="PATH",
+            help="JSON worker log file(s) used to label captures job/inference/worker",
+        )
+
     p_report = sub.add_parser("report", help="render flamegraphs + an index.html for all captures")
-    p_report.add_argument("dir", nargs="?", help="directory of captures (default: cwd)")
+    _add_common(p_report)
 
     p_list = sub.add_parser("list", help="list captures grouped by worker")
-    p_list.add_argument("dir", nargs="?")
+    _add_common(p_list)
 
     p_serve = sub.add_parser("serve", help="render + serve the captures over HTTP")
-    p_serve.add_argument("dir", nargs="?")
+    _add_common(p_serve)
     p_serve.add_argument("--port", type=int, default=8042)
 
     args = parser.parse_args(argv)
     directory = Path(args.dir) if getattr(args, "dir", None) else Path.cwd()
+    proc_info = load_proc_info([Path(p) for p in getattr(args, "logs", [])])
 
     if args.cmd == "list":
-        return _cmd_list(directory)
+        return _cmd_list(directory, proc_info)
     if args.cmd == "serve":
-        return _cmd_serve(directory, args.port)
+        return _cmd_serve(directory, proc_info, args.port)
     if args.cmd == "report":
-        return _cmd_report(directory)
+        return _cmd_report(directory, proc_info)
 
     parser.print_help()
     return 0

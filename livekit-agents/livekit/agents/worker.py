@@ -31,6 +31,7 @@ from urllib.parse import urljoin, urlparse
 
 import aiohttp
 import jwt
+import psutil
 from aiohttp import web
 from google.protobuf.json_format import MessageToDict, MessageToJson
 
@@ -60,6 +61,7 @@ UPDATE_STATUS_INTERVAL = 2.5
 UPDATE_LOAD_INTERVAL = 0.5
 HEARTBEAT_INTERVAL = 30
 WORKER_PROTOCOL_VERSION = 1
+MEMORY_LOG_INTERVAL = 30.0
 
 
 def _default_setup_fnc(proc: JobProcess) -> Any:
@@ -376,6 +378,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         )
         self._http_server: http_server.HttpServer | None = None
 
+        self._memory_baseline_mb: float | None = None
+
         self._lock = asyncio.Lock()
 
     @property
@@ -651,6 +655,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             self._conn_task: asyncio.Task[None] | None = None
             self._load_task: asyncio.Task[None] | None = None
+            self._memory_log_task: asyncio.Task[None] | None = None
 
             if not self._ws_url:
                 raise ValueError("ws_url is required, or set LIVEKIT_URL environment variable")
@@ -793,7 +798,12 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 )
                 tasks.append(self._conn_task)
 
+            self._memory_log_task = asyncio.create_task(
+                self._memory_log_loop(), name="memory_log_task"
+            )
+
             self.emit("worker_started")
+            self._log_memory_usage("started")
 
         await self._close_future
 
@@ -964,12 +974,16 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             assert self._http_server is not None
 
             self._closed = True
+            self._log_memory_usage("before_shutdown")
 
             if self._conn_task is not None:
                 await utils.aio.cancel_and_wait(self._conn_task)
 
             if self._load_task is not None:
                 await utils.aio.cancel_and_wait(self._load_task)
+
+            if self._memory_log_task is not None:
+                await utils.aio.cancel_and_wait(self._memory_log_task)
 
             # let in-flight availability tasks finish launching their jobs
             # before closing the proc pool (they accepted before shutdown)
@@ -1247,6 +1261,37 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
         self._worker_load = await self._invoke_load_fnc()
         telemetry.metrics._update_worker_load(self._worker_load)
+
+    def _log_memory_usage(self, event: str) -> None:
+        try:
+            memory_mb = psutil.Process().memory_info().rss / (1024 * 1024)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            return
+
+        if self._memory_baseline_mb is None:
+            self._memory_baseline_mb = memory_mb
+
+        logger.info(
+            f"worker process memory ({event})",
+            extra={
+                "pid": os.getpid(),
+                # process_kind lets the debug.memory CLI join this log line to the
+                # matching memray capture (the worker is the --follow-fork parent)
+                "process_kind": "worker",
+                "memory_event": event,
+                "memory_usage_mb": round(memory_mb, 1),
+                "baseline_memory_mb": round(self._memory_baseline_mb, 1),
+                "growth_memory_mb": round(memory_mb - self._memory_baseline_mb, 1),
+            },
+        )
+
+    @utils.log_exceptions(logger=logger)
+    async def _memory_log_loop(self) -> None:
+        while not self._closed:
+            await asyncio.sleep(MEMORY_LOG_INTERVAL)
+            if self._closed:
+                break
+            self._log_memory_usage("periodic")
 
     def _get_effective_load(self) -> float:
         """Current load including reserved slots (accepted but not yet launched)."""

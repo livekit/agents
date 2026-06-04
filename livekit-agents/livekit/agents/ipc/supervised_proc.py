@@ -38,6 +38,8 @@ _MEMORY_WARN_COOLDOWN = 120.0
 # re-emit the warning before the cooldown elapses if usage grew by at least this much
 # since the last warning (so a genuine leak still surfaces promptly)
 _MEMORY_WARN_RESET_DELTA_MB = 50.0
+# how often each process logs its current RSS, regardless of the warn/limit thresholds
+_MEMORY_LOG_INTERVAL = 30.0
 
 
 class SupervisedProcKind(str, Enum):
@@ -290,6 +292,7 @@ class SupervisedProc(ABC):
                 "process initialized",
                 extra={**self.logging_extra(), "elapsed_time": round(elapsed_time, 2)},
             )
+            self._log_memory_usage("started")
         except asyncio.TimeoutError:
             self._initialize_fut.set_exception(
                 asyncio.TimeoutError("process initialization timed out")
@@ -306,6 +309,8 @@ class SupervisedProc(ABC):
         """attempt to gracefully close the supervised process"""
         if not self.started:
             return
+
+        self._log_memory_usage("before_shutdown")
 
         self._closing = True
         with contextlib.suppress(duplex_unix.DuplexClosed):
@@ -426,10 +431,14 @@ class SupervisedProc(ABC):
         if self._opts.memory_limit_mb > 0 or self._opts.memory_warn_mb > 0:
             memory_monitor_task = asyncio.create_task(self._memory_monitor_task())
 
+        memory_log_task = asyncio.create_task(self._memory_log_task())
+
         await self._join_fut
         self._exitcode = self._proc.exitcode
         self._proc.close()
         await aio.cancel_and_wait(ping_task, read_ipc_task, main_task)
+
+        await aio.cancel_and_wait(memory_log_task)
 
         if memory_monitor_task is not None:
             await aio.cancel_and_wait(memory_monitor_task)
@@ -528,6 +537,9 @@ class SupervisedProc(ABC):
         """Diagnostic context for the memory logs: tells a process that started
         heavy from one that grew over time (uptime, baseline RSS, growth)."""
         extra: dict[str, Any] = {
+            # process_kind + pid let the debug.memory CLI join this log line to the
+            # matching memray capture and label it job/inference
+            "process_kind": str(self.process_kind),
             "memory_usage_mb": round(memory_mb, 1),
             "memory_warn_mb": self._opts.memory_warn_mb,
             "memory_limit_mb": self._opts.memory_limit_mb,
@@ -540,6 +552,33 @@ class SupervisedProc(ABC):
             extra["growth_memory_mb"] = round(memory_mb - self._memory_baseline_mb, 1)
         extra.update(self.logging_extra())
         return extra
+
+    def _read_memory_mb(self) -> float | None:
+        if not self._pid:
+            return None
+        try:
+            return psutil.Process(self._pid).memory_info().rss / (1024 * 1024)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            return None
+
+    def _log_memory_usage(self, event: str) -> None:
+        memory_mb = self._read_memory_mb()
+        if memory_mb is None:
+            return
+        if self._memory_baseline_mb is None:
+            self._memory_baseline_mb = memory_mb
+        extra = self._memory_logging_extra(memory_mb)
+        extra["memory_event"] = event
+        logger.info(f"{self.process_kind} process memory ({event})", extra=extra)
+
+    @log_exceptions(logger=logger)
+    async def _memory_log_task(self) -> None:
+        # unconditional, unlike the threshold-driven _memory_monitor_task
+        while not self._closing and not self._kill_sent:
+            await asyncio.sleep(_MEMORY_LOG_INTERVAL)
+            if self._closing or self._kill_sent:
+                break
+            self._log_memory_usage("periodic")
 
     @log_exceptions(logger=logger)
     async def _memory_monitor_task(self) -> None:

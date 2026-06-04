@@ -35,19 +35,48 @@ src/
 
 `--no-reload` is recommended so the reloader process doesn't add noise.
 
+## Label captures by process (jobs / inference / worker)
+
+memray names captures by pid only, so a `.bin` on its own can't tell you
+whether it's a job, the inference process, or the worker. The framework logs
+that mapping: every process logs its RSS with `pid` + `process_kind` (and
+`job_id` / `room_id` for jobs) at startup, every 30s, and before shutdown.
+
+Capture those logs as **JSON** alongside the run, e.g.:
+
+```bash
+AGENT_ENTRYPOINT=src/agent.py uv run --no-sync \
+  memray run --follow-fork "$AGENT_ENTRYPOINT" dev --no-reload 2> agent.log
+```
+
+(Configure the framework's logger for JSON output so the lines are
+machine-readable; plain-text lines are simply ignored by the joiner.)
+
+Then pass the log to the viewer with `--logs` and each capture is labelled:
+
+```bash
+uv run --no-sync python -m livekit.agents.debug.memory list src --logs agent.log
+#   worker pid=500
+#   job pid=501  job=AJ_abc
+#   inference pid=502
+```
+
+Without `--logs`, captures still group by parent/child pid; their kind just
+shows as `unknown`.
+
 ## View
 
 Render flamegraphs and an index that groups children under their parent
-worker:
+worker (pass `--logs` here too to label them):
 
 ```bash
-uv run --no-sync python -m livekit.agents.debug.memory report src
+uv run --no-sync python -m livekit.agents.debug.memory report src --logs agent.log
 ```
 
 Browse them locally:
 
 ```bash
-uv run --no-sync python -m livekit.agents.debug.memory serve src
+uv run --no-sync python -m livekit.agents.debug.memory serve src --logs agent.log
 # → serving src at http://localhost:8042/
 ```
 
