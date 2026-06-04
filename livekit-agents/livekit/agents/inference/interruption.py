@@ -298,9 +298,7 @@ class AdaptiveInterruptionDetector(
             raise ValueError("max_audio_duration must be less than or equal to 3.0 seconds")
 
         lk_base_url = (
-            base_url
-            if base_url
-            else os.getenv("LIVEKIT_REMOTE_EOT_URL", get_default_inference_url())
+            base_url if base_url else os.getenv("LIVEKIT_INFERNCE_URL", get_default_inference_url())
         )
         # Adaptive interruption is inference-gateway-only and always connects over WebSocket,
         # so LiveKit credentials are always required.
