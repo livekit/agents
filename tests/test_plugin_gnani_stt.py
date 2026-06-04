@@ -116,34 +116,13 @@ def test_stt_custom_base_url():
     assert stt._opts.base_url == "https://custom.api.com"
 
 
-def test_stt_organization_and_user_id():
-    """STT accepts organization_id and user_id."""
+def test_stt_only_api_key_auth():
+    """STT options only contain api_key for authentication (no organization_id or user_id)."""
     from livekit.plugins.gnani import STT
 
-    stt = STT(
-        api_key="test-key",
-        organization_id="org-123",
-        user_id="user-456",
-    )
-    assert stt._opts.organization_id == "org-123"
-    assert stt._opts.user_id == "user-456"
-
-
-def test_stt_org_from_env():
-    """STT reads organization_id and user_id from environment."""
-    from livekit.plugins.gnani import STT
-
-    with patch.dict(
-        "os.environ",
-        {
-            "GNANI_API_KEY": "key",
-            "GNANI_ORGANIZATION_ID": "env-org",
-            "GNANI_USER_ID": "env-user",
-        },
-    ):
-        stt = STT()
-        assert stt._opts.organization_id == "env-org"
-        assert stt._opts.user_id == "env-user"
+    stt = STT(api_key="test-key")
+    assert not hasattr(stt._opts, "organization_id")
+    assert not hasattr(stt._opts, "user_id")
 
 
 def test_speech_stream_ws_url_https():

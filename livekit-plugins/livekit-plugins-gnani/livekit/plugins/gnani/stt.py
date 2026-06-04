@@ -72,8 +72,6 @@ STREAM_SUPPORTED_LANGUAGES: set[str] = {
     "pa-IN",
     "ta-IN",
     "te-IN",
-    "en-hi-IN-latn",
-    "en-hi-in-cm",
 }
 
 SAMPLE_RATE_16K = 16000
@@ -87,8 +85,6 @@ class GnaniSTTOptions:
     language: str
     sample_rate: int = SAMPLE_RATE_16K
     base_url: str = GNANI_STT_BASE_URL
-    organization_id: str | None = None
-    user_id: str | None = None
 
 
 class STT(stt.STT):
@@ -102,8 +98,6 @@ class STT(stt.STT):
         api_key: Gnani API key (falls back to GNANI_API_KEY env var).
         sample_rate: Audio sample rate for streaming (8000 or 16000).
         base_url: Vachana API base URL.
-        organization_id: Organization ID for REST API (falls back to GNANI_ORGANIZATION_ID).
-        user_id: User ID for REST API (falls back to GNANI_USER_ID).
     """
 
     def __init__(
@@ -113,8 +107,6 @@ class STT(stt.STT):
         api_key: str | None = None,
         sample_rate: int = SAMPLE_RATE_16K,
         base_url: str = GNANI_STT_BASE_URL,
-        organization_id: str | None = None,
-        user_id: str | None = None,
         http_session: None = None,
     ) -> None:
         super().__init__(
@@ -140,8 +132,6 @@ class STT(stt.STT):
             language=language,
             sample_rate=sample_rate,
             base_url=base_url,
-            organization_id=organization_id or os.environ.get("GNANI_ORGANIZATION_ID"),
-            user_id=user_id or os.environ.get("GNANI_USER_ID"),
         )
         self._session: aiohttp.ClientSession | None = None
 
@@ -197,10 +187,6 @@ class STT(stt.STT):
         headers: dict[str, str] = {
             "X-API-Key-ID": self._opts.api_key,
         }
-        if self._opts.organization_id:
-            headers["X-Organization-ID"] = self._opts.organization_id
-        if self._opts.user_id:
-            headers["X-API-User-ID"] = self._opts.user_id
 
         try:
             async with self._ensure_session().post(
@@ -258,8 +244,6 @@ class STT(stt.STT):
                 language=lang,
                 sample_rate=self._opts.sample_rate,
                 base_url=self._opts.base_url,
-                organization_id=self._opts.organization_id,
-                user_id=self._opts.user_id,
             ),
             conn_options=self._single_attempt(conn_options),
         )

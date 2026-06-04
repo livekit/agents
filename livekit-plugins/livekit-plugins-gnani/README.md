@@ -19,15 +19,24 @@ This will also install the [`websockets`](https://pypi.org/project/websockets/) 
 
 You need a Gnani API key. Email **[speechstack@gnani.ai](mailto:speechstack@gnani.ai)** to get started — all new accounts receive free credits, no credit card required.
 
-Set your credentials as environment variables:
+### Authentication
+
+All APIs require a single API key — no `organization_id` or `user_id` needed.
+
+**Option 1 — Environment variable (recommended):**
 
 ```bash
 export GNANI_API_KEY="your-api-key"
-
-# For REST STT only (optional):
-export GNANI_ORGANIZATION_ID="your-org-id"
-export GNANI_USER_ID="your-user-id"
 ```
+
+**Option 2 — Constructor argument:**
+
+```python
+stt = STT(api_key="your-api-key", language="hi-IN")
+tts = TTS(api_key="your-api-key", voice="Karan")
+```
+
+> **Migration note:** If upgrading from an earlier version, remove any `organization_id` and `user_id` parameters — they are no longer accepted.
 
 ## Quick Start
 
@@ -67,8 +76,8 @@ regardless of this setting.
 
 - **Batch recognition** — REST API (`POST /stt/v3`) for file-based transcription
 - **Real-time streaming** — WebSocket API for live audio transcription with VAD
-- **10 Indian languages** — bn-IN, en-IN, gu-IN, hi-IN, kn-IN, ml-IN, mr-IN, pa-IN, ta-IN, te-IN
-- **Code-switching** — Hinglish (en-hi-IN-latn) and Hindi-English mixed (en-hi-in-cm) for streaming
+- **10+ Indian languages** — see [supported language codes](https://docs.inya.ai/vachana/STT/stt-websocket#supported-languages)
+- **Code-switching** — supports multilingual and code-mixed audio
 - **Sample rates** — 8 kHz and 16 kHz
 
 ### TTS
@@ -81,18 +90,20 @@ regardless of this setting.
 
 ## Supported Languages
 
-| Language        | Code    |
-|-----------------|---------|
-| Bengali         | `bn-IN` |
-| English (India) | `en-IN` |
-| Gujarati        | `gu-IN` |
-| Hindi           | `hi-IN` |
-| Kannada         | `kn-IN` |
-| Malayalam       | `ml-IN` |
-| Marathi         | `mr-IN` |
-| Punjabi         | `pa-IN` |
-| Tamil           | `ta-IN` |
-| Telugu          | `te-IN` |
+### STT Languages (Speech-to-Text)
+
+STT uses BCP-47 locale codes (e.g. `hi-IN`). For the full list of supported languages, see:
+
+- **[STT REST — Supported Languages](https://docs.inya.ai/vachana/STT/speech-to-text#supported-languages)**
+- **[STT Realtime — Supported Languages](https://docs.inya.ai/vachana/STT/stt-websocket#supported-languages)**
+
+---
+
+### TTS Languages (Text-to-Speech)
+
+TTS uses ISO 639 language codes (e.g. `hi`, `bn`). Pass these via the `language` parameter.
+
+For the full list of supported languages, see **[TTS — Supported Languages](https://docs.inya.ai/vachana/TTS/tts-inference#supported-languages)**.
 
 ## Available Voices
 
@@ -107,7 +118,7 @@ regardless of this setting.
 
 ## Architecture
 
-This plugin directly implements the Gnani Vachana REST and WebSocket APIs using `aiohttp` (for batch STT/TTS) and `websockets` (for streaming STT/TTS), adapting them into LiveKit's `stt.STT` and `tts.TTS` base classes. No external SDK is required — all connection logic, authentication, and audio format handling is self-contained.
+This plugin directly implements the Gnani Vachana REST and WebSocket APIs using `aiohttp` (for batch STT/TTS) and `websockets` (for streaming STT/TTS), adapting them into LiveKit's `stt.STT` and `tts.TTS` base classes. No external SDK is required — all connection logic, authentication, and audio format handling is self-contained. Authentication uses a single `api_key` passed via the `X-API-Key-ID` header.
 
 ## Documentation
 
