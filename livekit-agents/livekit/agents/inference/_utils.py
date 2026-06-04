@@ -65,6 +65,7 @@ def get_inference_headers() -> dict[str, str]:
         # cleared, so the access below won't raise once isconnected() is True.
         if ctx.room.isconnected() and isinstance(agent_sid := ctx.agent.sid, str) and agent_sid:
             headers[HEADER_AGENT_ID] = agent_sid
+        # for hosted agents where job context is always present
         if worker_token := os.getenv("LIVEKIT_WORKER_TOKEN"):
             headers[HEADER_WORKER_TOKEN] = worker_token
     except RuntimeError:

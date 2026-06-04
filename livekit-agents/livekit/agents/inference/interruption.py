@@ -50,6 +50,7 @@ from ._utils import (
 )
 
 SAMPLE_RATE = 16000
+# local fallback when server/model side threshold is not available
 THRESHOLD = 0.5
 MIN_INTERRUPTION_DURATION = 0.025 * 2  # 25ms per frame, 2 consecutive frames
 MAX_AUDIO_DURATION = 3  # 3 seconds
@@ -775,11 +776,16 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
         threshold: NotGivenOr[float] = NOT_GIVEN,
         min_interruption_duration: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
-        if is_given(threshold):
-            self._opts.threshold = threshold
-        if is_given(min_interruption_duration):
-            self._opts.min_frames = math.ceil(min_interruption_duration * _FRAMES_PER_SECOND)
+        # opts are shared with the detector (self._opts is model._opts), no need to update them here
         self._reconnect_event.set()
+
+    def _resolve_effective_threshold(self, default_threshold: float | None) -> float:
+        """Return the effective threshold."""
+        if is_given(self._opts.threshold):
+            return self._opts.threshold
+        if default_threshold is not None:
+            return default_threshold
+        return THRESHOLD
 
     async def _run(self) -> None:
         closing_ws = False
@@ -848,20 +854,15 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
 
                 match msg:
                     case InterruptionWSSessionCreatedMessage():
-                        # The server makes the actual decision: when we omit the threshold from
-                        # session.create (no user override) it uses its fetched default. Resolve the
-                        # effective value here only for observability, with THRESHOLD as the backup.
-                        if is_given(self._opts.threshold):
-                            effective_threshold = self._opts.threshold
-                        elif msg.default_threshold is not None:
-                            effective_threshold = msg.default_threshold
-                        else:
-                            effective_threshold = THRESHOLD
+                        # Observability only — the server makes the actual decision; when we omit
+                        # the threshold from session.create it applies its fetched default.
                         logger.debug(
                             "adaptive interruption session created",
                             extra={
                                 "default_threshold": msg.default_threshold,
-                                "effective_threshold": effective_threshold,
+                                "effective_threshold": self._resolve_effective_threshold(
+                                    msg.default_threshold
+                                ),
                                 "user_override": is_given(self._opts.threshold),
                             },
                         )
@@ -989,7 +990,7 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
             # only send the threshold when the user explicitly overrode it; otherwise let the
             # server apply its fetched default
             threshold=self._opts.threshold if is_given(self._opts.threshold) else None,
-            min_frames=self._model._opts.min_frames,
+            min_frames=self._opts.min_frames,
             encoding="s16le",
         )
 
