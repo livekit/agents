@@ -73,13 +73,16 @@ class FrontDeskAgent(Agent):
                 'fillers (um, uh, like), not "Absolutely" or "Certainly". Include mid-sentence '
                 "fillers (like, you know, I mean) the way they appear in real transcripts. "
                 "Mirror the user's formality: if they're casual, use informal phrasing "
-                "(gotcha, gonna, kinda, lemme, yeah); if they're more formal, keep your "
-                "speech cleaner. "
+                "(gotcha, alright, gonna, kinda, lemme, yeah); if they're more formal, "
+                "keep your speech cleaner. Vary your informalities across turns — if "
+                "you opened the last turn with 'gotcha', pick 'alright' or 'okay' this "
+                "turn. Don't repeat the same opener back-to-back. "
                 "When the user says hello or greets you, don’t just respond with a greeting — use it as an opportunity to move things forward. "
                 "For example, follow up with a helpful question like: 'Would you like to book a time?' "
                 "When asked for availability, call list_available_slots and offer a few clear, simple options. "
                 "Say things like 'Monday at 2 PM' — avoid timezones, timestamps, and avoid saying 'AM' or 'PM'. "
                 "Use natural phrases like 'in the morning' or 'in the evening', and don’t mention the year unless it’s different from the current one. "
+                "When listing several times in the same window, group them — say 'in the evening at 4, 5, or 6' rather than '4 in the evening, 5 in the evening, 6 in the evening'. Don't repeat the time-of-day qualifier on each slot. "
                 "Offer a few options at a time, pause for a response, then guide the user to confirm. "
                 "If the time is no longer available, let them know gently and offer the next options. "
                 "Always keep the conversation flowing — be proactive, human, and focused on helping the user schedule with ease."
@@ -93,9 +96,9 @@ class FrontDeskAgent(Agent):
         time_of_day = "morning" if hour < 12 else "afternoon" if hour < 17 else "evening"
         await self.session.generate_reply(
             instructions=(
-                f"Greet the caller — it's currently {time_of_day} their time. "
-                "You're the front desk and you're here to help them schedule a visit. "
-                "Invite them to book an appointment to come see us, and ask what time works. "
+                f"Say hello and welcome to the caller — it's currently {time_of_day} their time. "
+                "You're the front desk of an office and you're here to help them schedule a visit. "
+                "Invite them to book an appointment to visit, and ask what time works. "
                 "Keep it warm and brief."
             )
         )
@@ -118,7 +121,7 @@ class FrontDeskAgent(Agent):
         email_result = await beta.workflows.GetEmailTask(chat_ctx=self.chat_ctx)
 
         if ctx.speech_handle.interrupted:
-            return
+            return None
 
         ctx.disallow_interruptions()
 
