@@ -4,11 +4,15 @@ import asyncio
 import multiprocessing as mp
 import socket
 
+import pytest
+
 from livekit.agents.ipc.supervised_proc import (
     _MEMORY_WARN_COOLDOWN,
     _MEMORY_WARN_RESET_DELTA_MB,
     SupervisedProc,
 )
+
+pytestmark = pytest.mark.unit
 
 
 class _FakeProc(SupervisedProc):
