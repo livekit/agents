@@ -3,10 +3,14 @@ from __future__ import annotations
 from collections.abc import AsyncIterable
 from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
+import pytest
+
 from livekit import rtc
 from livekit.agents import Agent
 from livekit.agents.voice.agent import ModelSettings
 from livekit.agents.voice.agent_activity import AgentActivity
+
+pytestmark = pytest.mark.unit
 
 
 def _make_activity(agent: Agent, stt: object) -> MagicMock:
@@ -86,10 +90,12 @@ async def test_not_reusable_different_stt_node_override() -> None:
     assert result is None
 
 
-async def test_reusable_subclass_inherits_stt_node() -> None:
-    """Old agent overrides stt_node; new agent is a subclass that inherits it → reusable.
+async def test_not_reusable_subclass_inherits_custom_stt_node() -> None:
+    """Both agents share a custom stt_node via inheritance → not reusable.
 
-    B(A) does not override stt_node, so B.stt_node is A.stt_node (same object via MRO).
+    The pipeline is bound to the old agent's `self`; a custom stt_node may access
+    self.session/activity inside the yield loop, which raises after detach.
+    Only the default Agent.stt_node is known to be safe to reuse.
     """
     shared_stt = MagicMock()
 
@@ -108,8 +114,7 @@ async def test_reusable_subclass_inherits_stt_node() -> None:
     new = _make_activity(AgentB(instructions="b"), shared_stt)
 
     result = await _detach_stt_if_reusable(old, new)
-    assert result is not None
-    old._audio_recognition._detach_stt.assert_awaited_once()
+    assert result is None
 
 
 async def test_not_reusable_subclass_overrides_stt_node() -> None:

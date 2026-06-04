@@ -27,10 +27,13 @@ from ._utils import create_access_token, get_default_inference_url, get_inferenc
 
 CartesiaModels = Literal[
     "cartesia",
+    "cartesia/sonic-3.5",
     "cartesia/sonic-3",
     "cartesia/sonic-2",
     "cartesia/sonic-turbo",
     "cartesia/sonic",
+    "cartesia/sonic-3-latest",
+    "cartesia/sonic-latest",
 ]
 DeepgramModels = Literal[
     "deepgram",
@@ -44,22 +47,30 @@ ElevenlabsModels = Literal[
     "elevenlabs/eleven_turbo_v2",
     "elevenlabs/eleven_turbo_v2_5",
     "elevenlabs/eleven_multilingual_v2",
+    "elevenlabs/eleven_v3",
 ]
 RimeModels = Literal[
     "rime",
     "rime/arcana",
+    "rime/coda",
     "rime/mistv2",
+    "rime/mistv3",
+    "rime/mist",
 ]
 InworldModels = Literal[
     "inworld",
     "inworld/inworld-tts-2",
     "inworld/inworld-tts-1.5-max",
     "inworld/inworld-tts-1.5-mini",
+    "inworld/inworld-tts-1.5",
     "inworld/inworld-tts-1-max",
     "inworld/inworld-tts-1",
 ]
+XaiModels = Literal["xai/tts-1",]
 
-TTSModels = CartesiaModels | DeepgramModels | ElevenlabsModels | RimeModels | InworldModels
+TTSModels = (
+    CartesiaModels | DeepgramModels | ElevenlabsModels | RimeModels | InworldModels | XaiModels
+)
 
 
 def _parse_model_string(model: str) -> tuple[str, str | None]:
@@ -173,6 +184,10 @@ class InworldOptions(TypedDict, total=False):
     temperature: float  # range 0-2
     timestamp_type: Literal["TIMESTAMP_TYPE_UNSPECIFIED", "WORD", "CHARACTER"]
     apply_text_normalization: Literal["APPLY_TEXT_NORMALIZATION_UNSPECIFIED", "ON", "OFF"]
+
+
+class XaiOptions(TypedDict, total=False):
+    bit_rate: Literal[32000, 64000, 96000, 128000, 192000]
 
 
 TTSEncoding = Literal["pcm_s16le"]
@@ -295,6 +310,25 @@ class TTS(tts.TTS):
     @overload
     def __init__(
         self,
+        model: XaiModels,
+        *,
+        voice: NotGivenOr[str] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        encoding: NotGivenOr[TTSEncoding] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        extra_kwargs: NotGivenOr[XaiOptions] = NOT_GIVEN,
+        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+    ) -> None:
+        pass
+
+    @overload
+    def __init__(
+        self,
         model: str,
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
@@ -330,6 +364,7 @@ class TTS(tts.TTS):
             | ElevenlabsOptions
             | RimeOptions
             | InworldOptions
+            | XaiOptions
         ] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,

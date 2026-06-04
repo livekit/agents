@@ -12,6 +12,8 @@ from livekit.agents.tokenize.blingfire import SentenceTokenizer
 from livekit.agents.tokenize.token_stream import _XML_TAG_RE
 from livekit.agents.tts.markup_utils import strip_xml_tags
 
+pytestmark = pytest.mark.unit
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

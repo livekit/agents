@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from enum import Enum, unique
 from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_serializer, model_validator
 from typing_extensions import Self
 
 from ..inference.interruption import (
@@ -27,6 +29,7 @@ from ..log import logger
 from ..metrics import AgentMetrics, AgentSessionUsage
 from ..stt import STT, STTError
 from ..tts import TTS, TTSError
+from .filler_scheduler import _FillerScheduler, _FillerSource
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
@@ -50,6 +53,7 @@ class RunContext(Generic[Userdata_T]):
         self._function_call = function_call
 
         self._initial_step_idx = speech_handle.num_steps - 1
+        self._filler_schedulers: list[_FillerScheduler] = []
 
     @property
     def session(self) -> AgentSession[Userdata_T]:
@@ -87,6 +91,49 @@ class RunContext(Generic[Userdata_T]):
         this tool to finish playing."""
         await self.speech_handle._wait_for_generation(step_idx=self._initial_step_idx)
 
+    @asynccontextmanager
+    async def with_filler(
+        self,
+        source: _FillerSource,
+        *,
+        delay: float = 0,
+        interval: float | None = None,
+        max_steps: int | None = None,
+    ) -> AsyncIterator[None]:
+        """Schedule filler speech while a long-running step blocks the tool.
+
+        While the context is open, a background scheduler waits for the session to be
+        continuously idle for ``delay`` seconds, then plays ``source``. With ``interval``
+        set, it then sleeps that many wall-clock seconds before restarting the dwell
+        wait. ``interval=None`` (default) fires at most once.
+
+        Args:
+            source: Either a string (spoken via ``session.say``), or a callable
+                ``(step: int) -> SpeechHandle | str | None`` invoked at fire time with
+                the iteration count. Returning ``None`` skips this fire and retries on
+                the next interval; the step counter only advances when a handle is
+                produced. Use ``max_steps`` to cap the total number of fires.
+            delay: Continuous-idle dwell required before each fire. ``0`` = fire as
+                soon as the session is next idle.
+            interval: Wall-clock cooldown after each fire. ``None`` = fire at most once.
+            max_steps: Maximum number of fires across the lifetime of the cm.
+                ``None`` = no limit.
+        """
+        scheduler = _FillerScheduler(
+            session=self._session,
+            speech_handle=self._speech_handle,
+            source=source,
+            delay=delay,
+            interval=interval,
+            max_steps=max_steps,
+        )
+        self._filler_schedulers.append(scheduler)
+        try:
+            yield
+        finally:
+            await scheduler.aclose()
+            self._filler_schedulers.remove(scheduler)
+
 
 EventTypes = Literal[
     "user_state_changed",
@@ -101,6 +148,7 @@ EventTypes = Literal[
     "speech_created",
     "error",
     "close",
+    "debug_message",
 ]
 
 UserState = Literal["speaking", "listening", "away"]
@@ -174,6 +222,16 @@ class ConversationItemAddedEvent(BaseModel):
 
 
 class FunctionToolsExecutedEvent(BaseModel):
+    """Emitted after a batch of function tools finishes executing.
+
+    ``function_calls`` and ``function_call_outputs`` are parallel lists: the
+    output at a given index belongs to the call at the same index. When an
+    output is present, its ``call_id`` matches the paired function call's
+    ``call_id``. A ``None`` output means the function call did not produce a
+    value that should be sent back to the LLM, such as when a tool raises
+    ``StopResponse`` or returns an invalid output.
+    """
+
     type: Literal["function_tools_executed"] = "function_tools_executed"
     function_calls: list[FunctionCall]
     function_call_outputs: list[FunctionCallOutput | None]
@@ -182,6 +240,7 @@ class FunctionToolsExecutedEvent(BaseModel):
     _handoff_required: bool = PrivateAttr(default=False)
 
     def zipped(self) -> list[tuple[FunctionCall, FunctionCallOutput | None]]:
+        """Return calls paired with outputs by list position."""
         return list(zip(self.function_calls, self.function_call_outputs, strict=False))
 
     def cancel_tool_reply(self) -> None:
@@ -219,12 +278,40 @@ class SpeechCreatedEvent(BaseModel):
     created_at: float = Field(default_factory=time.time)
 
 
+class UserTurnExceededEvent(BaseModel):
+    type: Literal["user_turn_exceeded"] = "user_turn_exceeded"
+    transcript: str
+    """Transcript from the current (uncommitted) user turn only.
+    Previous turns in the accumulation window are already in the chat context."""
+    accumulated_transcript: str
+    """Full transcript since the start of user speaking."""
+    accumulated_word_count: int
+    """Total word count since the start of user speaking."""
+    duration: float
+    """Duration of the user turn in seconds."""
+    created_at: float = Field(default_factory=time.time)
+
+
 class ErrorEvent(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     type: Literal["error"] = "error"
     error: LLMError | STTError | TTSError | RealtimeModelError | InterruptionDetectionError | Any
     source: LLM | STT | TTS | RealtimeModel | AdaptiveInterruptionDetector | Any
     created_at: float = Field(default_factory=time.time)
+
+    @field_serializer("source")
+    def _serialize_source(self, source: Any) -> Any:
+        if isinstance(source, (LLM, STT, TTS, RealtimeModel, AdaptiveInterruptionDetector)):
+            return {"model": source.model, "provider": source.provider}
+        if isinstance(source, BaseModel):
+            return source.model_dump()
+        return repr(source)
+
+    @field_serializer("error")
+    def _serialize_error(self, error: Any) -> Any:
+        if isinstance(error, BaseModel):
+            return error.model_dump()
+        return repr(error)
 
 
 @unique

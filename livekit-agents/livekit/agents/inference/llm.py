@@ -110,23 +110,33 @@ OpenAIModels = Literal[
     "openai/gpt-5.3-chat-latest",
     "openai/gpt-5.4",
     "openai/gpt-5.4-mini",
+    "openai/gpt-5.4-nano",
+    "openai/gpt-5.5",
+    "openai/chat-latest",
     "openai/gpt-oss-120b",
 ]
 
 GoogleModels = Literal[
-    "google/gemini-3-pro",
+    "google/gemini-3.1-pro",
     "google/gemini-3-flash",
+    "google/gemini-3.1-flash-lite",
+    "google/gemini-3.5-flash",
     "google/gemini-2.5-pro",
     "google/gemini-2.5-flash",
     "google/gemini-2.5-flash-lite",
 ]
 
-KimiModels = Literal["moonshotai/kimi-k2-instruct"]
+KimiModels = Literal[
+    "moonshotai/kimi-k2.5",
+    "moonshotai/kimi-k2.6",
+]
 
 DeepSeekModels = Literal[
     "deepseek-ai/deepseek-v3",
     "deepseek-ai/deepseek-v3.2",
 ]
+
+ZAIModels = Literal["zai/glm-5.1"]
 
 XAIModels = Literal[
     "xai/grok-4-1-fast-non-reasoning",
@@ -136,7 +146,7 @@ XAIModels = Literal[
     "xai/grok-4.20-multi-agent-0309",
 ]
 
-LLMModels = OpenAIModels | GoogleModels | KimiModels | DeepSeekModels | XAIModels
+LLMModels = OpenAIModels | GoogleModels | KimiModels | DeepSeekModels | ZAIModels | XAIModels
 
 InferenceClass = Literal["priority", "standard"]
 
@@ -249,6 +259,24 @@ class LLM(llm.LLM):
     def from_model_string(cls, model: str) -> LLM:
         """Create a LLM instance from a model string"""
         return cls(model)
+
+    def update_options(
+        self,
+        *,
+        model: NotGivenOr[LLMModels | str] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[ChatCompletionOptions | dict[str, Any]] = NOT_GIVEN,
+    ) -> None:
+        """Update LLM configuration options.
+
+        Each option is read on the next ``chat()`` call, so a swap
+        takes effect on the agent's next turn without recreating the
+        LLM. ``extra_kwargs`` *replaces* the persistent kwargs dict
+        rather than merging — pass ``{}`` to clear it.
+        """
+        if is_given(model):
+            self._opts.model = model
+        if is_given(extra_kwargs):
+            self._opts.extra_kwargs = dict(extra_kwargs)
 
     @property
     def model(self) -> str:

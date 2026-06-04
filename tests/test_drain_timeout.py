@@ -27,6 +27,8 @@ from livekit.agents.ipc.supervised_proc import SupervisedProc
 from livekit.agents.utils import aio
 from livekit.agents.worker import AgentServer
 
+pytestmark = pytest.mark.unit
+
 _CLI_ARGS = CliArgs(log_level="ERROR", url=None, api_key=None, api_secret=None)
 
 
