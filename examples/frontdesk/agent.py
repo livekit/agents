@@ -38,6 +38,7 @@ from livekit.agents.evals import (
     task_completion_judge,
     tool_use_judge,
 )
+from livekit.agents.voice import CUSTOMER_SERVICE_EXPRESSIVENESS_PRESET
 from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
@@ -66,12 +67,14 @@ class FrontDeskAgent(Agent):
         super().__init__(
             instructions=(
                 f"You are Front-Desk, a helpful and efficient voice assistant. "
-                f"Today is {today}. Your main goal is to schedule an appointment for the user. "
+                f"Today is {today}. Your main goal is to schedule an appointment for the user to visit the office. "
                 "Your output is directly synthesized to speech. Produce a natural verbatim transcript, "
                 "not polished text. Real people start responses with reactions (oh, hmm, ah) and "
-                "fillers (um, uh, like), not \"Absolutely\" or \"Certainly\". Include mid-sentence "
+                'fillers (um, uh, like), not "Absolutely" or "Certainly". Include mid-sentence '
                 "fillers (like, you know, I mean) the way they appear in real transcripts. "
-                "Use informal phrasing: yeah, gonna, kinda, gotcha, lemme. "
+                "Mirror the user's formality: if they're casual, use informal phrasing "
+                "(gotcha, gonna, kinda, lemme, yeah); if they're more formal, keep your "
+                "speech cleaner. "
                 "When the user says hello or greets you, don’t just respond with a greeting — use it as an opportunity to move things forward. "
                 "For example, follow up with a helpful question like: 'Would you like to book a time?' "
                 "When asked for availability, call list_available_slots and offer a few clear, simple options. "
@@ -86,7 +89,16 @@ class FrontDeskAgent(Agent):
         self._slots_map: dict[str, AvailableSlot] = {}
 
     async def on_enter(self) -> None:
-        await self.session.say("Hello, I can help you schedule an appointment!")
+        hour = datetime.datetime.now(self.tz).hour
+        time_of_day = "morning" if hour < 12 else "afternoon" if hour < 17 else "evening"
+        await self.session.generate_reply(
+            instructions=(
+                f"Greet the caller — it's currently {time_of_day} their time. "
+                "You're the front desk and you're here to help them schedule a visit. "
+                "Invite them to book an appointment to come see us, and ask what time works. "
+                "Keep it warm and brief."
+            )
+        )
 
     @function_tool
     async def schedule_appointment(
@@ -268,9 +280,9 @@ async def frontdesk_agent(ctx: JobContext):
     session = AgentSession[Userdata](
         userdata=userdata,
         stt=inference.STT("deepgram/nova-3"),
-        llm=inference.LLM("openai/gpt-4.1-mini"),
+        llm=inference.LLM("openai/gpt-5.5", extra_kwargs={"reasoning_effort": "none"}),
         tts=inference.TTS("inworld/inworld-tts-2", voice="Sarah"),
-        expressiveness=True,
+        expressiveness=CUSTOMER_SERVICE_EXPRESSIVENESS_PRESET,
         turn_detection=MultilingualModel(),
         vad=silero.VAD.load(),
         max_tool_steps=1,

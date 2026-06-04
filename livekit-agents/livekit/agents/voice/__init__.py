@@ -1,6 +1,9 @@
 from . import io, run_result
 from .agent import Agent, AgentTask, ModelSettings
 from .agent_session import (
+    CONVERSATIONAL_EXPRESSIVENESS_PRESET,
+    CUSTOMER_SERVICE_EXPRESSIVENESS_PRESET,
+    HEALTHCARE_EXPRESSIVENESS_PRESET,
     AgentSession,
     ExpressivenessOptions,
     RecordingOptions,
@@ -39,6 +42,9 @@ __all__ = [
     "Agent",
     "ModelSettings",
     "ExpressivenessOptions",
+    "CUSTOMER_SERVICE_EXPRESSIVENESS_PRESET",
+    "HEALTHCARE_EXPRESSIVENESS_PRESET",
+    "CONVERSATIONAL_EXPRESSIVENESS_PRESET",
     "AgentTask",
     "SpeechHandle",
     "RunContext",

@@ -674,7 +674,10 @@ class SynthesizeStream(tts.SynthesizeStream):
             base_pkt["type"] = "input_transcript"
             async for ev in sent_tokenizer_stream:
                 token_pkt = base_pkt.copy()
-                converted = self._tts.markup.convert(ev.token)
+                # re-normalize at sentence level: tags split across input chunks
+                # aren't caught by the per-chunk normalize in _input_task
+                converted = self._tts.markup.convert(self._tts.markup.normalize(ev.token))
+                logger.debug("[TTS→API] %s", converted)
                 token_pkt["transcript"] = converted + " "
                 generation_config: dict[str, Any] = {}
                 if self._opts.voice:

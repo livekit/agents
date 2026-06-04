@@ -780,7 +780,7 @@ class AgentActivity(RecognitionHooks):
         initial_tools = get_fnc_tool_names(self.tools) or None
         if self._agent.instructions or initial_tools:
             initial_config = llm.AgentConfigUpdate(
-                instructions=self._agent.instructions,
+                instructions=str(self._agent.instructions),
                 tools_added=initial_tools,
                 agent_id=self._agent.id,
             )
@@ -2889,9 +2889,7 @@ class AgentActivity(RecognitionHooks):
                 transcript = timed_texts
                 read_transcript_from_tts = True
 
-            tr_node = self._agent.transcription_node(
-                _read_segment_text(transcript), model_settings
-            )
+            tr_node = self._agent.transcription_node(_read_segment_text(transcript), model_settings)
             text_source = await tr_node if asyncio.iscoroutine(tr_node) else tr_node
             audio_source = segment.tts.audio_ch if segment.tts else None
 

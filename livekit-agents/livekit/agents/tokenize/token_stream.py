@@ -150,9 +150,7 @@ class BufferedTokenStream:
         xml_aware: bool = True,
     ) -> None:
         self._event_ch = aio.Chan[TokenData]()
-        self._tokenize_fnc = (
-            _xml_wrap_tokenizer(tokenize_fnc) if xml_aware else tokenize_fnc
-        )
+        self._tokenize_fnc = _xml_wrap_tokenizer(tokenize_fnc) if xml_aware else tokenize_fnc
         self._min_ctx_len = min_ctx_len
         self._min_token_len = min_token_len
         self._max_token_len = max_token_len

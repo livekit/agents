@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from livekit import blingfire
 
 from . import token_stream, tokenizer
+
 __all__ = [
     "SentenceTokenizer",
 ]
