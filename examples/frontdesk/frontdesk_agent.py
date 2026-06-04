@@ -26,6 +26,7 @@ from livekit.agents import (
     get_job_context,
     inference,
 )
+from livekit.agents.voice import CUSTOMER_SERVICE_EXPRESSIVENESS_PRESET
 from livekit.agents.evals import (
     JudgeGroup,
     accuracy_judge,
@@ -61,7 +62,7 @@ class FrontDeskAgent(Agent):
         super().__init__(
             instructions=(
                 f"You are Front-Desk, a helpful and efficient voice assistant. "
-                f"Today is {today}. Your main goal is to schedule an appointment for the user. "
+                f"Today is {today}. Your main goal is to schedule an appointment for the user to visit the office. "
                 "Your output is directly synthesized to speech. Produce a natural verbatim transcript, "
                 "not polished text. Real people start responses with reactions (oh, hmm, ah) and "
                 "fillers (um, uh, like), not \"Absolutely\" or \"Certainly\". Include mid-sentence "
@@ -81,7 +82,16 @@ class FrontDeskAgent(Agent):
         self._slots_map: dict[str, AvailableSlot] = {}
 
     async def on_enter(self) -> None:
-        await self.session.say("hello, I can help you to schedule an appointment")
+        hour = datetime.datetime.now(self.tz).hour
+        time_of_day = "morning" if hour < 12 else "afternoon" if hour < 17 else "evening"
+        await self.session.generate_reply(
+            instructions=(
+                f"Greet the caller — it's currently {time_of_day} their time. "
+                "You're the front desk and you're here to help them schedule a visit. "
+                "Invite them to book an appointment to come see us, and ask what time works. "
+                "Keep it warm and brief."
+            )
+        )
 
     @function_tool
     async def schedule_appointment(
@@ -246,9 +256,9 @@ async def frontdesk_agent(ctx: JobContext):
     session = AgentSession[Userdata](
         userdata=Userdata(cal=cal),
         stt=inference.STT("deepgram/nova-3"),
-        llm=inference.LLM("openai/gpt-4.1-mini"),
+        llm=inference.LLM("openai/gpt-5.5"),
         tts=inference.TTS("inworld/inworld-tts-2", voice="Sarah"),
-        expressiveness=True,
+        expressiveness=CUSTOMER_SERVICE_EXPRESSIVENESS_PRESET,
         turn_detection=MultilingualModel(),
         vad=silero.VAD.load(),
         max_tool_steps=1,

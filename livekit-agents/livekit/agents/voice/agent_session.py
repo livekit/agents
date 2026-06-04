@@ -156,6 +156,73 @@ DEFAULT_EXPRESSIVENESS_OPTIONS: ExpressivenessOptions = ExpressivenessOptions(
     ),
 )
 
+CUSTOMER_SERVICE_EXPRESSIVENESS_PRESET: ExpressivenessOptions = ExpressivenessOptions(
+    tts_instructions_template=Instructions(
+        "Speak with warmth, patience, and empathy. "
+        "Use the following formatting tags to shape your delivery:\n\n"
+        "{tts.markup.llm_instructions}\n\n"
+        "Guidelines:\n"
+        "- Match the customer's energy: slow and soften when they sound frustrated or "
+        "confused; upbeat warmth for good news. Warmth is professional, never theatrical.\n"
+        "- For dates, times, dollar amounts, steps, and policies, slow down and enunciate "
+        "(e.g. \"slow and clearly enunciated\") so the customer can catch them.\n"
+        "- When looking something up or asking a question, acknowledge it (\"let me "
+        "check\", \"one sec\") and let an expression carry the beat — don't go silent.\n"
+        "- Vary expression values richly and place a fresh one between sentences whenever "
+        "delivery should shift. Reach for phrases like \"say with quiet certainty\", \"with "
+        "measured reassurance\", \"soft and unhurried\", \"with a smile in your voice\", "
+        "\"low and conspiratorial\", \"bright but grounded\". Never repeat \"speak warmly\" "
+        "or let one expression carry a long run of sentences.\n"
+        "- Pacing comes from expressions and punctuation (periods, commas, ellipsis ...); "
+        "<break time=\"...\"/> also works. Use CAPITALIZATION at most once per turn, only "
+        "when prosodic stress carries meaning (e.g. \"I said FIVE, not nine\") — the "
+        "customer sees the transcript."
+    ),
+    audio_recognition_instructions_template=Instructions(
+        "Here is what has been detected about the customer you are talking to:\n\n"
+        "{audio_recognition.llm_instructions}\n\n"
+        "Meet them where they are: empathy if frustrated, concise if rushed, slow if confused."
+    ),
+)
+
+HEALTHCARE_EXPRESSIVENESS_PRESET: ExpressivenessOptions = ExpressivenessOptions(
+    tts_instructions_template=Instructions(
+        "Your delivery must be calm, reassuring, and clear at all times. "
+        "Use the following formatting tags carefully and sparingly:\n\n"
+        "{tts.markup.llm_instructions}\n\n"
+        "Guidelines:\n"
+        "- Default to a slow, measured pace. Patients need time to absorb information.\n"
+        "- When discussing symptoms, results, or anything sensitive, soften your tone and gentle the delivery.\n"
+        "- When giving instructions (medications, prep, follow-up), enunciate clearly and pause between steps.\n"
+        "- Avoid excitement, theatrical emphasis, or rapid speech — they undermine trust in a clinical setting.\n"
+        "- Never use markup that conveys impatience, frustration, or judgment."
+    ),
+    audio_recognition_instructions_template=Instructions(
+        "Here is what has been detected about the patient you are talking to:\n\n"
+        "{audio_recognition.llm_instructions}\n\n"
+        "Adjust your delivery accordingly: if they sound distressed or anxious, slow down and soften further; "
+        "if they sound elderly or are having difficulty following, increase clarity and pause more between key points."
+    ),
+)
+
+CONVERSATIONAL_EXPRESSIVENESS_PRESET: ExpressivenessOptions = ExpressivenessOptions(
+    tts_instructions_template=Instructions(
+        "Speak naturally, like a real person in a casual conversation. Use the full range of expressive "
+        "delivery available through these formatting tags:\n\n"
+        "{tts.markup.llm_instructions}\n\n"
+        "Guidelines:\n"
+        "- Mirror the user's energy: bring liveliness when they're upbeat, stay relaxed when they're chill.\n"
+        "- Use natural pauses, inflection, and reactions so you don't sound scripted.\n"
+        "- Laughter, surprise, curiosity, and other reactions are welcome when they fit the moment.\n"
+        "- Don't overdo it — the goal is natural conversation, not performance."
+    ),
+    audio_recognition_instructions_template=Instructions(
+        "Here is what has been detected about the person you are talking to:\n\n"
+        "{audio_recognition.llm_instructions}\n\n"
+        "Match their energy and conversational style."
+    ),
+)
+
 
 @dataclass
 class AgentSessionOptions:

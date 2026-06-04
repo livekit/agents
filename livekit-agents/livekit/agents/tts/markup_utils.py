@@ -4,6 +4,7 @@ import re
 
 _EXPRESSION_RE = re.compile(r'<expression\s+value="([^"]*)"(?:\s*/>|>(?:.*?)</expression>)')
 _SOUND_RE = re.compile(r'<sound\s+value="([^"]*)"(?:\s*/>|>(?:.*?)</sound>)')
+_BREAK_RE = re.compile(r'<break\s+time="[^"]*"\s*/>')
 
 
 def convert_expression_tags(text: str) -> str:
@@ -11,6 +12,15 @@ def convert_expression_tags(text: str) -> str:
     text = _EXPRESSION_RE.sub(lambda m: f"[{m.group(1)}]", text)
     text = _SOUND_RE.sub(lambda m: f"[{m.group(1)}]", text)
     return text
+
+
+def convert_break_to_ellipsis(text: str) -> str:
+    """Replace ``<break time="..."/>`` tags with an ellipsis (``...``).
+
+    Used for providers whose pacing is best expressed through punctuation
+    (e.g. Inworld) rather than explicit silence directives.
+    """
+    return _BREAK_RE.sub("...", text)
 
 
 def strip_bracket_tags(text: str) -> str:

@@ -768,7 +768,7 @@ class AgentActivity(RecognitionHooks):
 
         # Record initial agent configuration
         initial_config = llm.AgentConfigUpdate(
-            instructions=self._agent.instructions,
+            instructions=str(self._agent.instructions),
             tools_added=get_fnc_tool_names(self.tools) or None,
             agent_id=self._agent.id,
         )

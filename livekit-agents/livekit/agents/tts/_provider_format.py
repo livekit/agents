@@ -16,7 +16,12 @@ from __future__ import annotations
 
 import re
 
-from .markup_utils import convert_expression_tags, strip_bracket_tags, strip_xml_tags
+from .markup_utils import (
+    convert_break_to_ellipsis,
+    convert_expression_tags,
+    strip_bracket_tags,
+    strip_xml_tags,
+)
 
 _CARTESIA_TAGS = ["emotion", "speed", "volume", "break", "spell"]
 
@@ -99,12 +104,25 @@ Use contractions. Expand all numbers, symbols, and abbreviations into spoken \
 form (e.g. $42.50 to forty-two dollars and fifty cents, Dr. to Doctor, \
 3:45 PM to three forty-five PM, account 123456 to one two three four five six).
 
+Control pacing through punctuation and sentence structure:
+- Periods separate thoughts and create natural pauses.
+- Commas create shorter breaks within sentences.
+- Ellipsis (...) creates a lingering pause or beat — useful for thinking, \
+hesitation, or trailing off thoughtfully (e.g. "let me check...").
+- Short sentences land with emphasis and urgency.
+- Longer sentences give a calm, measured delivery.
+
 You have three XML tags. All are self-closing (end with />).
 
 1. Delivery - controls how a sentence sounds. Place before EVERY sentence.
    <expression value="DESCRIPTION"/>
-   Describe the vocal quality: say excitedly, sound concerned, whisper softly, \
-speak with bright energy, say in a low tone, very fast, very slow, etc.
+   Describe vocal quality, pitch, pace, and intonation in plain English:
+   - Quality/emotion: say excitedly, sound concerned, whisper softly, with warm surprise
+   - Pace: very fast, slow and measured, with deliberate pauses
+   - Pitch: say in a low tone, high and bright, drop to a near-whisper, \
+pitch lifts on the key word
+   - Intonation: rising tone at the end (for questions), falling close (for statements), \
+flat monotone, melodic and lilting
 
 2. Sounds - produces a non-verbal sound. Use between sentences when natural.
    <sound value="laugh"/>, <sound value="sigh"/>, <sound value="breathe"/>, \
@@ -112,6 +130,10 @@ speak with bright energy, say in a low tone, very fast, very slow, etc.
 
 3. Pauses - you can insert silence when appropriate.
    <break time="500ms"/> or <break time="1s"/> (max 10s)
+
+Combine tags freely within a single turn — pair an <expression> with a <sound> \
+and a <break> when it makes the delivery feel natural. Don't limit yourself to \
+one tag per sentence.
 
 Use CAPITALIZATION for emphasis on key words.
 
@@ -187,7 +209,10 @@ def normalize_markup(provider: str, text: str) -> str:
 
 
 def convert_markup(provider: str, text: str) -> str:
-    """Convert ``<expression>`` tags to provider's native ``[]`` format."""
+    """Convert framework-standard markup to a provider's native syntax."""
     if provider in ("elevenlabs_v3", "inworld"):
-        return convert_expression_tags(text)
+        text = convert_expression_tags(text)
+    if provider == "inworld":
+        # Inworld prefers punctuation-based pacing; rewrite <break> to ellipsis.
+        text = convert_break_to_ellipsis(text)
     return text
