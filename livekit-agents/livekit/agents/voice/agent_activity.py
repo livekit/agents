@@ -2838,7 +2838,7 @@ class AgentActivity(RecognitionHooks):
             self._agent._chat_ctx.insert(_previous_tools_messages)
             self._session._tool_items_added(_previous_tools_messages)
 
-        forwarded_text = "\n".join(out.forwarded_text for out in segment_outputs)
+        forwarded_text = "".join(out.forwarded_text for out in segment_outputs)
         if speech_handle.interrupted:
             # forward_generation already cleared the buffer and waited for playout
             await utils.aio.cancel_and_wait(*tasks)
