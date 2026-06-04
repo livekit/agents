@@ -25,7 +25,7 @@ class _FakeProc(SupervisedProc):
 
     @property
     def process_kind(self) -> SupervisedProcKind:
-        return SupervisedProcKind.job
+        return SupervisedProcKind.JOB
 
     def _create_process(self, cch: socket.socket, log_cch: socket.socket):  # pragma: no cover
         raise NotImplementedError
@@ -95,9 +95,9 @@ async def test_uptime_is_zero_before_start() -> None:
 
 def test_process_kind_renders_as_plain_string() -> None:
     # the log message interpolates `f"{self.process_kind} process …"`, so the enum
-    # must stringify to its value (not "SupervisedProcKind.job")
-    assert f"{SupervisedProcKind.job} process" == "job process"
-    assert f"{SupervisedProcKind.inference} process" == "inference process"
+    # must stringify to its value (not "SupervisedProcKind.JOB")
+    assert f"{SupervisedProcKind.JOB} process" == "job process"
+    assert f"{SupervisedProcKind.INFERENCE} process" == "inference process"
 
 
 def test_subclassing_without_process_kind_is_rejected() -> None:

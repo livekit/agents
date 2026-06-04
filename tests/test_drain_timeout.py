@@ -40,7 +40,7 @@ def _make_server(drain_timeout: int = 1) -> AgentServer:
 class _DummySupervisedProc(SupervisedProc):
     @property
     def process_kind(self) -> SupervisedProcKind:
-        return SupervisedProcKind.job
+        return SupervisedProcKind.JOB
 
     def _create_process(self, cch: socket.socket, log_cch: socket.socket) -> mp.Process:
         raise NotImplementedError

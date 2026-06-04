@@ -69,7 +69,7 @@ class ProcJobExecutor(SupervisedProc):
 
     @property
     def process_kind(self) -> SupervisedProcKind:
-        return SupervisedProcKind.job
+        return SupervisedProcKind.JOB
 
     @property
     def status(self) -> JobStatus:

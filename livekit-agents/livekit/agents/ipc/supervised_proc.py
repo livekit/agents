@@ -41,8 +41,8 @@ _MEMORY_WARN_RESET_DELTA_MB = 50.0
 
 
 class SupervisedProcKind(str, Enum):
-    job = "job"
-    inference = "inference"
+    JOB = "job"
+    INFERENCE = "inference"
 
     def __str__(self) -> str:
         return self.value

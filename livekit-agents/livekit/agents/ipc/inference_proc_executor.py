@@ -49,7 +49,7 @@ class InferenceProcExecutor(SupervisedProc):
 
     @property
     def process_kind(self) -> SupervisedProcKind:
-        return SupervisedProcKind.inference
+        return SupervisedProcKind.INFERENCE
 
     def _create_process(self, cch: socket.socket, log_cch: socket.socket) -> mp.Process:
         proc_args = ProcStartArgs(
