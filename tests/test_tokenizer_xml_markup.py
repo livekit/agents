@@ -102,10 +102,7 @@ class TestBatchTokenizer:
     def test_standalone_tag_merged_with_following_text(self) -> None:
         """Regression: a self-closing tag as its own sentence must merge with
         the next so TTS never receives a tag-only chunk."""
-        text = (
-            '<expression value="speak firmly"/> '
-            "I told you already, no changes to the order."
-        )
+        text = '<expression value="speak firmly"/> I told you already, no changes to the order.'
         sentences = self.tok.tokenize(text)
         _assert_no_tag_only_sentences(sentences)
 

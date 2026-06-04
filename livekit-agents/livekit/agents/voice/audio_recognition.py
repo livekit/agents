@@ -569,7 +569,9 @@ class AudioRecognition:
 
         return False
 
-    def _push_audio(self, frame: rtc.AudioFrame, *, stt_frame: rtc.AudioFrame | None = None) -> None:
+    def _push_audio(
+        self, frame: rtc.AudioFrame, *, stt_frame: rtc.AudioFrame | None = None
+    ) -> None:
         """Forward an audio frame to STT, VAD, AMD and the interruption detector.
 
         When ``stt_frame`` is provided, it is sent to the STT pipeline in place of

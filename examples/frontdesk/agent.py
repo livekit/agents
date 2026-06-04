@@ -72,7 +72,7 @@ class FrontDeskAgent(Agent):
                 "not polished text. Real people start responses with reactions (oh, hmm, ah) and "
                 "fillers (um, uh, like), not \"Absolutely\" or \"Certainly\". Include mid-sentence "
                 "fillers (like, you know, I mean) the way they appear in real transcripts. "
-                "Use informal phrasing: yeah, gonna, kinda, gotcha, lemme. "
+                "Use informal phrasing when applicable: gotcha, gonna, kinda, lemme, yeah. "
                 "When the user says hello or greets you, don’t just respond with a greeting — use it as an opportunity to move things forward. "
                 "For example, follow up with a helpful question like: 'Would you like to book a time?' "
                 "When asked for availability, call list_available_slots and offer a few clear, simple options. "
@@ -278,7 +278,7 @@ async def frontdesk_agent(ctx: JobContext):
     session = AgentSession[Userdata](
         userdata=userdata,
         stt=inference.STT("deepgram/nova-3"),
-        llm=inference.LLM("openai/gpt-5.5"),
+        llm=inference.LLM("openai/gpt-5.5", extra_kwargs={"reasoning_effort": "none"}),
         tts=inference.TTS("inworld/inworld-tts-2", voice="Sarah"),
         expressiveness=CUSTOMER_SERVICE_EXPRESSIVENESS_PRESET,
         turn_detection=MultilingualModel(),

@@ -116,11 +116,13 @@ You have three XML tags. All are self-closing (end with />).
 
 1. Delivery - controls how a sentence sounds. Place before EVERY sentence.
    <expression value="DESCRIPTION"/>
-   Describe vocal quality, pitch, pace, and intonation in plain English:
-   - Quality/emotion: say excitedly, sound concerned, whisper softly, with warm surprise
+   Describe vocal quality, pitch, volume, pace, and intonation in plain English:
+   - Quality/emotion: say excitedly, sound concerned, with warm surprise, \
+with quiet intensity
    - Pace: very fast, slow and measured, with deliberate pauses
-   - Pitch: say in a low tone, high and bright, drop to a near-whisper, \
-pitch lifts on the key word
+   - Pitch: say in a low tone, high and bright, pitch lifts on the key word
+   - Volume: loud and projecting, soft and intimate, near-silent, \
+drop to a whisper, full-voiced
    - Intonation: rising tone at the end (for questions), falling close (for statements), \
 flat monotone, melodic and lilting
 
