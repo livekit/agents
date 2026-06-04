@@ -286,7 +286,15 @@ class SupervisedProc(ABC):
             await self._send_kill_signal()
 
         if not self._shutting_down_fut.done():
-            await self._shutting_down_fut
+            try:
+                await asyncio.wait_for(self._shutting_down_fut, timeout=self._opts.close_timeout)
+            except asyncio.TimeoutError:
+                logger.error(
+                    "process did not send ShuttingDown in time, killing process",
+                    extra=self.logging_extra(),
+                )
+                await self._send_dump_signal()
+                await self._send_kill_signal()
 
         if self._supervise_atask and not self._supervise_atask.done():
             try:

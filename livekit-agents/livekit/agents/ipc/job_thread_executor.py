@@ -219,7 +219,10 @@ class ThreadJobExecutor:
             logger.error("job did not ack shutdown in time", extra=self.logging_extra())
 
         if not self._shutting_down_fut.done():
-            await self._shutting_down_fut
+            try:
+                await asyncio.wait_for(self._shutting_down_fut, timeout=self._opts.close_timeout)
+            except asyncio.TimeoutError:
+                logger.error("job did not send ShuttingDown in time", extra=self.logging_extra())
 
         try:
             if self._main_atask:
@@ -327,6 +330,8 @@ class ThreadJobExecutor:
         # resolve pending futures when the channel closes
         if not self._shutdown_ack_fut.done():
             self._shutdown_ack_fut.set_result(None)
+        if not self._shutting_down_fut.done():
+            self._shutting_down_fut.set_result(None)
 
     @utils.log_exceptions(logger=logger)
     async def _ping_task(self) -> None:
