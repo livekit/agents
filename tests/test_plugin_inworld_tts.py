@@ -12,6 +12,8 @@ from livekit.agents import APIConnectionError
 from livekit.agents.types import NOT_GIVEN
 from livekit.agents.utils import aio
 
+pytestmark = pytest.mark.plugin("inworld")
+
 
 async def test_delivery_mode_default_not_given():
     from livekit.plugins.inworld import TTS

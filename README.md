@@ -186,7 +186,7 @@ class StoryAgent(Agent):
     def __init__(self, name: str, location: str) -> None:
         super().__init__(
             instructions=f"You are a storyteller. Use the user's information in order to make the story personalized."
-            f"The user's name is {name}, from {location}"
+            f"The user's name is {name}, from {location}",
             # override the default model, switching to Realtime API from standard LLMs
             llm=openai.realtime.RealtimeModel(voice="echo"),
             chat_ctx=chat_ctx,
@@ -222,7 +222,7 @@ Automated tests are essential for building reliable agents, especially with the 
 @pytest.mark.asyncio
 async def test_no_availability() -> None:
     llm = google.LLM()
-    async AgentSession(llm=llm) as sess:
+    async with AgentSession(llm=llm) as sess:
         await sess.start(MyAgent())
         result = await sess.run(
             user_input="Hello, I need to place an order."
