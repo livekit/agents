@@ -155,16 +155,12 @@ class SupervisedProc(ABC):
 
     @property
     def process_kind(self) -> str:
-        """human-readable label for this kind of process, used in log messages.
-
-        Subclasses override this (e.g. "job process", "inference process") so log
-        lines name the process accurately instead of guessing.
-        """
+        """log label for this kind of process; subclasses override it."""
         return "process"
 
     @property
     def uptime(self) -> float:
-        """seconds since the process was spawned, or 0.0 if it hasn't started yet"""
+        """seconds since spawn, 0.0 if not started yet."""
         if self._spawn_time is None:
             return 0.0
         return time.monotonic() - self._spawn_time
@@ -510,13 +506,8 @@ class SupervisedProc(ABC):
             await aio.cancel_and_wait(*tasks)
 
     def _should_emit_memory_warning(self, memory_mb: float, *, now: float) -> bool:
-        """Decide whether to emit a high-memory warning, applying the cooldown.
-
-        Returns True (and records this emission) when either the cooldown has elapsed
-        since the last warning, or usage grew by at least _MEMORY_WARN_RESET_DELTA_MB
-        since then. This keeps a process that lingers above the threshold from spamming
-        a warning on every sample while still surfacing real growth promptly.
-        """
+        """True (and records the emission) if the cooldown elapsed or usage grew
+        by _MEMORY_WARN_RESET_DELTA_MB since the last warning."""
         cooled_down = now - self._last_memory_warn_time >= _MEMORY_WARN_COOLDOWN
         grew = memory_mb - self._last_memory_warn_mb >= _MEMORY_WARN_RESET_DELTA_MB
         if cooled_down or grew:
@@ -526,15 +517,8 @@ class SupervisedProc(ABC):
         return False
 
     def _memory_logging_extra(self, memory_mb: float) -> dict[str, Any]:
-        """Build the diagnostic context shared by the memory warning/limit logs.
-
-        The extra fields are meant to answer "is this a process that started heavy,
-        or one whose usage grew over time?" without needing follow-up requests:
-          - uptime / has_running_job: distinguishes a freshly warmed process from one
-            that has been handling a job for a while
-          - baseline_memory_mb: RSS right after initialization (prewarm), before any job
-          - growth_memory_mb: how much the process has grown since that baseline
-        """
+        """Diagnostic context for the memory logs: tells a process that started
+        heavy from one that grew over time (uptime, baseline RSS, growth)."""
         extra: dict[str, Any] = {
             "memory_usage_mb": round(memory_mb, 1),
             "memory_warn_mb": self._opts.memory_warn_mb,
