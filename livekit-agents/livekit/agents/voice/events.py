@@ -30,6 +30,7 @@ from ..log import logger
 from ..metrics import AgentMetrics, AgentSessionUsage
 from ..stt import STT, STTError
 from ..tts import TTS, TTSError
+from .filler_scheduler import _FillerScheduler, _FillerSource
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
@@ -55,6 +56,7 @@ class RunContext(Generic[Userdata_T]):
         self._function_call = function_call
 
         self._initial_step_idx = speech_handle.num_steps - 1
+        self._filler_schedulers: list[_FillerScheduler] = []
 
         # synthesized progress-update pairs, populated whether or not an executor is attached
         self._updates: list[tuple[FunctionCall, FunctionCallOutput]] = []
@@ -100,6 +102,49 @@ class RunContext(Generic[Userdata_T]):
         await self.speech_handle._wait_for_generation(step_idx=self._initial_step_idx)
 
     @asynccontextmanager
+    async def with_filler(
+        self,
+        source: _FillerSource,
+        *,
+        delay: float = 0,
+        interval: float | None = None,
+        max_steps: int | None = None,
+    ) -> AsyncIterator[None]:
+        """Schedule filler speech while a long-running step blocks the tool.
+
+        While the context is open, a background scheduler waits for the session to be
+        continuously idle for ``delay`` seconds, then plays ``source``. With ``interval``
+        set, it then sleeps that many wall-clock seconds before restarting the dwell
+        wait. ``interval=None`` (default) fires at most once.
+
+        Args:
+            source: Either a string (spoken via ``session.say``), or a callable
+                ``(step: int) -> SpeechHandle | str | None`` invoked at fire time with
+                the iteration count. Returning ``None`` skips this fire and retries on
+                the next interval; the step counter only advances when a handle is
+                produced. Use ``max_steps`` to cap the total number of fires.
+            delay: Continuous-idle dwell required before each fire. ``0`` = fire as
+                soon as the session is next idle.
+            interval: Wall-clock cooldown after each fire. ``None`` = fire at most once.
+            max_steps: Maximum number of fires across the lifetime of the cm.
+                ``None`` = no limit.
+        """
+        scheduler = _FillerScheduler(
+            session=self._session,
+            speech_handle=self._speech_handle,
+            source=source,
+            delay=delay,
+            interval=interval,
+            max_steps=max_steps,
+        )
+        self._filler_schedulers.append(scheduler)
+        try:
+            yield
+        finally:
+            await scheduler.aclose()
+            self._filler_schedulers.remove(scheduler)
+
+    @asynccontextmanager
     async def foreground(self) -> AsyncIterator[AgentActivity]:
         """Wait for idle, then hold the floor while interactive work runs.
 
@@ -116,18 +161,6 @@ class RunContext(Generic[Userdata_T]):
         await self._drain_pending_reply()
         async with self._session._wait_for_idle_and_hold() as activity:
             yield activity
-
-    async def _drain_pending_reply(self) -> None:
-        """Wait for this tool's pending deferred reply to finish delivery, if any."""
-        if self._executor is None:
-            return
-        reply_task = self._executor._reply_task
-        if reply_task is None or reply_task.done():
-            return
-        try:
-            await asyncio.shield(reply_task)
-        except Exception:
-            pass  # reply task's own errors aren't our concern
 
     async def update(
         self,
@@ -148,6 +181,11 @@ class RunContext(Generic[Userdata_T]):
                 callable receiving ``UpdatePromptArgs``. Defaults to the executor's
                 resolved ``update`` template (or the module default when standalone).
         """
+        # update() is a deliberate agent action — reset any active filler dwell so a
+        # pending filler doesn't race the real update to the speech queue
+        for s in self._filler_schedulers:
+            s.reset_dwell()
+
         if isinstance(message, str):
             if template is None:
                 if self._executor is not None:
@@ -196,6 +234,18 @@ class RunContext(Generic[Userdata_T]):
     def _detach_executor(self) -> None:
         self._executor = None
         self._first_update_fut = None
+
+    async def _drain_pending_reply(self) -> None:
+        """Wait for this tool's pending deferred reply to finish delivery, if any."""
+        if self._executor is None:
+            return
+        reply_task = self._executor._reply_task
+        if reply_task is None or reply_task.done():
+            return
+        try:
+            await asyncio.shield(reply_task)
+        except Exception:
+            pass  # reply task's own errors aren't our concern
 
     def _make_update_pair(
         self, message: Any, *, call_id_suffix: str = ""
