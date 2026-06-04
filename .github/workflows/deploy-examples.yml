@@ -1,16 +1,14 @@
 name: Deploy Examples
 
 on:
+  # Manual runs deploy from the branch picked in the Actions "Use workflow
+  # from" selector — no input needed.
   workflow_dispatch:
-    inputs:
-      ref:
-        description: "Branch or ref to deploy from (default: main)"
-        type: string
-        required: false
-        default: "main"
+  # Called by publish.yml after a release to deploy the published commit.
   workflow_call:
     inputs:
       ref:
+        description: "Commit/branch/tag to deploy. Defaults to the triggering ref."
         type: string
         required: false
 
@@ -28,7 +26,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
-          ref: ${{ inputs.ref || 'main' }}
+          ref: ${{ inputs.ref || github.ref }}
 
       - name: Install LiveKit CLI
         run: |
