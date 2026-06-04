@@ -1,9 +1,9 @@
-"""Demo: ctx.update() + ctx.say_filler() in a slow tool.
+"""Demo: ctx.update() + ctx.with_filler() in a slow tool.
 
 ``ctx.update()`` delivers a real status to the LLM; the agent then naturally voices
 something like "let me check flights, this might take a couple minutes."
 
-``ctx.say_filler()`` is the acoustic lane — it goes straight through session.say and
+``ctx.with_filler()`` is the acoustic lane — it goes straight through session.say and
 only plays during continuous-idle gaps in the conversation. Use it to fill quiet
 during opaque work without burning an LLM round-trip.
 """
@@ -45,7 +45,7 @@ class TravelToolset(AsyncToolset):
         )
 
         # phase 1: searching — single filler if the user stays quiet for 5s
-        async with ctx.say_filler("Still searching, hang on a sec.", delay=5):
+        async with ctx.with_filler("Still searching, hang on a sec.", delay=5):
             await asyncio.sleep(20)
             airlines = random.sample(["United", "Delta", "American", "JetBlue"], k=3)
             cheapest = airlines[0]
@@ -58,7 +58,7 @@ class TravelToolset(AsyncToolset):
             "Still working on it, won't be long.",
             "Hang tight — almost done.",
         ]
-        async with ctx.say_filler(
+        async with ctx.with_filler(
             lambda step: followups[step], delay=5, interval=10, max_steps=len(followups)
         ):
             await asyncio.sleep(40)

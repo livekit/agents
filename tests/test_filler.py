@@ -369,8 +369,8 @@ async def test_scheduler_does_not_fire_after_speech_interrupted() -> None:
 
 
 @pytest.mark.asyncio
-async def test_async_run_context_say_fillers_yields_and_fires() -> None:
-    """async with ctx.say_fillers(...) starts a scheduler and tears it down on exit."""
+async def test_async_run_context_with_filler_yields_and_fires() -> None:
+    """async with ctx.with_filler(...) starts a scheduler and tears it down on exit."""
     from livekit.agents.llm import FunctionCall
     from livekit.agents.llm.async_toolset import AsyncRunContext, AsyncToolset
     from livekit.agents.voice.events import RunContext
@@ -385,13 +385,13 @@ async def test_async_run_context_say_fillers_yields_and_fires() -> None:
     )
     ctx = AsyncRunContext(run_ctx=run_ctx, toolset=toolset)
 
-    async with ctx.say_filler("hello", delay=0.02, interval=None):
+    async with ctx.with_filler("hello", delay=0.02, interval=None):
         await asyncio.sleep(0.1)
     assert [c["text"] for c in session.say_calls] == ["hello"]
 
 
 @pytest.mark.asyncio
-async def test_async_run_context_say_fillers_cancels_on_exit() -> None:
+async def test_async_run_context_with_filler_cancels_on_exit() -> None:
     """Exiting the cm before delay elapses cancels the pending fire."""
     from livekit.agents.llm import FunctionCall
     from livekit.agents.llm.async_toolset import AsyncRunContext, AsyncToolset
@@ -407,7 +407,7 @@ async def test_async_run_context_say_fillers_cancels_on_exit() -> None:
     )
     ctx = AsyncRunContext(run_ctx=run_ctx, toolset=toolset)
 
-    async with ctx.say_filler("nope", delay=1.0, interval=None):
+    async with ctx.with_filler("nope", delay=1.0, interval=None):
         await asyncio.sleep(0.01)
     assert session.say_calls == []
 
@@ -435,7 +435,7 @@ async def test_ctx_update_resets_pending_filler_dwell() -> None:
 
     toolset._enqueue_reply = _noop_enqueue  # type: ignore[assignment]
 
-    async with ctx.say_filler("ping", delay=0.1, interval=None):
+    async with ctx.with_filler("ping", delay=0.1, interval=None):
         await asyncio.sleep(0.05)
         # update first sets _pending_fut; subsequent calls go through _enqueue_reply.
         # Both paths must call reset_dwell, so fire two updates back to back.

@@ -92,7 +92,7 @@ class RunContext(Generic[Userdata_T]):
         await self.speech_handle._wait_for_generation(step_idx=self._initial_step_idx)
 
     @asynccontextmanager
-    async def say_filler(
+    async def with_filler(
         self,
         source: _FillerSource,
         *,
