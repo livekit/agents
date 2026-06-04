@@ -165,7 +165,11 @@ class AudioRecognition:
         self._user_turn_committed = False  # true if user turn ended but EOU task not done
 
         self._sample_rate: int | None = None
-        self._speaking = False
+
+        # set on END_OF_SPEECH, cleared on START_OF_SPEECH; _speaking is its inverse.
+        # exposed as an event so _wait_for_inactive can level-wait on it
+        self._user_silence_ev = asyncio.Event()
+        self._user_silence_ev.set()
 
         self._last_final_transcript_time: float | None = None
         self._last_speaking_time: float | None = None
@@ -408,6 +412,22 @@ class AudioRecognition:
         self._interruption_ch.send_nowait(  # type: ignore[union-attr]
             _OverlapSpeechEndedSentinel(ended_at=ended_at or time.time())
         )
+
+    @property
+    def _speaking(self) -> bool:
+        return not self._user_silence_ev.is_set()
+
+    @_speaking.setter
+    def _speaking(self, value: bool) -> None:
+        if value:
+            self._user_silence_ev.clear()
+        else:
+            self._user_silence_ev.set()
+
+    async def _wait_for_user_silence(self) -> None:
+        if self._user_silence_ev.is_set():
+            return
+        await self._user_silence_ev.wait()
 
     @utils.log_exceptions(logger=logger)
     async def _flush_held_transcripts(self, cooldown: float, force: bool = False) -> None:

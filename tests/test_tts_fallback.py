@@ -13,6 +13,8 @@ from livekit.agents.utils.aio.channel import ChanEmpty
 
 from .fake_tts import FakeTTS
 
+pytestmark = pytest.mark.unit
+
 
 class FallbackAdapterTester(FallbackAdapter):
     def __init__(

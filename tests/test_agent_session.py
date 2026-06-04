@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import AsyncIterable
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
@@ -12,8 +13,10 @@ from livekit.agents import (
     AgentFalseInterruptionEvent,
     AgentStateChangedEvent,
     ConversationItemAddedEvent,
+    FlushSentinel,
     LanguageCode,
     MetricsCollectedEvent,
+    ModelSettings,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
     function_tool,
@@ -33,6 +36,8 @@ from livekit.agents.voice.events import FunctionToolsExecutedEvent
 from livekit.agents.voice.io import PlaybackFinishedEvent
 
 from .fake_session import FakeActions, create_session, run_session
+
+pytestmark = pytest.mark.unit
 
 
 class MyAgent(Agent):
@@ -359,18 +364,15 @@ async def test_interruption_by_text_input() -> None:
     assert len(playback_finished_events) == 2
     assert playback_finished_events[0].interrupted is True
 
-    assert len(agent_state_events) == 7
+    assert len(agent_state_events) == 6
     assert agent_state_events[0].old_state == "initializing"
     assert agent_state_events[0].new_state == "listening"
     assert agent_state_events[1].new_state == "thinking"
     assert agent_state_events[2].new_state == "speaking"
-    assert (
-        agent_state_events[3].new_state == "listening"
-    )  # not sure how we can avoid listening here?
-    # speaking to thinking when interrupted by text
-    assert agent_state_events[4].new_state == "thinking"
-    assert agent_state_events[5].new_state == "speaking"
-    assert agent_state_events[6].new_state == "listening"
+    # interrupted by text while speaking -> straight to thinking for the new reply
+    assert agent_state_events[3].new_state == "thinking"
+    assert agent_state_events[4].new_state == "speaking"
+    assert agent_state_events[5].new_state == "listening"
 
     chat_ctx_items = agent.chat_ctx.items
     assert len(chat_ctx_items) == 6
@@ -1396,3 +1398,80 @@ async def test_silent_tool_call_pause_state_does_not_leak_into_tool_reply() -> N
     assert transitions[silent_step_finished + 1] == ("listening", "speaking")
     assert false_interruption_events
     assert false_interruption_events[-1].resumed is True
+
+
+class FlushMultiSegmentAgent(Agent):
+    """Agent whose llm_node flushes the reply into two segments via FlushSentinel."""
+
+    def __init__(self) -> None:
+        super().__init__(instructions="You are a helpful assistant.")
+
+    async def llm_node(
+        self,
+        chat_ctx: ChatContext,
+        tools: list,
+        model_settings: ModelSettings,
+    ) -> AsyncIterable[str | FlushSentinel]:
+        yield "Hello there. "
+        yield FlushSentinel()
+        yield "How are you?"
+
+
+async def test_pipeline_multi_segment_flush() -> None:
+    speed = 5.0
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Hello, how are you?", stt_delay=0.2)
+    # the agent's llm_node injects a FlushSentinel, splitting the reply into two
+    # segments; register a TTS response keyed by each segment's text
+    actions.add_tts(1.0, input="Hello there. ", ttfb=0.1, duration=0.1)
+    actions.add_tts(1.0, input="How are you?", ttfb=0.1, duration=0.1)
+
+    session = create_session(actions, speed_factor=speed)
+    agent = FlushMultiSegmentAgent()
+
+    playback_finished_events: list[PlaybackFinishedEvent] = []
+    session.output.audio.on("playback_finished", playback_finished_events.append)
+
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    # each FlushSentinel-delimited segment plays out independently
+    assert len(playback_finished_events) == 2
+    assert all(not ev.interrupted for ev in playback_finished_events)
+
+    # but both segments join into a single assistant message
+    assistant_msgs = [
+        it for it in agent.chat_ctx.items if it.type == "message" and it.role == "assistant"
+    ]
+    assert len(assistant_msgs) == 1
+    assert assistant_msgs[0].text_content == "Hello there. How are you?"
+
+
+async def test_pipeline_multi_segment_interrupted() -> None:
+    speed = 5.0
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Hello, how are you?", stt_delay=0.2)
+    # long first segment so the interrupt lands while it is still playing
+    actions.add_tts(15.0, input="Hello there. ", ttfb=0.1, duration=0.1)
+    actions.add_tts(1.0, input="How are you?", ttfb=0.1, duration=0.1)
+
+    session = create_session(actions, speed_factor=speed)
+    agent = FlushMultiSegmentAgent()
+
+    playback_finished_events: list[PlaybackFinishedEvent] = []
+    session.output.audio.on("playback_finished", playback_finished_events.append)
+
+    asyncio.get_event_loop().call_later(5 / speed, session.interrupt)
+
+    await asyncio.wait_for(run_session(session, agent, drain_delay=0.5), timeout=SESSION_TIMEOUT)
+
+    # interrupted during the first segment: only that segment plays, the second
+    # segment is never forwarded
+    assert len(playback_finished_events) == 1
+    assert playback_finished_events[0].interrupted is True
+
+    assistant_msgs = [
+        it for it in agent.chat_ctx.items if it.type == "message" and it.role == "assistant"
+    ]
+    assert len(assistant_msgs) == 1
+    assert assistant_msgs[0].interrupted is True
+    assert "How are you?" not in (assistant_msgs[0].text_content or "")

@@ -8,6 +8,8 @@ import pytest
 from livekit.agents import APIConnectOptions, llm
 from livekit.plugins.anthropic.llm import LLMStream
 
+pytestmark = pytest.mark.plugin("anthropic")
+
 
 def _make_llm(**kwargs):
     from livekit.plugins.anthropic import LLM
