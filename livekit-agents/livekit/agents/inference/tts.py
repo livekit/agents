@@ -562,7 +562,9 @@ class TTS(tts.TTS):
             }
 
         try:
-            await ws.send_str(json.dumps(params))
+            payload = json.dumps(params)
+            logger.debug("[TTS→gateway] %s", payload)
+            await ws.send_str(payload)
         except Exception as e:
             await ws.close()
             raise APIConnectionError(
@@ -673,7 +675,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             async for ev in sent_tokenizer_stream:
                 token_pkt = base_pkt.copy()
                 converted = self._tts.markup.convert(ev.token)
-                logger.debug("[TTS→API] %s", converted)
                 token_pkt["transcript"] = converted + " "
                 generation_config: dict[str, Any] = {}
                 if self._opts.voice:
@@ -685,13 +686,17 @@ class SynthesizeStream(tts.SynthesizeStream):
                 token_pkt["generation_config"] = generation_config
                 token_pkt["extra"] = self._opts.extra_kwargs if self._opts.extra_kwargs else {}
                 self._mark_started()
-                await ws.send_str(json.dumps(token_pkt))
+                payload = json.dumps(token_pkt)
+                logger.debug("[TTS→gateway] %s", payload)
+                await ws.send_str(payload)
                 input_sent_event.set()
 
             end_pkt = {
                 "type": "session.flush",
             }
-            await ws.send_str(json.dumps(end_pkt))
+            flush_payload = json.dumps(end_pkt)
+            logger.debug("[TTS→gateway] %s", flush_payload)
+            await ws.send_str(flush_payload)
             # needed in case empty input is sent
             input_sent_event.set()
 
