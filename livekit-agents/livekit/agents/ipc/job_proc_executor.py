@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import multiprocessing as mp
+import os
 import socket
 from collections.abc import Awaitable, Callable
 from multiprocessing.context import BaseContext
@@ -168,6 +169,19 @@ class ProcJobExecutor(SupervisedProc):
         metrics.job_started()
         self._job_status = JobStatus.RUNNING
         self._running_job = info
+
+        # Re-write the manifest now that job_id/room_id are known, so the
+        # debug.memory CLI can label this child's memray capture by job.
+        if self._pid is not None:
+            from ..debug._proc_manifest import write_manifest
+
+            write_manifest(
+                pid=self._pid,
+                parent_pid=os.getpid(),
+                kind=str(self.process_kind),
+                job_id=info.job.id,
+                room_id=info.job.room.sid,
+            )
 
         start_req = proto.StartJobRequest()
         start_req.running_job = info

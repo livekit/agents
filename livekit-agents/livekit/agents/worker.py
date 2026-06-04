@@ -802,6 +802,12 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 self._memory_log_loop(), name="memory_log_task"
             )
 
+            from .debug._proc_manifest import write_manifest
+
+            # Write a manifest so the debug.memory CLI can label this pid as the
+            # worker (memray --follow-fork captures are named by pid only).
+            write_manifest(pid=os.getpid(), parent_pid=os.getpid(), kind="worker")
+
             self.emit("worker_started")
             self._log_memory_usage("started")
 

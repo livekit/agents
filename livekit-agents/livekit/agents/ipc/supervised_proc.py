@@ -235,6 +235,16 @@ class SupervisedProc(ABC):
             self._spawn_time = time.monotonic()
             self._join_fut = asyncio.Future[None]()
 
+            # Write a manifest so debug.memory can label this child's memray capture.
+            # Job manifests are updated again in launch_job() once job_id is known.
+            from ..debug._proc_manifest import write_manifest
+
+            write_manifest(
+                pid=self._pid,
+                parent_pid=os.getpid(),
+                kind=str(self.process_kind),
+            )
+
             def _sync_run() -> None:
                 self._proc.join()
                 log_listener.stop()

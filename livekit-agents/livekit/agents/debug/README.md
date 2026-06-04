@@ -4,9 +4,14 @@ The framework can run with `multiprocessing_context="fork"`, which is what lets
 `memray run --follow-fork` capture the worker plus every job/inference child
 in one shot — at memray's full native-symbol fidelity.
 
-> `fork` is a profiling-only setting. It is unsafe once native/threaded libs
-> are initialized in the parent (onnxruntime threadpools, CUDA, etc.). Don't
-> ship to production with this; use it for a local profiling session.
+> **Linux only.** `fork` is unsafe on macOS (libdispatch + objc runtime
+> initialization issues), which is why Python's `multiprocessing` defaults to
+> `spawn` there. memray + `fork` on macOS will crash. Profile from a Linux
+> machine — Docker on the host works fine.
+>
+> Also: `fork` is a profiling-only setting. Don't ship to production with
+> this default; it's unsafe with already-initialized native/threaded libs
+> (onnxruntime threadpools, CUDA, etc.).
 
 ## Install
 
@@ -14,90 +19,64 @@ in one shot — at memray's full native-symbol fidelity.
 uv pip install memray
 ```
 
-(Linux + macOS; memray does not support Windows.)
-
 ## Capture
 
-Run the agent with memray, telling it to follow forks:
+Run the agent with memray and `--follow-fork`:
 
 ```bash
-AGENT_ENTRYPOINT=src/agent.py uv run --no-sync memray run --follow-fork "$AGENT_ENTRYPOINT" dev --no-reload
+AGENT_ENTRYPOINT=src/agent.py uv run --no-sync \
+  memray run --follow-fork "$AGENT_ENTRYPOINT" dev --no-reload
 ```
 
-memray writes one `.bin` per process into the cwd:
+memray writes one `.bin` per process into **the parent directory of the
+entrypoint script** (`src/` in the example above, not `cwd`):
 
 ```
 src/
 ├─ memray-agent.py.70321.bin             # the worker (parent)
-├─ memray-agent.py.70321.bin.70324       # one per forked child (jobs, inference)
-└─ memray-agent.py.70321.bin.70327
+├─ memray-agent.py.70321.bin.70324       # forked child (job/inference)
+├─ memray-agent.py.70321.bin.70327       # …
+├─ livekit-proc-70321-70321.json         # manifests written by the framework
+├─ livekit-proc-70321-70324.json         #   one per process; pid → kind/job_id
+└─ livekit-proc-70321-70327.json
 ```
 
-`--no-reload` is recommended so the reloader process doesn't add noise.
+Use `--no-reload` so the watcher process doesn't add noise.
 
-## Label captures by process (jobs / inference / worker)
-
-memray names captures by pid only, so a `.bin` on its own can't tell you
-whether it's a job, the inference process, or the worker. The framework logs
-that mapping: every process logs its RSS with `pid` + `process_kind` (and
-`job_id` / `room_id` for jobs) at startup, every 30s, and before shutdown.
-
-Capture those logs as **JSON** alongside the run, e.g.:
-
-```bash
-AGENT_ENTRYPOINT=src/agent.py uv run --no-sync \
-  memray run --follow-fork "$AGENT_ENTRYPOINT" dev --no-reload 2> agent.log
-```
-
-(Configure the framework's logger for JSON output so the lines are
-machine-readable; plain-text lines are simply ignored by the joiner.)
-
-Then pass the log to the viewer with `--logs` and each capture is labelled:
-
-```bash
-uv run --no-sync python -m livekit.agents.debug.memory list src --logs agent.log
-#   worker pid=500
-#   job pid=501  job=AJ_abc
-#   inference pid=502
-```
-
-Without `--logs`, captures still group by parent/child pid; their kind just
-shows as `unknown`.
+The framework writes the `livekit-proc-*.json` manifest files next to the
+captures so the viewer can label each `.bin` as worker / job (with `job_id`) /
+inference. Override the manifest directory with `LK_DEBUG_DIR` if you need to.
 
 ## View
 
-Render flamegraphs and an index that groups children under their parent
-worker (pass `--logs` here too to label them):
-
 ```bash
-uv run --no-sync python -m livekit.agents.debug.memory report src --logs agent.log
-```
+uv run --no-sync python -m livekit.agents.debug.memory list src
+#   worker pid=70321
+#   job pid=70324  job=AJ_abc
+#   inference pid=70327
 
-Browse them locally:
-
-```bash
-uv run --no-sync python -m livekit.agents.debug.memory serve src --logs agent.log
+uv run --no-sync python -m livekit.agents.debug.memory report src
+uv run --no-sync python -m livekit.agents.debug.memory serve src
 # → serving src at http://localhost:8042/
 ```
 
-Open the index in Chrome. Click into any capture, then switch to the **peak**
-view (top of the memray UI) — for a flat, non-growing process the peak is
-essentially the whole resident footprint.
+Open the index in Chrome, click into any capture, switch to the **peak** view
+(top of the memray UI). For a flat, non-growing process the peak is essentially
+the whole resident footprint.
 
-You can also use memray's other reporters directly when the flamegraph is too
-noisy (e.g. lots of `<unknown>` frames from stripped C extensions):
+When the flamegraph is too noisy (lots of `<unknown>` frames from stripped C
+extensions), use memray's other reporters directly:
 
 ```bash
 uv run --no-sync python -m memray table src/memray-agent.py.70321.bin.70324 -o table.html
-uv run --no-sync python -m memray summary src/memray-agent.py.70321.bin.70324    # terminal
-uv run --no-sync python -m memray tree src/memray-agent.py.70321.bin.70324       # interactive TUI
+uv run --no-sync python -m memray summary src/memray-agent.py.70321.bin.70324
+uv run --no-sync python -m memray tree src/memray-agent.py.70321.bin.70324
 ```
 
 ## Share
 
 Captures contain function names and source paths from your code — review
-before sending externally. The rendered HTML is self-contained and opens in
-any browser without memray installed:
+before sending externally. The rendered HTML is self-contained:
 
 ```bash
 tar czf flamegraphs.tar.gz src/*.flamegraph.html src/index.html
@@ -105,8 +84,7 @@ tar czf flamegraphs.tar.gz src/*.flamegraph.html src/index.html
 
 ## Caveats
 
-- `fork` is unsafe in production. Pass `multiprocessing_context="fork"` only
-  for a profiling session.
+- Linux only (see top of file).
 - Run long enough for a clean exit — a `SIGKILL` (container OOM-kill) may
   leave the last memray buffer unflushed.
 - Capture size scales with duration × allocation rate; expect tens of MB per
