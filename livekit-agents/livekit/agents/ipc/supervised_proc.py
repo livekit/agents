@@ -13,6 +13,7 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator
 from dataclasses import dataclass
+from enum import Enum
 from multiprocessing.context import BaseContext
 from types import FrameType
 from typing import Any
@@ -37,6 +38,14 @@ _MEMORY_WARN_COOLDOWN = 120.0
 # re-emit the warning before the cooldown elapses if usage grew by at least this much
 # since the last warning (so a genuine leak still surfaces promptly)
 _MEMORY_WARN_RESET_DELTA_MB = 50.0
+
+
+class SupervisedProcKind(str, Enum):
+    job = "job"
+    inference = "inference"
+
+    def __str__(self) -> str:
+        return self.value
 
 
 @contextlib.contextmanager
@@ -154,9 +163,8 @@ class SupervisedProc(ABC):
         return self._supervise_atask is not None
 
     @property
-    def process_kind(self) -> str:
-        """log label for this kind of process; subclasses override it."""
-        return "process"
+    @abstractmethod
+    def process_kind(self) -> SupervisedProcKind: ...
 
     @property
     def uptime(self) -> float:
@@ -554,7 +562,7 @@ class SupervisedProc(ABC):
 
                 if self._opts.memory_limit_mb > 0 and memory_mb > self._opts.memory_limit_mb:
                     logger.error(
-                        f"{self.process_kind} exceeded memory limit, killing it",
+                        f"{self.process_kind} process exceeded memory limit, killing it",
                         extra=self._memory_logging_extra(memory_mb),
                     )
                     await self._send_dump_signal()
@@ -568,7 +576,8 @@ class SupervisedProc(ABC):
                         # nothing is terminated, so say so to avoid alarming operators.
                         advisory = self._opts.memory_limit_mb <= 0
                         logger.warning(
-                            f"{self.process_kind} memory usage is above the warning threshold"
+                            f"{self.process_kind} process memory usage is above the"
+                            " warning threshold"
                             + (
                                 " (advisory only, the process will not be terminated)"
                                 if advisory

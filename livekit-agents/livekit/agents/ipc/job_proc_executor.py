@@ -16,7 +16,7 @@ from . import channel, proto
 from .inference_executor import InferenceExecutor
 from .job_executor import JobStatus
 from .job_proc_lazy_main import ProcStartArgs, proc_main
-from .supervised_proc import SupervisedProc
+from .supervised_proc import SupervisedProc, SupervisedProcKind
 
 
 class ProcJobExecutor(SupervisedProc):
@@ -68,8 +68,8 @@ class ProcJobExecutor(SupervisedProc):
         return self._id
 
     @property
-    def process_kind(self) -> str:
-        return "job process"
+    def process_kind(self) -> SupervisedProcKind:
+        return SupervisedProcKind.job
 
     @property
     def status(self) -> JobStatus:
