@@ -4,7 +4,7 @@ import asyncio
 import functools
 import json
 import time
-from collections.abc import AsyncGenerator, AsyncIterable, Callable, Sequence
+from collections.abc import AsyncIterable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
@@ -25,7 +25,7 @@ from ..llm.chat_context import Instructions
 from ..log import logger
 from ..telemetry import trace_types, tracer
 from ..types import USERDATA_TIMED_TRANSCRIPT, FlushSentinel, NotGivenOr
-from ..utils import aio, is_given
+from ..utils import aio
 from ..utils.aio import itertools
 from . import io
 from .speech_handle import SpeechHandle
@@ -215,7 +215,7 @@ class _TTSGenerationData:
 def perform_tts_inference(
     *,
     node: io.TTSNode,
-    input: AsyncIterable[str | FlushSentinel],
+    input: AsyncIterable[str],
     model_settings: ModelSettings,
     text_transforms: Sequence[TextTransforms] | None,
     model: str | None = None,
@@ -241,97 +241,64 @@ def perform_tts_inference(
 
 
 @utils.log_exceptions(logger=logger)
+@tracer.start_as_current_span("tts_node")
 async def _tts_inference_task(
     node: io.TTSNode,
-    input: AsyncIterable[str | FlushSentinel],
+    input: AsyncIterable[str],
     model_settings: ModelSettings,
     data: _TTSGenerationData,
     text_transforms: Sequence[TextTransforms] | None,
     model: str | None = None,
     provider: str | None = None,
 ) -> bool:
-    start_time: float | None = None
+    current_span = trace.get_current_span()
+    if model:
+        current_span.set_attribute(trace_types.ATTR_GEN_AI_REQUEST_MODEL, model)
+    if provider:
+        current_span.set_attribute(trace_types.ATTR_GEN_AI_PROVIDER_NAME, provider)
+
     audio_ch, timed_texts_fut = data.audio_ch, data.timed_texts_fut
+    if text_transforms:
+        input = _apply_text_transforms(input, text_transforms)
 
-    @tracer.start_as_current_span("tts_node")
-    async def _tts_node_inference(input: AsyncIterable[str], pushed_duration: float) -> float:
-        # set model/provider attributes on the span
-        current_span = trace.get_current_span()
-        if model:
-            current_span.set_attribute(trace_types.ATTR_GEN_AI_REQUEST_MODEL, model)
-        if provider:
-            current_span.set_attribute(trace_types.ATTR_GEN_AI_PROVIDER_NAME, provider)
-        if text_transforms:
-            input = _apply_text_transforms(input, text_transforms)
-
-        tts_node = node(input, model_settings)
-        if asyncio.iscoroutine(tts_node):
-            tts_node = await tts_node
-
-        audio_duration: float = 0.0
-        if not isinstance(tts_node, AsyncIterable):
-            if not timed_texts_fut.done():
-                timed_texts_fut.set_result(None)
-            return audio_duration
-
-        if timed_texts_fut.done():
-            timed_text_ch = timed_texts_fut.result()
-        else:
-            timed_text_ch = aio.Chan[io.TimedString]()
-            timed_texts_fut.set_result(timed_text_ch)
-
-        async for audio_frame in tts_node:
-            if start_time is not None and data.ttfb is None:
-                data.ttfb = time.perf_counter() - start_time
-                current_span = trace.get_current_span()
-                current_span.set_attribute(trace_types.ATTR_RESPONSE_TTFB, data.ttfb)
-
-            if timed_text_ch is not None:
-                for text in audio_frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, []):
-                    if isinstance(text, io.TimedString):
-                        if is_given(text.start_time):
-                            text.start_time += pushed_duration
-                        if is_given(text.end_time):
-                            text.end_time += pushed_duration
-                        timed_text_ch.send_nowait(text)
-
-            audio_ch.send_nowait(audio_frame)
-            audio_duration += audio_frame.duration
-        return audio_duration
-
+    start_time: float | None = None
     input_tee = itertools.tee(input, 2)
-    finished = False
 
     async def _get_start_time() -> None:
         nonlocal start_time
-        async for chunk in input_tee[0]:
-            if not isinstance(chunk, FlushSentinel):
-                start_time = time.perf_counter()
-                break
-
-    async def _input_segment() -> AsyncGenerator[str, None]:
-        async for chunk in input_tee[1]:
-            if isinstance(chunk, FlushSentinel):
-                return
-            yield chunk
-
-        nonlocal finished
-        finished = True
+        async for _ in input_tee[0]:
+            start_time = time.perf_counter()
+            break
 
     _start_time_task = asyncio.create_task(_get_start_time())
-    pushed_duration: float = 0.0
-    input_segment: AsyncGenerator[str, None] | None = None
     try:
-        while not finished:
-            input_segment = _input_segment()
-            pushed_duration += await _tts_node_inference(input_segment, pushed_duration)
+        tts_node = node(input_tee[1], model_settings)
+        if asyncio.iscoroutine(tts_node):
+            tts_node = await tts_node
+
+        if not isinstance(tts_node, AsyncIterable):
+            timed_texts_fut.set_result(None)
+            return False
+
+        timed_text_ch = aio.Chan[io.TimedString]()
+        timed_texts_fut.set_result(timed_text_ch)
+
+        audio_duration = 0.0
+        async for audio_frame in tts_node:
+            if start_time is not None and data.ttfb is None:
+                data.ttfb = time.perf_counter() - start_time
+                current_span.set_attribute(trace_types.ATTR_RESPONSE_TTFB, data.ttfb)
+
+            for text in audio_frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, []):
+                if isinstance(text, io.TimedString):
+                    timed_text_ch.send_nowait(text)
+
+            audio_ch.send_nowait(audio_frame)
+            audio_duration += audio_frame.duration
+        return audio_duration > 0
     finally:
         await aio.gracefully_cancel(_start_time_task)
-        if input_segment is not None:
-            await input_segment.aclose()
         await input_tee.aclose()
-
-    return pushed_duration > 0
 
 
 @dataclass
@@ -450,6 +417,102 @@ async def _audio_forwarding_task(
         audio_output.flush()
         if cancelled:
             audio_output.clear_buffer()
+
+
+@dataclass
+class _ForwardOutput:
+    """Result of forwarding one generation segment's audio and text to the outputs."""
+
+    text_out: _TextOutput | None = None
+    audio_out: _AudioOutput | None = None
+    played: Literal["full", "partial", "skipped"] = "skipped"
+    playback_position: float = 0.0
+    synchronized_transcript: str | None = None
+
+    @property
+    def forwarded_text(self) -> str:
+        """The text that actually reached the user, accounting for interruptions."""
+        if self.played == "skipped":
+            return ""
+        if self.played == "partial" and self.synchronized_transcript is not None:
+            return self.synchronized_transcript
+        return self.text_out.text if self.text_out else ""
+
+
+async def forward_generation(
+    *,
+    speech_handle: SpeechHandle,
+    audio_output: io.AudioOutput | None,
+    text_output: io.TextOutput | None,
+    audio_source: AsyncIterable[rtc.AudioFrame] | None,
+    text_source: AsyncIterable[str] | None,
+    on_first_frame: Callable[[asyncio.Future[Any], _AudioOutput | None], None],
+) -> _ForwardOutput:
+    """Forward one segment's audio/text to the outputs, then wait for its playout.
+
+    Returns when the segment has fully played, been interrupted, or never started
+    (e.g. interrupted before the first frame). Callers resolve the audio/text sources
+    and own message creation; this is the shared core between the pipeline and realtime
+    generation paths.
+    """
+    out = _ForwardOutput()
+    forward_tasks: list[asyncio.Task[Any]] = []
+    try:
+        audio_out: _AudioOutput | None = None
+        if audio_output is not None and audio_source is not None:
+            forward_audio_task, audio_out = perform_audio_forwarding(
+                audio_output=audio_output, tts_output=audio_source
+            )
+            forward_tasks.append(forward_audio_task)
+            audio_out.first_frame_fut.add_done_callback(lambda fut: on_first_frame(fut, audio_out))
+            out.audio_out = audio_out
+
+        text_out: _TextOutput | None = None
+        if text_source is not None:
+            forward_text_task, text_out = perform_text_forwarding(
+                text_output=text_output, source=text_source
+            )
+            forward_tasks.append(forward_text_task)
+            out.text_out = text_out
+
+        if audio_out is None and text_out is not None:
+            text_out.first_text_fut.add_done_callback(lambda fut: on_first_frame(fut, None))
+
+        playout_fut: asyncio.Future[Any] | None = None
+        await speech_handle.wait_if_not_interrupted(list(forward_tasks))
+        if not speech_handle.interrupted and audio_output is not None:
+            playout_fut = asyncio.ensure_future(audio_output.wait_for_playout())
+            await speech_handle.wait_if_not_interrupted([playout_fut])
+
+        if speech_handle.interrupted:
+            await utils.aio.cancel_and_wait(*forward_tasks)
+            if audio_output is not None:
+                audio_output.clear_buffer()
+                playback_ev = await audio_output.wait_for_playout()
+                if (
+                    audio_out is not None
+                    and audio_out.first_frame_fut.done()
+                    and not audio_out.first_frame_fut.cancelled()
+                ):
+                    out.played = "partial"
+                    out.playback_position = playback_ev.playback_position
+                    out.synchronized_transcript = playback_ev.synchronized_transcript
+                # else: audio never reached the speakers, stays "skipped"
+            elif text_out is not None and text_out.text:
+                out.played = "partial"
+            return out
+
+        if audio_output is not None:
+            assert playout_fut is not None
+            playback_ev = playout_fut.result()
+            out.played = "full"
+            out.playback_position = playback_ev.playback_position
+            out.synchronized_transcript = playback_ev.synchronized_transcript
+        elif text_out is not None and text_out.text:
+            out.played = "full"
+        return out
+    finally:
+        await utils.aio.cancel_and_wait(*forward_tasks)
 
 
 @dataclass
