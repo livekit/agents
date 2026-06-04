@@ -16,6 +16,8 @@ from livekit.agents.voice.room_io._output import _ParticipantTranscriptionOutput
 from livekit.agents.voice.room_io.room_io import RoomIO
 from livekit.agents.voice.room_io.types import NoiseCancellationParams
 
+pytestmark = pytest.mark.unit
+
 # -- helpers ------------------------------------------------------------------
 
 

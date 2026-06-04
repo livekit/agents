@@ -8,6 +8,8 @@ from typer.testing import CliRunner
 from livekit.agents.cli.cli import _build_cli
 from livekit.agents.worker import AgentServer, ServerEnvOption, ServerOptions
 
+pytestmark = pytest.mark.unit
+
 
 def _make_server(**kwargs) -> AgentServer:
     async def _fake_entrypoint(ctx):

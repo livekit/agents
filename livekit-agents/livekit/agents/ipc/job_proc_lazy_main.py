@@ -44,6 +44,13 @@ from .proto import (
     StartJobRequest,
 )
 
+# Defensive timeout for AgentSession.aclose() during job shutdown. Hardcoded for now
+# as a guardrail against close paths that hang indefinitely. If aclose() does not
+# return in this window, the rest of the shutdown sequence (on_session_end,
+# ShuttingDown ack, room.disconnect, shutdown callbacks) runs anyway so user-
+# registered shutdown callbacks are not silently dropped.
+_SESSION_ACLOSE_TIMEOUT = 60.0
+
 
 @dataclass
 class ProcStartArgs:
@@ -365,9 +372,20 @@ class _JobProc:
             except asyncio.TimeoutError:
                 logger.warning("entrypoint did not exit in time, cancelling")
                 await aio.cancel_and_wait(job_entry_task)
+            except Exception:
+                # entrypoint raised; already logged via _on_entry_done.
+                # swallow so shutdown callbacks still run.
+                pass
 
         if session := self._job_ctx._primary_agent_session:
-            await session.aclose()
+            try:
+                await asyncio.wait_for(session.aclose(), timeout=_SESSION_ACLOSE_TIMEOUT)
+            except asyncio.TimeoutError:
+                logger.error(
+                    "AgentSession.aclose() timed out after %.1fs; "
+                    "proceeding with shutdown so registered callbacks still run.",
+                    _SESSION_ACLOSE_TIMEOUT,
+                )
 
         if self._session_end_fnc:
             try:
@@ -380,7 +398,10 @@ class _JobProc:
             except Exception:
                 logger.exception("error while executing the on_session_end callback")
 
-        await self._job_ctx._on_session_end()
+        try:
+            await self._job_ctx._on_session_end()
+        except Exception:
+            logger.exception("error in job_ctx._on_session_end")
 
         await self._client.send(ShuttingDown())
 
