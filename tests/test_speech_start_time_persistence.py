@@ -43,6 +43,8 @@ class TestUserTurnStartPersistence:
         # state read/written by _on_vad_event SOS/EOS branches
         audio_recognition._speech_start_time = None
         audio_recognition._vad_speech_started = False
+        # _speaking is a property backed by this event (set == silent/not speaking)
+        audio_recognition._user_silence_ev = asyncio.Event()
         audio_recognition._speaking = False
         audio_recognition._end_of_turn_task = None
         audio_recognition._user_turn_span = None

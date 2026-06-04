@@ -408,7 +408,7 @@ For more information, see the [examples README](examples/README.md).
 Unit tests are in the `tests` directory and can be run with:
 
 ```shell
-uv run pytest tests/test_tools.py
+uv run pytest --unit
 ```
 
 Integration tests for each plugin require various API credentials and run automatically in GitHub CI for PRs submitted by project maintainers. See the [tests workflow](.github/workflows/tests.yml) for details.

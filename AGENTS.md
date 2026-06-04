@@ -20,8 +20,8 @@ make check            # Run all checks (format-check, lint, type-check)
 
 ### Testing
 ```bash
+uv run pytest --unit                    # Run all unit tests
 uv run pytest tests/test_tools.py       # Run a single test file
-uv run pytest tests/test_tools.py -k "test_name"  # Run specific test
 make unit-tests                         # Run unit tests that don't require cloud accounts
 ```
 
