@@ -49,7 +49,7 @@ class _FillerScheduler:
             await utils.aio.cancel_and_wait(self._main_task)
 
     def reset_dwell(self) -> None:
-        """Abort the current idle dwell — the next iteration restarts from wait_for_inactive.
+        """Abort the current idle dwell — the next iteration restarts from wait_for_idle.
 
         Called by ``ctx.update()`` to signal that the tool just took the floor, so any
         pending filler should hold off until idle resumes for a fresh ``delay`` window.
@@ -70,7 +70,7 @@ class _FillerScheduler:
 
         async def _loop() -> None:
             while True:
-                await self._session.wait_for_inactive()
+                await self._session.wait_for_idle()
                 self._speaking_ev.clear()
                 try:
                     await asyncio.wait_for(self._speaking_ev.wait(), timeout=self._delay)

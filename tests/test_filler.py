@@ -77,7 +77,7 @@ class _FakeSession:
         if callback in self._listeners.get(event, []):
             self._listeners[event].remove(callback)
 
-    async def wait_for_inactive(self) -> Any:
+    async def wait_for_idle(self) -> Any:
         await self._idle_event.wait()
         return None
 
@@ -371,21 +371,18 @@ async def test_scheduler_does_not_fire_after_speech_interrupted() -> None:
 
 
 @pytest.mark.asyncio
-async def test_async_run_context_with_filler_yields_and_fires() -> None:
+async def test_run_context_with_filler_yields_and_fires() -> None:
     """async with ctx.with_filler(...) starts a scheduler and tears it down on exit."""
     from livekit.agents.llm import FunctionCall
-    from livekit.agents.llm.async_toolset import AsyncRunContext, AsyncToolset
     from livekit.agents.voice.events import RunContext
 
     session = _FakeSession()
     handle = _FakeSpeechHandle()
-    toolset = AsyncToolset(id="t")
-    run_ctx: RunContext = RunContext(
+    ctx: RunContext = RunContext(
         session=session,  # type: ignore[arg-type]
         speech_handle=handle,  # type: ignore[arg-type]
         function_call=FunctionCall(call_id="c", name="t", arguments="{}"),
     )
-    ctx = AsyncRunContext(run_ctx=run_ctx, toolset=toolset)
 
     async with ctx.with_filler("hello", delay=0.02, interval=None):
         await asyncio.sleep(0.1)
@@ -393,21 +390,18 @@ async def test_async_run_context_with_filler_yields_and_fires() -> None:
 
 
 @pytest.mark.asyncio
-async def test_async_run_context_with_filler_cancels_on_exit() -> None:
+async def test_run_context_with_filler_cancels_on_exit() -> None:
     """Exiting the cm before delay elapses cancels the pending fire."""
     from livekit.agents.llm import FunctionCall
-    from livekit.agents.llm.async_toolset import AsyncRunContext, AsyncToolset
     from livekit.agents.voice.events import RunContext
 
     session = _FakeSession()
     handle = _FakeSpeechHandle()
-    toolset = AsyncToolset(id="t")
-    run_ctx: RunContext = RunContext(
+    ctx: RunContext = RunContext(
         session=session,  # type: ignore[arg-type]
         speech_handle=handle,  # type: ignore[arg-type]
         function_call=FunctionCall(call_id="c", name="t", arguments="{}"),
     )
-    ctx = AsyncRunContext(run_ctx=run_ctx, toolset=toolset)
 
     async with ctx.with_filler("nope", delay=1.0, interval=None):
         await asyncio.sleep(0.01)
@@ -418,29 +412,20 @@ async def test_async_run_context_with_filler_cancels_on_exit() -> None:
 async def test_ctx_update_resets_pending_filler_dwell() -> None:
     """ctx.update() called mid-dwell aborts the current dwell on every active filler."""
     from livekit.agents.llm import FunctionCall
-    from livekit.agents.llm.async_toolset import AsyncRunContext, AsyncToolset
     from livekit.agents.voice.events import RunContext
 
     session = _FakeSession()
     handle = _FakeSpeechHandle()
-    toolset = AsyncToolset(id="t")
-    run_ctx: RunContext = RunContext(
+    ctx: RunContext = RunContext(
         session=session,  # type: ignore[arg-type]
         speech_handle=handle,  # type: ignore[arg-type]
         function_call=FunctionCall(call_id="c", name="t", arguments="{}"),
     )
-    ctx = AsyncRunContext(run_ctx=run_ctx, toolset=toolset)
-
-    # patch _enqueue_reply so ctx.update doesn't actually try to deliver
-    async def _noop_enqueue(*args: Any, **kwargs: Any) -> None:
-        return None
-
-    toolset._enqueue_reply = _noop_enqueue  # type: ignore[assignment]
 
     async with ctx.with_filler("ping", delay=0.1, interval=None):
         await asyncio.sleep(0.05)
-        # update first sets _pending_fut; subsequent calls go through _enqueue_reply.
-        # Both paths must call reset_dwell, so fire two updates back to back.
+        # update() resets the dwell on every active filler before anything else;
+        # fire two back to back to confirm each call resets it
         await ctx.update("first")
         await ctx.update("second")
         await asyncio.sleep(0.08)

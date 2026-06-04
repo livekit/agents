@@ -19,6 +19,7 @@ RUN adduser \
     appuser
 
 RUN apt-get update && apt-get install -y \
+    git \
     gcc \
     g++ \
     python3-dev \

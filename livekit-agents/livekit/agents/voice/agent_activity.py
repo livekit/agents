@@ -79,6 +79,7 @@ from .generation import (
     update_instructions,
 )
 from .speech_handle import DEFAULT_INPUT_DETAILS, InputDetails, SpeechHandle
+from .tool_executor import _resolve_async_tool_options, _ToolExecutor
 from .turn import EndpointingOptions, TurnDetectionMode
 
 if TYPE_CHECKING:
@@ -88,6 +89,11 @@ if TYPE_CHECKING:
 
 _AgentActivityContextVar = contextvars.ContextVar["AgentActivity"]("agents_activity")
 _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_handle")
+_IdleHoldContextVar = contextvars.ContextVar[bool]("agents_idle_hold", default=False)
+
+
+class ActivityClosedError(Exception):
+    """Raised by ``wait_for_idle`` when the target activity/session has closed."""
 
 
 @dataclass
@@ -180,6 +186,16 @@ class AgentActivity(RecognitionHooks):
 
         self._drain_blocked_tasks: list[asyncio.Task[Any]] = []
         self._mcp_tools: list[mcp.MCPToolset] = []
+
+        # activity-scoped executor: cancels cancellable tools / awaits the rest on drain,
+        # and delivers replies to this activity's agent
+        if is_given(self._agent._async_tool_options):
+            activity_options = _resolve_async_tool_options(self._agent._async_tool_options)
+        else:
+            activity_options = self._session._async_tool_options
+        self._tool_executor = _ToolExecutor(
+            owning_activity=self, async_tool_options=activity_options
+        )
 
         self._user_turn_exceeded_atask: asyncio.Task[None] | None = None
         self._user_turn_exceeded_locked: bool = False
@@ -370,7 +386,15 @@ class AgentActivity(RecognitionHooks):
     def tools(
         self,
     ) -> list[llm.Tool | llm.Toolset]:
-        return self._session.tools + self._agent.tools + self._mcp_tools
+        from .tool_executor import cancel_task, get_running_tasks, has_cancellable_tool
+
+        tools = self._session.tools + self._agent.tools + self._mcp_tools
+        # auto-expose cancel_task / get_running_tasks when any tool opts in via
+        # ToolFlag.CANCELLABLE. always-on (not per-turn) so the LLM-visible
+        # schema stays stable across turns and the prompt cache stays warm
+        if has_cancellable_tool(tools):
+            tools = [*tools, cancel_task, get_running_tasks]
+        return tools
 
     @property
     def min_consecutive_speech_delay(self) -> float:
@@ -581,6 +605,10 @@ class AgentActivity(RecognitionHooks):
                     if isinstance(self.tts, tts.TTS):
                         self.tts.prewarm()
 
+                # one-shot — not re-run on resume, so toolsets and MCP connections
+                # survive pause/resume
+                await self._setup_toolsets()
+
                 # don't use start_span for _start_session, avoid nested user/assistant turns
                 await self._start_session(reuse_resources=reuse_resources)
                 self._started = True
@@ -673,6 +701,45 @@ class AgentActivity(RecognitionHooks):
 
         return resources
 
+    async def _setup_toolsets(self) -> None:
+        """Build MCP toolsets, scope each AsyncToolset, and call ``setup()`` on all."""
+        from ..llm.async_toolset import AsyncToolset
+
+        assert self._lock.locked(), "_setup_toolsets must run under the activity lock."
+
+        if self.mcp_servers:
+            from ..llm.mcp import MCPToolset
+
+            self._mcp_tools = [
+                MCPToolset(id=utils.shortuuid("mcp_toolset_"), mcp_server=server)
+                for server in self.mcp_servers
+            ]
+
+        session_toolsets = [t for t in self._session.tools if isinstance(t, llm.Toolset)]
+        agent_toolsets = [t for t in self._agent.tools if isinstance(t, llm.Toolset)]
+        mcp_toolsets: list[llm.Toolset] = list(self._mcp_tools)
+
+        all_toolsets = session_toolsets + agent_toolsets + mcp_toolsets
+        if not all_toolsets:
+            return
+
+        # session.tools → session-scoped (survives handoff); agent.tools → activity-scoped
+        for ts in llm.ToolContext(session_toolsets).toolsets:
+            if isinstance(ts, AsyncToolset):
+                ts._attach_activity(activity=None, session=self._session)
+        for ts in llm.ToolContext(agent_toolsets).toolsets:
+            if isinstance(ts, AsyncToolset):
+                ts._attach_activity(activity=self, session=self._session)
+
+        @utils.log_exceptions(logger=logger)
+        async def _do_setup(toolset: llm.Toolset) -> None:
+            await toolset.setup()
+
+        await asyncio.gather(
+            *(_do_setup(ts) for ts in all_toolsets),
+            return_exceptions=True,
+        )
+
     async def _start_session(self, *, reuse_resources: _ReusableResources | None = None) -> None:
         assert self._lock.locked(), "_start_session should only be used when locked."
 
@@ -695,26 +762,6 @@ class AgentActivity(RecognitionHooks):
             self._interruption_detector.on("metrics_collected", self._on_metrics_collected)
             self._interruption_detector.on("error", self._on_error)
             self._interruption_detector.on("overlapping_speech", self._on_overlap_speech_ended)
-
-        if self.mcp_servers:
-            from ..llm.mcp import MCPToolset
-
-            self._mcp_tools = [
-                MCPToolset(id=utils.shortuuid("mcp_toolset_"), mcp_server=server)
-                for server in self.mcp_servers
-            ]
-
-        toolsets = [tool for tool in self.tools if isinstance(tool, llm.Toolset)]
-        if toolsets:
-
-            @utils.log_exceptions(logger=logger)
-            async def _setup_toolset(toolset: llm.Toolset) -> None:
-                await toolset.setup()
-
-            await asyncio.gather(
-                *(_setup_toolset(toolset) for toolset in toolsets),
-                return_exceptions=True,
-            )
 
         if isinstance(self.llm, llm.RealtimeModel):
             rt_reused = reuse_resources is not None and reuse_resources.rt_session is not None
@@ -975,16 +1022,6 @@ class AgentActivity(RecognitionHooks):
         if self._audio_recognition is not None:
             await self._audio_recognition._aclose()
 
-        # close the toolsets created internally and the ones from the agent
-        # leave the ones from the session open, they will be closed by the session
-        toolsets = self._mcp_tools + [
-            tool for tool in self._agent.tools if isinstance(tool, llm.Toolset)
-        ]
-        if toolsets:
-            await asyncio.gather(
-                *(toolset.aclose() for toolset in toolsets), return_exceptions=True
-            )
-
         await self._cancel_speech_pause(
             old_task=self._cancel_speech_pause_task,
             interrupt=False,  # don't interrupt the paused speech, it's managed by _pause_scheduling_task
@@ -1004,11 +1041,27 @@ class AgentActivity(RecognitionHooks):
             # on_exit_task should be awaited in `drain`
             self._on_exit_task = None
 
+            # cancel cancellable tools and await the rest before teardown
+            await self._tool_executor.drain()
+
             await self._close_session()
             await asyncio.gather(*self._interrupt_background_speeches(force=False))
 
             if self._scheduling_atask is not None:
                 await utils.aio.cancel_and_wait(self._scheduling_atask)
+
+            # session-scoped toolsets are closed by the session; this only closes
+            # the agent's own toolsets + MCP — all of which outlive pause
+            toolsets = self._mcp_tools + [
+                tool for tool in self._agent.tools if isinstance(tool, llm.Toolset)
+            ]
+            if toolsets:
+                await asyncio.gather(
+                    *(toolset.aclose() for toolset in toolsets), return_exceptions=True
+                )
+
+            # final sweep: anything non-cancellable that survived drain dies here
+            await self._tool_executor.aclose()
 
             self._agent._activity = None
 
@@ -1427,9 +1480,13 @@ class AgentActivity(RecognitionHooks):
             if self._scheduling_paused and len(to_wait) == 0:
                 break
 
-    async def _wait_for_inactive(
+    async def wait_for_idle(
         self, *, wait_for_agent: bool = True, wait_for_user: bool = True
     ) -> None:
+        """Wait until this activity has no in-flight agent or user work.
+
+        Raises ``ActivityClosedError`` if the activity has terminally closed.
+        """
         agent_active = True
         user_active = True
 
@@ -1445,7 +1502,14 @@ class AgentActivity(RecognitionHooks):
                 user_active = True
                 await eou_task
 
+            if self._user_turn_completed_atask and not self._user_turn_completed_atask.done():
+                user_active = True
+                await self._user_turn_completed_atask
+
         while (wait_for_agent and agent_active) or (wait_for_user and user_active):
+            if self._closed or self._session._closing:
+                raise ActivityClosedError(f"activity {self.agent.label} is closing")
+
             if wait_for_agent:
                 await _wait_for_eou()
 
@@ -1458,11 +1522,11 @@ class AgentActivity(RecognitionHooks):
                     await asyncio.sleep(0)
 
             if wait_for_user:
-                if self._user_silence_event.is_set():
-                    user_active = False
-                else:
+                if self._audio_recognition and self._audio_recognition._speaking:
                     user_active = True
-                    await self._user_silence_event.wait()
+                    await self._audio_recognition._wait_for_user_silence()
+                else:
+                    user_active = False
 
                 await _wait_for_eou()
 
@@ -1471,6 +1535,15 @@ class AgentActivity(RecognitionHooks):
                 await self._session._user_turn_released.wait()
                 agent_active = wait_for_agent
                 user_active = wait_for_user
+
+            if self._session._idle_holds > 0 and not _IdleHoldContextVar.get():
+                # another caller holds `_wait_for_idle_and_hold` — block until release
+                await self._session._idle_released.wait()
+                agent_active = wait_for_agent
+                user_active = wait_for_user
+
+        if self._closed or self._session._closing:
+            raise ActivityClosedError(f"activity {self.agent.label} is closing")
 
     # -- Realtime Session events --
 
@@ -2183,7 +2256,7 @@ class AgentActivity(RecognitionHooks):
 
         # wait for the EOU-triggered agent response (cancellable by the new user turn exceeded event)
         wait_inactive = asyncio.ensure_future(
-            self._wait_for_inactive(wait_for_agent=True, wait_for_user=False)
+            self.wait_for_idle(wait_for_agent=True, wait_for_user=False)
         )
         try:
             done, _ = await asyncio.wait(
