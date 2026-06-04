@@ -154,11 +154,20 @@ class SupervisedProc(ABC):
         return self._supervise_atask is not None
 
     @property
+    def process_kind(self) -> str:
+        """human-readable label for this kind of process, used in log messages.
+
+        Subclasses override this (e.g. "job process", "inference process") so log
+        lines name the process accurately instead of guessing.
+        """
+        return "process"
+
+    @property
     def uptime(self) -> float:
         """seconds since the process was spawned, or 0.0 if it hasn't started yet"""
         if self._spawn_time is None:
             return 0.0
-        return time.time() - self._spawn_time
+        return time.monotonic() - self._spawn_time
 
     async def start(self) -> None:
         """start the supervised process"""
@@ -217,7 +226,7 @@ class SupervisedProc(ABC):
             mp_cch.close()
 
             self._pid = self._proc.pid
-            self._spawn_time = time.time()
+            self._spawn_time = time.monotonic()
             self._join_fut = asyncio.Future[None]()
 
             def _sync_run() -> None:
@@ -561,7 +570,7 @@ class SupervisedProc(ABC):
 
                 if self._opts.memory_limit_mb > 0 and memory_mb > self._opts.memory_limit_mb:
                     logger.error(
-                        "process exceeded memory limit, killing process",
+                        f"{self.process_kind} exceeded memory limit, killing it",
                         extra=self._memory_logging_extra(memory_mb),
                     )
                     await self._send_dump_signal()
@@ -570,12 +579,12 @@ class SupervisedProc(ABC):
                     # rate-limit the warning: a process that lingers above the threshold
                     # would otherwise emit a warning on every sample (every few seconds).
                     # still re-emit early if usage jumped noticeably since the last warning.
-                    if self._should_emit_memory_warning(memory_mb, now=time.time()):
+                    if self._should_emit_memory_warning(memory_mb, now=time.monotonic()):
                         # when no hard limit is configured the warning is purely advisory:
                         # nothing is terminated, so say so to avoid alarming operators.
                         advisory = self._opts.memory_limit_mb <= 0
                         logger.warning(
-                            "job process memory usage is above the warning threshold"
+                            f"{self.process_kind} memory usage is above the warning threshold"
                             + (
                                 " (advisory only, the process will not be terminated)"
                                 if advisory

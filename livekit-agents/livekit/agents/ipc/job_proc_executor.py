@@ -68,6 +68,10 @@ class ProcJobExecutor(SupervisedProc):
         return self._id
 
     @property
+    def process_kind(self) -> str:
+        return "job process"
+
+    @property
     def status(self) -> JobStatus:
         if self._job_status is None:
             raise RuntimeError("job status not available")

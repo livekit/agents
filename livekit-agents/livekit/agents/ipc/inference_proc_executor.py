@@ -47,6 +47,10 @@ class InferenceProcExecutor(SupervisedProc):
         self._runners = runners
         self._active_requests: dict[str, asyncio.Future[proto.InferenceResponse]] = {}
 
+    @property
+    def process_kind(self) -> str:
+        return "inference process"
+
     def _create_process(self, cch: socket.socket, log_cch: socket.socket) -> mp.Process:
         proc_args = ProcStartArgs(
             log_cch=log_cch,
