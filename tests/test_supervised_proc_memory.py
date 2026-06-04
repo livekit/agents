@@ -82,3 +82,9 @@ async def test_memory_logging_extra_reports_baseline_and_growth() -> None:
 async def test_uptime_is_zero_before_start() -> None:
     proc = _make_proc()
     assert proc.uptime == 0.0
+
+
+async def test_base_process_kind_is_generic() -> None:
+    # subclasses override this (e.g. "job process" / "inference process")
+    proc = _make_proc()
+    assert proc.process_kind == "process"
