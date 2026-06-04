@@ -15,8 +15,17 @@ from datetime import datetime
 
 from dotenv import load_dotenv
 
-from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli, inference, llm
-from livekit.agents.llm.async_toolset import AsyncRunContext, AsyncToolset
+from livekit.agents import (
+    Agent,
+    AgentServer,
+    AgentSession,
+    JobContext,
+    RunContext,
+    cli,
+    inference,
+    llm,
+)
+from livekit.agents.llm.async_toolset import AsyncToolset
 from livekit.plugins import silero
 
 logger = logging.getLogger("filler-example")
@@ -28,9 +37,7 @@ class TravelToolset(AsyncToolset):
         super().__init__(id="travel")
 
     @llm.function_tool
-    async def book_flight(
-        self, ctx: AsyncRunContext, origin: str, destination: str, date: str
-    ) -> str:
+    async def book_flight(self, ctx: RunContext, origin: str, destination: str, date: str) -> str:
         """Book a flight (mock — ~60 seconds of opaque work).
 
         Args:
