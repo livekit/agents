@@ -20,16 +20,10 @@ RUN adduser \
 
 RUN apt-get update && apt-get install -y \
     git \
-    git-lfs \
     gcc \
     g++ \
     python3-dev \
   && rm -rf /var/lib/apt/lists/*
-
-# Enable git-lfs so pip's git installs smudge LFS-tracked binaries
-# (e.g. silero's bundled VAD onnx) instead of leaving pointer files.
-# --system so the unprivileged appuser below inherits the filters.
-RUN git lfs install --system
 
 WORKDIR /app
 USER appuser
