@@ -6,7 +6,6 @@ import platform
 
 from livekit import api
 
-from ..log import logger
 from ..version import __version__
 
 DEFAULT_INFERENCE_URL = "https://agent-gateway.livekit.cloud/v1"
@@ -68,7 +67,6 @@ def get_inference_headers() -> dict[str, str]:
             headers[HEADER_AGENT_ID] = agent_sid
         # for hosted agents where job context is always present
         if worker_token := os.getenv("LIVEKIT_WORKER_TOKEN"):
-            logger.info(f"cloud agent debug message {len(worker_token)}")
             headers[HEADER_WORKER_TOKEN] = worker_token
     except RuntimeError:
         pass

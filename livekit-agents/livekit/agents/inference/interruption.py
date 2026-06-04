@@ -997,8 +997,10 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
         base_url = self._opts.base_url
         if base_url.startswith(("http://", "https://")):
             base_url = base_url.replace("http", "ws", 1)
+        inference_headers = get_inference_headers()
+        logger.info(f"header fields: {','.join(inference_headers)}")
         headers = {
-            **get_inference_headers(),
+            **inference_headers,
             "Authorization": f"Bearer {create_access_token(self._opts.api_key, self._opts.api_secret)}",
         }
         try:
