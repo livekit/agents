@@ -29,6 +29,15 @@ from .log_queue import LogQueueListener
 _mask_ctrl_c_refcount = 0
 _mask_ctrl_c_original: Callable[[int, FrameType | None], Any] | int | None = signal.SIG_DFL
 
+# how often the memory monitor samples the process RSS (seconds)
+_MEMORY_MONITOR_INTERVAL = 5.0
+# minimum delay between two "high memory usage" warnings for the same process, so a
+# process that sits above the threshold doesn't emit a warning on every sample
+_MEMORY_WARN_COOLDOWN = 120.0
+# re-emit the warning before the cooldown elapses if usage grew by at least this much
+# since the last warning (so a genuine leak still surfaces promptly)
+_MEMORY_WARN_RESET_DELTA_MB = 50.0
+
 
 @contextlib.contextmanager
 def _mask_ctrl_c() -> Generator[None, None, None]:
@@ -103,6 +112,12 @@ class SupervisedProc(ABC):
 
         self._exitcode: int | None = None
         self._pid: int | None = None
+        self._spawn_time: float | None = None
+
+        # memory monitoring state (see _memory_monitor_task)
+        self._memory_baseline_mb: float | None = None
+        self._last_memory_warn_time: float = 0.0
+        self._last_memory_warn_mb: float = 0.0
 
         self._supervise_atask: asyncio.Task[None] | None = None
         self._closing = False
@@ -137,6 +152,13 @@ class SupervisedProc(ABC):
     @property
     def started(self) -> bool:
         return self._supervise_atask is not None
+
+    @property
+    def uptime(self) -> float:
+        """seconds since the process was spawned, or 0.0 if it hasn't started yet"""
+        if self._spawn_time is None:
+            return 0.0
+        return time.time() - self._spawn_time
 
     async def start(self) -> None:
         """start the supervised process"""
@@ -195,6 +217,7 @@ class SupervisedProc(ABC):
             mp_cch.close()
 
             self._pid = self._proc.pid
+            self._spawn_time = time.time()
             self._join_fut = asyncio.Future[None]()
 
             def _sync_run() -> None:
@@ -477,13 +500,53 @@ class SupervisedProc(ABC):
         finally:
             await aio.cancel_and_wait(*tasks)
 
+    def _should_emit_memory_warning(self, memory_mb: float, *, now: float) -> bool:
+        """Decide whether to emit a high-memory warning, applying the cooldown.
+
+        Returns True (and records this emission) when either the cooldown has elapsed
+        since the last warning, or usage grew by at least _MEMORY_WARN_RESET_DELTA_MB
+        since then. This keeps a process that lingers above the threshold from spamming
+        a warning on every sample while still surfacing real growth promptly.
+        """
+        cooled_down = now - self._last_memory_warn_time >= _MEMORY_WARN_COOLDOWN
+        grew = memory_mb - self._last_memory_warn_mb >= _MEMORY_WARN_RESET_DELTA_MB
+        if cooled_down or grew:
+            self._last_memory_warn_time = now
+            self._last_memory_warn_mb = memory_mb
+            return True
+        return False
+
+    def _memory_logging_extra(self, memory_mb: float) -> dict[str, Any]:
+        """Build the diagnostic context shared by the memory warning/limit logs.
+
+        The extra fields are meant to answer "is this a process that started heavy,
+        or one whose usage grew over time?" without needing follow-up requests:
+          - uptime / has_running_job: distinguishes a freshly warmed process from one
+            that has been handling a job for a while
+          - baseline_memory_mb: RSS right after initialization (prewarm), before any job
+          - growth_memory_mb: how much the process has grown since that baseline
+        """
+        extra: dict[str, Any] = {
+            "memory_usage_mb": round(memory_mb, 1),
+            "memory_warn_mb": self._opts.memory_warn_mb,
+            "memory_limit_mb": self._opts.memory_limit_mb,
+            "uptime": round(self.uptime, 1),
+            # _running_job only exists on the job executor subclass, not the inference one
+            "has_running_job": getattr(self, "_running_job", None) is not None,
+        }
+        if self._memory_baseline_mb is not None:
+            extra["baseline_memory_mb"] = round(self._memory_baseline_mb, 1)
+            extra["growth_memory_mb"] = round(memory_mb - self._memory_baseline_mb, 1)
+        extra.update(self.logging_extra())
+        return extra
+
     @log_exceptions(logger=logger)
     async def _memory_monitor_task(self) -> None:
         """Monitor memory usage and kill the process if it exceeds the limit."""
         while not self._closing and not self._kill_sent:
             try:
                 if not self._pid:
-                    await asyncio.sleep(5)
+                    await asyncio.sleep(_MEMORY_MONITOR_INTERVAL)
                     continue
 
                 # get process memory info
@@ -491,27 +554,35 @@ class SupervisedProc(ABC):
                 memory_info = process.memory_info()
                 memory_mb = memory_info.rss / (1024 * 1024)  # Convert to MB
 
+                # the first sample (taken shortly after initialization) is treated as the
+                # post-prewarm baseline, so later samples can report growth since startup
+                if self._memory_baseline_mb is None:
+                    self._memory_baseline_mb = memory_mb
+
                 if self._opts.memory_limit_mb > 0 and memory_mb > self._opts.memory_limit_mb:
                     logger.error(
                         "process exceeded memory limit, killing process",
-                        extra={
-                            "memory_usage_mb": memory_mb,
-                            "memory_limit_mb": self._opts.memory_limit_mb,
-                            **self.logging_extra(),
-                        },
+                        extra=self._memory_logging_extra(memory_mb),
                     )
                     await self._send_dump_signal()
                     await self._send_kill_signal()
                 elif self._opts.memory_warn_mb > 0 and memory_mb > self._opts.memory_warn_mb:
-                    logger.warning(
-                        "process memory usage is high",
-                        extra={
-                            "memory_usage_mb": memory_mb,
-                            "memory_warn_mb": self._opts.memory_warn_mb,
-                            "memory_limit_mb": self._opts.memory_limit_mb,
-                            **self.logging_extra(),
-                        },
-                    )
+                    # rate-limit the warning: a process that lingers above the threshold
+                    # would otherwise emit a warning on every sample (every few seconds).
+                    # still re-emit early if usage jumped noticeably since the last warning.
+                    if self._should_emit_memory_warning(memory_mb, now=time.time()):
+                        # when no hard limit is configured the warning is purely advisory:
+                        # nothing is terminated, so say so to avoid alarming operators.
+                        advisory = self._opts.memory_limit_mb <= 0
+                        logger.warning(
+                            "job process memory usage is above the warning threshold"
+                            + (
+                                " (advisory only, the process will not be terminated)"
+                                if advisory
+                                else ""
+                            ),
+                            extra=self._memory_logging_extra(memory_mb),
+                        )
 
             except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
                 if self._closing or self._kill_sent:
@@ -533,7 +604,7 @@ class SupervisedProc(ABC):
                     extra=self.logging_extra(),
                 )
 
-            await asyncio.sleep(5)  # check every 5 seconds
+            await asyncio.sleep(_MEMORY_MONITOR_INTERVAL)
 
     def logging_extra(self) -> dict[str, Any]:
         extra: dict[str, Any] = {
