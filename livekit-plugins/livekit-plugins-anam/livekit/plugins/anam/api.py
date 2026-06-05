@@ -97,17 +97,22 @@ class AnamAPI:
             "livekitToken": livekit_token,
         }
 
-        if session_options is not None:
-            # Anam's public API speaks camelCase pixel dimensions. Send both or
-            # neither; Anam rejects a half pair and any unsupported pair with an
-            # HTTP 400 (surfaced below as APIStatusError) rather than downgrading.
-            video_options: dict[str, int] = {}
-            if session_options.video_width is not None:
-                video_options["videoWidth"] = session_options.video_width
-            if session_options.video_height is not None:
-                video_options["videoHeight"] = session_options.video_height
-            if video_options:
-                payload["sessionOptions"] = video_options
+        if session_options is not None and (
+            session_options.video_width is not None or session_options.video_height is not None
+        ):
+            # Anam's public API speaks camelCase pixel dimensions and wants them
+            # as a matched pair: it rejects a lone width/height (and any
+            # unsupported pair) with an HTTP 400, surfaced below as
+            # APIStatusError, rather than downgrading. Fail fast on a half pair
+            # rather than round-tripping a 400.
+            if session_options.video_width is None or session_options.video_height is None:
+                raise ValueError(
+                    "video_width and video_height must be set together (both or neither)"
+                )
+            payload["sessionOptions"] = {
+                "videoWidth": session_options.video_width,
+                "videoHeight": session_options.video_height,
+            }
 
         headers = {
             "Authorization": f"Bearer {self._api_key}",  # Use API Key here
