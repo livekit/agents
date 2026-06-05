@@ -56,7 +56,11 @@ from .models import (
     XAIChatModels,
     _supports_reasoning_effort,
 )
-from .utils import AsyncAzureADTokenProvider, AsyncBedrockTokenProvider
+from .utils import (
+    AsyncAzureADTokenProvider,
+    AsyncBedrockTokenProvider,
+    resolve_bedrock_base_url,
+)
 
 lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
@@ -306,7 +310,7 @@ class LLM(llm.LLM):
             api_key=api_key,
             bedrock_token_provider=bedrock_token_provider,
             aws_region=aws_region,
-            base_url=base_url,
+            base_url=resolve_bedrock_base_url(model, aws_region, base_url),
             organization=organization,
             project=project,
             max_retries=0,

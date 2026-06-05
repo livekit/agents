@@ -44,7 +44,7 @@ from openai.types.shared_params import ResponsesModel
 from ..log import logger
 from ..models import BedrockResponsesModels, _supports_reasoning_effort
 from ..tools import OpenAITool
-from ..utils import AsyncBedrockTokenProvider
+from ..utils import AsyncBedrockTokenProvider, resolve_bedrock_base_url
 
 ServiceTier = Literal["auto", "default", "flex", "scale", "priority"]
 Verbosity = Literal["low", "medium", "high"]
@@ -297,7 +297,7 @@ class LLM(llm.LLM):
             api_key=api_key,
             bedrock_token_provider=bedrock_token_provider,
             aws_region=aws_region,
-            base_url=base_url,
+            base_url=resolve_bedrock_base_url(model, aws_region, base_url),
             organization=organization,
             project=project,
             max_retries=0,

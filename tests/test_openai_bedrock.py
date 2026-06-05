@@ -12,13 +12,15 @@ pytestmark = pytest.mark.unit
 # --- Chat Completions (gpt-oss) ---------------------------------------------
 
 
-def test_chat_with_aws_bedrock_resolves_regional_endpoint() -> None:
+def test_chat_with_aws_bedrock_routes_gpt_oss_to_v1() -> None:
     bedrock = LLM.with_aws_bedrock(api_key="test-token", aws_region="us-west-2")
 
     assert bedrock.model == "openai.gpt-oss-120b"
     assert isinstance(bedrock._client, openai.AsyncBedrockOpenAI)
-    # the client derives the regional Mantle endpoint from the region
     assert bedrock.provider == "bedrock-mantle.us-west-2.api.aws"
+    # gpt-oss is served on the mantle `/v1` path, NOT the SDK's default `/openai/v1`
+    url = str(bedrock._client.base_url)
+    assert ".api.aws/v1" in url and "/openai/v1" not in url
     assert bedrock._owns_client is True
 
 
@@ -46,23 +48,26 @@ def test_chat_with_aws_bedrock_rejects_conflicting_credentials() -> None:
 # --- Responses API (gpt-5.x, gpt-oss) ---------------------------------------
 
 
-def test_responses_with_aws_bedrock_defaults_to_gpt_5_5() -> None:
+def test_responses_with_aws_bedrock_routes_gpt_5_5_to_openai_v1() -> None:
     bedrock = ResponsesLLM.with_aws_bedrock(api_key="test-token", aws_region="us-east-2")
 
     assert bedrock.model == "openai.gpt-5.5"
     assert isinstance(bedrock._client, openai.AsyncBedrockOpenAI)
     assert bedrock.provider == "bedrock-mantle.us-east-2.api.aws"
+    # gpt-5.x is served on the mantle `/openai/v1` path
+    assert ".api.aws/openai/v1" in str(bedrock._client.base_url)
     assert bedrock._owns_client is True
     # Bedrock has no OpenAI WebSocket transport; it must use the HTTP Responses path
     assert bedrock._opts.use_websocket is False
 
 
-def test_responses_with_aws_bedrock_accepts_gpt_5_4() -> None:
+def test_responses_with_aws_bedrock_routes_gpt_oss_to_v1() -> None:
     bedrock = ResponsesLLM.with_aws_bedrock(
-        model="openai.gpt-5.4",
+        model="openai.gpt-oss-120b",
         api_key="test-token",
         aws_region="us-west-2",
     )
 
-    assert bedrock.model == "openai.gpt-5.4"
-    assert bedrock.provider == "bedrock-mantle.us-west-2.api.aws"
+    assert bedrock.model == "openai.gpt-oss-120b"
+    url = str(bedrock._client.base_url)
+    assert ".api.aws/v1" in url and "/openai/v1" not in url
