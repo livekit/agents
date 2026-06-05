@@ -192,5 +192,10 @@ module = "speechmatics.*"
 follow_untyped_imports = true
 
 [[tool.mypy.overrides]]
+module = "bithuman.*"
+follow_untyped_imports = true
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
 module = "livekit.plugins"
 follow_untyped_imports = true
