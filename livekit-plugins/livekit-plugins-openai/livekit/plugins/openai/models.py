@@ -292,6 +292,13 @@ SambaNovaChatModels = Literal[
     "E5-Mistral-7B-Instruct",
 ]
 
+# OpenAI models served through Amazon Bedrock's OpenAI-compatible endpoint.
+# See https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-openai.html
+BedrockChatModels = Literal[
+    "openai.gpt-oss-20b-1:0",
+    "openai.gpt-oss-120b-1:0",
+]
+
 
 def _supports_reasoning_effort(model: ChatModels | str) -> bool:
     return model in [
