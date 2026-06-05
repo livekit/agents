@@ -1,9 +1,13 @@
 import asyncio
 import types
 
+import pytest
+
 from livekit.agents import llm
 from livekit.agents.llm import remote_chat_context
 from livekit.plugins.openai.realtime.realtime_model import RealtimeSession
+
+pytestmark = pytest.mark.unit
 
 
 def _create_session() -> RealtimeSession:
