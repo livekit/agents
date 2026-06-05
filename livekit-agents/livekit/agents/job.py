@@ -743,7 +743,9 @@ class JobContext:
             self._participant_tasks[(p.identity, coro)] = task
 
             def _on_done(task: asyncio.Task[Any], *, coro: Any = coro) -> None:
-                self._participant_tasks.pop((p.identity, coro))
+                # pop with default: a fast same-identity reconnect overwrites the entry, so both
+                # done-callbacks target the same key and the second would KeyError
+                self._participant_tasks.pop((p.identity, coro), None)
                 if not task.cancelled() and (exc := task.exception()) is not None:
                     logger.error(
                         f"error in participant entrypoint {coro.__name__} for '{p.identity}'",
