@@ -743,7 +743,9 @@ class JobContext:
             self._participant_tasks[(p.identity, coro)] = task
 
             def _on_done(task: asyncio.Task[Any], *, coro: Any = coro) -> None:
-                self._participant_tasks.pop((p.identity, coro))
+                key = (p.identity, coro)
+                if self._participant_tasks.get(key) is task:
+                    self._participant_tasks.pop(key, None)
                 if not task.cancelled() and (exc := task.exception()) is not None:
                     logger.error(
                         f"error in participant entrypoint {coro.__name__} for '{p.identity}'",
