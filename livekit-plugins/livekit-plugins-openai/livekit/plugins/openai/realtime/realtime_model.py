@@ -1361,6 +1361,20 @@ class RealtimeSession(
     ) -> list[ConversationItemCreateEvent | ConversationItemDeleteEvent]:
         events: list[ConversationItemCreateEvent | ConversationItemDeleteEvent] = []
         remote_ctx = self._remote_chat_ctx.to_chat_ctx()
+
+        # Empty message content can mean either:
+        # - a local placeholder that should not be created remotely, or
+        # - an existing remote item with non-text content (audio/images) that is not
+        #   synced into the agent-side ChatContext.
+        # Keep empty messages that already exist remotely so we do not delete them.
+        remote_ids = {item.id for item in remote_ctx.items}
+        chat_ctx = llm.ChatContext(
+            [
+                item
+                for item in chat_ctx.items
+                if item.type != "message" or item.content or item.id in remote_ids
+            ]
+        )
         diff_ops = llm.utils.compute_chat_ctx_diff(remote_ctx, chat_ctx)
 
         def _delete_item(msg_id: str) -> None:
