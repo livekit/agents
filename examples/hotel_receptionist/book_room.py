@@ -4,7 +4,6 @@ from datetime import date
 from typing import Annotated
 
 from hotel_db import (
-    ALLOWED_EXTRAS,
     MAX_PARTY_SIZE,
     TODAY,
     HotelDB,
@@ -12,12 +11,10 @@ from hotel_db import (
     RoomExtra,
     RoomType,
     Unavailable,
-    apply_tax,
-    extras_total,
-    invoice_line_items,
+    speak_usd,
 )
+from persona import COMMON_INSTRUCTIONS
 from pydantic import Field
-from workflows import COMMON_INSTRUCTIONS, capture_email, capture_name, capture_phone
 
 from livekit.agents import NOT_GIVEN, NotGivenOr, beta
 from livekit.agents.llm import ChatContext
@@ -31,7 +28,7 @@ Before asking anything, scan the conversation so far. If dates, room type, party
 
 Run set_stay before choose_room - available rooms depend on the dates. Before calling confirm, make sure you've collected the stay, the room choice, plus the caller's name, email, phone, and card.
 
-Each tool returns a short status with the recorded value plus what's still missing. Use that to ask for the next missing piece naturally, without narrating what the tool just did. When a status says "all required details captured", call confirm() immediately - don't say "one moment" or any other filler; the call IS the next action.
+Each tool's return ends with a directive for the next action (e.g. "next: call open_email_dialog"). Follow that directive immediately - don't narrate what the tool just did. When the directive says "call confirm() now", call it - the call IS the next action, no filler turn.
 
 If the room sells out at the last second, just pick another - everything else stays captured.
 """
@@ -50,10 +47,11 @@ class BookRoomTask(AgentTask[RoomBooking]):
         self._check_out: date | None = None
         self._guests: int | None = None
         self._room_type: RoomType | None = None
-        self._nightly_rate: int | None = None
         self._extras: list[RoomExtra] = []
+        # Smoking defaults to non-smoking: it's industry-standard opt-in, not
+        # a value the caller has to volunteer. choose_room flips it when the
+        # caller actually asks for a smoking-permitted room.
         self._smoking: bool = False
-        self._available: set[str] = set()
         self._first_name: str | None = None
         self._last_name: str | None = None
         self._email: str | None = None
@@ -72,22 +70,6 @@ class BookRoomTask(AgentTask[RoomBooking]):
             )
         )
 
-    def _missing(self) -> list[str]:
-        missing: list[str] = []
-        if self._check_in is None:
-            missing.append("stay")
-        if self._room_type is None:
-            missing.append("room")
-        if not (self._first_name and self._last_name):
-            missing.append("name")
-        if not self._email:
-            missing.append("email")
-        if not self._phone:
-            missing.append("phone")
-        if not self._card_last4:
-            missing.append("card")
-        return missing
-
     def _status(self) -> str:
         # Action-oriented status, NOT a missing-field list. A "still need: card"
         # string gets parroted by the model as "What card should I use?" - the
@@ -105,16 +87,21 @@ class BookRoomTask(AgentTask[RoomBooking]):
             return "email captured - next: call open_phone_dialog"
         if not self._card_last4:
             return "phone captured - next: call open_credit_card_dialog"
-        return "all required details captured - call confirm() now to finalize the booking"  # fmt: skip
+        return "all required details captured - call confirm() now to finalize the booking"
 
     @function_tool()
-    async def set_stay(self, check_in: date, check_out: date, guests: Annotated[int, Field(ge=1, le=MAX_PARTY_SIZE)]) -> str:  # fmt: skip
-        """Record the stay dates + party size; returns the room types available for them.
+    async def set_stay(
+        self,
+        check_in: date,
+        check_out: date,
+        guests: Annotated[int, Field(ge=1, le=MAX_PARTY_SIZE)],
+    ) -> str:
+        """Record the stay dates + party size; returns each available room type with rate and view, so you can answer "how much?" / "what's the cheapest?" without leaving the flow.
 
         Args:
-            check_in: Check-in date.
-            check_out: Check-out date.
-            guests: Number of guests.
+            check_in: Check-in date in ISO YYYY-MM-DD format (e.g. "2026-01-20").
+            check_out: Check-out date in ISO YYYY-MM-DD format.
+            guests: Number of guests (must be >= 1; ask the caller if not specified).
         """
         if check_out <= check_in:
             raise ToolError("check-out must be after check-in")
@@ -130,14 +117,17 @@ class BookRoomTask(AgentTask[RoomBooking]):
             # Don't persist sold-out dates as the active stay - if the model
             # drifts forward without re-setting, the booking would carry
             # invalid dates. The caller needs to pick different dates anyway.
-            return f"sold out for {check_in} to {check_out}, {guests} guests - dates not recorded; ask for adjacent dates"  # fmt: skip
+            return f"sold out for {check_in} to {check_out}, {guests} guests - dates not recorded; ask for adjacent dates"
 
         self._check_in, self._check_out, self._guests = check_in, check_out, guests
-        self._available = {a.type for a in avail}
-        if self._room_type and self._room_type not in self._available:
+        available_types = {a.type for a in avail}
+        if self._room_type and self._room_type not in available_types:
             self._room_type = None  # prior choice no longer fits the new dates
-        types = ", ".join(a.type.replace("_", " ") for a in avail)
-        return f"stay recorded ({check_in} to {check_out}, {guests} guests); available room types: {types} | {self._status()}"  # fmt: skip
+        options = " | ".join(
+            f"{a.type.replace('_', ' ')} ({speak_usd(a.nightly_rate)}/night, {a.sample_view})"
+            for a in avail
+        )
+        return f"stay recorded ({check_in} to {check_out}, {guests} guests); options: {options} | {self._status()}"
 
     @function_tool()
     async def choose_room(
@@ -166,28 +156,39 @@ class BookRoomTask(AgentTask[RoomBooking]):
             offer = ", ".join(sorted(a.type for a in avail)) or "nothing for those dates"
             raise ToolError(f"no {kind}{room_type} available; offer one of: {offer}")
         self._room_type = room_type
-        self._nightly_rate = chosen.nightly_rate
         self._extras = list(extras)
         self._smoking = smoking_room
         extras_part = f", extras: {', '.join(extras)}" if extras else ""
-        return f"room recorded: {room_type.replace('_', ' ')}{extras_part} | {self._status()}"  # fmt: skip
+        return f"room recorded: {room_type.replace('_', ' ')}{extras_part} | {self._status()}"
 
     @function_tool()
     async def open_name_dialog(self) -> str:
         """Open the name dialog. It collects the guest's first and last name (read back and confirmed) from the caller."""
-        self._first_name, self._last_name = await capture_name(self)
+        r = await beta.workflows.GetNameTask(
+            first_name=True,
+            last_name=True,
+            chat_ctx=self.chat_ctx,
+            extra_instructions=COMMON_INSTRUCTIONS,
+        )
+        self._first_name, self._last_name = r.first_name or "", r.last_name or ""
         return f"name recorded: {self._first_name} {self._last_name} | {self._status()}"
 
     @function_tool()
     async def open_email_dialog(self) -> str:
         """Open the email dialog. It collects the guest's email address (read back and confirmed) from the caller."""
-        self._email = await capture_email(self)
+        r = await beta.workflows.GetEmailTask(
+            chat_ctx=self.chat_ctx, extra_instructions=COMMON_INSTRUCTIONS
+        )
+        self._email = r.email_address
         return f"email recorded: {self._email} | {self._status()}"
 
     @function_tool()
     async def open_phone_dialog(self) -> str:
         """Open the phone dialog. It collects the guest's phone number (read back and confirmed) from the caller."""
-        self._phone = await capture_phone(self)
+        r = await beta.workflows.GetPhoneNumberTask(
+            chat_ctx=self.chat_ctx, extra_instructions=COMMON_INSTRUCTIONS
+        )
+        self._phone = r.phone_number
         return f"phone recorded: {self._phone} | {self._status()}"
 
     @function_tool()
@@ -202,36 +203,40 @@ class BookRoomTask(AgentTask[RoomBooking]):
     @function_tool()
     async def confirm(self) -> str | None:
         """Finalize the booking. All details (stay, room, name, email, phone, card) must already be captured."""
-        missing = self._missing()
-        if missing:
-            raise ToolError("still need: " + ", ".join(missing))
-
-        assert (
-            self._check_in
-            and self._check_out
-            and self._guests
-            and self._room_type
-            and self._nightly_rate
-            and self._first_name
-            and self._last_name
-            and self._email
-            and self._phone
-            and self._card_last4
+        check_in, check_out, guests, room_type = (
+            self._check_in,
+            self._check_out,
+            self._guests,
+            self._room_type,
         )
-        clean_extras = sorted(e for e in self._extras if e in ALLOWED_EXTRAS)
-        nights = (self._check_out - self._check_in).days
-        room_subtotal = self._nightly_rate * nights
-        subtotal = room_subtotal + extras_total(clean_extras, nights)
-        taxes = apply_tax(subtotal)
-        items = invoice_line_items(nights=nights, room_subtotal=room_subtotal, extras=clean_extras, tax=taxes)  # fmt: skip
+        first_name, last_name = self._first_name, self._last_name
+        email, phone, card_last4 = self._email, self._phone, self._card_last4
+        if not (
+            check_in
+            and check_out
+            and guests
+            and room_type
+            and first_name
+            and last_name
+            and email
+            and phone
+            and card_last4
+        ):
+            raise ToolError(self._status())
         try:
             booking = await self._db.book_room(
-                room_type=self._room_type, smoking=self._smoking, guests=self._guests,
-                check_in=self._check_in, check_out=self._check_out,
-                first_name=self._first_name, last_name=self._last_name,
-                email=self._email, phone=self._phone, card_last4=self._card_last4,
-                extras=clean_extras, subtotal=subtotal, taxes=taxes, line_items=items,
-            )  # fmt: skip
+                room_type=room_type,
+                smoking=self._smoking,
+                guests=guests,
+                check_in=check_in,
+                check_out=check_out,
+                first_name=first_name,
+                last_name=last_name,
+                email=email,
+                phone=phone,
+                card_last4=card_last4,
+                extras=self._extras,
+            )
         except Unavailable:
             self._room_type = None
             return (

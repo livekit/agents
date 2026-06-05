@@ -4,10 +4,10 @@ from datetime import date, time
 from typing import Annotated
 
 from hotel_db import MAX_PARTY_SIZE, TODAY, HotelDB, RestaurantReservation, Unavailable, speak_time
+from persona import COMMON_INSTRUCTIONS
 from pydantic import Field
-from workflows import COMMON_INSTRUCTIONS, capture_name, capture_phone
 
-from livekit.agents import NOT_GIVEN, NotGivenOr
+from livekit.agents import NOT_GIVEN, NotGivenOr, beta
 from livekit.agents.llm import ChatContext
 from livekit.agents.llm.tool_context import ToolError, ToolFlag, function_tool
 from livekit.agents.voice.agent import AgentTask
@@ -19,7 +19,7 @@ Before asking anything, scan the conversation so far. If date, party size, time,
 
 Run set_party before choose_time - open slots depend on the date and party size. Before calling confirm, make sure you've collected the date, party, time, and the caller's name and phone.
 
-Each tool returns a short status with the recorded value plus what's still missing. Use that to ask for the next missing piece naturally, without narrating what the tool just did. When a status says "all required details captured", call confirm() immediately - don't say "one moment" or any other filler; the call IS the next action.
+Each tool's return ends with a directive for the next action (e.g. "next: call open_phone_dialog"). Follow that directive immediately - don't narrate what the tool just did. When the directive says "call confirm() now", call it - the call IS the next action, no filler turn.
 """
 
 
@@ -53,18 +53,6 @@ class BookRestaurantTask(AgentTask[RestaurantReservation]):
             )
         )
 
-    def _missing(self) -> list[str]:
-        missing: list[str] = []
-        if self._date is None:
-            missing.append("date")
-        if self._time is None:
-            missing.append("time")
-        if not (self._first_name and self._last_name):
-            missing.append("name")
-        if not self._phone:
-            missing.append("phone")
-        return missing
-
     def _status(self) -> str:
         # See book_room.py - status describes the next *action*, not a list
         # of missing field names. A "still need: phone" string gets parroted
@@ -77,15 +65,17 @@ class BookRestaurantTask(AgentTask[RestaurantReservation]):
             return "party and time captured - next: call open_name_dialog"
         if not self._phone:
             return "name captured - next: call open_phone_dialog"
-        return "all required details captured - call confirm() now to finalize the reservation"  # fmt: skip
+        return "all required details captured - call confirm() now to finalize the reservation"
 
     @function_tool()
-    async def set_party(self, on_date: date, party_size: Annotated[int, Field(ge=1, le=MAX_PARTY_SIZE)]) -> str:  # fmt: skip
+    async def set_party(
+        self, on_date: date, party_size: Annotated[int, Field(ge=1, le=MAX_PARTY_SIZE)]
+    ) -> str:
         """Record the date + party size; returns the open time slots for them.
 
         Args:
-            on_date: Reservation date.
-            party_size: Number of guests.
+            on_date: Reservation date in ISO YYYY-MM-DD format (e.g. "2026-01-20").
+            party_size: Number of guests (must be >= 1; ask the caller if not specified).
         """
         if on_date < TODAY:
             raise ToolError("the date can't be in the past")
@@ -95,14 +85,14 @@ class BookRestaurantTask(AgentTask[RestaurantReservation]):
         if not open_times:
             # Same reasoning as BookRoomTask.set_stay: don't persist a
             # fully-booked date - the caller needs to pick another.
-            return f"fully booked on {on_date.strftime('%A, %B %-d')} for {party_size} - date not recorded; ask for another date"  # fmt: skip
+            return f"fully booked on {on_date.strftime('%A, %B %-d')} for {party_size} - date not recorded; ask for another date"
 
         self._date, self._party_size = on_date, party_size
         self._open_times = open_times
         if self._time and self._time not in self._open_times:
             self._time = None  # prior slot no longer open for the new date/party
         labels = ", ".join(speak_time(t) for t in sorted(self._open_times))
-        return f"party recorded ({on_date.strftime('%A, %B %-d')}, {party_size} guests); open times: {labels} | {self._status()}"  # fmt: skip
+        return f"party recorded ({on_date.strftime('%A, %B %-d')}, {party_size} guests); open times: {labels} | {self._status()}"
 
     @function_tool()
     async def choose_time(self, at_time: time, notes: str | None = None) -> str:
@@ -125,32 +115,40 @@ class BookRestaurantTask(AgentTask[RestaurantReservation]):
     @function_tool()
     async def open_name_dialog(self) -> str:
         """Open the name dialog. It collects the guest's first and last name (read back and confirmed) from the caller."""
-        self._first_name, self._last_name = await capture_name(self)
+        r = await beta.workflows.GetNameTask(
+            first_name=True,
+            last_name=True,
+            chat_ctx=self.chat_ctx,
+            extra_instructions=COMMON_INSTRUCTIONS,
+        )
+        self._first_name, self._last_name = r.first_name or "", r.last_name or ""
         return f"name recorded: {self._first_name} {self._last_name} | {self._status()}"
 
     @function_tool()
     async def open_phone_dialog(self) -> str:
         """Open the phone dialog. It collects the guest's phone number (read back and confirmed) from the caller."""
-        self._phone = await capture_phone(self)
+        r = await beta.workflows.GetPhoneNumberTask(
+            chat_ctx=self.chat_ctx, extra_instructions=COMMON_INSTRUCTIONS
+        )
+        self._phone = r.phone_number
         return f"phone recorded: {self._phone} | {self._status()}"
 
     @function_tool()
     async def confirm(self) -> str | None:
         """Finalize once the date, party, time, and the caller's details are all captured: book
         the table."""
-        missing = self._missing()
-        if missing:
-            raise ToolError("still need: " + ", ".join(missing))
-
-        assert self._date and self._party_size and self._time and self._first_name and self._phone
+        on_date, party_size, at_time = self._date, self._party_size, self._time
+        first_name, phone = self._first_name, self._phone
+        if not (on_date and party_size and at_time and first_name and phone):
+            raise ToolError(self._status())
         try:
             reservation = await self._db.book_restaurant(
-                first_name=self._first_name,
+                first_name=first_name,
                 last_name=self._last_name or "",
-                phone=self._phone,
-                party_size=self._party_size,
-                on_date=self._date,
-                at_time=self._time,
+                phone=phone,
+                party_size=party_size,
+                on_date=on_date,
+                at_time=at_time,
                 notes=self._notes,
             )
         except Unavailable:

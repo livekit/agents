@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+import os
+from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass, fields
 from datetime import date, time
 from itertools import groupby
-from pathlib import Path
 from typing import Any, Literal, get_args
 
 import apsw
@@ -35,7 +35,7 @@ RoomExtra = Literal["breakfast", "valet", "late_checkout", "pets"]
 ALLOWED_EXTRAS: frozenset[str] = frozenset(get_args(RoomExtra))
 
 
-def extras_total(extras: list[str], nights: int) -> int:
+def extras_total(extras: Sequence[str], nights: int) -> int:
     total = 0
     if "breakfast" in extras:
         total += PRICING.breakfast_per_night * nights
@@ -155,7 +155,10 @@ DISPUTE_POLICIES: dict[DisputeCategory, DisputePolicy] = {
     ),
 }
 
-TODAY = date(2026, 1, 16)
+# Set HOTEL_TODAY=YYYY-MM-DD before import for deterministic sim runs.
+TODAY: date = (
+    date.fromisoformat(os.environ["HOTEL_TODAY"]) if os.environ.get("HOTEL_TODAY") else date.today()
+)
 MAX_PARTY_SIZE = 6
 
 RoomType = Literal["king", "queen_2beds", "double_queen", "suite", "penthouse"]
@@ -165,7 +168,6 @@ RoomType = Literal["king", "queen_2beds", "double_queen", "suite", "penthouse"]
 class RoomTypeAvailability:
     type: RoomType
     nightly_rate: int
-    available_count: int
     sample_view: str
 
 
@@ -174,6 +176,9 @@ class RoomBooking:
     id: int
     code: str
     room_id: int
+    room_type: RoomType
+    smoking: bool
+    nightly_rate: int
     first_name: str
     last_name: str
     email: str
@@ -181,10 +186,11 @@ class RoomBooking:
     check_in: date
     check_out: date
     guests: int
-    extras: list[str]
+    extras: list[RoomExtra]
     total: int
     card_last4: str
     status: Literal["confirmed", "cancelled"]
+    late_arrival_note: str | None
 
     @property
     def nights(self) -> int:
@@ -238,6 +244,28 @@ class Invoice:
     paid: bool
 
 
+FollowupKind = Literal[
+    "sales_lead",  # group bookings, events, weddings, corporate rates
+    "identity_change",  # caller wants name/email/phone/card on file updated
+    "callback",  # caller asked to be called back later
+    "verification_help",  # verification failed; route to a human
+    "early_checkout",  # in-house guest wants to leave early; front desk handles
+    "abandoned_booking",  # caller dropped mid-booking; a human can call back
+    "other",
+]
+
+
+@dataclass
+class Followup:
+    id: int
+    code: str
+    kind: FollowupKind
+    caller_name: str
+    caller_phone: str
+    summary: str
+    status: Literal["open", "resolved"]
+
+
 class Unavailable(Exception):
     pass
 
@@ -246,7 +274,9 @@ class NotFound(Exception):
     pass
 
 
-def invoice_line_items(*, nights: int, room_subtotal: int, extras: list[str], tax: int) -> list[LineItem]:  # fmt: skip
+def invoice_line_items(
+    *, nights: int, room_subtotal: int, extras: Sequence[str], tax: int
+) -> list[LineItem]:
     """The itemized invoice for a stay. Shared by book_room and the seed script
     so the breakdown can't drift between them."""
     items = [LineItem(f"Room ({nights} nights)", room_subtotal)]
@@ -262,50 +292,123 @@ def invoice_line_items(*, nights: int, room_subtotal: int, extras: list[str], ta
     return items
 
 
+def compute_invoice(
+    *, nightly_rate: int, nights: int, extras: Sequence[str]
+) -> tuple[int, int, int, list[LineItem]]:
+    """Single source of truth for booking math: returns (subtotal, taxes, total, line_items).
+    Used by book_room, update_booking, and the seed script so no caller can drift."""
+    room_subtotal = nightly_rate * nights
+    subtotal = room_subtotal + extras_total(extras, nights)
+    taxes = apply_tax(subtotal)
+    items = invoice_line_items(nights=nights, room_subtotal=room_subtotal, extras=extras, tax=taxes)
+    return subtotal, taxes, subtotal + taxes, items
+
+
 OnChange = Callable[[], Awaitable[None]]
 
 
 class HotelDB:
-    def __init__(self, db_path: str | Path, *, on_change: OnChange | None = None) -> None:
-        self.db_path = str(db_path)
+    def __init__(self, conn: apsw.Connection, *, on_change: OnChange | None = None) -> None:
+        self._conn: apsw.Connection = conn
         self.on_change = on_change
-        self._conn: apsw.Connection | None = None
+
+    @classmethod
+    def empty(cls, *, on_change: OnChange | None = None) -> HotelDB:
+        conn = apsw.Connection(":memory:")
+        _install_schema(conn)
+        return cls(conn, on_change=on_change)
+
+    @classmethod
+    def from_bytes(cls, seed_bytes: bytes, *, on_change: OnChange | None = None) -> HotelDB:
+        conn = apsw.Connection(":memory:")
+        conn.deserialize("main", seed_bytes)
+        _install_schema(conn)
+        return cls(conn, on_change=on_change)
+
+    @classmethod
+    def open_path(cls, db_path: str, *, on_change: OnChange | None = None) -> HotelDB:
+        conn = apsw.Connection(db_path)
+        _install_schema(conn)
+        return cls(conn, on_change=on_change)
 
     @property
     def connection(self) -> apsw.Connection:
-        if self._conn is None:
-            raise RuntimeError("HotelDB.initialize() must be called first")
         return self._conn
 
-    async def initialize(self) -> None:
-        self._conn = apsw.Connection(self.db_path)
-        for _ in self._conn.execute(_SCHEMA):  # apsw runs a script lazily; exhaust to run all
-            pass
-        for _ in self._conn.execute(_VIEWS):
-            pass
-        logger.info("hotel db initialized at %s", self.db_path)
+    def serialize(self) -> bytes:
+        return bytes(self._conn.serialize("main"))
+
+    def close(self) -> None:
+        self._conn.close()
 
     async def aclose(self) -> None:
-        if self._conn is not None:
-            self._conn.close()
-            self._conn = None
+        self.close()
 
-    async def list_room_types_available(self, *, check_in: date, check_out: date, guests: int, smoking: bool | None = None) -> list[RoomTypeAvailability]:  # fmt: skip
-        rows = self.connection.execute(_SQL_AVAILABILITY, {"guests": guests, "smoking": int(smoking) if smoking is not None else None, "check_in": check_in.isoformat(), "check_out": check_out.isoformat()})  # fmt: skip
+    async def list_room_types_available(
+        self,
+        *,
+        check_in: date,
+        check_out: date,
+        guests: int,
+        smoking: bool | None = None,
+        exclude_booking_code: str | None = None,
+    ) -> list[RoomTypeAvailability]:
+        rows = self.connection.execute(
+            _SQL_AVAILABILITY,
+            {
+                "guests": guests,
+                "smoking": int(smoking) if smoking is not None else None,
+                "check_in": check_in.isoformat(),
+                "check_out": check_out.isoformat(),
+                "exclude": exclude_booking_code,
+            },
+        )
         return [RoomTypeAvailability(*r) for r in rows]
 
-    async def list_restaurant_availability(self, *, on_date: date, party_size: int) -> list[TimeSlot]:  # fmt: skip
-        rows = self.connection.execute(_SQL_DINING_AVAILABILITY, {"party_size": party_size, "date": on_date.isoformat()})  # fmt: skip
+    async def list_restaurant_availability(
+        self, *, on_date: date, party_size: int
+    ) -> list[TimeSlot]:
+        rows = self.connection.execute(
+            _SQL_DINING_AVAILABILITY, {"party_size": party_size, "date": on_date.isoformat()}
+        )
         return [
             TimeSlot(time.fromisoformat(slot), [tid for _, tid in group if tid is not None])
             for slot, group in groupby(rows, key=lambda row: row[0])
         ]
 
-    async def find_booking(self, *, last_name: str, confirmation_code: str | None = None, email: str | None = None, card_last4: str | None = None) -> RoomBooking | None:  # fmt: skip
-        return _row_to_booking(self.connection.execute(_SQL_FIND_BOOKING, {"last_name": last_name, "code": confirmation_code.upper() if confirmation_code else None, "email": email, "card_last4": card_last4}).fetchone())  # fmt: skip
+    async def find_booking(
+        self,
+        *,
+        last_name: str,
+        confirmation_code: str | None = None,
+        email: str | None = None,
+        card_last4: str | None = None,
+    ) -> RoomBooking | None:
+        return _row_to_booking(
+            self.connection.execute(
+                _SQL_FIND_BOOKING,
+                {
+                    "last_name": last_name,
+                    "code": confirmation_code.upper() if confirmation_code else None,
+                    "email": email,
+                    "card_last4": card_last4,
+                },
+            ).fetchone()
+        )
 
-    async def find_restaurant_reservation(self, *, last_name: str, confirmation_code: str | None = None, on_date: date | None = None) -> RestaurantReservation | None:  # fmt: skip
-        return _row_to_reservation(self.connection.execute(_SQL_FIND_RESERVATION, {"last_name": last_name, "code": confirmation_code.upper() if confirmation_code else None, "date": on_date.isoformat() if on_date else None}).fetchone())  # fmt: skip
+    async def find_restaurant_reservation(
+        self, *, last_name: str, confirmation_code: str | None = None, on_date: date | None = None
+    ) -> RestaurantReservation | None:
+        return _row_to_reservation(
+            self.connection.execute(
+                _SQL_FIND_RESERVATION,
+                {
+                    "last_name": last_name,
+                    "code": confirmation_code.upper() if confirmation_code else None,
+                    "date": on_date.isoformat() if on_date else None,
+                },
+            ).fetchone()
+        )
 
     async def get_invoice(self, booking_code: str) -> Invoice:
         row = self.connection.execute(_SQL_GET_INVOICE, {"code": booking_code}).fetchone()
@@ -313,93 +416,337 @@ class HotelDB:
             raise NotFound(f"no invoice for {booking_code}")
         invoice_id, line_items_json, subtotal, taxes, total, paid = row
         return Invoice(
-            id=invoice_id, booking_code=booking_code,
+            id=invoice_id,
+            booking_code=booking_code,
             line_items=[LineItem(**li) for li in json.loads(line_items_json)],
-            subtotal=subtotal, taxes=taxes, total=total, paid=bool(paid),
-        )  # fmt: skip
+            subtotal=subtotal,
+            taxes=taxes,
+            total=total,
+            paid=bool(paid),
+        )
 
-    async def book_room(self, *, room_type: RoomType, smoking: bool, guests: int, check_in: date, check_out: date, first_name: str, last_name: str, email: str, phone: str, card_last4: str, extras: list[str], subtotal: int, taxes: int, line_items: list[LineItem]) -> RoomBooking:  # fmt: skip
-        params = {
-            "code": shortuuid("HTL-"),
-            "room_type": room_type,
-            "smoking": int(smoking),
-            "guests": guests,
-            "check_in": check_in.isoformat(),
-            "check_out": check_out.isoformat(),
-            "first_name": first_name,
-            "last_name": last_name,
-            "email": email,
-            "phone": phone,
-            "card_last4": card_last4,
-            "extras": ",".join(extras),
-            "subtotal": subtotal,
-            "taxes": taxes,
-            "total": subtotal + taxes,
-            "line_items": json.dumps([li.__dict__ for li in line_items]),
-        }
+    async def book_room(
+        self,
+        *,
+        room_type: RoomType,
+        smoking: bool,
+        guests: int,
+        check_in: date,
+        check_out: date,
+        first_name: str,
+        last_name: str,
+        email: str,
+        phone: str,
+        card_last4: str,
+        extras: list[RoomExtra],
+    ) -> RoomBooking:
+        clean_extras = sorted(e for e in extras if e in ALLOWED_EXTRAS)
+        code = shortuuid("HTL-")
         conn = self.connection
         with conn:
-            row = conn.execute(_SQL_FREE_ROOM, params).fetchone()
+            row = conn.execute(
+                _SQL_FREE_ROOM,
+                {
+                    "room_type": room_type,
+                    "smoking": int(smoking),
+                    "guests": guests,
+                    "check_in": check_in.isoformat(),
+                    "check_out": check_out.isoformat(),
+                    "exclude": None,
+                },
+            ).fetchone()
             if not row:
                 raise Unavailable(f"sold out: {room_type}")
-            params["room_id"] = row[0]
-            conn.execute(_SQL_INSERT_BOOKING, params)
-            booking_id = conn.last_insert_rowid()
-            conn.execute(_SQL_INSERT_INVOICE, params)
+            room_id, nightly_rate = row
+            nights = (check_out - check_in).days
+            subtotal, taxes, total, items = compute_invoice(
+                nightly_rate=nightly_rate, nights=nights, extras=clean_extras
+            )
+            booking_id = _insert(
+                conn,
+                "hotel_bookings",
+                {
+                    "code": code,
+                    "room_id": room_id,
+                    "first_name": first_name,
+                    "last_name": last_name,
+                    "email": email,
+                    "phone": phone,
+                    "check_in": check_in.isoformat(),
+                    "check_out": check_out.isoformat(),
+                    "guests": guests,
+                    "extras": ",".join(clean_extras),
+                    "total": total,
+                    "card_last4": card_last4,
+                },
+            )
+            _insert(
+                conn,
+                "hotel_invoices",
+                {
+                    "booking_code": code,
+                    "line_items": json.dumps([li.__dict__ for li in items]),
+                    "subtotal": subtotal,
+                    "taxes": taxes,
+                    "total": total,
+                },
+            )
         if self.on_change:
             await self.on_change()
-        return RoomBooking(id=booking_id, code=params["code"], room_id=params["room_id"], first_name=first_name, last_name=last_name, email=email, phone=phone, check_in=check_in, check_out=check_out, guests=guests, extras=extras, total=params["total"], card_last4=card_last4, status="confirmed")  # fmt: skip
+        return RoomBooking(
+            id=booking_id,
+            code=code,
+            room_id=room_id,
+            room_type=room_type,
+            smoking=smoking,
+            nightly_rate=nightly_rate,
+            first_name=first_name,
+            last_name=last_name,
+            email=email,
+            phone=phone,
+            check_in=check_in,
+            check_out=check_out,
+            guests=guests,
+            extras=clean_extras,
+            total=total,
+            card_last4=card_last4,
+            status="confirmed",
+            late_arrival_note=None,
+        )
+
+    async def update_booking(
+        self,
+        *,
+        booking_code: str,
+        room_type: RoomType,
+        smoking: bool,
+        guests: int,
+        check_in: date,
+        check_out: date,
+        extras: list[RoomExtra],
+    ) -> RoomBooking:
+        # Re-pick a free room of the new (type, smoking) for the new dates,
+        # ignoring the booking being modified itself (so same-room "extend
+        # by one night" doesn't conflict with itself).
+        clean_extras = sorted(e for e in extras if e in ALLOWED_EXTRAS)
+        conn = self.connection
+        with conn:
+            row = conn.execute(
+                _SQL_FREE_ROOM,
+                {
+                    "room_type": room_type,
+                    "smoking": int(smoking),
+                    "guests": guests,
+                    "check_in": check_in.isoformat(),
+                    "check_out": check_out.isoformat(),
+                    "exclude": booking_code,
+                },
+            ).fetchone()
+            if not row:
+                raise Unavailable(f"sold out: {room_type}")
+            room_id, nightly_rate = row
+            nights = (check_out - check_in).days
+            subtotal, taxes, total, items = compute_invoice(
+                nightly_rate=nightly_rate, nights=nights, extras=clean_extras
+            )
+            changed = _update(
+                conn,
+                "hotel_bookings",
+                {
+                    "room_id": room_id,
+                    "check_in": check_in.isoformat(),
+                    "check_out": check_out.isoformat(),
+                    "guests": guests,
+                    "extras": ",".join(clean_extras),
+                    "total": total,
+                },
+                {"code": booking_code, "status": "confirmed"},
+            )
+            if changed == 0:
+                raise NotFound(f"booking not found: {booking_code}")
+            _update(
+                conn,
+                "hotel_invoices",
+                {
+                    "line_items": json.dumps([li.__dict__ for li in items]),
+                    "subtotal": subtotal,
+                    "taxes": taxes,
+                    "total": total,
+                },
+                {"booking_code": booking_code},
+            )
+        if self.on_change:
+            await self.on_change()
+        updated = _row_to_booking(
+            conn.execute(_SQL_BOOKING_BY_CODE, {"code": booking_code}).fetchone()
+        )
+        if updated is None:
+            raise NotFound(f"booking vanished mid-update: {booking_code}")
+        return updated
 
     async def cancel_room_booking(self, booking_code: str) -> None:
         conn = self.connection
-        conn.execute("UPDATE hotel_bookings SET status = 'cancelled' WHERE code = :code", {"code": booking_code})  # fmt: skip
-        if conn.changes() == 0:
+        changed = _update(
+            conn,
+            "hotel_bookings",
+            {"status": "cancelled"},
+            {"code": booking_code, "status": "confirmed"},
+        )
+        if changed == 0:
             raise NotFound(f"booking not found: {booking_code}")
         if self.on_change:
             await self.on_change()
 
-    async def book_restaurant(self, *, first_name: str, last_name: str, phone: str, party_size: int, on_date: date, at_time: time, notes: str | None = None) -> RestaurantReservation:  # fmt: skip
+    async def book_restaurant(
+        self,
+        *,
+        first_name: str,
+        last_name: str,
+        phone: str,
+        party_size: int,
+        on_date: date,
+        at_time: time,
+        notes: str | None = None,
+    ) -> RestaurantReservation:
         conn = self.connection
-        row = conn.execute(_SQL_FREE_TABLE, {"party_size": party_size, "date": on_date.isoformat(), "time": at_time.isoformat()}).fetchone()  # fmt: skip
+        row = conn.execute(
+            _SQL_FREE_TABLE,
+            {"party_size": party_size, "date": on_date.isoformat(), "time": at_time.isoformat()},
+        ).fetchone()
         if not row:
             raise Unavailable(f"restaurant full: {on_date} {at_time}")
         table_id = row[0]
         code = shortuuid("RES-")
-        reservation_id = _insert(conn, "restaurant_reservations", {
-            "code": code, "table_id": table_id,
-            "first_name": first_name, "last_name": last_name, "phone": phone,
-            "party_size": party_size,
-            "date": on_date.isoformat(), "time": at_time.isoformat(), "notes": notes,
-        })  # fmt: skip
+        reservation_id = _insert(
+            conn,
+            "restaurant_reservations",
+            {
+                "code": code,
+                "table_id": table_id,
+                "first_name": first_name,
+                "last_name": last_name,
+                "phone": phone,
+                "party_size": party_size,
+                "date": on_date.isoformat(),
+                "time": at_time.isoformat(),
+                "notes": notes,
+            },
+        )
         if self.on_change:
             await self.on_change()
-        return RestaurantReservation(id=reservation_id, code=code, table_id=table_id, first_name=first_name, last_name=last_name, phone=phone, party_size=party_size, date=on_date, time=at_time, notes=notes, status="confirmed")  # fmt: skip
+        return RestaurantReservation(
+            id=reservation_id,
+            code=code,
+            table_id=table_id,
+            first_name=first_name,
+            last_name=last_name,
+            phone=phone,
+            party_size=party_size,
+            date=on_date,
+            time=at_time,
+            notes=notes,
+            status="confirmed",
+        )
 
     async def cancel_restaurant_reservation(self, code: str) -> None:
         conn = self.connection
-        conn.execute("UPDATE restaurant_reservations SET status = 'cancelled' WHERE code = :code AND status = 'confirmed'", {"code": code})  # fmt: skip
-        if conn.changes() == 0:
+        changed = _update(
+            conn,
+            "restaurant_reservations",
+            {"status": "cancelled"},
+            {"code": code, "status": "confirmed"},
+        )
+        if changed == 0:
             raise NotFound(f"reservation not found: {code}")
         if self.on_change:
             await self.on_change()
 
-    async def file_dispute(self, *, booking_code: str, line_item: str, amount_cents: int, category: DisputeCategory, caller_note: str, outcome: str, refund_amount: int) -> str:  # fmt: skip
+    async def flag_late_arrival(self, *, booking_code: str, note: str) -> None:
+        conn = self.connection
+        changed = _update(
+            conn,
+            "hotel_bookings",
+            {"late_arrival_note": note},
+            {"code": booking_code, "status": "confirmed"},
+        )
+        if changed == 0:
+            raise NotFound(f"booking not found: {booking_code}")
+        if self.on_change:
+            await self.on_change()
+
+    async def record_followup(
+        self,
+        *,
+        kind: FollowupKind,
+        caller_name: str,
+        caller_phone: str,
+        summary: str,
+    ) -> str:
+        code = shortuuid("FUP-")
+        conn = self.connection
+        with conn:
+            _insert(
+                conn,
+                "hotel_followups",
+                {
+                    "code": code,
+                    "kind": kind,
+                    "caller_name": caller_name,
+                    "caller_phone": caller_phone,
+                    "summary": summary,
+                },
+            )
+        if self.on_change:
+            await self.on_change()
+        return code
+
+    async def file_dispute(
+        self,
+        *,
+        booking_code: str,
+        line_item: str,
+        amount_cents: int,
+        category: DisputeCategory,
+        caller_note: str,
+        outcome: str,
+        refund_amount: int,
+    ) -> str:
         case_number = shortuuid("DSP-")
         conn = self.connection
         with conn:
-            _insert(conn, "hotel_disputes", {
-                "case_number": case_number, "booking_code": booking_code, "line_item": line_item,
-                "amount": amount_cents, "category": category, "caller_note": caller_note,
-                "outcome": outcome, "refund_amount": refund_amount,
-            })  # fmt: skip
+            _insert(
+                conn,
+                "hotel_disputes",
+                {
+                    "case_number": case_number,
+                    "booking_code": booking_code,
+                    "line_item": line_item,
+                    "amount": amount_cents,
+                    "category": category,
+                    "caller_note": caller_note,
+                    "outcome": outcome,
+                    "refund_amount": refund_amount,
+                },
+            )
             if refund_amount > 0:
-                conn.execute("UPDATE hotel_invoices SET total = total - :refund WHERE booking_code = :code", {"refund": refund_amount, "code": booking_code})  # fmt: skip
+                conn.execute(
+                    "UPDATE hotel_invoices SET total = total - :refund WHERE booking_code = :code",
+                    {"refund": refund_amount, "code": booking_code},
+                )
         if self.on_change:
             await self.on_change()
         return case_number
 
 
-_SCHEMA = """
+def _install_schema(conn: apsw.Connection) -> None:
+    # Views DROP+CREATE so they pick up the current TODAY each time.
+    for _ in conn.execute(SCHEMA):
+        pass
+    for _ in conn.execute(VIEWS):
+        pass
+
+
+SCHEMA = """
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS hotel_rooms (
@@ -414,20 +761,21 @@ CREATE TABLE IF NOT EXISTS hotel_rooms (
 );
 
 CREATE TABLE IF NOT EXISTS hotel_bookings (
-    id         INTEGER PRIMARY KEY,
-    code       TEXT    NOT NULL UNIQUE,
-    room_id    INTEGER NOT NULL REFERENCES hotel_rooms(id),
-    first_name TEXT    NOT NULL,
-    last_name  TEXT    NOT NULL,
-    email      TEXT    NOT NULL,
-    phone      TEXT    NOT NULL,
-    check_in   DATE    NOT NULL,
-    check_out  DATE    NOT NULL,
-    guests     INTEGER NOT NULL CHECK (guests >= 1),
-    extras     TEXT    NOT NULL DEFAULT '',
-    total      INTEGER NOT NULL,
-    card_last4 TEXT    NOT NULL,
-    status     TEXT    NOT NULL DEFAULT 'confirmed' CHECK (status IN ('confirmed','cancelled')),
+    id                 INTEGER PRIMARY KEY,
+    code               TEXT    NOT NULL UNIQUE,
+    room_id            INTEGER NOT NULL REFERENCES hotel_rooms(id),
+    first_name         TEXT    NOT NULL,
+    last_name          TEXT    NOT NULL,
+    email              TEXT    NOT NULL,
+    phone              TEXT    NOT NULL,
+    check_in           DATE    NOT NULL,
+    check_out          DATE    NOT NULL,
+    guests             INTEGER NOT NULL CHECK (guests >= 1),
+    extras             TEXT    NOT NULL DEFAULT '',
+    total              INTEGER NOT NULL,
+    card_last4         TEXT    NOT NULL,
+    status             TEXT    NOT NULL DEFAULT 'confirmed' CHECK (status IN ('confirmed','cancelled')),
+    late_arrival_note  TEXT,
     CHECK (check_out > check_in)
 );
 
@@ -478,13 +826,23 @@ CREATE TABLE IF NOT EXISTS hotel_disputes (
     status        TEXT    NOT NULL DEFAULT 'open' CHECK (status IN ('open','resolved','rejected'))
 );
 
+CREATE TABLE IF NOT EXISTS hotel_followups (
+    id           INTEGER PRIMARY KEY,
+    code         TEXT    NOT NULL UNIQUE,
+    kind         TEXT    NOT NULL CHECK (kind IN ('sales_lead','identity_change','callback','verification_help','early_checkout','abandoned_booking','other')),
+    caller_name  TEXT    NOT NULL,
+    caller_phone TEXT    NOT NULL,
+    summary      TEXT    NOT NULL,
+    status       TEXT    NOT NULL DEFAULT 'open' CHECK (status IN ('open','resolved'))
+);
+
 CREATE TABLE IF NOT EXISTS lk_descriptions (
     name        TEXT PRIMARY KEY,
     description TEXT NOT NULL
 );
 """
 
-_VIEWS = f"""
+VIEWS = f"""
 DROP VIEW IF EXISTS hotel_room_status;
 CREATE VIEW hotel_room_status AS
 SELECT r.room_number, r.type, r.room_view, r.max_occupancy, r.nightly_rate,
@@ -523,8 +881,11 @@ SELECT label, capacity, location,
 FROM grid GROUP BY id ORDER BY label;
 """
 
-_BOOKING_COLS = "id, code, room_id, first_name, last_name, email, phone, check_in, check_out, guests, extras, total, card_last4, status"  # fmt: skip
-_RESERVATION_COLS = "id, code, table_id, first_name, last_name, phone, party_size, date, time, notes, status"  # fmt: skip
+_BOOKING_COLS = "b.id, b.code, b.room_id, r.type AS room_type, r.smoking, r.nightly_rate, b.first_name, b.last_name, b.email, b.phone, b.check_in, b.check_out, b.guests, b.extras, b.total, b.card_last4, b.status, b.late_arrival_note"
+# Names that _row_to_booking maps the SELECT columns onto - derived from the
+# dataclass so adding a field in one place keeps them aligned.
+_BOOKING_COL_NAMES: tuple[str, ...] = tuple(f.name for f in fields(RoomBooking))
+_RESERVATION_COLS: tuple[str, ...] = tuple(f.name for f in fields(RestaurantReservation))
 
 
 _SQL_FREE_ROOM = """
@@ -533,32 +894,20 @@ WHERE type = :room_type AND smoking = :smoking AND max_occupancy >= :guests
   AND NOT EXISTS (
     SELECT 1 FROM hotel_bookings b
     WHERE b.room_id = hotel_rooms.id AND b.status = 'confirmed'
+      AND (:exclude IS NULL OR b.code != :exclude)
       AND NOT (b.check_out <= :check_in OR b.check_in >= :check_out))
 ORDER BY id LIMIT 1
 """
 
-_SQL_INSERT_BOOKING = """
-INSERT INTO hotel_bookings
-  (code, room_id, first_name, last_name, email, phone,
-   check_in, check_out, guests, extras, total, card_last4)
-VALUES
-  (:code, :room_id, :first_name, :last_name, :email, :phone,
-   :check_in, :check_out, :guests, :extras, :total, :card_last4)
-"""
-
-_SQL_INSERT_INVOICE = """
-INSERT INTO hotel_invoices (booking_code, line_items, subtotal, taxes, total, paid)
-VALUES (:code, :line_items, :subtotal, :taxes, :total, 0)
-"""
-
 _SQL_AVAILABILITY = """
-SELECT r.type, r.nightly_rate, COUNT(*), MIN(r.room_view)
+SELECT r.type, r.nightly_rate, MIN(r.room_view)
 FROM hotel_rooms r
 WHERE r.max_occupancy >= :guests
   AND (:smoking IS NULL OR r.smoking = :smoking)
   AND NOT EXISTS (
     SELECT 1 FROM hotel_bookings b
     WHERE b.room_id = r.id AND b.status = 'confirmed'
+      AND (:exclude IS NULL OR b.code != :exclude)
       AND NOT (b.check_out <= :check_in OR b.check_in >= :check_out))
 GROUP BY r.type ORDER BY r.nightly_rate
 """
@@ -590,23 +939,30 @@ ORDER BY slots.slot, rt.capacity, rt.id
 """
 
 _SQL_FIND_BOOKING = f"""
-SELECT {_BOOKING_COLS} FROM hotel_bookings
-WHERE LOWER(last_name) = LOWER(:last_name)
-  AND (:code IS NULL OR code = :code)
-  AND (:email IS NULL OR LOWER(email) = LOWER(:email))
-  AND (:card_last4 IS NULL OR card_last4 = :card_last4)
+SELECT {_BOOKING_COLS} FROM hotel_bookings b
+JOIN hotel_rooms r ON r.id = b.room_id
+WHERE LOWER(b.last_name) = LOWER(:last_name)
+  AND (:code IS NULL OR b.code = :code)
+  AND (:email IS NULL OR LOWER(b.email) = LOWER(:email))
+  AND (:card_last4 IS NULL OR b.card_last4 = :card_last4)
 LIMIT 1
 """
 
+_SQL_BOOKING_BY_CODE = f"""
+SELECT {_BOOKING_COLS} FROM hotel_bookings b
+JOIN hotel_rooms r ON r.id = b.room_id
+WHERE b.code = :code LIMIT 1
+"""
+
 _SQL_FIND_RESERVATION = f"""
-SELECT {_RESERVATION_COLS} FROM restaurant_reservations
+SELECT {", ".join(_RESERVATION_COLS)} FROM restaurant_reservations
 WHERE LOWER(last_name) = LOWER(:last_name)
   AND (:code IS NULL OR code = :code)
   AND (:date IS NULL OR date = :date)
 LIMIT 1
 """
 
-_SQL_GET_INVOICE = "SELECT id, line_items, subtotal, taxes, total, paid FROM hotel_invoices WHERE booking_code = :code"  # fmt: skip
+_SQL_GET_INVOICE = "SELECT id, line_items, subtotal, taxes, total, paid FROM hotel_invoices WHERE booking_code = :code"
 
 
 def _insert(conn: apsw.Connection, table: str, row: dict[str, Any]) -> int:
@@ -616,18 +972,32 @@ def _insert(conn: apsw.Connection, table: str, row: dict[str, Any]) -> int:
     return conn.last_insert_rowid()
 
 
+def _update(
+    conn: apsw.Connection, table: str, set_fields: dict[str, Any], where: dict[str, Any]
+) -> int:
+    set_clause = ", ".join(f"{k} = :{k}" for k in set_fields)
+    where_clause = " AND ".join(f"{k} = :w_{k}" for k in where)
+    params = {**set_fields, **{f"w_{k}": v for k, v in where.items()}}
+    conn.execute(f"UPDATE {table} SET {set_clause} WHERE {where_clause}", params)
+    return conn.changes()
+
+
 def _row_to_booking(row: tuple[Any, ...] | None) -> RoomBooking | None:
     if row is None:
         return None
-    d = dict(zip(_BOOKING_COLS.split(", "), row, strict=True))
-    d["check_in"], d["check_out"] = date.fromisoformat(d["check_in"]), date.fromisoformat(d["check_out"])  # fmt: skip
+    d = dict(zip(_BOOKING_COL_NAMES, row, strict=True))
+    d["check_in"], d["check_out"] = (
+        date.fromisoformat(d["check_in"]),
+        date.fromisoformat(d["check_out"]),
+    )
     d["extras"] = [e for e in d["extras"].split(",") if e]
+    d["smoking"] = bool(d["smoking"])
     return RoomBooking(**d)
 
 
 def _row_to_reservation(row: tuple[Any, ...] | None) -> RestaurantReservation | None:
     if row is None:
         return None
-    d = dict(zip(_RESERVATION_COLS.split(", "), row, strict=True))
+    d = dict(zip(_RESERVATION_COLS, row, strict=True))
     d["date"], d["time"] = date.fromisoformat(d["date"]), time.fromisoformat(d["time"])
     return RestaurantReservation(**d)
