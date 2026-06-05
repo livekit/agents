@@ -292,11 +292,25 @@ SambaNovaChatModels = Literal[
     "E5-Mistral-7B-Instruct",
 ]
 
-# OpenAI models served through Amazon Bedrock's OpenAI-compatible endpoint.
-# See https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-openai.html
+# OpenAI models served through Amazon Bedrock's OpenAI-compatible `bedrock-mantle`
+# endpoint. Model IDs on this endpoint omit the `-1:0` Bedrock-native version suffix
+# (that suffix is only used by the bedrock-runtime InvokeModel/Converse APIs).
+
+# Models exposed over the Chat Completions API (gpt-oss only).
+# See https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-oss-120b.html
 BedrockChatModels = Literal[
-    "openai.gpt-oss-20b-1:0",
-    "openai.gpt-oss-120b-1:0",
+    "openai.gpt-oss-20b",
+    "openai.gpt-oss-120b",
+]
+
+# Models exposed over the Responses API. The gpt-5.x models are Responses-only on
+# Bedrock; gpt-oss supports both Responses and Chat Completions.
+# See https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-55.html
+BedrockResponsesModels = Literal[
+    "openai.gpt-5.5",
+    "openai.gpt-5.4",
+    "openai.gpt-oss-120b",
+    "openai.gpt-oss-20b",
 ]
 
 

@@ -259,7 +259,7 @@ class LLM(llm.LLM):
     @staticmethod
     def with_aws_bedrock(
         *,
-        model: str | BedrockChatModels = "openai.gpt-oss-120b-1:0",
+        model: str | BedrockChatModels = "openai.gpt-oss-120b",
         api_key: str | None = None,
         bedrock_token_provider: AsyncBedrockTokenProvider | None = None,
         aws_region: str | None = None,
@@ -279,13 +279,18 @@ class LLM(llm.LLM):
         max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
     ) -> LLM:
         """
-        Create a new instance of an LLM backed by OpenAI models on Amazon Bedrock.
+        Create a new instance of a Chat Completions LLM backed by OpenAI models on
+        Amazon Bedrock.
 
         Amazon Bedrock exposes an OpenAI-compatible endpoint for OpenAI's open-weight
-        models (e.g. ``openai.gpt-oss-120b-1:0``). This builds an
+        models (e.g. ``openai.gpt-oss-120b``). This builds an
         ``openai.AsyncBedrockOpenAI`` client, which resolves the regional Bedrock
         endpoint (``https://bedrock-mantle.<region>.api.aws/openai/v1``) and sends the
         Bedrock bearer token in the ``Authorization`` header.
+
+        Only the ``gpt-oss`` models are available over Chat Completions on Bedrock. The
+        ``gpt-5.x`` models are Responses-only — use
+        :meth:`livekit.plugins.openai.responses.LLM.with_aws_bedrock` for those.
 
         This automatically infers the following arguments from their corresponding
         environment variables if they are not provided:
