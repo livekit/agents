@@ -1,9 +1,11 @@
 from . import io, run_result
 from .agent import Agent, AgentTask, ModelSettings
-from .agent_session import (
+from ..tts._provider_format import (
     CONVERSATIONAL_EXPRESSIVENESS_PRESET,
     CUSTOMER_SERVICE_EXPRESSIVENESS_PRESET,
     HEALTHCARE_EXPRESSIVENESS_PRESET,
+)
+from .agent_session import (
     AgentSession,
     ExpressivenessOptions,
     RecordingOptions,
