@@ -5,7 +5,7 @@ import datetime
 import os
 import time
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterable, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator
 from dataclasses import dataclass
 from types import TracebackType
 from typing import TYPE_CHECKING, ClassVar, Generic, Literal, TypeVar
@@ -68,6 +68,68 @@ class TTS(
     rtc.EventEmitter[Literal["metrics_collected", "error"] | TEvent],
     Generic[TEvent],
 ):
+    class Markup:
+        """Declares TTS markup capabilities for the expressiveness pipeline.
+
+        Plugins override this inner class to declare what markup tags the TTS supports
+        and how to convert marked-up text back to plain text.
+        """
+
+        def __init__(self, tts: TTS) -> None:
+            self._tts = tts
+
+        def llm_instructions(self) -> str | None:
+            """Return instructions for the LLM describing available markup tags.
+
+            The framework injects this into the LLM system prompt when
+            ``expressiveness=True``.  Return ``None`` if this TTS has no markup support.
+            """
+            return None
+
+        def to_text(self, text: str) -> str:
+            """Strip TTS-specific markup from *text*, returning plain text.
+
+            Used for transcripts streamed to the user and for chat history storage.
+            The TTS itself receives the original marked-up text.
+            """
+            return text
+
+        async def to_text_stream(
+            self, text_stream: AsyncIterable[str]
+        ) -> AsyncGenerator[str, None]:
+            """Strip TTS markup from a stream of text chunks.
+
+            Buffers partial XML tags across chunks so that ``to_text`` always
+            receives complete tags to strip.
+            """
+            buf = ""
+            async for chunk in text_stream:
+                buf += chunk
+                if buf.rfind("<") > buf.rfind(">"):
+                    continue
+                stripped = self.to_text(buf)
+                buf = ""
+                if stripped:
+                    yield stripped
+
+            if buf:
+                buf = self.to_text(buf)
+            if buf:
+                yield buf
+
+        def normalize(self, text: str) -> str:
+            """Fix common LLM markup mistakes (e.g. unclosed self-closing tags)."""
+            return text
+
+        def convert(self, text: str) -> str:
+            """Convert framework-standard markup to the provider's native format.
+
+            Called before text is sent to the TTS. The default is a no-op.
+            Plugins that use non-XML formats (e.g. square brackets) override this
+            to convert ``<expression value="..."/>`` tags to their native syntax.
+            """
+            return text
+
     def __init__(
         self,
         *,
@@ -80,6 +142,12 @@ class TTS(
         self._sample_rate = sample_rate
         self._num_channels = num_channels
         self._label = f"{type(self).__module__}.{type(self).__name__}"
+        self._markup = self.Markup(self)
+
+    @property
+    def markup(self) -> Markup:
+        """Access TTS markup capabilities (instructions for LLM, text stripping)."""
+        return self._markup
 
     @property
     def label(self) -> str:

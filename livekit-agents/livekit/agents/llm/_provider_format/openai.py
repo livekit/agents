@@ -52,12 +52,15 @@ def _to_chat_item(msg: llm.ChatItem) -> dict[str, Any]:
         list_content: list[dict[str, Any]] = []
         text_content = ""
         for content in msg.content:
-            if isinstance(content, str):
+            if isinstance(content, llm.ImageContent):
+                list_content.append(_to_image_content(content))
+            elif isinstance(content, llm.AudioContent):
+                pass
+            else:
+                # str or Instructions
                 if text_content:
                     text_content += "\n"
-                text_content += content
-            elif isinstance(content, llm.ImageContent):
-                list_content.append(_to_image_content(content))
+                text_content += str(content)
 
         if not list_content:
             # certain providers require text-only content in a string vs a list.
@@ -171,12 +174,15 @@ def _to_responses_chat_item(msg: llm.ChatItem) -> dict[str, Any]:
         list_content: list[dict[str, Any]] = []
         text_content = ""
         for content in msg.content:
-            if isinstance(content, str):
+            if isinstance(content, llm.ImageContent):
+                list_content.append(_to_responses_image_content(content))
+            elif isinstance(content, llm.AudioContent):
+                pass
+            else:
+                # str or Instructions
                 if text_content:
                     text_content += "\n"
-                text_content += content
-            elif isinstance(content, llm.ImageContent):
-                list_content.append(_to_responses_image_content(content))
+                text_content += str(content)
 
         if not list_content:
             return {"role": msg.role, "content": text_content}

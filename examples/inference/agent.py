@@ -12,6 +12,7 @@ from livekit.agents import (
     cli,
     inference,
 )
+from livekit.agents.voice import CONVERSATIONAL_EXPRESSIVENESS_PRESET
 from livekit.plugins import silero
 from livekit.rtc import RpcInvocationData
 
@@ -21,8 +22,8 @@ logger.setLevel(logging.INFO)
 load_dotenv()
 
 DEFAULT_STT = "deepgram/nova-3"
-DEFAULT_LLM = "openai/gpt-4.1-mini"
-DEFAULT_TTS = "cartesia/sonic-3"
+DEFAULT_LLM = "google/gemini-3.1-flash-lite"
+DEFAULT_TTS = "inworld/inworld-tts-2"
 
 # Default starter prompt. Keep in sync with the `set_system_prompt`
 # control's `default` in examples/playground.yaml — the UI seeds the
@@ -32,8 +33,11 @@ INSTRUCTIONS = (
     "You're a friendly agent in the LiveKit Playground. The person "
     "talking to you is prototyping their own voice agent — they can "
     "edit this prompt in the side panel and swap the STT / LLM / TTS "
-    "models live. Keep replies short, natural, and conversational. "
-    "If asked which models you're using, answer honestly."
+    "models live. Keep replies short, natural, and conversational, and "
+    "be expressive so they can hear what the selected voice can do. "
+    "If the conversation lulls or they're not sure what to try, offer "
+    "to tell them a short joke — and if they say yes, deliver it with "
+    "good comic timing. If asked which models you're using, answer honestly."
 )
 
 _SWAP_PROMPT = (
@@ -60,6 +64,7 @@ async def entrypoint(ctx: JobContext) -> None:
         llm=inference.LLM(model=DEFAULT_LLM),
         tts=inference.TTS(model=DEFAULT_TTS),
         vad=silero.VAD.load(),
+        expressiveness=CONVERSATIONAL_EXPRESSIVENESS_PRESET,
     )
 
     def parse_value(payload: str, fallback: str) -> str:

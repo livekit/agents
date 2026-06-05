@@ -17,7 +17,7 @@ def _make_activity(agent: Agent, stt: object) -> MagicMock:
     act = MagicMock(spec=AgentActivity)
     act.agent = agent
     act._audio_recognition = MagicMock()
-    act._audio_recognition.detach_stt = AsyncMock(return_value=MagicMock())
+    act._audio_recognition._detach_stt = AsyncMock(return_value=MagicMock())
     type(act).stt = PropertyMock(return_value=stt)
     # rt session reuse checks need these
     act._rt_session = None
@@ -45,7 +45,7 @@ async def test_reusable_same_class_same_stt() -> None:
 
     result = await _detach_stt_if_reusable(old, new)
     assert result is not None  # detach_stt was called
-    old._audio_recognition.detach_stt.assert_awaited_once()
+    old._audio_recognition._detach_stt.assert_awaited_once()
 
 
 async def test_not_reusable_different_stt_instance() -> None:

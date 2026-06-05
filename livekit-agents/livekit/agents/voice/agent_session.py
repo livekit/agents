@@ -138,6 +138,31 @@ class SessionConnectOptions:
     """Maximum number of consecutive unrecoverable errors from llm or tts."""
 
 
+class ExpressivenessOptions(TypedDict, total=False):
+    """Configuration for the expressiveness pipeline.
+
+    Controls how TTS markup instructions and speaker context are injected
+    into the LLM when expressiveness is enabled.
+    """
+
+    tts_instructions_template: Instructions | str
+    audio_recognition_instructions_template: Instructions | str
+
+
+DEFAULT_EXPRESSIVENESS_OPTIONS: ExpressivenessOptions = ExpressivenessOptions(
+    tts_instructions_template=Instructions(
+        "You can control how you speak using the following formatting tags. "
+        "Use them when appropriate to make your speech more expressive and natural:\n\n"
+        "{tts.markup.llm_instructions}"
+    ),
+    audio_recognition_instructions_template=Instructions(
+        "Here is what has been detected about the speaker you are talking to:\n\n"
+        "{audio_recognition.llm_instructions}\n\n"
+        "Adapt your tone and response accordingly."
+    ),
+)
+
+
 @dataclass
 class AgentSessionOptions:
     turn_handling: TurnHandlingOptions
@@ -149,6 +174,7 @@ class AgentSessionOptions:
     ivr_detection: bool
     aec_warmup_duration: float | None
     session_close_transcript_timeout: float
+    expressiveness: bool | ExpressivenessOptions
 
     @property
     def endpointing(self) -> EndpointingOptions:
@@ -236,6 +262,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
         min_consecutive_speech_delay: float = 0.0,
+        # Expressiveness
+        expressiveness: bool | ExpressivenessOptions = False,
         # Misc settings
         userdata: NotGivenOr[Userdata_T] = NOT_GIVEN,
         video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
@@ -391,6 +419,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             ),
             aec_warmup_duration=aec_warmup_duration,
             session_close_transcript_timeout=session_close_transcript_timeout,
+            expressiveness=expressiveness,
         )
         self._conn_options = conn_options or SessionConnectOptions()
         self._started = False
@@ -988,7 +1017,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     and (audio_recognition := activity._audio_recognition) is not None
                 ):
                     # wait for the user transcript to be committed
-                    audio_recognition.commit_user_turn(
+                    audio_recognition._commit_user_turn(
                         audio_detached=True,
                         transcript_timeout=self._opts.session_close_transcript_timeout,
                     )
