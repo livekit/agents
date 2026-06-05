@@ -805,8 +805,7 @@ class AudioRecognition:
 
             transcript = self._audio_transcript
             self._audio_interim_transcript = ""
-            chat_ctx = self._hooks.retrieve_chat_ctx().copy()
-            self._run_eou_detection(chat_ctx, skip_reply=skip_reply)
+            self._run_eou_detection(self._hooks.retrieve_chat_ctx(), skip_reply=skip_reply)
             self._user_turn_committed = True
             if not fut.done():
                 fut.set_result(transcript)
@@ -949,8 +948,7 @@ class AudioRecognition:
                     )
 
                 if not self._speaking:
-                    chat_ctx = self._hooks.retrieve_chat_ctx().copy()
-                    self._run_eou_detection(chat_ctx)
+                    self._run_eou_detection(self._hooks.retrieve_chat_ctx())
 
         elif ev.type == stt.SpeechEventType.PREFLIGHT_TRANSCRIPT:
             self._hooks.on_interim_transcript(
@@ -1036,8 +1034,7 @@ class AudioRecognition:
                 # vad disabled or missed a speech, use stt timestamp
                 self._last_speaking_time = stt_last_speaking_time
 
-            chat_ctx = self._hooks.retrieve_chat_ctx().copy()
-            self._run_eou_detection(chat_ctx)
+            self._run_eou_detection(self._hooks.retrieve_chat_ctx())
 
         elif ev.type == stt.SpeechEventType.START_OF_SPEECH and self._turn_detection_mode == "stt":
             # If the plugin provided a server onset timestamp, use it;
@@ -1093,8 +1090,7 @@ class AudioRecognition:
             if self._vad_base_turn_detection or (
                 self._turn_detection_mode == "stt" and self._user_turn_committed
             ):
-                chat_ctx = self._hooks.retrieve_chat_ctx().copy()
-                self._run_eou_detection(chat_ctx)
+                self._run_eou_detection(self._hooks.retrieve_chat_ctx())
 
             if self._session.amd is not None:
                 self._session.amd._on_user_speech_ended(ev.silence_duration)
