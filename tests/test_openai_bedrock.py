@@ -3,6 +3,7 @@ from __future__ import annotations
 import openai
 import pytest
 
+from livekit.agents.utils import is_given
 from livekit.plugins.openai import LLM
 from livekit.plugins.openai.responses import LLM as ResponsesLLM
 
@@ -71,3 +72,22 @@ def test_responses_with_aws_bedrock_routes_gpt_oss_to_v1() -> None:
     assert bedrock.model == "openai.gpt-oss-120b"
     url = str(bedrock._client.base_url)
     assert ".api.aws/v1" in url and "/openai/v1" not in url
+
+
+def test_responses_with_aws_bedrock_applies_gpt_5_4_reasoning_default() -> None:
+    # the `openai.` Bedrock prefix must still resolve the gpt-5.4 reasoning default,
+    # matching `gpt-5.4` accessed directly via OpenAI (effort="none")
+    bedrock = ResponsesLLM.with_aws_bedrock(
+        model="openai.gpt-5.4", api_key="test-token", aws_region="us-east-2"
+    )
+
+    reasoning = bedrock._opts.reasoning
+    assert is_given(reasoning) and reasoning.effort == "none"
+
+
+def test_responses_with_aws_bedrock_gpt_5_5_has_no_reasoning_default() -> None:
+    # gpt-5.5 is not in the reasoning-effort list (same as direct OpenAI usage)
+    bedrock = ResponsesLLM.with_aws_bedrock(api_key="test-token", aws_region="us-east-2")
+
+    assert bedrock.model == "openai.gpt-5.5"
+    assert not is_given(bedrock._opts.reasoning)

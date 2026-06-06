@@ -315,6 +315,9 @@ BedrockResponsesModels = Literal[
 
 
 def _supports_reasoning_effort(model: ChatModels | str) -> bool:
+    # Amazon Bedrock exposes the same models under an ``openai.`` prefix
+    # (e.g. ``openai.gpt-5.4``); normalize it so the defaults below still apply.
+    model = model.removeprefix("openai.")
     return model in [
         "gpt-5.4",
         "gpt-5.4-mini",
