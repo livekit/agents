@@ -74,6 +74,7 @@ def _make_full_recognition_for_eou() -> AudioRecognition:
     ar._user_turn_span = None
     ar._user_turn_start = None
     ar._user_speaking_event = asyncio.Event()
+    ar._user_silence_ev = asyncio.Event()
     ar._speaking = False
     ar._final_transcript_confidence = []
     ar._stt_request_ids = []
