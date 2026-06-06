@@ -55,6 +55,7 @@ class _TTSOptions:
     speed: float
     instructions: str | None
     response_format: RESPONSE_FORMATS
+    stream_format: Literal["audio", "sse"] | None
 
 
 class TTS(tts.TTS):
@@ -69,6 +70,7 @@ class TTS(tts.TTS):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         client: openai.AsyncClient | None = None,
         response_format: NotGivenOr[RESPONSE_FORMATS] = NOT_GIVEN,
+        stream_format: NotGivenOr[Literal["audio", "sse"]] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of OpenAI TTS.
@@ -88,6 +90,7 @@ class TTS(tts.TTS):
             speed=speed,
             instructions=instructions if is_given(instructions) else None,
             response_format=response_format if is_given(response_format) else "mp3",
+            stream_format=stream_format if is_given(stream_format) else None,
         )
 
         if is_given(api_key) and not api_key:
@@ -153,6 +156,7 @@ class TTS(tts.TTS):
         project: str | None = None,
         base_url: str | None = None,
         response_format: NotGivenOr[RESPONSE_FORMATS] = NOT_GIVEN,
+        stream_format: NotGivenOr[Literal["audio", "sse"]] = NOT_GIVEN,
         timeout: httpx.Timeout | None = None,
     ) -> TTS:
         """
@@ -191,6 +195,7 @@ class TTS(tts.TTS):
             instructions=instructions,
             client=azure_client,
             response_format=response_format,
+            stream_format=stream_format,
         )
         tts._owns_client = True
         return tts
@@ -200,7 +205,10 @@ class TTS(tts.TTS):
     ) -> tts.ChunkedStream:
         # Use audio stream format for tts-1/tts-1-hd (character-based billing)
         # Use SSE stream format for newer models like gpt-4o-mini-tts (token-based billing)
-        if self._opts.model in AUDIO_STREAM_MODELS:
+        stream_format = self._opts.stream_format or (
+            "audio" if self._opts.model in AUDIO_STREAM_MODELS else "sse"
+        )
+        if stream_format == "audio":
             return AudioChunkedStream(tts=self, input_text=text, conn_options=conn_options)
         return SSEChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
