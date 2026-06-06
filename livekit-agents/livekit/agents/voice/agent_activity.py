@@ -262,14 +262,14 @@ class AgentActivity(RecognitionHooks):
             if isinstance(turn_detection, _StreamingTurnDetector):
                 if self.vad is None:
                     logger.warning(
-                        "AudioTurnDetector requires a VAD model. Pass vad=inference.VAD() to AgentSession/Agent"
-                        " or turn_detection=None to disable the default AudioTurnDetector"
+                        "TurnDetector requires a VAD model. Pass vad=inference.VAD() to AgentSession/Agent"
+                        " or turn_detection=None to disable the default TurnDetector"
                     )
                     return None
 
                 if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.turn_detection:
                     logger.warning(
-                        "turn_detection is an AudioTurnDetector, but the LLM is a RealtimeModel "
+                        "turn_detection is a TurnDetector, but the LLM is a RealtimeModel "
                         "with server-side turn detection enabled, ignoring the turn_detection setting"
                     )
                     return None
@@ -800,7 +800,7 @@ class AgentActivity(RecognitionHooks):
             self._interruption_detector.on("error", self._on_error)
             self._interruption_detector.on("overlapping_speech", self._on_overlap_speech_ended)
 
-        if isinstance(self._turn_detection, inference.AudioTurnDetector):
+        if isinstance(self._turn_detection, inference.TurnDetector):
             self._turn_detection.on("metrics_collected", self._on_metrics_collected)
 
         if isinstance(self.llm, llm.RealtimeModel):
@@ -1071,7 +1071,7 @@ class AgentActivity(RecognitionHooks):
             self._interruption_detector.off("error", self._on_error)
             self._interruption_detector.off("overlapping_speech", self._on_overlap_speech_ended)
 
-        if isinstance(self._turn_detection, inference.AudioTurnDetector):
+        if isinstance(self._turn_detection, inference.TurnDetector):
             self._turn_detection.off("metrics_collected", self._on_metrics_collected)
 
         if self._rt_session is not None:

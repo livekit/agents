@@ -84,7 +84,7 @@ import os
 from livekit import agents
 from livekit.agents import AgentSession, Agent, RoomInputOptions, inference
 from livekit.plugins import baseten, openai, noise_cancellation
-from livekit.agents.inference import AudioTurnDetector
+from livekit.agents.inference import TurnDetector
 
 BASETEN_API_KEY = os.getenv("BASETEN_API_KEY")
 whisper_model_id = "your-whisper-model-id"  # or use chain_id for chain deployments
@@ -117,7 +117,7 @@ async def entrypoint(ctx: agents.JobContext):
             ),
         ),
         vad=inference.VAD(),
-        turn_detection=AudioTurnDetector(),
+        turn_detection=TurnDetector(),
     )
 
     await session.start(

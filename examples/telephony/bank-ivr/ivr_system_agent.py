@@ -28,7 +28,7 @@ from livekit.agents import (
     metrics,
 )
 from livekit.agents.beta.workflows.dtmf_inputs import GetDtmfTask
-from livekit.agents.inference import AudioTurnDetector
+from livekit.agents.inference import TurnDetector
 from livekit.agents.llm.tool_context import ToolError
 
 load_dotenv()
@@ -633,7 +633,7 @@ async def bank_ivr_session(ctx: JobContext) -> None:
         llm=inference.LLM("openai/gpt-4.1"),
         stt=inference.STT("deepgram/nova-3"),
         tts=inference.TTS("cartesia/sonic-3"),
-        turn_detection=AudioTurnDetector(),
+        turn_detection=TurnDetector(),
         userdata=state,
     )
 

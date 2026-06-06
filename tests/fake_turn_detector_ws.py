@@ -7,7 +7,7 @@ Used by cloud-transport tests to drive ``_CloudTransport.run`` deterministically
   protobufs, and yields scripted server frames from ``receive()``.
 - ``ControlledCloudTransport`` overrides ``_connect_ws`` so each connect
   attempt is scripted: an exception is raised, ``None`` returns the fake ws.
-- ``make_stream(...)`` constructs an ``_AudioTurnDetectorStream`` in cloud
+- ``make_stream(...)`` constructs an ``_BaseStreamingTurnDetectorStream`` in cloud
   mode bound to a controlled transport.
 - ``wait_until_connected(...)`` blocks until the transport's ``_ws`` is set,
   so tests can assert against post-connect state without arbitrary sleeps.
@@ -23,7 +23,7 @@ import aiohttp
 
 from livekit.agents.inference.eot.base import (
     TurnDetectorOptions,
-    _AudioTurnDetectorStream,
+    _BaseStreamingTurnDetectorStream,
 )
 from livekit.agents.inference.eot.languages import ThresholdOptions
 from livekit.agents.inference.eot.transports import _CloudTransport, _CloudTransportOptions
@@ -97,7 +97,7 @@ def make_stream(
     connect_script: list[BaseException | None] | None = None,
     max_retry: int = 3,
     retry_interval: float = 0.0,
-) -> tuple[_AudioTurnDetectorStream, FakeTurnDetectorWS, ControlledCloudTransport]:
+) -> tuple[_BaseStreamingTurnDetectorStream, FakeTurnDetectorWS, ControlledCloudTransport]:
     """Construct a cloud-mode stream with a controlled transport.
 
     Returns the stream, the fake ws, and the transport so callers can read
@@ -105,11 +105,11 @@ def make_stream(
     """
     fake_ws = fake_ws or FakeTurnDetectorWS()
     detector = MagicMock()
-    detector.model = "turn-detector"
+    detector.model = "turn-detector-v1"
     detector.provider = "livekit"
     session_mock = MagicMock()
     session_mock.closed = False
-    opts = TurnDetectorOptions(sample_rate=16000, thresholds=ThresholdOptions("turn-detector"))
+    opts = TurnDetectorOptions(sample_rate=16000, thresholds=ThresholdOptions("turn-detector-v1"))
     conn_options = APIConnectOptions(max_retry=max_retry, retry_interval=retry_interval)
     cloud_opts = _CloudTransportOptions(
         base_url="",
@@ -125,11 +125,11 @@ def make_stream(
         cloud_opts=cloud_opts,
         http_session=session_mock,
     )
-    stream = _AudioTurnDetectorStream(
+    stream = _BaseStreamingTurnDetectorStream(
         detector=detector,
         opts=opts,
         transport=transport,
-        model="turn-detector",
+        model="turn-detector-v1",
     )
     return stream, fake_ws, transport
 

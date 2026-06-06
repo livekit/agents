@@ -38,7 +38,7 @@ Usage:
 
 ```python
 from livekit.agents import AgentSession, inference
-from livekit.agents.inference import AudioTurnDetector
+from livekit.agents.inference import TurnDetector
 from livekit.plugins import speechmatics
 
 agent = AgentSession(
@@ -48,7 +48,7 @@ agent = AgentSession(
         speaker_passive_format="[Speaker {speaker_id} *PASSIVE*] {text}",
     ),
     vad=inference.VAD(),
-    turn_detection=AudioTurnDetector(),
+    turn_detection=TurnDetector(),
     min_endpointing_delay=0.3,
     max_endpointing_delay=5.0,
     ...

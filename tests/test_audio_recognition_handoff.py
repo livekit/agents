@@ -167,7 +167,7 @@ async def _detach_turn_detector_if_reusable(old: MagicMock, new: MagicMock) -> o
 
 
 async def test_turn_detector_reusable_same_instance() -> None:
-    """Same AudioTurnDetector instance carries over → live stream is detached for reuse."""
+    """Same TurnDetector instance carries over → live stream is detached for reuse."""
     shared_detector = MagicMock(spec=_StreamingTurnDetector)
     old = _make_activity(Agent(instructions="a"), MagicMock(), turn_detection=shared_detector)
     new = _make_activity(Agent(instructions="b"), MagicMock(), turn_detection=shared_detector)

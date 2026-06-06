@@ -1,5 +1,5 @@
 """Tests for ``_CloudTransport`` (cloud WS body, driven by the unified
-``_AudioTurnDetectorStreamImpl`` stream).
+``_BaseStreamingTurnDetectorStream`` stream).
 
 Uses the in-process ``FakeTurnDetectorWS`` to drive the transport
 deterministically. Covers:

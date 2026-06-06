@@ -12,7 +12,7 @@ from livekit.agents import (
     room_io,
 )
 from livekit.agents.beta.workflows import WarmTransferTask
-from livekit.agents.inference import AudioTurnDetector
+from livekit.agents.inference import TurnDetector
 from livekit.agents.llm import ToolError, function_tool
 from livekit.plugins import noise_cancellation
 
@@ -99,7 +99,7 @@ async def entrypoint(ctx: JobContext):
         llm="openai/gpt-4.1-mini",
         stt="deepgram/nova-3:en",
         tts="cartesia/sonic-3:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
-        turn_detection=AudioTurnDetector(),
+        turn_detection=TurnDetector(),
     )
 
     support_agent = SupportAgent()

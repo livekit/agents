@@ -688,7 +688,7 @@ class AudioRecognition:
         required = (MIN_SILENCE_DURATION_MS + 50) / 1000
         if current < required:
             raise ValueError(
-                f"vad min_silence_duration={current}s is too low for the AudioTurnDetector. "
+                f"vad min_silence_duration={current}s is too low for the TurnDetector. "
                 f"Raise the VAD's min_silence_duration to at least {required}s."
             )
 

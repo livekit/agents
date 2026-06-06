@@ -1,4 +1,4 @@
-"""FSM tests for ``_AudioTurnDetectorStream``.
+"""FSM tests for ``_BaseStreamingTurnDetectorStream``.
 
 Covers the warmup → activate → deactivate / flush lifecycle and the
 regression cases:
@@ -19,7 +19,7 @@ import pytest
 
 from livekit.agents.inference.eot.base import (
     TurnDetectorOptions,
-    _AudioTurnDetectorStream,
+    _BaseStreamingTurnDetectorStream,
     _Status,
 )
 from livekit.agents.inference.eot.languages import ThresholdOptions
@@ -33,9 +33,9 @@ class _FakeTransport:
 
     def __init__(self) -> None:
         self.events: list[tuple[str, ...]] = []
-        self._stream: _AudioTurnDetectorStream | None = None
+        self._stream: _BaseStreamingTurnDetectorStream | None = None
 
-    def attach(self, stream: _AudioTurnDetectorStream) -> None:
+    def attach(self, stream: _BaseStreamingTurnDetectorStream) -> None:
         self._stream = stream
 
     async def run(self) -> None:
@@ -58,7 +58,7 @@ class _FakeTransport:
         pass
 
 
-class _FakeBackend(_AudioTurnDetectorStream):
+class _FakeBackend(_BaseStreamingTurnDetectorStream):
     """Stream + fake transport bundled for FSM testing, exposing the
     transport's recorded events."""
 
@@ -79,7 +79,7 @@ def _make_opts(thresholds: dict[str, float] | None = None) -> TurnDetectorOption
     # Seed the resolved thresholds via a local-model dict override so ``lookup`` returns them.
     overrides = thresholds if thresholds is not None else NOT_GIVEN
     return TurnDetectorOptions(
-        sample_rate=16000, thresholds=ThresholdOptions("turn-detector-mini", overrides)
+        sample_rate=16000, thresholds=ThresholdOptions("turn-detector-v1-mini", overrides)
     )
 
 
@@ -88,7 +88,7 @@ def _make_stream(thresholds: dict[str, float] | None = None) -> _FakeBackend:
 
 
 class TestAudioTurnDetectionFSM:
-    """State transitions and hook dispatch for ``_AudioTurnDetectorStream``."""
+    """State transitions and hook dispatch for ``_BaseStreamingTurnDetectorStream``."""
 
     async def test_warmup_starts_inference(self) -> None:
         s = _make_stream()

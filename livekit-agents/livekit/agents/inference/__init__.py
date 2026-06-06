@@ -1,4 +1,4 @@
-from .eot import AudioTurnDetector, TurnDetectorModels
+from .eot import TurnDetector, TurnDetectorModels, TurnDetectorVersions
 from .interruption import (
     AdaptiveInterruptionDetector,
     InterruptionDataFrameType,
@@ -24,6 +24,7 @@ __all__ = [
     "InterruptionDetectionError",
     "OverlappingSpeechEvent",
     "InterruptionDataFrameType",
-    "AudioTurnDetector",
+    "TurnDetector",
     "TurnDetectorModels",
+    "TurnDetectorVersions",
 ]

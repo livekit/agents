@@ -20,21 +20,21 @@ from .._utils import get_default_inference_url
 from .base import (
     DEFAULT_SAMPLE_RATE,
     TurnDetectorOptions,
-    _AudioTurnDetectionTransport,
-    _AudioTurnDetector,
-    _AudioTurnDetectorStream,
+    _BaseStreamingTurnDetector,
+    _BaseStreamingTurnDetectorStream,
+    _StreamingTurnDetectionTransport,
 )
-from .languages import ThresholdOptions, TurnDetectorModels
+from .languages import ThresholdOptions, TurnDetectorModels, TurnDetectorVersions
 from .transports import _CloudTransport, _CloudTransportOptions, _LocalTransport
 
-__all__ = ["AudioTurnDetector"]
+__all__ = ["TurnDetector"]
 
 
-class AudioTurnDetector(_AudioTurnDetector):
+class TurnDetector(_BaseStreamingTurnDetector):
     def __init__(
         self,
         *,
-        model: NotGivenOr[TurnDetectorModels] = NOT_GIVEN,
+        version: NotGivenOr[TurnDetectorVersions] = NOT_GIVEN,
         unlikely_threshold: NotGivenOr[float | dict[LanguageCode | str, float]] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
@@ -43,20 +43,19 @@ class AudioTurnDetector(_AudioTurnDetector):
         http_session: aiohttp.ClientSession | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
-        auto = not is_given(model)
+        auto = not is_given(version)
+        resolved_version: TurnDetectorVersions = (
+            version
+            if is_given(version)
+            else ("v1" if (utils.is_hosted() or utils.is_dev_mode()) else "v1-mini")
+        )
         resolved_model: TurnDetectorModels = (
-            model
-            if is_given(model)
-            else (
-                "turn-detector"
-                if (utils.is_hosted() or utils.is_dev_mode())
-                else "turn-detector-mini"
-            )
+            "turn-detector-v1" if resolved_version == "v1" else "turn-detector-v1-mini"
         )
 
         cloud_opts: _CloudTransportOptions | None = None
 
-        if resolved_model == "turn-detector":
+        if resolved_version == "v1":
             lk_base_url = utils.resolve_env_var(
                 base_url,
                 "LIVEKIT_INFERENCE_URL",
@@ -82,13 +81,13 @@ class AudioTurnDetector(_AudioTurnDetector):
                 if auto:
                     logger.warning(
                         "LIVEKIT_INFERENCE_URL is set but %s missing; "
-                        "falling back to the turn-detector-mini model",
+                        "falling back to the turn-detector-v1-mini model",
                         ", ".join(missing),
                     )
-                    resolved_model = "turn-detector-mini"
+                    resolved_model = "turn-detector-v1-mini"
                 else:
                     raise ValueError(
-                        f"AudioTurnDetector(model='turn-detector') requires "
+                        f"TurnDetector(version='v1') requires "
                         f"{', '.join(missing)} (env or constructor argument)."
                     )
             else:
@@ -136,16 +135,16 @@ class AudioTurnDetector(_AudioTurnDetector):
         self,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> _AudioTurnDetectorStream:
+    ) -> _BaseStreamingTurnDetectorStream:
         cloud_opts = (
             replace(self._cloud_opts, conn_options=conn_options)
             if self._cloud_opts is not None
             else None
         )
 
-        transport: _AudioTurnDetectionTransport
-        if self._model == "turn-detector":
-            assert cloud_opts is not None, "turn-detector requires cloud_opts"
+        transport: _StreamingTurnDetectionTransport
+        if self._model == "turn-detector-v1":
+            assert cloud_opts is not None, "turn-detector-v1 requires cloud_opts"
             transport = _CloudTransport(
                 detector=self,
                 opts=self._opts,
@@ -155,7 +154,7 @@ class AudioTurnDetector(_AudioTurnDetector):
         else:
             transport = _LocalTransport(opts=self._opts)
 
-        return _AudioTurnDetectorStream(
+        return _BaseStreamingTurnDetectorStream(
             detector=self,
             opts=self._opts,
             transport=transport,

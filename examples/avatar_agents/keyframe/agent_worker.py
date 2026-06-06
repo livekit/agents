@@ -14,7 +14,7 @@ from livekit.agents import (
     function_tool,
     inference,
 )
-from livekit.agents.inference import AudioTurnDetector
+from livekit.agents.inference import TurnDetector
 from livekit.plugins import keyframe
 from livekit.plugins.keyframe import Emotion
 
@@ -51,7 +51,7 @@ async def entrypoint(ctx: JobContext):
         llm=inference.LLM("google/gemini-2.5-flash"),
         tts=inference.TTS("cartesia/sonic-3"),
         resume_false_interruption=False,
-        turn_detection=AudioTurnDetector(),
+        turn_detection=TurnDetector(),
     )
 
     avatar = keyframe.AvatarSession(persona_slug="public:cosmo_persona-1.5-live")

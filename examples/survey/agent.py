@@ -20,7 +20,7 @@ from livekit.agents import (
     room_io,
 )
 from livekit.agents.beta.workflows import GetEmailTask, TaskGroup
-from livekit.agents.inference import AudioTurnDetector
+from livekit.agents.inference import TurnDetector
 from livekit.agents.llm import function_tool
 
 logger = logging.getLogger("SurveyAgent")
@@ -353,7 +353,7 @@ async def entrypoint(ctx: JobContext):
         llm=inference.LLM("google/gemini-2.5-flash"),
         stt=inference.STT("deepgram/nova-3", language="multi"),
         tts=inference.TTS("inworld/inworld-tts-1"),
-        turn_detection=AudioTurnDetector(),
+        turn_detection=TurnDetector(),
         preemptive_generation=True,
     )
 

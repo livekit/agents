@@ -18,7 +18,7 @@ from livekit.agents import (
     ModelSettings,
     cli,
 )
-from livekit.agents.inference import AudioTurnDetector
+from livekit.agents.inference import TurnDetector
 from livekit.plugins import openai
 
 logger = logging.getLogger("structured-output")
@@ -129,7 +129,7 @@ server = AgentServer()
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
-        turn_detection=AudioTurnDetector(),
+        turn_detection=TurnDetector(),
     )
     await session.start(agent=MyAgent(), room=ctx.room)
 

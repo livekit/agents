@@ -45,19 +45,19 @@ from .._utils import create_access_token, get_inference_headers
 from .base import (
     DEFAULT_SAMPLE_RATE,
     TurnDetectorOptions,
-    _AudioTurnDetectionTransport,
-    _AudioTurnDetectorStream,
+    _BaseStreamingTurnDetectorStream,
+    _StreamingTurnDetectionTransport,
 )
 
 if TYPE_CHECKING:
-    from .detector import AudioTurnDetector
+    from .detector import TurnDetector
 
 
 __all__ = [
-    "_AudioTurnDetectionTransport",
     "_CloudTransport",
     "_CloudTransportOptions",
     "_LocalTransport",
+    "_StreamingTurnDetectionTransport",
 ]
 
 
@@ -78,17 +78,17 @@ _CLIENT_BUFFER_SAMPLES = int(_CLIENT_BUFFER_SECONDS * DEFAULT_SAMPLE_RATE)
 
 
 class _CloudTransport:
-    """WebSocket transport for `turn-detector`."""
+    """WebSocket transport for `turn-detector-v1`."""
 
     def __init__(
         self,
         *,
-        detector: AudioTurnDetector,
+        detector: TurnDetector,
         opts: TurnDetectorOptions,
         cloud_opts: _CloudTransportOptions,
         http_session: aiohttp.ClientSession | None,
     ) -> None:
-        self._detector_ref: weakref.ref[AudioTurnDetector] = weakref.ref(detector)
+        self._detector_ref: weakref.ref[TurnDetector] = weakref.ref(detector)
         self._opts = opts
         self._cloud_opts = cloud_opts
         self._conn_options = cloud_opts.conn_options
@@ -97,9 +97,9 @@ class _CloudTransport:
         self._num_retries = 0
 
         self._send_ch: aio.Chan[ClientMessage] | None = None
-        self._stream_ref: weakref.ref[_AudioTurnDetectorStream] | None = None
+        self._stream_ref: weakref.ref[_BaseStreamingTurnDetectorStream] | None = None
 
-    def attach(self, stream: _AudioTurnDetectorStream) -> None:
+    def attach(self, stream: _BaseStreamingTurnDetectorStream) -> None:
         self._stream_ref = weakref.ref(stream)
 
     def start_inference(self, request_id: str) -> None:
@@ -375,7 +375,7 @@ class _CloudTransport:
 
 
 class _LocalTransport:
-    """In-process ctypes transport for `turn-detector-mini`."""
+    """In-process ctypes transport for `turn-detector-v1-mini`."""
 
     def __init__(self, *, opts: TurnDetectorOptions) -> None:
         self._opts = opts
@@ -383,10 +383,10 @@ class _LocalTransport:
             buffer_size=_CLIENT_BUFFER_SAMPLES, sample_rate=DEFAULT_SAMPLE_RATE
         )
         self._eot = _EOT()
-        self._stream_ref: weakref.ref[_AudioTurnDetectorStream] | None = None
+        self._stream_ref: weakref.ref[_BaseStreamingTurnDetectorStream] | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
 
-    def attach(self, stream: _AudioTurnDetectorStream) -> None:
+    def attach(self, stream: _BaseStreamingTurnDetectorStream) -> None:
         self._stream_ref = weakref.ref(stream)
 
     def start_inference(self, request_id: str) -> None:

@@ -132,7 +132,7 @@ from livekit.agents import (
     metrics,
     room_io,
 )
-from livekit.agents.inference import AudioTurnDetector
+from livekit.agents.inference import TurnDetector
 from livekit.plugins import inworld
 
 logger = logging.getLogger("inworld-agent")
@@ -166,7 +166,7 @@ async def entrypoint(ctx: JobContext):
         stt=inworld.STT(model="inworld/inworld-stt-1"),
         llm="openai/gpt-4.1-mini",
         tts=inworld.TTS(voice="Clive"),
-        turn_detection=AudioTurnDetector(),
+        turn_detection=TurnDetector(),
         vad=inference.VAD(),
     )
 

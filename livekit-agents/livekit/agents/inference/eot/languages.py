@@ -26,7 +26,8 @@ LOCAL_LANGUAGES: dict[str, float] = {
     "zh": 0.3550,
 }
 
-TurnDetectorModels = Literal["turn-detector", "turn-detector-mini"]
+TurnDetectorModels = Literal["turn-detector-v1", "turn-detector-v1-mini"]
+TurnDetectorVersions = Literal["v1", "v1-mini"]
 
 
 def _normalize_overrides(
@@ -49,7 +50,7 @@ class ThresholdOptions:
         # server/shipped defaults
         self._server_thresholds: dict[str, float] | None = None
         self._server_default: float | None = None
-        if model == "turn-detector-mini":
+        if model == "turn-detector-v1-mini":
             self._server_thresholds = dict(LOCAL_LANGUAGES)
             self._server_default = LOCAL_LANGUAGES["en"]
 
@@ -80,7 +81,7 @@ class ThresholdOptions:
         return self._thresholds.get(lang_key, self.default_threshold)
 
     def supports(self, language: LanguageCode | None) -> bool:
-        pending = self._model == "turn-detector" and self._server_thresholds is None
+        pending = self._model == "turn-detector-v1" and self._server_thresholds is None
         return pending or self.lookup(language) is not None
 
     def update_overrides(
@@ -105,7 +106,7 @@ class ThresholdOptions:
         self._resolve()
 
     def _to_local_fallback(self) -> None:
-        if self._model == "turn-detector-mini":
+        if self._model == "turn-detector-v1-mini":
             return
 
         rescaled: dict[str, float] | None = None
@@ -117,7 +118,7 @@ class ThresholdOptions:
                 if active_t is not None and lang in LOCAL_LANGUAGES and server[lang] != 0
             }
 
-        self._model = "turn-detector-mini"
+        self._model = "turn-detector-v1-mini"
         self._server_thresholds = dict(LOCAL_LANGUAGES)
         self._server_default = LOCAL_LANGUAGES["en"]
         self._resolve()

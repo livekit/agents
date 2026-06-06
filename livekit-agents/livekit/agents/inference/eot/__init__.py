@@ -1,4 +1,4 @@
-from .detector import AudioTurnDetector
-from .languages import TurnDetectorModels
+from .detector import TurnDetector
+from .languages import TurnDetectorModels, TurnDetectorVersions
 
-__all__ = ["AudioTurnDetector", "TurnDetectorModels"]
+__all__ = ["TurnDetector", "TurnDetectorModels", "TurnDetectorVersions"]

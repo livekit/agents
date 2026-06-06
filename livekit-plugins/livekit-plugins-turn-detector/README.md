@@ -1,6 +1,6 @@
 # Turn detector plugin for LiveKit Agents
 
-> ⚠️ **Deprecated.** This plugin is deprecated and will be removed in a future release. Use [`livekit.agents.inference.AudioTurnDetector`](https://docs.livekit.io/agents/build/turns/turn-detector/) instead — it ships with `livekit-agents`, requires no additional install, and replaces both the English and Multilingual text-based models with a unified audio end-of-turn detector.
+> ⚠️ **Deprecated.** This plugin is deprecated and will be removed in a future release. Use [`livekit.agents.inference.TurnDetector`](https://docs.livekit.io/agents/build/turns/turn-detector/) instead — it ships with `livekit-agents`, requires no additional install, and replaces both the English and Multilingual text-based models with a unified audio end-of-turn detector.
 
 This plugin introduces end-of-turn detection for LiveKit Agents using a custom open-weight model to determine when a user has finished speaking.
 
@@ -12,26 +12,26 @@ See [https://docs.livekit.io/agents/build/turns/turn-detector/](https://docs.liv
 
 ## Usage
 
-The recommended replacement is `AudioTurnDetector`, available from `livekit-agents` directly:
+The recommended replacement is `TurnDetector`, available from `livekit-agents` directly:
 
 ```python
-from livekit.agents.inference import AudioTurnDetector
+from livekit.agents.inference import TurnDetector
 
 session = AgentSession(
     ...
-    turn_detection=AudioTurnDetector(),
+    turn_detection=TurnDetector(),
 )
 ```
 
 ### Usage with RealtimeModel
 
-`AudioTurnDetector` works with speech-to-speech models such as OpenAI's Realtime API:
+`TurnDetector` works with speech-to-speech models such as OpenAI's Realtime API:
 
 ```python
 session = AgentSession(
     ...
     llm=openai.realtime.RealtimeModel(),
-    turn_detection=AudioTurnDetector(),
+    turn_detection=TurnDetector(),
 )
 ```
 

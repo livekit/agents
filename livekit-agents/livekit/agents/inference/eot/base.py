@@ -49,7 +49,7 @@ class TurnDetectorOptions:
 
 
 @runtime_checkable
-class _AudioTurnDetectionTransport(Protocol):
+class _StreamingTurnDetectionTransport(Protocol):
     async def run(self) -> None: ...
 
     def start_inference(self, request_id: str) -> None: ...
@@ -57,11 +57,11 @@ class _AudioTurnDetectionTransport(Protocol):
     def push_frame(self, frame: rtc.AudioFrame) -> None: ...
     def flush(self) -> None: ...
 
-    def attach(self, stream: _AudioTurnDetectorStream) -> None: ...
+    def attach(self, stream: _BaseStreamingTurnDetectorStream) -> None: ...
     def detach(self) -> None: ...
 
 
-class _AudioTurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
+class _BaseStreamingTurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
     def __init__(self, *, opts: TurnDetectorOptions) -> None:
         super().__init__()
         self._opts = opts
@@ -78,7 +78,7 @@ class _AudioTurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
         self,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> _AudioTurnDetectorStream:
+    ) -> _BaseStreamingTurnDetectorStream:
         raise NotImplementedError
 
     async def unlikely_threshold(self, language: LanguageCode | None) -> float | None:
@@ -88,7 +88,7 @@ class _AudioTurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
         return self._opts.thresholds.supports(language)
 
 
-class _AudioTurnDetectorStream:
+class _BaseStreamingTurnDetectorStream:
     @dataclass
     class _FlushSentinel:
         reason: str | None = None
@@ -96,10 +96,10 @@ class _AudioTurnDetectorStream:
     def __init__(
         self,
         *,
-        detector: _AudioTurnDetector,
+        detector: _BaseStreamingTurnDetector,
         opts: TurnDetectorOptions,
-        transport: _AudioTurnDetectionTransport,
-        model: TurnDetectorModels = "turn-detector-mini",
+        transport: _StreamingTurnDetectionTransport,
+        model: TurnDetectorModels = "turn-detector-v1-mini",
     ) -> None:
         self._detector = detector
         self._opts = opts
@@ -116,7 +116,9 @@ class _AudioTurnDetectorStream:
         self._audio_input_sample_rate: int | None = None
         self._audio_input_num_channels: int | None = None
         self._audio_resampler: rtc.AudioResampler | None = None
-        self._audio_ch = aio.Chan[rtc.AudioFrame | _AudioTurnDetectorStream._FlushSentinel]()
+        self._audio_ch = aio.Chan[
+            rtc.AudioFrame | _BaseStreamingTurnDetectorStream._FlushSentinel
+        ]()
 
         self._status: _Status = _Status.IDLE
         self._preemptive_request_id: str | None = None
@@ -134,7 +136,7 @@ class _AudioTurnDetectorStream:
     @property
     def model(self) -> TurnDetectorModels:
         # The stream owns its active model, so after a fallback this reports
-        # "turn-detector-mini". The detector and stream share one mutable
+        # "turn-detector-v1-mini". The detector and stream share one mutable
         # ``ThresholdOptions``, and the cloud→local fallback it performs is
         # one-way and sticky: once degraded it never returns to cloud, so the
         # detector view stays consistent for the rest of its lifetime.
@@ -233,7 +235,7 @@ class _AudioTurnDetectorStream:
 
         for resampled_frame in self._flush_audio_resampler():
             self._audio_ch.send_nowait(resampled_frame)
-        self._audio_ch.send_nowait(_AudioTurnDetectorStream._FlushSentinel(reason=reason))
+        self._audio_ch.send_nowait(_BaseStreamingTurnDetectorStream._FlushSentinel(reason=reason))
         # Turn boundary — the cached prediction belongs to the turn we just
         # closed and must not leak into the next one.
         self._last_prediction = None
@@ -399,7 +401,7 @@ class _AudioTurnDetectorStream:
             # Cloud predict timeout = transport failure; promote the mini model
             # for the rest of the session and let the next call retry on the new
             # transport.
-            if self._model == "turn-detector":
+            if self._model == "turn-detector-v1":
                 self._fall_back_to_local(reason=asyncio.TimeoutError("predict_end_of_turn"))
             # Positive default so min_endpointing_delay applies.
             return 1.0
@@ -429,14 +431,14 @@ class _AudioTurnDetectorStream:
 
     async def _drain_audio_channel(self) -> None:
         async for item in self._audio_ch:
-            if isinstance(item, _AudioTurnDetectorStream._FlushSentinel):
+            if isinstance(item, _BaseStreamingTurnDetectorStream._FlushSentinel):
                 self._transport.flush()
             else:
                 self._transport.push_frame(item)
 
     async def _run(self) -> None:
         """Run the active transport, retrying on cloud failure by swapping in
-        a local transport in-place. ``turn-detector-mini`` just runs the
+        a local transport in-place. ``turn-detector-v1-mini`` just runs the
         transport once and surfaces failures to the caller via
         ``_handle_prediction`` (default 1.0)."""
         while True:
@@ -456,7 +458,7 @@ class _AudioTurnDetectorStream:
                     await aio.cancel_and_wait(task)
                 raise
             except Exception as e:  # noqa: BLE001 — any cloud error degrades to local
-                if self._model == "turn-detector":
+                if self._model == "turn-detector-v1":
                     self._fall_back_to_local(reason=e)
                     continue
                 self._on_local_failure(reason=e)
@@ -477,13 +479,13 @@ class _AudioTurnDetectorStream:
         self._emit_default_for_inflight()
         self._transport.detach()
         self._opts.thresholds._to_local_fallback()
-        from .detector import AudioTurnDetector
+        from .detector import TurnDetector
 
-        if isinstance(self._detector, AudioTurnDetector):
-            self._detector._model = "turn-detector-mini"
+        if isinstance(self._detector, TurnDetector):
+            self._detector._model = "turn-detector-v1-mini"
         self._transport = _LocalTransport(opts=self._opts)
         self._transport.attach(self)
-        self._model = "turn-detector-mini"
+        self._model = "turn-detector-v1-mini"
         self._is_fallback = True
         # If transport.run() is still in flight (e.g. predict timeout while
         # the cloud session was otherwise idle), signal+cancel so _run loops

@@ -1,4 +1,4 @@
-"""Tests for the unified ``AudioTurnDetector`` (auto-select + fallback + server defaults).
+"""Tests for the unified ``TurnDetector`` (auto-select + fallback + server defaults).
 
 Covers:
 
@@ -26,11 +26,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from livekit.agents._exceptions import APIConnectionError, APIError
-from livekit.agents.inference.eot import AudioTurnDetector
+from livekit.agents.inference.eot import TurnDetector
 from livekit.agents.inference.eot.base import (
     TurnDetectorOptions,
-    _AudioTurnDetectionTransport,
-    _AudioTurnDetectorStream,
+    _BaseStreamingTurnDetectorStream,
+    _StreamingTurnDetectionTransport,
 )
 from livekit.agents.inference.eot.languages import (
     LOCAL_LANGUAGES,
@@ -71,7 +71,7 @@ def _clean_env(**overrides: str | None):
 
 
 class _ScriptedTransport:
-    """Fake transport that structurally satisfies ``_AudioTurnDetectionTransport``.
+    """Fake transport that structurally satisfies ``_StreamingTurnDetectionTransport``.
 
     Behavior is scriptable: ``run`` either sleeps until cancelled, raises a
     configured exception, or returns immediately. Hook calls are recorded.
@@ -89,7 +89,7 @@ class _ScriptedTransport:
         self.stream_ref: Any = None
         self.events: list[tuple[str, Any]] = []
 
-    def attach(self, stream: _AudioTurnDetectorStream) -> None:
+    def attach(self, stream: _BaseStreamingTurnDetectorStream) -> None:
         self.stream_ref = stream
 
     async def run(self) -> None:
@@ -120,7 +120,7 @@ class _ScriptedTransport:
 
 def _make_opts(
     *,
-    model: str = "turn-detector",
+    model: str = "turn-detector-v1",
     user_threshold: NotGivenOr[float | dict[str, float]] = NOT_GIVEN,
 ) -> TurnDetectorOptions:
     return TurnDetectorOptions(
@@ -130,11 +130,11 @@ def _make_opts(
 
 
 def _make_stream_with_transport(
-    transport: _AudioTurnDetectionTransport,
+    transport: _StreamingTurnDetectionTransport,
     *,
-    model: str = "turn-detector",
+    model: str = "turn-detector-v1",
     user_threshold: NotGivenOr[float | dict[str, float]] = NOT_GIVEN,
-) -> _AudioTurnDetectorStream:
+) -> _BaseStreamingTurnDetectorStream:
     """Construct a stream wired to a scripted transport.
 
     The cloud model starts with empty thresholds (its defaults arrive via ``SessionCreated`` —
@@ -147,7 +147,7 @@ def _make_stream_with_transport(
     opts = _make_opts(model=model, user_threshold=user_threshold)
     detector._opts = opts
 
-    return _AudioTurnDetectorStream(
+    return _BaseStreamingTurnDetectorStream(
         detector=detector,
         opts=opts,
         transport=transport,
@@ -158,8 +158,8 @@ def _make_stream_with_transport(
 class TestAutoSelect:
     def test_auto_select_local_when_no_remote_eot_url(self) -> None:
         with _clean_env(LIVEKIT_REMOTE_EOT_URL=None):
-            detector = AudioTurnDetector()
-            assert detector.model == "turn-detector-mini"
+            detector = TurnDetector()
+            assert detector.model == "turn-detector-v1-mini"
 
     def test_auto_select_cloud_when_remote_eot_url_set(self) -> None:
         with _clean_env(
@@ -167,8 +167,8 @@ class TestAutoSelect:
             LIVEKIT_API_KEY="k",
             LIVEKIT_API_SECRET="s",
         ):
-            detector = AudioTurnDetector()
-            assert detector.model == "turn-detector"
+            detector = TurnDetector()
+            assert detector.model == "turn-detector-v1"
 
     def test_auto_select_downgrades_when_creds_missing(self) -> None:
         with _clean_env(
@@ -178,9 +178,9 @@ class TestAutoSelect:
             LIVEKIT_INFERENCE_API_KEY=None,
             LIVEKIT_INFERENCE_API_SECRET=None,
         ):
-            detector = AudioTurnDetector()
+            detector = TurnDetector()
             # env said cloud, but creds absent → silent downgrade
-            assert detector.model == "turn-detector-mini"
+            assert detector.model == "turn-detector-v1-mini"
 
 
 class TestExplicitModelErrors:
@@ -193,7 +193,7 @@ class TestExplicitModelErrors:
             LIVEKIT_INFERENCE_API_SECRET=None,
         ):
             with pytest.raises(ValueError):
-                AudioTurnDetector(model="turn-detector")
+                TurnDetector(version="v1")
 
 
 class TestFallback:
@@ -201,8 +201,8 @@ class TestFallback:
         transport = _ScriptedTransport(run_behavior="raise", run_exc=APIConnectionError("boom"))
         with patch.object(_LocalTransport, "run", new=lambda self: asyncio.sleep(0)):
             stream = _make_stream_with_transport(transport)
-            await _wait_for(lambda: stream.model == "turn-detector-mini")
-            assert stream.model == "turn-detector-mini"
+            await _wait_for(lambda: stream.model == "turn-detector-v1-mini")
+            assert stream.model == "turn-detector-v1-mini"
             assert stream.is_fallback is True
             assert stream._warned_cloud_failure is True
             assert ("detach", None) in transport.events
@@ -216,7 +216,7 @@ class TestFallback:
             # Drive a predict that times out fast.
             prob = await stream.predict_end_of_turn(timeout=0.01)
             assert prob == 1.0
-            assert stream.model == "turn-detector-mini"
+            assert stream.model == "turn-detector-v1-mini"
             assert stream.is_fallback is True
             await stream.aclose()
 
@@ -224,12 +224,12 @@ class TestFallback:
         transport = _ScriptedTransport(run_behavior="raise", run_exc=APIConnectionError("boom"))
         with patch.object(_LocalTransport, "run", new=lambda self: asyncio.sleep(0)):
             stream = _make_stream_with_transport(transport)
-            await _wait_for(lambda: stream.model == "turn-detector-mini")
+            await _wait_for(lambda: stream.model == "turn-detector-v1-mini")
             # Cloud transport ran exactly once; no resurrection.
             assert transport.run_calls == 1
             # Future turns can call warmup without re-touching cloud.
             stream.warmup()
-            assert stream.model == "turn-detector-mini"
+            assert stream.model == "turn-detector-v1-mini"
             await stream.aclose()
 
 
@@ -244,27 +244,27 @@ class TestDetectorViewAfterFallback:
             LIVEKIT_API_KEY="k",
             LIVEKIT_API_SECRET="s",
         ):
-            detector = AudioTurnDetector(unlikely_threshold=0.5)
-            assert detector.model == "turn-detector"
+            detector = TurnDetector(unlikely_threshold=0.5)
+            assert detector.model == "turn-detector-v1"
             # scalar override is resolvable pre-session via the catch-all
             assert await detector.unlikely_threshold(LanguageCode("en")) == pytest.approx(0.5)
 
         transport = _ScriptedTransport(run_behavior="idle")
         with patch.object(_LocalTransport, "run", new=lambda self: asyncio.sleep(0)):
-            stream = _AudioTurnDetectorStream(
+            stream = _BaseStreamingTurnDetectorStream(
                 detector=detector,
                 opts=detector._opts,
                 transport=transport,
-                model="turn-detector",
+                model="turn-detector-v1",
             )
             # server defaults arrive, then the cloud session fails
             stream._opts.thresholds._update_defaults(
                 dict(SERVER_THRESHOLDS), SERVER_DEFAULT_THRESHOLD
             )
             stream._fall_back_to_local(reason=APIConnectionError("boom"))
-            await _wait_for(lambda: stream.model == "turn-detector-mini")
+            await _wait_for(lambda: stream.model == "turn-detector-v1-mini")
 
-            assert detector.model == "turn-detector-mini"
+            assert detector.model == "turn-detector-v1-mini"
             local_threshold = await detector.unlikely_threshold(LanguageCode("en"))
             expected = LOCAL_LANGUAGES["en"] * (0.5 / SERVER_THRESHOLDS["en"])
             assert local_threshold == pytest.approx(expected)
@@ -277,10 +277,10 @@ class TestLocalFailureRetry:
         """Local _predict raising emits 1.0 for the turn and does NOT
         permanently disable local — the next turn invokes _predict again."""
         transport = _ScriptedTransport(run_behavior="raise", run_exc=RuntimeError("local boom"))
-        stream = _make_stream_with_transport(transport, model="turn-detector-mini")
+        stream = _make_stream_with_transport(transport, model="turn-detector-v1-mini")
         await _wait_for(lambda: stream._warned_local_failure)
-        # Local failed; warning logged once; model stays turn-detector-mini; no fallback flag.
-        assert stream.model == "turn-detector-mini"
+        # Local failed; warning logged once; model stays turn-detector-v1-mini; no fallback flag.
+        assert stream.model == "turn-detector-v1-mini"
         assert stream.is_fallback is False
         assert stream._warned_local_failure is True
         # Run a second cycle to confirm we'd accept another call (the
@@ -297,7 +297,7 @@ class TestWarningDedupe:
         transport = _ScriptedTransport(run_behavior="raise", run_exc=APIConnectionError("boom"))
         with patch.object(_LocalTransport, "run", new=lambda self: asyncio.sleep(0)):
             stream = _make_stream_with_transport(transport)
-            await _wait_for(lambda: stream.model == "turn-detector-mini")
+            await _wait_for(lambda: stream.model == "turn-detector-v1-mini")
             # Trigger a second fallback path by calling the method directly.
             stream._fall_back_to_local(reason=APIConnectionError("boom2"))
             # Only one warning across both invocations.
@@ -310,7 +310,7 @@ class TestWarningDedupe:
     ) -> None:
         caplog.set_level(logging.WARNING, logger="livekit.agents")
         transport = _ScriptedTransport(run_behavior="idle")
-        stream = _make_stream_with_transport(transport, model="turn-detector-mini")
+        stream = _make_stream_with_transport(transport, model="turn-detector-v1-mini")
         # Two local failures back to back.
         stream._on_local_failure(reason=RuntimeError("a"))
         stream._on_local_failure(reason=RuntimeError("b"))
@@ -327,7 +327,7 @@ class TestResolveThresholds:
     @staticmethod
     def _cloud(overrides: Any = NOT_GIVEN) -> ThresholdOptions:
         # mirror the detector boundary: overrides are normalized before reaching ThresholdOptions
-        opts = ThresholdOptions("turn-detector", _normalize_overrides(overrides))
+        opts = ThresholdOptions("turn-detector-v1", _normalize_overrides(overrides))
         opts._update_defaults(dict(SERVER_THRESHOLDS), SERVER_DEFAULT_THRESHOLD)
         return opts
 
@@ -414,7 +414,7 @@ class TestOverrideWarning:
     def test_warning_on_construction_with_override(self, caplog: pytest.LogCaptureFixture) -> None:
         caplog.set_level(logging.WARNING, logger="livekit.agents")
         with _clean_env(LIVEKIT_REMOTE_EOT_URL=None):
-            AudioTurnDetector(unlikely_threshold=0.5)
+            TurnDetector(unlikely_threshold=0.5)
         warnings = [
             r for r in caplog.records if "non-default turn detection threshold" in r.getMessage()
         ]
@@ -423,7 +423,7 @@ class TestOverrideWarning:
     def test_no_warning_without_override(self, caplog: pytest.LogCaptureFixture) -> None:
         caplog.set_level(logging.WARNING, logger="livekit.agents")
         with _clean_env(LIVEKIT_REMOTE_EOT_URL=None):
-            AudioTurnDetector()
+            TurnDetector()
         warnings = [
             r for r in caplog.records if "non-default turn detection threshold" in r.getMessage()
         ]
@@ -440,7 +440,7 @@ class TestUpdateOptions:
             LIVEKIT_API_KEY="k",
             LIVEKIT_API_SECRET="s",
         ):
-            detector = AudioTurnDetector()
+            detector = TurnDetector()
 
         # detector.stream() shares the detector's ThresholdOptions with the stream
         transport = _ScriptedTransport(run_behavior="idle")
@@ -462,8 +462,8 @@ class TestUpdateOptions:
 
     async def test_update_options_local_model(self) -> None:
         with _clean_env(LIVEKIT_REMOTE_EOT_URL=None):
-            detector = AudioTurnDetector()
-            assert detector.model == "turn-detector-mini"
+            detector = TurnDetector()
+            assert detector.model == "turn-detector-v1-mini"
             detector.update_options(unlikely_threshold=0.42)
             assert await detector.unlikely_threshold(LanguageCode("en")) == pytest.approx(0.42)
 
@@ -477,7 +477,7 @@ class TestThresholdRescaleOnFallback:
                 dict(SERVER_THRESHOLDS), SERVER_DEFAULT_THRESHOLD
             )
             stream._fall_back_to_local(reason=APIConnectionError("boom"))
-            await _wait_for(lambda: stream.model == "turn-detector-mini")
+            await _wait_for(lambda: stream.model == "turn-detector-v1-mini")
             assert stream.is_fallback is True
             value = await stream.unlikely_threshold(LanguageCode("en"))
             expected = LOCAL_LANGUAGES["en"] * (0.5 / SERVER_THRESHOLDS["en"])
@@ -492,7 +492,7 @@ class TestThresholdRescaleOnFallback:
                 dict(SERVER_THRESHOLDS), SERVER_DEFAULT_THRESHOLD
             )
             stream._fall_back_to_local(reason=APIConnectionError("boom"))
-            await _wait_for(lambda: stream.model == "turn-detector-mini")
+            await _wait_for(lambda: stream.model == "turn-detector-v1-mini")
             # ratio 1.0 → local table unchanged
             assert await stream.unlikely_threshold(LanguageCode("en")) == pytest.approx(
                 LOCAL_LANGUAGES["en"]
@@ -507,7 +507,7 @@ class TestThresholdRescaleOnFallback:
                 dict(SERVER_THRESHOLDS), SERVER_DEFAULT_THRESHOLD
             )
             stream._fall_back_to_local(reason=APIConnectionError("boom"))
-            await _wait_for(lambda: stream.model == "turn-detector-mini")
+            await _wait_for(lambda: stream.model == "turn-detector-v1-mini")
             assert stream.is_fallback is True
             assert await stream.unlikely_threshold(LanguageCode("en")) == pytest.approx(
                 LOCAL_LANGUAGES["en"] * (0.55 / SERVER_THRESHOLDS["en"])
@@ -527,7 +527,7 @@ class TestThresholdRescaleOnFallback:
         transport = _ScriptedTransport(run_behavior="raise", run_exc=APIConnectionError("boom"))
         with patch.object(_LocalTransport, "run", new=lambda self: asyncio.sleep(0)):
             stream = _make_stream_with_transport(transport, user_threshold=0.42)
-            await _wait_for(lambda: stream.model == "turn-detector-mini")
+            await _wait_for(lambda: stream.model == "turn-detector-v1-mini")
             assert stream.is_fallback is True
             # materialize_local_thresholds(0.42) → 0.42 for every local language
             assert await stream.unlikely_threshold(LanguageCode("en")) == pytest.approx(0.42)

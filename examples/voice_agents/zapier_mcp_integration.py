@@ -14,7 +14,7 @@ from livekit.agents import (
     mcp,
     metrics,
 )
-from livekit.agents.inference import AudioTurnDetector
+from livekit.agents.inference import TurnDetector
 
 load_dotenv(dotenv_path=".env.local")
 logger = logging.getLogger("voice-agent")
@@ -31,7 +31,7 @@ class Assistant(Agent):
             llm=inference.LLM("google/gemini-2.5-flash"),
             tts=inference.TTS("rime/arcana"),
             # use LiveKit's transformer-based turn detector
-            turn_detection=AudioTurnDetector(),
+            turn_detection=TurnDetector(),
         )
 
     async def on_enter(self):

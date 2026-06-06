@@ -369,7 +369,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         preemptive_gen = _resolve_preemptive_generation(turn_handling.get("preemptive_generation"))
         user_turn_limit = _resolve_user_turn_limit(turn_handling.get("user_turn_limit"))
         raw_turn_detection: TurnDetectionMode | None = turn_handling.get(
-            "turn_detection", inference.AudioTurnDetector()
+            "turn_detection", inference.TurnDetector()
         )
 
         # This is the "global" chat_context, it holds the entire conversation history

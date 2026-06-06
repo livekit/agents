@@ -16,7 +16,7 @@ from livekit.agents import (
     inference,
     metrics,
 )
-from livekit.agents.inference import AudioTurnDetector
+from livekit.agents.inference import TurnDetector
 from livekit.agents.llm import FallbackAdapter as FallbackLLMAdapter, function_tool
 from livekit.agents.stt import FallbackAdapter as FallbackSTTAdapter
 from livekit.agents.telemetry import set_tracer_provider
@@ -95,7 +95,7 @@ class Kelly(Agent):
                     inference.TTS("rime/arcana"),
                 ]
             ),
-            turn_detection=AudioTurnDetector(),
+            turn_detection=TurnDetector(),
             tools=[lookup_weather],
         )
 

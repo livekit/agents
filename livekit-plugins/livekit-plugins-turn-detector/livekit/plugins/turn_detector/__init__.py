@@ -18,7 +18,7 @@ See https://docs.livekit.io/agents/build/turns/turn-detector/ for more informati
 
 .. deprecated::
     This plugin is deprecated and will be removed in a future release. Use
-    ``livekit.agents.inference.AudioTurnDetector`` instead.
+    ``livekit.agents.inference.TurnDetector`` instead.
 """
 
 import warnings
@@ -34,7 +34,7 @@ __all__ = ["english", "multilingual", "__version__"]
 
 warnings.warn(
     "`livekit.plugins.turn_detector` is deprecated and will be removed in a "
-    "future release. Use `livekit.agents.inference.AudioTurnDetector` instead.",
+    "future release. Use `livekit.agents.inference.TurnDetector` instead.",
     DeprecationWarning,
     stacklevel=2,
 )

@@ -341,7 +341,7 @@ def _make_recognition_for_validation() -> AudioRecognition:
 
 
 class TestVadMinSilenceRequirement:
-    """``AudioTurnDetector`` needs ~200ms of trailing silence; the VAD must report
+    """``TurnDetector`` needs ~200ms of trailing silence; the VAD must report
     END_OF_SPEECH no earlier than that. Rather than mutate the user's VAD,
     ``AudioRecognition`` fails fast when ``min_silence_duration`` is too low
     for an audio-EOT pairing."""

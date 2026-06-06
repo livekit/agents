@@ -1442,7 +1442,7 @@ async def test_user_supplied_vad_clears_default_flag() -> None:
 
 
 async def test_default_turn_detection_builds_default_eot() -> None:
-    """No turn_detection given → session auto-provisions a default AudioTurnDetector."""
+    """No turn_detection given → session auto-provisions a default TurnDetector."""
     from livekit.agents.voice.agent_session import AgentSession
     from livekit.agents.voice.turn import _StreamingTurnDetector
 
@@ -1468,7 +1468,7 @@ async def test_user_supplied_turn_detector_passes_through() -> None:
     from livekit.agents import inference
     from livekit.agents.voice.agent_session import AgentSession
 
-    user_detector = inference.AudioTurnDetector(model="turn-detector-mini")
+    user_detector = inference.TurnDetector(version="v1-mini")
     session = AgentSession(turn_handling={"turn_detection": user_detector})
     try:
         assert session.turn_detection is user_detector

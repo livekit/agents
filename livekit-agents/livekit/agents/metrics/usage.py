@@ -116,7 +116,7 @@ class EOTModelUsage(_BaseModelUsage):
     provider: str
     """The provider name (e.g., 'livekit')."""
     model: str
-    """The model name (e.g., 'turn-detector')."""
+    """The model name (e.g., 'turn-detector-v1')."""
     total_requests: int = 0
     """Total number of inference requests sent to the EOT model."""
 
