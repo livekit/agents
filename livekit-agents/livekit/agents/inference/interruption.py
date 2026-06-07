@@ -296,11 +296,7 @@ class AdaptiveInterruptionDetector(
         if max_audio_duration > 3.0:
             raise ValueError("max_audio_duration must be less than or equal to 3.0 seconds")
 
-        lk_base_url = (
-            base_url
-            if base_url
-            else os.getenv("LIVEKIT_INFERENCE_URL", get_default_inference_url())
-        )
+        lk_base_url = base_url if base_url else get_default_inference_url()
 
         lk_api_key = (
             api_key
