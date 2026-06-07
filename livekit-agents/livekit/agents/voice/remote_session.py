@@ -785,11 +785,11 @@ class SessionHost:
             )
             await self._transport.send_message(resp)
 
-        elif req.HasField("simulation_finalize"):
+        elif req.HasField("finalize_simulation"):
             # A simulation controller computed a provisional verdict and is giving
             # the agent under test a chance to override it via on_simulation_end.
-            success = req.simulation_finalize.provisional_success
-            reason = req.simulation_finalize.provisional_reason
+            success = req.finalize_simulation.provisional_success
+            reason = req.finalize_simulation.provisional_reason
             overridden = False
             sim_error: str | None = None
             try:
@@ -824,7 +824,7 @@ class SessionHost:
                 response=agent_pb.SessionResponse(
                     request_id=req.request_id,
                     error=sim_error,
-                    simulation_finalize=agent_pb.SessionResponse.SimulationFinalizeResponse(
+                    finalize_simulation=agent_pb.SessionResponse.FinalizeSimulationResponse(
                         success=success,
                         reason=reason,
                         overridden=overridden,
@@ -1046,17 +1046,17 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
         provisional_success: bool,
         provisional_reason: str = "",
         timeout: float = 60.0,
-    ) -> agent_pb.SessionResponse.SimulationFinalizeResponse:
+    ) -> agent_pb.SessionResponse.FinalizeSimulationResponse:
         """Hand the agent under test the simulator's provisional verdict and return its
         final verdict. The agent may override it from its on_simulation_end callback;
         if the agent has no handler (or times out), the caller should keep the
         provisional verdict."""
         req = agent_pb.SessionRequest(
             request_id=utils.shortuuid("req_"),
-            simulation_finalize=agent_pb.SessionRequest.SimulationFinalize(
+            finalize_simulation=agent_pb.SessionRequest.FinalizeSimulation(
                 provisional_success=provisional_success,
                 provisional_reason=provisional_reason,
             ),
         )
         resp = await self._send_request(req, timeout=timeout)
-        return resp.simulation_finalize
+        return resp.finalize_simulation
