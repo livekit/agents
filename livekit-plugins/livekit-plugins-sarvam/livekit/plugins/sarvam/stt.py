@@ -1107,6 +1107,10 @@ class SpeechStream(stt.SpeechStream):
 
         alternatives: list[stt.SpeechData] = []
         if self._utterance_speech_end_audio_pos is not None:
+        # The empty SpeechData alternative is metadata-only. Sarvam's internal VAD
+        # provides the authoritative speech-end time separately from the transcript, and
+        # AudioRecognition uses this end_time to compute EOU latency metrics when using
+        # STT-based turn detection without an external VAD.
             metadata: dict[str, Any] = {}
             if self._utterance_speech_end_wall is not None:
                 metadata["speech_end_wall_time"] = self._utterance_speech_end_wall
