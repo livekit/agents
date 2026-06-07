@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from google.genai import types
 
-from livekit.agents import llm
+from livekit.agents import APIConnectOptions, llm
 from livekit.agents.llm import ChatContext, function_tool
 from livekit.plugins.google.llm import LLM, LLMStream
 from livekit.plugins.google.realtime.realtime_api import RealtimeModel, RealtimeSession
@@ -242,6 +242,29 @@ class TestCachedContentRequestSuppression:
         config = captured["config"]
         assert config.system_instruction is not None
         assert config.tools is not None and len(config.tools) >= 1
+
+    @pytest.mark.asyncio
+    async def test_request_merges_conn_timeout_into_caller_http_options(self) -> None:
+        http_options = types.HttpOptions(headers={"X-Vertex-AI-LLM-Request-Type": "shared"})
+        llm = LLM(model="gemini-2.5-flash", api_key="test", http_options=http_options)
+
+        fake, captured = self._patched_stream_capture()
+        with patch.object(llm._client.aio.models, "generate_content_stream", fake):
+            stream = llm.chat(
+                chat_ctx=ChatContext.empty(),
+                conn_options=APIConnectOptions(timeout=7.5),
+            )
+            try:
+                async for _ in stream:
+                    pass
+            finally:
+                await stream.aclose()
+
+        config = captured["config"]
+        assert config.http_options.timeout == 7500
+        assert config.http_options.headers["X-Vertex-AI-LLM-Request-Type"] == "shared"
+        assert config.http_options.headers["x-goog-api-client"].startswith("livekit-agents/")
+        assert http_options.timeout is None
 
 
 class TestMediaResolution:
