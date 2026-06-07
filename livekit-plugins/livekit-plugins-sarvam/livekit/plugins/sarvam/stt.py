@@ -925,6 +925,7 @@ class SpeechStream(stt.SpeechStream):
         self._utterance_speech_end_wall: float | None = None
         self._pending_final_data: dict[str, Any] | None = None
         self._pending_eos = False
+        self._eos_fallback_task: asyncio.Task[None] | None = None
         self._final_received_for_utterance = False
         self._eos_emitted_for_utterance = False
 
@@ -1004,6 +1005,8 @@ class SpeechStream(stt.SpeechStream):
             self._pending_final_data = None
         if not hasattr(self, "_pending_eos"):
             self._pending_eos = False
+        if not hasattr(self, "_eos_fallback_task"):
+            self._eos_fallback_task = None
         if not hasattr(self, "_final_received_for_utterance"):
             self._final_received_for_utterance = False
         if not hasattr(self, "_eos_emitted_for_utterance"):
@@ -1011,6 +1014,7 @@ class SpeechStream(stt.SpeechStream):
 
     def _reset_utterance_state(self) -> None:
         self._ensure_utterance_timing_state()
+        self._cancel_eos_fallback()
         self._pending_final_data = None
         self._pending_eos = False
         self._utterance_start_audio_pos = self._audio_position
@@ -1020,7 +1024,16 @@ class SpeechStream(stt.SpeechStream):
         self._final_received_for_utterance = False
         self._eos_emitted_for_utterance = False
 
-    def _send_final_transcript(self, transcript_data: dict[str, Any]) -> bool:
+    def _cancel_eos_fallback(self) -> None:
+        current_task = asyncio.current_task()
+        fallback_task = self._eos_fallback_task
+        self._eos_fallback_task = None
+        if fallback_task and fallback_task is not current_task and not fallback_task.done():
+            fallback_task.cancel()
+
+    def _send_final_transcript(
+        self, transcript_data: dict[str, Any], *, require_end_time: bool = False
+    ) -> bool:
         self._ensure_utterance_timing_state()
         transcript_text = transcript_data.get("transcript", "")
         if not transcript_text:
@@ -1037,7 +1050,9 @@ class SpeechStream(stt.SpeechStream):
             or self._utterance_speech_end_audio_pos
         )
         if end_time is None:
-            return False
+            if require_end_time:
+                return False
+            end_time = 0.0
 
         speech_data = stt.SpeechData(
             language=language,
@@ -1065,7 +1080,7 @@ class SpeechStream(stt.SpeechStream):
             return
 
         committed_data = self._pending_final_data
-        if self._send_final_transcript(committed_data):
+        if self._send_final_transcript(committed_data, require_end_time=True):
             self._logger.debug(
                 "Sarvam STT utterance committed",
                 extra={
@@ -1081,6 +1096,8 @@ class SpeechStream(stt.SpeechStream):
         self._ensure_utterance_timing_state()
         if self._eos_emitted_for_utterance:
             return
+
+        self._cancel_eos_fallback()
 
         alternatives: list[stt.SpeechData] = []
         if self._utterance_speech_end_audio_pos is not None:
@@ -1105,6 +1122,15 @@ class SpeechStream(stt.SpeechStream):
         )
         self._eos_emitted_for_utterance = True
         self._pending_eos = False
+
+    async def _emit_pending_eos_after_timeout(self, timeout: float = 0.1) -> None:
+        try:
+            if timeout > 0:
+                await asyncio.sleep(timeout)
+            if self._pending_eos and not self._eos_emitted_for_utterance:
+                self._emit_end_of_speech()
+        except asyncio.CancelledError:
+            raise
 
     async def aclose(self) -> None:
         """Close the stream and clean up resources."""
@@ -1635,15 +1661,18 @@ class SpeechStream(stt.SpeechStream):
             )
             self._event_ch.send_nowait(usage_event)
 
-            self._pending_final_data = transcript_data
-            self._final_received_for_utterance = True
-
             transcript_end_time = self._positive_time(transcript_data.get("speech_end"))
             if transcript_end_time is not None and self._utterance_speech_end_audio_pos is None:
                 self._utterance_speech_end_audio_pos = transcript_end_time
                 self._utterance_speech_end_wall = time.time()
 
-            self._try_commit_utterance()
+            if self._pending_eos:
+                self._pending_final_data = transcript_data
+                self._final_received_for_utterance = True
+                self._try_commit_utterance()
+            else:
+                if self._send_final_transcript(transcript_data):
+                    self._final_received_for_utterance = True
 
             self._logger.debug(
                 "Transcript processed successfully",
@@ -1704,6 +1733,13 @@ class SpeechStream(stt.SpeechStream):
                     self._utterance_speech_end_wall = time.time()
                     self._pending_eos = True
                     self._try_commit_utterance()
+                    if not self._eos_emitted_for_utterance and self._pending_final_data is None:
+                        if self._final_received_for_utterance:
+                            self._emit_end_of_speech()
+                        elif self._eos_fallback_task is None or self._eos_fallback_task.done():
+                            self._eos_fallback_task = asyncio.create_task(
+                                self._emit_pending_eos_after_timeout()
+                            )
 
                     # Set flag to trigger flush when Sarvam detects end of speech
                     self._should_flush = True
