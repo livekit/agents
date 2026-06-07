@@ -292,6 +292,7 @@ def _chat_item_to_proto(item: llm.ChatItem) -> agent_pb.ChatContext.ChatItem:
             id=item.id,
             role=pb_role,
             content=content,
+            interrupted=item.interrupted,
             metrics=_metrics_to_proto(item.metrics),
         )
         return agent_pb.ChatContext.ChatItem(message=pb_msg)
@@ -373,6 +374,7 @@ class SessionHost:
             session.on("session_usage_updated", self._on_session_usage_updated)
             session.on("overlapping_speech", self._on_overlapping_speech)
             session.on("error", self._on_error)
+            session.on("debug_message", self._on_debug_message)
 
     async def start(self) -> None:
         if self._started:
@@ -396,6 +398,7 @@ class SessionHost:
             self._session.off("session_usage_updated", self._on_session_usage_updated)
             self._session.off("overlapping_speech", self._on_overlapping_speech)
             self._session.off("error", self._on_error)
+            self._session.off("debug_message", self._on_debug_message)
 
         if self._recv_task:
             await utils.aio.cancel_and_wait(self._recv_task)
@@ -568,6 +571,9 @@ class SessionHost:
                 )
             )
         )
+
+    def _on_debug_message(self, event: agent_pb.DebugMessage) -> None:
+        self._send_event(agent_pb.AgentSessionEvent(debug_message=event))
 
     async def _handle_request_safe(self, req: agent_pb.SessionRequest) -> None:
         try:
@@ -752,25 +758,77 @@ class SessionHost:
             await self._transport.send_message(resp)
 
         elif req.HasField("update_io"):
-            update = req.update_io
-            if update.HasField("input"):
-                if update.input.HasField("audio_enabled"):
-                    self._session.input.set_audio_enabled(update.input.audio_enabled)
-                if update.input.HasField("video_enabled"):
-                    self._session.input.set_video_enabled(update.input.video_enabled)
-            if update.HasField("output"):
-                if update.output.HasField("audio_enabled"):
-                    self._session.output.set_audio_enabled(update.output.audio_enabled)
-                if update.output.HasField("video_enabled"):
-                    self._session.output.set_video_enabled(update.output.video_enabled)
-                if update.output.HasField("transcription_enabled"):
-                    self._session.output.set_transcription_enabled(
-                        update.output.transcription_enabled
-                    )
+            # Honor the remote control's mute/unmute toggles for audio /
+            # video / transcription. Only fields actually set in the proto
+            # are applied (presence-tracked booleans), so the client can
+            # send a partial update without clobbering the other channels.
+            io = req.update_io
+            input_io = self._session.input
+            output_io = self._session.output
+            if io.HasField("input"):
+                if io.input.HasField("audio_enabled"):
+                    input_io.set_audio_enabled(io.input.audio_enabled)
+                if io.input.HasField("video_enabled"):
+                    input_io.set_video_enabled(io.input.video_enabled)
+            if io.HasField("output"):
+                if io.output.HasField("audio_enabled"):
+                    output_io.set_audio_enabled(io.output.audio_enabled)
+                if io.output.HasField("video_enabled"):
+                    output_io.set_video_enabled(io.output.video_enabled)
+                if io.output.HasField("transcription_enabled"):
+                    output_io.set_transcription_enabled(io.output.transcription_enabled)
             resp = agent_pb.AgentSessionMessage(
                 response=agent_pb.SessionResponse(
                     request_id=req.request_id,
                     update_io=agent_pb.SessionResponse.UpdateIOResponse(),
+                )
+            )
+            await self._transport.send_message(resp)
+
+        elif req.HasField("simulation_finalize"):
+            # A simulation controller computed a provisional verdict and is giving
+            # the agent under test a chance to override it via on_simulation_end.
+            success = req.simulation_finalize.provisional_success
+            reason = req.simulation_finalize.provisional_reason
+            overridden = False
+            sim_error: str | None = None
+            try:
+                from livekit.protocol import agent_simulation as sim_pb
+
+                from ..job import get_job_context
+                from ..simulation import ScenarioResult
+
+                jc = get_job_context(required=False)
+                sim_ctx = jc.simulation_context() if jc is not None else None
+                if sim_ctx is not None:
+                    sim_ctx._begin_finalize(
+                        result=ScenarioResult(success=success, reason=reason),
+                        run=sim_pb.SimulationRun(id=sim_ctx.simulation_run_id),
+                        job=None,
+                        session=self._session,
+                    )
+                    fnc = jc._simulation_end_fnc if jc is not None else None
+                    if fnc is not None:
+                        cb_res = fnc(sim_ctx)
+                        if asyncio.iscoroutine(cb_res):
+                            await cb_res
+                    final = sim_ctx.final_result
+                    if final is not None:
+                        success, reason = final.success, final.reason
+                    overridden = sim_ctx.overridden
+            except Exception as e:
+                sim_error = str(e)
+                logger.exception("error while executing the on_simulation_end callback")
+
+            resp = agent_pb.AgentSessionMessage(
+                response=agent_pb.SessionResponse(
+                    request_id=req.request_id,
+                    error=sim_error,
+                    simulation_finalize=agent_pb.SessionResponse.SimulationFinalizeResponse(
+                        success=success,
+                        reason=reason,
+                        overridden=overridden,
+                    ),
                 )
             )
             await self._transport.send_message(resp)
@@ -981,3 +1039,24 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
         )
         resp = await self._send_request(req, timeout=timeout)
         return resp.run_input
+
+    async def finalize_simulation(
+        self,
+        *,
+        provisional_success: bool,
+        provisional_reason: str = "",
+        timeout: float = 30.0,
+    ) -> agent_pb.SessionResponse.SimulationFinalizeResponse:
+        """Hand the agent under test the simulator's provisional verdict and return its
+        final verdict. The agent may override it from its on_simulation_end callback;
+        if the agent has no handler (or times out), the caller should keep the
+        provisional verdict."""
+        req = agent_pb.SessionRequest(
+            request_id=utils.shortuuid("req_"),
+            simulation_finalize=agent_pb.SessionRequest.SimulationFinalize(
+                provisional_success=provisional_success,
+                provisional_reason=provisional_reason,
+            ),
+        )
+        resp = await self._send_request(req, timeout=timeout)
+        return resp.simulation_finalize

@@ -170,7 +170,7 @@ class SpeechHandle:
                 info
                 and info.function_call
                 and info.speech_handle == self
-                and not info.function_call.extra.get("__livekit_agents_tool_pending", False)
+                and not info.function_call.extra.get("__livekit_agents_tool_non_blocking", False)
             ):
                 raise RuntimeError(
                     f"cannot call `SpeechHandle.wait_for_playout()` from inside the function tool `{info.function_call.name}` that owns this SpeechHandle. "

@@ -82,6 +82,8 @@ class _LLMOptions:
     seed: NotGivenOr[int]
     safety_settings: NotGivenOr[list[types.SafetySettingOrDict]]
     service_tier: NotGivenOr[types.ServiceTier]
+    cached_content: NotGivenOr[str]
+    media_resolution: NotGivenOr[types.MediaResolution]
 
 
 BLOCKED_REASONS = [
@@ -119,6 +121,8 @@ class LLM(llm.LLM):
         seed: NotGivenOr[int] = NOT_GIVEN,
         safety_settings: NotGivenOr[list[types.SafetySettingOrDict]] = NOT_GIVEN,
         service_tier: NotGivenOr[types.ServiceTier] = NOT_GIVEN,
+        cached_content: NotGivenOr[str] = NOT_GIVEN,
+        media_resolution: NotGivenOr[types.MediaResolution] = NOT_GIVEN,
         credentials: google.auth.credentials.Credentials | None = None,
     ) -> None:
         """
@@ -151,6 +155,8 @@ class LLM(llm.LLM):
             seed (int, optional): Random seed for reproducible generation. Defaults to None.
             safety_settings (list[SafetySettingOrDict], optional): Safety settings for content filtering. Defaults to None.
             service_tier (types.ServiceTier, optional): The service tier for the request (e.g. types.ServiceTier.PRIORITY). Defaults to None.
+            cached_content (str, optional): Resource name of an explicit context cache to attach to every request from this LLM instance, e.g. ``"cachedContents/abc123"`` for the Gemini API or ``"projects/<project>/locations/<location>/cachedContents/abc123"`` for VertexAI. The cache must already exist — create it via ``client.caches.create(...)`` and pass the returned ``name``. Gemini rejects ``generateContent`` requests that combine ``cached_content`` with ``system_instruction``, ``tools``, or ``tool_config``, so when this option is set the plugin bakes those fields out of every outgoing request; the cache resource itself must contain whichever of them the model needs (typically the system prompt and the tool schemas). Useful for long-lived static prefixes where implicit caching is unreliable. See https://ai.google.dev/gemini-api/docs/caching for details and minimum prefix-token requirements. Defaults to None.
+            media_resolution (types.MediaResolution, optional): The media resolution for the request. Defaults to None.
         """  # noqa: E501
         super().__init__()
         gcp_project = project if is_given(project) else os.environ.get("GOOGLE_CLOUD_PROJECT")
@@ -224,6 +230,8 @@ class LLM(llm.LLM):
             seed=seed,
             safety_settings=safety_settings,
             service_tier=service_tier,
+            cached_content=cached_content,
+            media_resolution=media_resolution,
         )
         self._client = Client(
             api_key=gemini_api_key,
@@ -391,6 +399,12 @@ class LLM(llm.LLM):
         if is_given(self._opts.service_tier):
             extra["service_tier"] = self._opts.service_tier
 
+        if is_given(self._opts.cached_content):
+            extra["cached_content"] = self._opts.cached_content
+
+        if is_given(self._opts.media_resolution):
+            extra["media_resolution"] = self._opts.media_resolution
+
         return LLMStream(
             self,
             client=self._client,
@@ -437,8 +451,31 @@ class LLMStream(llm.LLMStream):
             turns = [types.Content.model_validate(turn) for turn in turns_dict]
             tool_context = llm.ToolContext(self._tools)
             tools_config = create_tools_config(tool_context, _only_single_type=True)
-            if tools_config:
+            # Gemini's API rejects `generateContent` requests that pass
+            # `cached_content` together with `system_instruction`, `tools`,
+            # or `tool_config` — those fields must live INSIDE the
+            # CachedContent resource, not on the request. The application
+            # bakes them into the cache via `client.caches.create(...)`;
+            # here we just suppress the duplicates on the outgoing request
+            # whenever a cache is attached.
+            using_cache = "cached_content" in self._extra_kwargs
+            if tools_config and not using_cache:
                 self._extra_kwargs["tools"] = tools_config
+            elif using_cache:
+                dropped = [k for k in ("tools", "tool_config") if k in self._extra_kwargs]
+                if tools_config and "tools" not in dropped:
+                    dropped.append("tools")
+                if extra_data.system_messages:
+                    dropped.append("system_instruction")
+                if dropped:
+                    logger.warning(
+                        "dropping %s from Gemini request because cached_content=%r is set; "
+                        "these fields must be baked into the CachedContent resource",
+                        dropped,
+                        self._extra_kwargs.get("cached_content"),
+                    )
+                self._extra_kwargs.pop("tools", None)
+                self._extra_kwargs.pop("tool_config", None)
             http_options = self._llm._opts.http_options or types.HttpOptions(
                 timeout=int(self._conn_options.timeout * 1000)
             )
@@ -447,9 +484,13 @@ class LLMStream(llm.LLMStream):
             http_options.headers["x-goog-api-client"] = f"livekit-agents/{__version__}"
             config = types.GenerateContentConfig(
                 system_instruction=(
-                    [types.Part(text=content) for content in extra_data.system_messages]
-                    if extra_data.system_messages
-                    else None
+                    None
+                    if using_cache
+                    else (
+                        [types.Part(text=content) for content in extra_data.system_messages]
+                        if extra_data.system_messages
+                        else None
+                    )
                 ),
                 http_options=http_options,
                 **self._extra_kwargs,

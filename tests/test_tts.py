@@ -42,6 +42,8 @@ from .fake_tts import FakeTTS
 from .toxic_proxy import Proxy, Toxiproxy
 from .utils import EventCollector, fake_llm_stream, wer
 
+pytestmark = pytest.mark.tts
+
 load_dotenv(override=True)
 
 
@@ -203,6 +205,13 @@ SYNTHESIZE_TTS = [
             "proxy-upstream": "users.rime.ai:443",
         },
         id="rime",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": rime.TTS(model="coda"),
+            "proxy-upstream": "users.rime.ai:443",
+        },
+        id="rime-coda",
     ),
     pytest.param(
         lambda: {

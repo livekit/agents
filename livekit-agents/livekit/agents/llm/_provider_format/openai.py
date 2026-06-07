@@ -179,12 +179,21 @@ def _to_responses_chat_item(msg: llm.ChatItem) -> dict[str, Any]:
                 list_content.append(_to_responses_image_content(content))
 
         if not list_content:
-            return {"role": msg.role, "content": text_content}
+            item: dict[str, Any] = {"role": msg.role, "content": text_content}
+        else:
+            if text_content:
+                list_content.append({"type": "input_text", "text": text_content})
+            item = {"role": msg.role, "content": list_content}
 
-        if text_content:
-            list_content.append({"type": "input_text", "text": text_content})
+        # Re-attach the assistant message phase (commentary / final_answer) captured from
+        # the Responses API. Dropping it on follow-up requests can degrade performance for
+        # models like gpt-5.3-codex.
+        if msg.role == "assistant":
+            phase = msg.extra.get("openai", {}).get("phase")
+            if phase is not None:
+                item["phase"] = phase
 
-        return {"role": msg.role, "content": list_content}
+        return item
 
     elif msg.type == "function_call_output":
         return {
@@ -218,9 +227,12 @@ def to_fnc_ctx(tool_ctx: llm.ToolContext, *, strict: bool = True) -> list[dict[s
     return schemas
 
 
-def to_responses_fnc_ctx(tool_ctx: llm.ToolContext, *, strict: bool = True) -> list[dict[str, Any]]:
-    from livekit.plugins import openai
-
+def to_responses_fnc_ctx(
+    tool_ctx: llm.ToolContext,
+    *,
+    strict: bool = True,
+    provider_tool_type: type[llm.ProviderTool] | None = None,
+) -> list[dict[str, Any]]:
     schemas: list[dict[str, Any]] = []
     for tool in tool_ctx.flatten():
         if isinstance(tool, llm.RawFunctionTool):
@@ -230,7 +242,11 @@ def to_responses_fnc_ctx(tool_ctx: llm.ToolContext, *, strict: bool = True) -> l
         elif isinstance(tool, llm.FunctionTool):
             schema = llm.utils.build_legacy_openai_schema(tool, internally_tagged=True)
             schemas.append(schema)
-        elif isinstance(tool, openai.tools.OpenAITool):
+        elif (
+            provider_tool_type is not None
+            and isinstance(tool, provider_tool_type)
+            and hasattr(tool, "to_dict")
+        ):
             schemas.append(tool.to_dict())
 
     return schemas

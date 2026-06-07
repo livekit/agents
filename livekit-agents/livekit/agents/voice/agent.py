@@ -15,7 +15,9 @@ from ..llm.chat_context import Instructions, _ReadOnlyChatContext
 from ..log import logger
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils import is_given, misc
+from .events import UserTurnExceededEvent
 from .speech_handle import SpeechHandle
+from .tool_executor import ToolHandlingOptions
 from .turn import TurnHandlingOptions, _migrate_turn_handling
 
 if TYPE_CHECKING:
@@ -44,9 +46,9 @@ class Agent:
         stt: NotGivenOr[stt.STT | STTModels | str | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
+        tool_handling: NotGivenOr[ToolHandlingOptions] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
-        mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
         min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         # deprecated
@@ -54,6 +56,7 @@ class Agent:
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+        mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
     ) -> None:
         tools = tools or []
         if type(self) is Agent:
@@ -104,11 +107,21 @@ class Agent:
         self._min_endpointing_delay = endpointing.get("min_delay", NOT_GIVEN)
         self._max_endpointing_delay = endpointing.get("max_delay", NOT_GIVEN)
         self._turn_handling = turn_handling
+        # stored unresolved so the resolution chain can tell "set on agent" from "fall
+        # back to session"; async_options absent on a given tool_handling means NOT_GIVEN
+        self._async_tool_options = (
+            tool_handling.get("async_options", NOT_GIVEN) if is_given(tool_handling) else NOT_GIVEN
+        )
 
         if isinstance(mcp_servers, list) and len(mcp_servers) == 0:
             mcp_servers = None  # treat empty list as None (but keep NOT_GIVEN)
 
         self._mcp_servers = mcp_servers
+        if self._mcp_servers:
+            logger.warning(
+                "passing MCP servers to AgentSession or Agent is deprecated "
+                "and will be removed in a future version. Use `MCPToolset` instead."
+            )
         self._activity: AgentActivity | None = None
 
     @property
@@ -253,6 +266,26 @@ class Agent:
         sent to the LLM.
         """
         pass
+
+    async def on_user_turn_exceeded(self, ev: UserTurnExceededEvent) -> None:
+        """Called when the user turn has exceeded the configured limit.
+
+        The user has been speaking for too long without the agent successfully
+        responding. By default, generates a reply using the current turn's
+        transcript (previous turns are already in the chat context).
+
+        Override to customize (e.g., use session.say() with a canned message,
+        or skip the interruption entirely).
+        """
+        await self.session.generate_reply(
+            user_input=ev.transcript,
+            instructions=(
+                "The user has been speaking too long without giving a chance to reply. "
+                "Politely cut in with a short reply or notice. Keep it short since the user cannot interrupt it."
+            ),
+            allow_interruptions=False,
+            tool_choice="none",
+        )
 
     def stt_node(
         self, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
@@ -699,13 +732,13 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
-        mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
         preserve_function_call_history: bool = False,
         # deprecated
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
+        mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
     ) -> None:
         tools = tools or []
         turn_handling = (

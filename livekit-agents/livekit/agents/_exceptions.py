@@ -65,9 +65,13 @@ class APIStatusError(APIError):
     ) -> None:
         if retryable is None:
             retryable = True
-            # 4xx errors are not retryable
-            if status_code >= 400 and status_code < 500:
-                retryable = False
+
+        # 4xx client errors are not retryable, except for transient codes:
+        # 408 (Request Timeout), 429 (Too Many Requests), 499 (Client Closed Request / gRPC CANCELLED).
+        # This overrides any caller-provided retryable=True, since a client
+        # error (bad URL, auth, bad request) will keep failing on retry.
+        if 400 <= status_code < 500 and status_code not in (408, 429, 499):
+            retryable = False
 
         super().__init__(message, body=body, retryable=retryable)
 
