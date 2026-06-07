@@ -1,0 +1,12 @@
+name: Room booking
+scenarios:
+  - label: 'Booking a room for one night'
+    instructions: 'Book a room for tmrw night. No breakfast, no late-checkout'
+    agent_expectations: 'Room booked successfully'
+    tags:
+      feature: room_booking
+    userdata:
+      target_state:
+        booked_rooms: 1
+        breakfast: false
+        late_checkout: false

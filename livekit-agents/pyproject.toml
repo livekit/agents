@@ -55,6 +55,7 @@ dependencies = [
     "openai>=2",
     "aiofiles>=24",
     "json-repair==0.59.10",
+    "pyyaml>=6.0.3"
 ]
 
 [project.optional-dependencies]

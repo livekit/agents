@@ -58,6 +58,17 @@ from .llm.tool_context import (
     function_tool,
 )
 from .plugin import Plugin
+from .simulation import (
+    Scenario,
+    ScenarioGroup,
+    ScenarioResult,
+    ScenarioUserdata,
+    SimulationContext,
+    SimulationDispatch,
+    SimulationRun,
+    load_scenarios,
+    scenario_group_to_yaml,
+)
 from .types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -184,6 +195,15 @@ __all__ = [
     "ToolError",
     "RunContext",
     "Plugin",
+    "Scenario",
+    "ScenarioGroup",
+    "ScenarioResult",
+    "ScenarioUserdata",
+    "SimulationContext",
+    "SimulationDispatch",
+    "SimulationRun",
+    "load_scenarios",
+    "scenario_group_to_yaml",
     "AgentSession",
     "RecordingOptions",
     "text_transforms",

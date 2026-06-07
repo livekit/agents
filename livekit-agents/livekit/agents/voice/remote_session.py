@@ -793,6 +793,54 @@ class SessionHost:
             )
             await self._transport.send_message(resp)
 
+        elif req.HasField("simulation_finalize"):
+            # A simulation controller computed a provisional verdict and is giving
+            # the agent under test a chance to override it via on_simulation_end.
+            success = req.simulation_finalize.provisional_success
+            reason = req.simulation_finalize.provisional_reason
+            overridden = False
+            sim_error: str | None = None
+            try:
+                from livekit.protocol import agent_simulation as sim_pb
+
+                from ..job import get_job_context
+                from ..simulation import ScenarioResult
+
+                jc = get_job_context(required=False)
+                sim_ctx = jc.simulation_context() if jc is not None else None
+                if sim_ctx is not None:
+                    sim_ctx._begin_finalize(
+                        result=ScenarioResult(success=success, reason=reason),
+                        run=sim_pb.SimulationRun(id=sim_ctx.simulation_run_id),
+                        job=None,
+                        session=self._session,
+                    )
+                    fnc = jc._simulation_end_fnc if jc is not None else None
+                    if fnc is not None:
+                        cb_res = fnc(sim_ctx)
+                        if asyncio.iscoroutine(cb_res):
+                            await cb_res
+                    final = sim_ctx.final_result
+                    if final is not None:
+                        success, reason = final.success, final.reason
+                    overridden = sim_ctx.overridden
+            except Exception as e:
+                sim_error = str(e)
+                logger.exception("error while executing the on_simulation_end callback")
+
+            resp = agent_pb.AgentSessionMessage(
+                response=agent_pb.SessionResponse(
+                    request_id=req.request_id,
+                    error=sim_error,
+                    simulation_finalize=agent_pb.SessionResponse.SimulationFinalizeResponse(
+                        success=success,
+                        reason=reason,
+                        overridden=overridden,
+                    ),
+                )
+            )
+            await self._transport.send_message(resp)
+
 
 def _session_usage_to_proto(usage: AgentSessionUsage) -> agent_pb.AgentSessionUsage:
     model_usages: list[agent_pb.ModelUsage] = []

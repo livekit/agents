@@ -50,6 +50,7 @@ from .job import (
 )
 from .log import DEV_LEVEL, logger
 from .plugin import Plugin
+from .simulation import SimulationContext
 from .types import ATTRIBUTE_AGENT_NAME, NOT_GIVEN, NotGivenOr
 from .utils import http_server, is_given
 from .utils.hw import get_cpu_monitor
@@ -367,6 +368,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._entrypoint_fnc: Callable[[JobContext], Awaitable[None]] | None = None
         self._request_fnc: Callable[[JobRequest], Awaitable[None]] | None = None
         self._session_end_fnc: Callable[[JobContext], Awaitable[None]] | None = None
+        self._simulation_end_fnc: Callable[[SimulationContext], Any] | None = None
 
         # worker cb
         self._setup_fnc: Callable[[JobProcess], Any] | None = setup_fnc
@@ -450,6 +452,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         type: ServerType = ServerType.ROOM,
         on_request: Callable[[JobRequest], Any] | None = None,
         on_session_end: Callable[[JobContext], Any] | None = None,
+        on_simulation_end: Callable[[SimulationContext], Any] | None = None,
     ) -> Callable[[JobContext], Awaitable[None]]: ...
 
     @overload
@@ -460,6 +463,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         type: ServerType = ServerType.ROOM,
         on_request: Callable[[JobRequest], Any] | None = None,
         on_session_end: Callable[[JobContext], Any] | None = None,
+        on_simulation_end: Callable[[SimulationContext], Any] | None = None,
     ) -> Callable[
         [Callable[[JobContext], Awaitable[None]]], Callable[[JobContext], Awaitable[None]]
     ]: ...
@@ -472,6 +476,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         type: ServerType = ServerType.ROOM,
         on_request: Callable[[JobRequest], Any] | None = None,
         on_session_end: Callable[[JobContext], Any] | None = None,
+        on_simulation_end: Callable[[SimulationContext], Any] | None = None,
     ) -> (
         Callable[[JobContext], Awaitable[None]]
         | Callable[
@@ -498,6 +503,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._entrypoint_fnc = f
             self._request_fnc = on_request
             self._session_end_fnc = on_session_end
+            self._simulation_end_fnc = on_simulation_end
             if agent_name:
                 self._agent_name = agent_name
                 self._agent_name_is_env = False
@@ -606,6 +612,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 initialize_process_fnc=self._setup_fnc,
                 job_entrypoint_fnc=self._entrypoint_fnc,
                 session_end_fnc=self._session_end_fnc,
+                simulation_end_fnc=self._simulation_end_fnc,
                 num_idle_processes=ServerEnvOption.getvalue(self._num_idle_processes, devmode),
                 loop=self._loop,
                 job_executor_type=self._job_executor_type,

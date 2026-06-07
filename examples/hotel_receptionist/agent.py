@@ -40,6 +40,7 @@ from livekit.agents import (
     AgentSession,
     JobContext,
     RunContext,
+    SimulationContext,
     ToolError,
     cli,
     function_tool,
@@ -585,6 +586,22 @@ server = AgentServer()
 _SEED_DB_BYTES = build_seed_bytes(TODAY)
 
 
+async def on_simulation_end(ctx: SimulationContext) -> None:
+    # Override the simulator's verdict against a benchmark target carried in the
+    # scenario's userdata: the run only passes if the mock DB ended in the target
+    # state (here, the expected number of room bookings).
+    target = ctx.userdata().get("target_state", {})
+    session = ctx.session
+    if session is None or "booked_rooms" not in target:
+        return
+
+    booked = len(session.userdata.booked_room_codes)
+    want = target["booked_rooms"]
+    if booked != want:
+        ctx.fail(reason=f"expected {want} room booking(s), found {booked}")
+    else:
+        ctx.success(reason="hotel DB matches the benchmark target state")
+
 async def on_session_end(ctx: JobContext) -> None:
     try:
         report = ctx.make_session_report()
@@ -624,9 +641,15 @@ async def on_session_end(ctx: JobContext) -> None:
         logger.exception("error closing hotel DB")
 
 
-@server.rtc_session(on_session_end=on_session_end)
+@server.rtc_session(
+    on_session_end=on_session_end,
+    on_simulation_end=on_simulation_end
+)
 async def hotel_receptionist_agent(ctx: JobContext) -> None:
     await ctx.connect()
+
+    if sim_ctx := ctx.simulation_context():
+        pass
 
     db = HotelDB.from_bytes(_SEED_DB_BYTES)
 
