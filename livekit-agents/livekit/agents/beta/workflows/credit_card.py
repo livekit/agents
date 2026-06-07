@@ -21,12 +21,12 @@ CARD_ISSUERS_LOOKUP = {"3": "American Express", "4": "Visa", "5": "Mastercard", 
 
 _CARD_NUMBER_BASE_INSTRUCTIONS = """
 You are a single step in a broader process of collecting credit card information.
-You are solely responsible for collecting the card number.
+You are solely responsible for collecting the credit card number.
 {modality_specific}
-If the user refuses to provide a number, call decline_card_capture().
-If the user wishes to start over the card collection process, call restart_card_collection().
+If the user refuses to provide a credit card number, call decline_card_capture().
+If the user wishes to start over the credit card collection process, call restart_card_collection().
 Avoid listing out questions with bullet points or numbers, use a natural conversational tone.
-Never repeat any sensitive information, such as the user's card number, back to the user.
+Never repeat any sensitive information, such as the user's credit card number, back to the user.
 {confirmation_instructions}
 """
 
@@ -156,11 +156,20 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
     def __init__(
         self,
         *,
+        chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         require_confirmation: NotGivenOr[bool] = NOT_GIVEN,
+        require_explicit_ask: bool = False,
+        extra_instructions: str = "",
     ) -> None:
         confirmation_instructions = (
             "Call `confirm_card_number` once the user has repeated their card number."
         )
+        extra_suffix = f"\n{extra_instructions}" if extra_instructions else ""
+
+        self._card_number = ""
+        self._require_confirmation = require_confirmation
+        self._require_explicit_ask = require_explicit_ask
+
         super().__init__(
             instructions=Instructions(
                 _CARD_NUMBER_BASE_INSTRUCTIONS.format(
@@ -168,35 +177,52 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
                     confirmation_instructions=(
                         confirmation_instructions if require_confirmation is not False else ""
                     ),
-                ),
+                )
+                + extra_suffix,
                 text=_CARD_NUMBER_BASE_INSTRUCTIONS.format(
                     modality_specific=_CARD_NUMBER_TEXT_SPECIFIC,
                     confirmation_instructions=(
                         confirmation_instructions if require_confirmation is True else ""
                     ),
-                ),
+                )
+                + extra_suffix,
             ),
-            tools=[decline_card_capture, restart_card_collection],
+            chat_ctx=chat_ctx,
+            tools=[
+                self._build_update_card_number_tool(),
+                decline_card_capture,
+                restart_card_collection,
+            ],
         )
-        self._card_number = ""
-        self._require_confirmation = require_confirmation
 
     async def on_enter(self) -> None:
         await self.session.generate_reply(
-            instructions="Ask for the user's credit card number.",
+            instructions=(
+                "Get the user's credit card number. First scan the conversation - if a "
+                "credit card number was already given (e.g. the user volunteered it "
+                "before the task started), use it via update_card_number rather than "
+                "re-asking. Only ask fresh when no credit card number is in the "
+                "conversation yet."
+            )
         )
 
-    @function_tool()
-    async def record_card_number(
-        self,
-        context: RunContext,
-        card_number: str,
-    ) -> str | None:
-        """Call to record the user's card number. Only call once the entire number has been given, do not call in increments.
+    def _build_update_card_number_tool(self) -> llm.FunctionTool:
+        # Built dynamically so we can apply IGNORE_ON_ENTER per-instance
+        # based on require_explicit_ask.
+        flags = ToolFlag.IGNORE_ON_ENTER if self._require_explicit_ask else ToolFlag.NONE
 
-        Args:
-            card_number (str): The credit card number as a string with no dashes or spaces
-        """
+        @function_tool(flags=flags)
+        async def update_card_number(context: RunContext, card_number: str) -> str | None:
+            """Call to record the user's card number. Only call once the entire number has been given, do not call in increments.
+
+            Args:
+                card_number (str): The credit card number as a string with no dashes or spaces
+            """
+            return await self._update_card_number_impl(context, card_number)
+
+        return update_card_number
+
+    async def _update_card_number_impl(self, context: RunContext, card_number: str) -> str | None:
         card_number = "".join([d for d in card_number if d.isdigit()])
         if len(card_number) < 13 or len(card_number) > 19:
             self.session.generate_reply(
@@ -284,11 +310,20 @@ class GetSecurityCodeTask(AgentTask[GetSecurityCodeResult]):
     def __init__(
         self,
         *,
+        chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         require_confirmation: NotGivenOr[bool] = NOT_GIVEN,
+        require_explicit_ask: bool = False,
+        extra_instructions: str = "",
     ) -> None:
         confirmation_instructions = (
             "Call `confirm_security_code` once the user has repeated their security code."
         )
+        extra_suffix = f"\n{extra_instructions}" if extra_instructions else ""
+
+        self._security_code = ""
+        self._require_confirmation = require_confirmation
+        self._require_explicit_ask = require_explicit_ask
+
         super().__init__(
             instructions=Instructions(
                 _SECURITY_CODE_BASE_INSTRUCTIONS.format(
@@ -296,35 +331,52 @@ class GetSecurityCodeTask(AgentTask[GetSecurityCodeResult]):
                     confirmation_instructions=(
                         confirmation_instructions if require_confirmation is not False else ""
                     ),
-                ),
+                )
+                + extra_suffix,
                 text=_SECURITY_CODE_BASE_INSTRUCTIONS.format(
                     modality_specific=_SECURITY_CODE_TEXT_SPECIFIC,
                     confirmation_instructions=(
                         confirmation_instructions if require_confirmation is True else ""
                     ),
-                ),
+                )
+                + extra_suffix,
             ),
-            tools=[decline_card_capture, restart_card_collection],
+            chat_ctx=chat_ctx,
+            tools=[
+                self._build_update_security_code_tool(),
+                decline_card_capture,
+                restart_card_collection,
+            ],
         )
-        self._security_code = ""
-        self._require_confirmation = require_confirmation
 
     async def on_enter(self) -> None:
         await self.session.generate_reply(
-            instructions="Collect the user's card's security code.",
+            instructions=(
+                "Get the user's card security code. First scan the conversation - if a "
+                "code was already given, use it via update_security_code rather than "
+                "re-asking. Only ask fresh when no code is in the conversation yet."
+            )
         )
 
-    @function_tool()
-    async def update_security_code(
-        self,
-        context: RunContext,
-        security_code: str,
-    ) -> str | None:
-        """Call to update the card's security code.
+    def _build_update_security_code_tool(self) -> llm.FunctionTool:
+        # Built dynamically so we can apply IGNORE_ON_ENTER per-instance
+        # based on require_explicit_ask.
+        flags = ToolFlag.IGNORE_ON_ENTER if self._require_explicit_ask else ToolFlag.NONE
 
-        Args:
-            security_code (str): The card's security code (3-4 digits, may have leading zeros).
-        """
+        @function_tool(flags=flags)
+        async def update_security_code(context: RunContext, security_code: str) -> str | None:
+            """Call to update the card's security code.
+
+            Args:
+                security_code (str): The card's security code (3-4 digits, may have leading zeros).
+            """
+            return await self._update_security_code_impl(context, security_code)
+
+        return update_security_code
+
+    async def _update_security_code_impl(
+        self, context: RunContext, security_code: str
+    ) -> str | None:
         stripped = security_code.strip()
         if not stripped.isdigit() or not (3 <= len(stripped) <= 4):
             self.session.generate_reply(
@@ -379,11 +431,20 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
     def __init__(
         self,
         *,
+        chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         require_confirmation: NotGivenOr[bool] = NOT_GIVEN,
+        require_explicit_ask: bool = False,
+        extra_instructions: str = "",
     ) -> None:
         confirmation_instructions = (
             "Call `confirm_expiration_date` once the user has repeated their expiration date."
         )
+        extra_suffix = f"\n{extra_instructions}" if extra_instructions else ""
+
+        self._expiration_date = ""
+        self._require_confirmation = require_confirmation
+        self._require_explicit_ask = require_explicit_ask
+
         super().__init__(
             instructions=Instructions(
                 _EXPIRATION_DATE_BASE_INSTRUCTIONS.format(
@@ -391,37 +452,57 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
                     confirmation_instructions=(
                         confirmation_instructions if require_confirmation is not False else ""
                     ),
-                ),
+                )
+                + extra_suffix,
                 text=_EXPIRATION_DATE_BASE_INSTRUCTIONS.format(
                     modality_specific=_EXPIRATION_DATE_TEXT_SPECIFIC,
                     confirmation_instructions=(
                         confirmation_instructions if require_confirmation is True else ""
                     ),
-                ),
+                )
+                + extra_suffix,
             ),
-            tools=[decline_card_capture, restart_card_collection],
+            chat_ctx=chat_ctx,
+            tools=[
+                self._build_update_expiration_date_tool(),
+                decline_card_capture,
+                restart_card_collection,
+            ],
         )
-        self._expiration_date = ""
-        self._require_confirmation = require_confirmation
 
     async def on_enter(self) -> None:
         await self.session.generate_reply(
-            instructions="Collect the user's card's expiration date.",
+            instructions=(
+                "Get the user's card expiration date. First scan the conversation - if "
+                "an expiration date was already given, use it via update_expiration_date "
+                "rather than re-asking. Only ask fresh when no date is in the conversation yet."
+            )
         )
 
-    @function_tool()
-    async def update_expiration_date(
-        self,
-        context: RunContext,
-        expiration_month: int,
-        expiration_year: int,
-    ) -> str | None:
-        """Call to update the card's expiration date. Collect both the numerical month and year.
+    def _build_update_expiration_date_tool(self) -> llm.FunctionTool:
+        # Built dynamically so we can apply IGNORE_ON_ENTER per-instance
+        # based on require_explicit_ask.
+        flags = ToolFlag.IGNORE_ON_ENTER if self._require_explicit_ask else ToolFlag.NONE
 
-        Args:
-            expiration_month (int): The numerical expiration month of the card, example: '04' for April
-            expiration_year (int): The numerical expiration year of the card shortened to the last two digits, for example, '35' for 2035
-        """
+        @function_tool(flags=flags)
+        async def update_expiration_date(
+            context: RunContext, expiration_month: int, expiration_year: int
+        ) -> str | None:
+            """Call to update the card's expiration date. Collect both the numerical month and year.
+
+            Args:
+                expiration_month (int): The numerical expiration month of the card, example: '04' for April
+                expiration_year (int): The numerical expiration year of the card shortened to the last two digits, for example, '35' for 2035
+            """
+            return await self._update_expiration_date_impl(
+                context, expiration_month, expiration_year
+            )
+
+        return update_expiration_date
+
+    async def _update_expiration_date_impl(
+        self, context: RunContext, expiration_month: int, expiration_year: int
+    ) -> str | None:
         if not (1 <= expiration_month <= 12):
             self.session.generate_reply(
                 instructions="The expiration month is invalid, ask the user to repeat the expiration month."
@@ -511,6 +592,7 @@ class GetCreditCardTask(AgentTask[GetCreditCardResult]):
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         require_confirmation: NotGivenOr[bool] = NOT_GIVEN,
+        extra_instructions: str = "",
     ) -> None:
         super().__init__(
             instructions="*none*",
@@ -524,33 +606,78 @@ class GetCreditCardTask(AgentTask[GetCreditCardResult]):
             allow_interruptions=allow_interruptions,
         )
         self._require_confirmation = require_confirmation
+        self._extra_instructions = extra_instructions
 
     async def on_enter(self) -> None:
+        # Pass chat_ctx into both the TaskGroup AND every sub-task. The
+        # TaskGroup overwrites each sub-task's chat_ctx with its own (see
+        # TaskGroup.on_enter) - without seeding the TaskGroup, sub-tasks
+        # would run with empty context.
+        ctx = self.chat_ctx
+        # Role hint for the cardholder sub-task. With IGNORE_ON_ENTER on
+        # update_name (via require_explicit_ask=True), the model is
+        # structurally forced to ask before recording. The extra text
+        # just makes sure the *question* anchors to the card.
+        cardholder_extra = (
+            "You are collecting the name on the credit card (the cardholder). "
+            "When you ask the user to confirm a candidate name from earlier in "
+            "the conversation, anchor the question to the card or cardholder "
+            "so the user knows which name you mean - not just 'is it [name]?' "
+            "in the abstract."
+        )
+        if self._extra_instructions:
+            cardholder_extra = f"{self._extra_instructions}\n\n{cardholder_extra}"
+
         while not self.done():
-            task_group = TaskGroup()
+            # Order: number first (most natural for the caller to give
+            # when asked for "card details"), then expiry and security
+            # code, then the cardholder name LAST. The name most often
+            # pre-fills from chat_ctx (same as the booking name) so
+            # leaving it for the end avoids the failure mode where the
+            # caller's first response (typically the digits) gets crammed
+            # into update_name.
+            task_group = TaskGroup(chat_ctx=ctx)
             task_group.add(
-                lambda: GetNameTask(
-                    last_name=True,
-                    extra_instructions="This is in the context of credit card information collection, ask specifically for the full name listed on it.",
+                lambda: GetCardNumberTask(
+                    chat_ctx=ctx,
                     require_confirmation=self._require_confirmation,
+                    extra_instructions=self._extra_instructions,
                 ),
-                id="cardholder_name_task",
-                description="Collects the cardholder's full name",
-            )
-            task_group.add(
-                lambda: GetCardNumberTask(require_confirmation=self._require_confirmation),
                 id="card_number_task",
                 description="Collects the user's card number",
             )
             task_group.add(
-                lambda: GetSecurityCodeTask(require_confirmation=self._require_confirmation),
+                lambda: GetExpirationDateTask(
+                    chat_ctx=ctx,
+                    require_confirmation=self._require_confirmation,
+                    extra_instructions=self._extra_instructions,
+                ),
+                id="expiration_date_task",
+                description="Collects the card's expiration date",
+            )
+            task_group.add(
+                lambda: GetSecurityCodeTask(
+                    chat_ctx=ctx,
+                    require_confirmation=self._require_confirmation,
+                    extra_instructions=self._extra_instructions,
+                ),
                 id="security_code_task",
                 description="Collects the card's security code",
             )
             task_group.add(
-                lambda: GetExpirationDateTask(require_confirmation=self._require_confirmation),
-                id="expiration_date_task",
-                description="Collects the card's expiration date",
+                lambda: GetNameTask(
+                    last_name=True,
+                    chat_ctx=ctx,
+                    extra_instructions=cardholder_extra,
+                    require_confirmation=self._require_confirmation,
+                    # The cardholder may differ from the caller or any guest
+                    # mentioned earlier in chat_ctx. Apply IGNORE_ON_ENTER on
+                    # update_name so the model must produce an asking turn
+                    # rather than silently filling from chat_ctx.
+                    require_explicit_ask=True,
+                ),
+                id="cardholder_name_task",
+                description="Collects the cardholder's full name",
             )
             try:
                 results = await task_group

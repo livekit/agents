@@ -783,6 +783,34 @@ class SessionHost:
             )
             await self._transport.send_message(resp)
 
+        elif req.HasField("update_io"):
+            # Honor the remote control's mute/unmute toggles for audio /
+            # video / transcription. Only fields actually set in the proto
+            # are applied (presence-tracked booleans), so the client can
+            # send a partial update without clobbering the other channels.
+            io = req.update_io
+            input_io = self._session.input
+            output_io = self._session.output
+            if io.HasField("input"):
+                if io.input.HasField("audio_enabled"):
+                    input_io.set_audio_enabled(io.input.audio_enabled)
+                if io.input.HasField("video_enabled"):
+                    input_io.set_video_enabled(io.input.video_enabled)
+            if io.HasField("output"):
+                if io.output.HasField("audio_enabled"):
+                    output_io.set_audio_enabled(io.output.audio_enabled)
+                if io.output.HasField("video_enabled"):
+                    output_io.set_video_enabled(io.output.video_enabled)
+                if io.output.HasField("transcription_enabled"):
+                    output_io.set_transcription_enabled(io.output.transcription_enabled)
+            resp = agent_pb.AgentSessionMessage(
+                response=agent_pb.SessionResponse(
+                    request_id=req.request_id,
+                    update_io=agent_pb.SessionResponse.UpdateIOResponse(),
+                )
+            )
+            await self._transport.send_message(resp)
+
 
 def _session_usage_to_proto(usage: AgentSessionUsage) -> agent_pb.AgentSessionUsage:
     model_usages: list[agent_pb.ModelUsage] = []
