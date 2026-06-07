@@ -53,6 +53,7 @@ from livekit.agents.utils.misc import is_given
 from .log import logger
 
 USER_AGENT = f"Livekit/{livekit_version} Python/{platform.python_version()}"
+EOS_FALLBACK_TIMEOUT = 1.0
 
 # Sarvam API details
 SARVAM_STT_BASE_URL = "https://api.sarvam.ai/speech-to-text"
@@ -926,6 +927,7 @@ class SpeechStream(stt.SpeechStream):
         self._pending_final_data: dict[str, Any] | None = None
         self._pending_eos = False
         self._eos_fallback_task: asyncio.Task[None] | None = None
+        self._eos_fallback_timeout = EOS_FALLBACK_TIMEOUT
         self._final_received_for_utterance = False
         self._eos_emitted_for_utterance = False
 
@@ -1007,6 +1009,8 @@ class SpeechStream(stt.SpeechStream):
             self._pending_eos = False
         if not hasattr(self, "_eos_fallback_task"):
             self._eos_fallback_task = None
+        if not hasattr(self, "_eos_fallback_timeout"):
+            self._eos_fallback_timeout = EOS_FALLBACK_TIMEOUT
         if not hasattr(self, "_final_received_for_utterance"):
             self._final_received_for_utterance = False
         if not hasattr(self, "_eos_emitted_for_utterance"):
@@ -1024,12 +1028,14 @@ class SpeechStream(stt.SpeechStream):
         self._final_received_for_utterance = False
         self._eos_emitted_for_utterance = False
 
-    def _cancel_eos_fallback(self) -> None:
+    def _cancel_eos_fallback(self) -> asyncio.Task[None] | None:
         current_task = asyncio.current_task()
         fallback_task = self._eos_fallback_task
         self._eos_fallback_task = None
         if fallback_task and fallback_task is not current_task and not fallback_task.done():
             fallback_task.cancel()
+            return fallback_task
+        return None
 
     def _send_final_transcript(
         self, transcript_data: dict[str, Any], *, require_end_time: bool = False
@@ -1123,8 +1129,9 @@ class SpeechStream(stt.SpeechStream):
         self._eos_emitted_for_utterance = True
         self._pending_eos = False
 
-    async def _emit_pending_eos_after_timeout(self, timeout: float = 0.1) -> None:
+    async def _emit_pending_eos_after_timeout(self) -> None:
         try:
+            timeout = self._eos_fallback_timeout
             if timeout > 0:
                 await asyncio.sleep(timeout)
             if self._pending_eos and not self._eos_emitted_for_utterance:
@@ -1145,6 +1152,9 @@ class SpeechStream(stt.SpeechStream):
             tasks_to_cancel.append(self._audio_task)
         if self._message_task and not self._message_task.done():
             tasks_to_cancel.append(self._message_task)
+        fallback_task = self._cancel_eos_fallback()
+        if fallback_task is not None:
+            tasks_to_cancel.append(fallback_task)
 
         if tasks_to_cancel:
             try:
@@ -1368,6 +1378,9 @@ class SpeechStream(stt.SpeechStream):
         finally:
             # Clean up tasks
             all_tasks = tasks + [reconnect_task]
+            fallback_task = self._cancel_eos_fallback()
+            if fallback_task is not None:
+                all_tasks.append(fallback_task)
             await utils.aio.cancel_and_wait(*all_tasks)
 
             # Close WebSocket
@@ -1737,6 +1750,8 @@ class SpeechStream(stt.SpeechStream):
                         if self._final_received_for_utterance:
                             self._emit_end_of_speech()
                         elif self._eos_fallback_task is None or self._eos_fallback_task.done():
+                            # Give Sarvam a short grace period to deliver the
+                            # final transcript so LiveKit sees FINAL before EOS.
                             self._eos_fallback_task = asyncio.create_task(
                                 self._emit_pending_eos_after_timeout()
                             )

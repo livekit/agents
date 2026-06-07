@@ -13,7 +13,9 @@ from livekit.plugins.sarvam.stt import SpeechStream
 pytestmark = pytest.mark.unit
 
 
-def _make_stream_under_test(*, audio_position: float = 1.25) -> tuple[SpeechStream, list[Any]]:
+def _make_stream_under_test(
+    *, audio_position: float = 1.25, eos_fallback_timeout: float = 0.01
+) -> tuple[SpeechStream, list[Any]]:
     instance = SpeechStream.__new__(SpeechStream)
     captured: list[Any] = []
     event_ch = MagicMock()
@@ -34,6 +36,7 @@ def _make_stream_under_test(*, audio_position: float = 1.25) -> tuple[SpeechStre
     instance._pending_final_data = None  # type: ignore[attr-defined]
     instance._pending_eos = False  # type: ignore[attr-defined]
     instance._eos_fallback_task = None  # type: ignore[attr-defined]
+    instance._eos_fallback_timeout = eos_fallback_timeout  # type: ignore[attr-defined]
     instance._final_received_for_utterance = False  # type: ignore[attr-defined]
     instance._eos_emitted_for_utterance = False  # type: ignore[attr-defined]
     return instance, captured
@@ -76,7 +79,7 @@ async def test_end_speech_emits_end_time_alternative() -> None:
 
     await instance._handle_events(_event("START_SPEECH"))
     await instance._handle_events(_event("END_SPEECH"))
-    await asyncio.sleep(0.15)
+    await asyncio.sleep(0.05)
 
     end_events = _events_of_type(captured, stt.SpeechEventType.END_OF_SPEECH)
     assert len(end_events) == 1
@@ -143,6 +146,30 @@ async def test_commit_order_final_before_eos_when_speech_end_arrives_first() -> 
     ]
 
 
+async def test_late_transcript_after_eos_fallback_is_emitted_after_eos() -> None:
+    instance, captured = _make_stream_under_test(audio_position=1.25)
+
+    await instance._handle_events(_event("START_SPEECH"))
+    instance._audio_position = 1.4  # type: ignore[attr-defined]
+    await instance._handle_events(_event("END_SPEECH"))
+    await asyncio.sleep(0.05)
+    await instance._handle_transcript_data(_ws_message())
+
+    event_order = [
+        ev.type
+        for ev in captured
+        if ev.type
+        in {
+            stt.SpeechEventType.FINAL_TRANSCRIPT,
+            stt.SpeechEventType.END_OF_SPEECH,
+        }
+    ]
+    assert event_order == [
+        stt.SpeechEventType.END_OF_SPEECH,
+        stt.SpeechEventType.FINAL_TRANSCRIPT,
+    ]
+
+
 async def test_final_emits_immediately_without_speech_end() -> None:
     instance, captured = _make_stream_under_test()
 
@@ -163,3 +190,28 @@ async def test_multiple_transcripts_emit_multiple_finals() -> None:
 
     final_events = _events_of_type(captured, stt.SpeechEventType.FINAL_TRANSCRIPT)
     assert [ev.alternatives[0].text for ev in final_events] == ["first", "second"]
+
+
+async def test_aclose_cancels_pending_eos_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _noop_parent_aclose(self: object) -> None:
+        return None
+
+    monkeypatch.setattr(stt.SpeechStream, "aclose", _noop_parent_aclose)
+    instance, captured = _make_stream_under_test(eos_fallback_timeout=0.05)
+    instance._connection_lock = asyncio.Lock()  # type: ignore[attr-defined]
+    instance._audio_task = None  # type: ignore[attr-defined]
+    instance._message_task = None  # type: ignore[attr-defined]
+    instance._ws = None  # type: ignore[attr-defined]
+    instance._session = SimpleNamespace(closed=True)  # type: ignore[attr-defined]
+    instance._client_request_id = "client"  # type: ignore[attr-defined]
+
+    await instance._handle_events(_event("START_SPEECH"))
+    await instance._handle_events(_event("END_SPEECH"))
+    fallback_task = instance._eos_fallback_task  # type: ignore[attr-defined]
+
+    assert fallback_task is not None
+    await instance.aclose()
+    await asyncio.sleep(0.1)
+
+    assert fallback_task.cancelled()
+    assert not _events_of_type(captured, stt.SpeechEventType.END_OF_SPEECH)
