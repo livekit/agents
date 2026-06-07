@@ -222,9 +222,7 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
 
         return update_card_number
 
-    async def _update_card_number_impl(
-        self, context: RunContext, card_number: str
-    ) -> str | None:
+    async def _update_card_number_impl(self, context: RunContext, card_number: str) -> str | None:
         card_number = "".join([d for d in card_number if d.isdigit()])
         if len(card_number) < 13 or len(card_number) > 19:
             self.session.generate_reply(
