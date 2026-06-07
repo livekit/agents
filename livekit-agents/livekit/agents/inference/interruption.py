@@ -51,7 +51,7 @@ from ._utils import (
 
 SAMPLE_RATE = 16000
 # local fallback when server/model side threshold is not available
-THRESHOLD = 0.5
+THRESHOLD = 0.656
 MIN_INTERRUPTION_DURATION = 0.025 * 2  # 25ms per frame, 2 consecutive frames
 MAX_AUDIO_DURATION = 3  # 3 seconds
 DETECTION_INTERVAL = 0.1  # 0.1 second
@@ -74,8 +74,7 @@ class InterruptionOptions:
     sample_rate: int
     """The sample rate of the audio frames, defaults to 16000Hz"""
     threshold: NotGivenOr[float]
-    """The threshold for the interruption detection. NOT_GIVEN means the user did not override it,
-    in which case it is omitted from session.create so the server applies its fetched default."""
+    """The threshold for the interruption detection. NOT_GIVEN to use server defaults."""
     min_frames: int
     """The minimum number of frames to detect a interruption, defaults to 50ms/2 frames"""
     max_audio_duration: float
@@ -282,7 +281,7 @@ class AdaptiveInterruptionDetector(
         Initialize a AdaptiveInterruptionDetector instance.
 
         Args:
-            threshold (float, optional): The threshold for the interruption detection. When not set, the server-recommended default (returned in session.created) is used, falling back to 0.5 if the server does not provide one.
+            threshold (float, optional): The threshold for the interruption detection. When not set, the server-recommended default (returned in session.created) is used, falling back to THRESHOLD if the server does not provide one.
             min_interruption_duration (float, optional): The minimum duration, in seconds, of the interruption event, defaults to 50ms.
             max_audio_duration (float, optional): The maximum audio duration, including the audio prefix, in seconds, for the interruption detection, defaults to 3s.
             audio_prefix_duration (float, optional): The audio prefix duration, in seconds, for the interruption detection, defaults to 0.5s.
@@ -302,8 +301,7 @@ class AdaptiveInterruptionDetector(
             if base_url
             else os.getenv("LIVEKIT_INFERENCE_URL", get_default_inference_url())
         )
-        # Adaptive interruption is inference-gateway-only and always connects over WebSocket,
-        # so LiveKit credentials are always required.
+
         lk_api_key = (
             api_key
             if api_key
@@ -690,16 +688,13 @@ class InterruptionWSSessionCreatedMessage(BaseModel):
         InterruptionWSMessageType.SESSION_CREATED
     )
     default_threshold: float | None = None
-    """The server-recommended interruption threshold. Used as the effective threshold when the
-    user has not explicitly overridden it."""
+    """The server-recommended interruption threshold."""
 
 
 class InterruptionWSSessionCreateSettings(BaseModel):
     sample_rate: int
     num_channels: int
     threshold: float | None = None
-    """Only set when the user explicitly overrides the threshold; omitted otherwise so the server
-    applies its fetched default."""
     min_frames: int
     encoding: Literal["s16le"]
 
@@ -854,8 +849,7 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
 
                 match msg:
                     case InterruptionWSSessionCreatedMessage():
-                        # Observability only — the server makes the actual decision; when we omit
-                        # the threshold from session.create it applies its fetched default.
+                        # Observability only — the server makes the actual decision;
                         logger.debug(
                             "adaptive interruption session created",
                             extra={
@@ -987,8 +981,6 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
         settings = InterruptionWSSessionCreateSettings(
             sample_rate=self._opts.sample_rate,
             num_channels=1,
-            # only send the threshold when the user explicitly overrode it; otherwise let the
-            # server apply its fetched default
             threshold=self._opts.threshold if is_given(self._opts.threshold) else None,
             min_frames=self._opts.min_frames,
             encoding="s16le",
