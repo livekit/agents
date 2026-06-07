@@ -596,6 +596,10 @@ class SpeechStream(stt.SpeechStream):
                     alternatives=[speech_data],
                 )
                 self._event_ch.send_nowait(final_event)
+
+                if is_given(self._opts.server_vad) and self._opts.server_vad is not None:
+                    self._event_ch.send_nowait(stt.SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
+                    self._speaking = False
             else:
                 # Empty commit signals end of speech segment (similar to Cartesia's is_final flag)
                 # This groups multiple committed transcripts into one speech segment
