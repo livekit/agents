@@ -1045,7 +1045,7 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
         *,
         provisional_success: bool,
         provisional_reason: str = "",
-        timeout: float = 30.0,
+        timeout: float = 60.0,
     ) -> agent_pb.SessionResponse.SimulationFinalizeResponse:
         """Hand the agent under test the simulator's provisional verdict and return its
         final verdict. The agent may override it from its on_simulation_end callback;
