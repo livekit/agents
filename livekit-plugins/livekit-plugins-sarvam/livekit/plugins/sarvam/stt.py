@@ -25,10 +25,11 @@ import json
 import logging
 import os
 import platform
+import time
 import weakref
 from dataclasses import dataclass
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import urlencode
 
 import aiohttp
@@ -917,6 +918,16 @@ class SpeechStream(stt.SpeechStream):
         )
         self._should_flush = False  # Flag to trigger flush
 
+        self._audio_position = 0.0
+        self._utterance_start_audio_pos = 0.0
+        self._utterance_speech_end_audio_pos: float | None = None
+        self._utterance_speech_start_wall: float | None = None
+        self._utterance_speech_end_wall: float | None = None
+        self._pending_final_data: dict[str, Any] | None = None
+        self._pending_eos = False
+        self._final_received_for_utterance = False
+        self._eos_emitted_for_utterance = False
+
         # Task management for cleanup
         self._audio_task: asyncio.Task | None = None
         self._message_task: asyncio.Task | None = None
@@ -969,6 +980,131 @@ class SpeechStream(stt.SpeechStream):
 
         if request_id:
             self._server_request_id = str(request_id)
+
+    @staticmethod
+    def _positive_time(value: object) -> float | None:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        if value <= 0:
+            return None
+        return float(value)
+
+    def _ensure_utterance_timing_state(self) -> None:
+        if not hasattr(self, "_audio_position"):
+            self._audio_position = 0.0
+        if not hasattr(self, "_utterance_start_audio_pos"):
+            self._utterance_start_audio_pos = 0.0
+        if not hasattr(self, "_utterance_speech_end_audio_pos"):
+            self._utterance_speech_end_audio_pos = None
+        if not hasattr(self, "_utterance_speech_start_wall"):
+            self._utterance_speech_start_wall = None
+        if not hasattr(self, "_utterance_speech_end_wall"):
+            self._utterance_speech_end_wall = None
+        if not hasattr(self, "_pending_final_data"):
+            self._pending_final_data = None
+        if not hasattr(self, "_pending_eos"):
+            self._pending_eos = False
+        if not hasattr(self, "_final_received_for_utterance"):
+            self._final_received_for_utterance = False
+        if not hasattr(self, "_eos_emitted_for_utterance"):
+            self._eos_emitted_for_utterance = False
+
+    def _reset_utterance_state(self) -> None:
+        self._ensure_utterance_timing_state()
+        self._pending_final_data = None
+        self._pending_eos = False
+        self._utterance_start_audio_pos = self._audio_position
+        self._utterance_speech_end_audio_pos = None
+        self._utterance_speech_start_wall = time.time()
+        self._utterance_speech_end_wall = None
+        self._final_received_for_utterance = False
+        self._eos_emitted_for_utterance = False
+
+    def _send_final_transcript(self, transcript_data: dict[str, Any]) -> bool:
+        self._ensure_utterance_timing_state()
+        transcript_text = transcript_data.get("transcript", "")
+        if not transcript_text:
+            return False
+
+        language = LanguageCode(transcript_data.get("language_code", ""))
+        request_id = transcript_data.get("request_id") or self._server_request_id or ""
+        start_time = (
+            self._positive_time(transcript_data.get("speech_start"))
+            or self._utterance_start_audio_pos
+        )
+        end_time = (
+            self._positive_time(transcript_data.get("speech_end"))
+            or self._utterance_speech_end_audio_pos
+        )
+        if end_time is None:
+            return False
+
+        speech_data = stt.SpeechData(
+            language=language,
+            text=transcript_text,
+            start_time=start_time,
+            end_time=end_time,
+            confidence=_extract_confidence(transcript_data, self._logger),
+        )
+        self._event_ch.send_nowait(
+            stt.SpeechEvent(
+                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                request_id=request_id,
+                alternatives=[speech_data],
+            )
+        )
+        return True
+
+    def _try_commit_utterance(self) -> None:
+        self._ensure_utterance_timing_state()
+        if (
+            self._pending_final_data is None
+            or self._utterance_speech_end_audio_pos is None
+            or self._eos_emitted_for_utterance
+        ):
+            return
+
+        committed_data = self._pending_final_data
+        if self._send_final_transcript(committed_data):
+            self._logger.debug(
+                "Sarvam STT utterance committed",
+                extra={
+                    **self._build_log_context(),
+                    "end_time": self._utterance_speech_end_audio_pos,
+                    "speech_end_wall_time": self._utterance_speech_end_wall,
+                },
+            )
+            self._emit_end_of_speech()
+            self._pending_final_data = None
+
+    def _emit_end_of_speech(self) -> None:
+        self._ensure_utterance_timing_state()
+        if self._eos_emitted_for_utterance:
+            return
+
+        alternatives: list[stt.SpeechData] = []
+        if self._utterance_speech_end_audio_pos is not None:
+            metadata: dict[str, Any] = {}
+            if self._utterance_speech_end_wall is not None:
+                metadata["speech_end_wall_time"] = self._utterance_speech_end_wall
+            alternatives.append(
+                stt.SpeechData(
+                    language=LanguageCode(self._opts.language),
+                    text="",
+                    end_time=self._utterance_speech_end_audio_pos,
+                    metadata=metadata or None,
+                )
+            )
+
+        self._event_ch.send_nowait(
+            stt.SpeechEvent(
+                type=stt.SpeechEventType.END_OF_SPEECH,
+                request_id=self._server_request_id or "",
+                alternatives=alternatives,
+            )
+        )
+        self._eos_emitted_for_utterance = True
+        self._pending_eos = False
 
     async def aclose(self) -> None:
         """Close the stream and clean up resources."""
@@ -1263,6 +1399,7 @@ class SpeechStream(stt.SpeechStream):
 
                             await ws.send_str(json.dumps(audio_message))
                             chunks_sent += 1
+                            self._audio_position += chunk_size / self._opts.sample_rate
 
                             # Remove sent data from buffer
                             audio_buffer = audio_buffer[chunk_size:]
@@ -1470,9 +1607,9 @@ class SpeechStream(stt.SpeechStream):
 
     async def _handle_transcript_data(self, data: dict) -> None:
         """Handle transcription result messages."""
+        self._ensure_utterance_timing_state()
         transcript_data = data.get("data", {})
         transcript_text = transcript_data.get("transcript", "")
-        language = LanguageCode(transcript_data.get("language_code", ""))
         self._maybe_set_server_request_id(transcript_data)
         # Prefer the per-message request_id from the server; fall back to the
         # session-wide server request_id captured from an earlier message.
@@ -1498,22 +1635,15 @@ class SpeechStream(stt.SpeechStream):
             )
             self._event_ch.send_nowait(usage_event)
 
-            # Create speech data
-            speech_data = stt.SpeechData(
-                language=language,
-                text=transcript_text,
-                start_time=transcript_data.get("speech_start", 0.0),
-                end_time=transcript_data.get("speech_end", 0.0),
-                confidence=_extract_confidence(transcript_data, self._logger),
-            )
+            self._pending_final_data = transcript_data
+            self._final_received_for_utterance = True
 
-            # Create final transcript event with request_id
-            speech_event = stt.SpeechEvent(
-                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                request_id=request_id,
-                alternatives=[speech_data],
-            )
-            self._event_ch.send_nowait(speech_event)
+            transcript_end_time = self._positive_time(transcript_data.get("speech_end"))
+            if transcript_end_time is not None and self._utterance_speech_end_audio_pos is None:
+                self._utterance_speech_end_audio_pos = transcript_end_time
+                self._utterance_speech_end_wall = time.time()
+
+            self._try_commit_utterance()
 
             self._logger.debug(
                 "Transcript processed successfully",
@@ -1521,7 +1651,6 @@ class SpeechStream(stt.SpeechStream):
                     **self._build_log_context(),
                     "text_length": len(transcript_text),
                     "language": self._opts.language,
-                    "confidence": speech_data.confidence,
                 },
             )
 
@@ -1538,6 +1667,7 @@ class SpeechStream(stt.SpeechStream):
 
     async def _handle_events(self, data: dict) -> None:
         """Handle VAD (Voice Activity Detection) events."""
+        self._ensure_utterance_timing_state()
         event_data = data.get("data", {})
         signal_type = event_data.get("signal_type")
         self._maybe_set_server_request_id(event_data)
@@ -1557,16 +1687,23 @@ class SpeechStream(stt.SpeechStream):
         try:
             if signal_type == "START_SPEECH":
                 if not self._speaking:
+                    self._reset_utterance_state()
                     self._speaking = True
-                    start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
+                    start_event = stt.SpeechEvent(
+                        type=stt.SpeechEventType.START_OF_SPEECH,
+                        request_id=self._server_request_id or "",
+                        speech_start_time=self._utterance_speech_start_wall,
+                    )
                     self._event_ch.send_nowait(start_event)
                     self._logger.debug("Speech started", extra=self._build_log_context())
 
             elif signal_type == "END_SPEECH":
                 if self._speaking:
                     self._speaking = False
-                    end_event = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-                    self._event_ch.send_nowait(end_event)
+                    self._utterance_speech_end_audio_pos = self._audio_position
+                    self._utterance_speech_end_wall = time.time()
+                    self._pending_eos = True
+                    self._try_commit_utterance()
 
                     # Set flag to trigger flush when Sarvam detects end of speech
                     self._should_flush = True
