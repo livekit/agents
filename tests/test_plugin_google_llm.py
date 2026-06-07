@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -333,3 +334,35 @@ class TestMediaResolution:
 
         assert config.generation_config
         assert config.generation_config.media_resolution is None
+
+
+class TestRealtimeInitialChatContext:
+    def test_seeds_initial_context_without_resumption_handle(self):
+        session = RealtimeSession.__new__(RealtimeSession)
+        session._session_resumption_handle = None
+
+        assert session._should_seed_initial_chat_context()
+
+    def test_skips_initial_context_when_resuming_session(self):
+        session = RealtimeSession.__new__(RealtimeSession)
+        session._session_resumption_handle = "resume-123"
+
+        assert not session._should_seed_initial_chat_context()
+
+    @pytest.mark.asyncio
+    async def test_offline_chat_update_invalidates_resumption_handle(self):
+        session = RealtimeSession.__new__(RealtimeSession)
+        session._opts = MagicMock()
+        session._opts.model = "gemini-live-2.5-flash-preview"
+        session._active_session = None
+        session._session_lock = asyncio.Lock()
+        session._session_resumption_handle = "resume-123"
+        session._chat_ctx = llm.ChatContext.empty()
+
+        chat_ctx = llm.ChatContext.empty()
+        chat_ctx.add_message(role="user", content="tool result arrived while reconnecting")
+
+        await session.update_chat_ctx(chat_ctx)
+
+        assert session._session_resumption_handle is None
+        assert session._should_seed_initial_chat_context()
