@@ -308,8 +308,14 @@ class SupervisedProc(ABC):
             return
 
         self._closing = True
-        with contextlib.suppress(duplex_unix.DuplexClosed):
-            await channel.asend_message(self._pch, proto.ShutdownRequest())
+        if not self._process_is_alive():
+            self._mark_shutdown_complete()
+        else:
+            with contextlib.suppress(duplex_unix.DuplexClosed):
+                await channel.asend_message(self._pch, proto.ShutdownRequest())
+
+            if not self._process_is_alive():
+                self._mark_shutdown_complete()
 
         try:
             await asyncio.wait_for(self._shutdown_ack_fut, timeout=self._opts.close_timeout)
@@ -340,6 +346,18 @@ class SupervisedProc(ABC):
         async with self._lock:
             if self._supervise_atask:
                 await asyncio.shield(self._supervise_atask)
+
+    def _process_is_alive(self) -> bool:
+        try:
+            return self._proc.is_alive()
+        except ValueError:
+            return False
+
+    def _mark_shutdown_complete(self) -> None:
+        if not self._shutdown_ack_fut.done():
+            self._shutdown_ack_fut.set_result(None)
+        if not self._shutting_down_fut.done():
+            self._shutting_down_fut.set_result(None)
 
     async def kill(self) -> None:
         """forcefully kill the supervised process"""

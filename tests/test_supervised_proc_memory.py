@@ -93,6 +93,31 @@ async def test_uptime_is_zero_before_start() -> None:
     assert proc.uptime == 0.0
 
 
+async def test_aclose_skips_shutdown_request_when_process_is_already_dead(monkeypatch) -> None:
+    proc = _make_proc()
+
+    class _DeadProcess:
+        def is_alive(self) -> bool:
+            return False
+
+    async def _unexpected_shutdown_request(*args, **kwargs):
+        raise AssertionError("aclose should not send ShutdownRequest to a dead child")
+
+    proc._proc = _DeadProcess()
+    proc._supervise_atask = asyncio.create_task(asyncio.sleep(0))
+    await proc._supervise_atask
+
+    monkeypatch.setattr(
+        "livekit.agents.ipc.supervised_proc.channel.asend_message",
+        _unexpected_shutdown_request,
+    )
+
+    await proc.aclose()
+
+    assert proc._shutdown_ack_fut.done()
+    assert proc._shutting_down_fut.done()
+
+
 def test_process_kind_renders_as_plain_string() -> None:
     # the log message interpolates `f"{self.process_kind} process …"`, so the enum
     # must stringify to its value (not "SupervisedProcKind.JOB")
