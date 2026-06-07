@@ -23,9 +23,11 @@ import pytest
 
 from livekit.agents.cli.cli import _ExitCli, _run_worker
 from livekit.agents.cli.proto import CliArgs
-from livekit.agents.ipc.supervised_proc import SupervisedProc
+from livekit.agents.ipc.supervised_proc import SupervisedProc, SupervisedProcKind
 from livekit.agents.utils import aio
 from livekit.agents.worker import AgentServer
+
+pytestmark = pytest.mark.unit
 
 _CLI_ARGS = CliArgs(log_level="ERROR", url=None, api_key=None, api_secret=None)
 
@@ -36,6 +38,10 @@ def _make_server(drain_timeout: int = 1) -> AgentServer:
 
 
 class _DummySupervisedProc(SupervisedProc):
+    @property
+    def process_kind(self) -> SupervisedProcKind:
+        return SupervisedProcKind.JOB
+
     def _create_process(self, cch: socket.socket, log_cch: socket.socket) -> mp.Process:
         raise NotImplementedError
 

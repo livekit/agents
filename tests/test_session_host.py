@@ -32,6 +32,8 @@ from livekit.agents.voice.remote_session import (
 )
 from livekit.protocol.agent_pb import agent_session as agent_pb
 
+pytestmark = pytest.mark.unit
+
 # ---------------------------------------------------------------------------
 # In-memory transport for testing
 # ---------------------------------------------------------------------------

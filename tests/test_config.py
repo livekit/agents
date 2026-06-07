@@ -1,4 +1,8 @@
+import pytest
+
 from livekit.plugins.openai.realtime.realtime_model import process_base_url
+
+pytestmark = pytest.mark.unit
 
 
 def test_process_base_url():

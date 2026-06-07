@@ -32,6 +32,8 @@ from .utils.livekit_test import (
     wait_for_event,
 )
 
+pytestmark = pytest.mark.unit
+
 TIMEOUT = 5.0
 
 

@@ -261,6 +261,12 @@ class JobContext:
         otel_metrics.flush_turn_metrics(session.history)
 
         c = AgentsConsole.get_instance()
+
+        # in case AgentSession.aclose() was cancelled due to timeout
+        if (recorder_io := session._recorder_io) and recorder_io.recording:
+            logger.warning("recorder_io is still recording at session end, closing it")
+            await recorder_io.aclose()
+
         report = self.make_session_report(session)
 
         # console recording, dump data to a local file
@@ -502,6 +508,7 @@ class JobContext:
         encryption: rtc.E2EEOptions | None = None,
         auto_subscribe: AutoSubscribe = AutoSubscribe.SUBSCRIBE_ALL,
         rtc_config: rtc.RtcConfiguration | None = None,
+        single_peer_connection: bool | None = None,
         # deprecated
         e2ee: rtc.E2EEOptions | None = None,
     ) -> None:
@@ -511,6 +518,7 @@ class JobContext:
             encryption: End-to-end encryption options. If provided, the Agent will utilize end-to-end encryption. Note: clients will also need to handle E2EE.
             auto_subscribe: Whether to automatically subscribe to tracks. Default is AutoSubscribe.SUBSCRIBE_ALL.
             rtc_config: Custom RTC configuration to use when connecting to the room.
+            single_peer_connection: Use a single peer connection for both publish and subscribe. When None, uses the default (False).
         """  # noqa: E501
         async with self._lock:
             if self._connected:
@@ -521,6 +529,7 @@ class JobContext:
                 encryption=encryption,
                 auto_subscribe=auto_subscribe == AutoSubscribe.SUBSCRIBE_ALL,
                 rtc_config=rtc_config,
+                single_peer_connection=single_peer_connection,
             )
 
             await self._room.connect(self._info.url, self._info.token, options=room_options)
@@ -530,6 +539,22 @@ class JobContext:
 
             _apply_auto_subscribe_opts(self._room, auto_subscribe)
             self._connected = True
+
+    def _track_pending_task(self, task: asyncio.Task[Any], *, name: str) -> None:
+        """Track a fire-and-forget task so its exceptions are surfaced instead of swallowed.
+
+        Callers may still await the returned task to handle errors themselves; this only
+        guarantees that an otherwise unhandled exception is logged rather than silently
+        dropped (e.g. when the returned future is not awaited).
+        """
+        self._pending_tasks.append(task)
+
+        def _on_done(task: asyncio.Task[Any]) -> None:
+            self._pending_tasks.remove(task)
+            if not task.cancelled() and (exc := task.exception()) is not None:
+                logger.error(f"error in {name}", exc_info=exc)
+
+        task.add_done_callback(_on_done)
 
     def delete_room(self, room_name: str | None = None) -> asyncio.Future[api.DeleteRoomResponse]:  # type: ignore
         """Deletes the room and disconnects all participants."""
@@ -553,8 +578,7 @@ class JobContext:
                 logger.exception("unknown error while deleting room")
 
         task = asyncio.create_task(_delete_room())
-        self._pending_tasks.append(task)
-        task.add_done_callback(lambda _: self._pending_tasks.remove(task))
+        self._track_pending_task(task, name="delete_room")
         return task
 
     def add_sip_participant(
@@ -596,8 +620,7 @@ class JobContext:
                 )
             ),
         )
-        self._pending_tasks.append(task)
-        task.add_done_callback(lambda _: self._pending_tasks.remove(task))
+        self._track_pending_task(task, name="add_sip_participant")
         return task
 
     def transfer_sip_participant(
@@ -648,8 +671,7 @@ class JobContext:
                 )
             ),
         )
-        self._pending_tasks.append(task)
-        task.add_done_callback(lambda _: self._pending_tasks.remove(task))
+        self._track_pending_task(task, name="transfer_sip_participant")
         return task
 
     def shutdown(self, reason: str = "") -> None:
@@ -719,9 +741,18 @@ class JobContext:
             task_name = f"part-entry-{p.identity}-{coro.__name__}"
             task = asyncio.create_task(coro(self, p), name=task_name)
             self._participant_tasks[(p.identity, coro)] = task
-            task.add_done_callback(
-                lambda _, coro=coro: self._participant_tasks.pop((p.identity, coro))  # type: ignore
-            )
+
+            def _on_done(task: asyncio.Task[Any], *, coro: Any = coro) -> None:
+                key = (p.identity, coro)
+                if self._participant_tasks.get(key) is task:
+                    self._participant_tasks.pop(key, None)
+                if not task.cancelled() and (exc := task.exception()) is not None:
+                    logger.error(
+                        f"error in participant entrypoint {coro.__name__} for '{p.identity}'",
+                        exc_info=exc,
+                    )
+
+            task.add_done_callback(_on_done)
 
     def token_claims(self) -> Claims:
         return api.TokenVerifier().verify(self._info.token, verify_signature=False)
