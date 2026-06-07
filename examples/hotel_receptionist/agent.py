@@ -56,8 +56,6 @@ from livekit.agents.evals import (
     task_completion_judge,
     tool_use_judge,
 )
-from livekit.plugins import silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 load_dotenv()
 
