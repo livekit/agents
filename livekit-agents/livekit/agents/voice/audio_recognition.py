@@ -1273,7 +1273,6 @@ class AudioRecognition:
                         trace.use_span(user_turn_span),
                         tracer.start_as_current_span("eou_detection") as eou_detection_span,
                     ):
-                        end_of_turn_probability = 0.0
                         # reuse prediction from the turn detector if available.
                         from_cache = (
                             isinstance(turn_detector, _StreamingTurnDetectorStream)
@@ -1301,32 +1300,37 @@ class AudioRecognition:
                             else None
                         )
 
-                        eou_detection_span.set_attributes(
-                            {
-                                trace_types.ATTR_CHAT_CTX: json.dumps(
-                                    llm.ChatContext(chat_ctx.items[-_EOU_MAX_HISTORY_TURNS:])
-                                    .copy(
-                                        exclude_function_call=True,
-                                        exclude_instructions=True,
-                                        exclude_empty_message=True,
-                                        exclude_handoff=True,
-                                        exclude_config_update=True,
-                                    )
-                                    .to_dict(
-                                        exclude_audio=True,
-                                        exclude_image=True,
-                                        exclude_timestamp=True,
-                                        exclude_metrics=True,
-                                    )
-                                ),
-                                trace_types.ATTR_EOU_PROBABILITY: end_of_turn_probability,
-                                trace_types.ATTR_EOU_UNLIKELY_THRESHOLD: unlikely_threshold or 0,
-                                trace_types.ATTR_EOU_DELAY: endpointing_delay,
-                                trace_types.ATTR_EOU_LANGUAGE: self._last_language or "",
-                                trace_types.ATTR_EOU_SOURCE: trigger,
-                                trace_types.ATTR_EOU_FROM_CACHE: from_cache,
-                            }
-                        )
+                        eou_span_attributes: dict[str, Any] = {
+                            trace_types.ATTR_CHAT_CTX: json.dumps(
+                                llm.ChatContext(chat_ctx.items[-_EOU_MAX_HISTORY_TURNS:])
+                                .copy(
+                                    exclude_function_call=True,
+                                    exclude_instructions=True,
+                                    exclude_empty_message=True,
+                                    exclude_handoff=True,
+                                    exclude_config_update=True,
+                                )
+                                .to_dict(
+                                    exclude_audio=True,
+                                    exclude_image=True,
+                                    exclude_timestamp=True,
+                                    exclude_metrics=True,
+                                )
+                            ),
+                            trace_types.ATTR_EOU_DELAY: endpointing_delay,
+                            trace_types.ATTR_EOU_LANGUAGE: self._last_language or "",
+                            trace_types.ATTR_EOU_SOURCE: trigger,
+                            trace_types.ATTR_EOU_FROM_CACHE: from_cache,
+                        }
+                        if end_of_turn_probability is not None:
+                            eou_span_attributes[trace_types.ATTR_EOU_PROBABILITY] = (
+                                end_of_turn_probability
+                            )
+                        if unlikely_threshold is not None:
+                            eou_span_attributes[trace_types.ATTR_EOU_UNLIKELY_THRESHOLD] = (
+                                unlikely_threshold
+                            )
+                        eou_detection_span.set_attributes(eou_span_attributes)
                         logger.debug(
                             "eot prediction",
                             extra={
@@ -1340,8 +1344,12 @@ class AudioRecognition:
                         )
 
                         if (
-                            prediction_event is None
-                            or prediction_event is not self._last_emitted_prediction
+                            end_of_turn_probability is not None
+                            and unlikely_threshold is not None
+                            and (
+                                prediction_event is None
+                                or prediction_event is not self._last_emitted_prediction
+                            )
                         ):
                             self._last_emitted_prediction = prediction_event
                             inference_duration = (
@@ -1358,8 +1366,8 @@ class AudioRecognition:
                             )
                             self._hooks.on_eot_prediction(
                                 EotPredictionEvent(
-                                    probability=end_of_turn_probability or 0.0,
-                                    threshold=unlikely_threshold or 0.0,
+                                    probability=end_of_turn_probability,
+                                    threshold=unlikely_threshold,
                                     inference_duration=inference_duration,
                                     delay=delay,
                                 )
