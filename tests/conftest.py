@@ -14,6 +14,12 @@ from livekit.agents.cli import log
 
 from . import concurrency
 from .toxic_proxy import Toxiproxy
+from .virtual_time import (  # noqa: F401  (re-exported so pytest discovers the fixtures)
+    _virtual_wall_clock,
+    add_realtime_option as _add_realtime_option,
+    event_loop_policy,
+    register_marker as _register_virtual_time_marker,
+)
 
 TEST_CONNECT_OPTIONS = dataclasses.replace(DEFAULT_API_CONNECT_OPTIONS, retry_interval=0.0)
 
@@ -48,6 +54,7 @@ _CATEGORY_HINT = (
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
+    _add_realtime_option(parser)
     group = parser.getgroup("categories", "test category selection")
     for category in CATEGORIES:
         group.addoption(
@@ -124,6 +131,7 @@ def _uncategorized_modules(config: pytest.Config) -> list[Path]:
 def pytest_configure(config: pytest.Config) -> None:
     """Handle `--list-categories` before any collection/import happens."""
     _module_facts.cache_clear()
+    _register_virtual_time_marker(config)
 
     if not config.getoption("--list-categories"):
         return

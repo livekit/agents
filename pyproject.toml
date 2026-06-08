@@ -126,6 +126,12 @@ convention = "google"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+filterwarnings = [
+    # virtual-time tests override the event_loop_policy fixture (tests/virtual_time.py) to run on
+    # an autojumping virtual-time loop; pytest-asyncio deprecates the override but offers no per-test
+    # alternative that returns a default loop for unmarked tests without erroring.
+    "ignore:Overriding the \"event_loop_policy\" fixture is deprecated:Warning",
+]
 addopts = ["--import-mode=importlib", "--ignore=examples", "-p", "tests.concurrency"]
 pythonpath = ["."]
 testpaths = ["tests"]
