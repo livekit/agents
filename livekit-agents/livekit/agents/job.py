@@ -443,11 +443,10 @@ class JobContext:
         """Return the :class:`SimulationContext` when this job is running under a
         simulation, or ``None`` for a normal/production session.
 
-        The framework resolves and caches this automatically when the primary
-        ``AgentSession`` starts, so ``on_simulation_end`` always receives it — you do
-        not need to call this to "prime" anything. Call it only when you want the
-        scenario in your entrypoint (e.g. to seed scenario-specific mocks). Resolves
-        synchronously from the simulation room's metadata (a protojson
+        Resolved once and cached. The framework hands it to ``on_simulation_end``
+        automatically, so you never need to call this to "prime" anything. Call it only
+        when you want the scenario in your entrypoint (e.g. to seed scenario-specific
+        mocks). Resolves synchronously from the simulation room's metadata (a protojson
         ``SimulationDispatch``); a production room has none and returns ``None``.
         """
         if self._simulation_resolved:

@@ -42,19 +42,14 @@ class SimulationContext:
     """Passed to the ``on_simulation_end`` callback while running under a simulation.
 
     Carries two verdicts, both recorded for the run:
-      - :attr:`simulator_verdict` — the simulator's verdict (its LLM judgment of the chat).
-      - :attr:`user_verdict` — your own veto, set via :meth:`fail` from richer checks
+      - :attr:`simulator_verdict`: the simulator's verdict (its LLM judgment of the chat).
+      - :attr:`user_verdict`: your own veto, set via :meth:`fail` from richer checks
         (e.g. comparing mock backend state against the benchmark target in
         ``scenario.userdata``). The effective result is the AND of the two: your check
-        can fail a run the simulator passed, but it can never rescue one — so there is
+        can fail a run the simulator passed, but it can never rescue one, so there is
         no ``success()``; not calling :meth:`fail` leaves the simulator's verdict to stand.
 
-    The framework creates and caches this from the simulation room's metadata, so the
-    same instance is shared everywhere — read it any time via
-    :meth:`JobContext.simulation_context` (``None`` in production). Use :attr:`job_context`
-    to reach the running session (``job_context.primary_session``), the room, etc.
-    ``simulator_verdict`` and the hydrated ``run`` / ``job`` are filled in right before
-    ``on_simulation_end`` is invoked.
+    Use :attr:`job_context` to reach the running session and the room.
     """
 
     def __init__(self, dispatch: proto.SimulationDispatch, job_ctx: JobContext) -> None:
@@ -83,7 +78,7 @@ class SimulationContext:
         """The simulator's verdict (its LLM judgment of the conversation). Read-only;
         recorded alongside your :attr:`user_verdict`.
 
-        Only available once the simulation has ended — i.e. inside ``on_simulation_end``.
+        Only available once the simulation has ended, i.e. inside ``on_simulation_end``.
         Raises :class:`RuntimeError` if accessed earlier (e.g. from the entrypoint).
         """
         if self._simulator_verdict is None:
@@ -95,7 +90,7 @@ class SimulationContext:
 
     @property
     def job_context(self) -> JobContext:
-        """The :class:`JobContext` for this run — use it to reach the running session
+        """The :class:`JobContext` for this run; use it to reach the running session
         (``job_context.primary_session``), the room, and other job state."""
         return self._job_ctx
 

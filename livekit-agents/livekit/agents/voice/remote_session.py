@@ -786,7 +786,7 @@ class SessionHost:
         elif req.HasField("finalize_simulation"):
             # The simulator's verdict is passed in so on_simulation_end can read it
             # (ctx.simulator_verdict); the agent records its OWN verdict via
-            # ctx.success()/fail(). Both are reported — this is not an override.
+            # ctx.success()/fail(). Both are reported; this is not an override.
             user_verdict: (
                 agent_pb.SessionResponse.FinalizeSimulationResponse.SimulationVerdict | None
             ) = None  # noqa: E501
