@@ -70,12 +70,6 @@ class PairedTransport(SessionTransport):
             raise StopAsyncIteration from None
 
 
-@pytest.mark.xfail(
-    reason="session.run() does not yet surface LLM errors to RunResult directly; "
-    "the speech-generation path captures the llm_task exception. The e2e SessionHost "
-    "path (test_run_input_error_e2e_through_remote_session) does propagate it.",
-    strict=False,
-)
 @pytest.mark.asyncio
 async def test_run_propagates_llm_error_no_retry():
     session = AgentSession(
@@ -86,19 +80,12 @@ async def test_run_propagates_llm_error_no_retry():
     await session.start(agent=agent)
 
     result = session.run(user_input="hello")
-    # broad: the error surfaces differently across the e2e SessionHost path
-    with pytest.raises(Exception):  # noqa: B017
+    with pytest.raises(APIStatusError):
         await asyncio.wait_for(result, timeout=10.0)
 
     await session.aclose()
 
 
-@pytest.mark.xfail(
-    reason="session.run() does not yet surface LLM errors to RunResult directly; "
-    "the speech-generation path captures the llm_task exception. The e2e SessionHost "
-    "path (test_run_input_error_e2e_through_remote_session) does propagate it.",
-    strict=False,
-)
 @pytest.mark.asyncio
 async def test_run_propagates_llm_error_with_retry():
     session = AgentSession(
@@ -111,8 +98,7 @@ async def test_run_propagates_llm_error_with_retry():
     await session.start(agent=agent)
 
     result = session.run(user_input="hello")
-    # broad: the error surfaces differently across the e2e SessionHost path
-    with pytest.raises(Exception):  # noqa: B017
+    with pytest.raises(APIStatusError):
         await asyncio.wait_for(result, timeout=10.0)
 
     await session.aclose()
