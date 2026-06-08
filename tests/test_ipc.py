@@ -90,7 +90,7 @@ async def test_async_channel():
     await pch.aclose()
     await asyncio.sleep(0.1)
     proc.terminate()
-    proc.join()
+    await asyncio.get_running_loop().run_in_executor(None, proc.join)
 
 
 def test_sync_channel():
@@ -159,6 +159,12 @@ def _initialize_proc(proc: JobProcess) -> None:
 
     with start_args.update_ev:
         start_args.update_ev.notify()
+
+
+def _failing_initialize_proc(proc: JobProcess) -> None:
+    # Runs in the spawned child; raising here makes every spawn's initialize() fail. Used instead
+    # of monkeypatching ProcJobExecutor process-wide, so the test is safe to run concurrently.
+    raise RuntimeError("simulated init failure")
 
 
 async def _job_entrypoint(job_ctx: JobContext) -> None:
@@ -409,39 +415,24 @@ async def test_slow_initialization():
         assert exitcode != 0, "process should have been killed"
 
 
-async def test_proc_pool_launch_job_raises_when_all_spawns_fail(monkeypatch):
+async def test_proc_pool_launch_job_raises_when_all_spawns_fail():
     """When every spawn task fails to initialize, launch_job should raise
-    instead of hanging on an empty warmed-process queue. Reproduces #5868."""
+    instead of hanging on an empty warmed-process queue. Reproduces #5868.
 
-    class FailingProc:
-        running_job = None
-
-        def __init__(self, **kwargs):
-            pass
-
-        async def start(self) -> None:
-            pass
-
-        async def initialize(self) -> None:
-            raise TimeoutError("init timed out")
-
-        async def aclose(self) -> None:
-            pass
-
-        def logging_extra(self) -> dict:
-            return {}
-
-    monkeypatch.setattr(ipc.proc_pool.job_proc_executor, "ProcJobExecutor", FailingProc)
-
+    The failure is injected via a real executor whose init fn raises (not by
+    monkeypatching ProcJobExecutor process-wide), so this is safe to run
+    concurrently with its peers.
+    """
     mp_ctx = mp.get_context("spawn")
     loop = asyncio.get_running_loop()
     pool = ipc.proc_pool.ProcPool(
         job_executor_type=job.JobExecutorType.PROCESS,
-        initialize_process_fnc=_initialize_proc,
+        initialize_process_fnc=_failing_initialize_proc,
         job_entrypoint_fnc=_job_entrypoint,
         session_end_fnc=None,
         num_idle_processes=0,
-        initialize_timeout=0.1,
+        # generous so initialize() fails via the init fn raising, not a spawn-racing timeout
+        initialize_timeout=10.0,
         close_timeout=20.0,
         session_end_timeout=300.0,
         inference_executor=None,
