@@ -1042,6 +1042,41 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
         resp = await self._send_request(req, timeout=timeout)
         return resp.run_input
 
+    async def update_io(
+        self,
+        *,
+        input_audio_enabled: bool | None = None,
+        input_video_enabled: bool | None = None,
+        output_audio_enabled: bool | None = None,
+        output_video_enabled: bool | None = None,
+        output_transcription_enabled: bool | None = None,
+        timeout: float = 60.0,
+    ) -> agent_pb.SessionResponse.UpdateIOResponse:
+        """Toggle the agent's I/O channels remotely.
+
+        Only the channels passed (non-None) are applied; the rest are left
+        untouched. Simulators use this to disable the agent's audio I/O instead
+        of relying on a room attribute.
+        """
+        update = agent_pb.SessionRequest.UpdateIO()
+        if input_audio_enabled is not None:
+            update.input.audio_enabled = input_audio_enabled
+        if input_video_enabled is not None:
+            update.input.video_enabled = input_video_enabled
+        if output_audio_enabled is not None:
+            update.output.audio_enabled = output_audio_enabled
+        if output_video_enabled is not None:
+            update.output.video_enabled = output_video_enabled
+        if output_transcription_enabled is not None:
+            update.output.transcription_enabled = output_transcription_enabled
+
+        req = agent_pb.SessionRequest(
+            request_id=utils.shortuuid("req_"),
+            update_io=update,
+        )
+        resp = await self._send_request(req, timeout=timeout)
+        return resp.update_io
+
     async def finalize_simulation(
         self,
         *,
