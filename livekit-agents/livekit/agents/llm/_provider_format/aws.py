@@ -16,7 +16,10 @@ class BedrockFormatData:
 
 
 def to_chat_ctx(
-    chat_ctx: llm.ChatContext, *, inject_dummy_user_message: bool = True
+    chat_ctx: llm.ChatContext,
+    *,
+    inject_dummy_user_message: bool = True,
+    inject_trailing_user_message: bool = False,
 ) -> tuple[list[dict], BedrockFormatData]:
     chat_ctx = convert_mid_conversation_instructions(chat_ctx)
 
@@ -82,6 +85,13 @@ def to_chat_ctx(
     # Ensure the message list starts with a "user" message
     if inject_dummy_user_message and (not messages or messages[0]["role"] != "user"):
         messages.insert(0, {"role": "user", "content": [{"text": "(empty)"}]})
+
+    # Claude 4.5+/Opus 4.6+ no longer support prefilling (trailing assistant
+    # messages). Append a dummy user message so the request ends with a user
+    # turn. See https://github.com/livekit/agents/pull/4973 for the Anthropic
+    # plugin's equivalent fix.
+    if inject_trailing_user_message and messages and messages[-1]["role"] == "assistant":
+        messages.append({"role": "user", "content": [{"text": " "}]})
 
     return messages, BedrockFormatData(system_messages=system_messages)
 

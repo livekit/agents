@@ -35,6 +35,30 @@ from .log import logger
 
 DEFAULT_TEXT_MODEL = "amazon.nova-2-lite-v1:0"
 
+# Claude 4.5+/Opus 4.6+ no longer support prefilling (trailing assistant
+# messages). Bedrock surfaces this as a ValidationException at the Converse
+# API layer. Substring matching is used because Bedrock model IDs vary in
+# shape — plain IDs (``claude-sonnet-4-6``), date-stamped snapshots
+# (``anthropic.claude-sonnet-4-5-20250929-v1:0``), and cross-region inference
+# profiles (``global.anthropic.claude-sonnet-4-6``,
+# ``us.anthropic.claude-opus-4-7-v1:0``). See
+# https://platform.claude.com/docs/en/about-claude/models/migration-guide
+_NO_PREFILL_PATTERNS = (
+    "claude-sonnet-4-5",
+    "claude-sonnet-4-6",
+    "claude-sonnet-4-7",
+    "claude-opus-4-6",
+    "claude-opus-4-7",
+    "claude-opus-4-8",
+)
+
+
+def _model_disables_prefill(model: str | None) -> bool:
+    """Return True if the model does not support assistant message prefilling."""
+    if not model:
+        return False
+    return any(p in model for p in _NO_PREFILL_PATTERNS)
+
 
 @dataclass
 class _LLMOptions:
@@ -177,7 +201,12 @@ class LLM(llm.LLM):
             opts["toolConfig"] = tool_config
         else:
             chat_ctx = chat_ctx.copy(exclude_function_call=True)
-        messages, extra_data = chat_ctx.to_provider_format(format="aws")
+        # Claude 4.5+/Opus 4.6+ do not support prefilling — see
+        # _NO_PREFILL_PATTERNS above and PR #4973 for the Anthropic precedent.
+        inject_trailing = _model_disables_prefill(self._opts.model)
+        messages, extra_data = chat_ctx.to_provider_format(
+            format="aws", inject_trailing_user_message=inject_trailing
+        )
         opts["messages"] = messages
         if extra_data.system_messages:
             system_messages: list[dict[str, str | dict]] = [
