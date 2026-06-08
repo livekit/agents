@@ -175,7 +175,7 @@ class RoomTypeAvailability:
 class RoomBooking:
     id: int
     code: str
-    room_id: int
+    room_id: str
     room_type: RoomType
     smoking: bool
     nightly_rate: int
@@ -750,8 +750,7 @@ SCHEMA = """
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS hotel_rooms (
-    id            INTEGER PRIMARY KEY,
-    room_number   TEXT    NOT NULL UNIQUE,
+    id            TEXT    PRIMARY KEY,  -- human room number, e.g. 'RM_201' (floor 2, room 01)
     type          TEXT    NOT NULL CHECK (type IN ('king','queen_2beds','double_queen','suite','penthouse')),
     nightly_rate  INTEGER NOT NULL,
     max_occupancy INTEGER NOT NULL,
@@ -763,7 +762,7 @@ CREATE TABLE IF NOT EXISTS hotel_rooms (
 CREATE TABLE IF NOT EXISTS hotel_bookings (
     id                 INTEGER PRIMARY KEY,
     code               TEXT    NOT NULL UNIQUE,
-    room_id            INTEGER NOT NULL REFERENCES hotel_rooms(id),
+    room_id            TEXT    NOT NULL REFERENCES hotel_rooms(id),
     first_name         TEXT    NOT NULL,
     last_name          TEXT    NOT NULL,
     email              TEXT    NOT NULL,
@@ -845,14 +844,14 @@ CREATE TABLE IF NOT EXISTS lk_descriptions (
 VIEWS = f"""
 DROP VIEW IF EXISTS hotel_room_status;
 CREATE VIEW hotel_room_status AS
-SELECT r.room_number, r.type, r.room_view, r.max_occupancy, r.nightly_rate,
+SELECT r.id AS room_number, r.type, r.room_view, r.max_occupancy, r.nightly_rate,
        CASE WHEN b.code IS NULL THEN 'available' ELSE 'occupied' END AS status,
        b.code AS current_booking, b.first_name, b.last_name, b.check_out AS free_after
 FROM hotel_rooms r
 LEFT JOIN hotel_bookings b
     ON b.room_id = r.id AND b.status = 'confirmed'
    AND b.check_in <= '{TODAY.isoformat()}' AND b.check_out > '{TODAY.isoformat()}'
-ORDER BY r.room_number;
+ORDER BY r.id;
 
 DROP VIEW IF EXISTS restaurant_table_status;
 CREATE VIEW restaurant_table_status AS

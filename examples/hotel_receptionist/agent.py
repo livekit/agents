@@ -9,6 +9,7 @@ from typing import Annotated
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+from benchmark import build_expected, diff_databases
 from book_restaurant import BookRestaurantTask
 from book_room import BookRoomTask
 from dotenv import load_dotenv
@@ -587,20 +588,27 @@ _SEED_DB_BYTES = build_seed_bytes(TODAY)
 
 
 async def on_simulation_end(ctx: SimulationContext) -> None:
-    # Override the simulator's verdict against a benchmark target carried in the
-    # scenario's userdata: the run only passes if the mock DB ended in the target
-    # state (here, the expected number of room bookings).
-    target = ctx.userdata().get("target_state", {})
-    session = ctx.session
-    if session is None or "booked_rooms" not in target:
+    # Grade the run on final DB state: build the scenario's `expected_state` on a
+    # fresh seed, then diff it against the agent's DB. The diff compares
+    # agent-decided facts only (room type, dates, extras, status), so minted
+    # codes / order / which-king don't matter and the agent need not reproduce the
+    # statements — while collateral damage still surfaces.
+    expected_state = ctx.userdata().get("expected_state") or []
+    if ctx.session is None or not expected_state:
         return
 
-    booked = len(session.userdata.booked_room_codes)
-    want = target["booked_rooms"]
-    if booked != want:
-        ctx.fail(reason=f"expected {want} room booking(s), found {booked}")
-    else:
-        ctx.success(reason="hotel DB matches the benchmark target state")
+    expected = await build_expected(_SEED_DB_BYTES, expected_state)
+    try:
+        diffs = diff_databases(expected.connection, ctx.session.userdata.db.connection)
+    finally:
+        await expected.aclose()
+
+    # Veto the run if the final DB state diverged. The effective result is the AND of
+    # this check and the simulator's conversation judgment, so a mismatch fails a run
+    # the simulator passed; a match simply leaves the simulator's verdict to stand.
+    if diffs:
+        ctx.fail(reason="final DB diverges from expected: " + " | ".join(diffs[:8]))
+
 
 async def on_session_end(ctx: JobContext) -> None:
     try:
@@ -648,8 +656,9 @@ async def on_session_end(ctx: JobContext) -> None:
 async def hotel_receptionist_agent(ctx: JobContext) -> None:
     await ctx.connect()
 
-    if sim_ctx := ctx.simulation_context():
-        pass
+    # Prime the simulation context from the room metadata (None in production) so
+    # on_simulation_end reuses the same cached context to grade the final DB state.
+    ctx.simulation_context()
 
     db = HotelDB.from_bytes(_SEED_DB_BYTES)
 

@@ -29,7 +29,7 @@ __all__ = [
     "SimulationRun",
     "SimulationDispatch",
     "ScenarioUserdata",
-    "ScenarioResult",
+    "SimulationVerdict",
     "SimulationContext",
     "load_scenarios",
     "scenario_group_to_yaml",
@@ -73,8 +73,8 @@ def scenario_group_to_yaml(group: proto.ScenarioGroup) -> str:
 
 
 @dataclass
-class ScenarioResult:
-    """The simulator's provisional verdict for a scenario."""
+class SimulationVerdict:
+    """A pass/fail verdict for a scenario, with a human-readable reason."""
 
     success: bool
     reason: str
@@ -83,14 +83,18 @@ class ScenarioResult:
 class SimulationContext:
     """Passed to the ``on_simulation_end`` callback while running under a simulation.
 
-    Exposes the scenario, the run, and the simulator's provisional verdict, and lets
-    the agent override the outcome based on richer conditions (e.g. comparing mock
-    backend state against a benchmark target carried in ``scenario.userdata``).
+    Carries two verdicts, both recorded for the run:
+      - :attr:`simulator_verdict` — the simulator's verdict (its LLM judgment of the chat).
+      - :attr:`user_verdict` — your own veto, set via :meth:`fail` from richer checks
+        (e.g. comparing mock backend state against the benchmark target in
+        ``scenario.userdata``). The effective result is the AND of the two: your check
+        can fail a run the simulator passed, but it can never rescue one — so there is
+        no ``success()``; not calling :meth:`fail` leaves the simulator's verdict to stand.
 
     The context is created from the simulation room's metadata as soon as the
     entrypoint calls :meth:`JobContext.simulation_context`, so the scenario is
-    available immediately. The provisional ``result`` and the hydrated ``run`` /
-    ``job`` are filled in later, right before ``on_simulation_end`` is invoked.
+    available immediately. ``simulator_verdict`` and the hydrated ``run`` / ``job``
+    are filled in right before ``on_simulation_end`` is invoked.
     """
 
     def __init__(self, dispatch: proto.SimulationDispatch) -> None:
@@ -98,10 +102,9 @@ class SimulationContext:
         self._scenario = dispatch.scenario
         self._run: proto.SimulationRun | None = None
         self._job: proto.SimulationRun.Job | None = None
-        self._result: ScenarioResult | None = None
+        self._simulator_verdict: SimulationVerdict | None = None
         self._session: AgentSession | None = None
-        self._final: ScenarioResult | None = None
-        self._overridden = False
+        self._user_verdict: SimulationVerdict | None = None
 
     @property
     def simulation_run_id(self) -> str:
@@ -124,9 +127,10 @@ class SimulationContext:
         return self._job
 
     @property
-    def result(self) -> ScenarioResult | None:
-        """The simulator's provisional verdict (None until the simulation ends)."""
-        return self._result
+    def simulator_verdict(self) -> SimulationVerdict | None:
+        """The simulator's verdict (its LLM judgment of the conversation). Read-only;
+        recorded alongside your :attr:`user_verdict`. None until the simulation ends."""
+        return self._simulator_verdict
 
     @property
     def session(self) -> AgentSession | None:
@@ -135,42 +139,34 @@ class SimulationContext:
     def _begin_finalize(
         self,
         *,
-        result: ScenarioResult,
+        simulator_verdict: SimulationVerdict,
         run: proto.SimulationRun | None,
         job: proto.SimulationRun.Job | None,
         session: AgentSession | None,
     ) -> None:
-        """Internal: populate the verdict/run/session right before on_simulation_end."""
-        self._result = result
+        """Internal: populate the simulator verdict / run / session before on_simulation_end."""
+        self._simulator_verdict = simulator_verdict
         self._run = run
         self._job = job
         self._session = session
-        self._final = ScenarioResult(success=result.success, reason=result.reason)
 
     def userdata(self) -> ScenarioUserdata:
         """The scenario's ``userdata`` decoded from its JSON string (``{}`` if empty)."""
         if not self._scenario.userdata:
             return {}
-        return json.loads(self._scenario.userdata)
+        data: ScenarioUserdata = json.loads(self._scenario.userdata)
+        return data
 
-    def _default_reason(self) -> str:
-        return self._result.reason if self._result else ""
+    def fail(self, reason: str = "") -> None:
+        """Veto this run from your own checks (e.g. final DB state diverged).
 
-    def success(self, reason: str | None = None) -> None:
-        """Override the outcome: mark this simulation as passed."""
-        self._final = ScenarioResult(success=True, reason=reason or self._default_reason())
-        self._overridden = True
-
-    def fail(self, reason: str | None = None) -> None:
-        """Override the outcome: mark this simulation as failed."""
-        self._final = ScenarioResult(success=False, reason=reason or self._default_reason())
-        self._overridden = True
+        The effective result is the AND of both verdicts, so this can only fail a run
+        the simulator passed, never rescue one. The simulator's verdict is still
+        reported. The last call wins if you call :meth:`fail` more than once.
+        """
+        self._user_verdict = SimulationVerdict(success=False, reason=reason)
 
     @property
-    def final_result(self) -> ScenarioResult | None:
-        """The verdict after any override (None until the simulation ends)."""
-        return self._final
-
-    @property
-    def overridden(self) -> bool:
-        return self._overridden
+    def user_verdict(self) -> SimulationVerdict | None:
+        """Your veto set via :meth:`fail`, or None if you didn't veto the run."""
+        return self._user_verdict

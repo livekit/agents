@@ -1,12 +1,25 @@
 name: Room booking
 scenarios:
-  - label: 'Booking a room for one night'
-    instructions: 'Book a room for tmrw night. No breakfast, no late-checkout'
+  - label: Book a king room for one night
+    instructions: >
+      You are Jordan Reyes (email jordan.reyes@example.com, phone 5550142).
+      Book a king room for the night of 2026-06-09, checking out the 10th, just
+      you. No breakfast, no late checkout. Pay with the card ending 4242.
     agent_expectations: 'Room booked successfully'
     tags:
       feature: room_booking
+    # The expected end state, built by applying this SQL to a fresh seed and then
+    # diffed against the agent's DB. The agent is graded on the resulting *state*,
+    # not on running these statements. NOT-NULL columns the diff ignores get the
+    # 'IGNORED' sentinel (SQLite's flexible typing lets it sit in INTEGER cols
+    # too); extras/status are omitted since the schema defaults them. room_id is a
+    # king (RM_201/202/203/301/302 in the fixed seed) so the diff's room_id->type
+    # sees "king". Dates are literals — sims pin the seed date via HOTEL_TODAY (2026-06-08).
     userdata:
-      target_state:
-        booked_rooms: 1
-        breakfast: false
-        late_checkout: false
+      expected_state:
+        - >
+          INSERT INTO hotel_bookings
+            (code, room_id, first_name, last_name, email, phone,
+             check_in, check_out, guests, total, card_last4)
+          VALUES ('IGNORED', 'RM_201', 'Jordan', 'Reyes', 'jordan.reyes@example.com', '5550142',
+                  '2026-06-09', '2026-06-10', 1, 'IGNORED', '4242')

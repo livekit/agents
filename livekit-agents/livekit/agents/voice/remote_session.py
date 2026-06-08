@@ -597,7 +597,6 @@ class SessionHost:
 
     async def _handle_request(self, req: agent_pb.SessionRequest) -> None:
         assert self._session is not None
-        req_type = req.WhichOneof("request")
 
         if req.HasField("ping"):
             resp = agent_pb.AgentSessionMessage(
@@ -786,23 +785,25 @@ class SessionHost:
             await self._transport.send_message(resp)
 
         elif req.HasField("finalize_simulation"):
-            # A simulation controller computed a provisional verdict and is giving
-            # the agent under test a chance to override it via on_simulation_end.
-            success = req.finalize_simulation.provisional_success
-            reason = req.finalize_simulation.provisional_reason
-            overridden = False
+            # The simulator's verdict is passed in so on_simulation_end can read it
+            # (ctx.simulator_verdict); the agent records its OWN verdict via
+            # ctx.success()/fail(). Both are reported — this is not an override.
+            user_verdict: agent_pb.SessionResponse.FinalizeSimulationResponse.SimulationVerdict | None = None  # noqa: E501
             sim_error: str | None = None
             try:
                 from livekit.protocol import agent_simulation as sim_pb
 
                 from ..job import get_job_context
-                from ..simulation import ScenarioResult
+                from ..simulation import SimulationVerdict
 
                 jc = get_job_context(required=False)
                 sim_ctx = jc.simulation_context() if jc is not None else None
                 if sim_ctx is not None:
                     sim_ctx._begin_finalize(
-                        result=ScenarioResult(success=success, reason=reason),
+                        simulator_verdict=SimulationVerdict(
+                            success=req.finalize_simulation.provisional_success,
+                            reason=req.finalize_simulation.provisional_reason,
+                        ),
                         run=sim_pb.SimulationRun(id=sim_ctx.simulation_run_id),
                         job=None,
                         session=self._session,
@@ -812,10 +813,12 @@ class SessionHost:
                         cb_res = fnc(sim_ctx)
                         if asyncio.iscoroutine(cb_res):
                             await cb_res
-                    final = sim_ctx.final_result
-                    if final is not None:
-                        success, reason = final.success, final.reason
-                    overridden = sim_ctx.overridden
+                    if (uv := sim_ctx.user_verdict) is not None:
+                        user_verdict = (
+                            agent_pb.SessionResponse.FinalizeSimulationResponse.SimulationVerdict(
+                                success=uv.success, reason=uv.reason
+                            )
+                        )
             except Exception as e:
                 sim_error = str(e)
                 logger.exception("error while executing the on_simulation_end callback")
@@ -825,9 +828,7 @@ class SessionHost:
                     request_id=req.request_id,
                     error=sim_error,
                     finalize_simulation=agent_pb.SessionResponse.FinalizeSimulationResponse(
-                        success=success,
-                        reason=reason,
-                        overridden=overridden,
+                        user_verdict=user_verdict,
                     ),
                 )
             )
@@ -1004,7 +1005,7 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
                 return
             except (TimeoutError, asyncio.TimeoutError):
                 if asyncio.get_event_loop().time() >= deadline:
-                    raise TimeoutError("wait_for_ready timed out")
+                    raise TimeoutError("wait_for_ready timed out") from None
 
     async def get_chat_history(self) -> agent_pb.SessionResponse.GetChatHistoryResponse:
         req = agent_pb.SessionRequest(
@@ -1047,10 +1048,10 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
         provisional_reason: str = "",
         timeout: float = 60.0,
     ) -> agent_pb.SessionResponse.FinalizeSimulationResponse:
-        """Hand the agent under test the simulator's provisional verdict and return its
-        final verdict. The agent may override it from its on_simulation_end callback;
-        if the agent has no handler (or times out), the caller should keep the
-        provisional verdict."""
+        """Hand the agent under test the simulator's provisional verdict and return the
+        agent's own verdict from its on_simulation_end callback. The response's
+        ``user_verdict`` is unset when the agent has no handler (or times out) or sets
+        no verdict of its own; both verdicts are reported, neither overrides the other."""
         req = agent_pb.SessionRequest(
             request_id=utils.shortuuid("req_"),
             finalize_simulation=agent_pb.SessionRequest.FinalizeSimulation(
