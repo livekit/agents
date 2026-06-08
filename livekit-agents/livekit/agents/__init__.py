@@ -66,8 +66,6 @@ from .simulation import (
     SimulationDispatch,
     SimulationRun,
     SimulationVerdict,
-    load_scenarios,
-    scenario_group_to_yaml,
 )
 from .types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -202,8 +200,6 @@ __all__ = [
     "SimulationDispatch",
     "SimulationRun",
     "SimulationVerdict",
-    "load_scenarios",
-    "scenario_group_to_yaml",
     "AgentSession",
     "RecordingOptions",
     "text_transforms",

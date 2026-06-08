@@ -2,11 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeAlias, Union
-
-import yaml
-from google.protobuf import json_format
 
 from livekit.protocol import agent_simulation as proto
 
@@ -31,45 +27,7 @@ __all__ = [
     "ScenarioUserdata",
     "SimulationVerdict",
     "SimulationContext",
-    "load_scenarios",
-    "scenario_group_to_yaml",
 ]
-
-
-def _encode_userdata_in_place(scenario: dict[str, Any]) -> None:
-    """A scenarios.yaml carries `userdata` as a nested mapping for ergonomics, but
-    the proto field is a JSON-encoded string. Encode it before ParseDict."""
-    if "userdata" in scenario and not isinstance(scenario["userdata"], str):
-        scenario["userdata"] = json.dumps(scenario["userdata"])
-
-
-def load_scenarios(path: str | Path) -> proto.ScenarioGroup:
-    """Load a scenarios.yaml file into a :class:`ScenarioGroup` proto.
-
-    The YAML mirrors the proto field-for-field (``name`` + ``scenarios`` with
-    ``label``/``instructions``/``agent_expectations``/``tags``/``userdata``), so
-    the conversion is a json_format round-trip. ``userdata`` is written as a
-    nested mapping in YAML and JSON-encoded into the proto string field.
-    """
-    raw = yaml.safe_load(Path(path).read_text())
-    if not isinstance(raw, dict):
-        raise ValueError(f"scenarios file {path} must be a mapping with name/scenarios")
-
-    for scenario in raw.get("scenarios", []) or []:
-        if isinstance(scenario, dict):
-            _encode_userdata_in_place(scenario)
-
-    return json_format.ParseDict(raw, proto.ScenarioGroup())
-
-
-def scenario_group_to_yaml(group: proto.ScenarioGroup) -> str:
-    """Inverse of :func:`load_scenarios` — render a ScenarioGroup as a scenarios.yaml
-    string (decoding each scenario's JSON ``userdata`` back into a nested mapping)."""
-    data = json_format.MessageToDict(group, preserving_proto_field_name=True)
-    for scenario in data.get("scenarios", []):
-        if isinstance(scenario.get("userdata"), str) and scenario["userdata"]:
-            scenario["userdata"] = json.loads(scenario["userdata"])
-    return yaml.safe_dump(data, sort_keys=False)
 
 
 @dataclass
@@ -109,14 +67,6 @@ class SimulationContext:
         self._user_verdict: SimulationVerdict | None = None
 
     @property
-    def simulation_run_id(self) -> str:
-        return self._dispatch.simulation_run_id
-
-    @property
-    def job_id(self) -> str:
-        return self._dispatch.job_id
-
-    @property
     def scenario(self) -> proto.Scenario:
         return self._scenario
 
@@ -129,9 +79,18 @@ class SimulationContext:
         return self._job
 
     @property
-    def simulator_verdict(self) -> SimulationVerdict | None:
+    def simulator_verdict(self) -> SimulationVerdict:
         """The simulator's verdict (its LLM judgment of the conversation). Read-only;
-        recorded alongside your :attr:`user_verdict`. None until the simulation ends."""
+        recorded alongside your :attr:`user_verdict`.
+
+        Only available once the simulation has ended — i.e. inside ``on_simulation_end``.
+        Raises :class:`RuntimeError` if accessed earlier (e.g. from the entrypoint).
+        """
+        if self._simulator_verdict is None:
+            raise RuntimeError(
+                "simulator_verdict is only available inside on_simulation_end "
+                "(after the simulation completes)"
+            )
         return self._simulator_verdict
 
     @property
