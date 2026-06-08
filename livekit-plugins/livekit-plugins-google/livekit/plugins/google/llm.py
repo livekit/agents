@@ -39,36 +39,32 @@ from .models import ChatModels
 from .utils import create_tools_config, to_response_format
 from .version import __version__
 
+# Version-less aliases that resolve to the latest (Gemini 3.x) flash models
+# server-side. They can't be introspected client-side, so treat them as Gemini 3
+# flash for thinking-config and thought-signature handling.
+_GEMINI_3_FLASH_ALIASES = ("gemini-flash-latest", "gemini-flash-lite-latest")
+
 
 def _is_gemini_3_model(model: str) -> bool:
-    """Check if model is Gemini 3 series"""
-    return "gemini-3" in model.lower() or model.lower().startswith("gemini-3")
+    """Check if model is Gemini 3 series (including version-less aliases)."""
+    m = model.lower()
+    return "gemini-3" in m or m in _GEMINI_3_FLASH_ALIASES
 
 
 def _is_gemini_3_flash_model(model: str) -> bool:
-    """Check if model is Gemini 3 Flash"""
-    return "gemini-3-flash" in model.lower() or model.lower().startswith("gemini-3-flash")
+    """Check if model is a Gemini 3 Flash model (any 3.x flash + version-less aliases)."""
+    m = model.lower()
+    return (_is_gemini_3_model(m) and "flash" in m) or m in _GEMINI_3_FLASH_ALIASES
 
 
 def _requires_thought_signatures(model: str) -> bool:
-    """Check if model requires thought_signature handling for multi-turn function calling.
+    """Whether the model needs thought_signature handling for multi-turn function calling.
 
-    Gemini 2.5+ models require thought signatures to be stored from responses and
-    passed back in subsequent requests for proper multi-turn function calling.
-
-    Note: signature handling at runtime is response-driven (a signature is stored
-    whenever the API returns one and resent whenever present), so it no longer
-    depends on this name match. This helper is retained for backwards
-    compatibility and also recognizes the version-less aliases
-    ``gemini-flash-latest`` / ``gemini-flash-lite-latest``, which resolve to
-    Gemini 3 server-side and therefore require thought signatures too.
+    Gemini 2.5+/3.x (incl. version-less aliases) require it. NOTE: the runtime path
+    is now response-driven (see _parse_part / _run); this is retained for tests.
     """
-    if _is_gemini_3_model(model):
-        return True
-    model_lower = model.lower()
-    if "gemini-2.5" in model_lower or model_lower.startswith("gemini-2.5"):
-        return True
-    return model_lower in ("gemini-flash-latest", "gemini-flash-lite-latest")
+    m = model.lower()
+    return _is_gemini_3_model(m) or "gemini-2.5" in m
 
 
 @dataclass
