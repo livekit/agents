@@ -48,7 +48,7 @@ from .events import (
 from .run_result import RunResult
 
 if TYPE_CHECKING:
-    from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput  # type: ignore[import-untyped]
+    from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput
     from ..inference.interruption import OverlappingSpeechEvent
     from .agent_session import AgentSession, AgentSessionOptions
 

@@ -20,6 +20,8 @@ from livekit.protocol.agent_pb import agent_session as agent_pb
 
 from .fake_llm import FakeLLM
 
+pytestmark = pytest.mark.unit
+
 
 class FailingLLM(FakeLLM):
     """A FakeLLM that raises a retryable API error, going through the retry loop."""
@@ -75,7 +77,8 @@ async def test_run_propagates_llm_error_no_retry():
     await session.start(agent=agent)
 
     result = session.run(user_input="hello")
-    with pytest.raises(Exception):
+    # broad: the error surfaces differently across the e2e SessionHost path
+    with pytest.raises(Exception):  # noqa: B017
         await asyncio.wait_for(result, timeout=10.0)
 
     await session.aclose()
@@ -89,7 +92,8 @@ async def test_run_propagates_llm_error_with_retry():
     await session.start(agent=agent)
 
     result = session.run(user_input="hello")
-    with pytest.raises(Exception):
+    # broad: the error surfaces differently across the e2e SessionHost path
+    with pytest.raises(Exception):  # noqa: B017
         await asyncio.wait_for(result, timeout=10.0)
 
     await session.aclose()

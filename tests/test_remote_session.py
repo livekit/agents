@@ -15,6 +15,8 @@ from livekit.agents.voice.remote_session import (
 )
 from livekit.protocol.agent_pb import agent_session as agent_pb
 
+pytestmark = pytest.mark.unit
+
 
 class PairedTransport(SessionTransport):
     """Two linked transports: what one sends, the other receives."""
@@ -191,7 +193,7 @@ async def test_run_input():
     client = RemoteSession(client_transport)
     await client.start()
 
-    resp = await client.run_input("order a big mac", timeout=5.0)
+    resp = await client.run("order a big mac", timeout=5.0)
     assert resp is not None
 
     await client.aclose()

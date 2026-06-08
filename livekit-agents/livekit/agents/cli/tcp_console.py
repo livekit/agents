@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import queue as stdlib_queue
 import time
+from typing import cast
 
 from livekit import rtc
 from livekit.protocol.agent_pb import agent_session as agent_pb
@@ -61,10 +62,10 @@ class TcpAudioInput(io.AudioInput):
             item = await loop.run_in_executor(None, self._queue.get)
         except RuntimeError:
             # Executor shut down — treat as end of stream.
-            raise StopAsyncIteration
+            raise StopAsyncIteration from None
         if item is _SENTINEL:
             raise StopAsyncIteration
-        return item
+        return cast(rtc.AudioFrame, item)
 
 
 class TcpAudioOutput(io.AudioOutput):
