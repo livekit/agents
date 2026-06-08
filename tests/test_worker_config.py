@@ -55,11 +55,18 @@ class TestCLIOverridesConstructorAndEnv:
             assert config["ws_url"] == "ws://cli"
 
     def test_cli_keys_win(self):
-        with patch.dict(os.environ, {"LIVEKIT_API_KEY": "env-key", "LIVEKIT_API_SECRET": "env-secret"}):
+        with patch.dict(
+            os.environ, {"LIVEKIT_API_KEY": "env-key", "LIVEKIT_API_SECRET": "env-secret"}
+        ):
             server = _TestableServer(api_key="constructor-key", api_secret="constructor-secret")
-            config = _run_and_capture(server, proto.CliArgs(
-                log_level="INFO", api_key="cli-key", api_secret="cli-secret",
-            ))
+            config = _run_and_capture(
+                server,
+                proto.CliArgs(
+                    log_level="INFO",
+                    api_key="cli-key",
+                    api_secret="cli-secret",
+                ),
+            )
             assert config["api_key"] == "cli-key"
             assert config["api_secret"] == "cli-secret"
 
@@ -108,12 +115,15 @@ class TestAgentNameEnvWinsOverDecorator:
 
 class TestFullPrecedenceChain:
     def test_everything_set(self):
-        with patch.dict(os.environ, {
-            "LIVEKIT_URL": "ws://env",
-            "LIVEKIT_API_KEY": "env-key",
-            "LIVEKIT_API_SECRET": "env-secret",
-            "LIVEKIT_AGENT_NAME": "env-agent",
-        }):
+        with patch.dict(
+            os.environ,
+            {
+                "LIVEKIT_URL": "ws://env",
+                "LIVEKIT_API_KEY": "env-key",
+                "LIVEKIT_API_SECRET": "env-secret",
+                "LIVEKIT_AGENT_NAME": "env-agent",
+            },
+        ):
             server = _TestableServer(
                 ws_url="ws://constructor",
                 api_key="constructor-key",
@@ -124,12 +134,15 @@ class TestFullPrecedenceChain:
             async def entrypoint(ctx):
                 pass
 
-            config = _run_and_capture(server, proto.CliArgs(
-                log_level="INFO",
-                url="ws://cli",
-                api_key="cli-key",
-                api_secret="cli-secret",
-            ))
+            config = _run_and_capture(
+                server,
+                proto.CliArgs(
+                    log_level="INFO",
+                    url="ws://cli",
+                    api_key="cli-key",
+                    api_secret="cli-secret",
+                ),
+            )
 
             assert config["ws_url"] == "ws://cli"
             assert config["api_key"] == "cli-key"

@@ -459,6 +459,7 @@ class JobContext:
             return None
 
         from google.protobuf import json_format
+
         from livekit.protocol import agent_simulation as sim_pb
 
         from .simulation import SimulationContext

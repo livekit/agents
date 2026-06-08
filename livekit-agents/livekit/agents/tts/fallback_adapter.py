@@ -169,9 +169,7 @@ class FallbackChunkedStream(ChunkedStream):
 
         except Exception as e:
             if recovering:
-                logger.warning(
-                    "%s recovery failed: %s", tts.label, e, extra={"streamed": False}
-                )
+                logger.warning("%s recovery failed: %s", tts.label, e, extra={"streamed": False})
                 raise
 
             logger.warning(

@@ -1,7 +1,6 @@
 from . import io, run_result
 from .agent import Agent, AgentTask, ModelSettings
 from .agent_session import AgentSession, RecordingOptions, VoiceActivityVideoSampler
-from .remote_session import RemoteSession
 from .events import (
     AgentEvent,
     AgentFalseInterruptionEvent,
@@ -19,6 +18,7 @@ from .events import (
     UserStateChangedEvent,
     UserTurnExceededEvent,
 )
+from .remote_session import RemoteSession
 from .room_io import (
     _ParticipantAudioOutput,
     _ParticipantStreamTranscriptionOutput,

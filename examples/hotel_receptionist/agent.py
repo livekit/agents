@@ -649,10 +649,7 @@ async def on_session_end(ctx: JobContext) -> None:
         logger.exception("error closing hotel DB")
 
 
-@server.rtc_session(
-    on_session_end=on_session_end,
-    on_simulation_end=on_simulation_end
-)
+@server.rtc_session(on_session_end=on_session_end, on_simulation_end=on_simulation_end)
 async def hotel_receptionist_agent(ctx: JobContext) -> None:
     await ctx.connect()
 

@@ -66,9 +66,7 @@ FK_RESOLVE: dict[tuple[str, str], str] = {
 
 def _select_sql(conn: apsw.Connection, table: str) -> str:
     cols = [row[1] for row in conn.execute(f"PRAGMA table_info('{table}')")]
-    parts = [
-        FK_RESOLVE.get((table, c), f'"{c}"') for c in cols if c not in DENY_COLUMNS
-    ]
+    parts = [FK_RESOLVE.get((table, c), f'"{c}"') for c in cols if c not in DENY_COLUMNS]
     return f'SELECT {", ".join(parts)} FROM "{table}"'  # noqa: S608
 
 

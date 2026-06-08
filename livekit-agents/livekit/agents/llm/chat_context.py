@@ -23,14 +23,13 @@ from pydantic import BaseModel, Field, PrivateAttr, TypeAdapter
 from typing_extensions import TypedDict
 
 from livekit import rtc
+from livekit.protocol.agent_pb import agent_session as agent_pb
 
 from .. import utils
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils.misc import is_given
 from . import _provider_format
-
-from livekit.protocol.agent_pb import agent_session as agent_pb
 
 if TYPE_CHECKING:
     from ..llm import LLM, Tool, Toolset
@@ -873,9 +872,7 @@ class ChatContext:
     def to_proto(self) -> agent_pb.ChatContext:
         from ..voice.remote_session import _chat_item_to_proto
 
-        return agent_pb.ChatContext(
-            items=[_chat_item_to_proto(item) for item in self.items]
-        )
+        return agent_pb.ChatContext(items=[_chat_item_to_proto(item) for item in self.items])
 
     @property
     def readonly(self) -> bool:

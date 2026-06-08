@@ -180,7 +180,10 @@ async def test_run_input():
 
     class FakeRunResult:
         events = [MagicMock(item=ChatMessage(role="assistant", content=["hi there"], id="m-1"))]
-        def done(self): return True
+
+        def done(self):
+            return True
+
         def __await__(self):
             return asyncio.sleep(0).__await__()
 
@@ -198,5 +201,3 @@ async def test_run_input():
 
     await client.aclose()
     await host.aclose()
-
-

@@ -153,7 +153,6 @@ _TCP_MAX_MESSAGE_SIZE = 1 << 20
 
 
 class TcpSessionTransport(SessionTransport):
-
     def __init__(self, host: str, port: int) -> None:
         self._host = host
         self._port = port
@@ -788,7 +787,9 @@ class SessionHost:
             # The simulator's verdict is passed in so on_simulation_end can read it
             # (ctx.simulator_verdict); the agent records its OWN verdict via
             # ctx.success()/fail(). Both are reported — this is not an override.
-            user_verdict: agent_pb.SessionResponse.FinalizeSimulationResponse.SimulationVerdict | None = None  # noqa: E501
+            user_verdict: (
+                agent_pb.SessionResponse.FinalizeSimulationResponse.SimulationVerdict | None
+            ) = None  # noqa: E501
             sim_error: str | None = None
             try:
                 from livekit.protocol import agent_simulation as sim_pb
@@ -909,7 +910,6 @@ RemoteSessionEventTypes = Literal[
 
 
 class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
-
     def __init__(self, transport: SessionTransport) -> None:
         super().__init__()
         self._transport = transport
@@ -977,7 +977,10 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
             resp = await asyncio.wait_for(future, timeout=timeout)
         except asyncio.TimeoutError:
             self._pending_requests.pop(request.request_id, None)
-            logger.warning("remote session request timed out", extra={"request_id": request.request_id, "type": req_type, "timeout": timeout})
+            logger.warning(
+                "remote session request timed out",
+                extra={"request_id": request.request_id, "type": req_type, "timeout": timeout},
+            )
             raise
         except Exception:
             self._pending_requests.pop(request.request_id, None)
@@ -988,9 +991,7 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
 
         return resp
 
-    async def wait_for_ready(
-        self, timeout: float = 5.0, retry_interval: float = 0.5
-    ) -> None:
+    async def wait_for_ready(self, timeout: float = 5.0, retry_interval: float = 0.5) -> None:
         deadline = asyncio.get_event_loop().time() + timeout
         while True:
             remaining = deadline - asyncio.get_event_loop().time()
