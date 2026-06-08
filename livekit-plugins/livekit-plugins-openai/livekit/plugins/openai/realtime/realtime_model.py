@@ -2082,8 +2082,12 @@ class RealtimeSession(
             )
         elif event.response.status in {"cancelled", "incomplete"}:
             status_details = event.response.status_details
-            status_type = status_details.type if status_details else None
-            status_reason = status_details.reason if status_details else None
+            if isinstance(status_details, str):
+                status_type = status_details
+                status_reason = None
+            else:
+                status_type = status_details.type if status_details else None
+                status_reason = status_details.reason if status_details else None
             logger.debug(
                 "%s response done but not complete with status: %s (type=%s, reason=%s)",
                 provider_label,
