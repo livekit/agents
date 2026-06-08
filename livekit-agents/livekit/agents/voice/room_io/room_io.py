@@ -11,7 +11,6 @@ from ...log import logger
 from ...types import (
     ATTRIBUTE_AGENT_STATE,
     ATTRIBUTE_PUBLISH_ON_BEHALF,
-    ATTRIBUTE_SIMULATOR,
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     TOPIC_CHAT,
@@ -76,7 +75,6 @@ class RoomIO:
         self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
         self._room_connected_fut = asyncio.Future[None]()
 
-        self._simulator_mode = False
         self._ready_fut: asyncio.Future[None] = asyncio.Future()
         self._init_atask: asyncio.Task[None] | None = None
         self._user_transcript_ch: utils.aio.Chan[UserInputTranscribedEvent] | None = None
@@ -175,7 +173,6 @@ class RoomIO:
         self._room.on("participant_connected", self._on_participant_connected)
         self._room.on("connection_state_changed", self._on_connection_state_changed)
         self._room.on("participant_disconnected", self._on_participant_disconnected)
-        self._room.on("participant_attributes_changed", self._on_participant_attributes_changed)
         if self._room.isconnected():
             self._on_connection_state_changed(rtc.ConnectionState.CONN_CONNECTED)
 
@@ -347,14 +344,6 @@ class RoomIO:
         participant = await self._participant_available_fut
         self.set_participant(participant.identity)
 
-        if ATTRIBUTE_SIMULATOR in participant.attributes:
-            self._simulator_mode = True
-            logger.info(
-                "simulator participant detected, audio I/O disabled",
-                extra={"participant": participant.identity},
-            )
-            await self._force_disable_audio()
-
         # init outputs
         if self._agent_tr_output:
             self._agent_tr_output.set_participant(self._room.local_participant.identity)
@@ -369,24 +358,6 @@ class RoomIO:
         """Wait until participant detection and audio setup are complete."""
         await self._ready_fut
 
-    def _lock_audio(self) -> None:
-        self._agent_session.input.set_audio_enabled(False)
-        self._agent_session.input._audio_locked = True
-        self._agent_session.output.set_audio_enabled(False)
-        self._agent_session.output._audio_locked = True
-
-    async def _force_disable_audio(self) -> None:
-        self._lock_audio()
-        if self._audio_input:
-            await self._audio_input.aclose()
-            self._audio_input = None
-        self._agent_session.input.audio = None
-
-        if self._audio_output:
-            await self._audio_output.aclose()
-            self._audio_output = None
-        self._agent_session.output.audio = None
-
     @utils.log_exceptions(logger=logger)
     async def _forward_user_transcript(
         self, event_ch: utils.aio.Chan[UserInputTranscribedEvent]
@@ -398,19 +369,6 @@ class RoomIO:
             await self._user_tr_output.capture_text(ev.transcript)
             if ev.is_final:
                 self._user_tr_output.flush()
-
-    def _on_participant_attributes_changed(
-        self,
-        changed_attributes: dict[str, str],
-        participant: rtc.Participant,
-    ) -> None:
-        if ATTRIBUTE_SIMULATOR in changed_attributes and not self._simulator_mode:
-            self._simulator_mode = True
-            logger.info(
-                "simulator participant detected (late attribute), audio I/O disabled",
-                extra={"participant": participant.identity},
-            )
-            self._lock_audio()
 
     def _on_connection_state_changed(self, state: rtc.ConnectionState.ValueType) -> None:
         if self._room.isconnected() and not self._room_connected_fut.done():
