@@ -49,8 +49,15 @@ def _make_stream(
     stream._final_received_for_utterance = False
     stream._eos_emitted_for_utterance = False
     stream._eos_fallback_task = None
+    stream._manual_speech_started = False
     stream._stream_started_at = stt_streaming.time.time()
     stream._audio_position = 0.0
+    stream._audio_duration_collector = stt_streaming.PeriodicCollector(
+        callback=stt_streaming.StreamingSpeechStream._on_audio_duration_report.__get__(
+            stream, stt_streaming.StreamingSpeechStream
+        ),
+        duration=5.0,
+    )
     return stream
 
 
@@ -514,6 +521,115 @@ async def test_streaming_error_handling_distinguishes_fatal_and_non_fatal() -> N
     assert excinfo.value.status_code == 503
     assert excinfo.value.body["code"] == "model_unavailable"
     assert excinfo.value.retryable is True
+
+
+def test_reset_connection_state_clears_session_and_utterance_fields() -> None:
+    class _FakeFallbackTask:
+        def __init__(self) -> None:
+            self.cancelled = False
+
+        def done(self) -> bool:
+            return False
+
+        def cancel(self) -> None:
+            self.cancelled = True
+
+    stream = _make_stream()
+    stream._request_id = "req_old"
+    stream._session_id = "sess_old"
+    stream._session_ended = True
+    stream._manual_speech_started = True
+    stream._pending_eos = True
+    stream._pending_eos_time = 1.0
+    stream._pending_final_data = {"text": "hello"}
+    stream._utterance_start_audio_pos = 3.0
+    stream._utterance_speech_end_audio_pos = 4.0
+    stream._utterance_speech_end_wall = 5.0
+    stream._final_received_for_utterance = True
+    stream._eos_emitted_for_utterance = True
+    stream._total_reported_audio_duration = 50.0
+    fallback_task = _FakeFallbackTask()
+    stream._eos_fallback_task = fallback_task
+
+    stream._reset_connection_state()
+
+    assert fallback_task.cancelled is True
+
+    assert stream._request_id == ""
+    assert stream._session_id == ""
+    assert stream._session_ended is False
+    assert stream._manual_speech_started is False
+    assert stream._pending_eos is False
+    assert stream._pending_eos_time is None
+    assert stream._pending_final_data is None
+    assert stream._utterance_start_audio_pos == 0.0
+    assert stream._utterance_speech_end_audio_pos is None
+    assert stream._utterance_speech_end_wall is None
+    assert stream._final_received_for_utterance is False
+    assert stream._eos_emitted_for_utterance is False
+    assert stream._total_reported_audio_duration == 0.0
+    assert stream._eos_fallback_task is None
+
+
+@pytest.mark.asyncio
+async def test_session_end_delta_after_connection_reset() -> None:
+    stream = _make_stream()
+    stream._total_reported_audio_duration = 50.0
+
+    stream._reset_connection_state()
+
+    await stream._handle_message(
+        {
+            "event": "session.end",
+            "session_id": "sess_new",
+            "audio_duration_s": 12.0,
+        }
+    )
+
+    usage_events = [
+        event
+        for event in stream._event_ch.events
+        if event.type == stt_streaming.stt.SpeechEventType.RECOGNITION_USAGE
+    ]
+    assert len(usage_events) == 1
+    assert usage_events[0].recognition_usage.audio_duration == 12.0
+
+
+@pytest.mark.asyncio
+async def test_collector_flush_before_reset_emits_pending_usage() -> None:
+    stream = _make_stream()
+    stream._audio_duration_collector.push(2.5)
+
+    stream._reset_connection_state()
+
+    usage_events = [
+        event
+        for event in stream._event_ch.events
+        if event.type == stt_streaming.stt.SpeechEventType.RECOGNITION_USAGE
+    ]
+    assert len(usage_events) == 1
+    assert usage_events[0].recognition_usage.audio_duration == 2.5
+    assert stream._total_reported_audio_duration == 0.0
+
+
+@pytest.mark.asyncio
+async def test_reset_connection_state_allows_new_request_id_capture() -> None:
+    stream = _make_stream()
+    stream._request_id = "req_old"
+    stream._session_id = "sess_old"
+
+    stream._reset_connection_state()
+
+    await stream._handle_message(
+        {
+            "event": "session.begin",
+            "session_id": "sess_new",
+            "request_id": "req_new",
+        }
+    )
+
+    assert stream._request_id == "req_new"
+    assert stream._session_id == "sess_new"
 
 
 @pytest.mark.asyncio

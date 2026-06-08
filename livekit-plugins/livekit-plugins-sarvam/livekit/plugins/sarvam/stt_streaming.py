@@ -438,6 +438,7 @@ class StreamingSpeechStream(stt.SpeechStream):
                     if reconnect_task not in done:
                         break
                     self._reconnect_event.clear()
+                    self._reset_connection_state()
                 finally:
                     await utils.aio.gracefully_cancel(*tasks, reconnect_task)
                     tasks_group.cancel()
@@ -462,6 +463,23 @@ class StreamingSpeechStream(stt.SpeechStream):
         if self._eos_fallback_task and not self._eos_fallback_task.done():
             self._eos_fallback_task.cancel()
         self._eos_fallback_task = None
+
+    def _reset_connection_state(self) -> None:
+        self._cancel_eos_fallback()
+        self._request_id = ""
+        self._session_id = ""
+        self._session_ended = False
+        self._manual_speech_started = False
+        self._pending_eos = False
+        self._pending_eos_time = None
+        self._pending_final_data = None
+        self._utterance_start_audio_pos = 0.0
+        self._utterance_speech_end_audio_pos = None
+        self._utterance_speech_end_wall = None
+        self._final_received_for_utterance = False
+        self._eos_emitted_for_utterance = False
+        self._audio_duration_collector.flush()
+        self._total_reported_audio_duration = 0.0
 
     def _reset_utterance_state(self) -> None:
         self._cancel_eos_fallback()
