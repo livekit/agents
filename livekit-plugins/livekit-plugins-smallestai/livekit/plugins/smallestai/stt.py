@@ -51,6 +51,10 @@ NUM_CHANNELS = 1
 # Batch:     https://api.smallest.ai/waves/v1/stt/?model={model}
 SMALLEST_STT_BASE_URL = "https://api.smallest.ai/waves/v1"
 
+# Models that support real-time streaming. All others are batch-only and will be
+# wrapped with a StreamAdapter by the agent framework automatically.
+_STREAMING_MODELS: frozenset[str] = frozenset({"pulse"})
+
 # ---------------------------------------------------------------------------
 # Minimal PeriodicCollector — same logic as livekit-plugins-deepgram/_utils.py
 # ---------------------------------------------------------------------------
@@ -145,7 +149,7 @@ class STT(stt.STT):
         """
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=True,
+                streaming=model in _STREAMING_MODELS,
                 interim_results=True,
                 diarization=diarize,
                 aligned_transcript="word" if word_timestamps else False,
@@ -242,9 +246,9 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
-        if self._opts.model == "pulse-pro":
+        if not self.capabilities.streaming:
             raise ValueError(
-                "pulse-pro does not support streaming; use recognize() for batch transcription"
+                f"{self._opts.model} does not support streaming; use recognize() for batch transcription"
             )
         config = self._sanitize_options(language=language)
         stream = SpeechStream(
