@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+INFERENCE_QUOTA_EXCEEDED_TYPE = "inference_quota_exceeded"
+"""Value of the ``type`` field in a LiveKit Inference 429 quota response body."""
+
 
 class AssignmentTimeoutError(Exception):
     """Raised when accepting a job but not receiving an assignment within the specified timeout.
@@ -100,6 +103,105 @@ class APIStatusError(APIError):
         )
 
 
+class APIQuotaExceededError(APIStatusError):
+    """Raised when the inference gateway rejects a request because a usage quota
+    or rate limit has been exhausted.
+
+    LiveKit Inference answers an exhausted project with ``HTTP 429`` and a
+    structured JSON body (``type == "inference_quota_exceeded"``). This error
+    surfaces the fields of that body directly so callers can render or speak a
+    precise, user-facing message (``hint``) instead of leaving the agent silent.
+
+    Unlike a transient ``429`` (rate limit), quota exhaustion will not recover on
+    an immediate retry, so the error defaults to ``retryable=False``.
+
+    Example:
+        ```python
+        from livekit.agents import APIQuotaExceededError, ErrorEvent
+
+
+        @session.on("error")
+        def _on_error(ev: ErrorEvent) -> None:
+            if isinstance(ev.error, APIQuotaExceededError):
+                session.say(ev.error.hint or "The assistant is temporarily unavailable.")
+        ```
+    """
+
+    quota_type: str | None
+    """Which resource ran out, e.g. ``"llm"``, ``"stt"``, ``"tts"`` or ``"bargein"``."""
+
+    category: str | None
+    """Gateway category, e.g. ``"MaxGatewayCredits"`` (credits exhausted) or a
+    rate-limit variant such as ``"MaxConcurrentGatewayLLMRpm"``."""
+
+    hint: str | None
+    """Human-readable, user-appropriate explanation suitable to speak or display."""
+
+    remaining_limit: str | None
+    """Remaining quota for ``quota_type``; ``"0"`` when fully exhausted."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int = 429,
+        request_id: str | None = None,
+        body: object | None = None,
+        retryable: bool | None = None,
+        quota_type: str | None = None,
+        category: str | None = None,
+        hint: str | None = None,
+        remaining_limit: str | None = None,
+    ) -> None:
+        # quota exhaustion won't recover on an immediate retry
+        if retryable is None:
+            retryable = False
+
+        super().__init__(
+            message,
+            status_code=status_code,
+            request_id=request_id,
+            body=body,
+            retryable=retryable,
+        )
+
+        # backfill the structured fields from the response body when not given explicitly
+        if isinstance(body, dict):
+            if quota_type is None:
+                quota_type = body.get("quota_type")
+            if category is None:
+                category = body.get("category")
+            if hint is None:
+                hint = body.get("hint")
+            if remaining_limit is None:
+                remaining_limit = body.get("remaining_limit")
+
+        self.quota_type = quota_type
+        self.category = category
+        self.hint = hint
+        self.remaining_limit = remaining_limit
+
+    @classmethod
+    def from_response(
+        cls,
+        message: str,
+        *,
+        status_code: int = 429,
+        request_id: str | None = None,
+        body: object | None = None,
+    ) -> APIQuotaExceededError | None:
+        """Build an :class:`APIQuotaExceededError` from a response body, or return
+        ``None`` if the body isn't a LiveKit Inference quota-exceeded payload.
+
+        Lets plugins centralize quota detection: pass the decoded JSON body and
+        raise the result when it isn't ``None``.
+        """
+        if not (isinstance(body, dict) and body.get("type") == INFERENCE_QUOTA_EXCEEDED_TYPE):
+            return None
+
+        return cls(message, status_code=status_code, request_id=request_id, body=body)
+
+
 class APIConnectionError(APIError):
     """Raised when an API request failed due to a connection error."""
 
@@ -141,6 +243,12 @@ def create_api_error_from_http(
         display = f"{message} ({status} {reason})"
     else:
         display = f"{reason} ({status})"
+
+    quota_error = APIQuotaExceededError.from_response(
+        display, status_code=status, request_id=request_id, body=body
+    )
+    if quota_error is not None:
+        return quota_error
 
     return APIStatusError(
         message=display,
