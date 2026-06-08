@@ -624,7 +624,7 @@ class LLMStream(llm.LLMStream):
             # be echoed back on the next turn (required by Gemini for multi-turn
             # function calling). Driven by the response rather than a model-name
             # guess, so it works for every signature-emitting model and alias.
-            if getattr(part, "thought_signature", None):
+            if hasattr(part, "thought_signature") and part.thought_signature:
                 self._llm._thought_signatures[tool_call.call_id] = part.thought_signature
 
             chat_chunk = llm.ChatChunk(
