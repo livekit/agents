@@ -13,7 +13,7 @@ from livekit.agents.ipc.supervised_proc import (
     SupervisedProcKind,
 )
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
 
 
 class _FakeProc(SupervisedProc):

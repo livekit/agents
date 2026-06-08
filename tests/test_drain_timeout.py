@@ -27,7 +27,7 @@ from livekit.agents.ipc.supervised_proc import SupervisedProc, SupervisedProcKin
 from livekit.agents.utils import aio
 from livekit.agents.worker import AgentServer
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
 _CLI_ARGS = CliArgs(log_level="ERROR", url=None, api_key=None, api_secret=None)
 

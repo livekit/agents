@@ -11,7 +11,7 @@ import pytest
 from livekit.agents import tts, utils
 from livekit.agents.types import USERDATA_TIMED_TRANSCRIPT, TimedString
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
 
 
 def _make_pcm(sample_rate: int, num_channels: int, duration_ms: int) -> bytes:

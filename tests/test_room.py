@@ -32,7 +32,7 @@ from .utils.livekit_test import (
     wait_for_event,
 )
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
 
 TIMEOUT = 5.0
 
