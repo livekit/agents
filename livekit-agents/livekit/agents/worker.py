@@ -360,7 +360,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._http_proxy = http_proxy
         self._log_level = _validate_and_normalize_log_level(log_level)
         self._agent_name = ""
-        self._agent_name_is_env = False
         self._server_type = ServerType.ROOM
         self._id = "unregistered"
 
@@ -506,13 +505,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._simulation_end_fnc = on_simulation_end
             if agent_name:
                 self._agent_name = agent_name
-                self._agent_name_is_env = False
             elif os.environ.get("LIVEKIT_AGENT_NAME"):
                 self._agent_name = os.environ["LIVEKIT_AGENT_NAME"]
-                self._agent_name_is_env = True
             else:
                 self._agent_name = ""
-                self._agent_name_is_env = False
             self._server_type = type
             return f
 
