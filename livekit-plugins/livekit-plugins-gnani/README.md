@@ -40,14 +40,18 @@ tts = TTS(api_key="your-api-key", voice="Karan")
 
 ## Quick Start
 
-### Speech-to-Text
+### Speech-to-Text (REST + ASR)
 
 ```python
 from livekit.plugins.gnani import STT
 
 stt = STT(language="hi-IN")
 
-# Use with a LiveKit voice agent pipeline
+# REST STT (batch transcription)
+speech_event = await stt.recognize(audio_buffer)
+
+# ASR STT (real-time streaming)
+speech_stream = stt.stream()
 ```
 
 ### Text-to-Speech
@@ -55,20 +59,58 @@ stt = STT(language="hi-IN")
 ```python
 from livekit.plugins.gnani import TTS
 
-# REST (default) — single-request batch synthesis
-tts = TTS(voice="Karan")
+# REST (default) - single-request batch synthesis
+tts_rest = TTS(voice="Karan")
 
-# SSE — streaming via Server-Sent Events (lower latency)
-tts = TTS(voice="Karan", synthesize_method="sse")
+# SSE - chunked synthesis via Server-Sent Events (lower latency)
+tts_sse = TTS(voice="Karan", synthesize_method="sse")
 
-# WebSocket — real-time streaming via stream() (lowest latency)
-tts = TTS(voice="Karan", synthesize_method="websocket")
+# WebSocket - chunked synthesis over WS (lowest latency)
+tts_ws = TTS(voice="Karan", synthesize_method="websocket")
 ```
 
 All three modes work with the standard LiveKit voice agent pipeline.
 The `synthesize_method` controls which transport `synthesize()` uses
 (REST, SSE, or WebSocket). The `stream()` method always uses WebSocket
 regardless of this setting.
+
+## Access Methods (STT and TTS)
+
+In this plugin, STT is exposed as the `STT` class and supports two methods:
+- REST (batch)
+- ASR (real-time streaming over WebSocket)
+
+### STT access methods (REST + ASR)
+
+```python
+from livekit.plugins.gnani import STT
+
+stt = STT(language="en-IN")
+
+# REST STT (batch)
+speech_event = await stt.recognize(audio_buffer)
+
+# ASR STT (real-time)
+speech_stream = stt.stream()
+```
+
+### TTS (Text-to-Speech) access methods
+
+```python
+from livekit.plugins.gnani import TTS
+
+tts_rest = TTS(voice="Karan", synthesize_method="rest")
+tts_sse = TTS(voice="Karan", synthesize_method="sse")
+tts_ws = TTS(voice="Karan", synthesize_method="websocket")
+
+# Method stays the same; transport depends on synthesize_method
+rest_audio = tts_rest.synthesize("Hello from Gnani")
+sse_audio = tts_sse.synthesize("Hello from Gnani")
+ws_audio = tts_ws.synthesize("Hello from Gnani")
+
+# For incremental text streaming, use stream() (always WebSocket)
+tts_stream = tts_ws.stream()
+```
 
 ## Features
 
