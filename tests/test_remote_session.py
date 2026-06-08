@@ -83,7 +83,7 @@ def _make_mock_session() -> MagicMock:
     options.interruption = MagicMock(__iter__=lambda s: iter([]))
     options.max_tool_steps = 5
     options.user_away_timeout = 30
-    options.preemptive_generation = False
+    options.preemptive_generation = MagicMock(__iter__=lambda s: iter([]))
     options.min_consecutive_speech_delay = 0.5
     options.use_tts_aligned_transcript = True
     options.ivr_detection = False
@@ -179,7 +179,7 @@ async def test_run_input():
     mock_session.interrupt = AsyncMock()
 
     class FakeRunResult:
-        events: list = []
+        events = [MagicMock(item=ChatMessage(role="assistant", content=["hi there"], id="m-1"))]
         def done(self): return True
         def __await__(self):
             return asyncio.sleep(0).__await__()
