@@ -306,11 +306,248 @@ async def test_interruption_delay_requires_u3_rt_pro():
 
 
 # ---------------------------------------------------------------------------
+# agent_context
+#
+# agent_context carries "what the agent said" so the model can use it to bias
+# transcription of the user's reply. It is threaded through STTOptions, the
+# constructor, and both update_options paths, and is sent over the live
+# websocket as an UpdateConfiguration message. `enable_agent_context` wires the
+# agent's spoken turn into update_options automatically for an AgentSession.
+# ---------------------------------------------------------------------------
+
+
+async def test_agent_context_default():
+    """Test agent_context is not set by default."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key")
+    assert stt._opts.agent_context is NOT_GIVEN
+
+
+async def test_agent_context_set():
+    """Test agent_context can be set in the constructor (u3-rt-pro only)."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(
+        api_key="test-key",
+        model="u3-rt-pro",
+        agent_context="The agent asked for a booking date.",
+    )
+    assert stt._opts.agent_context == "The agent asked for a booking date."
+
+
+async def test_agent_context_update():
+    """Test agent_context can be updated dynamically via update_options."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key")
+    assert stt._opts.agent_context is NOT_GIVEN
+
+    stt.update_options(agent_context="What is your account number?")
+    assert stt._opts.agent_context == "What is your account number?"
+
+    # A subsequent update overwrites (most-recent-turn semantics).
+    stt.update_options(agent_context="Thanks, and your zip code?")
+    assert stt._opts.agent_context == "Thanks, and your zip code?"
+
+
+async def test_agent_context_stream_sends_update_configuration():
+    """SpeechStream.update_options enqueues an UpdateConfiguration message
+    containing agent_context, even when it's the only field updated (the
+    len(config_msg) > 1 guard)."""
+    stream = _make_stream_for_unit_test()
+
+    stream.update_options(agent_context="The agent confirmed the order.")
+
+    assert stream._opts.agent_context == "The agent confirmed the order."
+    msg = stream._config_update_queue.get_nowait()
+    assert msg["type"] == "UpdateConfiguration"
+    assert msg["agent_context"] == "The agent confirmed the order."
+
+
+async def test_agent_context_propagates_from_stt_to_active_stream():
+    """STT.update_options(agent_context=...) propagates to an already-active
+    stream and sends it over that stream's websocket queue."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", http_session=MagicMock())
+
+    def _fake_create_task(coro, *args, **kwargs):
+        coro.close()
+        return MagicMock()
+
+    with patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=_fake_create_task):
+        stream = stt.stream()
+
+    stt.update_options(agent_context="The agent greeted the caller.")
+
+    assert stt._opts.agent_context == "The agent greeted the caller."
+    assert stream._opts.agent_context == "The agent greeted the caller."
+    msg = stream._config_update_queue.get_nowait()
+    assert msg["type"] == "UpdateConfiguration"
+    assert msg["agent_context"] == "The agent greeted the caller."
+
+
+async def test_enable_agent_context_pushes_assistant_turn():
+    """enable_agent_context updates the STT's agent_context with the assistant's
+    spoken text on conversation_item_added."""
+    from livekit.agents import AgentSession
+    from livekit.agents.llm import ChatMessage
+    from livekit.agents.voice.events import ConversationItemAddedEvent
+    from livekit.plugins.assemblyai import STT, enable_agent_context
+
+    stt = STT(api_key="test-key", model="u3-rt-pro")
+    session = AgentSession(stt=stt)
+    enable_agent_context(session)
+
+    session.emit(
+        "conversation_item_added",
+        ConversationItemAddedEvent(
+            item=ChatMessage(role="assistant", content=["What date works for you?"])
+        ),
+    )
+
+    assert stt._opts.agent_context == "What date works for you?"
+
+
+async def test_enable_agent_context_ignores_user_turn():
+    """User messages must not update agent_context."""
+    from livekit.agents import AgentSession
+    from livekit.agents.llm import ChatMessage
+    from livekit.agents.voice.events import ConversationItemAddedEvent
+    from livekit.plugins.assemblyai import STT, enable_agent_context
+
+    stt = STT(api_key="test-key", model="u3-rt-pro")
+    session = AgentSession(stt=stt)
+    enable_agent_context(session)
+
+    session.emit(
+        "conversation_item_added",
+        ConversationItemAddedEvent(item=ChatMessage(role="user", content=["next Tuesday"])),
+    )
+
+    assert stt._opts.agent_context is NOT_GIVEN
+
+
+async def test_enable_agent_context_ignores_empty_assistant_turn():
+    """Assistant messages with no text content (e.g. tool-only) are skipped."""
+    from livekit.agents import AgentSession
+    from livekit.agents.llm import ChatMessage
+    from livekit.agents.voice.events import ConversationItemAddedEvent
+    from livekit.plugins.assemblyai import STT, enable_agent_context
+
+    stt = STT(api_key="test-key", model="u3-rt-pro")
+    session = AgentSession(stt=stt)
+    enable_agent_context(session)
+
+    session.emit(
+        "conversation_item_added",
+        ConversationItemAddedEvent(item=ChatMessage(role="assistant", content=[])),
+    )
+
+    assert stt._opts.agent_context is NOT_GIVEN
+
+
+async def test_enable_agent_context_unsubscribe_stops_updates():
+    """The returned callable unsubscribes the handler."""
+    from livekit.agents import AgentSession
+    from livekit.agents.llm import ChatMessage
+    from livekit.agents.voice.events import ConversationItemAddedEvent
+    from livekit.plugins.assemblyai import STT, enable_agent_context
+
+    stt = STT(api_key="test-key", model="u3-rt-pro")
+    session = AgentSession(stt=stt)
+    unsubscribe = enable_agent_context(session)
+
+    session.emit(
+        "conversation_item_added",
+        ConversationItemAddedEvent(item=ChatMessage(role="assistant", content=["first"])),
+    )
+    assert stt._opts.agent_context == "first"
+
+    unsubscribe()
+
+    session.emit(
+        "conversation_item_added",
+        ConversationItemAddedEvent(item=ChatMessage(role="assistant", content=["second"])),
+    )
+    # Still the pre-unsubscribe value.
+    assert stt._opts.agent_context == "first"
+
+
+async def test_enable_agent_context_no_op_for_non_assemblyai_stt(caplog):
+    """When the session STT is not an AssemblyAI STT, the helper is a no-op and
+    warns once rather than raising."""
+    import logging
+
+    from livekit.agents import AgentSession
+    from livekit.agents.llm import ChatMessage
+    from livekit.agents.voice.events import ConversationItemAddedEvent
+    from livekit.plugins.assemblyai import STT, enable_agent_context
+
+    session = AgentSession(stt=STT(api_key="test-key"))
+    enable_agent_context(session)
+    # Simulate a session whose STT is not an AssemblyAI STT.
+    session._stt = None
+
+    ev = ConversationItemAddedEvent(item=ChatMessage(role="assistant", content=["hi"]))
+    with caplog.at_level(logging.WARNING):
+        session.emit("conversation_item_added", ev)
+        session.emit("conversation_item_added", ev)
+
+    warnings = [r for r in caplog.records if "agent_context" in r.getMessage()]
+    assert len(warnings) == 1
+
+
+async def test_enable_agent_context_no_op_for_non_u3_pro_model(caplog):
+    """When the STT is an AssemblyAI STT but not a u3-rt-pro model, the helper is
+    a no-op and warns once (agent_context is u3-rt-pro only)."""
+    import logging
+
+    from livekit.agents import AgentSession
+    from livekit.agents.llm import ChatMessage
+    from livekit.agents.voice.events import ConversationItemAddedEvent
+    from livekit.plugins.assemblyai import STT, enable_agent_context
+
+    stt = STT(api_key="test-key", model="universal-streaming-english")
+    session = AgentSession(stt=stt)
+    enable_agent_context(session)
+
+    ev = ConversationItemAddedEvent(item=ChatMessage(role="assistant", content=["hi"]))
+    with caplog.at_level(logging.WARNING):
+        session.emit("conversation_item_added", ev)
+        session.emit("conversation_item_added", ev)
+
+    assert stt._opts.agent_context is NOT_GIVEN
+    warnings = [r for r in caplog.records if "u3-rt-pro" in r.getMessage()]
+    assert len(warnings) == 1
+
+
+async def test_enable_agent_context_truncates_long_text():
+    """agent_context is truncated to AssemblyAI's 1500-character limit."""
+    from livekit.agents import AgentSession
+    from livekit.agents.llm import ChatMessage
+    from livekit.agents.voice.events import ConversationItemAddedEvent
+    from livekit.plugins.assemblyai import STT, enable_agent_context
+
+    stt = STT(api_key="test-key", model="u3-rt-pro")
+    session = AgentSession(stt=stt)
+    enable_agent_context(session)
+
+    session.emit(
+        "conversation_item_added",
+        ConversationItemAddedEvent(item=ChatMessage(role="assistant", content=["a" * 2000])),
+    )
+
+    assert stt._opts.agent_context == "a" * 1500
+
+
+# ---------------------------------------------------------------------------
 # u3-rt-pro-beta-1 model + u3-pro param family
 #
 # u3-rt-pro-beta-1 shares all u3-rt-pro behavior, so the u3-pro-gated params
-# (prompt, continuous_partials, interruption_delay) are accepted with it, and
-# continuous_partials defaults to True.
+# (prompt, agent_context, continuous_partials, interruption_delay) are accepted
+# with it, and continuous_partials defaults to True.
 # ---------------------------------------------------------------------------
 
 
@@ -332,7 +569,31 @@ async def test_u3_rt_pro_beta_1_accepts_u3_pro_params():
         api_key="test-key",
         model="u3-rt-pro-beta-1",
         prompt="medical dictation",
+        agent_context="The agent asked for the patient's name.",
         interruption_delay=300,
     )
     assert stt._opts.prompt == "medical dictation"
+    assert stt._opts.agent_context == "The agent asked for the patient's name."
     assert stt._opts.interruption_delay == 300
+
+
+# ---------------------------------------------------------------------------
+# agent_context is u3-rt-pro-only
+# ---------------------------------------------------------------------------
+
+
+async def test_agent_context_requires_u3_rt_pro():
+    """agent_context in the constructor raises for non-u3-rt-pro models."""
+    from livekit.plugins.assemblyai import STT
+
+    with pytest.raises(ValueError, match="agent_context"):
+        STT(api_key="test-key", agent_context="hello")
+
+
+async def test_agent_context_allowed_for_u3_rt_pro_models():
+    """agent_context is accepted for both u3-rt-pro and u3-rt-pro-beta-1."""
+    from livekit.plugins.assemblyai import STT
+
+    for model in ("u3-rt-pro", "u3-rt-pro-beta-1"):
+        stt = STT(api_key="test-key", model=model, agent_context="ctx")
+        assert stt._opts.agent_context == "ctx"

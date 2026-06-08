@@ -66,6 +66,7 @@ class STTOptions:
     interruption_delay: NotGivenOr[int] = NOT_GIVEN
     keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN
     prompt: NotGivenOr[str] = NOT_GIVEN
+    agent_context: NotGivenOr[str] = NOT_GIVEN
     vad_threshold: NotGivenOr[float] = NOT_GIVEN
     speaker_labels: NotGivenOr[bool] = NOT_GIVEN
     max_speakers: NotGivenOr[int] = NOT_GIVEN
@@ -73,8 +74,8 @@ class STTOptions:
 
 
 # Speech models in the u3-rt-pro family, which share the same parameter support
-# (prompt, continuous_partials, interruption_delay). Mirrors the server-side
-# `SpeechModel.is_u3_pro`.
+# (prompt, agent_context, continuous_partials, interruption_delay). Mirrors the
+# server-side `SpeechModel.is_u3_pro`.
 _U3_PRO_MODELS = ("u3-rt-pro", "u3-rt-pro-beta-1")
 
 
@@ -101,6 +102,7 @@ class STT(stt.STT):
         interruption_delay: NotGivenOr[int] = NOT_GIVEN,
         keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
         prompt: NotGivenOr[str] = NOT_GIVEN,
+        agent_context: NotGivenOr[str] = NOT_GIVEN,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         speaker_labels: NotGivenOr[bool] = NOT_GIVEN,
         max_speakers: NotGivenOr[int] = NOT_GIVEN,
@@ -136,6 +138,11 @@ class STT(stt.STT):
                 Range 0–1000, default 500. Lower values produce faster time-to-first-token
                 for barge-in; higher values produce more confident first partials. Only
                 supported with the 'u3-rt-pro' / 'u3-rt-pro-beta-1' models.
+            agent_context: Free-text context describing what the agent said, used to bias
+                transcription of the user's reply. Typically set per-turn via
+                `update_options(agent_context=...)`; see `enable_agent_context` for wiring
+                this automatically to an `AgentSession`. Only supported with the
+                'u3-rt-pro' / 'u3-rt-pro-beta-1' models (max 1500 characters).
         """
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -153,6 +160,11 @@ class STT(stt.STT):
         if is_given(prompt) and model not in _U3_PRO_MODELS:
             raise ValueError(
                 "The 'prompt' parameter is only supported with the 'u3-rt-pro' models."
+            )
+
+        if is_given(agent_context) and model not in _U3_PRO_MODELS:
+            raise ValueError(
+                "The 'agent_context' parameter is only supported with the 'u3-rt-pro' models."
             )
 
         if is_given(continuous_partials) and model not in _U3_PRO_MODELS:
@@ -209,6 +221,7 @@ class STT(stt.STT):
             interruption_delay=interruption_delay,
             keyterms_prompt=keyterms_prompt,
             prompt=prompt,
+            agent_context=agent_context,
             vad_threshold=vad_threshold,
             speaker_labels=speaker_labels,
             max_speakers=max_speakers,
@@ -266,6 +279,7 @@ class STT(stt.STT):
         min_turn_silence: NotGivenOr[int] = NOT_GIVEN,
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
         prompt: NotGivenOr[str] = NOT_GIVEN,
+        agent_context: NotGivenOr[str] = NOT_GIVEN,
         keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         continuous_partials: NotGivenOr[bool] = NOT_GIVEN,
@@ -291,6 +305,8 @@ class STT(stt.STT):
             self._opts.max_turn_silence = max_turn_silence
         if is_given(prompt):
             self._opts.prompt = prompt
+        if is_given(agent_context):
+            self._opts.agent_context = agent_context
         if is_given(keyterms_prompt):
             self._opts.keyterms_prompt = keyterms_prompt
         if is_given(vad_threshold):
@@ -307,6 +323,7 @@ class STT(stt.STT):
                 min_turn_silence=min_turn_silence,
                 max_turn_silence=max_turn_silence,
                 prompt=prompt,
+                agent_context=agent_context,
                 keyterms_prompt=keyterms_prompt,
                 vad_threshold=vad_threshold,
                 continuous_partials=continuous_partials,
@@ -362,6 +379,7 @@ class SpeechStream(stt.SpeechStream):
         min_turn_silence: NotGivenOr[int] = NOT_GIVEN,
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
         prompt: NotGivenOr[str] = NOT_GIVEN,
+        agent_context: NotGivenOr[str] = NOT_GIVEN,
         keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         continuous_partials: NotGivenOr[bool] = NOT_GIVEN,
@@ -387,6 +405,8 @@ class SpeechStream(stt.SpeechStream):
             self._opts.max_turn_silence = max_turn_silence
         if is_given(prompt):
             self._opts.prompt = prompt
+        if is_given(agent_context):
+            self._opts.agent_context = agent_context
         if is_given(keyterms_prompt):
             self._opts.keyterms_prompt = keyterms_prompt
         if is_given(vad_threshold):
@@ -400,6 +420,8 @@ class SpeechStream(stt.SpeechStream):
         config_msg: dict = {"type": "UpdateConfiguration"}
         if is_given(prompt):
             config_msg["prompt"] = prompt
+        if is_given(agent_context):
+            config_msg["agent_context"] = agent_context
         if is_given(keyterms_prompt):
             config_msg["keyterms_prompt"] = keyterms_prompt
         if is_given(max_turn_silence):
@@ -601,6 +623,9 @@ class SpeechStream(stt.SpeechStream):
             or self._opts.speech_model in _U3_PRO_MODELS
             else False,
             "prompt": self._opts.prompt if is_given(self._opts.prompt) else None,
+            "agent_context": self._opts.agent_context
+            if is_given(self._opts.agent_context)
+            else None,
             "vad_threshold": self._opts.vad_threshold
             if is_given(self._opts.vad_threshold)
             else None,
