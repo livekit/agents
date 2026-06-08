@@ -88,7 +88,7 @@ async def test_async_channel():
     )
 
     await pch.aclose()
-    await asyncio.sleep(0.5)
+    await asyncio.sleep(0.1)
     proc.terminate()
     proc.join()
 
@@ -194,7 +194,7 @@ async def _job_entrypoint_session_aclose_hangs(job_ctx: JobContext) -> None:
     from livekit.agents.ipc import job_proc_lazy_main
 
     # Shrink the hardcoded guardrail so the test doesn't wait the full 60s.
-    job_proc_lazy_main._SESSION_ACLOSE_TIMEOUT = 2.0
+    job_proc_lazy_main._SESSION_ACLOSE_TIMEOUT = 0.5
 
     start_args: _StartArgs = job_ctx.proc.user_arguments
 
@@ -507,7 +507,7 @@ async def test_shutdown_no_job():
 
 async def test_job_slow_shutdown():
     mp_ctx = mp.get_context("spawn")
-    proc, start_args = _create_proc(close_timeout=1.0, mp_ctx=mp_ctx)
+    proc, start_args = _create_proc(close_timeout=0.3, mp_ctx=mp_ctx)
     start_args.shutdown_simulate_work_time = 10.0
 
     await proc.start()
@@ -527,7 +527,7 @@ async def test_shutdown_callback_runs_when_session_aclose_hangs():
     """Regression test: when AgentSession.aclose() blocks indefinitely during
     job shutdown, the _SESSION_ACLOSE_TIMEOUT guardrail must fire and
     user-registered shutdown callbacks must still run. The entrypoint shrinks
-    the hardcoded constant to 2s so the test stays fast."""
+    the hardcoded constant to 0.5s so the test stays fast."""
     mp_ctx = mp.get_context("spawn")
     proc, start_args = _create_proc(
         close_timeout=20.0,
@@ -577,7 +577,7 @@ async def test_shutdown_callback_runs_when_entrypoint_raises():
 async def test_job_graceful_shutdown():
     mp_ctx = mp.get_context("spawn")
     proc, start_args = _create_proc(close_timeout=10.0, mp_ctx=mp_ctx)
-    start_args.shutdown_simulate_work_time = 1.0
+    start_args.shutdown_simulate_work_time = 0.3
     await proc.start()
     await proc.initialize()
 

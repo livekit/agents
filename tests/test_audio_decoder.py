@@ -130,7 +130,7 @@ def test_stream_buffer_large_chunks():
     def reader():
         nonlocal received_size
         # allow writer to start first
-        time.sleep(1)
+        time.sleep(0.1)
         while True:
             chunk = buffer.read(8192)  # Read in 8KB chunks
             if not chunk:
