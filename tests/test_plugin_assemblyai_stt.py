@@ -101,7 +101,7 @@ async def test_vad_threshold_partial_update():
 # ---------------------------------------------------------------------------
 
 
-def _make_stream_for_unit_test():
+def _make_stream_for_unit_test(stt=None):
     """Construct a SpeechStream without triggering the _main_task WebSocket
     loop. Patches asyncio.create_task during __init__ so the stream doesn't
     try to open a real connection; also closes the coroutines that would
@@ -110,7 +110,8 @@ def _make_stream_for_unit_test():
     from livekit.plugins.assemblyai import STT
     from livekit.plugins.assemblyai.stt import SpeechStream
 
-    stt = STT(api_key="test-key")
+    if stt is None:
+        stt = STT(api_key="test-key")
 
     def _fake_create_task(coro, *args, **kwargs):
         # Close the coroutine so we don't get RuntimeWarning about it never
@@ -546,8 +547,8 @@ async def test_enable_agent_context_truncates_long_text():
 # u3-rt-pro-beta-1 model + u3-pro param family
 #
 # u3-rt-pro-beta-1 shares all u3-rt-pro behavior, so the u3-pro-gated params
-# (prompt, agent_context, continuous_partials, interruption_delay) are accepted
-# with it, and continuous_partials defaults to True.
+# (prompt, agent_context, previous_context_n_turns, continuous_partials,
+# interruption_delay) are accepted with it, and continuous_partials defaults to True.
 # ---------------------------------------------------------------------------
 
 
@@ -570,10 +571,12 @@ async def test_u3_rt_pro_beta_1_accepts_u3_pro_params():
         model="u3-rt-pro-beta-1",
         prompt="medical dictation",
         agent_context="The agent asked for the patient's name.",
+        previous_context_n_turns=10,
         interruption_delay=300,
     )
     assert stt._opts.prompt == "medical dictation"
     assert stt._opts.agent_context == "The agent asked for the patient's name."
+    assert stt._opts.previous_context_n_turns == 10
     assert stt._opts.interruption_delay == 300
 
 
@@ -597,3 +600,56 @@ async def test_agent_context_allowed_for_u3_rt_pro_models():
     for model in ("u3-rt-pro", "u3-rt-pro-beta-1"):
         stt = STT(api_key="test-key", model=model, agent_context="ctx")
         assert stt._opts.agent_context == "ctx"
+
+
+# ---------------------------------------------------------------------------
+# previous_context_n_turns (u3-rt-pro only, connect-only)
+# ---------------------------------------------------------------------------
+
+
+async def test_previous_context_n_turns_set():
+    """previous_context_n_turns can be set for u3-rt-pro models."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model="u3-rt-pro", previous_context_n_turns=5)
+    assert stt._opts.previous_context_n_turns == 5
+
+
+async def test_previous_context_n_turns_default_unset():
+    """previous_context_n_turns is unset by default (server default applies)."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model="u3-rt-pro")
+    assert stt._opts.previous_context_n_turns is NOT_GIVEN
+
+
+async def test_previous_context_n_turns_requires_u3_rt_pro():
+    """previous_context_n_turns raises for non-u3-rt-pro models."""
+    from livekit.plugins.assemblyai import STT
+
+    with pytest.raises(ValueError, match="previous_context_n_turns"):
+        STT(api_key="test-key", previous_context_n_turns=5)
+
+
+async def test_previous_context_n_turns_zero_is_forwarded():
+    """0 is a meaningful value (disable carryover), distinct from unset, and must
+    be sent in the connect config rather than dropped."""
+    from urllib.parse import parse_qs, urlparse
+
+    from livekit.plugins.assemblyai import STT
+
+    captured: dict = {}
+
+    async def _fake_ws_connect(url, **kwargs):
+        captured["url"] = url
+        return MagicMock()
+
+    stt = STT(api_key="test-key", model="u3-rt-pro", previous_context_n_turns=0)
+    assert stt._opts.previous_context_n_turns == 0
+
+    stream = _make_stream_for_unit_test(stt)
+    stream._session.ws_connect = _fake_ws_connect
+    await stream._connect_ws()
+
+    query = parse_qs(urlparse(captured["url"]).query)
+    assert query["previous_context_n_turns"] == ["0"]

@@ -67,6 +67,7 @@ class STTOptions:
     keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN
     prompt: NotGivenOr[str] = NOT_GIVEN
     agent_context: NotGivenOr[str] = NOT_GIVEN
+    previous_context_n_turns: NotGivenOr[int] = NOT_GIVEN
     vad_threshold: NotGivenOr[float] = NOT_GIVEN
     speaker_labels: NotGivenOr[bool] = NOT_GIVEN
     max_speakers: NotGivenOr[int] = NOT_GIVEN
@@ -74,8 +75,8 @@ class STTOptions:
 
 
 # Speech models in the u3-rt-pro family, which share the same parameter support
-# (prompt, agent_context, continuous_partials, interruption_delay). Mirrors the
-# server-side `SpeechModel.is_u3_pro`.
+# (prompt, agent_context, previous_context_n_turns, continuous_partials,
+# interruption_delay). Mirrors the server-side `SpeechModel.is_u3_pro`.
 _U3_PRO_MODELS = ("u3-rt-pro", "u3-rt-pro-beta-1")
 
 
@@ -103,6 +104,7 @@ class STT(stt.STT):
         keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
         prompt: NotGivenOr[str] = NOT_GIVEN,
         agent_context: NotGivenOr[str] = NOT_GIVEN,
+        previous_context_n_turns: NotGivenOr[int] = NOT_GIVEN,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         speaker_labels: NotGivenOr[bool] = NOT_GIVEN,
         max_speakers: NotGivenOr[int] = NOT_GIVEN,
@@ -143,6 +145,12 @@ class STT(stt.STT):
                 `update_options(agent_context=...)`; see `enable_agent_context` for wiring
                 this automatically to an `AgentSession`. Only supported with the
                 'u3-rt-pro' / 'u3-rt-pro-beta-1' models (max 1500 characters).
+            previous_context_n_turns: Maximum number of prior conversation entries (user
+                transcripts and any `agent_context` values) carried forward as context for
+                each transcription. Set to 0 to disable automatic context carryover
+                entirely; leave unset to use the server default (recommended). Range 0–100.
+                Only supported with the 'u3-rt-pro' / 'u3-rt-pro-beta-1' models. Set at
+                construction (connect) time only; it cannot be changed via `update_options`.
         """
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -165,6 +173,12 @@ class STT(stt.STT):
         if is_given(agent_context) and model not in _U3_PRO_MODELS:
             raise ValueError(
                 "The 'agent_context' parameter is only supported with the 'u3-rt-pro' models."
+            )
+
+        if is_given(previous_context_n_turns) and model not in _U3_PRO_MODELS:
+            raise ValueError(
+                "The 'previous_context_n_turns' parameter is only supported with the "
+                "'u3-rt-pro' models."
             )
 
         if is_given(continuous_partials) and model not in _U3_PRO_MODELS:
@@ -222,6 +236,7 @@ class STT(stt.STT):
             keyterms_prompt=keyterms_prompt,
             prompt=prompt,
             agent_context=agent_context,
+            previous_context_n_turns=previous_context_n_turns,
             vad_threshold=vad_threshold,
             speaker_labels=speaker_labels,
             max_speakers=max_speakers,
@@ -625,6 +640,9 @@ class SpeechStream(stt.SpeechStream):
             "prompt": self._opts.prompt if is_given(self._opts.prompt) else None,
             "agent_context": self._opts.agent_context
             if is_given(self._opts.agent_context)
+            else None,
+            "previous_context_n_turns": self._opts.previous_context_n_turns
+            if is_given(self._opts.previous_context_n_turns)
             else None,
             "vad_threshold": self._opts.vad_threshold
             if is_given(self._opts.vad_threshold)
