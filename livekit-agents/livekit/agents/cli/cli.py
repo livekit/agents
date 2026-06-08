@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import argparse
 import asyncio
 import contextvars
 import os
 import signal
-import sys
 import threading
 from types import FrameType
 from typing import TYPE_CHECKING, Any, Literal
@@ -227,9 +225,7 @@ def _run_tcp_console(*, server: AgentServer, connect_addr: str, record: bool = F
         @server.once("worker_started")
         def _simulate_job() -> None:
             asyncio.run_coroutine_threadsafe(
-                server.simulate_job(
-                    "console-room", agent_identity="console", fake_job=True
-                ),
+                server.simulate_job("console-room", agent_identity="console", fake_job=True),
                 loop,
             )
 
@@ -377,42 +373,12 @@ def _run_worker(server: AgentServer, args: proto.CliArgs) -> None:
 
 
 def run_app(server: AgentServer | WorkerOptions) -> None:
-    if isinstance(server, WorkerOptions):
-        server = AgentServer.from_server_options(server)
+    """Run the agent via the (deprecated) rich Python CLI.
 
-    parser = argparse.ArgumentParser()
-    sub = parser.add_subparsers(dest="command")
+    This is the default entry used by ``python myagent.py <command>``. The rich
+    CLI lives in ``._legacy`` and is being phased out in favor of the LiveKit CLI
+    (``lk agent ...``) and the thin interface in ``livekit.agents.__main__``.
+    """
+    from . import _legacy
 
-    start_p = sub.add_parser("start")
-    start_p.add_argument("--log-level", default="INFO")
-    start_p.add_argument("--log-format", choices=["json", "colored"], default="json")
-    start_p.add_argument("--url")
-    start_p.add_argument("--api-key")
-    start_p.add_argument("--api-secret")
-    start_p.add_argument("--dev", action="store_true", default=False)
-    start_p.add_argument("--reload-addr")
-
-    console_p = sub.add_parser("console")
-    console_p.add_argument("--connect-addr", required=True)
-    console_p.add_argument("--record", action="store_true", default=False)
-
-    args = parser.parse_args()
-    if args.command is None:
-        print("Please use the Go CLI: lk agent start|dev|console")
-        sys.exit(1)
-
-    if args.command == "console":
-        _run_tcp_console(server=server, connect_addr=args.connect_addr, record=args.record)
-    elif args.command == "start":
-        _run_worker(
-            server=server,
-            args=proto.CliArgs(
-                log_level=args.log_level,
-                url=args.url,
-                api_key=args.api_key,
-                api_secret=args.api_secret,
-                reload_addr=args.reload_addr,
-                log_format=args.log_format,
-                dev=args.dev,
-            ),
-        )
+    _legacy.run_app(server)

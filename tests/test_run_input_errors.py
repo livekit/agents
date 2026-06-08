@@ -11,6 +11,7 @@ import pytest
 from livekit.agents import APIStatusError
 from livekit.agents.types import APIConnectOptions
 from livekit.agents.voice import Agent, AgentSession
+from livekit.agents.voice.agent_session import SessionConnectOptions
 from livekit.agents.voice.remote_session import (
     RemoteSession,
     SessionHost,
@@ -19,6 +20,8 @@ from livekit.agents.voice.remote_session import (
 from livekit.protocol.agent_pb import agent_session as agent_pb
 
 from .fake_llm import FakeLLM
+
+pytestmark = pytest.mark.unit
 
 
 class FailingLLM(FakeLLM):
@@ -69,13 +72,15 @@ class PairedTransport(SessionTransport):
 
 @pytest.mark.asyncio
 async def test_run_propagates_llm_error_no_retry():
-    session = AgentSession(conn_options=APIConnectOptions(max_retry=0))
+    session = AgentSession(
+        conn_options=SessionConnectOptions(llm_conn_options=APIConnectOptions(max_retry=0))
+    )
     agent = Agent(instructions="test agent", llm=FailingLLM())
 
     await session.start(agent=agent)
 
     result = session.run(user_input="hello")
-    with pytest.raises(Exception):
+    with pytest.raises(APIStatusError):
         await asyncio.wait_for(result, timeout=10.0)
 
     await session.aclose()
@@ -83,13 +88,17 @@ async def test_run_propagates_llm_error_no_retry():
 
 @pytest.mark.asyncio
 async def test_run_propagates_llm_error_with_retry():
-    session = AgentSession(conn_options=APIConnectOptions(max_retry=1, retry_interval=0.01))
+    session = AgentSession(
+        conn_options=SessionConnectOptions(
+            llm_conn_options=APIConnectOptions(max_retry=1, retry_interval=0.01)
+        )
+    )
     agent = Agent(instructions="test agent", llm=FailingLLM())
 
     await session.start(agent=agent)
 
     result = session.run(user_input="hello")
-    with pytest.raises(Exception):
+    with pytest.raises(APIStatusError):
         await asyncio.wait_for(result, timeout=10.0)
 
     await session.aclose()
@@ -104,7 +113,9 @@ async def test_run_input_error_e2e_through_remote_session():
     """
     host_transport, client_transport = PairedTransport.create_pair()
 
-    session = AgentSession(conn_options=APIConnectOptions(max_retry=0))
+    session = AgentSession(
+        conn_options=SessionConnectOptions(llm_conn_options=APIConnectOptions(max_retry=0))
+    )
     agent = Agent(instructions="test agent", llm=FailingLLM())
 
     host = SessionHost(host_transport)
@@ -117,7 +128,7 @@ async def test_run_input_error_e2e_through_remote_session():
     await client.start()
 
     with pytest.raises(RuntimeError, match="failed"):
-        await client.run_input("order a big mac", timeout=10.0)
+        await client.run("order a big mac", timeout=10.0)
 
     await client.aclose()
     await host.aclose()

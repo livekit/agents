@@ -5,8 +5,12 @@ from __future__ import annotations
 import time
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from livekit.agents.stt import SpeechEventType
 from livekit.agents.types import NOT_GIVEN
+
+pytestmark = pytest.mark.plugin("assemblyai")
 
 
 async def test_vad_threshold_default():
@@ -184,3 +188,118 @@ async def test_start_time_has_default_before_plugin_override():
     # start_time should already be a recent wall-clock value from the base
     # class __init__, without any explicit override.
     assert time.time() - stream.start_time < 5.0
+
+
+async def test_continuous_partials_default():
+    """Test continuous_partials is not set by default."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key")
+    assert stt._opts.continuous_partials is NOT_GIVEN
+
+
+async def test_continuous_partials_set():
+    """Test continuous_partials can be set in constructor with u3-rt-pro."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model="u3-rt-pro", continuous_partials=True)
+    assert stt._opts.continuous_partials is True
+
+
+async def test_continuous_partials_requires_u3_rt_pro():
+    """Test continuous_partials raises ValueError when used with a non-u3-rt-pro model."""
+    from livekit.plugins.assemblyai import STT
+
+    with pytest.raises(ValueError, match="continuous_partials"):
+        STT(api_key="test-key", continuous_partials=True)
+
+
+async def test_continuous_partials_with_u3_pro_alias():
+    """Test continuous_partials works with the deprecated 'u3-pro' alias (rewritten to u3-rt-pro)."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model="u3-pro", continuous_partials=True)
+    assert stt._opts.continuous_partials is True
+    assert stt._opts.speech_model == "u3-rt-pro"
+
+
+async def test_continuous_partials_update():
+    """Test continuous_partials can be updated dynamically via update_options."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model="u3-rt-pro", continuous_partials=False)
+    stt.update_options(continuous_partials=True)
+    assert stt._opts.continuous_partials is True
+
+
+async def test_continuous_partials_defaults_to_true_for_u3_rt_pro():
+    """Test continuous_partials defaults to True when model is u3-rt-pro (LiveKit-only
+    default; AssemblyAI server defaults to False)."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model="u3-rt-pro")
+    assert stt._opts.continuous_partials is True
+
+
+async def test_continuous_partials_explicit_false_overrides_livekit_default():
+    """Test explicit continuous_partials=False overrides the LiveKit-only True default."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model="u3-rt-pro", continuous_partials=False)
+    assert stt._opts.continuous_partials is False
+
+
+async def test_continuous_partials_update_from_default():
+    """Test continuous_partials can be updated via update_options away from LiveKit default."""
+    from livekit.plugins.assemblyai import STT
+
+    # LiveKit defaults this to True for u3-rt-pro
+    stt = STT(api_key="test-key", model="u3-rt-pro")
+    assert stt._opts.continuous_partials is True
+
+    stt.update_options(continuous_partials=False)
+    assert stt._opts.continuous_partials is False
+
+
+async def test_interruption_delay_update():
+    """Test interruption_delay can be updated dynamically via update_options."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model="u3-rt-pro", interruption_delay=200)
+    stt.update_options(interruption_delay=750)
+    assert stt._opts.interruption_delay == 750
+
+
+async def test_interruption_delay_update_from_default():
+    """Test interruption_delay can be set via update_options when not initially set."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model="u3-rt-pro")
+    assert stt._opts.interruption_delay is NOT_GIVEN
+
+    stt.update_options(interruption_delay=300)
+    assert stt._opts.interruption_delay == 300
+
+
+async def test_interruption_delay_default():
+    """Test interruption_delay is not set by default."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key")
+    assert stt._opts.interruption_delay is NOT_GIVEN
+
+
+async def test_interruption_delay_set():
+    """Test interruption_delay can be set in constructor with u3-rt-pro."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model="u3-rt-pro", interruption_delay=200)
+    assert stt._opts.interruption_delay == 200
+
+
+async def test_interruption_delay_requires_u3_rt_pro():
+    """Test interruption_delay raises ValueError when used with a non-u3-rt-pro model."""
+    from livekit.plugins.assemblyai import STT
+
+    with pytest.raises(ValueError, match="interruption_delay"):
+        STT(api_key="test-key", interruption_delay=200)

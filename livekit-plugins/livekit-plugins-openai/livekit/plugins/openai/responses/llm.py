@@ -33,6 +33,7 @@ from openai.types.responses import (
     ResponseFailedEvent,
     ResponseInputParam,
     ResponseOutputItemDoneEvent,
+    ResponseOutputMessage,
     ResponseTextDeltaEvent,
     ToolParam,
     response_create_params,
@@ -42,6 +43,7 @@ from openai.types.shared_params import ResponsesModel
 
 from ..log import logger
 from ..models import _supports_reasoning_effort
+from ..tools import OpenAITool
 
 ServiceTier = Literal["auto", "default", "flex", "scale", "priority"]
 Verbosity = Literal["low", "medium", "high"]
@@ -151,6 +153,10 @@ class _LLMOptions:
 
 
 class LLM(llm.LLM):
+    # the plugin's ProviderTool subclass; subclasses (e.g. xAI) override this so server-side
+    # provider tools are recognized when serializing the request. See to_responses_fnc_ctx.
+    _provider_tool_type: type[llm.ProviderTool] = OpenAITool
+
     def __init__(
         self,
         *,
@@ -406,7 +412,9 @@ class LLMStream(llm.LLMStream):
         tool_schemas = cast(
             list[ToolParam],
             self._tool_ctx.parse_function_tools(
-                "openai.responses", strict=self._strict_tool_schema
+                "openai.responses",
+                strict=self._strict_tool_schema,
+                provider_tool_type=self._llm._provider_tool_type,
             ),
         )
 
@@ -540,6 +548,21 @@ class LLMStream(llm.LLMStream):
         self._response_id = event.response.id
 
     def _handle_response_completed(self, event: ResponseCompletedEvent) -> llm.ChatChunk | None:
+        for item in event.response.output:
+            # Every item.type is a discriminator of openai's ResponseOutputItem union.
+            # Of those, only these are produced/consumed by the agent itself; all other
+            # members of the union are tools the Responses API runs server-side (e.g.
+            # openai web_search, xAI web_search and x_search's custom_tool_call subcalls),
+            # so anything not in this set is a provider-executed tool.
+            if item.type not in ("message", "reasoning", "function_call", "function_call_output"):
+                logger.info(
+                    "provider tool executed",
+                    extra={
+                        "tool_type": item.type,
+                        "result": item.model_dump(exclude_none=True),
+                    },
+                )
+
         self._response_completed = True
         self._llm._prev_chat_ctx = self._full_chat_ctx
         self._llm._prev_resp_id = self._response_id
@@ -579,6 +602,17 @@ class LLMStream(llm.LLMStream):
                 ),
             )
             self._pending_tool_calls.add(event.item.call_id)
+        elif isinstance(event.item, ResponseOutputMessage) and event.item.phase is not None:
+            # Models like gpt-5.3-codex label assistant messages as intermediate
+            # `commentary` or the `final_answer`
+            chunk = llm.ChatChunk(
+                id=self._response_id,
+                delta=llm.ChoiceDelta(
+                    role="assistant",
+                    content=None,
+                    extra={"openai": {"phase": event.item.phase}},
+                ),
+            )
         return chunk
 
     def _handle_response_output_text_delta(

@@ -48,7 +48,7 @@ from .events import (
 from .run_result import RunResult
 
 if TYPE_CHECKING:
-    from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput  # type: ignore[import-untyped]
+    from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput
     from ..inference.interruption import OverlappingSpeechEvent
     from .agent_session import AgentSession, AgentSessionOptions
 
@@ -292,6 +292,7 @@ def _chat_item_to_proto(item: llm.ChatItem) -> agent_pb.ChatContext.ChatItem:
             id=item.id,
             role=pb_role,
             content=content,
+            interrupted=item.interrupted,
             metrics=_metrics_to_proto(item.metrics),
         )
         return agent_pb.ChatContext.ChatItem(message=pb_msg)
@@ -373,6 +374,7 @@ class SessionHost:
             session.on("session_usage_updated", self._on_session_usage_updated)
             session.on("overlapping_speech", self._on_overlapping_speech)
             session.on("error", self._on_error)
+            session.on("debug_message", self._on_debug_message)
 
     async def start(self) -> None:
         if self._started:
@@ -396,6 +398,7 @@ class SessionHost:
             self._session.off("session_usage_updated", self._on_session_usage_updated)
             self._session.off("overlapping_speech", self._on_overlapping_speech)
             self._session.off("error", self._on_error)
+            self._session.off("debug_message", self._on_debug_message)
 
         if self._recv_task:
             await utils.aio.cancel_and_wait(self._recv_task)
@@ -569,6 +572,9 @@ class SessionHost:
             )
         )
 
+    def _on_debug_message(self, event: agent_pb.DebugMessage) -> None:
+        self._send_event(agent_pb.AgentSessionEvent(debug_message=event))
+
     async def _handle_request_safe(self, req: agent_pb.SessionRequest) -> None:
         try:
             await self._handle_request(req)
@@ -591,7 +597,6 @@ class SessionHost:
 
     async def _handle_request(self, req: agent_pb.SessionRequest) -> None:
         assert self._session is not None
-        req_type = req.WhichOneof("request")
 
         if req.HasField("ping"):
             resp = agent_pb.AgentSessionMessage(
@@ -752,25 +757,79 @@ class SessionHost:
             await self._transport.send_message(resp)
 
         elif req.HasField("update_io"):
-            update = req.update_io
-            if update.HasField("input"):
-                if update.input.HasField("audio_enabled"):
-                    self._session.input.set_audio_enabled(update.input.audio_enabled)
-                if update.input.HasField("video_enabled"):
-                    self._session.input.set_video_enabled(update.input.video_enabled)
-            if update.HasField("output"):
-                if update.output.HasField("audio_enabled"):
-                    self._session.output.set_audio_enabled(update.output.audio_enabled)
-                if update.output.HasField("video_enabled"):
-                    self._session.output.set_video_enabled(update.output.video_enabled)
-                if update.output.HasField("transcription_enabled"):
-                    self._session.output.set_transcription_enabled(
-                        update.output.transcription_enabled
-                    )
+            # Honor the remote control's mute/unmute toggles for audio /
+            # video / transcription. Only fields actually set in the proto
+            # are applied (presence-tracked booleans), so the client can
+            # send a partial update without clobbering the other channels.
+            io = req.update_io
+            input_io = self._session.input
+            output_io = self._session.output
+            if io.HasField("input"):
+                if io.input.HasField("audio_enabled"):
+                    input_io.set_audio_enabled(io.input.audio_enabled)
+                if io.input.HasField("video_enabled"):
+                    input_io.set_video_enabled(io.input.video_enabled)
+            if io.HasField("output"):
+                if io.output.HasField("audio_enabled"):
+                    output_io.set_audio_enabled(io.output.audio_enabled)
+                if io.output.HasField("video_enabled"):
+                    output_io.set_video_enabled(io.output.video_enabled)
+                if io.output.HasField("transcription_enabled"):
+                    output_io.set_transcription_enabled(io.output.transcription_enabled)
             resp = agent_pb.AgentSessionMessage(
                 response=agent_pb.SessionResponse(
                     request_id=req.request_id,
                     update_io=agent_pb.SessionResponse.UpdateIOResponse(),
+                )
+            )
+            await self._transport.send_message(resp)
+
+        elif req.HasField("finalize_simulation"):
+            # The simulator's verdict is passed in so on_simulation_end can read it
+            # (ctx.simulator_verdict); the agent records its OWN verdict via
+            # ctx.success()/fail(). Both are reported — this is not an override.
+            user_verdict: agent_pb.SessionResponse.FinalizeSimulationResponse.SimulationVerdict | None = None  # noqa: E501
+            sim_error: str | None = None
+            try:
+                from livekit.protocol import agent_simulation as sim_pb
+
+                from ..job import get_job_context
+                from ..simulation import SimulationVerdict
+
+                jc = get_job_context(required=False)
+                sim_ctx = jc.simulation_context() if jc is not None else None
+                if sim_ctx is not None:
+                    sim_ctx._begin_finalize(
+                        simulator_verdict=SimulationVerdict(
+                            success=req.finalize_simulation.provisional_success,
+                            reason=req.finalize_simulation.provisional_reason,
+                        ),
+                        run=sim_pb.SimulationRun(id=sim_ctx.simulation_run_id),
+                        job=None,
+                        session=self._session,
+                    )
+                    fnc = jc._simulation_end_fnc if jc is not None else None
+                    if fnc is not None:
+                        cb_res = fnc(sim_ctx)
+                        if asyncio.iscoroutine(cb_res):
+                            await cb_res
+                    if (uv := sim_ctx.user_verdict) is not None:
+                        user_verdict = (
+                            agent_pb.SessionResponse.FinalizeSimulationResponse.SimulationVerdict(
+                                success=uv.success, reason=uv.reason
+                            )
+                        )
+            except Exception as e:
+                sim_error = str(e)
+                logger.exception("error while executing the on_simulation_end callback")
+
+            resp = agent_pb.AgentSessionMessage(
+                response=agent_pb.SessionResponse(
+                    request_id=req.request_id,
+                    error=sim_error,
+                    finalize_simulation=agent_pb.SessionResponse.FinalizeSimulationResponse(
+                        user_verdict=user_verdict,
+                    ),
                 )
             )
             await self._transport.send_message(resp)
@@ -946,7 +1005,7 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
                 return
             except (TimeoutError, asyncio.TimeoutError):
                 if asyncio.get_event_loop().time() >= deadline:
-                    raise TimeoutError("wait_for_ready timed out")
+                    raise TimeoutError("wait_for_ready timed out") from None
 
     async def get_chat_history(self) -> agent_pb.SessionResponse.GetChatHistoryResponse:
         req = agent_pb.SessionRequest(
@@ -981,3 +1040,24 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
         )
         resp = await self._send_request(req, timeout=timeout)
         return resp.run_input
+
+    async def finalize_simulation(
+        self,
+        *,
+        provisional_success: bool,
+        provisional_reason: str = "",
+        timeout: float = 60.0,
+    ) -> agent_pb.SessionResponse.FinalizeSimulationResponse:
+        """Hand the agent under test the simulator's provisional verdict and return the
+        agent's own verdict from its on_simulation_end callback. The response's
+        ``user_verdict`` is unset when the agent has no handler (or times out) or sets
+        no verdict of its own; both verdicts are reported, neither overrides the other."""
+        req = agent_pb.SessionRequest(
+            request_id=utils.shortuuid("req_"),
+            finalize_simulation=agent_pb.SessionRequest.FinalizeSimulation(
+                provisional_success=provisional_success,
+                provisional_reason=provisional_reason,
+            ),
+        )
+        resp = await self._send_request(req, timeout=timeout)
+        return resp.finalize_simulation

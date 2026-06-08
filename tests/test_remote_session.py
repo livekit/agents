@@ -15,6 +15,8 @@ from livekit.agents.voice.remote_session import (
 )
 from livekit.protocol.agent_pb import agent_session as agent_pb
 
+pytestmark = pytest.mark.unit
+
 
 class PairedTransport(SessionTransport):
     """Two linked transports: what one sends, the other receives."""
@@ -81,7 +83,7 @@ def _make_mock_session() -> MagicMock:
     options.interruption = MagicMock(__iter__=lambda s: iter([]))
     options.max_tool_steps = 5
     options.user_away_timeout = 30
-    options.preemptive_generation = False
+    options.preemptive_generation = MagicMock(__iter__=lambda s: iter([]))
     options.min_consecutive_speech_delay = 0.5
     options.use_tts_aligned_transcript = True
     options.ivr_detection = False
@@ -177,7 +179,7 @@ async def test_run_input():
     mock_session.interrupt = AsyncMock()
 
     class FakeRunResult:
-        events: list = []
+        events = [MagicMock(item=ChatMessage(role="assistant", content=["hi there"], id="m-1"))]
         def done(self): return True
         def __await__(self):
             return asyncio.sleep(0).__await__()
@@ -191,7 +193,7 @@ async def test_run_input():
     client = RemoteSession(client_transport)
     await client.start()
 
-    resp = await client.run_input("order a big mac", timeout=5.0)
+    resp = await client.run("order a big mac", timeout=5.0)
     assert resp is not None
 
     await client.aclose()

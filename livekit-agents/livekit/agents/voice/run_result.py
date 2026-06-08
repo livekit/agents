@@ -1056,6 +1056,43 @@ def mock_tools(agent: type[Agent], mocks: dict[str, Callable]) -> Generator[None
         _MockToolsContextVar.reset(token)
 
 
+async def _run_mock(mock: Callable, *fnc_args: Any, **fnc_kwargs: Any) -> Any:
+    """Invoke a mock tool, trimming args/kwargs to whatever subset of the real
+    tool's parameters the mock actually declares."""
+    import inspect
+
+    sig = inspect.signature(mock)
+
+    pos_param_names = [
+        name
+        for name, param in sig.parameters.items()
+        if param.kind
+        in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        )
+    ]
+    max_positional = len(pos_param_names)
+    trimmed_args = fnc_args[:max_positional]
+    kw_param_names = [
+        name
+        for name, param in sig.parameters.items()
+        if param.kind
+        in (
+            inspect.Parameter.KEYWORD_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        )
+    ]
+    trimmed_kwargs = {k: v for k, v in fnc_kwargs.items() if k in kw_param_names}
+
+    bound = sig.bind_partial(*trimmed_args, **trimmed_kwargs)
+    bound.apply_defaults()
+
+    if inspect.iscoroutinefunction(mock):
+        return await mock(*bound.args, **bound.kwargs)
+    return mock(*bound.args, **bound.kwargs)
+
+
 def _format_events(events: list[RunEvent], *, selected_index: int | None = None) -> list[str]:
     lines: list[str] = []
     for i, event in enumerate(events):

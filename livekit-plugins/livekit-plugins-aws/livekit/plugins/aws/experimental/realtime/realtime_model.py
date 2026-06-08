@@ -2116,7 +2116,7 @@ class RealtimeSession(  # noqa: F811
                     if self._pending_generation_fut is fut:
                         self._pending_generation_fut = None
 
-            asyncio.create_task(_send_text())
+            send_task = asyncio.create_task(_send_text())
 
             # Set timeout from model configuration
             def _on_timeout() -> None:
@@ -2130,7 +2130,17 @@ class RealtimeSession(  # noqa: F811
             timeout_handle = asyncio.get_running_loop().call_later(
                 self._realtime_model._generate_reply_timeout, _on_timeout
             )
-            fut.add_done_callback(lambda _: timeout_handle.cancel())
+
+            def _on_fut_done(f: asyncio.Future[llm.GenerationCreatedEvent]) -> None:
+                timeout_handle.cancel()
+                is_current = self._pending_generation_fut is fut
+                if is_current:
+                    self._pending_generation_fut = None
+                if f.cancelled() and is_current and not send_task.done():
+                    # external cancel before the text was sent: drop the send
+                    send_task.cancel()
+
+            fut.add_done_callback(_on_fut_done)
 
             return fut
 

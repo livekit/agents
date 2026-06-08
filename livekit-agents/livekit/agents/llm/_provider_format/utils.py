@@ -17,17 +17,24 @@ def convert_mid_conversation_instructions(
 ) -> llm.ChatContext:
     """Convert mid-conversation system messages to the given role to preserve their position.
 
-    Preamble system messages (before any user/assistant turn) are kept as-is.
-    Later ones are converted using the given role and template.
+    The first system/developer message is kept as the base preamble.
+    Every later system/developer message is rewritten with the given
+    role, wrapped in ``template``. This covers both mid-conversation
+    instructions and per-turn instructions appended by ``generate_reply``
+    on the very first turn (when there's no user/assistant content yet
+    to anchor "mid-conversation"). Without this, providers like Gemini,
+    Anthropic, and AWS fall back to ``inject_dummy_user_message``
+    (a literal ``"."`` user turn the model frequently responds to with
+    "you didn't say anything").
     """
-    seen_non_system = False
+    first_system_seen = False
     items: list[llm.ChatItem] = []
 
     for item in chat_ctx.items:
         if (
             item.type == "message"
             and item.role in ("system", "developer")
-            and seen_non_system
+            and first_system_seen
             and (text := item.text_content)
         ):
             items.append(
@@ -39,12 +46,8 @@ def convert_mid_conversation_instructions(
                 )
             )
         else:
-            if not seen_non_system and (
-                item.type in ("function_call", "function_call_output")
-                or (item.type == "message" and item.role in ("assistant", "user"))
-            ):
-                seen_non_system = True
-
+            if item.type == "message" and item.role in ("system", "developer"):
+                first_system_seen = True
             items.append(item)
 
     return llm.ChatContext(items)

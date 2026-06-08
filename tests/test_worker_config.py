@@ -11,9 +11,13 @@ from __future__ import annotations
 import os
 from unittest.mock import patch
 
+import pytest
+
 from livekit.agents.cli import proto
 from livekit.agents.cli.cli import _run_worker
 from livekit.agents.worker import AgentServer
+
+pytestmark = pytest.mark.unit
 
 
 class _TestableServer(AgentServer):

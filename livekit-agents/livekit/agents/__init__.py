@@ -58,6 +58,17 @@ from .llm.tool_context import (
     function_tool,
 )
 from .plugin import Plugin
+from .simulation import (
+    Scenario,
+    ScenarioGroup,
+    ScenarioUserdata,
+    SimulationContext,
+    SimulationDispatch,
+    SimulationRun,
+    SimulationVerdict,
+    load_scenarios,
+    scenario_group_to_yaml,
+)
 from .types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -87,6 +98,7 @@ from .voice import (
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
+    UserTurnExceededEvent,
     avatar,
     io,
     room_io,
@@ -116,6 +128,7 @@ from .voice.turn import (
     InterruptionOptions,
     PreemptiveGenerationOptions,
     TurnHandlingOptions,
+    UserTurnLimitOptions,
 )
 from .worker import (
     AgentServer,
@@ -182,6 +195,15 @@ __all__ = [
     "ToolError",
     "RunContext",
     "Plugin",
+    "Scenario",
+    "ScenarioGroup",
+    "ScenarioUserdata",
+    "SimulationContext",
+    "SimulationDispatch",
+    "SimulationRun",
+    "SimulationVerdict",
+    "load_scenarios",
+    "scenario_group_to_yaml",
     "AgentSession",
     "RecordingOptions",
     "text_transforms",
@@ -237,6 +259,8 @@ __all__ = [
     "EndpointingOptions",
     "InterruptionOptions",
     "PreemptiveGenerationOptions",
+    "UserTurnLimitOptions",
+    "UserTurnExceededEvent",
 ]
 
 # Cleanup docs of unexported modules

@@ -4,6 +4,8 @@ import pytest
 
 from livekit.agents.utils import ConnectionPool
 
+pytestmark = pytest.mark.unit
+
 
 class DummyConnection:
     def __init__(self, id):
