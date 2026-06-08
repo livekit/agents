@@ -421,6 +421,30 @@ async def test_streaming_emits_pending_end_of_speech_when_final_never_arrives() 
 
 
 @pytest.mark.asyncio
+async def test_new_speech_start_emits_pending_end_of_speech_for_previous_utterance() -> None:
+    stream = _make_stream()
+    stream._audio_position = 1.0
+
+    await stream._handle_message({"event": "vad.speech_start", "utterance_idx": 0})
+    stream._audio_position = 1.5
+    await stream._handle_message({"event": "vad.speech_end", "utterance_idx": 0})
+    stream._audio_position = 2.0
+    await stream._handle_message({"event": "vad.speech_start", "utterance_idx": 1})
+
+    assert [event.type for event in stream._event_ch.events] == [
+        stt_streaming.stt.SpeechEventType.START_OF_SPEECH,
+        stt_streaming.stt.SpeechEventType.END_OF_SPEECH,
+        stt_streaming.stt.SpeechEventType.START_OF_SPEECH,
+    ]
+    eos_event = stream._event_ch.events[1]
+    assert eos_event.alternatives[0].end_time == 1.5
+    assert eos_event.alternatives[0].metadata["speech_end_wall_time"] > 0
+    assert stream._pending_eos is False
+    assert stream._eos_emitted_for_utterance is False
+    assert stream._utterance_start_audio_pos == 2.0
+
+
+@pytest.mark.asyncio
 async def test_streaming_safe_send_str_ignores_closed_transport() -> None:
     stream = _make_stream()
     calls = []

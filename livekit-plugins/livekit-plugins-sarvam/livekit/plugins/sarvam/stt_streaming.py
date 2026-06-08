@@ -638,6 +638,7 @@ class StreamingSpeechStream(stt.SpeechStream):
         if event == "session.begin":
             return
         elif event == "vad.speech_start":
+            self._emit_pending_eos_before_new_speech()
             self._reset_utterance_state()
             self._event_ch.send_nowait(
                 stt.SpeechEvent(
@@ -702,6 +703,10 @@ class StreamingSpeechStream(stt.SpeechStream):
     def _is_valid_transcript(self, data: dict[str, Any]) -> bool:
         text = data.get("text")
         return isinstance(text, str) and bool(text)
+
+    def _emit_pending_eos_before_new_speech(self) -> None:
+        if self._pending_eos and not self._eos_emitted_for_utterance:
+            self._emit_end_of_speech()
 
     def _handle_speech_end(self) -> None:
         self._utterance_speech_end_audio_pos = self._audio_position
