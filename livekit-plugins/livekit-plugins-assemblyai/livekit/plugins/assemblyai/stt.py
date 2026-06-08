@@ -51,7 +51,11 @@ class STTOptions:
     buffer_size_seconds: float
     encoding: Literal["pcm_s16le", "pcm_mulaw"] = "pcm_s16le"
     speech_model: Literal[
-        "universal-streaming-english", "universal-streaming-multilingual", "u3-rt-pro", "u3-pro"
+        "universal-streaming-english",
+        "universal-streaming-multilingual",
+        "u3-rt-pro",
+        "u3-rt-pro-beta-1",
+        "u3-pro",
     ] = "universal-streaming-english"
     language_detection: NotGivenOr[bool] = NOT_GIVEN
     end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN
@@ -68,6 +72,12 @@ class STTOptions:
     domain: NotGivenOr[str] = NOT_GIVEN
 
 
+# Speech models in the u3-rt-pro family, which share the same parameter support
+# (prompt, continuous_partials, interruption_delay). Mirrors the server-side
+# `SpeechModel.is_u3_pro`.
+_U3_PRO_MODELS = ("u3-rt-pro", "u3-rt-pro-beta-1")
+
+
 class STT(stt.STT):
     def __init__(
         self,
@@ -79,6 +89,7 @@ class STT(stt.STT):
             "universal-streaming-english",
             "universal-streaming-multilingual",
             "u3-rt-pro",
+            "u3-rt-pro-beta-1",
             "u3-pro",
         ] = "universal-streaming-english",
         language_detection: NotGivenOr[bool] = NOT_GIVEN,
@@ -120,11 +131,11 @@ class STT(stt.STT):
                 LiveKit; AssemblyAI server defaults to False), additional partials covering
                 the full turn transcript are emitted approximately every 3 seconds while
                 speech continues, on top of those baseline partials. Only supported with
-                the 'u3-rt-pro' model.
+                the 'u3-rt-pro' / 'u3-rt-pro-beta-1' models.
             interruption_delay: How soon the first early partial is emitted, in ms.
                 Range 0–1000, default 500. Lower values produce faster time-to-first-token
                 for barge-in; higher values produce more confident first partials. Only
-                supported with the 'u3-rt-pro' model.
+                supported with the 'u3-rt-pro' / 'u3-rt-pro-beta-1' models.
         """
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -139,23 +150,25 @@ class STT(stt.STT):
             logger.warning("'u3-pro' is deprecated, use 'u3-rt-pro' instead.")
             model = "u3-rt-pro"
 
-        if is_given(prompt) and model != "u3-rt-pro":
-            raise ValueError("The 'prompt' parameter is only supported with the 'u3-rt-pro' model.")
-
-        if is_given(continuous_partials) and model != "u3-rt-pro":
+        if is_given(prompt) and model not in _U3_PRO_MODELS:
             raise ValueError(
-                "The 'continuous_partials' parameter is only supported with the 'u3-rt-pro' model."
+                "The 'prompt' parameter is only supported with the 'u3-rt-pro' models."
             )
 
-        if is_given(interruption_delay) and model != "u3-rt-pro":
+        if is_given(continuous_partials) and model not in _U3_PRO_MODELS:
             raise ValueError(
-                "The 'interruption_delay' parameter is only supported with the 'u3-rt-pro' model."
+                "The 'continuous_partials' parameter is only supported with the 'u3-rt-pro' models."
+            )
+
+        if is_given(interruption_delay) and model not in _U3_PRO_MODELS:
+            raise ValueError(
+                "The 'interruption_delay' parameter is only supported with the 'u3-rt-pro' models."
             )
 
         # LiveKit defaults continuous_partials to True (vs. AssemblyAI's server default of
         # False) for steady-cadence partials. This parameter is only supported for
-        # u3-rt-pro, enforced by the validation above.
-        if not is_given(continuous_partials) and model == "u3-rt-pro":
+        # the u3-rt-pro family, enforced by the validation above.
+        if not is_given(continuous_partials) and model in _U3_PRO_MODELS:
             continuous_partials = True
 
         self._base_url = base_url
@@ -545,7 +558,7 @@ class SpeechStream(stt.SpeechStream):
         # u3-rt-pro defaults: min=100, max=min (so both 100 unless overridden)
         min_silence: int | None
         max_silence: int | None
-        if self._opts.speech_model == "u3-rt-pro":
+        if self._opts.speech_model in _U3_PRO_MODELS:
             min_silence = (
                 self._opts.min_turn_silence if is_given(self._opts.min_turn_silence) else 100
             )
@@ -584,7 +597,8 @@ class SpeechStream(stt.SpeechStream):
             "language_detection": self._opts.language_detection
             if is_given(self._opts.language_detection)
             else True
-            if "multilingual" in self._opts.speech_model or self._opts.speech_model == "u3-rt-pro"
+            if "multilingual" in self._opts.speech_model
+            or self._opts.speech_model in _U3_PRO_MODELS
             else False,
             "prompt": self._opts.prompt if is_given(self._opts.prompt) else None,
             "vad_threshold": self._opts.vad_threshold

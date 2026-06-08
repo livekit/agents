@@ -303,3 +303,36 @@ async def test_interruption_delay_requires_u3_rt_pro():
 
     with pytest.raises(ValueError, match="interruption_delay"):
         STT(api_key="test-key", interruption_delay=200)
+
+
+# ---------------------------------------------------------------------------
+# u3-rt-pro-beta-1 model + u3-pro param family
+#
+# u3-rt-pro-beta-1 shares all u3-rt-pro behavior, so the u3-pro-gated params
+# (prompt, continuous_partials, interruption_delay) are accepted with it, and
+# continuous_partials defaults to True.
+# ---------------------------------------------------------------------------
+
+
+async def test_u3_rt_pro_beta_1_accepted():
+    """u3-rt-pro-beta-1 is a valid model and gets the u3-rt-pro defaults."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model="u3-rt-pro-beta-1")
+    assert stt._opts.speech_model == "u3-rt-pro-beta-1"
+    # continuous_partials defaults to True for the u3-rt-pro family
+    assert stt._opts.continuous_partials is True
+
+
+async def test_u3_rt_pro_beta_1_accepts_u3_pro_params():
+    """The u3-pro-gated params are accepted with u3-rt-pro-beta-1."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(
+        api_key="test-key",
+        model="u3-rt-pro-beta-1",
+        prompt="medical dictation",
+        interruption_delay=300,
+    )
+    assert stt._opts.prompt == "medical dictation"
+    assert stt._opts.interruption_delay == 300
