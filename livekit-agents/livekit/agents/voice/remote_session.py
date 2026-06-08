@@ -807,7 +807,6 @@ class SessionHost:
                         ),
                         run=sim_pb.SimulationRun(id=sim_ctx.simulation_run_id),
                         job=None,
-                        session=self._session,
                     )
                     fnc = jc._simulation_end_fnc if jc is not None else None
                     if fnc is not None:

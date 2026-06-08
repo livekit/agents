@@ -11,7 +11,7 @@ from google.protobuf import json_format
 from livekit.protocol import agent_simulation as proto
 
 if TYPE_CHECKING:
-    from .voice import AgentSession
+    from .job import JobContext
 
 # Re-export the generated proto messages as the canonical scenario types.
 Scenario = proto.Scenario
@@ -91,19 +91,21 @@ class SimulationContext:
         can fail a run the simulator passed, but it can never rescue one — so there is
         no ``success()``; not calling :meth:`fail` leaves the simulator's verdict to stand.
 
-    The context is created from the simulation room's metadata as soon as the
-    entrypoint calls :meth:`JobContext.simulation_context`, so the scenario is
-    available immediately. ``simulator_verdict`` and the hydrated ``run`` / ``job``
-    are filled in right before ``on_simulation_end`` is invoked.
+    The framework creates and caches this from the simulation room's metadata, so the
+    same instance is shared everywhere — read it any time via
+    :meth:`JobContext.simulation_context` (``None`` in production). Use :attr:`job_context`
+    to reach the running session (``job_context.primary_session``), the room, etc.
+    ``simulator_verdict`` and the hydrated ``run`` / ``job`` are filled in right before
+    ``on_simulation_end`` is invoked.
     """
 
-    def __init__(self, dispatch: proto.SimulationDispatch) -> None:
+    def __init__(self, dispatch: proto.SimulationDispatch, job_ctx: JobContext) -> None:
         self._dispatch = dispatch
         self._scenario = dispatch.scenario
+        self._job_ctx = job_ctx
         self._run: proto.SimulationRun | None = None
         self._job: proto.SimulationRun.Job | None = None
         self._simulator_verdict: SimulationVerdict | None = None
-        self._session: AgentSession | None = None
         self._user_verdict: SimulationVerdict | None = None
 
     @property
@@ -133,8 +135,10 @@ class SimulationContext:
         return self._simulator_verdict
 
     @property
-    def session(self) -> AgentSession | None:
-        return self._session
+    def job_context(self) -> JobContext:
+        """The :class:`JobContext` for this run — use it to reach the running session
+        (``job_context.primary_session``), the room, and other job state."""
+        return self._job_ctx
 
     def _begin_finalize(
         self,
@@ -142,13 +146,11 @@ class SimulationContext:
         simulator_verdict: SimulationVerdict,
         run: proto.SimulationRun | None,
         job: proto.SimulationRun.Job | None,
-        session: AgentSession | None,
     ) -> None:
-        """Internal: populate the simulator verdict / run / session before on_simulation_end."""
+        """Internal: populate the simulator verdict / run before on_simulation_end."""
         self._simulator_verdict = simulator_verdict
         self._run = run
         self._job = job
-        self._session = session
 
     def userdata(self) -> ScenarioUserdata:
         """The scenario's ``userdata`` decoded from its JSON string (``{}`` if empty)."""
