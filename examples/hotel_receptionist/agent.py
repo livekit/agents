@@ -594,12 +594,13 @@ async def on_simulation_end(ctx: SimulationContext) -> None:
     # codes / order / which-king don't matter and the agent need not reproduce the
     # statements — while collateral damage still surfaces.
     expected_state = ctx.userdata().get("expected_state") or []
-    if ctx.session is None or not expected_state:
+    if not expected_state:
         return
 
+    session = ctx.job_context.primary_session
     expected = await build_expected(_SEED_DB_BYTES, expected_state)
     try:
-        diffs = diff_databases(expected.connection, ctx.session.userdata.db.connection)
+        diffs = diff_databases(expected.connection, session.userdata.db.connection)
     finally:
         await expected.aclose()
 
@@ -652,10 +653,6 @@ async def on_session_end(ctx: JobContext) -> None:
 @server.rtc_session(on_session_end=on_session_end, on_simulation_end=on_simulation_end)
 async def hotel_receptionist_agent(ctx: JobContext) -> None:
     await ctx.connect()
-
-    # Prime the simulation context from the room metadata (None in production) so
-    # on_simulation_end reuses the same cached context to grade the final DB state.
-    ctx.simulation_context()
 
     db = HotelDB.from_bytes(_SEED_DB_BYTES)
 
