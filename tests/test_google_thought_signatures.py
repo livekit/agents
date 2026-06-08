@@ -63,6 +63,12 @@ class TestGeminiModelDetection:
             ("gemini-3-flash", True),
             ("gemini-3-pro", True),
             ("GEMINI-3-FLASH", True),  # case insensitive
+            # Latest Gemini 3 point releases - should return True (matched by gemini-3)
+            ("gemini-3.5-flash", True),
+            ("gemini-3.1-flash-lite", True),
+            # Version-less Gemini aliases - should return True (resolve to Gemini 3 server-side)
+            ("gemini-flash-latest", True),
+            ("gemini-flash-lite-latest", True),
             # Gemini 2.5 models - should return True (requires thought signatures)
             ("gemini-2.5-flash", True),
             ("gemini-2.5-pro-preview-05-06", True),
