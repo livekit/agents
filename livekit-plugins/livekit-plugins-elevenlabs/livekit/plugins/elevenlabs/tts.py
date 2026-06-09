@@ -344,6 +344,7 @@ class ChunkedStream(tts.ChunkedStream):
         if is_given(self._opts.apply_language_text_normalization):
             extra_params["apply_language_text_normalization"] = self._opts.apply_language_text_normalization
 
+      
         try:
             async with self._tts._ensure_session().post(
                 _synthesize_url(self._opts),
@@ -353,6 +354,7 @@ class ChunkedStream(tts.ChunkedStream):
                     "model_id": self._opts.model,
                     "voice_settings": voice_settings,
                     "apply_text_normalization": self._opts.apply_text_normalization,
+                    "enable_logging": self._opts.enable_logging,
                     **extra_params
                 },
                 timeout=aiohttp.ClientTimeout(
