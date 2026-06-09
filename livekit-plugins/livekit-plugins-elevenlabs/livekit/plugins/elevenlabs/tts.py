@@ -336,16 +336,14 @@ class ChunkedStream(tts.ChunkedStream):
             if is_given(self._opts.voice_settings)
             else None
         )
-        language_code = (
-            self._opts.language
-            if is_given(self._opts.language)
-            else None
-        )
-        apply_language_text_normalization = (
-            self._opts.apply_language_text_normalization
-            if is_given(self._opts.apply_language_text_normalization)
-            else None
-        )
+        extra_params = {}
+        
+        if is_given(self._opts.language):
+            extra_params["language_code"] = self._opts.language.language
+        
+        if is_given(self._opts.apply_language_text_normalization):
+            extra_params["apply_language_text_normalization"] = self._opts.apply_language_text_normalization
+
         try:
             async with self._tts._ensure_session().post(
                 _synthesize_url(self._opts),
@@ -355,9 +353,7 @@ class ChunkedStream(tts.ChunkedStream):
                     "model_id": self._opts.model,
                     "voice_settings": voice_settings,
                     "apply_text_normalization": self._opts.apply_text_normalization,
-                    "apply_language_text_normalization": apply_language_text_normalization,
-                    "language_code": language_code
-
+                    **extra_params
                 },
                 timeout=aiohttp.ClientTimeout(
                     total=30,
