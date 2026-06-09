@@ -3,6 +3,14 @@ from __future__ import annotations
 INFERENCE_QUOTA_EXCEEDED_TYPE = "inference_quota_exceeded"
 """Value of the ``type`` field in a LiveKit Inference 429 quota response body."""
 
+# The gateway returns `inference_quota_exceeded` for two different classes of 429.
+# These categories mean a billing quota is exhausted ("Wait for the next billing
+# cycle …") — they will fail identically every turn until the quota resets, so they
+# are terminal and non-retryable. Every other category (rate/concurrency limits like
+# MaxConcurrentGatewayLLMRpm/Tpm) is transient: it recovers via backoff, so it stays
+# retryable and non-terminal. See agent-gateway `pkg/quota/response.go::quotaHint`.
+_TERMINAL_QUOTA_CATEGORIES = frozenset({"MaxGatewayCredits", "MaxBargeInRequests"})
+
 
 class AssignmentTimeoutError(Exception):
     """Raised when accepting a job but not receiving an assignment within the specified timeout.
@@ -32,14 +40,32 @@ class APIError(Exception):
     """
 
     retryable: bool = False
-    """Whether the error can be retried."""
+    """Whether the error can be retried (within the request's retry loop)."""
 
-    def __init__(self, message: str, *, body: object | None = None, retryable: bool = True) -> None:
+    terminal: bool = False
+    """Whether the error is terminal — it will fail identically on every turn, so
+    callers should surface it immediately rather than absorbing it under a
+    transient-error tolerance (e.g. ``AgentSession``'s ``max_unrecoverable_errors``).
+
+    Independent of ``retryable``: ``retryable`` governs in-request retries, while
+    ``terminal`` governs whether higher-level loops should give up at once. A quota
+    error from depleted credits is both non-retryable and terminal; a transient
+    rate-limit is non-terminal (and may be retryable)."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        body: object | None = None,
+        retryable: bool = True,
+        terminal: bool = False,
+    ) -> None:
         super().__init__(message)
 
         self.message = message
         self.body = body
         self.retryable = retryable
+        self.terminal = terminal
 
     def __str__(self) -> str:
         return self.message
@@ -65,6 +91,7 @@ class APIStatusError(APIError):
         request_id: str | None = None,
         body: object | None = None,
         retryable: bool | None = None,
+        terminal: bool = False,
     ) -> None:
         if retryable is None:
             retryable = True
@@ -76,7 +103,7 @@ class APIStatusError(APIError):
         if 400 <= status_code < 500 and status_code not in (408, 429, 499):
             retryable = False
 
-        super().__init__(message, body=body, retryable=retryable)
+        super().__init__(message, body=body, retryable=retryable, terminal=terminal)
 
         self.status_code = status_code
         self.request_id = request_id
@@ -112,8 +139,24 @@ class APIQuotaExceededError(APIStatusError):
     surfaces the fields of that body directly so callers can render or speak a
     precise, user-facing message (``hint``) instead of leaving the agent silent.
 
-    Unlike a transient ``429`` (rate limit), quota exhaustion will not recover on
-    an immediate retry, so the error defaults to ``retryable=False``.
+    The gateway uses this single ``type`` for two different conditions, told apart by
+    ``category``:
+
+    * **Credit/quota exhaustion** (``MaxGatewayCredits``, ``MaxBargeInRequests``) —
+      recovers only at the next billing cycle, so it is :attr:`terminal` and
+      ``retryable=False``.
+    * **Rate / concurrency limits** (e.g. ``MaxConcurrentGatewayLLMRpm`` / ``…Tpm``) —
+      recover within ~a minute via backoff, so they stay ``retryable=True`` and
+      non-terminal (they fall through the usual transient-error handling).
+
+    ``retryable`` / ``terminal`` are derived from ``category`` automatically; pass them
+    explicitly to override.
+
+    By default ``AgentSession`` already speaks the ``hint`` and closes on the first
+    occurrence (see ``AgentSession(error_message=...)``). Subscribe to ``error`` only
+    when you need the structured fields, e.g. to forward an "out of credits" state to
+    your frontend. ``ErrorEvent.error`` is the ``LLMError``/``STTError``/… wrapper, so
+    the underlying exception is at ``ev.error.error``:
 
     Example:
         ```python
@@ -122,8 +165,9 @@ class APIQuotaExceededError(APIStatusError):
 
         @session.on("error")
         def _on_error(ev: ErrorEvent) -> None:
-            if isinstance(ev.error, APIQuotaExceededError):
-                session.say(ev.error.hint or "The assistant is temporarily unavailable.")
+            err = ev.error.error
+            if isinstance(err, APIQuotaExceededError):
+                logger.warning("inference quota exceeded: %s (%s)", err.hint, err.quota_type)
         ```
     """
 
@@ -131,14 +175,16 @@ class APIQuotaExceededError(APIStatusError):
     """Which resource ran out, e.g. ``"llm"``, ``"stt"``, ``"tts"`` or ``"bargein"``."""
 
     category: str | None
-    """Gateway category, e.g. ``"MaxGatewayCredits"`` (credits exhausted) or a
-    rate-limit variant such as ``"MaxConcurrentGatewayLLMRpm"``."""
+    """Gateway category. Credit-exhaustion categories (``"MaxGatewayCredits"``,
+    ``"MaxBargeInRequests"``) are terminal; rate-limit variants such as
+    ``"MaxConcurrentGatewayLLMRpm"`` are transient."""
 
     hint: str | None
     """Human-readable, user-appropriate explanation suitable to speak or display."""
 
     remaining_limit: str | None
-    """Remaining quota for ``quota_type``; ``"0"`` when fully exhausted."""
+    """Remaining quota for ``quota_type`` as reported by the gateway; ``"0"`` when
+    fully exhausted. An opaque diagnostic string (not guaranteed numeric)."""
 
     def __init__(
         self,
@@ -148,24 +194,14 @@ class APIQuotaExceededError(APIStatusError):
         request_id: str | None = None,
         body: object | None = None,
         retryable: bool | None = None,
+        terminal: bool | None = None,
         quota_type: str | None = None,
         category: str | None = None,
         hint: str | None = None,
         remaining_limit: str | None = None,
     ) -> None:
-        # quota exhaustion won't recover on an immediate retry
-        if retryable is None:
-            retryable = False
-
-        super().__init__(
-            message,
-            status_code=status_code,
-            request_id=request_id,
-            body=body,
-            retryable=retryable,
-        )
-
-        # backfill the structured fields from the response body when not given explicitly
+        # the response body carries the structured fields; read category early so we
+        # can derive retryable/terminal from it when not given explicitly
         if isinstance(body, dict):
             if quota_type is None:
                 quota_type = body.get("quota_type")
@@ -175,6 +211,23 @@ class APIQuotaExceededError(APIStatusError):
                 hint = body.get("hint")
             if remaining_limit is None:
                 remaining_limit = body.get("remaining_limit")
+
+        # credit exhaustion is terminal and won't recover on retry; everything else
+        # (rate/concurrency limits, or an unknown category) is treated as transient
+        is_credit_exhaustion = category in _TERMINAL_QUOTA_CATEGORIES
+        if terminal is None:
+            terminal = is_credit_exhaustion
+        if retryable is None:
+            retryable = not is_credit_exhaustion
+
+        super().__init__(
+            message,
+            status_code=status_code,
+            request_id=request_id,
+            body=body,
+            retryable=retryable,
+            terminal=terminal,
+        )
 
         self.quota_type = quota_type
         self.category = category

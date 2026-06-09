@@ -51,22 +51,25 @@ async def entrypoint(ctx: JobContext):
 
     @session.on("error")
     def on_error(ev: ErrorEvent) -> None:
+        # ErrorEvent.error is the LLMError/STTError/TTSError wrapper; the underlying
+        # API exception is at ev.error.error
+        err = ev.error.error
         # quota errors are non-retryable; they will fail identically every turn
-        if isinstance(ev.error, APIQuotaExceededError):
+        if isinstance(err, APIQuotaExceededError):
             logger.warning(
                 "inference quota exceeded",
                 extra={
-                    "quota_type": ev.error.quota_type,  # "llm" | "stt" | "tts" | ...
-                    "category": ev.error.category,  # e.g. "MaxGatewayCredits"
-                    "hint": ev.error.hint,
-                    "remaining_limit": ev.error.remaining_limit,
+                    "quota_type": err.quota_type,  # "llm" | "stt" | "tts" | ...
+                    "category": err.category,  # e.g. "MaxGatewayCredits"
+                    "hint": err.hint,
+                    "remaining_limit": err.remaining_limit,
                 },
             )
             # forward a structured signal so the frontend can render an
             # "out of credits" state instead of dead air, e.g.:
             #
             # await ctx.room.local_participant.set_attributes(
-            #     {"agent_error": "quota_exceeded", "quota_type": ev.error.quota_type or ""}
+            #     {"agent_error": "quota_exceeded", "quota_type": err.quota_type or ""}
             # )
 
     @session.on("close")

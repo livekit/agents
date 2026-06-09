@@ -330,14 +330,19 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 final STT transcript when closing the session (after audio is detached).
                 Default ``2.0`` s (independent of ``commit_user_turn``'s ``transcript_timeout``).
             error_message (str | None, optional): Message spoken to the user just before
-                the session closes on an unrecoverable error, so the agent never goes
-                silent. Pass a string to speak it on any unrecoverable error; pass ``None``
-                to disable spoken errors entirely. When *NOT_GIVEN* (the default), nothing
-                is spoken for generic errors, but a quota-exhausted error
-                (:class:`~livekit.agents.APIQuotaExceededError`, e.g. out of LiveKit
+                the session closes on a terminal/unrecoverable error, so the agent never
+                goes silent. Pass a string to speak it on any unrecoverable error; pass
+                ``None`` to disable spoken errors entirely. When *NOT_GIVEN* (the default),
+                nothing is spoken for generic errors, but a terminal quota error
+                (:class:`~livekit.agents.APIQuotaExceededError` from depleted LiveKit
                 Inference credits) speaks its gateway ``hint`` — falling back to a generic
                 message when no hint is provided. The session always emits ``error`` and
                 ``close`` events regardless of this setting.
+                Note: the message is synthesized through the configured TTS, so it cannot
+                be heard if TTS itself is the failed/exhausted resource. For a TTS-resilient
+                signal, handle ``@session.on("error")`` and call
+                ``session.say(..., audio=...)`` with pre-recorded audio instead
+                (see https://docs.livekit.io/reference/agents/events/#pre-recorded-audio).
             preemptive_generation (NotGivenOr[bool | PreemptiveGenerationOptions]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
             min_endpointing_delay (NotGivenOr[float]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
             max_endpointing_delay (NotGivenOr[float]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
@@ -1511,10 +1516,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._closing_task or error.recoverable:
             return
 
-        # A quota-exhausted error (e.g. out of LiveKit Inference credits) is terminal:
-        # it will fail identically every turn, so surface it on the first occurrence
-        # instead of absorbing `max_unrecoverable_errors` silent dead turns.
-        terminal = isinstance(error.error, APIQuotaExceededError)
+        # A terminal error (e.g. out of LiveKit Inference credits) will fail identically
+        # every turn, so surface it on the first occurrence instead of absorbing
+        # `max_unrecoverable_errors` silent dead turns. Transient errors (incl. rate
+        # limits) still fall through the tolerance below.
+        terminal = isinstance(error.error, APIError) and error.error.terminal
 
         if not terminal:
             if error.type == "llm_error":
@@ -1552,8 +1558,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if is_given(self._error_message):
             return self._error_message  # speak the configured message on any error
 
-        # default: only speak for terminal quota errors, preferring the gateway hint
-        if isinstance(error, APIQuotaExceededError):
+        # default: only speak for a terminal quota error, preferring the gateway hint.
+        # Transient errors (incl. rate limits) stay silent — speaking "out of credits"
+        # for a recoverable blip would be misleading.
+        if isinstance(error, APIQuotaExceededError) and error.terminal:
             return error.hint or DEFAULT_ERROR_MESSAGE
 
         return None
@@ -1576,6 +1584,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if not message or self._activity is None or self.output.audio is None:
             return
 
+        # NOTE: this synthesizes through the configured TTS, so it won't be heard if TTS
+        # itself is the exhausted/failed resource. Developers needing a TTS-resilient
+        # signal should use @session.on("error") + session.say(..., audio=<pre-recorded>).
         try:
             handle = self.say(message, allow_interruptions=False, add_to_chat_ctx=False)
             await asyncio.wait_for(

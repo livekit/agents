@@ -16,6 +16,7 @@ import openai
 import pytest
 
 from livekit.agents import (
+    APIConnectionError,
     APIQuotaExceededError,
     APIStatusError,
     create_api_error_from_http,
@@ -23,11 +24,13 @@ from livekit.agents import (
 )
 from livekit.agents._exceptions import INFERENCE_QUOTA_EXCEEDED_TYPE
 from livekit.agents.llm import ChatContext
+from livekit.agents.types import APIConnectOptions
 
 pytestmark = pytest.mark.unit
 
 
 def _quota_body(hint: str | None = "Wait for the next billing cycle or upgrade your plan.") -> dict:
+    """A credit-exhaustion (terminal) quota body."""
     return {
         "type": INFERENCE_QUOTA_EXCEEDED_TYPE,
         "error": "LLM token credit quota exceeded, category: MaxGatewayCredits, remaining_limit: 0",
@@ -37,6 +40,18 @@ def _quota_body(hint: str | None = "Wait for the next billing cycle or upgrade y
         "remaining_limit": "0",
         "free_tier": "false",
         "documentation_url": "https://livekit.com/pricing",
+    }
+
+
+def _rate_limit_body() -> dict:
+    """A per-minute rate-limit (transient) quota body — same `type`, different category."""
+    return {
+        "type": INFERENCE_QUOTA_EXCEEDED_TYPE,
+        "error": "LLM request/min rate limit exceeded",
+        "hint": "LLM request rate limit reached. Reduce request rate or upgrade your plan.",
+        "quota_type": "llm",
+        "category": "MaxConcurrentGatewayLLMRpm",
+        "remaining_limit": "0",
     }
 
 
@@ -51,9 +66,36 @@ def test_quota_error_extracts_fields_from_body() -> None:
     assert err.remaining_limit == "0"
 
 
-def test_quota_error_is_not_retryable_by_default() -> None:
-    # quota exhaustion will fail identically on an immediate retry
+def test_credit_quota_error_is_terminal_and_not_retryable() -> None:
+    # credit exhaustion will fail identically on an immediate retry and every turn
     err = APIQuotaExceededError("quota exceeded", status_code=429, body=_quota_body())
+    assert err.retryable is False
+    assert err.terminal is True
+
+
+def test_rate_limit_quota_error_is_retryable_and_not_terminal() -> None:
+    # a per-minute rate limit recovers via backoff: keep it retryable + non-terminal so
+    # it isn't misclassified as "out of credits" and doesn't kill the session on turn 1
+    err = APIQuotaExceededError("rate limited", status_code=429, body=_rate_limit_body())
+    assert err.category == "MaxConcurrentGatewayLLMRpm"
+    assert err.retryable is True
+    assert err.terminal is False
+
+
+def test_unknown_quota_category_defaults_to_transient() -> None:
+    # an unknown/missing category is treated as transient (no regression: it falls
+    # through the existing tolerance instead of killing the session immediately)
+    body = {**_quota_body(), "category": "SomeFutureCategory"}
+    err = APIQuotaExceededError("quota exceeded", status_code=429, body=body)
+    assert err.terminal is False
+    assert err.retryable is True
+
+
+def test_quota_error_explicit_terminal_and_retryable_override() -> None:
+    err = APIQuotaExceededError(
+        "rate limited", status_code=429, body=_rate_limit_body(), terminal=True, retryable=False
+    )
+    assert err.terminal is True
     assert err.retryable is False
 
 
@@ -110,21 +152,27 @@ def test_create_api_error_from_http_returns_plain_status_error() -> None:
     assert not isinstance(err, APIQuotaExceededError)
 
 
-async def test_inference_llm_raises_quota_error_on_429() -> None:
-    """The inference LLM plugin surfaces a 429 inference_quota_exceeded body as a
-    typed, non-retryable APIQuotaExceededError carrying the gateway hint."""
+def _inference_llm_raising(body: dict) -> tuple[inference.LLM, MagicMock, object]:
+    """Build an inference LLM whose client raises a 429 with ``body``.
+
+    Returns (llm, mock_client, real_client). Swap the client *before* chat() so the
+    background stream task uses the mock. Caller must close the real client.
+    """
     inference_llm = inference.LLM("gpt-4o", api_key="devkey", api_secret="s" * 32)
-
     response = httpx.Response(429, request=httpx.Request("POST", "http://x/v1/chat/completions"))
-    status_error = openai.APIStatusError(
-        "LLM token credit quota exceeded", response=response, body=_quota_body()
-    )
+    status_error = openai.APIStatusError(body["error"], response=response, body=body)
 
-    # replace the client before chat() so the background stream task uses the mock
     real_client = inference_llm._client
     mock_client = MagicMock()
     mock_client.chat.completions.create = AsyncMock(side_effect=status_error)
     inference_llm._client = mock_client
+    return inference_llm, mock_client, real_client
+
+
+async def test_inference_llm_raises_quota_error_on_429() -> None:
+    """The inference LLM plugin surfaces a 429 credit-quota body as a typed,
+    terminal, non-retryable APIQuotaExceededError carrying the gateway hint."""
+    inference_llm, mock_client, real_client = _inference_llm_raising(_quota_body())
 
     chat_ctx = ChatContext.empty()
     chat_ctx.add_message(role="user", content="hello")
@@ -140,9 +188,35 @@ async def test_inference_llm_raises_quota_error_on_429() -> None:
     assert err.quota_type == "llm"
     assert err.hint == "Wait for the next billing cycle or upgrade your plan."
     assert err.retryable is False
+    assert err.terminal is True
 
-    # quota errors are terminal: no retries, the endpoint is hit exactly once
+    # credit exhaustion is terminal: no retries, the endpoint is hit exactly once
     assert mock_client.chat.completions.create.await_count == 1
+
+    await stream.aclose()
+    await real_client.close()
+
+
+async def test_inference_llm_retries_rate_limit_429() -> None:
+    """A 429 rate-limit body is retryable, so the stream retries it with backoff
+    instead of giving up on the first attempt (contrast with credit exhaustion)."""
+    inference_llm, mock_client, real_client = _inference_llm_raising(_rate_limit_body())
+
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="user", content="hello")
+
+    max_retry = 2
+    stream = inference_llm.chat(
+        chat_ctx=chat_ctx,
+        conn_options=APIConnectOptions(max_retry=max_retry, retry_interval=0.0),
+    )
+
+    # after exhausting retries the stream raises APIConnectionError, not the 429
+    with pytest.raises(APIConnectionError):
+        async for _ in stream:
+            pass
+
+    assert mock_client.chat.completions.create.await_count == max_retry + 1
 
     await stream.aclose()
     await real_client.close()
