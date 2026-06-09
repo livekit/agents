@@ -3,14 +3,23 @@ import dataclasses
 import logging
 import re
 from collections.abc import Iterator
+from functools import cache
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, utils
 from livekit.agents.cli import log
 
+from . import concurrency
 from .toxic_proxy import Toxiproxy
+from .virtual_time import (  # noqa: F401  (re-exported so pytest discovers the fixtures)
+    _virtual_wall_clock,
+    add_realtime_option as _add_realtime_option,
+    event_loop_policy,
+    register_marker as _register_virtual_time_marker,
+)
 
 TEST_CONNECT_OPTIONS = dataclasses.replace(DEFAULT_API_CONNECT_OPTIONS, retry_interval=0.0)
 
@@ -45,6 +54,7 @@ _CATEGORY_HINT = (
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
+    _add_realtime_option(parser)
     group = parser.getgroup("categories", "test category selection")
     for category in CATEGORIES:
         group.addoption(
@@ -71,15 +81,25 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     )
 
 
-def _read_source(path: Path) -> str:
+class _ModuleFacts(NamedTuple):
+    categories: frozenset[str]
+    has_tests: bool
+
+
+@cache
+def _module_facts(path: Path) -> _ModuleFacts:
+    """
+    Retrieve information about the module without importing it.
+    Cache to avoid redundant filesystem reads.
+    """
     try:
-        return path.read_text(encoding="utf-8")
+        source = path.read_text(encoding="utf-8")
     except OSError:
-        return ""
-
-
-def _module_categories(source: str) -> set[str]:
-    return set(_CATEGORY_RE.findall(source))
+        return _ModuleFacts(frozenset(), False)
+    return _ModuleFacts(
+        frozenset(_CATEGORY_RE.findall(source)),
+        _HAS_TESTS_RE.search(source) is not None,
+    )
 
 
 def _plural(n: int, noun: str) -> str:
@@ -100,16 +120,19 @@ def _uncategorized_modules(config: pytest.Config) -> list[Path]:
     """Test files that contain tests but declare no category marker."""
     offenders: list[Path] = []
     for path in _iter_test_files(config):
-        source = _read_source(path)
-        if not _HAS_TESTS_RE.search(source):
+        facts = _module_facts(path)
+        if not facts.has_tests:
             continue  # empty / fully-commented module: nothing to categorize
-        if not _module_categories(source):
+        if not facts.categories:
             offenders.append(path)
     return offenders
 
 
 def pytest_configure(config: pytest.Config) -> None:
     """Handle `--list-categories` before any collection/import happens."""
+    _module_facts.cache_clear()
+    _register_virtual_time_marker(config)
+
     if not config.getoption("--list-categories"):
         return
 
@@ -117,14 +140,13 @@ def pytest_configure(config: pytest.Config) -> None:
     by_category: dict[str, list[str]] = {c: [] for c in CATEGORIES}
     uncategorized: list[str] = []
     for path in _iter_test_files(config):
-        source = _read_source(path)
-        if not _HAS_TESTS_RE.search(source):
+        facts = _module_facts(path)
+        if not facts.has_tests:
             continue
         rel = str(path.relative_to(rootdir))
-        cats = _module_categories(source)
-        if not cats:
+        if not facts.categories:
             uncategorized.append(rel)
-        for cat in cats:
+        for cat in facts.categories:
             by_category[cat].append(rel)
 
     lines = ["", "Test categories (select with --<category>):", ""]
@@ -178,16 +200,9 @@ def pytest_ignore_collect(collection_path: Path, config: pytest.Config) -> bool 
         return None
     if not collection_path.name.startswith("test_"):
         return None
-
-    try:
-        source = collection_path.read_text(encoding="utf-8")
-    except OSError:
+    if _module_facts(collection_path).categories.intersection(selected):
         return None
 
-    # ignore the module only if it carries none of the selected categories' markers;
-    # otherwise return None (defer) so --ignore and other plugins still apply.
-    if any(f"pytest.mark.{category}" in source for category in selected):
-        return None
     return True
 
 
@@ -242,7 +257,7 @@ def _logging_baseline():
     return [(logger, logger.level, logger.handlers[:], logger.propagate) for logger in loggers]
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(scope="module", autouse=True)
 def _restore_logging(_logging_baseline):
     """Revert global logging a test mutated (e.g. via cli.log.setup_logging)."""
     yield
@@ -307,7 +322,22 @@ def format_task(task) -> str:
 
 
 @pytest.fixture(autouse=True)
-async def fail_on_leaked_tasks():
+async def fail_on_leaked_tasks(request):
+    if concurrency.is_concurrent_member(request.node):
+        # Concurrent group members share one event loop, so we can't diff asyncio.all_tasks()
+        # (it would flag other still-running tests). Instead ask which still-pending tasks were
+        # created by *this* test -- tagged via contextvars, see tests/concurrency.py.
+        yield
+        leaked_tasks = [
+            task
+            for task in concurrency.owned_pending_tasks(request.node.nodeid)
+            if not _is_ignorable_task(task)
+        ]
+        if leaked_tasks:
+            tasks_msg = "\n\n".join(format_task(task) for task in leaked_tasks)
+            pytest.fail("Test leaked tasks:\n\n" + tasks_msg)
+        return
+
     tasks_before = set(asyncio.all_tasks())
 
     yield

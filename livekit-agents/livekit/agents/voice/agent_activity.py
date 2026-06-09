@@ -2625,6 +2625,19 @@ class AgentActivity(RecognitionHooks):
         )
         tasks.append(llm_task)
 
+        def _on_llm_task_done(task: asyncio.Task[bool]) -> None:
+            # Surface a genuine LLM failure (not interruption/cancellation) so it
+            # propagates through the SpeechHandle to RunResult (i.e. session.run()).
+            # RunResult._mark_done() raises ``_maybe_run_final_output`` when it is a
+            # BaseException; this also retrieves the task exception (no "never
+            # retrieved" warning).
+            if task.cancelled():
+                return
+            if (exc := task.exception()) is not None:
+                speech_handle._maybe_run_final_output = exc
+
+        llm_task.add_done_callback(_on_llm_task_done)
+
         # split the LLM text on FlushSentinel into segments, each spoken independently;
         # without a FlushSentinel there is a single (continuous) segment
         @dataclass

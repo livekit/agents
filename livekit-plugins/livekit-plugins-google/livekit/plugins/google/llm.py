@@ -476,12 +476,16 @@ class LLMStream(llm.LLMStream):
                     )
                 self._extra_kwargs.pop("tools", None)
                 self._extra_kwargs.pop("tool_config", None)
-            http_options = self._llm._opts.http_options or types.HttpOptions(
-                timeout=int(self._conn_options.timeout * 1000)
-            )
-            if not http_options.headers:
-                http_options.headers = {}
-            http_options.headers["x-goog-api-client"] = f"livekit-agents/{__version__}"
+            if is_given(self._llm._opts.http_options):
+                http_options = self._llm._opts.http_options.model_copy()
+                if http_options.timeout is None:
+                    http_options.timeout = int(self._conn_options.timeout * 1000)
+            else:
+                http_options = types.HttpOptions(timeout=int(self._conn_options.timeout * 1000))
+
+            headers = dict(http_options.headers or {})
+            headers["x-goog-api-client"] = f"livekit-agents/{__version__}"
+            http_options.headers = headers
             config = types.GenerateContentConfig(
                 system_instruction=(
                     None

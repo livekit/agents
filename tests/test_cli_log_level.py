@@ -5,7 +5,7 @@ from unittest.mock import patch
 import pytest
 from typer.testing import CliRunner
 
-from livekit.agents.cli.cli import _build_cli
+from livekit.agents.cli._legacy import _build_cli
 from livekit.agents.worker import AgentServer, ServerEnvOption, ServerOptions
 
 pytestmark = pytest.mark.unit

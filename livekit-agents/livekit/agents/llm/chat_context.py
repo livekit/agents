@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field, PrivateAttr, TypeAdapter
 from typing_extensions import TypedDict
 
 from livekit import rtc
+from livekit.protocol.agent_pb import agent_session as agent_pb
 
 from .. import utils
 from ..log import logger
@@ -867,6 +868,11 @@ class ChatContext:
         item_adapter = TypeAdapter(list[ChatItem])
         items = item_adapter.validate_python(data["items"])
         return cls(items)
+
+    def to_proto(self) -> agent_pb.ChatContext:
+        from ..voice.remote_session import _chat_item_to_proto
+
+        return agent_pb.ChatContext(items=[_chat_item_to_proto(item) for item in self.items])
 
     @property
     def readonly(self) -> bool:
