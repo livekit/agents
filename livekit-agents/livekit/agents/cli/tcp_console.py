@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import queue as stdlib_queue
 import time
 from typing import cast
 
@@ -19,18 +18,18 @@ _SENTINEL = object()
 
 
 class TcpAudioInput(io.AudioInput):
-    """Audio input backed by a stdlib queue.
+    """Audio input bridging the producer loop to the agent-session loop.
 
-    We use a stdlib queue (not an asyncio Chan) because the producer
-    (push_frame, called from the main event loop) and the consumer
-    (__anext__, called from the job-executor thread's event loop) live
-    on *different* asyncio loops when JobExecutorType.THREAD is used.
-    A stdlib queue + run_in_executor is the only safe bridge.
+    push_frame runs on the transport host's loop while __anext__ runs on the
+    agent-session loop; these differ when JobExecutorType.THREAD is used. Frames
+    are marshalled onto the consumer loop via call_soon_threadsafe, so the queue
+    is a plain asyncio.Queue owned by that loop (mirrors TcpAudioOutput).
     """
 
     def __init__(self) -> None:
         super().__init__(label="TCP Console")
-        self._queue: stdlib_queue.Queue[rtc.AudioFrame | object] = stdlib_queue.Queue()
+        self._queue: asyncio.Queue[rtc.AudioFrame | object] = asyncio.Queue()
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._resampler = rtc.AudioResampler(
             input_rate=WIRE_SAMPLE_RATE,
             output_rate=AGENT_SAMPLE_RATE,
@@ -39,7 +38,9 @@ class TcpAudioInput(io.AudioInput):
         self._closed = False
 
     def push_frame(self, frame: agent_pb.AgentSessionMessage.ConsoleIO.AudioFrame) -> None:
-        if self._closed:
+        # the consumer loop is captured on the first __anext__; frames pushed before
+        # that startup window are dropped (same assumption as TcpAudioOutput).
+        if self._closed or self._loop is None:
             return
         audio_frame = rtc.AudioFrame(
             data=frame.data,
@@ -49,20 +50,18 @@ class TcpAudioInput(io.AudioInput):
         )
         resampled = self._resampler.push(audio_frame)
         for rf in resampled:
-            self._queue.put_nowait(rf)
+            self._loop.call_soon_threadsafe(self._queue.put_nowait, rf)
 
     def close(self) -> None:
         """Unblock any waiting consumer and mark as closed."""
         self._closed = True
-        self._queue.put_nowait(_SENTINEL)
+        if self._loop is not None:
+            self._loop.call_soon_threadsafe(self._queue.put_nowait, _SENTINEL)
 
     async def __anext__(self) -> rtc.AudioFrame:
-        loop = asyncio.get_running_loop()
-        try:
-            item = await loop.run_in_executor(None, self._queue.get)
-        except RuntimeError:
-            # Executor shut down — treat as end of stream.
-            raise StopAsyncIteration from None
+        if self._loop is None:
+            self._loop = asyncio.get_running_loop()
+        item = await self._queue.get()
         if item is _SENTINEL:
             raise StopAsyncIteration
         return cast(rtc.AudioFrame, item)
