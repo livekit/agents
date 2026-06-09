@@ -503,7 +503,12 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._request_fnc = on_request
             self._session_end_fnc = on_session_end
             self._simulation_end_fnc = on_simulation_end
-            if agent_name:
+            # precedence: the LIVEKIT_AGENT_NAME_OVERRIDE env var (a platform-injected
+            # force, e.g. from the lk simulation launcher) takes priority, then the
+            # explicit agent_name arg, then the LIVEKIT_AGENT_NAME env default.
+            if os.environ.get("LIVEKIT_AGENT_NAME_OVERRIDE"):
+                self._agent_name = os.environ["LIVEKIT_AGENT_NAME_OVERRIDE"]
+            elif agent_name:
                 self._agent_name = agent_name
             elif os.environ.get("LIVEKIT_AGENT_NAME"):
                 self._agent_name = os.environ["LIVEKIT_AGENT_NAME"]

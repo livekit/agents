@@ -1,9 +1,10 @@
 """Config precedence tests.
 
-These tests simulate the full lifecycle of an AgentServer to verify
-the config override order matches what the simulation system depends on:
-  url/keys:    update_options (CLI) > constructor arg > env var
-  agent_name:  LIVEKIT_AGENT_NAME env > @rtc_session decorator arg
+These tests simulate the full lifecycle of an AgentServer to verify the config
+override order matches what the simulation system depends on:
+  url/keys:    CLI update_options, then constructor arg, then env var
+  agent_name:  LIVEKIT_AGENT_NAME_OVERRIDE, then the rtc_session decorator arg,
+               then LIVEKIT_AGENT_NAME
 """
 
 from __future__ import annotations
@@ -83,9 +84,13 @@ class TestCLIOverridesConstructorAndEnv:
             assert config["ws_url"] == "ws://env"
 
 
-class TestAgentNameEnvWinsOverDecorator:
-    def test_env_wins(self):
-        with patch.dict(os.environ, {"LIVEKIT_AGENT_NAME": "env-agent"}):
+class TestAgentNamePrecedence:
+    def test_override_wins_over_decorator_and_default(self):
+        with patch.dict(
+            os.environ,
+            {"LIVEKIT_AGENT_NAME_OVERRIDE": "override-agent", "LIVEKIT_AGENT_NAME": "env-agent"},
+            clear=True,
+        ):
             server = _TestableServer()
 
             @server.rtc_session(agent_name="decorator-agent")
@@ -93,9 +98,31 @@ class TestAgentNameEnvWinsOverDecorator:
                 pass
 
             config = _run_and_capture(server, proto.CliArgs(log_level="INFO"))
+            assert config["agent_name"] == "override-agent"
+
+    def test_decorator_wins_over_env_default(self):
+        with patch.dict(os.environ, {"LIVEKIT_AGENT_NAME": "env-agent"}, clear=True):
+            server = _TestableServer()
+
+            @server.rtc_session(agent_name="decorator-agent")
+            async def entrypoint(ctx):
+                pass
+
+            config = _run_and_capture(server, proto.CliArgs(log_level="INFO"))
+            assert config["agent_name"] == "decorator-agent"
+
+    def test_env_default_when_decorator_has_no_name(self):
+        with patch.dict(os.environ, {"LIVEKIT_AGENT_NAME": "env-agent"}, clear=True):
+            server = _TestableServer()
+
+            @server.rtc_session()
+            async def entrypoint(ctx):
+                pass
+
+            config = _run_and_capture(server, proto.CliArgs(log_level="INFO"))
             assert config["agent_name"] == "env-agent"
 
-    def test_decorator_fallback(self):
+    def test_decorator_when_no_env(self):
         with patch.dict(os.environ, {}, clear=True):
             server = _TestableServer()
 
@@ -147,4 +174,6 @@ class TestFullPrecedenceChain:
             assert config["ws_url"] == "ws://cli"
             assert config["api_key"] == "cli-key"
             assert config["api_secret"] == "cli-secret"
-            assert config["agent_name"] == "env-agent"
+            # no LIVEKIT_AGENT_NAME_OVERRIDE set, so the explicit decorator arg wins
+            # over the LIVEKIT_AGENT_NAME default
+            assert config["agent_name"] == "decorator-agent"
