@@ -234,7 +234,9 @@ class TestServerSideToolInvocations:
         )
 
         assert config.tool_config.include_server_side_tool_invocations is True
-        assert config.tool_config.function_calling_config.mode == types.FunctionCallingConfigMode.ANY
+        assert (
+            config.tool_config.function_calling_config.mode == types.FunctionCallingConfigMode.ANY
+        )
         assert config.tool_config.function_calling_config.allowed_function_names == ["get_weather"]
 
     @pytest.mark.asyncio
@@ -248,7 +250,9 @@ class TestServerSideToolInvocations:
         )
 
         assert config.tool_config.include_server_side_tool_invocations is True
-        assert config.tool_config.function_calling_config.mode == types.FunctionCallingConfigMode.ANY
+        assert (
+            config.tool_config.function_calling_config.mode == types.FunctionCallingConfigMode.ANY
+        )
         assert config.tool_config.function_calling_config.allowed_function_names == ["get_weather"]
 
     @pytest.mark.asyncio
