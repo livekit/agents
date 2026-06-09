@@ -24,23 +24,31 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from num2words import num2words  # type: ignore[import-untyped]
 
+# (singular, plural) for the whole and fractional units — explicit because some
+# plurals are irregular (penny -> pence, not "pennys").
 _CURRENCY_MAP = {
-    "$": ("dollar", "cent"),
-    "£": ("pound", "penny"),
-    "€": ("euro", "cent"),
+    "$": ("dollar", "dollars", "cent", "cents"),
+    "£": ("pound", "pounds", "penny", "pence"),
+    "€": ("euro", "euros", "cent", "cents"),
 }
 
 
 def _expand_currency(m: re.Match) -> str:
     symbol = m.group(1)
     number = m.group(2).replace(",", "")
-    name, frac_name = _CURRENCY_MAP.get(symbol, ("dollar", "cent"))
+    whole_name, whole_plural, frac_name, frac_plural = _CURRENCY_MAP.get(
+        symbol, ("dollar", "dollars", "cent", "cents")
+    )
     amount = Decimal(number)
     whole = int(amount)
     cents = int((amount - whole).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) * 100)
-    parts = [f"{num2words(whole)} {name}{'s' if whole != 1 else ''}"]
+
+    parts = []
+    # Skip the whole part for sub-unit amounts (e.g. $0.50 -> "fifty cents").
+    if whole != 0 or cents == 0:
+        parts.append(f"{num2words(whole)} {whole_name if whole == 1 else whole_plural}")
     if cents:
-        parts.append(f"{num2words(cents)} {frac_name}{'s' if cents != 1 else ''}")
+        parts.append(f"{num2words(cents)} {frac_name if cents == 1 else frac_plural}")
     return " and ".join(parts)
 
 
