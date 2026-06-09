@@ -137,6 +137,8 @@ flat monotone, melodic and lilting
 
 3. Pauses - you can insert silence when appropriate.
    <break time="500ms"/> or <break time="1s"/> (max 10s)
+   A period already creates a pause, so don't put a period and a <break> right next to each \
+other. Pick one or the other, not both.
 
 Combine tags freely within a single turn — pair an <expression> with a <sound> \
 and a <break> when it makes the delivery feel natural. Don't limit yourself to \
@@ -228,8 +230,8 @@ CONVERSATIONAL_EXPRESSIVENESS_PRESET: "ExpressivenessOptions" = {
         "Speak like a real person mid-conversation with a friend — present, reactive, opinionated, "
         "never flat or scripted. Your delivery is punchy and lively: react first, support second. "
         "Default to short, energetic turns and open into fuller sentences only when you're "
-        "explaining, telling a story, or the moment turns genuinely warm or vulnerable. Let your "
-        "feelings show in your voice, and use the formatting tags below to shape that delivery:\n\n"
+        "explaining, telling a story, or the moment turns genuinely warm or vulnerable. Use the "
+        "formatting tags below to shape your delivery:\n\n"
         + _INWORLD_LLM_INSTRUCTIONS
         + "\n\nGuidelines:\n"
         "- Be genuinely emotive, not performed. Let real feeling land in the voice — delight, "
@@ -280,9 +282,8 @@ CONVERSATIONAL_EXPRESSIVENESS_PRESET: "ExpressivenessOptions" = {
         'or hesitate, and the occasional <break time="..."/>. Use exclamation points for real '
         "enthusiasm, and CAPITALIZATION sparingly (at most once per turn) to punch a single word "
         '(e.g. "that is SO good") — the user sees the transcript.\n'
-        "- Keep it real, not performed. Expressive and varied, yes — but it should sound like a "
-        "person who actually feels things. If a reaction wouldn't happen in a real conversation, "
-        "skip it — there's always another genuine beat to lean into."
+        "- If a reaction wouldn't happen in a real conversation, skip it — there's always another "
+        "genuine beat to lean into."
     ),
     "audio_recognition_instructions_template": Instructions(
         "Here is what has been detected about the person you are talking to:\n\n"

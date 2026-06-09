@@ -1,17 +1,22 @@
 import json
 import logging
 import os
+from collections.abc import AsyncGenerator
 from urllib.parse import urlencode
 
 from dotenv import load_dotenv
 
 from livekit.agents import (
+    NOT_GIVEN,
     Agent,
     AgentServer,
     AgentSession,
     JobContext,
+    ModelSettings,
     cli,
     inference,
+    llm,
+    tokenize,
 )
 from livekit.agents.voice import CONVERSATIONAL_EXPRESSIVENESS_PRESET
 from livekit.plugins import openai, silero
@@ -29,6 +34,10 @@ DEFAULT_TTS = "inworld/inworld-tts-2"
 GEMMA_BASE_URL = os.environ["GEMMA_BASE_URL"]
 GEMMA_API_KEY = os.environ["GEMMA_API_KEY"]
 GEMMA_MODEL = "gemma-4-31b-it"
+
+# Seed model for the Inference backend — only used once a non-Gemma model
+# is picked, but inference.LLM needs a valid model at construction.
+FALLBACK_INFERENCE_LLM = "openai/gpt-4.1-mini"
 
 # Default starter prompt. Keep in sync with the `set_system_prompt`
 # control's `default` in examples/playground.yaml — the UI seeds the
@@ -57,6 +66,36 @@ _SWAP_PROMPT = (
 class InferenceAgent(Agent):
     def __init__(self, instructions: str = INSTRUCTIONS) -> None:
         super().__init__(instructions=instructions)
+        # The session's default LLM is the Gemma openai.LLM (see entrypoint).
+        # Every other model in playground.yaml is on LiveKit Inference, which
+        # update_options() can't reach from the Gemma plugin — so we keep a
+        # separate Inference backend and route to it from llm_node.
+        self._inference_llm = inference.LLM(model=FALLBACK_INFERENCE_LLM)
+        self.llm_model = DEFAULT_LLM
+
+    async def on_enter(self) -> None:
+        self.session.generate_reply(
+            instructions="Greet the user with excitement, and ask how their day has been "
+            "with curiosity."
+        )
+
+    async def llm_node(
+        self,
+        chat_ctx: llm.ChatContext,
+        tools: list[llm.Tool],
+        model_settings: ModelSettings,
+    ) -> AsyncGenerator[llm.ChatChunk | str, None]:
+        # Gemma → the session's default LLM; anything else → Inference.
+        active = self.session.llm if self.llm_model == GEMMA_MODEL else self._inference_llm
+        tool_choice = model_settings.tool_choice if model_settings else NOT_GIVEN
+        async with active.chat(
+            chat_ctx=chat_ctx,
+            tools=tools,
+            tool_choice=tool_choice,
+            conn_options=self.session.conn_options.llm_conn_options,
+        ) as stream:
+            async for chunk in stream:
+                yield chunk
 
 
 server = AgentServer()
@@ -75,6 +114,11 @@ async def entrypoint(ctx: JobContext) -> None:
             model=DEFAULT_TTS,
             voice="Sarah",
             extra_kwargs={"delivery_mode": "CREATIVE"},
+            # Batch sentences up to 900 chars per request — as large as we can go
+            # while staying under Inworld's 1000-char send_text limit (the server
+            # auto-flushes past 1000). All chunks share one session/context, so
+            # prosody stays continuous across the turn.
+            tokenizer=tokenize.blingfire.SentenceTokenizer(max_token_len=900),
         ),
         vad=silero.VAD.load(),
         expressiveness=CONVERSATIONAL_EXPRESSIVENESS_PRESET,
@@ -105,10 +149,12 @@ async def entrypoint(ctx: JobContext) -> None:
     @ctx.room.local_participant.register_rpc_method("set_llm_model")
     async def set_llm_model(data: RpcInvocationData) -> str:
         model = parse_value(data.payload, DEFAULT_LLM)
-        if isinstance(session.llm, inference.LLM) and session.llm.model == model:
+        if model == agent.llm_model:
             return ""
+        agent.llm_model = model
+        if model != GEMMA_MODEL:
+            agent._inference_llm.update_options(model=model)
         logger.info("switching LLM → %s", model)
-        session.llm.update_options(model=model)
         session.generate_reply(instructions=_SWAP_PROMPT.format(modality="language", model=model))
         return ""
 
@@ -133,7 +179,7 @@ async def entrypoint(ctx: JobContext) -> None:
         params = {
             "modelMode": "pipeline",
             "instructions": agent.instructions or "",
-            "llm": session.llm.model if isinstance(session.llm, inference.LLM) else DEFAULT_LLM,
+            "llm": agent.llm_model,
             "stt": session.stt.model if isinstance(session.stt, inference.STT) else DEFAULT_STT,
             "tts": session.tts.model if isinstance(session.tts, inference.TTS) else DEFAULT_TTS,
         }
