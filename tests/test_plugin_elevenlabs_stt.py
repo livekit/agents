@@ -6,7 +6,7 @@ from livekit.agents import stt
 from livekit.agents.types import NOT_GIVEN
 from livekit.plugins.elevenlabs import stt as elevenlabs_stt
 
-pytestmark = pytest.mark.plugin
+pytestmark = pytest.mark.plugin("elevenlabs")
 
 
 class _EventSink:
