@@ -18,6 +18,7 @@ from .events import (
     UserStateChangedEvent,
     UserTurnExceededEvent,
 )
+from .recording_exporter import RecordingExporter, RecordingExportResult
 from .remote_session import RemoteSession
 from .room_io import (
     _ParticipantAudioOutput,
@@ -30,6 +31,8 @@ from .transcription import TranscriptSynchronizer, text_transforms
 __all__ = [
     "AgentSession",
     "RecordingOptions",
+    "RecordingExporter",
+    "RecordingExportResult",
     "VoiceActivityVideoSampler",
     "Agent",
     "ModelSettings",

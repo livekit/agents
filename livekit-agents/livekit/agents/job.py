@@ -59,6 +59,30 @@ def _observability_url(livekit_url: str) -> str | None:
     return None
 
 
+_RECORDING_EXPORT_TIMEOUT = 30.0
+
+
+async def _export_session_recording(session: AgentSession, report: SessionReport) -> None:
+    exporter = session._recording_exporter
+    if exporter is None:
+        return
+
+    try:
+        result = await asyncio.wait_for(
+            exporter.export(report),
+            timeout=_RECORDING_EXPORT_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        logger.exception("recording exporter timed out")
+        return
+    except Exception:
+        logger.exception("recording exporter failed")
+        return
+
+    if result is not None:
+        session._set_recording_export_result(result)
+
+
 if TYPE_CHECKING:
     from .ipc.inference_executor import InferenceExecutor
     from .simulation import SimulationContext
@@ -266,47 +290,52 @@ class JobContext:
         if not (session := self._primary_agent_session):
             return
 
-        otel_metrics.flush_turn_metrics(session.history)
+        try:
+            otel_metrics.flush_turn_metrics(session.history)
 
-        c = AgentsConsole.get_instance()
+            c = AgentsConsole.get_instance()
 
-        # in case AgentSession.aclose() was cancelled due to timeout
-        if (recorder_io := session._recorder_io) and recorder_io.recording:
-            logger.warning("recorder_io is still recording at session end, closing it")
-            await recorder_io.aclose()
+            # in case AgentSession.aclose() was cancelled due to timeout
+            if (recorder_io := session._recorder_io) and recorder_io.recording:
+                logger.warning("recorder_io is still recording at session end, closing it")
+                await recorder_io.aclose()
 
-        report = self.make_session_report(session)
+            report = self.make_session_report(session)
 
-        # console recording, dump data to a local file
-        if c.enabled and c.record:
-            try:
-                report_json = json.dumps(report.to_dict(), indent=2)
+            # console recording, dump data to a local file
+            if c.enabled and c.record:
+                try:
+                    report_json = json.dumps(report.to_dict(), indent=2)
 
-                import aiofiles
-                import aiofiles.os
+                    import aiofiles
+                    import aiofiles.os
 
-                await aiofiles.os.makedirs(self._session_directory, exist_ok=True)
-                async with aiofiles.open(
-                    self._session_directory / "session_report.json", mode="w"
-                ) as f:
-                    await f.write(report_json)
+                    await aiofiles.os.makedirs(self._session_directory, exist_ok=True)
+                    async with aiofiles.open(
+                        self._session_directory / "session_report.json", mode="w"
+                    ) as f:
+                        await f.write(report_json)
 
-            except Exception:
-                logger.exception("failed to save session report")
+                except Exception:
+                    logger.exception("failed to save session report")
 
-        has_evals = bool(self._tagger.evaluations or self._tagger.outcome)
-        obs_url = _observability_url(self._info.url)
-        if (any(report.recording_options.values()) or has_evals) and obs_url:
-            try:
-                await _upload_session_report(
-                    agent_name=self._info.job.agent_name,
-                    observability_url=obs_url,
-                    report=report,
-                    tagger=self._tagger,
-                    http_session=http_context.http_session(),
-                )
-            except Exception:
-                logger.exception("failed to upload the session report to LiveKit Cloud")
+            has_evals = bool(self._tagger.evaluations or self._tagger.outcome)
+            obs_url = _observability_url(self._info.url)
+            if (any(report.recording_options.values()) or has_evals) and obs_url:
+                try:
+                    await _upload_session_report(
+                        agent_name=self._info.job.agent_name,
+                        observability_url=obs_url,
+                        report=report,
+                        tagger=self._tagger,
+                        http_session=http_context.http_session(),
+                    )
+                except Exception:
+                    logger.exception("failed to upload the session report to LiveKit Cloud")
+
+            await _export_session_recording(session, report)
+        finally:
+            session._end_session_span()
 
     def _on_cleanup(self) -> None:
         # if session.start() was never reached and server wanted recording,

@@ -20,6 +20,9 @@ ATTR_JOB_ID = "lk.job_id"
 ATTR_AGENT_NAME = "lk.agent_name"
 ATTR_ROOM_NAME = "lk.room_name"
 ATTR_SESSION_OPTIONS = "lk.session_options"
+ATTR_RECORDING_URL = "lk.recording_url"
+ATTR_RECORDING_ID = "lk.recording_id"
+ATTR_RECORDING_PATH = "lk.recording_path"
 
 # agent turn
 ATTR_AGENT_TURN_ID = "lk.generation_id"
