@@ -22,6 +22,7 @@ class StreamAdapter(STT):
                 streaming=True,
                 interim_results=False,
                 diarization=False,  # diarization requires streaming STT
+                keyterms=stt.capabilities.keyterms,
             )
         )
         self._vad = vad
@@ -41,6 +42,9 @@ class StreamAdapter(STT):
     @property
     def provider(self) -> str:
         return self._stt.provider
+
+    def update_keyterms(self, keyterms: list[str]) -> None:
+        self._stt.update_keyterms(keyterms)
 
     async def _recognize_impl(
         self,

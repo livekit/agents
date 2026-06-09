@@ -150,6 +150,7 @@ class STT(stt.STT):
                 interim_results=interim_results,
                 diarization=enable_diarization,
                 aligned_transcript="word",
+                keyterms=True,
             )
         )
 
@@ -374,6 +375,10 @@ class STT(stt.STT):
                 vad_events=vad_events,
                 endpoint_url=endpoint_url,
             )
+
+    def update_keyterms(self, keyterms: list[str]) -> None:
+        # keyterm is supported by Nova-3 models; older models fall back server-side.
+        self.update_options(keyterm=keyterms)
 
     def _sanitize_options(
         self, *, language: NotGivenOr[DeepgramLanguages | str] = NOT_GIVEN

@@ -84,6 +84,7 @@ class FallbackAdapter(
                 interim_results=all(t.capabilities.interim_results for t in stt),
                 diarization=all(t.capabilities.diarization for t in stt),
                 aligned_transcript=aligned_transcript,
+                keyterms=any(t.capabilities.keyterms for t in stt),
             )
         )
 
@@ -112,6 +113,11 @@ class FallbackAdapter(
     @property
     def provider(self) -> str:
         return "livekit"
+
+    def update_keyterms(self, keyterms: list[str]) -> None:
+        # forward to every underlying STT; unsupported ones warn-and-skip internally
+        for stt_instance in self._stt_instances:
+            stt_instance.update_keyterms(keyterms)
 
     async def _try_recognize(
         self,

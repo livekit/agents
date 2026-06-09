@@ -128,6 +128,8 @@ class STTCapabilities:
     aligned_transcript: Literal["word", "chunk", False] = False
     offline_recognize: bool = True
     """Whether the STT supports batch recognition via recognize() method"""
+    keyterms: bool = False
+    """Whether the STT supports keyterm prompting via update_keyterms()"""
 
 
 class STTError(BaseModel):
@@ -152,6 +154,7 @@ class STT(
         self._capabilities = capabilities
         self._label = f"{type(self).__module__}.{type(self).__name__}"
         self._recognize_metrics_needed = True
+        self._keyterms_unsupported_warned = False
 
     @property
     def label(self) -> str:
@@ -263,6 +266,25 @@ class STT(
                 recoverable=recoverable,
             ),
         )
+
+    def update_keyterms(self, keyterms: list[str]) -> None:
+        """Set the keyterms used to bias recognition toward specific words/phrases.
+
+        Keyterms are a provider-agnostic list of strings (e.g. proper names, places,
+        product names, jargon). Plugins that support keyterm prompting override this
+        to map the list onto their native parameter and apply it to active streams.
+
+        The default implementation warns once and no-ops when the STT does not
+        support keyterms, so setting keyterms never crashes a session.
+        """
+        if not self._capabilities.keyterms:
+            if not self._keyterms_unsupported_warned:
+                self._keyterms_unsupported_warned = True
+                logger.warning(
+                    "keyterms are not supported by this STT, ignoring update_keyterms()",
+                    extra={"stt": self._label},
+                )
+            return
 
     def stream(
         self,

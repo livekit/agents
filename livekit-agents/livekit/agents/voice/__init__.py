@@ -18,6 +18,7 @@ from .events import (
     UserStateChangedEvent,
     UserTurnExceededEvent,
 )
+from .keyterms import KeytermDetectionOptions, KeytermOptions
 from .room_io import (
     _ParticipantAudioOutput,
     _ParticipantStreamTranscriptionOutput,
@@ -49,6 +50,8 @@ __all__ = [
     "FunctionToolsExecutedEvent",
     "AgentFalseInterruptionEvent",
     "UserTurnExceededEvent",
+    "KeytermOptions",
+    "KeytermDetectionOptions",
     "TranscriptSynchronizer",
     "io",
     "room_io",

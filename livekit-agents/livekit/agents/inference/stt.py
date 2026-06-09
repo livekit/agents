@@ -192,6 +192,26 @@ def _diarization_enabled(extra_kwargs: dict[str, Any] | None) -> bool:
     return False
 
 
+def _keyterms_extra_for_model(
+    model: NotGivenOr[str], keyterms: list[str]
+) -> dict[str, Any] | None:
+    """Map a provider-agnostic keyterms list onto the active provider's extra_kwargs key.
+
+    Returns None when the model does not support keyterm prompting. Called with an empty
+    list, it doubles as a capability check (non-None ⇒ supported). Keep every provider's
+    keyterm key here so capability inference and update_keyterms can't diverge.
+    """
+    if not (is_given(model) and isinstance(model, str)):
+        return None
+    if model.startswith("deepgram/"):
+        return {"keyterm": list(keyterms)}
+    if model.startswith("assemblyai/"):
+        return {"keyterms_prompt": list(keyterms)}
+    if model.startswith("speechmatics/"):
+        return {"additional_vocab": [{"content": term} for term in keyterms]}
+    return None
+
+
 STTLanguages = Literal["multi", "en", "de", "es", "fr", "ja", "pt", "zh", "hi"]
 
 
@@ -517,6 +537,7 @@ class STT(stt.STT):
                 diarization=diarization_enabled,
                 aligned_transcript="word",
                 offline_recognize=False,
+                keyterms=_keyterms_extra_for_model(model, []) is not None,
             ),
         )
 
@@ -634,6 +655,10 @@ class STT(stt.STT):
 
             self._opts.model = model
             self._vad = _resolve_vad_for_model(model, self._vad)
+            self._capabilities = replace(
+                self._capabilities,
+                keyterms=_keyterms_extra_for_model(self._opts.model, []) is not None,
+            )
         if is_given(language):
             self._opts.language = LanguageCode(language)
         if is_given(extra):
@@ -645,6 +670,13 @@ class STT(stt.STT):
 
         for stream in self._streams:
             stream.update_options(model=model, language=language, extra=extra)
+
+    def update_keyterms(self, keyterms: list[str]) -> None:
+        extra = _keyterms_extra_for_model(self._opts.model, keyterms)
+        if extra is None:
+            super().update_keyterms(keyterms)  # warn-and-skip for unsupported models
+            return
+        self.update_options(extra=extra)
 
     def _sanitize_options(
         self, *, language: NotGivenOr[STTLanguages | str] = NOT_GIVEN

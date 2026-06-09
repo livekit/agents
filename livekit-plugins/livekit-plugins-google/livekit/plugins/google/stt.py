@@ -68,6 +68,11 @@ _max_session_duration = 240
 # Google is very sensitive to background noise, so we'll ignore results with low confidence
 _default_min_confidence = 0.65
 
+# Default boost applied to keyterms set via the provider-agnostic update_keyterms() API.
+# Google accepts boosts in roughly 0-20; a moderate value biases toward the terms without
+# over-triggering false positives.
+_DEFAULT_KEYTERM_BOOST = 10.0
+
 
 # This class is only be used internally to encapsulate the options
 @dataclass
@@ -226,6 +231,7 @@ class STT(stt.STT):
                 streaming=use_streaming,
                 interim_results=True,
                 aligned_transcript="word" if enable_word_time_offsets and use_streaming else False,
+                keyterms=True,
             )
         )
 
@@ -543,6 +549,11 @@ class STT(stt.STT):
                 speech_end_timeout=speech_end_timeout,
                 endpointing_sensitivity=endpointing_sensitivity,
             )
+
+    def update_keyterms(self, keyterms: list[str]) -> None:
+        # Google biases recognition via (phrase, boost) pairs; apply a moderate
+        # default boost since the common keyterms API carries no per-term weight.
+        self.update_options(keywords=[(term, _DEFAULT_KEYTERM_BOOST) for term in keyterms])
 
     async def aclose(self) -> None:
         await self._pool.aclose()

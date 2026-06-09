@@ -133,6 +133,7 @@ class STT(stt.STT):
                 aligned_transcript="word",
                 offline_recognize=False,
                 diarization=is_given(speaker_labels) and speaker_labels is True,
+                keyterms=True,
             ),
         )
         if model == "u3-pro":
@@ -299,6 +300,9 @@ class STT(stt.STT):
                 continuous_partials=continuous_partials,
                 interruption_delay=interruption_delay,
             )
+
+    def update_keyterms(self, keyterms: list[str]) -> None:
+        self.update_options(keyterms_prompt=keyterms)
 
 
 class SpeechStream(stt.SpeechStream):

@@ -110,6 +110,7 @@ class STTv2(stt.STT):
                 interim_results=True,
                 aligned_transcript="word",
                 offline_recognize=False,
+                keyterms=True,
             )
         )
 
@@ -266,6 +267,9 @@ class STTv2(stt.STT):
                 language_hint=language_hint,
                 eager_eot_threshold=eager_eot_threshold,
             )
+
+    def update_keyterms(self, keyterms: list[str]) -> None:
+        self.update_options(keyterm=keyterms)
 
 
 class SpeechStreamv2(stt.SpeechStream):
