@@ -243,12 +243,71 @@ def test_recording_path_returns_recorder_output_path() -> None:
 
 async def test_start_accepts_recording_exporter() -> None:
     session = _create_simple_session()
+    mock_ctx = _make_mock_job_ctx()
     exporter = StaticRecordingExporter(None)
 
-    await session.start(SimpleAgent(), record=False, recording_exporter=exporter)
+    with _patch_job_ctx(mock_ctx):
+        await session.start(SimpleAgent(), record=False, recording_exporter=exporter)
 
     assert session._recording_exporter is exporter
     await _cleanup(session)
+    session._end_session_span()
+
+
+async def test_recording_exporter_requires_job_context() -> None:
+    session = _create_simple_session()
+    exporter = StaticRecordingExporter(None)
+
+    with pytest.raises(RuntimeError, match="requires an active JobContext"):
+        await session.start(SimpleAgent(), record=False, recording_exporter=exporter)
+
+
+async def test_recording_exporter_requires_primary_session() -> None:
+    primary_session = _create_simple_session()
+    secondary_session = _create_simple_session()
+    mock_ctx = _make_mock_job_ctx()
+    mock_ctx._primary_agent_session = primary_session
+    exporter = StaticRecordingExporter(None)
+
+    with _patch_job_ctx(mock_ctx):
+        with pytest.raises(RuntimeError, match="primary AgentSession"):
+            await secondary_session.start(SimpleAgent(), record=False, recording_exporter=exporter)
+
+
+async def test_restart_ends_deferred_session_span_before_replacing_it() -> None:
+    session = _create_simple_session()
+    mock_ctx = _make_mock_job_ctx()
+    first_span = MagicMock()
+    second_span = MagicMock()
+    session_spans = iter([first_span, second_span])
+
+    def start_span(name: str, *args: Any, **kwargs: Any) -> MagicMock:
+        if name == "agent_session":
+            return next(session_spans)
+        return MagicMock()
+
+    with (
+        _patch_job_ctx(mock_ctx),
+        patch(
+            f"{_AGENT_SESSION_MOD}.tracer.start_span",
+            side_effect=start_span,
+        ),
+    ):
+        await session.start(SimpleAgent(), record=False)
+        await session.aclose()
+        assert session._session_span is first_span
+        first_span.end.assert_not_called()
+
+        await session.start(SimpleAgent(), record=False)
+
+        first_span.end.assert_called_once()
+        assert session._session_span is second_span
+
+        await session.aclose()
+        second_span.end.assert_not_called()
+
+    session._end_session_span()
+    second_span.end.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

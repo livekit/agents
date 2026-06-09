@@ -678,6 +678,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # configure observability first
             record_is_given = is_given(record)
             job_ctx = get_job_context(required=False)
+            if recording_exporter is not None and job_ctx is None:
+                raise RuntimeError("recording_exporter requires an active JobContext")
+
             if not is_given(record):
                 # defer to server-side setting for recording
                 record = job_ctx.job.enable_recording if job_ctx else False
@@ -691,6 +694,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     job_ctx._primary_agent_session = self
                 else:
                     is_primary = False
+                    if recording_exporter is not None:
+                        raise RuntimeError(
+                            "recording_exporter can only be used with the primary AgentSession"
+                        )
                     if any(self._recording_options.values()):
                         if record_is_given:
                             raise RuntimeError(
@@ -704,12 +711,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 job_ctx.init_recording(self._recording_options)
 
-            self._session_span = current_span = tracer.start_span("agent_session")
-            # we detach here to avoid context issues since tokens need to be detached
-            # in the same context as it was created
             if self._session_ctx_token is not None:
                 otel_context.detach(self._session_ctx_token)
                 self._session_ctx_token = None
+            self._end_session_span()
+
+            self._session_span = current_span = tracer.start_span("agent_session")
             ctx = trace.set_span_in_context(current_span)
             self._session_ctx_token = otel_context.attach(ctx)
 
