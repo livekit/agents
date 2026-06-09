@@ -354,7 +354,6 @@ class ChunkedStream(tts.ChunkedStream):
                     "model_id": self._opts.model,
                     "voice_settings": voice_settings,
                     "apply_text_normalization": self._opts.apply_text_normalization,
-                    "enable_logging": self._opts.enable_logging,
                     **extra_params
                 },
                 timeout=aiohttp.ClientTimeout(
@@ -903,7 +902,7 @@ def _synthesize_url(opts: _TTSOptions) -> str:
     output_format = opts.encoding
     url = (
         f"{base_url}/text-to-speech/{voice_id}/stream?"
-        f"model_id={model_id}&output_format={output_format}"
+        f"model_id={model_id}&output_format={output_format}&enable_logging={str(opts.enable_logging).lower()}"
     )
     if is_given(opts.streaming_latency):
         url += f"&optimize_streaming_latency={opts.streaming_latency}"
