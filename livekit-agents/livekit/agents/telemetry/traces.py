@@ -325,7 +325,9 @@ def _chat_ctx_to_otel_events(chat_ctx: ChatContext) -> list[tuple[str, Attribute
     return events
 
 
-def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatContext.ChatItem:
+def _build_proto_chat_item(
+    item: ChatItem,
+) -> agent_pb.agent_session.ChatContext.ChatItem:
     item_pb = agent_pb.agent_session.ChatContext.ChatItem()
 
     if item.type == "message":
@@ -406,11 +408,17 @@ def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatC
         acu.id = item.id
         if item.instructions is not None:
             acu.instructions = item.instructions
-        acu.tools_added[:] = item.tools_added or []
-        acu.tools_removed[:] = item.tools_removed or []
+        if item.tools_added:
+            acu.tools_added.extend(item.tools_added)
+        if item.tools_removed:
+            acu.tools_removed.extend(item.tools_removed)
         acu.created_at.FromMilliseconds(int(item.created_at * 1000))
 
-    return MessageToDict(item_pb, preserving_proto_field_name=True)
+    return item_pb
+
+
+def _to_proto_chat_item(item: ChatItem) -> dict:
+    return MessageToDict(_build_proto_chat_item(item), preserving_proto_field_name=True)
 
 
 async def _parse_retry_delay(resp: aiohttp.ClientResponse) -> float | None:

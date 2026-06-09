@@ -61,6 +61,7 @@ def _observability_url(livekit_url: str) -> str | None:
 
 if TYPE_CHECKING:
     from .ipc.inference_executor import InferenceExecutor
+    from .simulation import SimulationContext
     from .voice.agent_session import AgentSession, RecordingOptions
     from .voice.report import SessionReport
 
@@ -190,6 +191,13 @@ class JobContext:
         self._handlers_with_filter: list[logging.Handler] = []
 
         self._primary_agent_session: AgentSession | None = None
+
+        # Lazily built from the simulation room's metadata; None when not under a
+        # simulation. _simulation_resolved guards the one-time parse.
+        self._simulation_ctx: SimulationContext | None = None
+        self._simulation_resolved = False
+        # on_simulation_end callback, injected by the job runner from AgentServer.
+        self._simulation_end_fnc: Callable[[SimulationContext], Any] | None = None
 
         self._tempdir = tempfile.TemporaryDirectory()
 
@@ -430,6 +438,44 @@ class JobContext:
         if not self._primary_agent_session:
             raise RuntimeError("No AgentSession was started for this job")
         return self._primary_agent_session
+
+    def simulation_context(self) -> SimulationContext | None:
+        """Return the :class:`SimulationContext` when this job is running under a
+        simulation, or ``None`` for a normal/production session.
+
+        Resolved once and cached. The framework hands it to ``on_simulation_end``
+        automatically, so you never need to call this to "prime" anything. Call it only
+        when you want the scenario in your entrypoint (e.g. to seed scenario-specific
+        mocks). Resolves synchronously from the simulation room's metadata (a protojson
+        ``SimulationDispatch``); a production room has none and returns ``None``.
+        """
+        if self._simulation_resolved:
+            return self._simulation_ctx
+
+        self._simulation_resolved = True
+
+        # The simulation dispatch travels in the agent's dispatch metadata
+        # (RoomAgentDispatch.Metadata -> job.metadata); fall back to room metadata.
+        metadata = self._info.job.metadata or self._room.metadata
+        if not metadata:
+            return None
+
+        from google.protobuf import json_format
+
+        from livekit.protocol import agent_simulation as sim_pb
+
+        from .simulation import SimulationContext
+
+        try:
+            dispatch = json_format.Parse(metadata, sim_pb.SimulationDispatch())
+        except json_format.ParseError:
+            return None
+
+        if not dispatch.simulation_run_id:
+            return None
+
+        self._simulation_ctx = SimulationContext(dispatch, self)
+        return self._simulation_ctx
 
     @property
     def local_participant_identity(self) -> str:
