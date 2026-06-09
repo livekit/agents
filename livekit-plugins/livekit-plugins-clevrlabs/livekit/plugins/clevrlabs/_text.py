@@ -14,8 +14,8 @@
 
 """Text normalisation before TTS synthesis.
 
-Translation table is built once at import time — import this module at
-process startup so the C table is never rebuilt per-request.
+Strips punctuation and symbol characters (minus a small allowlist) and expands
+currency amounts, so the model only ever receives speakable text.
 """
 
 import re
@@ -60,18 +60,26 @@ _REPLACE = {
     "°": " degrees ",
 }
 
-_table = str.maketrans(
-    {
-        **{
-            chr(cp): None
-            for cp in range(0x110000)
-            if unicodedata.category(chr(cp)).startswith(("P", "S"))
-            and chr(cp) not in _KEEP
-            and chr(cp) not in _REPLACE
-        },
-        **_REPLACE,
-    }
-)
+
+def _strip_punctuation_and_symbols(text: str) -> str:
+    """Drop punctuation/symbol characters, keeping the _KEEP allowlist.
+
+    Only the characters actually present in ``text`` are inspected, so there is
+    no import-time cost from scanning the whole Unicode range.
+    """
+    out: list[str] = []
+    for char in text:
+        replacement = _REPLACE.get(char)
+        if replacement is not None:
+            out.append(replacement)
+        elif char in _KEEP:
+            out.append(char)
+        elif unicodedata.category(char)[0] in ("P", "S"):
+            continue  # punctuation or symbol — drop it
+        else:
+            out.append(char)
+    return "".join(out)
+
 
 _EMAIL = re.compile(r"\b[\w.+-]+@[\w.-]+\.[a-zA-Z]{2,}\b")
 _SPACE_BEFORE_COMMA = re.compile(r" ,")
@@ -82,7 +90,7 @@ def clean_text(text: str) -> str:
     text = _CURRENCY_RE.sub(_expand_currency, text)
     text = re.sub(r"\s+", " ", text).strip()
     text = _EMAIL.sub(lambda m: m.group().replace(".", " dot ").replace("@", " at "), text)
-    text = text.translate(_table)
+    text = _strip_punctuation_and_symbols(text)
     text = re.sub(r" {2,}", " ", text)
     text = _SPACE_BEFORE_COMMA.sub(",", text)
     text = _MULTI_PUNCT.sub(lambda m: m.group()[-1], text)
