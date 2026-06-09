@@ -83,6 +83,8 @@ class VideoInputOptions:
 class AudioOutputOptions:
     sample_rate: int = 24000
     num_channels: int = 1
+    frame_size_ms: int = 50
+    """The frame size in milliseconds for audio output frames."""
     track_publish_options: rtc.TrackPublishOptions = field(
         default_factory=lambda: rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
     )

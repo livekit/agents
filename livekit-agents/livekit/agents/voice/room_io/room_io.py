@@ -133,6 +133,7 @@ class RoomIO:
                 self._room,
                 sample_rate=output_audio_options.sample_rate,
                 num_channels=output_audio_options.num_channels,
+                frame_size_ms=output_audio_options.frame_size_ms,
                 track_publish_options=output_audio_options.track_publish_options,
                 track_name=(
                     output_audio_options.track_name

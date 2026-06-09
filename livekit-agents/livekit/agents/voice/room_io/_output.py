@@ -30,6 +30,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
         *,
         sample_rate: int,
         num_channels: int,
+        frame_size_ms: int = 50,
         track_publish_options: rtc.TrackPublishOptions,
         track_name: str = "roomio_audio",
     ) -> None:
@@ -49,7 +50,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
 
         self._audio_buf = utils.aio.Chan[rtc.AudioFrame]()
         self._audio_bstream = utils.audio.AudioByteStream(
-            sample_rate, num_channels, samples_per_channel=sample_rate // 20, progressive=True
+            sample_rate, num_channels, samples_per_channel=sample_rate * frame_size_ms // 1000, progressive=True
         )
 
         self._flush_task: asyncio.Task[None] | None = None

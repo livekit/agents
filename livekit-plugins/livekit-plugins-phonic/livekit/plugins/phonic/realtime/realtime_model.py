@@ -13,6 +13,7 @@ from typing import Literal
 
 from livekit import rtc
 from livekit.agents import llm, utils
+from livekit.agents.voice.room_io import AudioOutputOptions
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -43,6 +44,7 @@ PHONIC_INPUT_SAMPLE_RATE = 44100
 PHONIC_OUTPUT_SAMPLE_RATE = 44100
 PHONIC_NUM_CHANNELS = 1
 PHONIC_INPUT_FRAME_MS = 20
+PHONIC_OUTPUT_FRAME_MS = 20
 WS_CLOSE_NORMAL = 1000
 TOOL_CALL_OUTPUT_TIMEOUT_MS = 60000
 
@@ -220,6 +222,26 @@ class RealtimeModel(llm.RealtimeModel):
         sess = RealtimeSession(self)
         self._sessions.add(sess)
         return sess
+
+    @staticmethod
+    def audio_output_options(**kwargs: typing.Any) -> AudioOutputOptions:
+        """Return ``AudioOutputOptions`` tuned for Phonic: 44100 Hz sample rate and 20 ms frames.
+
+        Using these options with ``RoomIO`` avoids resampling (Phonic natively outputs 44100 Hz)
+        and matches the frame size to Phonic's 20 ms audio chunks, minimising buffer starvation.
+
+        Example::
+
+            model = phonic.realtime.RealtimeModel(...)
+            room_io = RoomIO(session, room=ctx.room, options=RoomOptions(
+                audio_output=model.audio_output_options()
+            ))
+        """
+        return AudioOutputOptions(
+            sample_rate=PHONIC_OUTPUT_SAMPLE_RATE,
+            frame_size_ms=PHONIC_OUTPUT_FRAME_MS,
+            **kwargs,
+        )
 
     def update_options(
         self,
