@@ -74,6 +74,7 @@ class STTOptions:
     sample_rate: STTRealtimeSampleRates
     server_vad: NotGivenOr[VADOptions | None]
     keyterms: NotGivenOr[list[str]]
+    no_verbatim: bool
 
 
 class STT(stt.STT):
@@ -91,6 +92,7 @@ class STT(stt.STT):
         http_session: aiohttp.ClientSession | None = None,
         model_id: NotGivenOr[ElevenLabsSTTModels | str] = NOT_GIVEN,
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
+        no_verbatim: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of ElevenLabs STT.
@@ -112,6 +114,9 @@ class STT(stt.STT):
                 Each keyterm can contain at most 5 words and must be less than 50 characters.
                 Maximum of 100 keyterms. Only supported for Scribe v2 batch recognition
                 (not realtime streaming). Usage incurs additional costs.
+            no_verbatim (NotGivenOr[bool]): When True, the model removes filler words, false starts
+                and disfluencies from the transcript, producing cleaner output. Supported for both
+                Scribe v2 (batch) and Scribe v2 realtime. Default is False.
         """
 
         if is_given(use_realtime):
@@ -157,6 +162,7 @@ class STT(stt.STT):
             include_timestamps=include_timestamps,
             model_id=model_id,
             keyterms=keyterms,
+            no_verbatim=no_verbatim if is_given(no_verbatim) else False,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -195,6 +201,8 @@ class STT(stt.STT):
         if is_given(self._opts.keyterms):
             for keyterm in self._opts.keyterms:
                 form.add_field("keyterms", keyterm)
+        if self._opts.no_verbatim:
+            form.add_field("no_verbatim", "true")
 
         try:
             async with self._ensure_session().post(
@@ -280,6 +288,7 @@ class STT(stt.STT):
         tag_audio_events: NotGivenOr[bool] = NOT_GIVEN,
         server_vad: NotGivenOr[VADOptions] = NOT_GIVEN,
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
+        no_verbatim: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         if is_given(tag_audio_events):
             self._opts.tag_audio_events = tag_audio_events
@@ -289,6 +298,9 @@ class STT(stt.STT):
 
         if is_given(keyterms):
             self._opts.keyterms = keyterms
+
+        if is_given(no_verbatim):
+            self._opts.no_verbatim = no_verbatim
 
         for stream in self._streams:
             stream.update_options(server_vad=server_vad)
@@ -512,6 +524,9 @@ class SpeechStream(stt.SpeechStream):
 
         if self._opts.include_timestamps:
             params.append("include_timestamps=true")
+
+        if self._opts.no_verbatim:
+            params.append("no_verbatim=true")
 
         query_string = "&".join(params)
 
