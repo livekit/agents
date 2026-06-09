@@ -21,7 +21,7 @@ from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
-from ._utils import create_access_token, get_default_inference_url
+from ._utils import create_access_token, get_default_inference_url, get_inference_headers
 
 STSModels = Literal[
     "openai/gpt-realtime",
@@ -168,6 +168,7 @@ class STSSession(llm.RealtimeSession):
         self._recv_task: asyncio.Task | None = None
         self._send_task: asyncio.Task | None = None
         self._connected = False
+        self._closing = False
 
         self._current_generation: _ResponseGeneration | None = None
         self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
@@ -196,7 +197,10 @@ class STSSession(llm.RealtimeSession):
             base_url = base_url.replace("http", "ws", 1)
 
         token = create_access_token(self._opts.api_key, self._opts.api_secret)
-        headers = {"Authorization": f"Bearer {token}"}
+        headers = {
+            **get_inference_headers(),
+            "Authorization": f"Bearer {token}",
+        }
 
         try:
             self._ws = await self._http_session.ws_connect(
@@ -336,6 +340,17 @@ class STSSession(llm.RealtimeSession):
                     ),
                 )
 
+        if not self._closing:
+            self.emit(
+                "error",
+                llm.RealtimeModelError(
+                    timestamp=time.time(),
+                    label="sts",
+                    error=APIConnectionError("STS connection closed unexpectedly"),
+                    recoverable=False,
+                ),
+            )
+
         self._close_current_generation()
 
     def _handle_response_created(self, data: dict[str, Any]) -> None:
@@ -393,20 +408,6 @@ class STSSession(llm.RealtimeSession):
                     modalities=item_gen.modalities,
                 )
             )
-
-        elif item_type == "function_call":
-            call_id = item.get("call_id", "")
-            name = item.get("name", "")
-            arguments = item.get("arguments", "")
-            if call_id and name:
-                self._current_generation.function_ch.send_nowait(
-                    llm.FunctionCall(
-                        id=item_id,
-                        call_id=call_id,
-                        name=name,
-                        arguments=arguments,
-                    )
-                )
 
     def _handle_response_content_part_added(self, data: dict[str, Any]) -> None:
         if self._current_generation is None:
@@ -472,6 +473,24 @@ class STSSession(llm.RealtimeSession):
 
         item = data.get("item", {})
         item_id = item.get("id", "")
+        item_type = item.get("type", "")
+
+        if item_type == "function_call":
+            # Arguments stream in after output_item.added and are only complete here.
+            call_id = item.get("call_id", "")
+            name = item.get("name", "")
+            arguments = item.get("arguments", "")
+            if call_id and name:
+                self._current_generation.function_ch.send_nowait(
+                    llm.FunctionCall(
+                        id=item_id,
+                        call_id=call_id,
+                        name=name,
+                        arguments=arguments,
+                    )
+                )
+            return
+
         item_gen = self._current_generation.messages.get(item_id)
         if item_gen:
             if not item_gen.text_ch.closed:
@@ -569,7 +588,9 @@ class STSSession(llm.RealtimeSession):
                 if self._ws:
                     await self._ws.send_str(json.dumps(msg))
             except Exception:
-                logger.exception("STS: failed to send event")
+                if not self._closing:
+                    logger.warning("STS: failed to send event, connection closed")
+                break
 
     def _queue_event(self, event: dict[str, Any]) -> None:
         with contextlib.suppress(utils.aio.channel.ChanClosed):
@@ -717,6 +738,7 @@ class STSSession(llm.RealtimeSession):
             })
 
     async def aclose(self) -> None:
+        self._closing = True
         self._close_current_generation()
         self._msg_ch.close()
         if self._send_task and not self._send_task.done():
