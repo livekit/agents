@@ -123,6 +123,8 @@ class STTv2(stt.STT):
                 "`keyterms` is deprecated, use `keyterm` instead for consistency with Deepgram API."
             )
             keyterm = keyterms
+        if is_given(keyterm):
+            keyterm = _strip_keyterm(keyterm)
 
         if is_given(eager_eot_threshold):
             effective_eot = eot_threshold if is_given(eot_threshold) else 0.7
@@ -236,7 +238,7 @@ class STTv2(stt.STT):
             )
             keyterm = keyterms
         if is_given(keyterm):
-            self._opts.keyterm = keyterm
+            self._opts.keyterm = _strip_keyterm(keyterm)
         if is_given(mip_opt_out):
             self._opts.mip_opt_out = mip_opt_out
         if is_given(tags):
@@ -327,7 +329,7 @@ class SpeechStreamv2(stt.SpeechStream):
             )
             keyterm = keyterms
         if is_given(keyterm):
-            self._opts.keyterm = keyterm
+            self._opts.keyterm = _strip_keyterm(keyterm)
         if is_given(mip_opt_out):
             self._opts.mip_opt_out = mip_opt_out
         if is_given(tags):
@@ -615,3 +617,10 @@ def _validate_tags(tags: list[str]) -> list[str]:
         if len(tag) > 128:
             raise ValueError("tag must be no more than 128 characters")
     return tags
+
+
+def _strip_keyterm(keyterm: str | Sequence[str]) -> str | list[str]:
+    """Strip whitespace from keyterm entries; Deepgram returns 400 for leading/trailing spaces."""
+    if isinstance(keyterm, str):
+        return keyterm.strip()
+    return [k.strip() for k in keyterm]

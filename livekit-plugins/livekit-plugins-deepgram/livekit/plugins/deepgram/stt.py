@@ -167,6 +167,8 @@ class STT(stt.STT):
                 "`keyterms` is deprecated, use `keyterm` instead for consistency with Deepgram API."
             )
             keyterm = keyterms
+        if is_given(keyterm):
+            keyterm = _strip_keyterm(keyterm)
         _validate_keyterm(model, language, keyterm, keywords)
 
         self._opts = STTOptions(
@@ -338,7 +340,7 @@ class STT(stt.STT):
             )
             keyterm = keyterms
         if is_given(keyterm):
-            self._opts.keyterm = keyterm
+            self._opts.keyterm = _strip_keyterm(keyterm)
         if is_given(profanity_filter):
             self._opts.profanity_filter = profanity_filter
         if is_given(redact):
@@ -481,7 +483,7 @@ class SpeechStream(stt.SpeechStream):
             )
             keyterm = keyterms
         if is_given(keyterm):
-            self._opts.keyterm = keyterm
+            self._opts.keyterm = _strip_keyterm(keyterm)
         if is_given(profanity_filter):
             self._opts.profanity_filter = profanity_filter
         if is_given(redact):
@@ -862,6 +864,13 @@ def _validate_tags(tags: list[str]) -> list[str]:
         if len(tag) > 128:
             raise ValueError("tag must be no more than 128 characters")
     return tags
+
+
+def _strip_keyterm(keyterm: str | Sequence[str]) -> str | list[str]:
+    """Strip whitespace from keyterm entries; Deepgram returns 400 for leading/trailing spaces."""
+    if isinstance(keyterm, str):
+        return keyterm.strip()
+    return [k.strip() for k in keyterm]
 
 
 def _validate_keyterm(
