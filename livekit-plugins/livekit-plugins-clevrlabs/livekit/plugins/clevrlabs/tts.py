@@ -41,6 +41,10 @@ from .log import logger
 
 _DEFAULT_SERVER_URL = "https://api.theclevr.com"
 
+# The Clevr Labs model always synthesizes at 24 kHz (and the pipeline encodes
+# user audio at 24 kHz too), so the output rate is fixed, not configurable.
+_OUTPUT_SAMPLE_RATE = 24000
+
 
 class TTS(tts.TTS):
     """Streaming text-to-speech backed by the Clevr Labs conversational speech model.
@@ -67,7 +71,6 @@ class TTS(tts.TTS):
         *,
         api_key: str,
         server_url: str = _DEFAULT_SERVER_URL,
-        sample_rate: int = 24000,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ):
         """Create a Clevr Labs TTS plugin.
@@ -77,12 +80,11 @@ class TTS(tts.TTS):
                           https://theclevr.com.
             server_url:   Base URL of the Clevr Labs API. Defaults to the hosted
                           endpoint; override only to target a different deployment.
-            sample_rate:  Output sample rate, in Hz, of the synthesized audio.
             conn_options: Connection and retry options applied to synthesis requests.
         """
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
-            sample_rate=sample_rate,
+            sample_rate=_OUTPUT_SAMPLE_RATE,
             num_channels=1,
         )
         self._server_url = server_url.rstrip("/")
@@ -90,9 +92,6 @@ class TTS(tts.TTS):
 
         self._session_id: str | None = None
         self._session_started: bool = False
-        self._session_starting: bool = False
-        self._session_ready = asyncio.Event()
-        self._session_error: Exception | None = None
         self._session_lock = asyncio.Lock()
         self._pending_user_turn: dict | None = None
 
@@ -139,46 +138,38 @@ class TTS(tts.TTS):
         """Eagerly start a session in the background.
 
         Call this right after construction (from an async context) so the
-        session is ready before the first synthesis request. If not called,
-        the session is started lazily on first use.
+        session is ready before the first synthesis request. This is purely an
+        optimization: if not called, the session is opened lazily on first use,
+        and a failed eager start is simply retried on first use.
         """
-        self._session_starting = True
-        asyncio.ensure_future(self._start_session_bg())
 
-    async def _open_session(self) -> None:
-        resp = await self._http_client.post("/tts/session/start")
-        resp.raise_for_status()
-        data = resp.json()
-        self._session_id = data["session_id"]
-        self._session_started = True
-        logger.info("Clevr session started: %s", self._session_id)
+        async def _eager_start() -> None:
+            try:
+                await self._ensure_session()
+            except Exception:
+                logger.warning(
+                    "Eager Clevr session start failed; will retry on first synthesis",
+                    exc_info=True,
+                )
 
-    async def _start_session_bg(self) -> None:
-        try:
-            await self._open_session()
-        except Exception as e:
-            self._session_error = e
-            logger.error("Failed to start Clevr session: %s", e)
-        finally:
-            self._session_ready.set()
+        asyncio.ensure_future(_eager_start())
 
     async def _ensure_session(self) -> None:
         if self._session_started:
             return
 
-        # start_session() kicked off a background start; wait for it to finish.
-        if self._session_starting:
-            await self._session_ready.wait()
-            if self._session_error is not None:
-                raise self._session_error
-            return
-
-        # Otherwise start lazily on first use. The lock stops concurrent segments
-        # from racing to open two sessions.
+        # The lock serializes concurrent callers so only one session is opened.
+        # A failed attempt leaves _session_started False, so the next call retries
+        # instead of permanently caching the error.
         async with self._session_lock:
             if self._session_started:
                 return
-            await self._open_session()
+            resp = await self._http_client.post("/tts/session/start")
+            resp.raise_for_status()
+            data = resp.json()
+            self._session_id = data["session_id"]
+            self._session_started = True
+            logger.info("Clevr session started: %s", self._session_id)
 
     async def _end_session(self) -> None:
         if not self._session_started or not self._session_id:
@@ -294,23 +285,27 @@ class ClevrLabsSynthesizeStream(tts.SynthesizeStream):
         if not text:
             return
 
-        await self._tts._ensure_session()
-
         t_start = time.perf_counter()
 
+        # Read but don't yet clear the pending user turn: if the request fails and
+        # the base class retries _run(), the context must still be available.
+        pending_user_turn = self._tts._pending_user_turn
         payload: dict = {
             "text": text,
             "speaker": 0,
-            "session_id": self._tts._session_id,
         }
-        if self._tts._pending_user_turn is not None:
-            payload["context"] = [self._tts._pending_user_turn]
-            self._tts._pending_user_turn = None
+        if pending_user_turn is not None:
+            payload["context"] = [pending_user_turn]
 
         audio_chunks: list = []
         byte_buffer = b""
 
         try:
+            # Opening the session is inside the try so its HTTP errors are wrapped
+            # as APIError too (e.g. a 401 from a bad key stays visible/retryable).
+            await self._tts._ensure_session()
+            payload["session_id"] = self._tts._session_id
+
             async with self._tts._http_client.stream(
                 "POST", "/tts/synthesize/stream", json=payload
             ) as resp:
@@ -337,6 +332,11 @@ class ClevrLabsSynthesizeStream(tts.SynthesizeStream):
 
             for frame in audio_bstream.flush():
                 output_emitter.push(frame.data.tobytes())
+
+            # Request succeeded — only now drop the user context so it isn't
+            # re-sent on the next segment (and is preserved for a retry on failure).
+            if pending_user_turn is not None:
+                self._tts._pending_user_turn = None
 
         except asyncio.CancelledError:
             raise
