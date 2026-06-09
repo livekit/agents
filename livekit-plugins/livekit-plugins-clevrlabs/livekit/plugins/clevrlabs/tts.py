@@ -26,7 +26,14 @@ import httpx
 import numpy as np
 from scipy.signal import resample_poly
 
-from livekit.agents import APIConnectOptions, tts, utils
+from livekit.agents import (
+    APIConnectionError,
+    APIConnectOptions,
+    APIStatusError,
+    APITimeoutError,
+    tts,
+    utils,
+)
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
 from ._text import clean_text
@@ -83,8 +90,10 @@ class TTS(tts.TTS):
 
         self._session_id: str | None = None
         self._session_started: bool = False
+        self._session_starting: bool = False
         self._session_ready = asyncio.Event()
         self._session_error: Exception | None = None
+        self._session_lock = asyncio.Lock()
         self._pending_user_turn: dict | None = None
 
         self._http_client = httpx.AsyncClient(
@@ -101,8 +110,8 @@ class TTS(tts.TTS):
 
         Args:
             text:        Transcript of what the user said.
-            audio:       Float32 numpy array of the user's speech. Int16 arrays
-                         are accepted and converted automatically.
+            audio:       Float32 numpy array of the user's speech. Integer arrays
+                         (e.g. int16) are accepted and normalised automatically.
             sample_rate: Sample rate of the audio array (e.g. 48000, 16000).
         """
         if not text.strip() or audio.size == 0:
@@ -113,10 +122,11 @@ class TTS(tts.TTS):
             )
             return
 
-        if audio.dtype != np.float32:
+        if np.issubdtype(audio.dtype, np.integer):
+            max_int = np.iinfo(audio.dtype).max
+            audio = audio.astype(np.float32) / max_int
+        elif audio.dtype != np.float32:
             audio = audio.astype(np.float32)
-            if np.abs(audio).max() > 1.0:
-                audio /= 32768.0
 
         if sample_rate != 24000:
             g = gcd(sample_rate, 24000)
@@ -132,16 +142,20 @@ class TTS(tts.TTS):
         session is ready before the first synthesis request. If not called,
         the session is started lazily on first use.
         """
+        self._session_starting = True
         asyncio.ensure_future(self._start_session_bg())
+
+    async def _open_session(self) -> None:
+        resp = await self._http_client.post("/tts/session/start")
+        resp.raise_for_status()
+        data = resp.json()
+        self._session_id = data["session_id"]
+        self._session_started = True
+        logger.info("Clevr session started: %s", self._session_id)
 
     async def _start_session_bg(self) -> None:
         try:
-            resp = await self._http_client.post("/tts/session/start")
-            resp.raise_for_status()
-            data = resp.json()
-            self._session_id = data["session_id"]
-            self._session_started = True
-            logger.info("Clevr session started: %s", self._session_id)
+            await self._open_session()
         except Exception as e:
             self._session_error = e
             logger.error("Failed to start Clevr session: %s", e)
@@ -151,17 +165,20 @@ class TTS(tts.TTS):
     async def _ensure_session(self) -> None:
         if self._session_started:
             return
-        if not self._session_ready.is_set():
+
+        # start_session() kicked off a background start; wait for it to finish.
+        if self._session_starting:
             await self._session_ready.wait()
-        if self._session_error is not None:
-            raise self._session_error
-        if not self._session_started:
-            resp = await self._http_client.post("/tts/session/start")
-            resp.raise_for_status()
-            data = resp.json()
-            self._session_id = data["session_id"]
-            self._session_started = True
-            logger.info("Clevr session started: %s", self._session_id)
+            if self._session_error is not None:
+                raise self._session_error
+            return
+
+        # Otherwise start lazily on first use. The lock stops concurrent segments
+        # from racing to open two sessions.
+        async with self._session_lock:
+            if self._session_started:
+                return
+            await self._open_session()
 
     async def _end_session(self) -> None:
         if not self._session_started or not self._session_id:
@@ -323,14 +340,19 @@ class ClevrLabsSynthesizeStream(tts.SynthesizeStream):
 
         except asyncio.CancelledError:
             raise
-        except httpx.ConnectError as e:
-            raise RuntimeError(
+        except httpx.HTTPStatusError as e:
+            raise APIStatusError(
+                message=e.response.text,
+                status_code=e.response.status_code,
+                request_id=None,
+                body=None,
+            ) from None
+        except httpx.TimeoutException as e:
+            raise APITimeoutError() from e
+        except httpx.HTTPError as e:
+            raise APIConnectionError(
                 f"Cannot connect to Clevr TTS server at {self._tts._server_url}. "
                 "Check your server_url or visit https://theclevr.com for status."
-            ) from e
-        except httpx.HTTPStatusError as e:
-            raise RuntimeError(
-                f"Clevr TTS server returned {e.response.status_code}: {e.response.text}"
             ) from e
         finally:
             total_ms = (time.perf_counter() - t_start) * 1000

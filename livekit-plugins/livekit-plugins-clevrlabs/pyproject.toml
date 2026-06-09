@@ -23,6 +23,7 @@ classifiers = [
 ]
 dependencies = [
     "livekit-agents>=1.5.18",
+    "httpx>=0.28",
     "numpy>=1.24",
     "scipy>=1.10",
     "num2words>=0.5",
