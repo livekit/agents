@@ -344,6 +344,10 @@ class ChunkedStream(tts.ChunkedStream):
                     "text": self._input_text,
                     "model_id": self._opts.model,
                     "voice_settings": voice_settings,
+                    "apply_text_normalization": self._opts.apply_text_normalization,
+                    "apply_language_text_normalization": self._opts.apply_language_text_normalization,
+                    "language_code": self._opts.language
+
                 },
                 timeout=aiohttp.ClientTimeout(
                     total=30,
