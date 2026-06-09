@@ -1,5 +1,5 @@
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Generic, TypeVar
 from urllib.parse import urlencode
 
@@ -36,6 +36,13 @@ class PeriodicCollector(Generic[T]):
             self._callback(self._total)
             self._total = None
         self._last_flush_time = time.monotonic()
+
+
+def _strip_keyterm(keyterm: str | Sequence[str]) -> str | list[str]:
+    """Strip whitespace from keyterm entries; Deepgram returns 400 for leading/trailing spaces."""
+    if isinstance(keyterm, str):
+        return keyterm.strip()
+    return [k.strip() for k in keyterm]
 
 
 def _to_deepgram_url(opts: dict, base_url: str, *, websocket: bool) -> str:

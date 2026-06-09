@@ -45,7 +45,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import AudioBuffer, is_given
 from livekit.agents.voice.io import TimedString
 
-from ._utils import PeriodicCollector, _to_deepgram_url
+from ._utils import PeriodicCollector, _strip_keyterm, _to_deepgram_url
 from .log import logger
 from .models import DeepgramLanguages, DeepgramModels
 
@@ -864,13 +864,6 @@ def _validate_tags(tags: list[str]) -> list[str]:
         if len(tag) > 128:
             raise ValueError("tag must be no more than 128 characters")
     return tags
-
-
-def _strip_keyterm(keyterm: str | Sequence[str]) -> str | list[str]:
-    """Strip whitespace from keyterm entries; Deepgram returns 400 for leading/trailing spaces."""
-    if isinstance(keyterm, str):
-        return keyterm.strip()
-    return [k.strip() for k in keyterm]
 
 
 def _validate_keyterm(
