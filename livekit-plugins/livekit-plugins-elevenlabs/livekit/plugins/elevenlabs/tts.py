@@ -336,7 +336,7 @@ class ChunkedStream(tts.ChunkedStream):
             if is_given(self._opts.voice_settings)
             else None
         )
-        
+
         extra_params = {}
         if is_given(self._opts.language):
             extra_params["language_code"] = self._opts.language.language
@@ -901,7 +901,7 @@ def _synthesize_url(opts: _TTSOptions) -> str:
     output_format = opts.encoding
     url = (
         f"{base_url}/text-to-speech/{voice_id}/stream?"
-        f"model_id={model_id}&output_format={output_format}&enable_logging={str(opts.enable_logging).lower()}"
+        f"output_format={output_format}&enable_logging={str(opts.enable_logging).lower()}"
     )
     if is_given(opts.streaming_latency):
         url += f"&optimize_streaming_latency={opts.streaming_latency}"
