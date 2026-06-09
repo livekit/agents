@@ -15,6 +15,7 @@ HEADER_USER_AGENT = "User-Agent"
 HEADER_ROOM_ID = "X-LiveKit-Room-ID"
 HEADER_JOB_ID = "X-LiveKit-Job-ID"
 HEADER_AGENT_ID = "X-LiveKit-Agent-ID"
+HEADER_WORKER_TOKEN = "X-LiveKit-Worker-Token"
 HEADER_INFERENCE_PROVIDER = "X-LiveKit-Inference-Provider"
 HEADER_INFERENCE_PRIORITY = "X-LiveKit-Inference-Priority"
 
@@ -44,6 +45,7 @@ def get_inference_headers() -> dict[str, str]:
     Always includes User-Agent with SDK version and Python version.
     Includes X-LiveKit-Room-ID, X-LiveKit-Job-ID, and X-LiveKit-Agent-ID
     when running inside a job context (omitted in console mode or tests).
+    Includes X-LiveKit-Worker-Token when LIVEKIT_WORKER_TOKEN is set (hosted agents).
     """
     headers: dict[str, str] = {
         HEADER_USER_AGENT: (f"LiveKit Agents/{__version__} (python {platform.python_version()})"),
@@ -56,6 +58,9 @@ def get_inference_headers() -> dict[str, str]:
             headers[HEADER_ROOM_ID] = room_sid
         if isinstance(job_id := ctx.job.id, str) and job_id:
             headers[HEADER_JOB_ID] = job_id
+        # for hosted agents where job context is always present
+        if worker_token := os.getenv("LIVEKIT_WORKER_TOKEN"):
+            headers[HEADER_WORKER_TOKEN] = worker_token
         # ctx.agent resolves to room.local_participant, which raises until the room
         # is connected (STT/TTS may open their websockets before ctx.connect()).
         # isconnected() is the codebase-standard readiness guard (see

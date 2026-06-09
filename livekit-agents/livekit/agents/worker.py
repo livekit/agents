@@ -711,6 +711,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 os.environ["LIVEKIT_API_KEY"] = self._api_key
             if self._api_secret:
                 os.environ["LIVEKIT_API_SECRET"] = self._api_secret
+            if self._worker_token:
+                os.environ["LIVEKIT_WORKER_TOKEN"] = self._worker_token
+            if self._deployment:
+                os.environ["LIVEKIT_AGENT_DEPLOYMENT"] = self._deployment
 
             logger.info(
                 "starting worker",
