@@ -4,7 +4,7 @@ import asyncio
 import weakref
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from typing_extensions import TypedDict
 
@@ -25,7 +25,13 @@ from ..llm.tool_context import (
 from ..llm.utils import prepare_function_arguments
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
-from .events import RunContext
+from .events import (
+    RunContext,
+    ToolCallStarted,
+    ToolCallUpdated,
+    ToolReplyUpdated,
+    ToolStatusUpdatedEvent,
+)
 
 if TYPE_CHECKING:
     from .agent import Agent
@@ -128,6 +134,13 @@ def _render(template: str | Callable[[Any], str], args: dict[str, Any]) -> str:
     if callable(template):
         return template(args)
     return template.format(**args)
+
+
+def _emit_tool_status_update(
+    session: AgentSession,
+    update: ToolCallStarted | ToolCallUpdated | ToolReplyUpdated,
+) -> None:
+    session.emit("tool_status_updated", ToolStatusUpdatedEvent(update=update))
 
 
 _ASYNC_TOOL_OPTIONS_DEFAULTS: AsyncToolOptions = {
@@ -281,6 +294,29 @@ class _ToolExecutor:
         first_update_fut = asyncio.Future[Any]()
         run_ctx._attach_executor(self, first_update_fut)
 
+        # framework-internal tools (cancel/list) don't emit tool status events
+        track = not fnc_name.startswith("lk_agents_")
+        terminal_emitted = False
+
+        def _emit_terminal(
+            status: Literal["done", "error", "cancelled"],
+            message: str | None,
+            *,
+            entry_id: str | None = None,
+        ) -> None:
+            nonlocal terminal_emitted
+            if not track or terminal_emitted:
+                return
+            terminal_emitted = True
+            if entry_id is None:
+                # deferred entries get the _final id; the plain call_id belongs to the
+                # normal turn (or the first update, which keeps the original id)
+                entry_id = call_id + "_final" if run_ctx._updates else call_id
+            _emit_tool_status_update(
+                run_ctx.session,
+                ToolCallUpdated(id=entry_id, call_id=call_id, message=message, status=status),
+            )
+
         async def _execute_tool() -> Any:
             try:
                 fnc_args, fnc_kwargs = prepare_function_arguments(
@@ -294,6 +330,7 @@ class _ToolExecutor:
                     output = await tool(*fnc_args, **fnc_kwargs)
             except asyncio.CancelledError:
                 logger.debug("tool cancelled", extra={"call_id": call_id, "function": fnc_name})
+                _emit_terminal("cancelled", None)
                 if not first_update_fut.done():
                     first_update_fut.set_result(None)
                 return
@@ -302,9 +339,17 @@ class _ToolExecutor:
 
             if not first_update_fut.done():
                 # tool returned without ctx.update() — surface the result to dispatch
-                if isinstance(output, BaseException):
+                if isinstance(output, StopResponse):
+                    _emit_terminal("done", None)
+                    first_update_fut.set_exception(output)
+                elif isinstance(output, BaseException):
+                    _emit_terminal("error", str(output))
                     first_update_fut.set_exception(output)
                 else:
+                    from .agent import Agent
+
+                    message = None if output is None or isinstance(output, Agent) else str(output)
+                    _emit_terminal("done", message)
                     first_update_fut.set_result(output)
                 return
 
@@ -323,6 +368,7 @@ class _ToolExecutor:
                     )
 
             if output is None or isinstance(output, StopResponse):
+                _emit_terminal("done", None)
                 return
 
             # the first update has already been returned to dispatch, so an Agent
@@ -335,11 +381,17 @@ class _ToolExecutor:
                     "agent handoff after a progress update is not supported",
                     extra={"call_id": call_id, "function": fnc_name},
                 )
+                _emit_terminal("error", "agent handoff after a progress update is not supported")
                 return
 
             # final return goes through the coalescer as a synthetic output
             pair = run_ctx._make_update_pair(output, call_id_suffix="_final")
             run_ctx._updates.append(pair)
+            _emit_terminal(
+                "error" if isinstance(output, BaseException) else "done",
+                str(output),
+                entry_id=pair[0].call_id,
+            )
             await self._enqueue_reply(run_ctx, [pair[0], pair[1]])
 
         exe_task = asyncio.create_task(_execute_tool(), name=f"tool_exec_{fnc_name}")
@@ -358,12 +410,21 @@ class _ToolExecutor:
         session = run_ctx.session
         _RunningTasks.setdefault(session, {})[call_id] = running_task
 
-        def _on_done(_: asyncio.Task[Any]) -> None:
+        if track:
+            _emit_tool_status_update(session, ToolCallStarted(function_call=run_ctx.function_call))
+
+        def _on_done(task: asyncio.Task[Any]) -> None:
             self._running_tasks.pop(call_id, None)
             if (session_tasks := _RunningTasks.get(session)) is not None:
                 session_tasks.pop(call_id, None)
             # detach so a stashed RunContext can't drive the executor post-completion
             run_ctx._detach_executor()
+            # a task cancelled before its first step never runs the CancelledError
+            # handler — report the cancellation and release dispatch here instead
+            if task.cancelled():
+                _emit_terminal("cancelled", None)
+            if not first_update_fut.done():
+                first_update_fut.set_result(None)
 
         exe_task.add_done_callback(_on_done)
 
@@ -497,6 +558,10 @@ class _ToolExecutor:
             tool_choice="none",
             chat_ctx=chat_ctx,
         )
+        _emit_tool_status_update(
+            session,
+            ToolReplyUpdated(update_ids=call_ids, status="scheduled", speech_id=speech.id),
+        )
         logger.debug(
             "generate async tool reply",
             extra={
@@ -511,12 +576,26 @@ class _ToolExecutor:
         )
 
         def _on_speech_done(speech: SpeechHandle) -> None:
+            reply_status: Literal["completed", "interrupted", "skipped"]
+            if speech.interrupted:
+                reply_status = "interrupted"
+            elif not speech.chat_items:
+                # the LLM judged the content already covered and produced no output
+                reply_status = "skipped"
+            else:
+                reply_status = "completed"
+
             if not speech.chat_items:
                 logger.debug(
                     "async tool reply was done without outputs",
                     extra={"speech_id": speech.id, "interrupted": speech.interrupted},
                 )
                 # TODO(long): reschedule interrupted replies?
+
+            _emit_tool_status_update(
+                session,
+                ToolReplyUpdated(update_ids=call_ids, status=reply_status, speech_id=speech.id),
+            )
 
         speech.add_done_callback(_on_speech_done)
 

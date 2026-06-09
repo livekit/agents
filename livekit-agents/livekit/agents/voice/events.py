@@ -186,6 +186,9 @@ class RunContext(Generic[Userdata_T]):
         for s in self._filler_schedulers:
             s.reset_dwell()
 
+        # events carry the raw message, before the LLM-facing template wraps it
+        raw_message = message if isinstance(message, str) else str(message)
+
         if isinstance(message, str):
             if template is None:
                 if self._executor is not None:
@@ -211,6 +214,18 @@ class RunContext(Generic[Userdata_T]):
             message, call_id_suffix=f"_update_{update_step}" if update_step > 0 else ""
         )
         self._updates.append(pair)
+
+        self._session.emit(
+            "tool_status_updated",
+            ToolStatusUpdatedEvent(
+                update=ToolCallUpdated(
+                    id=pair[0].call_id,
+                    call_id=self.function_call.call_id,
+                    message=raw_message,
+                    status="running",
+                )
+            ),
+        )
 
         if self._executor is None:
             return  # standalone — nothing else to do
@@ -288,6 +303,7 @@ EventTypes = Literal[
     "metrics_collected",
     "session_usage_updated",
     "speech_created",
+    "tool_status_updated",
     "error",
     "close",
     "debug_message",
@@ -420,6 +436,64 @@ class SpeechCreatedEvent(BaseModel):
     created_at: float = Field(default_factory=time.time)
 
 
+class ToolCallStarted(BaseModel):
+    """A function tool call was dispatched."""
+
+    type: Literal["tool_call_started"] = "tool_call_started"
+    function_call: FunctionCall
+
+
+class ToolCallUpdated(BaseModel):
+    """A progress update or the terminal entry of a tool call.
+
+    ``status == "running"`` marks a ``ctx.update()``; any other value is the call's
+    terminal entry. Every call ends with exactly one terminal entry.
+    """
+
+    type: Literal["tool_call_updated"] = "tool_call_updated"
+    id: str
+    """Synthetic entry id: ``call_id`` when voiced within the normal turn,
+    ``{call_id}_update_N`` / ``{call_id}_final`` when deferred."""
+    call_id: str
+    message: str | None = None
+    """Raw update text, result text, or error message; None when there is nothing
+    to voice (cancellation, empty return)."""
+    status: Literal["running", "done", "error", "cancelled"]
+
+
+class ToolReplyUpdated(BaseModel):
+    """Status of the deferred reply that voices buffered tool updates.
+
+    Emitted with ``scheduled`` when the reply speech is queued, then once more with
+    the outcome: ``completed``, ``interrupted``, or ``skipped`` (already covered).
+    One reply can cover updates from multiple calls; the inline first update of a
+    tool never gets a reply event.
+    """
+
+    type: Literal["tool_reply_updated"] = "tool_reply_updated"
+    update_ids: list[str]
+    """``ToolCallUpdated.id`` values this reply covers."""
+    status: Literal["scheduled", "completed", "interrupted", "skipped"]
+    speech_id: str
+    """Id of the reply speech; the ``speech_created`` event carries its handle."""
+
+
+class ToolStatusUpdatedEvent(BaseModel):
+    """Per-call tool lifecycle, one flat status update per occurrence.
+
+    Discriminate on ``update.type``: ``tool_call_started`` -> ``tool_call_updated``
+    (progress and terminal entries) -> ``tool_reply_updated`` (deferred-reply
+    lifecycle).
+    """
+
+    type: Literal["tool_status_updated"] = "tool_status_updated"
+    update: Annotated[
+        ToolCallStarted | ToolCallUpdated | ToolReplyUpdated,
+        Field(discriminator="type"),
+    ]
+    created_at: float = Field(default_factory=time.time)
+
+
 class UserTurnExceededEvent(BaseModel):
     type: Literal["user_turn_exceeded"] = "user_turn_exceeded"
     transcript: str
@@ -484,6 +558,7 @@ AgentEvent = Annotated[
     | ConversationItemAddedEvent
     | FunctionToolsExecutedEvent
     | SpeechCreatedEvent
+    | ToolStatusUpdatedEvent
     | ErrorEvent
     | CloseEvent
     | OverlappingSpeechEvent,

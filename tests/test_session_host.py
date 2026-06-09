@@ -278,7 +278,7 @@ class TestSessionHostEvents:
     def test_register_session(self, transport: InMemoryTransport, mock_session: MagicMock) -> None:
         host = SessionHost(transport)
         host.register_session(mock_session)
-        assert mock_session.on.call_count == 9
+        assert mock_session.on.call_count == 10
 
     @pytest.mark.asyncio
     async def test_agent_state_changed(self, transport: InMemoryTransport) -> None:
@@ -322,6 +322,65 @@ class TestSessionHostEvents:
         msg = transport.sent[0]
         assert msg.event.user_state_changed.old_state == agent_pb.US_LISTENING
         assert msg.event.user_state_changed.new_state == agent_pb.US_SPEAKING
+
+        await host.aclose()
+
+    @pytest.mark.asyncio
+    async def test_tool_status_updated(self, transport: InMemoryTransport) -> None:
+        from livekit.agents.llm import FunctionCall
+        from livekit.agents.voice.events import (
+            ToolCallStarted,
+            ToolCallUpdated,
+            ToolReplyUpdated,
+            ToolStatusUpdatedEvent,
+        )
+
+        host = SessionHost(transport)
+        await host.start()
+
+        host._on_tool_status_updated(
+            ToolStatusUpdatedEvent(
+                update=ToolCallStarted(
+                    function_call=FunctionCall(call_id="c1", name="my_tool", arguments="{}")
+                )
+            )
+        )
+        host._on_tool_status_updated(
+            ToolStatusUpdatedEvent(
+                update=ToolCallUpdated(
+                    id="c1_update_1", call_id="c1", message="working", status="running"
+                )
+            )
+        )
+        host._on_tool_status_updated(
+            ToolStatusUpdatedEvent(
+                update=ToolReplyUpdated(
+                    update_ids=["c1_update_1", "c1_final"],
+                    status="completed",
+                    speech_id="speech_1",
+                )
+            )
+        )
+        await asyncio.sleep(0.1)
+
+        assert len(transport.sent) == 3
+        started = transport.sent[0].event.tool_status_updated
+        assert started.WhichOneof("update") == "started"
+        assert started.started.function_call.call_id == "c1"
+        assert started.started.function_call.name == "my_tool"
+
+        call_updated = transport.sent[1].event.tool_status_updated
+        assert call_updated.WhichOneof("update") == "call_updated"
+        assert call_updated.call_updated.id == "c1_update_1"
+        assert call_updated.call_updated.call_id == "c1"
+        assert call_updated.call_updated.message == "working"
+        assert call_updated.call_updated.status == agent_pb.TC_RUNNING
+
+        reply_updated = transport.sent[2].event.tool_status_updated
+        assert reply_updated.WhichOneof("update") == "reply_updated"
+        assert list(reply_updated.reply_updated.update_ids) == ["c1_update_1", "c1_final"]
+        assert reply_updated.reply_updated.status == agent_pb.TR_COMPLETED
+        assert reply_updated.reply_updated.speech_id == "speech_1"
 
         await host.aclose()
 
@@ -591,4 +650,4 @@ class TestSessionHostRequests:
         host.register_session(session)
         await host.start()
         await host.aclose()
-        assert session.off.call_count == 9
+        assert session.off.call_count == 10

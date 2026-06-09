@@ -14,6 +14,8 @@ except ImportError as e:
         "ddgs (duckduckgo search) is required for this example. Install it with: pip install ddgs"
     ) from e
 
+from async_task_ui import AsyncTaskUI
+
 from livekit.agents import (
     Agent,
     AgentServer,
@@ -119,6 +121,9 @@ class TravelAgent(Agent):
                 )
             self._user_email = email.email_address
             logger.info(f"User's email address: {self._user_email}")
+        await ctx.update(
+            "Thanks for providing your email address, we are confirming the booking now."
+        )
 
         await asyncio.sleep(40)
 
@@ -201,6 +206,7 @@ class TravelAgent(Agent):
                 f"This will be spoken aloud, so keep it conversational and brief — "
                 f"3 to 5 top picks, no more than 200 words. No bullet points or markdown.\n\n"
                 f"Search results:\n{source_text}"
+                f"Present the results in a written format, no markdown or bullet points."
             ),
         )
 
@@ -213,6 +219,8 @@ server = AgentServer()
 
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
+    await ctx.connect()
+
     session = AgentSession(
         stt=inference.STT("deepgram/nova-3"),
         # llm=inference.LLM("openai/gpt-5.3-chat-latest"),
@@ -223,7 +231,15 @@ async def entrypoint(ctx: JobContext):
         turn_handling={"interruption": {"mode": "vad"}},
     )
 
-    await session.start(agent=TravelAgent(), room=ctx.room)
+    agent = TravelAgent()
+
+    # Mirror every async tool call (status + ctx.update timeline + reply lifecycle)
+    # to the custom frontend over RPC. This wraps the tools without changing them.
+    task_ui = AsyncTaskUI(room=ctx.room)
+    task_ui.instrument(agent)
+    task_ui.attach(session)
+
+    await session.start(agent=agent, room=ctx.room)
 
 
 if __name__ == "__main__":
