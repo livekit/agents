@@ -328,7 +328,7 @@ class LLM(llm.LLM):
 
             if tools_config := create_tools_config(
                 tool_ctx,
-                include_provider_tools=not drop_provider_tools and tool_choice != "none",
+                _only_single_type=drop_provider_tools or tool_choice == "none",
             ):
                 extra["tools"] = tools_config
 
