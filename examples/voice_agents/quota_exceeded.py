@@ -22,12 +22,13 @@ load_dotenv()
 # when the LLM endpoint returns `429 inference_quota_exceeded` (e.g. the project ran
 # out of LiveKit Inference credits).
 #
-# By default such an error makes the agent join the room, publish its track, and then
-# never speak. With the changes below the user always gets a perceptible signal:
+# Without this handling, such an error used to make the agent join the room, publish
+# its track, and then never speak. The SDK now surfaces a terminal quota error on the
+# FIRST occurrence (instead of after several dead turns) and, by default, speaks the
+# gateway's own `hint` before the session closes. This example builds on that:
 #
-#   1. `error_message=...` speaks a fallback line before the session closes. When left
-#      at its default, a quota error speaks the gateway's own `hint`. The session also
-#      surfaces the error on the FIRST occurrence instead of after several dead turns.
+#   1. `error_message=...` replaces the default spoken line with your own message
+#      (omit it to keep speaking the quota `hint`; pass None to disable spoken errors).
 #
 #   2. The `@session.on("error")` handler shows how to read the typed
 #      `APIQuotaExceededError` (status_code, quota_type, hint, ...) so you can forward
@@ -54,8 +55,10 @@ async def entrypoint(ctx: JobContext):
         # ErrorEvent.error is the LLMError/STTError/TTSError wrapper; the underlying
         # API exception is at ev.error.error
         err = ev.error.error
-        # quota errors are non-retryable; they will fail identically every turn
-        if isinstance(err, APIQuotaExceededError):
+        # this handler also sees transient errors (e.g. rate limits, including retry
+        # attempts); only a *terminal* quota error means the project is out of credits
+        # and will fail identically every turn until the quota resets
+        if isinstance(err, APIQuotaExceededError) and err.terminal:
             logger.warning(
                 "inference quota exceeded",
                 extra={
@@ -66,10 +69,13 @@ async def entrypoint(ctx: JobContext):
                 },
             )
             # forward a structured signal so the frontend can render an
-            # "out of credits" state instead of dead air, e.g.:
+            # "out of credits" state instead of dead air. `session.on` handlers are
+            # sync, so spawn a task for async work (add `import asyncio` above), e.g.:
             #
-            # await ctx.room.local_participant.set_attributes(
-            #     {"agent_error": "quota_exceeded", "quota_type": err.quota_type or ""}
+            # asyncio.create_task(
+            #     ctx.room.local_participant.set_attributes(
+            #         {"agent_error": "quota_exceeded", "quota_type": err.quota_type or ""}
+            #     )
             # )
 
     @session.on("close")

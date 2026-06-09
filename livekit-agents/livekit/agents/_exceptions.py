@@ -12,6 +12,11 @@ INFERENCE_QUOTA_EXCEEDED_TYPE = "inference_quota_exceeded"
 _TERMINAL_QUOTA_CATEGORIES = frozenset({"MaxGatewayCredits", "MaxBargeInRequests"})
 
 
+def _str_or_none(value: object) -> str | None:
+    """Coerce an untrusted JSON field to ``str``; non-str values become ``None``."""
+    return value if isinstance(value, str) else None
+
+
 class AssignmentTimeoutError(Exception):
     """Raised when accepting a job but not receiving an assignment within the specified timeout.
     The server may have chosen another worker to handle this job."""
@@ -152,8 +157,9 @@ class APIQuotaExceededError(APIStatusError):
     ``retryable`` / ``terminal`` are derived from ``category`` automatically; pass them
     explicitly to override.
 
-    By default ``AgentSession`` already speaks the ``hint`` and closes on the first
-    occurrence (see ``AgentSession(error_message=...)``). Subscribe to ``error`` only
+    On a terminal quota error, ``AgentSession`` by default speaks the ``hint`` and
+    closes on the first occurrence (see ``AgentSession(error_message=...)``); transient
+    variants go through the normal retry/tolerance path. Subscribe to ``error`` only
     when you need the structured fields, e.g. to forward an "out of credits" state to
     your frontend. ``ErrorEvent.error`` is the ``LLMError``/``STTError``/… wrapper, so
     the underlying exception is at ``ev.error.error``:
@@ -201,16 +207,18 @@ class APIQuotaExceededError(APIStatusError):
         remaining_limit: str | None = None,
     ) -> None:
         # the response body carries the structured fields; read category early so we
-        # can derive retryable/terminal from it when not given explicitly
+        # can derive retryable/terminal from it when not given explicitly. The body is
+        # wire data from a user-configurable endpoint, so non-str values are dropped —
+        # they'd violate the `str | None` fields and break the category check below.
         if isinstance(body, dict):
             if quota_type is None:
-                quota_type = body.get("quota_type")
+                quota_type = _str_or_none(body.get("quota_type"))
             if category is None:
-                category = body.get("category")
+                category = _str_or_none(body.get("category"))
             if hint is None:
-                hint = body.get("hint")
+                hint = _str_or_none(body.get("hint"))
             if remaining_limit is None:
-                remaining_limit = body.get("remaining_limit")
+                remaining_limit = _str_or_none(body.get("remaining_limit"))
 
         # credit exhaustion is terminal and won't recover on retry; everything else
         # (rate/concurrency limits, or an unknown category) is treated as transient

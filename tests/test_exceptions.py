@@ -121,6 +121,26 @@ def test_quota_error_missing_body_fields_are_none() -> None:
     assert err.remaining_limit is None
 
 
+def test_quota_error_non_str_body_fields_are_dropped() -> None:
+    # wire data from a user-pointable endpoint: non-str values must not crash the
+    # category check (unhashable types) or leak into the `str | None` fields
+    body = {
+        "type": INFERENCE_QUOTA_EXCEEDED_TYPE,
+        "quota_type": 3,
+        "category": ["MaxGatewayCredits"],  # unhashable without coercion
+        "hint": {"text": "x"},
+        "remaining_limit": 0,
+    }
+    err = APIQuotaExceededError("quota exceeded", status_code=429, body=body)
+    assert err.quota_type is None
+    assert err.category is None
+    assert err.hint is None
+    assert err.remaining_limit is None
+    # an invalid category cannot be credit exhaustion -> stays transient
+    assert err.terminal is False
+    assert err.retryable is True
+
+
 def test_from_response_detects_quota_body() -> None:
     err = APIQuotaExceededError.from_response("quota exceeded", status_code=429, body=_quota_body())
     assert isinstance(err, APIQuotaExceededError)
@@ -152,17 +172,27 @@ def test_create_api_error_from_http_returns_plain_status_error() -> None:
     assert not isinstance(err, APIQuotaExceededError)
 
 
-def _inference_llm_raising(body: dict) -> tuple[inference.LLM, MagicMock, object]:
+def _inference_llm_raising(body: dict) -> tuple[inference.LLM, MagicMock, openai.AsyncClient]:
     """Build an inference LLM whose client raises a 429 with ``body``.
+
+    The exception is constructed through the openai SDK's own response handling
+    (``_make_status_error_from_response``) so tests exercise the body shape real
+    gateway traffic produces: the SDK narrows a mapping body to its ``error`` value,
+    a bare string for gateway payloads, so the plugin must re-parse the response.
 
     Returns (llm, mock_client, real_client). Swap the client *before* chat() so the
     background stream task uses the mock. Caller must close the real client.
     """
     inference_llm = inference.LLM("gpt-4o", api_key="devkey", api_secret="s" * 32)
-    response = httpx.Response(429, request=httpx.Request("POST", "http://x/v1/chat/completions"))
-    status_error = openai.APIStatusError(body["error"], response=response, body=body)
-
     real_client = inference_llm._client
+
+    response = httpx.Response(
+        429, json=body, request=httpx.Request("POST", "http://x/v1/chat/completions")
+    )
+    status_error = real_client._make_status_error_from_response(response)
+    # the SDK unwrapped body["error"] — keep this pinned so the fixture stays honest
+    assert not isinstance(status_error.body, dict)
+
     mock_client = MagicMock()
     mock_client.chat.completions.create = AsyncMock(side_effect=status_error)
     inference_llm._client = mock_client

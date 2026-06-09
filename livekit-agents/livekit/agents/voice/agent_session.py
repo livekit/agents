@@ -342,7 +342,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 be heard if TTS itself is the failed/exhausted resource. For a TTS-resilient
                 signal, handle ``@session.on("error")`` and call
                 ``session.say(..., audio=...)`` with pre-recorded audio instead
-                (see https://docs.livekit.io/reference/agents/events/#pre-recorded-audio).
+                (see https://docs.livekit.io/reference/agents/events/#pre-recorded-audio-fallback).
             preemptive_generation (NotGivenOr[bool | PreemptiveGenerationOptions]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
             min_endpointing_delay (NotGivenOr[float]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
             max_endpointing_delay (NotGivenOr[float]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.

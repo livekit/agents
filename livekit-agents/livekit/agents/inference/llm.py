@@ -460,12 +460,23 @@ class LLMStream(llm.LLMStream):
             raise APITimeoutError(retryable=retryable) from None
         except openai.APIStatusError as e:
             # a depleted project answers 429 with a structured `inference_quota_exceeded`
-            # body; surface it as a typed, non-retryable error carrying the gateway hint
+            # JSON body. The openai SDK narrows a mapping body to its `error` value
+            # before raising — a bare string for gateway payloads — so re-parse the
+            # response to recover the full body.
+            body: object = e.body
+            if not isinstance(body, dict):
+                try:
+                    body = e.response.json()
+                except Exception:
+                    body = e.body
+
+            # surface a quota body as a typed error carrying the gateway hint: terminal
+            # and non-retryable for credit exhaustion, retryable for rate limits
             quota_error = APIQuotaExceededError.from_response(
                 e.message,
                 status_code=e.status_code,
                 request_id=e.request_id,
-                body=e.body,
+                body=body,
             )
             if quota_error is not None:
                 raise quota_error from None
