@@ -9,7 +9,7 @@ from livekit.agents.llm import remote_chat_context
 from livekit.plugins.openai.realtime import realtime_model
 from livekit.plugins.openai.realtime.realtime_model import RealtimeSession
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
 
 
 def _create_session() -> RealtimeSession:

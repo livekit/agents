@@ -21,7 +21,7 @@ from livekit.agents.voice.amd.classifier import (
 
 from .fake_llm import FakeLLM, FakeLLMResponse
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
 
 def _make_classifier(

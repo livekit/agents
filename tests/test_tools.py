@@ -23,7 +23,7 @@ from livekit.agents.llm.utils import (
     prepare_function_arguments,
 )
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
 
 class MockOption(str, enum.Enum):

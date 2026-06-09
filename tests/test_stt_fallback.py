@@ -20,7 +20,7 @@ from livekit.agents.utils.audio import AudioBuffer
 
 from .fake_stt import FakeSTT
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
 
 class FallbackAdapterTester(FallbackAdapter):

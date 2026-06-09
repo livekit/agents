@@ -4,7 +4,7 @@ import pytest
 
 from livekit.agents.utils.aio.itertools import Tee
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
 
 async def _async_iter(items):
