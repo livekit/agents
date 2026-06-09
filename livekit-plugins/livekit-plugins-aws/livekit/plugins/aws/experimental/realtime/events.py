@@ -305,7 +305,13 @@ class SonicEventBuilder:
         top_p: float = 0.9,
         temperature: float = 0.7,
         endpointing_sensitivity: TURN_DETECTION | None = "MEDIUM",
-    ) -> list[str]:
+    ) -> tuple[list[str], list[str]]:
+        """Build session init events and history events separately.
+
+        Returns:
+            A tuple of (init_events, history_events). History events should be
+            sent after the session is established, with small delays between them.
+        """
         system_content_name = str(uuid.uuid4())
         init_events = [
             self.create_session_start_event(
@@ -315,24 +321,43 @@ class SonicEventBuilder:
             *self.create_text_content_block(system_content_name, "SYSTEM", system_content),
         ]
 
-        # note: tool call events are not supported yet
+        history_events: list[str] = []
+        # Nova Sonic requires strict USER/ASSISTANT alternation.
+        # Merge consecutive same-role messages and skip empty ones.
         messages = chat_ctx.messages()
         if messages:
             logger.debug("initiating session with chat context")
+            merged: list[tuple[str, str]] = []
             for msg in messages:
                 if (role := msg.role.upper()) not in ["USER", "ASSISTANT", "SYSTEM"]:
                     continue
 
+                text = "".join(c for c in msg.content if isinstance(c, str))
+                if not text.strip():
+                    continue
+
+                if merged and merged[-1][0] == role:
+                    merged[-1] = (role, merged[-1][1] + "\n" + text)
+                else:
+                    merged.append((role, text))
+
+            # Nova Sonic rejects history that starts with ASSISTANT.
+            # Strip leading assistant messages (e.g. orphaned greetings from handoff).
+            if merged and merged[0][0] == "ASSISTANT":
+                logger.debug("Stripping leading ASSISTANT message from history events")
+                merged.pop(0)
+
+            for role, text in merged:
                 ctx_content_name = str(uuid.uuid4())
-                init_events.extend(
+                history_events.extend(
                     self.create_text_content_block(
                         ctx_content_name,
                         cast(ROLE, role),
-                        "".join(c for c in msg.content if isinstance(c, str)),
+                        text,
                     )
                 )
 
-        return init_events
+        return init_events, history_events
 
     def create_session_start_event(
         self,

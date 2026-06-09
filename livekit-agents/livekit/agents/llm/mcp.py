@@ -6,7 +6,7 @@ import asyncio
 import json
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
-from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 from typing_extensions import Self
 
+from ..log import logger
 from .tool_context import Toolset
 
 try:
@@ -79,7 +80,6 @@ class MCPServer(ABC):
         tool_result_resolver: MCPToolResultResolver | None = None,
     ) -> None:
         self._client: ClientSession | None = None
-        self._exit_stack: AsyncExitStack = AsyncExitStack()
         self._read_timeout = client_session_timeout_seconds
         self._tool_result_resolver: MCPToolResultResolver = (
             tool_result_resolver or _default_tool_result_resolver
@@ -87,6 +87,10 @@ class MCPServer(ABC):
 
         self._cache_dirty = True
         self._lk_tools: list[MCPTool] | None = None
+
+        self._client_task: asyncio.Task[None] | None = None
+        self._closing_ev = asyncio.Event()
+        self._ready_fut: asyncio.Future[None] | None = None
 
     @property
     def initialized(self) -> bool:
@@ -96,22 +100,45 @@ class MCPServer(ABC):
         self._cache_dirty = True
 
     async def initialize(self) -> None:
+        if self._client_task and not self._client_task.done():
+            logger.warning("MCPServer is already initializing")
+            if self._ready_fut:
+                await self._ready_fut
+            return
+
+        self._ready_fut = ready_fut = asyncio.Future[None]()
+        self._client_task = asyncio.create_task(
+            self._run_client(ready_fut), name=f"{type(self).__name__}._run_client"
+        )
+        await ready_fut
+
+    async def _run_client(self, ready_fut: asyncio.Future[None]) -> None:
         try:
-            streams = await self._exit_stack.enter_async_context(self.client_streams())
-            receive_stream, send_stream = streams[0], streams[1]
-            self._client = await self._exit_stack.enter_async_context(
-                ClientSession(
+            async with self.client_streams() as streams:
+                receive_stream, send_stream = streams[0], streams[1]
+                async with ClientSession(
                     receive_stream,
                     send_stream,
                     read_timeout_seconds=timedelta(seconds=self._read_timeout)
                     if self._read_timeout
                     else None,
-                )
-            )
-            await self._client.initialize()  # type: ignore[union-attr]
-        except Exception:
-            await self.aclose()
-            raise
+                ) as client:
+                    await client.initialize()
+                    self._client = client
+                    ready_fut.set_result(None)
+
+                    await self._closing_ev.wait()
+        except BaseException as e:
+            if not ready_fut.done():
+                ready_fut.set_exception(e)  # raising from `await initialize()`
+            else:
+                if isinstance(e, Exception):
+                    logger.exception("MCP client connection failed with unexpected error")
+                raise
+        finally:
+            self._client = None
+            self._lk_tools = None
+            self._closing_ev.clear()
 
     async def list_tools(self) -> list[MCPTool]:
         if self._client is None:
@@ -171,11 +198,13 @@ class MCPServer(ABC):
         return function_tool(_tool_called, raw_schema=raw_schema)
 
     async def aclose(self) -> None:
+        self._closing_ev.set()
         try:
-            await self._exit_stack.aclose()
+            if self._client_task:
+                await self._client_task
+                self._client_task = None
         finally:
-            self._client = None
-            self._lk_tools = None
+            self._closing_ev.clear()
 
     @abstractmethod
     def client_streams(
@@ -233,7 +262,7 @@ class MCPServerHTTP(MCPServer):
             tool_result_resolver=tool_result_resolver,
         )
         self.url = url
-        self.headers = headers
+        self._headers = headers or {}
         self._timeout = timeout
         self._sse_read_timeout = sse_read_timeout
         self._allowed_tools = set(allowed_tools) if allowed_tools else None
@@ -248,6 +277,37 @@ class MCPServerHTTP(MCPServer):
         else:
             # Fall back to URL-based detection for backward compatibility
             self._use_streamable_http = self._should_use_streamable_http(url)
+
+        self._http_client: httpx.AsyncClient | None = None
+
+    @property
+    def headers(self) -> dict[str, Any]:
+        return self._headers
+
+    @headers.setter
+    def headers(self, headers: dict[str, Any]) -> None:
+        self._headers = headers
+        if self._http_client is not None:
+            self._http_client.headers = headers
+
+    def _create_http_client(
+        self,
+        headers: dict[str, Any] | None = None,
+        timeout: httpx.Timeout | None = None,
+        auth: httpx.Auth | None = None,
+    ) -> httpx.AsyncClient:
+        # ported from mcp.shared._httpx_utils.create_mcp_http_client
+        kwargs: dict[str, Any] = {
+            "follow_redirects": True,
+            "timeout": timeout
+            if timeout is not None
+            else httpx.Timeout(self._timeout, read=self._sse_read_timeout),
+            "headers": headers if headers is not None else self._headers,
+        }
+        if auth is not None:
+            kwargs["auth"] = auth
+        self._http_client = httpx.AsyncClient(**kwargs)
+        return self._http_client
 
     def _should_use_streamable_http(self, url: str) -> bool:
         """
@@ -277,10 +337,7 @@ class MCPServerHTTP(MCPServer):
 
             @asynccontextmanager
             async def _streamable_http_with_client():  # type: ignore[no-untyped-def]
-                async with httpx.AsyncClient(
-                    headers=self.headers or {},
-                    timeout=httpx.Timeout(self._timeout, read=self._sse_read_timeout),
-                ) as http_client:
+                async with self._create_http_client() as http_client:
                     async with streamable_http_client(
                         url=self.url, http_client=http_client
                     ) as streams:
@@ -290,9 +347,10 @@ class MCPServerHTTP(MCPServer):
         else:
             return sse_client(  # type: ignore[no-any-return]
                 url=self.url,
-                headers=self.headers,
+                headers=self._headers,
                 timeout=self._timeout,
                 sse_read_timeout=self._sse_read_timeout,
+                httpx_client_factory=self._create_http_client,
             )
 
     async def list_tools(self) -> list[MCPTool]:

@@ -75,6 +75,7 @@ class GetNameTask(AgentTask[GetNameResult]):
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         require_confirmation: NotGivenOr[bool] = NOT_GIVEN,
+        require_explicit_ask: bool = False,
     ) -> None:
         if not (first_name or middle_name or last_name):
             raise ValueError("At least one of first_name, middle_name, or last_name must be True")
@@ -83,6 +84,7 @@ class GetNameTask(AgentTask[GetNameResult]):
         self._collect_middle_name = middle_name
         self._verify_spelling = verify_spelling
         self._require_confirmation = require_confirmation
+        self._require_explicit_ask = require_explicit_ask
 
         if is_given(name_format):
             self._name_format = name_format
@@ -110,6 +112,12 @@ class GetNameTask(AgentTask[GetNameResult]):
         )
         extra = extra_instructions if extra_instructions else ""
 
+        # State initialized BEFORE super() so the dynamically-built
+        # update_name tool's closures see real attrs at call time.
+        self._first_name: str = ""
+        self._middle_name: str = ""
+        self._last_name: str = ""
+
         super().__init__(
             instructions=Instructions(
                 _BASE_INSTRUCTIONS.format(
@@ -133,7 +141,7 @@ class GetNameTask(AgentTask[GetNameResult]):
             ),
             chat_ctx=chat_ctx,
             turn_detection=turn_detection,
-            tools=tools or [],
+            tools=[*(tools or []), self._build_update_name_tool()],
             stt=stt,
             vad=vad,
             llm=llm,
@@ -141,30 +149,54 @@ class GetNameTask(AgentTask[GetNameResult]):
             allow_interruptions=allow_interruptions,
         )
 
-        self._first_name: str = ""
-        self._middle_name: str = ""
-        self._last_name: str = ""
-
     async def on_enter(self) -> None:
         self.session.generate_reply(
-            instructions=f"Ask the user for their name, follow this order '{self._name_format}' but do not mention the format."
+            instructions=(
+                f"Get the user's name (follow this order '{self._name_format}' but do not "
+                "mention the format). First scan the conversation - if a name was already "
+                "given earlier, ask a short confirmation question rather than asking from "
+                "scratch. If context about what the name is FOR was provided (a role like "
+                "'cardholder', 'guest', 'emergency contact'), anchor your confirmation "
+                "question to that role so the user knows which name you mean - don't ask "
+                "abstractly. When pointing at where an existing name came from, reference "
+                "the source in the conversation (the earlier step, the booking they "
+                "mentioned), not a presumption about how the name appears in the "
+                "destination. Only ask fresh when the conversation has no name yet."
+            )
         )
 
-    @function_tool()
-    async def update_name(
+    def _build_update_name_tool(self) -> llm.FunctionTool:
+        # Built dynamically so we can apply IGNORE_ON_ENTER per-instance
+        # based on require_explicit_ask. With the flag set, the model
+        # can't silent-fill from chat_ctx during on_enter - it must
+        # produce an asking utterance first.
+        flags = ToolFlag.IGNORE_ON_ENTER if self._require_explicit_ask else ToolFlag.NONE
+
+        @function_tool(flags=flags)
+        async def update_name(
+            ctx: RunContext,
+            first_name: str | None = None,
+            middle_name: str | None = None,
+            last_name: str | None = None,
+        ) -> str | None:
+            """Update the name provided by the user.
+
+            Args:
+                first_name: The user's first name.
+                middle_name: The user's middle name, if collected.
+                last_name: The user's last name, if collected.
+            """
+            return await self._update_name_impl(ctx, first_name, middle_name, last_name)
+
+        return update_name
+
+    async def _update_name_impl(
         self,
         ctx: RunContext,
         first_name: str | None = None,
         middle_name: str | None = None,
         last_name: str | None = None,
     ) -> str | None:
-        """Update the name provided by the user.
-
-        Args:
-            first_name: The user's first name.
-            middle_name: The user's middle name, if collected.
-            last_name: The user's last name, if collected.
-        """
         errors: list[str] = []
         if self._collect_first_name and not (first_name and first_name.strip()):
             errors.append("first name is required but was not provided")
@@ -172,6 +204,20 @@ class GetNameTask(AgentTask[GetNameResult]):
             errors.append("middle name is required but was not provided")
         if self._collect_last_name and not (last_name and last_name.strip()):
             errors.append("last name is required but was not provided")
+
+        # A real name contains letters. Reject digit-only or punctuation-only
+        # values so a card number, ZIP code, phone number, etc. accidentally
+        # crammed into update_name fails fast instead of being recorded as
+        # the user's name.
+        for label, value in (
+            ("first", first_name),
+            ("middle", middle_name),
+            ("last", last_name),
+        ):
+            if value and value.strip() and not any(c.isalpha() for c in value):
+                errors.append(
+                    f"{label} name {value!r} contains no letters - that doesn't look like a name"
+                )
 
         if errors:
             raise ToolError(f"Incomplete name: {'; '.join(errors)}")

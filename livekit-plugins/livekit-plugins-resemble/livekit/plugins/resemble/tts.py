@@ -254,9 +254,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
-        self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
         request_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=request_id,
@@ -274,7 +274,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     if input_stream is None:
                         # new segment (after flush for e.g)
                         input_stream = self._opts.tokenizer.stream()
-                        self._segments_ch.send_nowait(input_stream)
+                        segments_ch.send_nowait(input_stream)
                     input_stream.push_text(text)
                 elif isinstance(text, self._FlushSentinel):
                     if input_stream is not None:
@@ -284,10 +284,10 @@ class SynthesizeStream(tts.SynthesizeStream):
             if input_stream is not None:
                 input_stream.end_input()
 
-            self._segments_ch.close()
+            segments_ch.close()
 
         async def _process_segments() -> None:
-            async for input_stream in self._segments_ch:
+            async for input_stream in segments_ch:
                 await self._run_ws(input_stream, output_emitter)
 
         tasks = [
@@ -368,6 +368,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                     logger.error("Unexpected Resemble message %s", data)
 
         async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+            self._acquire_time = self._tts._pool.last_acquire_time
+            self._connection_reused = self._tts._pool.last_connection_reused
             tasks = [
                 asyncio.create_task(_send_task(ws)),
                 asyncio.create_task(_recv_task(ws)),

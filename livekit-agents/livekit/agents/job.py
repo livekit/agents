@@ -27,7 +27,7 @@ from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from enum import Enum, unique
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, overload
 from urllib.parse import urlparse
 
 import aiohttp
@@ -38,10 +38,11 @@ from livekit.protocol import agent, models
 
 from .log import logger
 from .observability import Tagger
-from .telemetry import _upload_session_report
+from .telemetry import _upload_session_report, otel_metrics
 from .telemetry.traces import _BufferingHandler, _setup_cloud_tracer, _shutdown_telemetry
 from .types import NotGivenOr
 from .utils import http_context, is_given, wait_for_participant
+from .utils.deprecation import deprecate_params
 from .utils.misc import is_cloud
 
 _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
@@ -60,13 +61,22 @@ def _observability_url(livekit_url: str) -> str | None:
 
 if TYPE_CHECKING:
     from .ipc.inference_executor import InferenceExecutor
+    from .simulation import SimulationContext
     from .voice.agent_session import AgentSession, RecordingOptions
     from .voice.report import SessionReport
 
 
-def get_job_context() -> JobContext:
+@overload
+def get_job_context(*, required: Literal[True] = True) -> JobContext: ...
+
+
+@overload
+def get_job_context(*, required: Literal[False]) -> JobContext | None: ...
+
+
+def get_job_context(*, required: bool = True) -> JobContext | None:
     ctx = _JobContextVar.get(None)
-    if ctx is None:
+    if ctx is None and required:
         raise RuntimeError(
             "no job context found, are you running this code inside a job entrypoint?"
         )
@@ -109,6 +119,7 @@ class RunningJobInfo:
 
 
 DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
+    rtc.ParticipantKind.PARTICIPANT_KIND_CONNECTOR,
     rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
     rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
 ]
@@ -181,6 +192,13 @@ class JobContext:
 
         self._primary_agent_session: AgentSession | None = None
 
+        # Lazily built from the simulation room's metadata; None when not under a
+        # simulation. _simulation_resolved guards the one-time parse.
+        self._simulation_ctx: SimulationContext | None = None
+        self._simulation_resolved = False
+        # on_simulation_end callback, injected by the job runner from AgentServer.
+        self._simulation_end_fnc: Callable[[SimulationContext], Any] | None = None
+
         self._tempdir = tempfile.TemporaryDirectory()
 
         from .cli import AgentsConsole
@@ -248,7 +266,15 @@ class JobContext:
         if not (session := self._primary_agent_session):
             return
 
+        otel_metrics.flush_turn_metrics(session.history)
+
         c = AgentsConsole.get_instance()
+
+        # in case AgentSession.aclose() was cancelled due to timeout
+        if (recorder_io := session._recorder_io) and recorder_io.recording:
+            logger.warning("recorder_io is still recording at session end, closing it")
+            await recorder_io.aclose()
+
         report = self.make_session_report(session)
 
         # console recording, dump data to a local file
@@ -268,7 +294,7 @@ class JobContext:
             except Exception:
                 logger.exception("failed to save session report")
 
-        has_evals = bool(self._tagger.evaluations or self._tagger.outcome_reason)
+        has_evals = bool(self._tagger.evaluations or self._tagger.outcome)
         obs_url = _observability_url(self._info.url)
         if (any(report.recording_options.values()) or has_evals) and obs_url:
             try:
@@ -413,6 +439,44 @@ class JobContext:
             raise RuntimeError("No AgentSession was started for this job")
         return self._primary_agent_session
 
+    def simulation_context(self) -> SimulationContext | None:
+        """Return the :class:`SimulationContext` when this job is running under a
+        simulation, or ``None`` for a normal/production session.
+
+        Resolved once and cached. The framework hands it to ``on_simulation_end``
+        automatically, so you never need to call this to "prime" anything. Call it only
+        when you want the scenario in your entrypoint (e.g. to seed scenario-specific
+        mocks). Resolves synchronously from the simulation room's metadata (a protojson
+        ``SimulationDispatch``); a production room has none and returns ``None``.
+        """
+        if self._simulation_resolved:
+            return self._simulation_ctx
+
+        self._simulation_resolved = True
+
+        # The simulation dispatch travels in the agent's dispatch metadata
+        # (RoomAgentDispatch.Metadata -> job.metadata); fall back to room metadata.
+        metadata = self._info.job.metadata or self._room.metadata
+        if not metadata:
+            return None
+
+        from google.protobuf import json_format
+
+        from livekit.protocol import agent_simulation as sim_pb
+
+        from .simulation import SimulationContext
+
+        try:
+            dispatch = json_format.Parse(metadata, sim_pb.SimulationDispatch())
+        except json_format.ParseError:
+            return None
+
+        if not dispatch.simulation_run_id:
+            return None
+
+        self._simulation_ctx = SimulationContext(dispatch, self)
+        return self._simulation_ctx
+
     @property
     def local_participant_identity(self) -> str:
         if identity := self.token_claims().identity:
@@ -476,30 +540,42 @@ class JobContext:
         participant that joins the room will be returned.
         If the participant has already joined, the function will return immediately.
         """
+
+        # handle connection automatically, otherwise wait_for_participant will raise an error
+        if not self._room.isconnected():
+            await self.connect()
+
         return await wait_for_participant(self._room, identity=identity, kind=kind)
 
+    @deprecate_params({"e2ee": "Use `encryption` instead."})
     async def connect(
         self,
         *,
-        e2ee: rtc.E2EEOptions | None = None,
+        encryption: rtc.E2EEOptions | None = None,
         auto_subscribe: AutoSubscribe = AutoSubscribe.SUBSCRIBE_ALL,
         rtc_config: rtc.RtcConfiguration | None = None,
+        single_peer_connection: bool | None = None,
+        # deprecated
+        e2ee: rtc.E2EEOptions | None = None,
     ) -> None:
         """Connect to the room. This method should be called only once.
 
         Args:
-            e2ee: End-to-end encryption options. If provided, the Agent will utilize end-to-end encryption. Note: clients will also need to handle E2EE.
+            encryption: End-to-end encryption options. If provided, the Agent will utilize end-to-end encryption. Note: clients will also need to handle E2EE.
             auto_subscribe: Whether to automatically subscribe to tracks. Default is AutoSubscribe.SUBSCRIBE_ALL.
             rtc_config: Custom RTC configuration to use when connecting to the room.
+            single_peer_connection: Use a single peer connection for both publish and subscribe. When None, uses the default (False).
         """  # noqa: E501
         async with self._lock:
             if self._connected:
                 return
 
+            encryption = encryption or e2ee
             room_options = rtc.RoomOptions(
-                encryption=e2ee,
+                encryption=encryption,
                 auto_subscribe=auto_subscribe == AutoSubscribe.SUBSCRIBE_ALL,
                 rtc_config=rtc_config,
+                single_peer_connection=single_peer_connection,
             )
 
             await self._room.connect(self._info.url, self._info.token, options=room_options)
@@ -509,6 +585,22 @@ class JobContext:
 
             _apply_auto_subscribe_opts(self._room, auto_subscribe)
             self._connected = True
+
+    def _track_pending_task(self, task: asyncio.Task[Any], *, name: str) -> None:
+        """Track a fire-and-forget task so its exceptions are surfaced instead of swallowed.
+
+        Callers may still await the returned task to handle errors themselves; this only
+        guarantees that an otherwise unhandled exception is logged rather than silently
+        dropped (e.g. when the returned future is not awaited).
+        """
+        self._pending_tasks.append(task)
+
+        def _on_done(task: asyncio.Task[Any]) -> None:
+            self._pending_tasks.remove(task)
+            if not task.cancelled() and (exc := task.exception()) is not None:
+                logger.error(f"error in {name}", exc_info=exc)
+
+        task.add_done_callback(_on_done)
 
     def delete_room(self, room_name: str | None = None) -> asyncio.Future[api.DeleteRoomResponse]:  # type: ignore
         """Deletes the room and disconnects all participants."""
@@ -532,8 +624,7 @@ class JobContext:
                 logger.exception("unknown error while deleting room")
 
         task = asyncio.create_task(_delete_room())
-        self._pending_tasks.append(task)
-        task.add_done_callback(lambda _: self._pending_tasks.remove(task))
+        self._track_pending_task(task, name="delete_room")
         return task
 
     def add_sip_participant(
@@ -575,8 +666,7 @@ class JobContext:
                 )
             ),
         )
-        self._pending_tasks.append(task)
-        task.add_done_callback(lambda _: self._pending_tasks.remove(task))
+        self._track_pending_task(task, name="add_sip_participant")
         return task
 
     def transfer_sip_participant(
@@ -627,8 +717,7 @@ class JobContext:
                 )
             ),
         )
-        self._pending_tasks.append(task)
-        task.add_done_callback(lambda _: self._pending_tasks.remove(task))
+        self._track_pending_task(task, name="transfer_sip_participant")
         return task
 
     def shutdown(self, reason: str = "") -> None:
@@ -698,9 +787,18 @@ class JobContext:
             task_name = f"part-entry-{p.identity}-{coro.__name__}"
             task = asyncio.create_task(coro(self, p), name=task_name)
             self._participant_tasks[(p.identity, coro)] = task
-            task.add_done_callback(
-                lambda _, coro=coro: self._participant_tasks.pop((p.identity, coro))  # type: ignore
-            )
+
+            def _on_done(task: asyncio.Task[Any], *, coro: Any = coro) -> None:
+                key = (p.identity, coro)
+                if self._participant_tasks.get(key) is task:
+                    self._participant_tasks.pop(key, None)
+                if not task.cancelled() and (exc := task.exception()) is not None:
+                    logger.error(
+                        f"error in participant entrypoint {coro.__name__} for '{p.identity}'",
+                        exc_info=exc,
+                    )
+
+            task.add_done_callback(_on_done)
 
     def token_claims(self) -> Claims:
         return api.TokenVerifier().verify(self._info.token, verify_signature=False)

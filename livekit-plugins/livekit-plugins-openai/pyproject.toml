@@ -22,8 +22,8 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents[codecs, images]>=1.5.1",
-    "openai[realtime]>=2",
+    "livekit-agents[codecs, images]>=1.5.19.rc1",
+    "openai[realtime]>=2.36",
 ]
 
 
@@ -43,3 +43,7 @@ packages = ["livekit"]
 
 [tool.hatch.build.targets.sdist]
 include = ["/livekit"]
+
+[tool.uv]
+exclude-newer = "7 days"
+exclude-newer-package = { livekit-agents = "0 days" }

@@ -41,6 +41,10 @@ class _STTStatus:
 class FallbackAdapter(
     STT[Literal["stt_availability_changed"]],
 ):
+    """Agent Fallback Adapter for STT. Manages multiple STT instances with automatic fallback
+    when the primary provider fails.
+    """
+
     def __init__(
         self,
         stt: list[STT],
@@ -68,11 +72,18 @@ class FallbackAdapter(
                 StreamAdapter(stt=t, vad=vad) if not t.capabilities.streaming else t for t in stt
             ]
 
+        # Use the primary STT's aligned_transcript if all providers support it, since
+        # the SDK only checks truthiness, not the specific granularity.
+        aligned_transcript: Literal["word", "chunk", False] = False
+        if all(t.capabilities.aligned_transcript for t in stt):
+            aligned_transcript = stt[0].capabilities.aligned_transcript
+
         super().__init__(
             capabilities=STTCapabilities(
                 streaming=True,
                 interim_results=all(t.capabilities.interim_results for t in stt),
                 diarization=all(t.capabilities.diarization for t in stt),
+                aligned_transcript=aligned_transcript,
             )
         )
 
@@ -136,15 +147,17 @@ class FallbackAdapter(
         except APIError as e:
             if recovering:
                 logger.warning(
-                    f"{stt.label} recovery failed",
-                    exc_info=e,
+                    "%s recovery failed: %s",
+                    stt.label,
+                    e,
                     extra={"streamed": False},
                 )
                 raise
 
             logger.warning(
-                f"{stt.label} failed, switching to next STT",
-                exc_info=e,
+                "%s failed, switching to next STT: %s",
+                stt.label,
+                e,
                 extra={"streamed": False},
             )
             raise
@@ -191,8 +204,8 @@ class FallbackAdapter(
                         "stt_availability_changed",
                         AvailabilityChangedEvent(stt=stt, available=True),
                     )
-                except Exception:
-                    logger.debug(f"{stt.label} recovery attempt failed", exc_info=True)
+                except Exception as e:
+                    logger.debug("%s recovery attempt failed: %s", stt.label, e)
                     return
 
             stt_status.recovering_recognize_task = asyncio.create_task(_recover_stt_task(stt))
@@ -346,8 +359,9 @@ class FallbackRecognizeStream(RecognizeStream):
                         raise
                     except APIError as e:
                         logger.warning(
-                            f"{stt.label} failed, switching to next STT",
-                            exc_info=e,
+                            "%s failed, switching to next STT: %s",
+                            stt.label,
+                            e,
                             extra={"streamed": True},
                         )
                         raise
@@ -422,8 +436,9 @@ class FallbackRecognizeStream(RecognizeStream):
                     )
                 except APIError as e:
                     logger.warning(
-                        f"{stream._stt.label} recovery failed",
-                        exc_info=e,
+                        "%s recovery failed: %s",
+                        stream._stt.label,
+                        e,
                         extra={"streamed": True},
                     )
                 except Exception:

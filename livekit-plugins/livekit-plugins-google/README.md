@@ -25,6 +25,7 @@ LiveKit supports both Gemini Live API on both Gemini Developer API as well as Ve
 
 The following models are supported by Gemini Developer API:
 
+- gemini-3.1-flash-live-preview
 - gemini-2.5-flash-native-audio-preview-09-2025
 - gemini-2.5-flash-native-audio-preview-12-2025
 

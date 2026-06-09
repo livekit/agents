@@ -208,11 +208,16 @@ class TTS(tts.TTS):
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
-        url = self._opts.get_ws_url(
-            f"/tts/websocket?api_key={self._opts.api_key}&cartesia_version={self._opts.api_version}"
-        )
+        url = self._opts.get_ws_url(f"/tts/websocket?cartesia_version={self._opts.api_version}")
         ws = await asyncio.wait_for(
-            session.ws_connect(url, headers={"User-Agent": USER_AGENT}), timeout
+            session.ws_connect(
+                url,
+                headers={
+                    "User-Agent": USER_AGENT,
+                    API_AUTH_HEADER: self._opts.api_key,
+                },
+            ),
+            timeout,
         )
         c_request_id = ws._response.headers.get(REQUEST_ID_HEADER)
         logger.debug(
@@ -509,12 +514,16 @@ class SynthesizeStream(tts.SynthesizeStream):
                         extra={"cartesia_context_id": cartesia_context_id, "error": data},
                     )
                     raise APIError(f"Cartesia returned error: {data}")
+                elif data.get("type") == "flush_done":
+                    pass
                 else:
                     logger.warning("unexpected message %s", data)
 
         cartesia_context_id = utils.shortuuid()
         try:
             async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+                self._acquire_time = self._tts._pool.last_acquire_time
+                self._connection_reused = self._tts._pool.last_connection_reused
                 tasks = [
                     asyncio.create_task(_input_task()),
                     asyncio.create_task(_sentence_stream_task(ws, cartesia_context_id)),

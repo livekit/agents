@@ -176,6 +176,7 @@ class RealtimeModel(llm.RealtimeModel):
                 auto_tool_reply_generation=True,
                 audio_output=output_medium == "voice",
                 manual_function_calls=False,
+                per_response_tool_choice=False,
             )
         )
 
@@ -475,15 +476,25 @@ class RealtimeSession(
 
     @utils.log_exceptions(logger=logger)
     def generate_reply(
-        self, *, instructions: NotGivenOr[str] = NOT_GIVEN
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         """Generate a reply from the LLM based on the instructions."""
+        if is_given(tools):
+            logger.warning("per-response tools is not supported by Ultravox Realtime API, ignoring")
         # Cancel prior pending generation if exists
         if self._pending_generation_fut and not self._pending_generation_fut.done():
             logger.warning(
                 "generate_reply called while another generation is pending, cancelling previous."
             )
-            self._pending_generation_fut.cancel("Superseded by new generate_reply call")
+            # clear the slot before cancelling so the done callback doesn't treat it
+            # as an external cancellation and signal the server.
+            old_fut = self._pending_generation_fut
+            self._pending_generation_fut = None
+            old_fut.cancel("Superseded by new generate_reply call")
 
         # Record epoch for server-event gating
         self._pending_generation_epoch = time.perf_counter()
@@ -515,7 +526,21 @@ class RealtimeSession(
                     self._pending_generation_epoch = None
 
         timeout_handle = asyncio.get_event_loop().call_later(5.0, _on_timeout)
-        fut.add_done_callback(lambda _: timeout_handle.cancel())
+
+        def _on_fut_done(f: asyncio.Future[llm.GenerationCreatedEvent]) -> None:
+            timeout_handle.cancel()
+            is_current = self._pending_generation_fut is fut
+            if is_current:
+                self._pending_generation_fut = None
+                self._pending_generation_epoch = None
+            if f.cancelled() and is_current:
+                # external cancel: send a deferred barge-in so Ultravox does not
+                # produce a response (or interrupts one already in progress).
+                self._send_client_event(
+                    UserTextMessageEvent(text="", urgency="immediate", defer_response=True)
+                )
+
+        fut.add_done_callback(_on_fut_done)
 
         return fut
 
@@ -637,7 +662,9 @@ class RealtimeSession(
                     # init as text if specified
                     self._send_client_event(SetOutputMediumEvent(medium="text"))
 
+                t0 = time.perf_counter()
                 ws_conn = await http_session.ws_connect(join_url)
+                self._report_connection_acquired(time.perf_counter() - t0)
                 self._closing = False
 
                 # Create tasks for send/recv and restart monitoring

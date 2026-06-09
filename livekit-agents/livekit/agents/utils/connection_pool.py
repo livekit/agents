@@ -49,6 +49,10 @@ class ConnectionPool(Generic[T]):
 
         self._prewarm_task: weakref.ref[asyncio.Task[None]] | None = None
 
+        # Timing info from the last get() call
+        self.last_acquire_time: float = 0.0
+        self.last_connection_reused: bool = False
+
     async def _connect(self, timeout: float) -> T:
         """Create a new connection.
 
@@ -71,7 +75,7 @@ class ConnectionPool(Generic[T]):
             try:
                 await self._maybe_close_connection(conn)
             except Exception as e:
-                logger.warning(f"error closing connection: {conn}", exc_info=e)
+                logger.warning("error closing connection %s: %s", conn, e)
 
     @asynccontextmanager
     async def connection(self, *, timeout: float) -> AsyncGenerator[T, None]:
@@ -108,11 +112,17 @@ class ConnectionPool(Generic[T]):
                 ):
                     if self._mark_refreshed_on_get:
                         self._connections[conn] = now
+                    self.last_acquire_time = 0.0
+                    self.last_connection_reused = True
                     return conn
                 # connection expired; mark it for resetting.
                 self.remove(conn)
 
-            return await self._connect(timeout)
+            t0 = time.perf_counter()
+            conn = await self._connect(timeout)
+            self.last_acquire_time = time.perf_counter() - t0
+            self.last_connection_reused = False
+            return conn
 
     def put(self, conn: T) -> None:
         """Mark a connection as available for reuse.

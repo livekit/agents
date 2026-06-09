@@ -1,19 +1,25 @@
+from __future__ import annotations
+
 import functools
 import inspect
 from collections import defaultdict
 from collections.abc import Callable
-from typing import Any
+from typing import ParamSpec, TypeVar, cast
 
 from ..log import logger
 from ..types import NOT_GIVEN
 from .misc import is_given
+
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+_F = TypeVar("_F", bound=Callable)
 
 
 def deprecate_params(
     mapping: dict[str, str],
     *,
     target_version: str | None = None,
-) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+) -> Callable[[_F], _F]:
     """
     Args:
         mapping: {old_param: suggestion}
@@ -33,11 +39,11 @@ def deprecate_params(
 
     removal = f" and will be removed in {target_version}" if target_version else ""
 
-    def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
+    def decorator(fn: Callable[_P, _R]) -> Callable[_P, _R]:
         signature = inspect.signature(fn)
 
         @functools.wraps(fn)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
+        def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
             bound = signature.bind_partial(*args, **kwargs)
             by_suggestion: defaultdict[str, list[str]] = defaultdict(list)
             for name, suggestion in mapping.items():
@@ -54,4 +60,4 @@ def deprecate_params(
 
         return wrapper
 
-    return decorator
+    return cast(Callable[[_F], _F], decorator)

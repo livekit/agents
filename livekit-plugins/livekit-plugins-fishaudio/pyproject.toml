@@ -22,8 +22,8 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents[codecs]>=1.5.1",
-    "fish-audio-sdk; python_version >= '3.10'",
+    "livekit-agents[codecs]>=1.5.19.rc1",
+    "msgpack>=1.0",
 ]
 
 [project.urls]
@@ -39,3 +39,7 @@ packages = ["livekit"]
 
 [tool.hatch.build.targets.sdist]
 include = ["/livekit"]
+
+[tool.uv]
+exclude-newer = "7 days"
+exclude-newer-package = { livekit-agents = "0 days" }
