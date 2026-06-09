@@ -304,11 +304,7 @@ class LLM(llm.LLM):
             include_server_side_tool_invocations = (
                 tool_choice != "none" and bool(tool_ctx.provider_tools) and is_gemini_3_api
             )
-            function_calling_config = (
-                None
-                if include_server_side_tool_invocations
-                else _function_calling_config(tool_choice, tool_ctx.function_tools)
-            )
+            function_calling_config = _function_calling_config(tool_choice, tool_ctx.function_tools)
 
             retrieval_config: types.RetrievalConfig | None = None
             if is_given(self._opts.retrieval_config):

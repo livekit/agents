@@ -226,7 +226,7 @@ class TestServerSideToolInvocations:
         assert any(tool.google_search for tool in config.tools)
 
     @pytest.mark.asyncio
-    async def test_tool_choice_required_keeps_server_side(self) -> None:
+    async def test_required_tool_choice_preserved_with_provider_tools(self) -> None:
         model = LLM(model="gemini-3.5-flash", api_key="test")
 
         config = await _capture_request(
@@ -234,7 +234,22 @@ class TestServerSideToolInvocations:
         )
 
         assert config.tool_config.include_server_side_tool_invocations is True
-        assert config.tool_config.function_calling_config is None
+        assert config.tool_config.function_calling_config.mode == types.FunctionCallingConfigMode.ANY
+        assert config.tool_config.function_calling_config.allowed_function_names == ["get_weather"]
+
+    @pytest.mark.asyncio
+    async def test_specific_function_tool_choice_preserved_with_provider_tools(self) -> None:
+        model = LLM(model="gemini-3.5-flash", api_key="test")
+
+        config = await _capture_request(
+            model,
+            tools=[get_weather, GoogleSearch()],
+            tool_choice={"type": "function", "function": {"name": "get_weather"}},
+        )
+
+        assert config.tool_config.include_server_side_tool_invocations is True
+        assert config.tool_config.function_calling_config.mode == types.FunctionCallingConfigMode.ANY
+        assert config.tool_config.function_calling_config.allowed_function_names == ["get_weather"]
 
     @pytest.mark.asyncio
     async def test_provider_tools_alone_still_circulate(self) -> None:
