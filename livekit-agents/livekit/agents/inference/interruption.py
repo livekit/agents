@@ -772,9 +772,7 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
     def _resolve_effective_threshold(self, default_threshold: float | None) -> float | None:
         """Return the effective threshold for observability only.
 
-        Precedence: user override, then server default. Returns None when neither is known, so
-        the log reports an honest "unknown" rather than a hardcoded value that may disagree with
-        the server.
+        Precedence: user override, then server default; None when neither is known.
         """
         if is_given(self._opts.threshold):
             return self._opts.threshold
@@ -849,6 +847,16 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
 
                 match msg:
                     case InterruptionWSSessionCreatedMessage():
+                        if not is_given(self._opts.threshold) and msg.default_threshold is None:
+                            raise APIStatusError(
+                                message=(
+                                    "adaptive interruption session created without a threshold: "
+                                    "no user override and the server did not report a "
+                                    "default_threshold"
+                                ),
+                                status_code=500,
+                                retryable=False,
+                            )
                         # Observability only — the server makes the actual decision;
                         logger.debug(
                             "adaptive interruption session created",
@@ -860,11 +868,6 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
                                 "user_override": is_given(self._opts.threshold),
                             },
                         )
-                        if not is_given(self._opts.threshold) and msg.default_threshold is None:
-                            logger.warning(
-                                "adaptive interruption session created without a threshold from "
-                                "the server; the effective threshold is unknown"
-                            )
                     case InterruptionWSSessionClosedMessage():
                         pass
                     case InterruptionWSDetectedMessage():
