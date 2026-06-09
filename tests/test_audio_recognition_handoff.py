@@ -11,7 +11,7 @@ from livekit.agents.voice.agent import ModelSettings
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.turn import _StreamingTurnDetector
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
 
 
 def _make_activity(agent: Agent, stt: object, turn_detection: object = None) -> MagicMock:

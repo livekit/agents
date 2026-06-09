@@ -26,21 +26,21 @@ DEFAULT_DB_PATH = Path(__file__).resolve().parent / "hotel.db"
 _LATE = PRICING.late_checkout
 
 # fmt: off
-# (room_number, type, nightly_rate_cents, max_occupancy, smoking, pets, view)
+# (id (room number, floor+number), type, nightly_rate_cents, max_occupancy, smoking, pets, view)
 ROOMS = [
-    ("201", "king", 24000, 2, 0, 0, "city"),
-    ("202", "king", 26000, 2, 0, 1, "ocean"),
-    ("203", "king", 24000, 2, 1, 0, "city"),
-    ("204", "queen_2beds", 22000, 4, 0, 0, "city"),
-    ("205", "queen_2beds", 22000, 4, 0, 1, "garden"),
-    ("206", "double_queen", 26000, 4, 0, 0, "ocean"),
-    ("301", "king", 28000, 2, 0, 0, "ocean"),
-    ("302", "king", 28000, 2, 0, 0, "ocean"),
-    ("303", "queen_2beds", 24000, 4, 0, 0, "city"),
-    ("304", "double_queen", 28000, 4, 0, 1, "ocean"),
-    ("401", "suite", 48000, 4, 0, 1, "ocean"),
-    ("402", "suite", 52000, 4, 0, 0, "ocean"),
-    ("PH", "penthouse", 120000, 6, 0, 1, "ocean"),
+    ("RM_201", "king", 24000, 2, 0, 0, "city"),
+    ("RM_202", "king", 26000, 2, 0, 1, "ocean"),
+    ("RM_203", "king", 24000, 2, 1, 0, "city"),
+    ("RM_204", "queen_2beds", 22000, 4, 0, 0, "city"),
+    ("RM_205", "queen_2beds", 22000, 4, 0, 1, "garden"),
+    ("RM_206", "double_queen", 26000, 4, 0, 0, "ocean"),
+    ("RM_301", "king", 28000, 2, 0, 0, "ocean"),
+    ("RM_302", "king", 28000, 2, 0, 0, "ocean"),
+    ("RM_303", "queen_2beds", 24000, 4, 0, 0, "city"),
+    ("RM_304", "double_queen", 28000, 4, 0, 1, "ocean"),
+    ("RM_401", "suite", 48000, 4, 0, 1, "ocean"),
+    ("RM_402", "suite", 52000, 4, 0, 0, "ocean"),
+    ("RM_PH", "penthouse", 120000, 6, 0, 1, "ocean"),
 ]
 
 # (label, capacity, location, description)
@@ -123,7 +123,7 @@ def populate(db: HotelDB, today: date) -> None:
     reservation dates are stored as offsets from `today`."""
     conn = db.connection
     conn.executemany(
-        "INSERT INTO hotel_rooms (room_number, type, nightly_rate, max_occupancy, smoking, pets_allowed, room_view) VALUES (?,?,?,?,?,?,?)",
+        "INSERT INTO hotel_rooms (id, type, nightly_rate, max_occupancy, smoking, pets_allowed, room_view) VALUES (?,?,?,?,?,?,?)",
         ROOMS,
     )
     conn.executemany(
@@ -146,7 +146,7 @@ def populate(db: HotelDB, today: date) -> None:
         status,
     ) in BOOKINGS:
         room_row = conn.execute(
-            "SELECT id, nightly_rate FROM hotel_rooms WHERE room_number = ?", (room_no,)
+            "SELECT id, nightly_rate FROM hotel_rooms WHERE id = ?", (f"RM_{room_no}",)
         ).fetchone()
         assert room_row is not None, f"seed fixture references unknown room {room_no}"
         room_id, nightly = room_row

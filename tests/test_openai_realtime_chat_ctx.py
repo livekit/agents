@@ -1,13 +1,15 @@
 import asyncio
 import types
+from unittest.mock import Mock
 
 import pytest
 
 from livekit.agents import llm
 from livekit.agents.llm import remote_chat_context
+from livekit.plugins.openai.realtime import realtime_model
 from livekit.plugins.openai.realtime.realtime_model import RealtimeSession
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
 
 
 def _create_session() -> RealtimeSession:
@@ -50,3 +52,23 @@ async def test_update_chat_ctx_keeps_existing_remote_empty_messages() -> None:
     await session.update_chat_ctx(chat_ctx)
 
     assert session._sent_events == []
+
+
+def test_response_done_handles_string_status_details(monkeypatch) -> None:
+    session = _create_session()
+    session._realtime_model = types.SimpleNamespace(_provider_label="xAI")
+    event = types.SimpleNamespace(
+        response=types.SimpleNamespace(
+            id="resp_1",
+            status="incomplete",
+            status_details="incomplete",
+        )
+    )
+    debug = Mock()
+    monkeypatch.setattr(realtime_model.logger, "debug", debug)
+
+    session._handle_response_done_but_not_complete(event)
+
+    debug.assert_called_once()
+    assert debug.call_args.args[3] == "incomplete"
+    assert debug.call_args.args[4] is None

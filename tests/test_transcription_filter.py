@@ -3,7 +3,7 @@ import pytest
 from livekit.agents.voice.transcription.filters import filter_emoji, filter_markdown
 from livekit.agents.voice.transcription.text_transforms import _apply_text_transforms, replace
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
 
 MARKDOWN_INPUT = """# Mathematics and Markdown Guide
 

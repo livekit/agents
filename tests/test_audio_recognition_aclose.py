@@ -15,7 +15,7 @@ import pytest
 
 from livekit.agents.voice.audio_recognition import AudioRecognition
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
 
 class TestAudioRecognitionAclose:

@@ -498,8 +498,9 @@ class AudioStreamDecoder:
         if not self._started:
             return
 
-        async for _ in self._output_ch:
-            pass
-
-        if self._executor is not None:
-            self._executor.shutdown(wait=False, cancel_futures=True)
+        try:
+            async for _ in self._output_ch:
+                pass
+        finally:
+            if self._executor is not None:
+                self._executor.shutdown(wait=False, cancel_futures=True)

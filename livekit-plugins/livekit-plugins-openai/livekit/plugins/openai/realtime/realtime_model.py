@@ -265,6 +265,15 @@ class _ResponseGeneration:
     _first_token_timestamp: float | None = None
     """timestamp when the first token was received"""
 
+    def _close(self) -> None:
+        for msg in self.messages.values():
+            if not msg.text_ch.closed:
+                msg.text_ch.close()
+            if not msg.audio_ch.closed:
+                msg.audio_ch.close()
+        self.function_ch.close()
+        self.message_ch.close()
+
 
 class RealtimeModel(llm.RealtimeModel):
     @overload
@@ -1970,24 +1979,29 @@ class RealtimeSession(
         first_token_timestamp = self._current_generation._first_token_timestamp
 
         for generation in self._current_generation.messages.values():
-            # close all messages that haven't been closed yet
-            if not generation.text_ch.closed:
-                generation.text_ch.close()
-            if not generation.audio_ch.closed:
-                generation.audio_ch.close()
             if not generation.modalities.done():
                 generation.modalities.set_result(self._opts.modalities)
 
-        self._current_generation.function_ch.close()
-        self._current_generation.message_ch.close()
         for item_id, item_generation in self._current_generation.messages.items():
             if (remote_item := self._remote_chat_ctx.get(item_id)) and isinstance(
                 remote_item.item, llm.ChatMessage
             ):
                 remote_item.item.content.append(item_generation.audio_transcript)
 
+        self._current_generation._close()
+
         with contextlib.suppress(asyncio.InvalidStateError):
-            self._current_generation._done_fut.set_result(None)
+            if event.response.status in ("failed", "incomplete"):
+                details = event.response.status_details
+                msg = f"response {event.response.status}"
+                if details and details.error:
+                    msg = f"{msg}: [{details.error.type}] {details.error.code}"
+                elif details and details.reason:
+                    msg = f"{msg}: {details.reason}"
+                self._current_generation._done_fut.set_exception(llm.RealtimeError(msg))
+            else:
+                self._current_generation._done_fut.set_result(None)
+
         self._current_generation = None
 
         # calculate metrics
@@ -2068,8 +2082,12 @@ class RealtimeSession(
             )
         elif event.response.status in {"cancelled", "incomplete"}:
             status_details = event.response.status_details
-            status_type = status_details.type if status_details else None
-            status_reason = status_details.reason if status_details else None
+            if isinstance(status_details, str):
+                status_type = status_details
+                status_reason = None
+            else:
+                status_type = status_details.type if status_details else None
+                status_reason = status_details.reason if status_details else None
             logger.debug(
                 "%s response done but not complete with status: %s (type=%s, reason=%s)",
                 provider_label,
@@ -2095,14 +2113,6 @@ class RealtimeSession(
             f"{provider_label} returned an error: {event.error}",
             extra={"error": event.error},
         )
-
-        if (event_id := event.error.event_id) and (
-            fut := self._response_created_futures.pop(event_id, None)
-        ):
-            # set exception for the response future if it exists
-            if not fut.done():
-                fut.set_exception(llm.RealtimeError(event.error.message))
-
         self._emit_error(
             APIError(
                 message=f"{provider_label} returned an error",
@@ -2111,6 +2121,9 @@ class RealtimeSession(
             ),
             recoverable=True,
         )
+
+        # response errors are handled by _handle_response_done via _done_fut.
+        # error events here are for non-response errors (e.g. invalid request).
 
     def _emit_error(self, error: Exception, recoverable: bool) -> None:
         self.emit(

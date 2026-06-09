@@ -420,7 +420,19 @@ class SupervisedProc(ABC):
         main_task = asyncio.create_task(self._main_task(ipc_ch))
         read_ipc_task = asyncio.create_task(self._read_ipc_task(ipc_ch, pong_timeout))
         ping_task = asyncio.create_task(self._ping_pong_task(pong_timeout))
-        read_ipc_task.add_done_callback(lambda _: ipc_ch.close())
+
+        def _on_read_ipc_done(_: asyncio.Task[None]) -> None:
+            ipc_ch.close()
+            # the read task is the sole reader of the IPC channel; once it ends, the
+            # process is gone (channel closed) or being torn down (cancelled). resolve
+            # the shutdown futures here so aclose() never waits the full close_timeout
+            # for an ack that can't arrive.
+            if not self._shutdown_ack_fut.done():
+                self._shutdown_ack_fut.set_result(None)
+            if not self._shutting_down_fut.done():
+                self._shutting_down_fut.set_result(None)
+
+        read_ipc_task.add_done_callback(_on_read_ipc_done)
 
         memory_monitor_task: asyncio.Task[None] | None = None
         if self._opts.memory_limit_mb > 0 or self._opts.memory_warn_mb > 0:
@@ -479,12 +491,6 @@ class SupervisedProc(ABC):
                 )
 
             ipc_ch.send_nowait(msg)
-
-        # resolve pending futures when the channel closes (process exited)
-        if not self._shutdown_ack_fut.done():
-            self._shutdown_ack_fut.set_result(None)
-        if not self._shutting_down_fut.done():
-            self._shutting_down_fut.set_result(None)
 
     @log_exceptions(logger=logger)
     async def _ping_pong_task(self, pong_timeout: aio.Sleep) -> None:
@@ -591,9 +597,9 @@ class SupervisedProc(ABC):
                     return
 
                 logger.warning(
-                    "Failed to get memory info for process",
+                    "failed to get memory info for process: %s",
+                    e,
                     extra=self.logging_extra(),
-                    exc_info=e,
                 )
                 # don't bother rechecking if we cannot get process info
                 return

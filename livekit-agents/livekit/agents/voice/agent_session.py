@@ -62,7 +62,7 @@ from .events import (
 )
 from .ivr import IVRActivity
 from .recorder_io import RecorderIO
-from .remote_session import RoomSessionTransport, SessionHost
+from .remote_session import RoomSessionTransport, SessionHost, SessionTransport
 from .run_result import RunResult
 from .speech_handle import InputDetails, SpeechHandle
 from .tool_executor import ToolHandlingOptions, _resolve_async_tool_options
@@ -80,6 +80,7 @@ from .turn import (
 )
 
 if TYPE_CHECKING:
+    from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput
     from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
     from .transcription.text_transforms import TextTransforms
@@ -459,6 +460,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # used to keep a reference to the room io
         self._room_io: room_io.RoomIO | None = None
         self._recorder_io: RecorderIO | None = None
+        self._session_transport: SessionTransport | None = None
+        self._session_transport_audio_input: TcpAudioInput | None = None
+        self._session_transport_audio_output: TcpAudioOutput | None = None
         self._session_host: SessionHost | None = None
 
         self._agent: Agent | None = None
@@ -726,6 +730,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     )
 
                 c.acquire_io(loop=self._loop, session=self)
+
+                if c._tcp_transport is not None:
+                    self._session_host = SessionHost(
+                        c._tcp_transport,
+                        audio_input=c._tcp_audio_input,
+                        audio_output=c._tcp_audio_output,
+                    )
+                    self._session_host.register_session(self)
             elif is_given(room) and not self._room_io:
                 room_options = room_io.RoomOptions._ensure_options(
                     room_options,
@@ -767,8 +779,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 text_input_opts = room_options.get_text_input_options()
                 if text_input_opts:
                     self._room_io.register_text_input(text_input_opts.text_input_cb)
-                    if self._session_host is not None:
-                        self._session_host.register_text_input(text_input_opts.text_input_cb)
 
             if job_ctx:
                 # these aren't relevant during eval mode, as they require job context and/or room_io
@@ -1042,6 +1052,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._llm_error_counts = 0
             self._tts_error_counts = 0
             self._root_span_context = None
+
+            if self._global_run_state and not self._global_run_state.done():
+                self._global_run_state._done_fut.set_exception(
+                    RuntimeError(f"session closed: {error}" if error else "session closed")
+                )
 
             if self._session_host:
                 await self._session_host.aclose()
@@ -1701,10 +1716,18 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _conversation_item_added(self, message: llm.ChatMessage) -> None:
         self._chat_ctx.insert(message)
+        if text := message.text_content:
+            logger.debug(
+                "conversation_item_added",
+                extra={"role": message.role, "text": text},
+            )
         self.emit("conversation_item_added", ConversationItemAddedEvent(item=message))
 
     def _tool_items_added(self, items: Sequence[llm.FunctionCall | llm.FunctionCallOutput]) -> None:
         self._chat_ctx.insert(items)
+
+    def _config_update_added(self, item: llm.AgentConfigUpdate) -> None:
+        self._chat_ctx.insert(item)
 
     # move them to the end to avoid shadowing the same named modules for mypy
     @property

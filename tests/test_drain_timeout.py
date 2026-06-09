@@ -27,7 +27,7 @@ from livekit.agents.ipc.supervised_proc import SupervisedProc, SupervisedProcKin
 from livekit.agents.utils import aio
 from livekit.agents.worker import AgentServer
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
 _CLI_ARGS = CliArgs(log_level="ERROR", url=None, api_key=None, api_secret=None)
 
@@ -158,26 +158,36 @@ class TestDrainTimeout:
 
         mock_aclose.assert_not_awaited()
 
-    def test_exitcli_during_drain_forces_exit(self) -> None:
-        """When drain() raises _ExitCli (second SIGTERM), the handler
-        calls os._exit(1) for a forceful shutdown.
+    def test_signal_during_drain_forces_exit(self) -> None:
+        """A second SIGTERM/SIGINT while draining triggers a forceful shutdown.
+
+        After the worker loop, _run_worker installs a force-exit signal handler
+        for SIGINT/SIGTERM, so a signal arriving during drain() calls os._exit(1)
+        rather than waiting for a (potentially stuck) drain to finish.
         """
+        import signal as signal_mod
+
         server = _make_server()
+
+        async def _signal_while_draining() -> None:
+            # simulate a second Ctrl+C arriving while draining
+            handler = signal_mod.getsignal(signal_mod.SIGTERM)
+            assert callable(handler)
+            handler(signal_mod.SIGTERM, None)
 
         with (
             patch.object(
                 server,
                 "drain",
                 new_callable=AsyncMock,
-                side_effect=_ExitCli(),
+                side_effect=_signal_while_draining,
             ),
-            patch.object(server, "aclose", new_callable=AsyncMock) as mock_aclose,
+            patch.object(server, "aclose", new_callable=AsyncMock),
             patch.object(server, "run", new_callable=AsyncMock),
             patch("os._exit") as mock_exit,
         ):
             _run_worker(server, args=_CLI_ARGS)
 
-        mock_aclose.assert_not_awaited()
         mock_exit.assert_called_once_with(1)
 
     def test_memory_monitor_does_not_swallow_exitcli(self) -> None:
