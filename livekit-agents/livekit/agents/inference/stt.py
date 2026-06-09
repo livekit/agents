@@ -177,15 +177,6 @@ _DIARIZATION_EXTRA_KEYS: tuple[str, ...] = (
 )
 
 
-def _strip_extra_keyterm(extra_kwargs: dict[str, Any]) -> None:
-    """Strip whitespace from keyterm entries; Deepgram returns 400 for leading/trailing spaces."""
-    keyterm = extra_kwargs.get("keyterm")
-    if isinstance(keyterm, str):
-        extra_kwargs["keyterm"] = keyterm.strip()
-    elif isinstance(keyterm, list):
-        extra_kwargs["keyterm"] = [k.strip() for k in keyterm]
-
-
 def _diarization_enabled(extra_kwargs: dict[str, Any] | None) -> bool:
     """Return True if any known provider diarization flag is truthy."""
     if not extra_kwargs:
@@ -263,9 +254,6 @@ def _normalize_fallback(
         if isinstance(model, str):
             name, _ = _parse_model_string(model)
             return FallbackModel(model=name)
-        extra = model.get("extra_kwargs")
-        if isinstance(extra, dict):
-            _strip_extra_keyterm(extra)
         return model
 
     if isinstance(fallback, list):
@@ -557,9 +545,6 @@ class STT(stt.STT):
         if is_given(fallback):
             fallback_models = _normalize_fallback(fallback)
 
-        final_extra_kwargs: dict[str, Any] = dict(extra_kwargs) if is_given(extra_kwargs) else {}
-        _strip_extra_keyterm(final_extra_kwargs)
-
         self._opts = STTOptions(
             model=model,
             language=LanguageCode(language) if isinstance(language, str) else language,
@@ -568,7 +553,7 @@ class STT(stt.STT):
             base_url=lk_base_url,
             api_key=lk_api_key,
             api_secret=lk_api_secret,
-            extra_kwargs=final_extra_kwargs,
+            extra_kwargs=dict(extra_kwargs) if is_given(extra_kwargs) else {},
             fallback=fallback_models,
             conn_options=conn_options if is_given(conn_options) else DEFAULT_API_CONNECT_OPTIONS,
         )
@@ -652,8 +637,6 @@ class STT(stt.STT):
         if is_given(language):
             self._opts.language = LanguageCode(language)
         if is_given(extra):
-            extra = dict(extra)
-            _strip_extra_keyterm(extra)
             self._opts.extra_kwargs.update(extra)
             self._capabilities = replace(
                 self._capabilities,
@@ -713,8 +696,6 @@ class SpeechStream(stt.SpeechStream):
         if is_given(language):
             self._opts.language = LanguageCode(language)
         if is_given(extra):
-            extra = dict(extra)
-            _strip_extra_keyterm(extra)
             self._opts.extra_kwargs.update(extra)
 
         has_update = is_given(model) or is_given(language) or is_given(extra)
