@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 from .plugin import Plugin
 
 if TYPE_CHECKING:
-    from .worker import AgentServer, WorkerOptions
+    from .worker import AgentServer
 
 logger = logging.getLogger("livekit.agents")
 
@@ -55,42 +55,9 @@ def _download_files() -> int:
     return exit_code
 
 
-def run_app(server: AgentServer | WorkerOptions) -> None:
-    """Thin CLI driven by the LiveKit CLI (``lk agent start|dev|console``).
-
-    The LiveKit CLI launches the agent as a subprocess and speaks to this
-    interface: ``start`` (optionally ``--dev``/``--reload-addr``) runs the worker,
-    and ``console --connect-addr`` runs the agent against the CLI's TCP console.
-
-    This is the successor to the deprecated rich CLI in ``livekit.agents.cli``.
-    """
+def _dispatch(server: AgentServer, args: argparse.Namespace) -> None:
     from .cli import proto
     from .cli.cli import _run_tcp_console, _run_worker
-    from .worker import AgentServer, WorkerOptions
-
-    if isinstance(server, WorkerOptions):
-        server = AgentServer.from_server_options(server)
-
-    parser = argparse.ArgumentParser(prog="python -m livekit.agents")
-    sub = parser.add_subparsers(dest="command")
-
-    start_p = sub.add_parser("start")
-    start_p.add_argument("--log-level", default="INFO")
-    start_p.add_argument("--log-format", choices=["json", "colored"], default="json")
-    start_p.add_argument("--url")
-    start_p.add_argument("--api-key")
-    start_p.add_argument("--api-secret")
-    start_p.add_argument("--dev", action="store_true", default=False)
-    start_p.add_argument("--reload-addr")
-
-    console_p = sub.add_parser("console")
-    console_p.add_argument("--connect-addr", required=True)
-    console_p.add_argument("--record", action="store_true", default=False)
-
-    args = parser.parse_args()
-    if args.command is None:
-        print("Please use the LiveKit CLI: lk agent start|dev|console")
-        sys.exit(1)
 
     if args.command == "console":
         _run_tcp_console(server=server, connect_addr=args.connect_addr, record=args.record)
@@ -109,9 +76,22 @@ def run_app(server: AgentServer | WorkerOptions) -> None:
         )
 
 
-def main(argv: list[str] | None = None) -> int:
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
+def _discover_server(entrypoint: str | None) -> AgentServer:
+    """Import the user's entrypoint and return the AgentServer it defines.
 
+    Reuses the discovery in cli.discover (prefers an app, server, or agent global,
+    else the single AgentServer in the module).
+    """
+    from pathlib import Path
+
+    from .cli.discover import get_import_data
+
+    import_data = get_import_data(path=Path(entrypoint) if entrypoint else None)
+    mod = importlib.import_module(import_data.module_data.module_import_str)
+    return getattr(mod, import_data.app_name)  # type: ignore[no-any-return]
+
+
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m livekit.agents",
         description="LiveKit Agents utilities.",
@@ -122,13 +102,29 @@ def main(argv: list[str] | None = None) -> int:
         help="Discover installed livekit-plugins-* packages and run their download_files step.",
     )
 
+    start_p = sub.add_parser("start")
+    start_p.add_argument("entrypoint", nargs="?")
+    start_p.add_argument("--log-level", default="INFO")
+    start_p.add_argument("--log-format", choices=["json", "colored"], default="json")
+    start_p.add_argument("--url")
+    start_p.add_argument("--api-key")
+    start_p.add_argument("--api-secret")
+    start_p.add_argument("--dev", action="store_true", default=False)
+    start_p.add_argument("--reload-addr")
+
+    console_p = sub.add_parser("console")
+    console_p.add_argument("entrypoint", nargs="?")
+    console_p.add_argument("--connect-addr", required=True)
+    console_p.add_argument("--record", action="store_true", default=False)
+
     args = parser.parse_args(argv)
 
     if args.command == "download-files":
+        logging.basicConfig(level=logging.INFO, format="%(message)s")
         return _download_files()
 
-    parser.error(f"unknown command: {args.command}")
-    return 2
+    _dispatch(_discover_server(args.entrypoint), args)
+    return 0
 
 
 if __name__ == "__main__":
