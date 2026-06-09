@@ -23,7 +23,7 @@ logger.setLevel(logging.INFO)
 load_dotenv()
 
 DEFAULT_STT = "deepgram/nova-3"
-DEFAULT_LLM = "google/gemini-3.1-flash-lite"
+DEFAULT_LLM = "gemma-4-31b-it"
 DEFAULT_TTS = "inworld/inworld-tts-2"
 
 GEMMA_BASE_URL = os.environ["GEMMA_BASE_URL"]
