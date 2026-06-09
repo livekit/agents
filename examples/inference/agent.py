@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 from urllib.parse import urlencode
 
 from dotenv import load_dotenv
@@ -13,7 +14,7 @@ from livekit.agents import (
     inference,
 )
 from livekit.agents.voice import CONVERSATIONAL_EXPRESSIVENESS_PRESET
-from livekit.plugins import silero
+from livekit.plugins import openai, silero
 from livekit.rtc import RpcInvocationData
 
 logger = logging.getLogger("inference")
@@ -24,6 +25,10 @@ load_dotenv()
 DEFAULT_STT = "deepgram/nova-3"
 DEFAULT_LLM = "google/gemini-3.1-flash-lite"
 DEFAULT_TTS = "inworld/inworld-tts-2"
+
+GEMMA_BASE_URL = os.environ["GEMMA_BASE_URL"]
+GEMMA_API_KEY = os.environ["GEMMA_API_KEY"]
+GEMMA_MODEL = "gemma-4-31b-it"
 
 # Default starter prompt. Keep in sync with the `set_system_prompt`
 # control's `default` in examples/playground.yaml — the UI seeds the
@@ -61,8 +66,16 @@ server = AgentServer()
 async def entrypoint(ctx: JobContext) -> None:
     session = AgentSession(
         stt=inference.STT(model=DEFAULT_STT),
-        llm=inference.LLM(model=DEFAULT_LLM),
-        tts=inference.TTS(model=DEFAULT_TTS),
+        llm=openai.LLM(
+            model=GEMMA_MODEL,
+            base_url=GEMMA_BASE_URL,
+            api_key=GEMMA_API_KEY,
+        ),
+        tts=inference.TTS(
+            model=DEFAULT_TTS,
+            voice="Sarah",
+            extra_kwargs={"delivery_mode": "CREATIVE"},
+        ),
         vad=silero.VAD.load(),
         expressiveness=CONVERSATIONAL_EXPRESSIVENESS_PRESET,
     )

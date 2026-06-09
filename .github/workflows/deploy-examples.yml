@@ -135,6 +135,8 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           LEMONSLICE_API_KEY: ${{ secrets.LEMONSLICE_API_KEY }}
+          GEMMA_BASE_URL: ${{ secrets.GEMMA_BASE_URL }}
+          GEMMA_API_KEY: ${{ secrets.GEMMA_API_KEY }}
         run: |
           : > .env.deploy
           # Register the agent under a deterministic name so the playground
@@ -146,6 +148,9 @@ jobs:
               ;;
             avatar)
               keys="LEMONSLICE_API_KEY"
+              ;;
+            inference)
+              keys="GEMMA_BASE_URL GEMMA_API_KEY"
               ;;
             *)
               keys=""
