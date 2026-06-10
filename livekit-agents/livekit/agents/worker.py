@@ -359,6 +359,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
         self._http_proxy = http_proxy
         self._log_level = _validate_and_normalize_log_level(log_level)
+        # Set by the CLI (--simulation) when the worker runs under an agent
+        # simulation: load shedding is disabled so runs can saturate the agent.
+        self._simulation = False
         self._agent_name = ""
         self._server_type = ServerType.ROOM
         self._id = "unregistered"
@@ -583,6 +586,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                         "custom load_threshold is not supported when hosting on Cloud, reverting to default"
                     )
                     self._load_threshold = _default_load_threshold
+
+            if self._simulation:
+                logger.info("simulation mode enabled: worker load limit disabled")
 
             self._loop = asyncio.get_event_loop()
             self._devmode = devmode
@@ -1296,6 +1302,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         if self._draining:
             return False
 
+        if self._simulation:
+            return True
+
         load_threshold = ServerEnvOption.getvalue(self._load_threshold, self._devmode)
         if math.isinf(load_threshold):
             return True
@@ -1455,7 +1464,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
         load_threshold = ServerEnvOption.getvalue(self._load_threshold, self._devmode)
         effective_load = self._get_effective_load()
-        is_full = effective_load >= load_threshold
+        is_full = not self._simulation and effective_load >= load_threshold
         currently_available = not is_full and not self._draining
 
         status = (

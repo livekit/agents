@@ -467,7 +467,10 @@ class JobContext:
         from .simulation import SimulationContext
 
         try:
-            dispatch = json_format.Parse(metadata, sim_pb.SimulationDispatch())
+            # ignore unknown fields so dispatches from newer servers still parse
+            dispatch = json_format.Parse(
+                metadata, sim_pb.SimulationDispatch(), ignore_unknown_fields=True
+            )
         except json_format.ParseError:
             return None
 

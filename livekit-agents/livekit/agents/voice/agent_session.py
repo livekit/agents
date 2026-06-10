@@ -688,6 +688,21 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 job_ctx.init_recording(self._recording_options)
 
+            # Under a text simulation the simulated user interacts over text streams
+            # only: drop STT/TTS/VAD and audio I/O so the session never initializes
+            # or connects them.
+            text_simulation = False
+            if job_ctx and (sim_ctx := job_ctx.simulation_context()) is not None:
+                from ..simulation import SimulationChannel
+
+                text_simulation = sim_ctx.channel == SimulationChannel.SIMULATION_CHANNEL_TEXT
+
+            if text_simulation and (self._stt or self._tts or self._vad):
+                logger.info("text simulation: skipping STT/TTS/VAD and audio I/O")
+                self._stt = None
+                self._tts = None
+                self._vad = None
+
             self._session_span = current_span = tracer.start_span("agent_session")
             # we detach here to avoid context issues since tokens need to be detached
             # in the same context as it was created
@@ -737,6 +752,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     room_output_options=room_output_options,
                 )
                 room_options = copy.copy(room_options)  # shadow copy is enough
+
+                if text_simulation:
+                    room_options.audio_input = False
+                    room_options.audio_output = False
 
                 if self.input.audio is not None:
                     if room_options.audio_input:
