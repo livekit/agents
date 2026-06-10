@@ -303,7 +303,7 @@ class STT(stt.STT):
             self._opts.no_verbatim = no_verbatim
 
         for stream in self._streams:
-            stream.update_options(server_vad=server_vad)
+            stream.update_options(server_vad=server_vad, no_verbatim=no_verbatim)
 
     def stream(
         self,
@@ -349,9 +349,13 @@ class SpeechStream(stt.SpeechStream):
         self,
         *,
         server_vad: NotGivenOr[VADOptions] = NOT_GIVEN,
+        no_verbatim: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         if is_given(server_vad):
             self._opts.server_vad = server_vad
+            self._reconnect_event.set()
+        if is_given(no_verbatim):
+            self._opts.no_verbatim = no_verbatim
             self._reconnect_event.set()
 
     def _on_audio_duration_report(self, duration: float) -> None:

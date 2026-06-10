@@ -106,3 +106,20 @@ def test_update_options_leaves_no_verbatim_untouched_when_not_given() -> None:
     instance = _stt(no_verbatim=True)
     instance.update_options(tag_audio_events=False)
     assert instance._opts.no_verbatim is True
+
+
+def test_update_options_forwards_no_verbatim_to_active_streams() -> None:
+    # no_verbatim is a WebSocket query param applied at connect time, so a live
+    # realtime stream must be told to reconnect. Verify STT.update_options
+    # forwards it to active streams (which trigger a reconnect).
+    instance = _stt()
+    captured: dict[str, object] = {}
+
+    class _FakeStream:
+        def update_options(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    fake = _FakeStream()
+    instance._streams.add(fake)
+    instance.update_options(no_verbatim=True)
+    assert captured.get("no_verbatim") is True
