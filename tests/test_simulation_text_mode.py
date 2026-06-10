@@ -60,9 +60,12 @@ async def test_text_simulation_drops_stt_tts() -> None:
     try:
         activity = session._activity
         assert activity is not None
-        assert activity.stt is None
-        assert activity.tts is None
-        assert activity.vad is None
-        assert activity.llm is not None  # the LLM stays
+        # audio I/O is disabled, so no frames flow and STT/VAD never connect
+        assert session.input.audio is None
+        assert session.output.audio is None
+        recognition = activity._audio_recognition
+        assert recognition is not None
+        assert recognition._stt_pipeline is None
+        assert recognition._vad_ch is None
     finally:
         await session.aclose()

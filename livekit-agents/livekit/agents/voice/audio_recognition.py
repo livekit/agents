@@ -195,6 +195,7 @@ class AudioRecognition:
         self._interruption_detection = interruption_detection
         self._interruption_ch: aio.Chan[inference.InterruptionDataFrameType] | None = None
         self._input_started_at: float | None = None
+        self._audio_seen = False
         self._ignore_user_transcript_until: NotGivenOr[float] = NOT_GIVEN
         self._transcript_buffer: deque[SpeechEvent] = deque()
         self._interruption_enabled: bool = interruption_detection is not None and vad is not None
@@ -568,6 +569,17 @@ class AudioRecognition:
         ``frame`` (e.g. a silence substitute during AEC warmup or uninterruptible
         speech). VAD, AMD and the interruption channel always receive ``frame``.
         """
+        if not self._audio_seen:
+            # streams are created lazily on the first frame so that sessions
+            # without audio input never connect STT/VAD
+            self._audio_seen = True
+            if self._stt is not None and self._stt_pipeline is None:
+                self.update_stt(self._stt)
+            if self._vad is not None and self._vad_ch is None:
+                self.update_vad(self._vad)
+            if self._interruption_detection is not None and self._interruption_ch is None:
+                self.update_interruption_detection(self._interruption_detection)
+
         if self._input_started_at is None:
             self._input_started_at = time.time() - frame.duration
 
@@ -621,6 +633,8 @@ class AudioRecognition:
     def update_stt(self, stt: io.STTNode | None, *, pipeline: _STTPipeline | None = None) -> None:
         self._stt = stt
         if pipeline is None and stt is not None:
+            if not self._audio_seen:
+                return  # created on the first audio frame
             pipeline = _STTPipeline(stt)
 
         if pipeline is not None:
@@ -652,6 +666,11 @@ class AudioRecognition:
     def update_vad(self, vad: vad.VAD | None) -> None:
         self._vad = vad
         if vad:
+            if not self._audio_seen:
+                self._interruption_enabled = (
+                    self._interruption_detection is not None and self._vad is not None
+                )
+                return  # created on the first audio frame
             self._vad_stream = None
             self._vad_ch = aio.Chan[rtc.AudioFrame]()
             self._vad_atask = asyncio.create_task(
@@ -691,6 +710,9 @@ class AudioRecognition:
     ) -> None:
         self._interruption_detection = interruption_detection
         if interruption_detection is not None:
+            if not self._audio_seen:
+                self._interruption_enabled = self._vad is not None
+                return  # created on the first audio frame
             self._interruption_ch = aio.Chan[inference.InterruptionDataFrameType]()
             self._interruption_atask = asyncio.create_task(
                 self._interruption_task(

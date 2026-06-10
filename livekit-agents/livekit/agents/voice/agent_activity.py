@@ -3895,8 +3895,6 @@ class AgentActivity(RecognitionHooks):
     # move them to the end to avoid shadowing the same named modules for mypy
     @property
     def vad(self) -> vad.VAD | None:
-        if self._session._audio_models_disabled:
-            return None
         return self._agent.vad if is_given(self._agent.vad) else self._session.vad
 
     def _resolve_interruption_detection(self) -> inference.AdaptiveInterruptionDetector | None:
@@ -3953,8 +3951,6 @@ class AgentActivity(RecognitionHooks):
 
     @property
     def stt(self) -> stt.STT | None:
-        if self._session._audio_models_disabled:
-            return None
         return self._agent.stt if is_given(self._agent.stt) else self._session.stt
 
     @property
@@ -3963,6 +3959,4 @@ class AgentActivity(RecognitionHooks):
 
     @property
     def tts(self) -> tts.TTS | None:
-        if self._session._audio_models_disabled:
-            return None
         return self._agent.tts if is_given(self._agent.tts) else self._session.tts
