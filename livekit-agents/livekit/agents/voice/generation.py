@@ -583,10 +583,33 @@ async def _execute_tools_task(
         )
         return
 
-    # AsyncToolset members route to their own executor for per-toolset
-    # update/reply coalescing; the rest fall back to the activity executor
+    # We need to decide which executor runs each tool. A tool that belongs to an
+    # AsyncToolset must run on that toolset's own executor; every other tool runs
+    # on the activity's executor.
+    #
+    # Why we don't use ``tool_ctx.toolsets`` here: the LLM inference step shares
+    # this same ``tool_ctx`` object and runs first. To hand the model a plain
+    # list of functions it flattens the toolsets and writes the flat list back
+    # into ``tool_ctx`` in place (see ``_llm_inference_task``: ``tools =
+    # tool_ctx.flatten()`` then ``tool_ctx.update_tools(tools)``). After that,
+    # ``tool_ctx.toolsets`` is empty -- the "which tool came from which toolset"
+    # grouping is gone. If we routed off that, a session-scoped tool would look
+    # like a normal activity tool. That matters on handoff: when we switch
+    # agents the old activity shuts down and cancels its tools, but a
+    # session-scoped tool is supposed to keep running and report back to the new
+    # agent. Routed wrong, it gets cancelled and its result is lost.
+    #
+    # So we rebuild the list of toolsets directly from where they actually live
+    # (the session, the current agent, and MCP), which still knows which tools
+    # belong to which toolset, and use that to map each tool to the right
+    # executor.
+    routing_toolsets: list[llm.Toolset] = [
+        t for t in session.tools if isinstance(t, llm.Toolset)
+    ]
+    routing_toolsets += [t for t in activity._agent.tools if isinstance(t, llm.Toolset)]
+    routing_toolsets += list(activity._mcp_tools)
     executor_by_name = _build_executor_map(
-        toolsets=tool_ctx.toolsets, default=activity._tool_executor
+        toolsets=routing_toolsets, default=activity._tool_executor
     )
 
     tasks: list[asyncio.Task[Any]] = []
