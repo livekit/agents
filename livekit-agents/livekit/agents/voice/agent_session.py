@@ -695,7 +695,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if job_ctx and (sim_ctx := job_ctx.simulation_context()) is not None:
                 from ..simulation import SimulationMode
 
-                text_simulation = sim_ctx.mode == SimulationMode.SIMULATION_MODE_TEXT
+                text_simulation = sim_ctx.simulation_mode == SimulationMode.SIMULATION_MODE_TEXT
 
             if text_simulation:
                 logger.info("text simulation: disabling audio I/O")

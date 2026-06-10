@@ -68,7 +68,7 @@ class SimulationContext:
         return self._scenario
 
     @property
-    def mode(self) -> int:
+    def simulation_mode(self) -> int:
         """How the simulated user interacts with the agent (text chat or audio).
         Unspecified is treated as text, since simulations predating the field
         were all text-only."""
@@ -77,11 +77,11 @@ class SimulationContext:
         return self._dispatch.mode
 
     @property
-    def run(self) -> proto.SimulationRun | None:
+    def simulation_run(self) -> proto.SimulationRun | None:
         return self._run
 
     @property
-    def job(self) -> proto.SimulationRun.Job | None:
+    def simulation_job(self) -> proto.SimulationRun.Job | None:
         return self._job
 
     @property
