@@ -1,22 +1,17 @@
 import json
 import logging
 import os
-from collections.abc import AsyncGenerator
 from urllib.parse import urlencode
 
 from dotenv import load_dotenv
 
 from livekit.agents import (
-    NOT_GIVEN,
     Agent,
     AgentServer,
     AgentSession,
-    APIError,
     JobContext,
-    ModelSettings,
     cli,
     inference,
-    llm,
     tokenize,
 )
 from livekit.agents.voice import CONVERSATIONAL_EXPRESSIVENESS_PRESET
@@ -35,10 +30,6 @@ DEFAULT_TTS = "inworld/inworld-tts-2"
 GEMMA_BASE_URL = os.environ["GEMMA_BASE_URL"]
 GEMMA_API_KEY = os.environ["GEMMA_API_KEY"]
 GEMMA_MODEL = "gemma-4-31b-it"
-
-# Seed model for the Inference backend — only used once a non-Gemma model
-# is picked, but inference.LLM needs a valid model at construction.
-FALLBACK_INFERENCE_LLM = "openai/gpt-4.1-mini"
 
 # Default starter prompt. Keep in sync with the `set_system_prompt`
 # control's `default` in examples/playground.yaml — the UI seeds the
@@ -67,52 +58,17 @@ _SWAP_PROMPT = (
 class InferenceAgent(Agent):
     def __init__(self, instructions: str = INSTRUCTIONS) -> None:
         super().__init__(instructions=instructions)
-        # The session's default LLM is the Gemma openai.LLM (see entrypoint).
-        # Every other model in playground.yaml is on LiveKit Inference, which
-        # update_options() can't reach from the Gemma plugin — so we keep a
-        # separate Inference backend and route to it from llm_node.
-        self._inference_llm = inference.LLM(model=FALLBACK_INFERENCE_LLM)
-        self.llm_model = DEFAULT_LLM
 
     async def on_enter(self) -> None:
+        # Fired once the agent is active and RoomIO has subscribed to the
+        # participant's tracks, so the greeting is delivered to a connected
+        # client rather than spoken before the audio socket is up. Runs on
+        # the session's default LLM (Gemma) — no model-routing needed here.
         self.session.generate_reply(
-            instructions="Greet the user with excitement, and ask how their day has been "
-            "with curiosity."
+            instructions="Greet the user with excitement, welcome them to the "
+            "LiveKit Playground, and invite them to chat or swap your STT, LLM, "
+            "or TTS models. Keep it to one or two short, natural sentences."
         )
-
-    async def llm_node(
-        self,
-        chat_ctx: llm.ChatContext,
-        tools: list[llm.Tool],
-        model_settings: ModelSettings,
-    ) -> AsyncGenerator[llm.ChatChunk | str, None]:
-        # Gemma → the session's default LLM; anything else → Inference.
-        active = self.session.llm if self.llm_model == GEMMA_MODEL else self._inference_llm
-        logger.info("llm_node → llm_model=%s backend=%s", self.llm_model, type(active).__module__)
-        tool_choice = model_settings.tool_choice if model_settings else NOT_GIVEN
-        conn_options = self.session.conn_options.llm_conn_options
-
-        async def _run(backend: llm.LLM) -> AsyncGenerator[llm.ChatChunk, None]:
-            async with backend.chat(
-                chat_ctx=chat_ctx, tools=tools, tool_choice=tool_choice, conn_options=conn_options
-            ) as stream:
-                async for chunk in stream:
-                    yield chunk
-
-        started = False
-        try:
-            async for chunk in _run(active):
-                started = True
-                yield chunk
-        except APIError as e:
-            # A bad/unsupported model on the Inference gateway 404s here. Don't kill the
-            # session — fall back to the Gemma default if nothing has streamed yet.
-            if active is not self.session.llm and not started:
-                logger.warning("LLM %r failed (%s); falling back to Gemma", self.llm_model, e)
-                async for chunk in _run(self.session.llm):
-                    yield chunk
-            else:
-                raise
 
 
 server = AgentServer()
@@ -166,12 +122,10 @@ async def entrypoint(ctx: JobContext) -> None:
     @ctx.room.local_participant.register_rpc_method("set_llm_model")
     async def set_llm_model(data: RpcInvocationData) -> str:
         model = parse_value(data.payload, DEFAULT_LLM)
-        if model == agent.llm_model:
+        if isinstance(session.llm, openai.LLM) and session.llm.model == model:
             return ""
-        agent.llm_model = model
-        if model != GEMMA_MODEL:
-            agent._inference_llm.update_options(model=model)
         logger.info("switching LLM → %s", model)
+        session.llm.update_options(model=model)
         session.generate_reply(instructions=_SWAP_PROMPT.format(modality="language", model=model))
         return ""
 
@@ -196,7 +150,7 @@ async def entrypoint(ctx: JobContext) -> None:
         params = {
             "modelMode": "pipeline",
             "instructions": agent.instructions or "",
-            "llm": agent.llm_model,
+            "llm": session.llm.model if isinstance(session.llm, openai.LLM) else DEFAULT_LLM,
             "stt": session.stt.model if isinstance(session.stt, inference.STT) else DEFAULT_STT,
             "tts": session.tts.model if isinstance(session.tts, inference.TTS) else DEFAULT_TTS,
         }
