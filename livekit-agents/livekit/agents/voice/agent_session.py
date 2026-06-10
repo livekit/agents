@@ -693,9 +693,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # or connects them.
             text_simulation = False
             if job_ctx and (sim_ctx := job_ctx.simulation_context()) is not None:
-                from ..simulation import SimulationChannel
+                from ..simulation import SimulationMode
 
-                text_simulation = sim_ctx.channel == SimulationChannel.SIMULATION_CHANNEL_TEXT
+                text_simulation = sim_ctx.mode == SimulationMode.SIMULATION_MODE_TEXT
 
             if text_simulation and (self._stt or self._tts or self._vad):
                 logger.info("text simulation: skipping STT/TTS/VAD and audio I/O")

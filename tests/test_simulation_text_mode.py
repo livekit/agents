@@ -6,9 +6,9 @@ import pytest
 
 from livekit.agents import Agent, AgentSession
 from livekit.agents.simulation import (
-    SimulationChannel,
     SimulationContext,
     SimulationDispatch,
+    SimulationMode,
 )
 from livekit.agents.worker import AgentServer
 
@@ -20,20 +20,20 @@ from .fake_vad import FakeVAD
 pytestmark = [pytest.mark.unit]
 
 
-def _dispatch(channel: SimulationChannel.ValueType | None = None) -> SimulationDispatch:
+def _dispatch(mode: SimulationMode.ValueType | None = None) -> SimulationDispatch:
     dispatch = SimulationDispatch(simulation_run_id="SR_test", job_id="SRJ_test")
-    if channel is not None:
-        dispatch.channel = channel
+    if mode is not None:
+        dispatch.mode = mode
     return dispatch
 
 
-def test_simulation_context_channel() -> None:
+def test_simulation_context_mode() -> None:
     # unspecified is treated as text: simulations predating the field were text-only
     ctx = SimulationContext(_dispatch(), MagicMock())
-    assert ctx.channel == SimulationChannel.SIMULATION_CHANNEL_TEXT
+    assert ctx.mode == SimulationMode.SIMULATION_MODE_TEXT
 
-    ctx = SimulationContext(_dispatch(SimulationChannel.SIMULATION_CHANNEL_AUDIO), MagicMock())
-    assert ctx.channel == SimulationChannel.SIMULATION_CHANNEL_AUDIO
+    ctx = SimulationContext(_dispatch(SimulationMode.SIMULATION_MODE_AUDIO), MagicMock())
+    assert ctx.mode == SimulationMode.SIMULATION_MODE_AUDIO
 
 
 def test_worker_simulation_mode_bypasses_load_threshold() -> None:
