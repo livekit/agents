@@ -590,9 +590,7 @@ async def _execute_tools_task(
     # grouping is gone. Without it a session-scoped tool would route to the
     # activity executor and be cancelled on handoff instead of surviving to
     # deliver under the next agent.
-    routing_toolsets: list[llm.Toolset] = [
-        t for t in session.tools if isinstance(t, llm.Toolset)
-    ]
+    routing_toolsets: list[llm.Toolset] = [t for t in session.tools if isinstance(t, llm.Toolset)]
     routing_toolsets += [t for t in activity._agent.tools if isinstance(t, llm.Toolset)]
     routing_toolsets += list(activity._mcp_tools)
     executor_by_name = _build_executor_map(
