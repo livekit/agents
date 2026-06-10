@@ -178,14 +178,15 @@ class KeytermDetector:
             self._stt.update_keyterms(self.keyterms)
 
     def start(self, session: AgentSession, *, stt: STT | None, llm: LLM | None) -> None:
-        """Bind this activity's STT/LLM and start detection (if enabled)."""
-        if self._session is not None or not self._options["enabled"]:
-            return
-
+        """Bind this activity's STT (always) and start detection (if enabled)."""
+        # user-defined keyterms must reach the recognizer even with detection disabled
         if stt is not self._stt:
             self._stt = stt
-            if self._stt is not None:
+            if self._stt is not None and self.keyterms:
                 self._stt.update_keyterms(self.keyterms)
+
+        if self._session is not None or not self._options["enabled"]:
+            return
 
         detect_llm = self._options["llm"] or llm
         if detect_llm is None:

@@ -289,6 +289,26 @@ async def test_start_same_stt_does_not_repush() -> None:
     await d.aclose()
 
 
+async def test_user_terms_pushed_without_detection() -> None:
+    stt = _RecordingSTT()
+    session = _FakeSession()
+    d = _detector(user_keyterms=["Acme"], enabled=False)
+    d.start(session, stt=stt, llm=None)  # detection off must still bind the STT and push
+    assert stt.pushed == [["Acme"]]
+    d.set_user_keyterms(["New"])
+    assert stt.pushed[-1] == ["New"]
+    await d.aclose()
+
+
+async def test_start_without_terms_does_not_push() -> None:
+    stt = _RecordingSTT()
+    session = _FakeSession()
+    d = _detector(enabled=False)
+    d.start(session, stt=stt, llm=None)  # nothing to apply -> no push, no capability warning
+    assert stt.pushed == []
+    await d.aclose()
+
+
 async def test_set_user_keyterms_pushes() -> None:
     stt = _RecordingSTT()
     session = _FakeSession()
