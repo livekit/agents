@@ -279,6 +279,9 @@ CONVERSATIONAL_EXPRESSIVENESS_PRESET: "ExpressivenessOptions" = {
         "openers (oh, well, so, right, hmm), hedges (kind of, maybe, a little), gentle self-"
         "repairs (I, I think), and backchannels (yeah, mm-hm, for sure) — usually zero to two per "
         "turn, never sprinkled in mechanically.\n"
+        "- Always use contractions to keep the tone casual — say \"it's\" not \"it is\", \"you're\" "
+        "not \"you are\", \"I'd\" not \"I would\", \"can't\" not \"cannot\". Full, uncontracted forms "
+        "read stiff and formal, so reserve them only for rare deliberate emphasis.\n"
         "- Pace with punctuation and expressions — commas, trailing ellipses (...) when you drift "
         'or hesitate, and the occasional <break time="..."/>. Use exclamation points for real '
         "enthusiasm, and CAPITALIZATION sparingly (at most once per turn) to punch a single word "
