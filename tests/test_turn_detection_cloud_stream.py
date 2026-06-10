@@ -61,7 +61,7 @@ class TestCloudStreamSendOrdering:
     """FIFO delivery for the unified outbound channel."""
 
     async def test_inference_start_precedes_input_audio(self) -> None:
-        """Regression: ``start_inference`` (sync hook) used to schedule its
+        """Regression: ``run_inference`` (sync hook) used to schedule its
         send via ``asyncio.create_task``, which could land on the wire after
         an awaited ``input_audio`` send. With the unified channel, the
         sender drains FIFO so ``inference_start`` always reaches the wire
@@ -69,7 +69,7 @@ class TestCloudStreamSendOrdering:
         stream, fake_ws, transport = make_stream(connect_script=[None])
         try:
             await wait_until_connected(transport)
-            stream.warmup()
+            stream.predict()
             stream.push_audio(_pcm_frame())
             await drain_send_queue(transport)
 
@@ -80,21 +80,25 @@ class TestCloudStreamSendOrdering:
         finally:
             await stream.aclose()
 
-    async def test_inference_start_precedes_inference_stop(self) -> None:
-        """Regression: two sync hooks back-to-back (``start_inference`` then
-        ``stop_inference``) used to race at the ``ws.send_bytes`` await
-        because each ran in its own task. The unified channel serializes
+    async def test_consecutive_inference_starts_serialized(self) -> None:
+        """Regression: two sync ``run_inference`` hooks back-to-back (a
+        predict superseding another) used to race at the ``ws.send_bytes``
+        await because each ran in its own task. The unified channel serializes
         them in call order."""
         stream, fake_ws, transport = make_stream(connect_script=[None])
         try:
             await wait_until_connected(transport)
-            stream.warmup()
-            stream.deactivate(trigger="vad sos")
+            stream.predict()
+            first_id = stream._request_id
+            stream.predict()
+            second_id = stream._request_id
             await drain_send_queue(transport)
 
-            kinds = [m.WhichOneof("message") for m in fake_ws.sent]
-            start_idx = kinds.index("inference_start")
-            stop_idx = kinds.index("inference_stop")
-            assert start_idx < stop_idx
+            start_ids = [
+                m.inference_start.request_id
+                for m in fake_ws.sent
+                if m.WhichOneof("message") == "inference_start"
+            ]
+            assert start_ids == [first_id, second_id]
         finally:
             await stream.aclose()

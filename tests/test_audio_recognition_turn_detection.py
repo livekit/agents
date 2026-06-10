@@ -1,22 +1,32 @@
 """Integration tests for ``AudioRecognition`` audio turn-detection wiring.
 
-Covers concerns the FSM-level tests can't reach:
+Recognition owns all streaming turn-detection policy: it holds the in-flight
+inference request's future (``_turn_detector_prediction_fut``), starts
+requests on VAD events only, awaits the future with the endpointing
+``min_delay`` in the eou bounce, and flushes the stream on turn commits.
+Covered here:
 
 1. The speaking-guard race in ``_run_eou_detection``: setting
    ``_user_speaking_event`` mid-bounce must abort the commit so a
    late-arriving SOS doesn't ship the prior turn.
 
 2. ``on_eot_prediction`` dedup across the vad-EOS and stt-final triggers that
-   share one cached prediction, and the ``update_turn_detector`` swap wiring.
+   share one resolved prediction future, and the ``update_turn_detector``
+   swap wiring.
 
-The deactivate-on-positive-prediction behavior now lives in the stream FSM
-itself; see ``test_turn_detection_fsm.py``.
+3. The prediction-future lifecycle against VAD events: requests start
+   exclusively on the silence tick, resumed speech inside a still-open VAD
+   segment rearms the next pause, SOS teardown, the flushed-turn short-circuit
+   for late stt finals, and the predict-timeout fallback signal.
+
+The stream-side request lifecycle lives in ``test_turn_detection_fsm.py``.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import time
 from unittest.mock import AsyncMock, MagicMock
 
@@ -54,14 +64,25 @@ def _make_full_recognition_for_eou() -> AudioRecognition:
     ar._turn_detector = MagicMock(spec=_StreamingTurnDetector)
 
     # spec= on _StreamingTurnDetectorStream so the runtime_checkable isinstance
-    # narrowing in audio_recognition's last_prediction reads sees the mock as
-    # the streaming flavor.
+    # narrowing in audio_recognition's streaming branch sees the mock as the
+    # streaming flavor.
     stream_mock = MagicMock(spec=_StreamingTurnDetectorStream)
     stream_mock.supports_language = AsyncMock(return_value=True)
-    stream_mock.predict_end_of_turn = AsyncMock(return_value=0.0)
     stream_mock.unlikely_threshold = AsyncMock(return_value=0.5)
+    # each call hands out a fresh pending future, mirroring the real
+    # predict; tests install resolved/pending futures directly on
+    # ar._turn_detector_prediction_fut to model cached/awaiting predictions
+    stream_mock.predict = MagicMock(side_effect=asyncio.Future)
     stream_mock.flush = MagicMock()
+    stream_mock.cancel_inference = MagicMock()
     ar._turn_detector_stream = stream_mock
+    ar._turn_detector_prediction_fut = None
+    ar._turn_detector_flushed = False
+    ar._turn_detector_late_prediction_warned = False
+    ar._agent_speaking = False
+    ar._interruption_enabled = False
+    ar._interruption_ch = None
+    ar._vad_base_turn_detection = False
 
     endpointing = MagicMock()
     endpointing.min_delay = 0.01
@@ -101,12 +122,33 @@ def _make_chat_ctx_stub() -> MagicMock:
     return ctx
 
 
+def _resolved_prediction(
+    probability: float,
+    *,
+    inference_duration: float | None = None,
+    detection_delay: float | None = None,
+) -> tuple[asyncio.Future[TurnDetectionEvent], TurnDetectionEvent]:
+    """A resolved prediction future, as if the transport already answered."""
+    event = TurnDetectionEvent(
+        type="eot_prediction",
+        last_speaking_time=time.time(),
+        end_of_turn_probability=probability,
+        inference_duration=inference_duration,
+        detection_delay=detection_delay,
+    )
+    fut: asyncio.Future[TurnDetectionEvent] = asyncio.Future()
+    fut.set_result(event)
+    return fut, event
+
+
 class TestSpeakingGuardRace:
     async def test_speaking_event_during_bounce_aborts_commit(self) -> None:
         """Regression: a VAD SOS during the endpointing-delay window must
         cancel the in-flight bounce so the prior turn doesn't commit."""
         ar = _make_full_recognition_for_eou()
         chat_ctx = _make_chat_ctx_stub()
+        # sub-threshold prediction (0.2 < 0.5) extends endpointing to max_delay
+        ar._turn_detector_prediction_fut, _ = _resolved_prediction(0.2)
 
         ar._run_eou_detection(chat_ctx, trigger="vad")
 
@@ -134,14 +176,14 @@ class TestSpeakingGuardRace:
         assert ar._end_of_turn_task is not None
         await ar._end_of_turn_task
         ar._hooks.on_end_of_turn.assert_not_called()
-        # predict_end_of_turn should not have been awaited — the guard
+        # predict should not have been called — the guard
         # bailed before the bounce task started.
-        assert ar._turn_detector_stream.predict_end_of_turn.call_count == 0
+        assert ar._turn_detector_stream.predict.call_count == 0
 
 
-def _inference_done(*, raw_speech: float) -> vad.VADEvent:
-    """An ``INFERENCE_DONE`` event carrying ``raw_speech`` accumulated speech and no
-    silence — the shape the silero/inference VAD emits each inference window."""
+def _inference_done(*, raw_speech: float, raw_silence: float = 0.0) -> vad.VADEvent:
+    """An ``INFERENCE_DONE`` event carrying the accumulated speech/silence —
+    the shape the silero/inference VAD emits each inference window."""
     return vad.VADEvent(
         type=vad.VADEventType.INFERENCE_DONE,
         samples_index=0,
@@ -149,7 +191,27 @@ def _inference_done(*, raw_speech: float) -> vad.VADEvent:
         speech_duration=0.0,
         silence_duration=0.0,
         raw_accumulated_speech=raw_speech,
-        raw_accumulated_silence=0.0,
+        raw_accumulated_silence=raw_silence,
+    )
+
+
+def _start_of_speech() -> vad.VADEvent:
+    return vad.VADEvent(
+        type=vad.VADEventType.START_OF_SPEECH,
+        samples_index=0,
+        timestamp=0.0,
+        speech_duration=0.5,
+        silence_duration=0.0,
+    )
+
+
+def _end_of_speech() -> vad.VADEvent:
+    return vad.VADEvent(
+        type=vad.VADEventType.END_OF_SPEECH,
+        samples_index=0,
+        timestamp=0.0,
+        speech_duration=0.0,
+        silence_duration=0.3,
     )
 
 
@@ -198,29 +260,27 @@ class TestSubThresholdSpeakingSpike:
 
 
 class TestEotPredictionDedup:
-    """Both EOU triggers in a turn (vad EOS + stt final) read the same cached
-    ``TurnDetectionEvent`` from the audio stream. ``on_eot_prediction`` must
-    fire exactly once for that single prediction."""
+    """Both EOU triggers in a turn (vad EOS + stt final) read the same resolved
+    prediction future. ``on_eot_prediction`` must fire exactly once for that
+    single prediction."""
 
     async def test_vad_then_stt_emits_eot_prediction_once(self) -> None:
         """Regression for duplicate ``EotPredictionEvent``: the vad-trigger
         bounce emits and then parks in the endpointing sleep; the stt-trigger
-        cancels it and runs a second bounce that reads the *same* cached
-        prediction. Without identity dedup both bounces emit; with it, only
-        the first does."""
+        cancels it and runs a second bounce that reads the *same* resolved
+        future. Without identity dedup both bounces emit; with it, only the
+        first does."""
         ar = _make_full_recognition_for_eou()
         chat_ctx = _make_chat_ctx_stub()
 
-        # One prediction per inference window — both triggers read this object
-        # by reference via ``turn_detector_stream.last_prediction``.
-        cached = TurnDetectionEvent(
-            type="eot_prediction",
-            last_speaking_time=time.time(),
-            end_of_turn_probability=0.2,  # below 0.5 threshold → endpointing max_delay
+        # One prediction per inference request — both triggers read this event
+        # by reference from the held future.
+        fut, cached = _resolved_prediction(
+            0.2,  # below 0.5 threshold → endpointing max_delay
             inference_duration=0.05,
             detection_delay=0.1,
         )
-        ar._turn_detector_stream.last_prediction = cached
+        ar._turn_detector_prediction_fut = fut
 
         # vad trigger: bounce emits, then parks in the ~0.5s endpointing sleep.
         ar._run_eou_detection(chat_ctx, trigger="vad")
@@ -230,7 +290,7 @@ class TestEotPredictionDedup:
         assert ar._hooks.on_eot_prediction.call_count == 1
 
         # stt trigger: cancels the parked vad bounce and runs a fresh one that
-        # reads the same cached prediction. Dedup must suppress a second emit.
+        # reads the same resolved future. Dedup must suppress a second emit.
         ar._run_eou_detection(chat_ctx, trigger="stt")
         for _ in range(5):
             await asyncio.sleep(0)
@@ -238,29 +298,6 @@ class TestEotPredictionDedup:
 
         assert ar._hooks.on_eot_prediction.call_count == 1
         assert ar._last_emitted_prediction is cached
-
-        if ar._end_of_turn_task is not None:
-            await aio.cancel_and_wait(ar._end_of_turn_task)
-
-    async def test_no_cached_prediction_emits_every_bounce(self) -> None:
-        """When there's no cached ``TurnDetectionEvent`` (``last_prediction`` is
-        ``None`` — text-based detectors, or an audio timeout), each bounce must
-        still emit: identity dedup only applies to a shared cached object."""
-        ar = _make_full_recognition_for_eou()
-        ar._turn_detector_stream.last_prediction = None
-        chat_ctx = _make_chat_ctx_stub()
-
-        ar._run_eou_detection(chat_ctx, trigger="vad")
-        for _ in range(5):
-            await asyncio.sleep(0)
-        await asyncio.sleep(0.02)
-        assert ar._hooks.on_eot_prediction.call_count == 1
-
-        ar._run_eou_detection(chat_ctx, trigger="stt")
-        for _ in range(5):
-            await asyncio.sleep(0)
-        await asyncio.sleep(0.02)
-        assert ar._hooks.on_eot_prediction.call_count == 2
 
         if ar._end_of_turn_task is not None:
             await aio.cancel_and_wait(ar._end_of_turn_task)
@@ -276,7 +313,6 @@ class TestEotPredictionDedup:
         text_detector.supports_language = AsyncMock(return_value=True)
         text_detector.predict_end_of_turn = AsyncMock(return_value=0.2)
         text_detector.unlikely_threshold = AsyncMock(return_value=0.5)
-        text_detector.last_prediction = None
         ar._turn_detector = text_detector
         ar._turn_detector_stream = None
         ar._audio_transcript = "hello there"
@@ -318,6 +354,182 @@ class TestEotPredictionDedup:
         ar.clear_user_turn()
 
         assert ar._last_emitted_prediction is None
+
+
+class TestPredictionFutureLifecycle:
+    """The held prediction future against VAD events: requests start on the
+    silence tick, are rearmed by resumed speech or SOS, and the flushed-turn
+    flag blocks new requests until fresh speech."""
+
+    async def test_silence_tick_starts_request_once(self) -> None:
+        ar = _make_full_recognition_for_eou()
+        ar._speaking = True
+
+        await ar._on_vad_event(_inference_done(raw_speech=0.0, raw_silence=0.3))
+        await ar._on_vad_event(_inference_done(raw_speech=0.0, raw_silence=0.4))
+
+        assert ar._turn_detector_stream.predict.call_count == 1
+        assert ar._turn_detector_prediction_fut is not None
+
+    async def test_resumed_speech_without_sos_rearms_next_pause(self) -> None:
+        """A short intra-segment pause can resolve a prediction before Silero
+        emits EOS. When speech resumes without a new SOS, the cached
+        prediction must be dropped so the next pause gets a fresh window."""
+        ar = _make_full_recognition_for_eou()
+        ar._speaking = True
+
+        await ar._on_vad_event(_inference_done(raw_speech=0.0, raw_silence=0.3))
+        first_fut = ar._turn_detector_prediction_fut
+        assert first_fut is not None
+        first_fut.set_result(
+            TurnDetectionEvent(
+                type="eot_prediction",
+                last_speaking_time=time.time(),
+                end_of_turn_probability=0.1,
+            )
+        )
+
+        await ar._on_vad_event(_inference_done(raw_speech=0.1, raw_silence=0.0))
+
+        ar._turn_detector_stream.cancel_inference.assert_called_once_with()
+        assert ar._turn_detector_prediction_fut is None
+
+        await ar._on_vad_event(_inference_done(raw_speech=0.0, raw_silence=0.3))
+
+        assert ar._turn_detector_stream.predict.call_count == 2
+        assert ar._turn_detector_prediction_fut is not None
+        assert ar._turn_detector_prediction_fut is not first_fut
+
+    async def test_silence_tick_starts_request_while_agent_speaking(self) -> None:
+        """The agent-speaking gate was dropped: the silence tick warms a
+        prediction during the user's pause even while the agent is still
+        speaking, so an overlapping/interrupting turn still gets an EOT
+        window."""
+        ar = _make_full_recognition_for_eou()
+        ar._speaking = True
+        ar._agent_speaking = True
+
+        await ar._on_vad_event(_inference_done(raw_speech=0.0, raw_silence=0.3))
+
+        assert ar._turn_detector_stream.predict.call_count == 1
+        assert ar._turn_detector_prediction_fut is not None
+
+    async def test_eos_consumes_silence_tick_request_without_predicting(self) -> None:
+        """EOS no longer starts an inference request — the silence tick owns
+        that. EOS consumes the already-armed future and runs the eou bounce."""
+        ar = _make_full_recognition_for_eou()
+        ar._speaking = True
+        ar._vad_base_turn_detection = True
+        fut, _ = _resolved_prediction(0.9)
+        ar._turn_detector_prediction_fut = fut
+
+        await ar._on_vad_event(_end_of_speech())
+
+        assert ar._turn_detector_stream.predict.call_count == 0
+        assert ar._turn_detector_prediction_fut is fut
+        assert ar._end_of_turn_task is not None
+        await ar._end_of_turn_task
+        ar._hooks.on_eot_prediction.assert_called_once()
+
+    async def test_eos_runs_eou_even_while_agent_speaking(self) -> None:
+        """The agent-speaking gate was dropped from the EOS handler: the eou
+        bounce runs regardless of agent speech. Whether anything commits is
+        then decided downstream by the transcript/interruption guards, not by
+        the VAD handler."""
+        ar = _make_full_recognition_for_eou()
+        ar._speaking = True
+        ar._agent_speaking = True
+        ar._vad_base_turn_detection = True
+        fut, _ = _resolved_prediction(0.9)
+        ar._turn_detector_prediction_fut = fut
+
+        await ar._on_vad_event(_end_of_speech())
+
+        assert ar._turn_detector_stream.predict.call_count == 0
+        assert ar._end_of_turn_task is not None
+        await ar._end_of_turn_task
+        ar._hooks.on_eot_prediction.assert_called_once()
+
+    async def test_sos_tears_down_request_and_rearms(self) -> None:
+        ar = _make_full_recognition_for_eou()
+        ar._turn_detector_prediction_fut = asyncio.Future()
+        ar._turn_detector_flushed = True
+
+        await ar._on_vad_event(_start_of_speech())
+
+        ar._turn_detector_stream.cancel_inference.assert_called_once_with()
+        assert ar._turn_detector_prediction_fut is None
+        assert ar._turn_detector_flushed is False
+
+    async def test_eos_never_starts_request(self) -> None:
+        """Inference requests start exclusively on the silence tick. EOS does
+        not start one (no-prediction turns commit on min_delay) and leaves a
+        held future untouched for the eou bounce."""
+        ar = _make_full_recognition_for_eou()
+
+        await ar._on_vad_event(_end_of_speech())
+        assert ar._turn_detector_stream.predict.call_count == 0
+        assert ar._turn_detector_prediction_fut is None
+
+        fut, _ = _resolved_prediction(0.9)
+        ar._turn_detector_prediction_fut = fut
+        await ar._on_vad_event(_end_of_speech())
+        assert ar._turn_detector_stream.predict.call_count == 0
+        assert ar._turn_detector_prediction_fut is fut
+
+    async def test_late_stt_final_after_flush_short_circuits(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A late stt final after the turn was flushed must not start an
+        inference request; it warns once, then logs at debug level."""
+        caplog.set_level(logging.WARNING, logger="livekit.agents")
+        ar = _make_full_recognition_for_eou()
+        ar._turn_detector_flushed = True
+        chat_ctx = _make_chat_ctx_stub()
+
+        for _ in range(2):
+            ar._run_eou_detection(chat_ctx, trigger="stt")
+            assert ar._end_of_turn_task is not None
+            await ar._end_of_turn_task
+
+        assert ar._turn_detector_stream.predict.call_count == 0
+        ar._hooks.on_eot_prediction.assert_not_called()
+        flush_warnings = [r for r in caplog.records if "already flushed" in r.getMessage()]
+        assert len(flush_warnings) == 1
+
+    async def test_predict_timeout_signals_fallback_and_drops_future(self) -> None:
+        """A pending future timing out at ``min_delay`` commits without a
+        prediction — no synthetic emission, no threshold lookup — and reports
+        the timeout to the stream (first one promotes the cloud→local
+        fallback)."""
+        ar = _make_full_recognition_for_eou()
+        ar._turn_detector_prediction_fut = asyncio.Future()
+        chat_ctx = _make_chat_ctx_stub()
+
+        ar._run_eou_detection(chat_ctx, trigger="vad")
+        assert ar._end_of_turn_task is not None
+        await ar._end_of_turn_task
+
+        ar._turn_detector_stream.cancel_inference.assert_called_once_with(timed_out=True)
+        assert ar._turn_detector_prediction_fut is None
+        ar._hooks.on_eot_prediction.assert_not_called()
+        ar._turn_detector_stream.unlikely_threshold.assert_not_called()
+        ar._hooks.on_end_of_turn.assert_called_once()
+
+    async def test_commit_flushes_stream_and_marks_turn_flushed(self) -> None:
+        ar = _make_full_recognition_for_eou()
+        ar._hooks.on_end_of_turn.return_value = True  # commit
+        fut, _ = _resolved_prediction(0.9)  # confident → no max_delay extension
+        ar._turn_detector_prediction_fut = fut
+        chat_ctx = _make_chat_ctx_stub()
+
+        ar._run_eou_detection(chat_ctx, trigger="vad")
+        assert ar._end_of_turn_task is not None
+        await ar._end_of_turn_task
+
+        ar._turn_detector_stream.flush.assert_called_once_with(reason="turn committed")
+        assert ar._turn_detector_prediction_fut is None
+        assert ar._turn_detector_flushed is True
 
 
 class _FakeVad:

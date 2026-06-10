@@ -19,7 +19,6 @@ from livekit.protocol.agent_pb.agent_inference import (
     ClientMessage,
     EotPrediction,
     InferenceStart,
-    InferenceStop,
     InputAudio,
     ServerMessage,
     SessionClose,
@@ -102,14 +101,8 @@ class _CloudTransport:
     def attach(self, stream: _BaseStreamingTurnDetectorStream) -> None:
         self._stream_ref = weakref.ref(stream)
 
-    def start_inference(self, request_id: str) -> None:
+    def run_inference(self, request_id: str) -> None:
         self._send_message(ClientMessage(inference_start=InferenceStart(request_id=request_id)))
-
-    def stop_inference(self, *, reason: str | None) -> None:
-        created_at = Timestamp()
-        created_at.GetCurrentTime()
-        msg = ClientMessage(inference_stop=InferenceStop(), created_at=created_at)
-        self._send_message(msg)
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         pcm_bytes = bytes(frame.data)
@@ -217,7 +210,7 @@ class _CloudTransport:
                 detection_delay_ms = current_time.ToMilliseconds() - request_sent_at_ms
                 inference_duration_ms = inference_stats.server_e2e_latency.ToMilliseconds()
 
-                stream._handle_prediction(
+                stream._resolve_prediction(
                     msg.request_id,
                     prediction.probability,
                     detection_delay=detection_delay_ms / 1000.0,
@@ -389,7 +382,7 @@ class _LocalTransport:
     def attach(self, stream: _BaseStreamingTurnDetectorStream) -> None:
         self._stream_ref = weakref.ref(stream)
 
-    def start_inference(self, request_id: str) -> None:
+    def run_inference(self, request_id: str) -> None:
         task = asyncio.create_task(self._predict(request_id, self._buf.read()))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
@@ -406,7 +399,7 @@ class _LocalTransport:
         stream = self._stream_ref() if self._stream_ref is not None else None
         if stream is None:
             return
-        stream._handle_prediction(request_id, prob, inference_duration=inference_duration)
+        stream._resolve_prediction(request_id, prob, inference_duration=inference_duration)
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         self._buf.push_frame(frame)
@@ -414,9 +407,6 @@ class _LocalTransport:
     def flush(self) -> None:
         if len(self._buf) > 0:
             self._buf.shift(len(self._buf))
-
-    def stop_inference(self, *, reason: str | None) -> None:
-        return
 
     def detach(self) -> None:
         for task in list(self._tasks):

@@ -102,17 +102,14 @@ class _ScriptedTransport:
         # idle — sleep until cancelled
         await asyncio.Future()
 
-    def start_inference(self, request_id: str) -> None:
-        self.events.append(("start_inference", request_id))
+    def run_inference(self, request_id: str) -> None:
+        self.events.append(("run_inference", request_id))
 
     def push_frame(self, frame: Any) -> None:
         self.events.append(("push_frame", frame))
 
     def flush(self) -> None:
         self.events.append(("flush", None))
-
-    def stop_inference(self, *, reason: str | None) -> None:
-        self.events.append(("stop_inference", reason))
 
     def detach(self) -> None:
         self.events.append(("detach", None))
@@ -209,13 +206,14 @@ class TestFallback:
             await stream.aclose()
 
     async def test_fallback_on_predict_timeout(self) -> None:
-        """Cloud `predict_end_of_turn` timeout swaps to local."""
+        """A timed-out cancel_inference (AudioRecognition's predict timeout) swaps
+        cloud to local."""
         transport = _ScriptedTransport(run_behavior="idle")
         with patch.object(_LocalTransport, "run", new=lambda self: asyncio.sleep(0)):
             stream = _make_stream_with_transport(transport)
-            # Drive a predict that times out fast.
-            prob = await stream.predict_end_of_turn(timeout=0.01)
-            assert prob == 1.0
+            fut = stream.predict()
+            stream.cancel_inference(timed_out=True)
+            assert fut.result().end_of_turn_probability == 0.0
             assert stream.model == "turn-detector-v1-mini"
             assert stream.is_fallback is True
             await stream.aclose()
@@ -227,8 +225,8 @@ class TestFallback:
             await _wait_for(lambda: stream.model == "turn-detector-v1-mini")
             # Cloud transport ran exactly once; no resurrection.
             assert transport.run_calls == 1
-            # Future turns can call warmup without re-touching cloud.
-            stream.warmup()
+            # Future turns can start inference without re-touching cloud.
+            stream.predict()
             assert stream.model == "turn-detector-v1-mini"
             await stream.aclose()
 

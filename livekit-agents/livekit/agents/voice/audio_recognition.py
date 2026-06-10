@@ -239,6 +239,9 @@ class AudioRecognition:
 
         # streaming audio turn detection
         self._turn_detector_stream: _StreamingTurnDetectorStream | None = None
+        self._turn_detector_prediction_fut: asyncio.Future[TurnDetectionEvent] | None = None
+        self._turn_detector_flushed: bool = False
+        self._turn_detector_late_prediction_warned: bool = False
         self._last_emitted_prediction: TurnDetectionEvent | None = None
         self._user_speaking_event = asyncio.Event()
 
@@ -271,6 +274,9 @@ class AudioRecognition:
                             self._end_of_turn_task.cancel()
                     self._end_of_turn_task = None
                     self._user_turn_committed = False
+                    if self._turn_detector_stream is not None:
+                        self._turn_detector_stream.cancel_inference()
+                    self._turn_detector_prediction_fut = None
 
     def start(
         self,
@@ -404,12 +410,11 @@ class AudioRecognition:
         user_speaking_span: trace.Span | None = None,
         interruption: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
+        should_ignore = is_given(interruption) and not interruption and self._agent_speaking
         if self._speaking:
             self._endpointing.on_end_of_speech(
                 ended_at=ended_at,
-                should_ignore=(
-                    is_given(interruption) and not interruption and self._agent_speaking
-                ),
+                should_ignore=should_ignore,
             )
 
         self.on_end_of_overlap_speech(ended_at=ended_at, user_speaking_span=user_speaking_span)
@@ -638,6 +643,7 @@ class AudioRecognition:
         if self._turn_detector_stream is not None:
             await self._turn_detector_stream.aclose()
             self._turn_detector_stream = None
+        self._turn_detector_prediction_fut = None
 
         if self._backchannel_boundary_timer is not None:
             self._backchannel_boundary_timer.cancel()
@@ -780,6 +786,9 @@ class AudioRecognition:
             self._tasks.add(task)
         if stream is None:
             stream = detector.stream() if isinstance(detector, _StreamingTurnDetector) else None
+        if self._turn_detector_stream is not stream:
+            self._turn_detector_prediction_fut = None
+            self._turn_detector_flushed = False
         self._turn_detector_stream = stream
 
     def detach_turn_detector(self) -> _StreamingTurnDetectorStream | None:
@@ -787,9 +796,12 @@ class AudioRecognition:
 
         Returns the live stream (transport run loop intact) without closing it.
         The caller passes it to the new AudioRecognition via
-        ``start(..., turn_detector_stream=stream)``.
+        ``start(..., turn_detector_stream=stream)``. The adopting recognition
+        starts a fresh inference request on its next VAD event, superseding
+        any request that survived the handoff.
         """
         stream, self._turn_detector_stream = self._turn_detector_stream, None
+        self._turn_detector_prediction_fut = None
         return stream
 
     def clear_user_turn(self) -> None:
@@ -805,6 +817,8 @@ class AudioRecognition:
         self._last_emitted_prediction = None
         if self._turn_detector_stream is not None:
             self._turn_detector_stream.flush(reason="clear_user_turn")
+            self._turn_detector_prediction_fut = None
+            self._turn_detector_flushed = True
 
         self._turn_tracker = _UserTurnTracker()
 
@@ -984,8 +998,6 @@ class AudioRecognition:
                 language and len(transcript) > MIN_LANGUAGE_DETECTION_LENGTH
             ):
                 self._last_language = language
-                if self._turn_detector_stream is not None:
-                    self._turn_detector_stream.update_language(language)
 
             self._final_transcript_received.set()
             if not transcript:
@@ -1059,8 +1071,6 @@ class AudioRecognition:
                 language and len(transcript) > MIN_LANGUAGE_DETECTION_LENGTH
             ):
                 self._last_language = language
-                if self._turn_detector_stream is not None:
-                    self._turn_detector_stream.update_language(language)
 
             if not transcript:
                 return
@@ -1167,7 +1177,9 @@ class AudioRecognition:
             self._user_speaking_event.set()
 
             if self._turn_detector_stream is not None:
-                self._turn_detector_stream.deactivate(trigger="vad sos")
+                self._turn_detector_stream.cancel_inference()
+            self._turn_detector_prediction_fut = None
+            self._turn_detector_flushed = False
 
             if self._end_of_turn_task is not None:
                 self._end_of_turn_task.cancel()
@@ -1185,16 +1197,19 @@ class AudioRecognition:
                 if self._speech_start_time is None:
                     self._speech_start_time = time.time() - ev.raw_accumulated_speech
                 self._user_speaking_event.set()
+                if self._speaking and self._turn_detector_prediction_fut is not None:
+                    if self._turn_detector_stream is not None:
+                        self._turn_detector_stream.cancel_inference()
+                    self._turn_detector_prediction_fut = None
             elif not self._speaking:
                 self._user_speaking_event.clear()
 
             if ev.raw_accumulated_silence >= MIN_SILENCE_DURATION_MS / 1000 and self._speaking:
                 if (
                     self._turn_detector_stream is not None
-                    and not self._turn_detector_stream.is_inference_running
-                    and not self._agent_speaking
+                    and self._turn_detector_prediction_fut is None
                 ):
-                    self._turn_detector_stream.warmup()
+                    self._turn_detector_prediction_fut = self._turn_detector_stream.predict()
 
         elif ev.type == vad.VADEventType.END_OF_SPEECH:
             with trace.use_span(self._ensure_user_turn_span()):
@@ -1204,9 +1219,6 @@ class AudioRecognition:
             self._speaking = False
             self._user_speaking_event.clear()
             self._last_speaking_time = time.time() - ev.silence_duration - ev.inference_duration
-
-            if self._turn_detector_stream is not None:
-                self._turn_detector_stream.activate(trigger="vad eos")
 
             if self._vad_base_turn_detection or (
                 self._turn_detection_mode == "stt" and self._user_turn_committed
@@ -1226,6 +1238,21 @@ class AudioRecognition:
 
         if ev.is_interruption:
             self._hooks.on_interruption(ev)
+
+    def _on_missing_eot_prediction(self) -> None:
+        if self._turn_detector_flushed:
+            if not self._turn_detector_late_prediction_warned:
+                self._turn_detector_late_prediction_warned = True
+                logger.warning(
+                    "eou detection ran after the audio eot turn was already flushed "
+                    "(likely a late stt final). consider raising `min_delay` in the "
+                    "endpointing options to accommodate slow stt. subsequent "
+                    "occurrences will log at debug level.",
+                )
+            else:
+                logger.debug("stt transcript arrived after a turn flush, skipping eot prediction")
+        else:
+            logger.debug("no eot inference request in flight, skipping eot prediction")
 
     def _run_eou_detection(
         self,
@@ -1273,32 +1300,48 @@ class AudioRecognition:
                         trace.use_span(user_turn_span),
                         tracer.start_as_current_span("eou_detection") as eou_detection_span,
                     ):
-                        # reuse prediction from the turn detector if available.
-                        from_cache = (
-                            isinstance(turn_detector, _StreamingTurnDetectorStream)
-                            and turn_detector.last_prediction is not None
-                        )
-                        try:
-                            end_of_turn_probability = await turn_detector.predict_end_of_turn(
-                                chat_ctx,
-                                timeout=endpointing_delay,
-                            )
-                            unlikely_threshold = await turn_detector.unlikely_threshold(
-                                self._last_language
-                            )
-                            if (
-                                unlikely_threshold is not None
-                                and end_of_turn_probability < unlikely_threshold
-                            ):
-                                endpointing_delay = self._endpointing.max_delay
-                        except Exception:
-                            logger.exception("Error predicting end of turn")
+                        from_cache = False
+                        prediction_event: TurnDetectionEvent | None = None
+                        if isinstance(turn_detector, _StreamingTurnDetectorStream):
+                            fut = self._turn_detector_prediction_fut
+                            if fut is None:
+                                self._on_missing_eot_prediction()
+                            else:
+                                from_cache = fut.done()
+                                done, _ = await asyncio.wait([fut], timeout=endpointing_delay)
+                                if fut in done and not fut.cancelled():
+                                    prediction_event = fut.result()
+                                    end_of_turn_probability = (
+                                        prediction_event.end_of_turn_probability
+                                    )
+                                    unlikely_threshold = await turn_detector.unlikely_threshold(
+                                        self._last_language
+                                    )
+                                else:
+                                    logger.warning(
+                                        "eot prediction timed out, committing without a prediction",
+                                        extra={"timeout": endpointing_delay},
+                                    )
+                                    turn_detector.cancel_inference(timed_out=True)
+                                    self._turn_detector_prediction_fut = None
+                        else:
+                            try:
+                                end_of_turn_probability = await turn_detector.predict_end_of_turn(
+                                    chat_ctx,
+                                    timeout=endpointing_delay,
+                                )
+                                unlikely_threshold = await turn_detector.unlikely_threshold(
+                                    self._last_language
+                                )
+                            except Exception:
+                                logger.exception("Error predicting end of turn")
 
-                        prediction_event: TurnDetectionEvent | None = (
-                            turn_detector.last_prediction
-                            if isinstance(turn_detector, _StreamingTurnDetectorStream)
-                            else None
-                        )
+                        if (
+                            end_of_turn_probability is not None
+                            and unlikely_threshold is not None
+                            and end_of_turn_probability < unlikely_threshold
+                        ):
+                            endpointing_delay = self._endpointing.max_delay
 
                         eou_span_attributes: dict[str, Any] = {
                             trace_types.ATTR_CHAT_CTX: json.dumps(
@@ -1469,6 +1512,8 @@ class AudioRecognition:
 
                 if self._turn_detector_stream is not None:
                     self._turn_detector_stream.flush(reason="turn committed")
+                    self._turn_detector_prediction_fut = None
+                    self._turn_detector_flushed = True
 
             self._user_turn_committed = False
 
