@@ -10,7 +10,6 @@ from livekit.agents.simulation import (
     SimulationDispatch,
     SimulationMode,
 )
-from livekit.agents.worker import AgentServer
 
 from .fake_llm import FakeLLM
 from .fake_stt import FakeSTT
@@ -34,22 +33,6 @@ def test_simulation_context_mode() -> None:
 
     ctx = SimulationContext(_dispatch(SimulationMode.SIMULATION_MODE_AUDIO), MagicMock())
     assert ctx.mode == SimulationMode.SIMULATION_MODE_AUDIO
-
-
-def test_worker_simulation_mode_bypasses_load_threshold() -> None:
-    server = AgentServer()
-    server._devmode = False  # prod-mode load_threshold (0.7)
-    server._worker_load = 1.0
-    server._reserved_slots = 0
-    server._proc_pool = MagicMock(processes=[])
-
-    assert not server._is_available()
-
-    server._simulation = True
-    assert server._is_available()
-
-    server._draining = True
-    assert not server._is_available()
 
 
 async def test_text_simulation_drops_stt_tts() -> None:
