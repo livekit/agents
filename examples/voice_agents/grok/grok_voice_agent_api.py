@@ -10,7 +10,6 @@ from livekit.agents import (
     cli,
     room_io,
 )
-from livekit.agents.inference import TurnDetector
 from livekit.plugins import xai
 
 # uncomment lines 18 and 66-68 to enable Krisp background voice/noise cancellation
@@ -42,7 +41,6 @@ async def my_agent(ctx: JobContext):
 
     session = AgentSession(
         llm=xai.realtime.RealtimeModel(voice="ara"),
-        turn_detection=TurnDetector(),
         tools=[xai.realtime.XSearch(), xai.realtime.WebSearch()],
         preemptive_generation=True,
     )

@@ -34,7 +34,6 @@ from livekit.agents import (
     function_tool,
     inference,
 )
-from livekit.agents.inference import TurnDetector
 
 load_dotenv()
 
@@ -486,7 +485,6 @@ async def drive_thru_agent(ctx: JobContext) -> None:
         ),
         llm=inference.LLM("openai/gpt-4.1-mini"),
         tts=inference.TTS("cartesia/sonic-3", voice="f786b574-daa5-4673-aa0c-cbe3e8534c02"),
-        turn_detection=TurnDetector(),
         max_tool_steps=10,
     )
 

@@ -17,7 +17,6 @@ from livekit.agents import (
     text_transforms,
 )
 from livekit.agents.beta import EndCallTool
-from livekit.agents.inference import TurnDetector
 from livekit.agents.llm import function_tool
 
 # uncomment to enable Krisp background voice/noise cancellation
@@ -86,9 +85,6 @@ async def entrypoint(ctx: JobContext) -> None:
         # See all available models as well as voice selections at https://docs.livekit.io/agents/models/tts/
         tts=inference.TTS("cartesia/sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"),
         turn_handling=TurnHandlingOptions(
-            # turn detection is used to determine when the agent should respond
-            # See more at https://docs.livekit.io/agents/build/turns
-            turn_detection=TurnDetector(),
             interruption={
                 # sometimes background noise could interrupt the agent session, these are considered false positive interruptions
                 # when it's detected, you may resume the agent's speech

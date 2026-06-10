@@ -15,7 +15,6 @@ from livekit.agents import (
     cli,
     inference,
 )
-from livekit.agents.inference import TurnDetector
 from livekit.plugins import langchain
 
 logger = logging.getLogger("basic-agent")
@@ -29,7 +28,7 @@ load_dotenv()
 # In order to run this example, you need the following dependencies
 # - langchain[openai]
 # - langgraph
-# - livekit-agents[openai,silero,langchain,deepgram,turn_detector]
+# - livekit-agents[openai,silero,langchain,deepgram]
 
 server = AgentServer()
 
@@ -66,8 +65,6 @@ async def entrypoint(ctx: JobContext):
         # any combination of STT, LLM, TTS, or realtime API can be used
         stt=inference.STT("deepgram/nova-3", language="multi"),
         tts=inference.TTS("cartesia/sonic-3"),
-        # use LiveKit's turn detection model
-        turn_detection=TurnDetector(),
     )
 
     await session.start(

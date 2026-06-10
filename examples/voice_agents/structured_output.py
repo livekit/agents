@@ -18,7 +18,6 @@ from livekit.agents import (
     ModelSettings,
     cli,
 )
-from livekit.agents.inference import TurnDetector
 from livekit.plugins import openai
 
 logger = logging.getLogger("structured-output")
@@ -128,9 +127,7 @@ server = AgentServer()
 
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
-    session = AgentSession(
-        turn_detection=TurnDetector(),
-    )
+    session = AgentSession()
     await session.start(agent=MyAgent(), room=ctx.room)
 
 

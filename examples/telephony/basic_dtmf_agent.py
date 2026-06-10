@@ -15,7 +15,6 @@ from livekit.agents import (
 from livekit.agents.beta.workflows.dtmf_inputs import (
     GetDtmfTask,
 )
-from livekit.agents.inference import TurnDetector
 from livekit.agents.llm.tool_context import ToolError, function_tool
 from livekit.agents.voice.events import RunContext
 from livekit.agents.worker import AgentServer
@@ -138,7 +137,6 @@ async def entrypoint(ctx: JobContext) -> None:
         llm=inference.LLM("openai/gpt-4.1-mini"),
         stt=inference.STT("deepgram/nova-3"),
         tts=inference.TTS("inworld/inworld-tts-1"),
-        turn_detection=TurnDetector(),
     )
 
     @session.on("metrics_collected")
