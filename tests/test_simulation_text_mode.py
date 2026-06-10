@@ -19,7 +19,7 @@ from .fake_vad import FakeVAD
 pytestmark = [pytest.mark.unit]
 
 
-def _dispatch(mode: SimulationMode.ValueType | None = None) -> SimulationDispatch:
+def _dispatch(mode: int | None = None) -> SimulationDispatch:
     dispatch = SimulationDispatch(simulation_run_id="SR_test", job_id="SRJ_test")
     if mode is not None:
         dispatch.mode = mode
@@ -42,6 +42,9 @@ async def test_text_simulation_drops_stt_tts() -> None:
         vad=FakeVAD(),
         llm=FakeLLM(),
     )
+    # agent-level models must be disabled too (AgentActivity resolves them
+    # before falling back to the session)
+    agent = Agent(instructions="test", stt=FakeSTT(), tts=FakeTTS(), vad=FakeVAD())
 
     job_ctx = MagicMock()
     job_ctx.job.enable_recording = False
@@ -52,11 +55,14 @@ async def test_text_simulation_drops_stt_tts() -> None:
     job_ctx.simulation_context.return_value = SimulationContext(_dispatch(), job_ctx)
 
     with patch("livekit.agents.voice.agent_session.get_job_context", return_value=job_ctx):
-        await session.start(Agent(instructions="test"))
+        await session.start(agent)
 
     try:
-        assert session.stt is None
-        assert session.tts is None
-        assert session.vad is None
+        activity = session._activity
+        assert activity is not None
+        assert activity.stt is None
+        assert activity.tts is None
+        assert activity.vad is None
+        assert activity.llm is not None  # the LLM stays
     finally:
         await session.aclose()

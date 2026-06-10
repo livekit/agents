@@ -394,6 +394,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             session_close_transcript_timeout=session_close_transcript_timeout,
         )
         self._conn_options = conn_options or SessionConnectOptions()
+        self._audio_models_disabled = False
         self._started = False
 
         if isinstance(stt, str):
@@ -689,19 +690,18 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 job_ctx.init_recording(self._recording_options)
 
             # Under a text simulation the simulated user interacts over text streams
-            # only: drop STT/TTS/VAD and audio I/O so the session never initializes
-            # or connects them.
+            # only: disable STT/TTS/VAD (session- and agent-level, via
+            # AgentActivity) and audio I/O so they are never initialized or
+            # connected.
             text_simulation = False
             if job_ctx and (sim_ctx := job_ctx.simulation_context()) is not None:
                 from ..simulation import SimulationMode
 
                 text_simulation = sim_ctx.mode == SimulationMode.SIMULATION_MODE_TEXT
 
-            if text_simulation and (self._stt or self._tts or self._vad):
-                logger.info("text simulation: skipping STT/TTS/VAD and audio I/O")
-                self._stt = None
-                self._tts = None
-                self._vad = None
+            if text_simulation and not self._audio_models_disabled:
+                logger.info("text simulation: disabling STT/TTS/VAD and audio I/O")
+                self._audio_models_disabled = True
 
             self._session_span = current_span = tracer.start_span("agent_session")
             # we detach here to avoid context issues since tokens need to be detached

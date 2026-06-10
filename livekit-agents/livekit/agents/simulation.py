@@ -68,7 +68,7 @@ class SimulationContext:
         return self._scenario
 
     @property
-    def mode(self) -> proto.SimulationMode.ValueType:
+    def mode(self) -> int:
         """How the simulated user interacts with the agent (text chat or audio).
         Unspecified is treated as text, since simulations predating the field
         were all text-only."""
