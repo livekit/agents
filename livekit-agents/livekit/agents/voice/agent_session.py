@@ -7,6 +7,7 @@ from collections.abc import AsyncIterable, AsyncIterator, Callable, Sequence
 from contextlib import AbstractContextManager, asynccontextmanager, nullcontext
 from contextvars import Token
 from dataclasses import dataclass
+from pathlib import Path
 from types import TracebackType
 from typing import (
     TYPE_CHECKING,
@@ -62,6 +63,7 @@ from .events import (
 )
 from .ivr import IVRActivity
 from .recorder_io import RecorderIO
+from .recording_exporter import RecordingExporter, RecordingExportResult
 from .remote_session import RoomSessionTransport, SessionHost, SessionTransport
 from .run_result import RunResult
 from .speech_handle import InputDetails, SpeechHandle
@@ -452,6 +454,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # used to keep a reference to the room io
         self._room_io: room_io.RoomIO | None = None
         self._recorder_io: RecorderIO | None = None
+        self._recording_exporter: RecordingExporter | None = None
         self._session_transport: SessionTransport | None = None
         self._session_transport_audio_input: TcpAudioInput | None = None
         self._session_transport_audio_output: TcpAudioOutput | None = None
@@ -586,6 +589,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         """Returns usage summaries for this session, one per model/provider combination."""
         return AgentSessionUsage(model_usage=self._usage_collector.flatten())
 
+    @property
+    def recording_path(self) -> Path | None:
+        """Path to the session audio recording, or None when audio recording is disabled.
+
+        The path may be available while recording is still active. The recording
+        file is only guaranteed to be complete after the session is closed.
+        """
+        return self._recorder_io.output_path if self._recorder_io else None
+
     def run(
         self,
         *,
@@ -610,6 +622,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
         record: bool | RecordingOptions = True,
+        recording_exporter: RecordingExporter | None = None,
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
@@ -624,6 +637,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
         record: bool | RecordingOptions = True,
+        recording_exporter: RecordingExporter | None = None,
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
@@ -637,6 +651,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
         record: NotGivenOr[bool | RecordingOptions] = NOT_GIVEN,
+        recording_exporter: RecordingExporter | None = None,
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
@@ -652,6 +667,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             room_input_options: Options for the room input
             room_output_options: Options for the room output
             record: Whether to record the audio, transcripts, traces, or logs
+            recording_exporter: Optional exporter called with the completed session report
         """
         async with self._lock:
             if self._started:
@@ -662,6 +678,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # configure observability first
             record_is_given = is_given(record)
             job_ctx = get_job_context(required=False)
+            if recording_exporter is not None and job_ctx is None:
+                raise RuntimeError("recording_exporter requires an active JobContext")
+
             if not is_given(record):
                 # defer to server-side setting for recording
                 record = job_ctx.job.enable_recording if job_ctx else False
@@ -675,6 +694,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     job_ctx._primary_agent_session = self
                 else:
                     is_primary = False
+                    if recording_exporter is not None:
+                        raise RuntimeError(
+                            "recording_exporter can only be used with the primary AgentSession"
+                        )
                     if any(self._recording_options.values()):
                         if record_is_given:
                             raise RuntimeError(
@@ -688,12 +711,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 job_ctx.init_recording(self._recording_options)
 
-            self._session_span = current_span = tracer.start_span("agent_session")
-            # we detach here to avoid context issues since tokens need to be detached
-            # in the same context as it was created
             if self._session_ctx_token is not None:
                 otel_context.detach(self._session_ctx_token)
                 self._session_ctx_token = None
+            self._end_session_span()
+
+            self._session_span = current_span = tracer.start_span("agent_session")
             ctx = trace.set_span_in_context(current_span)
             self._session_ctx_token = otel_context.attach(ctx)
 
@@ -701,6 +724,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._usage_collector = ModelUsageCollector()
             self._room_io = None
             self._recorder_io = None
+            self._recording_exporter = recording_exporter
             self._session_host = None
 
             self._closing = False
@@ -1030,9 +1054,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     return_exceptions=True,
                 )
 
-            if self._session_span:
-                self._session_span.end()
-                self._session_span = None
+            if not self._defer_session_span_end():
+                self._end_session_span()
 
             self._started = False
 
@@ -1060,6 +1083,30 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._room_io = None
 
         logger.debug("session closed", extra={"reason": reason.value, "error": error})
+
+    def _defer_session_span_end(self) -> bool:
+        job_ctx = get_job_context(required=False)
+        return job_ctx is not None and job_ctx._primary_agent_session is self
+
+    def _end_session_span(self) -> None:
+        if self._session_span:
+            self._session_span.end()
+            self._session_span = None
+
+    def _set_recording_export_result(self, result: RecordingExportResult) -> None:
+        if self._session_span is None:
+            return
+
+        attributes: dict[str, Any] = dict(result.trace_attributes)
+        if result.recording_url:
+            attributes[trace_types.ATTR_RECORDING_URL] = result.recording_url
+        if result.recording_id:
+            attributes[trace_types.ATTR_RECORDING_ID] = result.recording_id
+        if result.recording_path:
+            attributes[trace_types.ATTR_RECORDING_PATH] = str(result.recording_path)
+
+        if attributes:
+            self._session_span.set_attributes(attributes)
 
     async def aclose(self) -> None:
         await self._aclose_impl(reason=CloseReason.USER_INITIATED)

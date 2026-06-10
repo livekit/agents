@@ -5,14 +5,16 @@ import inspect
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call as mock_call, patch
 
 import aiohttp
 import numpy as np
 import pytest
 
 from livekit import rtc
-from livekit.agents import Agent, AgentSession
+from livekit.agents import Agent, AgentSession, RecordingExporter, RecordingExportResult
+from livekit.agents.job import JobContext, _export_session_recording
+from livekit.agents.telemetry import trace_types
 from livekit.agents.telemetry.traces import _upload_session_report
 from livekit.agents.voice.agent_session import (
     _RECORDING_ALL_OFF,
@@ -40,6 +42,16 @@ _TRACES_MOD = "livekit.agents.telemetry.traces"
 class SimpleAgent(Agent):
     def __init__(self) -> None:
         super().__init__(instructions="You are a test agent.")
+
+
+class StaticRecordingExporter(RecordingExporter):
+    def __init__(self, result: RecordingExportResult | None) -> None:
+        self.result = result
+        self.report: Any | None = None
+
+    async def export(self, report: Any) -> RecordingExportResult | None:
+        self.report = report
+        return self.result
 
 
 def _create_simple_session() -> AgentSession:
@@ -185,7 +197,7 @@ def _get_multipart_part_names(mp_writer: aiohttp.MultipartWriter) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Group 1: RecordingOptions normalization (no JobContext)
+# Group 1: RecordingOptions normalization and public recording API (no JobContext)
 # ---------------------------------------------------------------------------
 
 
@@ -216,6 +228,86 @@ async def test_record_not_given_without_job_ctx() -> None:
     await session.start(SimpleAgent())
     assert session._recording_options == _RECORDING_ALL_OFF
     await _cleanup(session)
+
+
+def test_recording_path_returns_recorder_output_path() -> None:
+    session = _create_simple_session()
+    assert session.recording_path is None
+
+    recorder = MagicMock()
+    recorder.output_path = Path("/tmp/livekit/session/audio.ogg")
+    session._recorder_io = recorder
+
+    assert session.recording_path == Path("/tmp/livekit/session/audio.ogg")
+
+
+async def test_start_accepts_recording_exporter() -> None:
+    session = _create_simple_session()
+    mock_ctx = _make_mock_job_ctx()
+    exporter = StaticRecordingExporter(None)
+
+    with _patch_job_ctx(mock_ctx):
+        await session.start(SimpleAgent(), record=False, recording_exporter=exporter)
+
+    assert session._recording_exporter is exporter
+    await _cleanup(session)
+    session._end_session_span()
+
+
+async def test_recording_exporter_requires_job_context() -> None:
+    session = _create_simple_session()
+    exporter = StaticRecordingExporter(None)
+
+    with pytest.raises(RuntimeError, match="requires an active JobContext"):
+        await session.start(SimpleAgent(), record=False, recording_exporter=exporter)
+
+
+async def test_recording_exporter_requires_primary_session() -> None:
+    primary_session = _create_simple_session()
+    secondary_session = _create_simple_session()
+    mock_ctx = _make_mock_job_ctx()
+    mock_ctx._primary_agent_session = primary_session
+    exporter = StaticRecordingExporter(None)
+
+    with _patch_job_ctx(mock_ctx):
+        with pytest.raises(RuntimeError, match="primary AgentSession"):
+            await secondary_session.start(SimpleAgent(), record=False, recording_exporter=exporter)
+
+
+async def test_restart_ends_deferred_session_span_before_replacing_it() -> None:
+    session = _create_simple_session()
+    mock_ctx = _make_mock_job_ctx()
+    first_span = MagicMock()
+    second_span = MagicMock()
+    session_spans = iter([first_span, second_span])
+
+    def start_span(name: str, *args: Any, **kwargs: Any) -> MagicMock:
+        if name == "agent_session":
+            return next(session_spans)
+        return MagicMock()
+
+    with (
+        _patch_job_ctx(mock_ctx),
+        patch(
+            f"{_AGENT_SESSION_MOD}.tracer.start_span",
+            side_effect=start_span,
+        ),
+    ):
+        await session.start(SimpleAgent(), record=False)
+        await session.aclose()
+        assert session._session_span is first_span
+        first_span.end.assert_not_called()
+
+        await session.start(SimpleAgent(), record=False)
+
+        first_span.end.assert_called_once()
+        assert session._session_span is second_span
+
+        await session.aclose()
+        second_span.end.assert_not_called()
+
+    session._end_session_span()
+    second_span.end.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -358,6 +450,62 @@ async def test_upload_evaluations_emitted_without_logs() -> None:
     bodies = [c.kwargs.get("body") for c in mock_logger.emit.call_args_list]
     assert bodies.count("evaluation") == 1
     assert bodies.count("outcome") == 1
+
+
+async def test_recording_exporter_sets_trace_link_attributes() -> None:
+    session = _create_simple_session()
+    span = MagicMock()
+    session._session_span = span
+    report = _make_mock_report()
+    result = RecordingExportResult(
+        recording_url="https://recordings.example/session-1.ogg",
+        recording_id="rec_123",
+        trace_attributes={"custom.recording_tier": "regulated"},
+    )
+    exporter = StaticRecordingExporter(result)
+    session._recording_exporter = exporter
+
+    await _export_session_recording(session, report)
+
+    assert exporter.report is report
+    span.set_attributes.assert_called_once_with(
+        {
+            "custom.recording_tier": "regulated",
+            trace_types.ATTR_RECORDING_URL: "https://recordings.example/session-1.ogg",
+            trace_types.ATTR_RECORDING_ID: "rec_123",
+        }
+    )
+
+
+async def test_session_end_exports_recording_before_ending_span() -> None:
+    session = _create_simple_session()
+    span = MagicMock()
+    session._session_span = span
+    report = _make_mock_report()
+    exporter = StaticRecordingExporter(
+        RecordingExportResult(recording_url="https://recordings.example/session-1.ogg")
+    )
+    session._recording_exporter = exporter
+
+    job_ctx = JobContext.__new__(JobContext)
+    job_ctx._primary_agent_session = session
+    job_ctx._tagger = _make_mock_tagger()
+    job_ctx._info = MagicMock()
+    job_ctx._info.url = "ws://localhost:7880"
+    job_ctx._session_directory = Path("/tmp/livekit/session")
+    job_ctx.make_session_report = MagicMock(return_value=report)
+
+    with patch("livekit.agents.job.otel_metrics.flush_turn_metrics"):
+        await job_ctx._on_session_end()
+
+    assert exporter.report is report
+    assert span.method_calls == [
+        mock_call.set_attributes(
+            {trace_types.ATTR_RECORDING_URL: "https://recordings.example/session-1.ogg"}
+        ),
+        mock_call.end(),
+    ]
+    assert session._session_span is None
 
 
 def test_setup_cloud_tracer_logger_provider_always_created() -> None:
