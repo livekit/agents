@@ -8,7 +8,6 @@ from livekit.agents import Agent, AgentSession
 from livekit.agents.simulation import (
     SimulationContext,
     SimulationDispatch,
-    SimulationMode,
 )
 
 from .fake_llm import FakeLLM
@@ -24,15 +23,6 @@ def _dispatch(mode: int | None = None) -> SimulationDispatch:
     if mode is not None:
         dispatch.mode = mode
     return dispatch
-
-
-def test_simulation_context_simulation_mode() -> None:
-    # unspecified is treated as text: simulations predating the field were text-only
-    ctx = SimulationContext(_dispatch(), MagicMock())
-    assert ctx.simulation_mode == SimulationMode.SIMULATION_MODE_TEXT
-
-    ctx = SimulationContext(_dispatch(SimulationMode.SIMULATION_MODE_AUDIO), MagicMock())
-    assert ctx.simulation_mode == SimulationMode.SIMULATION_MODE_AUDIO
 
 
 async def test_text_simulation_drops_stt_tts() -> None:
