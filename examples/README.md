@@ -1,5 +1,7 @@
 # LiveKit Agents Examples
 
+> **Looking for examples and guides?** Most examples now live in the [LiveKit docs](https://docs.livekit.io/agents/). Browse the full collection of runnable examples and recipes on the [Recipes page](https://docs.livekit.io/reference/recipes).
+
 This directory contains various examples demonstrating different capabilities and use cases for LiveKit agents. Each example showcases specific features, integrations, or workflows that can be built with the LiveKit Agents framework.
 
 ## Model Configuration
