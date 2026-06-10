@@ -1,6 +1,6 @@
 [tool.uv]
 constraint-dependencies = ['onnxruntime<1.24; python_version < "3.11"']
-default-groups = ["dev", "typing"]
+default-groups = ["dev", "typing", "lint"]
 
 [tool.uv.sources]
 livekit-agents = { workspace = true }
@@ -88,7 +88,6 @@ dev = [
     "mypy",
     "scikit-learn",
     "pytest>=9.0.3,<9.1",
-    "ruff",
     "pytest-asyncio>=0.25.3",
     "pytest-asyncio-concurrent==0.5.2",
     "jiwer>=3.1.0",
@@ -97,6 +96,10 @@ dev = [
     "pytest-xdist>=3.8.0",
     "playwright>=1.58.0",
 ]
+# Standalone linter, isolated so CI can `uv sync --only-group lint` without
+# building the project or its heavy deps. Locked in uv.lock = single source of
+# truth (same ruff locally and in CI), unlike `uvx ruff` which floats.
+lint = ["ruff"]
 docs = ["pdoc3", "setuptools", "beautifulsoup4", "markdownify"]
 typing = [
     # .pyi stubs, never used at runtime
