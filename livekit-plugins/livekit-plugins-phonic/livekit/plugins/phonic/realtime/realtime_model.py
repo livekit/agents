@@ -24,7 +24,7 @@ from phonic import AsyncPhonic
 from phonic.conversations.socket_client import (
     AsyncConversationsSocketClient,
 )
-from phonic.core.request_options import RequestOptions
+from phonic.core import RequestOptions
 from phonic.types import (
     AddSystemMessagePayload,
     AudioChunkPayload,
