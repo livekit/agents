@@ -19,12 +19,6 @@ if TYPE_CHECKING:
     from .agent_session import AgentSession
 
 
-DEFAULT_MAX_KEYTERMS = 50
-DEFAULT_TURN_INTERVAL = 1
-# A pending term not confirmed within this many passes is dropped (confirmed terms persist).
-DEFAULT_PENDING_TTL = 3
-
-
 class KeytermDetectionOptions(TypedDict, total=False):
     """Configuration for automatic keyterm detection.
 
@@ -38,8 +32,8 @@ class KeytermDetectionOptions(TypedDict, total=False):
     """LLM used for extraction. Defaults to the active agent activity's LLM."""
     turn_interval: int
     """Run a pass once per N user turns. Defaults to ``1``."""
-    max_keyterms: int
-    """Cap on the confirmed (applied) auto keyterms. Defaults to ``50``."""
+    max_keyterms: int | None
+    """Cap on the confirmed (applied) auto keyterms if provided. Defaults to ``None``."""
     instructions: str | None
     """Override the built-in extraction prompt."""
 
@@ -66,10 +60,12 @@ class KeytermOptions(TypedDict, total=False):
 _KEYTERM_DETECTION_DEFAULTS: KeytermDetectionOptions = {
     "enabled": False,
     "llm": None,
-    "turn_interval": DEFAULT_TURN_INTERVAL,
-    "max_keyterms": DEFAULT_MAX_KEYTERMS,
+    "turn_interval": 1,
+    "max_keyterms": None,
     "instructions": None,
 }
+
+_PENDING_TTL_DEFAULT = 3  # A pending term not confirmed within this many passes is dropped
 
 
 def _resolve_detection(config: KeytermDetectionOptions | None) -> KeytermDetectionOptions:
@@ -89,16 +85,16 @@ class KeytermManager:
     def __init__(
         self,
         *,
+        max_keyterms: int | None = None,
         user_keyterms: list[str] | None = None,
-        max_keyterms: int = DEFAULT_MAX_KEYTERMS,
-        pending_ttl: int = DEFAULT_PENDING_TTL,
     ) -> None:
         self._user_terms = list(dict.fromkeys(user_keyterms or []))
         self._auto_terms: list[str] = []  # confirmed terms, insertion order (oldest first)
         self._pending_terms: dict[str, int] = {}  # term -> pass it was added (for TTL)
 
-        self._max_keyterms = max(0, max_keyterms)
-        self._pending_ttl = max(0, pending_ttl)
+        self._max_keyterms = max_keyterms
+        self._pending_ttl = _PENDING_TTL_DEFAULT
+
         self._tick = 0  # detection-pass counter
         self._stt: STT | None = None
 
@@ -116,10 +112,6 @@ class KeytermManager:
         """The effective list applied to the STT: user terms + confirmed auto terms."""
         return list(dict.fromkeys([*self._user_terms, *self._auto_terms]))
 
-    @property
-    def max_keyterms(self) -> int:
-        return self._max_keyterms
-
     def attach_stt(self, stt: STT | None) -> None:
         """Bind the STT that keyterms are pushed to and push the current set."""
         self._stt = stt
@@ -131,12 +123,7 @@ class KeytermManager:
         if self._stt is not None:
             self._stt.update_keyterms(self.keyterms)
 
-    def update(
-        self,
-        pending: list[str] | None = None,
-        confirm: list[str] | None = None,
-        remove: list[str] | None = None,
-    ) -> bool:
+    def update(self, *, pending: list[str] | None = None, confirm: list[str] | None = None, remove: list[str] | None = None) -> bool:
         """Apply one detector pass: drop ``remove``, track ``pending``, apply ``confirm``.
 
         A term's state only moves forward; a pending term not confirmed within ``pending_ttl``
@@ -166,72 +153,47 @@ class KeytermManager:
                 if term not in self._auto_terms:
                     self._auto_terms.append(term)
 
-        self._evict_stale_pending()
-        while len(self._auto_terms) > self._max_keyterms:
-            self._auto_terms.pop(0)  # FIFO eviction of the oldest confirmed term
-
-        if self.keyterms != before and self._stt is not None:
-            self._stt.update_keyterms(self.keyterms)
-        return self.keyterms != before
-
-    def _evict_stale_pending(self) -> None:
-        """Drop pending terms not confirmed within ``pending_ttl`` passes of being added."""
-        if not self._pending_ttl:
-            return
+        # evict stale pending terms
         stale = [
             t for t, since in self._pending_terms.items() if self._tick - since >= self._pending_ttl
         ]
         for term in stale:
             del self._pending_terms[term]
 
+        # evict oldest confirmed terms if we're over the limit
+        if self._max_keyterms is not None:
+            while len(self._auto_terms) > self._max_keyterms:
+                self._auto_terms.pop(0)
+
+        if self.keyterms != before and self._stt is not None:
+            self._stt.update_keyterms(self.keyterms)
+        return self.keyterms != before
+
 
 _DEFAULT_INSTRUCTIONS = """\
-You keep a small set of STT keyterms that bias a speech recognizer toward the correct \
-spelling of distinctive words — names, places, companies, products, technical terms. You run \
-repeatedly during a live call; each turn you see the recent transcript plus the keyterms \
-already applied and the candidates seen so far, and you adjust the set.
+You maintain a small set of STT keyterms that bias a speech recognizer toward the correct \
+spelling of distinctive words — names, places, companies, products, technical terms. Each turn \
+you see the recent transcript and the current keyterms; adjust them by calling \
+`record_keyterms` once.
 
-CRITICAL: a keyterm you apply BIASES the recognizer toward that spelling. If you apply a \
-WRONG spelling, the recognizer keeps producing that wrong spelling — recognition gets worse, \
-not better, and the user cannot correct it. So only ever apply a spelling you are confident \
-is CORRECT. Missing a keyterm is harmless; applying a wrong one is damaging. When unsure, do \
-not apply.
+Applying a WRONG spelling biases the recognizer toward it and makes recognition worse, with no \
+way for the user to recover — so only apply spellings you are confident are correct, and never \
+record ordinary words or fillers (e.g. "yes", "the meeting", "voice agent").
 
-Trust the inputs for different things:
-- USER lines are raw speech-to-text: words may be wrong, and the recognizer repeats the SAME \
-error every time, so a word recurring in USER lines is NOT proof it is correct.
-- ASSISTANT lines are the agent's own writing, so they SPELL real words correctly — but the \
-agent only knows what the (possibly wrong) transcript told it, so it can echo a misheard word \
-straight back. The assistant gives you correct SPELLING, never correct MEANING.
+USER lines are raw speech-to-text: often wrong, and the recognizer repeats the same error, so \
+a recurring word is not proof it is correct. ASSISTANT lines are the agent's own writing, so \
+their spelling is correct (though it may echo a misheard word). Spell terms as the assistant \
+does.
 
-What makes a term correct is the USER settling on it, so read the user's intent across the \
-recent turns. A term needs follow-up before you trust it — its first appearance alone is never \
-enough, however certain the spelling looks:
-- JUST APPEARED — shows up only in the latest turn, with nothing after it yet: keep it \
-`pending`, even a clean spelling. You have not seen the user carry on past it.
-- CORRECTING — says "no", "I mean…", spells it out, or the word keeps coming out different: \
-the current spelling is wrong. Do not apply it, and `remove` any garbled variant already \
-applied. The right spelling is the letters the user spelled, or the clean form the assistant \
-offered that the user then accepted.
-- ACCEPTING — a later turn bears the term out (the user moved on without correcting it, \
-repeated it, or built on it): it is settled. `confirm` it, spelled the way the assistant \
-writes it. The follow-up may be several turns back in the transcript you are given, not only \
-in a prior call.
-
-Call `record_keyterms` once with three lists:
-- `confirm`: a distinctive term the user has SETTLED on (corroborated after its first \
-mention), in its correct spelling (spell it as the assistant does). Never confirm a word just \
-because it recurs in USER lines or because the assistant echoed it — the user must have \
-accepted it.
-- `pending`: a distinctive term the user seems to mean but has not settled on yet (just \
-appeared, still being corrected, or brand new) — track it, don't apply. (Pending terms drop \
-automatically if never confirmed, so you don't need to repeat or clean them up.)
-- `remove`: a wrong spelling that must stop biasing the recognizer — a misrecognition the \
-user corrected, or one the assistant has since spelled differently.
-
-Do NOT record ordinary language: fillers ("yes", "okay", "thanks"), greetings, common words, \
-or generic phrases (e.g. "voice agent", "the meeting"). When in doubt, leave it out. Never \
-repeat a term already applied unless you are removing it."""
+Report only CHANGES: never re-list a term already applied, and only `remove` a term shown in \
+the current lists.
+- `pending`: a distinctive term not yet trusted — put a term here on its first mention (even a \
+confident spelling) and while the user is still correcting it.
+- `confirm`: a pending term once the transcript bears it out — the user repeated it, or moved \
+on after the agent used it. Confirm promptly once it has settled; don't keep waiting.
+- `remove`: only a spelling the USER just rejected and replaced ("no, not X — it's Y"); drop \
+X (and confirm Y). Applied terms are otherwise sticky — never remove one because the topic \
+moved on or the assistant abbreviated it. If you have no replacement, remove nothing."""
 
 _MAX_TRANSCRIPT_MESSAGES = 12
 
@@ -241,15 +203,9 @@ async def _record_keyterms(pending: list[str], confirm: list[str], remove: list[
     """Update the STT keyterms based on the latest transcript.
 
     Args:
-        pending: Distinctive terms seen but not yet corroborated — tracked, not applied. Put a
-            term here on its first appearance (no follow-up yet), even if the spelling looks
-            certain; wait for the conversation to bear it out before applying.
-        confirm: Terms to apply, in their correct spelling — only once the conversation has
-            corroborated the term AFTER its first mention (the user moved on without correcting
-            it, repeated it, spelled it, or accepted a read-back). Do not confirm a term whose
-            only appearance is the latest turn.
-        remove: Wrong spellings to drop so they stop biasing the recognizer — a USER-side
-            misrecognition the assistant has since spelled correctly, or one the user fixed.
+        pending: Distinctive terms seen but not yet trusted — tracked, not applied.
+        confirm: Pending terms the transcript has now corroborated — applied.
+        remove: Only a spelling the user corrected away; applied terms are otherwise sticky.
     """
     # only used to elicit a structured tool call; never executed
     ...
@@ -269,15 +225,33 @@ class KeytermAnalyzer:
         self,
         llm: LLM,
         *,
-        turn_interval: int = DEFAULT_TURN_INTERVAL,
+        turn_interval: int = 1,
         instructions: str | None = None,
     ) -> None:
         self._llm = llm
+
         self._turn_interval = max(1, turn_interval)
         self._instructions = instructions or _DEFAULT_INSTRUCTIONS
+
         self._turn_count = 0
-        self._task: asyncio.Task[None] | None = None
+        self._detect_task: asyncio.Task[None] | None = None
         self._session: AgentSession | None = None
+
+    def start(self, session: AgentSession) -> None:
+        if self._session is not None:
+            return
+        self._session = session
+        session.on("conversation_item_added", self._on_conversation_item_added)
+
+    async def aclose(self) -> None:
+        if self._session is None:
+            return
+        self._session.off("conversation_item_added", self._on_conversation_item_added)
+        if self._detect_task:
+            await aio.cancel_and_wait(self._detect_task)
+            self._detect_task = None
+
+        self._session = None
 
     async def detect(
         self,
@@ -305,22 +279,7 @@ class KeytermAnalyzer:
         _debug_dump(current, user_msg, response.tool_calls, result)
         return result
 
-    def start(self, session: AgentSession) -> None:
-        if self._session is not None:
-            return
-        self._session = session
-        session.on("conversation_item_added", self._on_item_added)
-
-    async def aclose(self) -> None:
-        if self._session is None:
-            return
-        self._session.off("conversation_item_added", self._on_item_added)
-        self._session = None
-        if self._task is not None and not self._task.done():
-            await aio.cancel_and_wait(self._task)
-        self._task = None
-
-    def _on_item_added(self, ev: ConversationItemAddedEvent) -> None:
+    def _on_conversation_item_added(self, ev: ConversationItemAddedEvent) -> None:
         session = self._session
         if session is None:
             return
@@ -334,7 +293,7 @@ class KeytermAnalyzer:
             return
 
         # single-flight: skip while a pass is still running
-        if self._task is not None and not self._task.done():
+        if self._detect_task is not None and not self._detect_task.done():
             return
 
         # snapshot the transcript now so the pass isn't affected by later turns
@@ -344,9 +303,9 @@ class KeytermAnalyzer:
             exclude_handoff=True,
             exclude_empty_message=True,
         )
-        self._task = asyncio.create_task(self._run(session._keyterm_manager, chat_ctx))
+        self._detect_task = asyncio.create_task(self._run_once(session._keyterm_manager, chat_ctx))
 
-    async def _run(self, manager: KeytermManager, chat_ctx: ChatContext) -> None:
+    async def _run_once(self, manager: KeytermManager, chat_ctx: ChatContext) -> None:
         try:
             pending, confirm, remove = await self.detect(
                 chat_ctx, current_keyterms=manager.auto_entries
@@ -387,10 +346,13 @@ def _format_input(chat_ctx: ChatContext, current_keyterms: list[tuple[str, bool]
     ]
     applied = [term for term, ok in current_keyterms if ok]
     candidates = [term for term, ok in current_keyterms if not ok]
-    if applied:
-        sections.append("## Applied keyterms (biasing the recognizer now)\n" + ", ".join(applied))
-    if candidates:
-        sections.append("## Candidate keyterms (seen, not yet applied)\n" + ", ".join(candidates))
+    # always show both lists (even empty) so the model has explicit state to diff against
+    sections.append(
+        "## Applied keyterms (biasing the recognizer now)\n" + (", ".join(applied) or "(none)")
+    )
+    sections.append(
+        "## Candidate keyterms (seen, not yet applied)\n" + (", ".join(candidates) or "(none)")
+    )
     sections.append("Update the keyterms from the latest turns, then call `record_keyterms` once.")
     return "\n\n".join(sections)  # blank line + ## heading between sections
 

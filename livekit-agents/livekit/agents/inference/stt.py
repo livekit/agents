@@ -192,9 +192,7 @@ def _diarization_enabled(extra_kwargs: dict[str, Any] | None) -> bool:
     return False
 
 
-def _keyterms_extra_for_model(
-    model: NotGivenOr[str], keyterms: list[str]
-) -> dict[str, Any] | None:
+def _keyterms_extra_for_model(model: NotGivenOr[str], keyterms: list[str]) -> dict[str, Any] | None:
     """Map a provider-agnostic keyterms list onto the active provider's extra_kwargs key.
 
     Returns None when the model does not support keyterm prompting. Called with an empty
