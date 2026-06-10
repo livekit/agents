@@ -1023,7 +1023,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 await self._prometheus_server.aclose()
 
             if self._api is not None:
-                await self._api.aclose()
+                await self._api.aclose()  # type: ignore[no-untyped-call, unused-ignore]
 
             # await asyncio.sleep(0.25)  # see https://github.com/aio-libs/aiohttp/issues/1925
             self._msg_chan.close()
