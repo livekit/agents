@@ -1,27 +1,38 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from typing import Any
 
 import pytest
 
 from livekit import rtc
-from livekit.agents.llm import ChatContext, CollectedResponse, FunctionToolCall
+from livekit.agents.llm import LLM, ChatContext, CollectedResponse, FunctionToolCall
 from livekit.agents.stt import STT, RecognizeStream, SpeechEvent, STTCapabilities
 from livekit.agents.types import NOT_GIVEN, APIConnectOptions, NotGivenOr
 from livekit.agents.utils import AudioBuffer
 from livekit.agents.voice.events import ConversationItemAddedEvent
 from livekit.agents.voice.keyterms import (
-    DEFAULT_MAX_KEYTERMS,
-    DEFAULT_TURN_INTERVAL,
-    KeytermAnalyzer,
-    KeytermManager,
+    _PENDING_TTL,
+    KeytermDetector,
+    _detect_keyterms,
+    _format_input,
     _parse_tool_call,
     _resolve_detection,
 )
 
 pytestmark = pytest.mark.unit
+
+
+def _detector(*, user_keyterms: list[str] | None = None, **options: Any) -> KeytermDetector:
+    return KeytermDetector(user_keyterms=user_keyterms, options=options)
+
+
+def _ctx(text: str = "hello") -> ChatContext:
+    ctx = ChatContext.empty()
+    ctx.add_message(role="user", content=text)
+    return ctx
 
 
 class _RecordingSTT(STT):
@@ -56,165 +67,60 @@ class _RecordingSTT(STT):
         self.pushed.append(list(keyterms))
 
 
-# -- KeytermManager: confirmation gating --
-
-
-def test_only_confirmed_terms_are_applied() -> None:
-    m = KeytermManager(user_keyterms=["Acme"])
-    m.apply_detection([("Niamh", "unconfirmed"), ("Foo", "implicit")])
-    # unconfirmed terms are tracked but not applied to the STT
-    assert m.auto_entries == [("Niamh", "unconfirmed"), ("Foo", "implicit")]
-    assert m.keyterms == ["Acme", "Foo"]
-
-    # confirming an existing term applies it (auto insertion order preserved)
-    m.apply_detection([("Niamh", "explicit")])
-    assert m.keyterms == ["Acme", "Niamh", "Foo"]
-
-
-def test_user_precedence_and_dedup() -> None:
-    m = KeytermManager(user_keyterms=["Acme", "Acme", "LiveKit"])
-    assert m.user_keyterms == ["Acme", "LiveKit"]
-    # an auto term equal to a user term is dropped
-    m.apply_detection([("LiveKit", "explicit"), ("Foo", "explicit")])
-    assert [t for t, _ in m.auto_entries] == ["Foo"]
-    assert m.keyterms == ["Acme", "LiveKit", "Foo"]
-
-
-def test_user_set_immutable_by_auto() -> None:
-    m = KeytermManager(user_keyterms=["Alice"])
-    m.apply_detection([("Alice", "explicit"), ("Bob", "explicit")])
-    assert m.user_keyterms == ["Alice"]
-    assert "Alice" in m.keyterms
-
-
-def test_correction_adds_confirmed_spelling() -> None:
-    m = KeytermManager()
-    # the misheard spelling is only ever unconfirmed, so it is never applied
-    m.apply_detection([("Jon", "unconfirmed")])
-    assert m.keyterms == []
-    # the user's correction is recorded as confirmed and applied
-    m.apply_detection([("John", "explicit")])
-    assert m.keyterms == ["John"]
-
-
-def test_status_upgrade_in_place() -> None:
-    m = KeytermManager()
-    m.apply_detection([("Kubernetes", "unconfirmed")])
-    assert m.keyterms == []
-    m.apply_detection([("Kubernetes", "explicit")])
-    assert m.auto_entries == [("Kubernetes", "explicit")]
-    assert m.keyterms == ["Kubernetes"]
-
-
-def test_cap_fifo_eviction() -> None:
-    m = KeytermManager(max_keyterms=3)
-    m.apply_detection([(t, "explicit") for t in ["a", "b", "c", "d", "e"]])
-    assert [t for t, _ in m.auto_entries] == ["c", "d", "e"]
-
-
-def test_apply_detection_returns_applied_change() -> None:
-    m = KeytermManager()
-    # adding an unconfirmed term does not change the applied set
-    assert m.apply_detection([("x", "unconfirmed")]) is False
-    # confirming it does
-    assert m.apply_detection([("x", "explicit")]) is True
-
-
-def test_push_only_on_applied_change() -> None:
-    stt = _RecordingSTT()
-    m = KeytermManager(user_keyterms=["Acme"])
-    m.attach_stt(stt)
-    assert stt.pushed == [["Acme"]]
-
-    # unconfirmed term: tracked, but no push (applied set unchanged)
-    before = len(stt.pushed)
-    m.apply_detection([("Foo", "unconfirmed")])
-    assert len(stt.pushed) == before
-
-    # confirm it: push
-    m.apply_detection([("Foo", "explicit")])
-    assert stt.pushed[-1] == ["Acme", "Foo"]
-
-
-def test_set_user_keyterms_pushes() -> None:
-    stt = _RecordingSTT()
-    m = KeytermManager()
-    m.attach_stt(stt)
-    m.set_user_keyterms(["New"])
-    assert stt.pushed[-1] == ["New"]
-
-
-def test_unsupported_stt_warn_and_skip() -> None:
-    stt = _RecordingSTT(supports_keyterms=False)
-    # exercise the base method (warn-and-skip), not the recorder override
-    STT.update_keyterms(stt, ["a", "b"])
-    assert stt.pushed == []
-
-
-# -- tool-call parsing & config resolution --
-
-
-def test_parse_tool_call() -> None:
-    call = FunctionToolCall(
-        call_id="1",
-        name="record_keyterms",
-        arguments=json.dumps(
-            {
-                "keyterms": [
-                    {"term": "John", "confirmation": "explicit"},
-                    {"term": "x", "confirmation": "bogus"},  # invalid -> unconfirmed
-                    {"confirmation": "explicit"},  # missing term -> skipped
-                ],
-            }
-        ),
-    )
-    assert _parse_tool_call([call]) == [("John", "explicit"), ("x", "unconfirmed")]
-
-
-def test_parse_tool_call_missing() -> None:
-    assert _parse_tool_call([]) == []
-    bad = FunctionToolCall(call_id="1", name="record_keyterms", arguments="not json")
-    assert _parse_tool_call([bad]) == []
-
-
-def test_resolve_detection() -> None:
-    # always returns a fully-defaulted dict; `enabled` reflects the input
-    assert _resolve_detection(None)["enabled"] is False
-    assert _resolve_detection({"enabled": False})["enabled"] is False
-
-    resolved = _resolve_detection({"enabled": True})
-    assert resolved["enabled"] is True
-    assert resolved["turn_interval"] == DEFAULT_TURN_INTERVAL
-    assert resolved["max_keyterms"] == DEFAULT_MAX_KEYTERMS
-
-
-# -- KeytermAnalyzer (Layer 2) --
-
-
 class _FakeStream:
-    def __init__(self, keyterms: list[dict[str, str]]) -> None:
-        self._args = json.dumps({"keyterms": keyterms})
+    def __init__(self, pending: list[str], confirm: list[str], remove: list[str]) -> None:
+        self._args = json.dumps({"pending": pending, "confirm": confirm, "remove": remove})
 
     async def collect(self) -> CollectedResponse:
         call = FunctionToolCall(call_id="1", name="record_keyterms", arguments=self._args)
         return CollectedResponse(text="", tool_calls=[call], usage=None, extra={})
 
 
-class _FakeLLM:
-    def __init__(self, keyterms: list[dict[str, str]] | None = None):
-        self._keyterms = keyterms or []
+class _RecordingLLM(LLM):
+    """Fake LLM: returns a `record_keyterms` call per `chat()`, one result tuple per call.
+
+    Subclasses LLM so the detector's ``isinstance(..., LLM)`` gate passes; the last result
+    repeats once the sequence is exhausted.
+    """
+
+    def __init__(self, *results: tuple[list[str], list[str], list[str]]) -> None:
+        super().__init__()
+        self._results = list(results) or [([], [], [])]
         self.calls = 0
 
-    def chat(self, *, chat_ctx: ChatContext, **kwargs: Any) -> _FakeStream:
+    def chat(self, *, chat_ctx: ChatContext, **kwargs: Any) -> _FakeStream:  # type: ignore[override]
+        result = self._results[min(self.calls, len(self._results) - 1)]
         self.calls += 1
-        return _FakeStream(self._keyterms)
+        return _FakeStream(*result)
+
+
+class _BlockingStream(_FakeStream):
+    def __init__(self, gate: asyncio.Event) -> None:
+        super().__init__([], [], [])
+        self._gate = gate
+
+    async def collect(self) -> CollectedResponse:
+        await self._gate.wait()
+        return await super().collect()
+
+
+class _BlockingLLM(LLM):
+    """Fake LLM whose response blocks until ``gate`` is set (for single-flight tests)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.gate = asyncio.Event()
+        self.calls = 0
+
+    def chat(self, *, chat_ctx: ChatContext, **kwargs: Any) -> _BlockingStream:  # type: ignore[override]
+        self.calls += 1
+        return _BlockingStream(self.gate)
 
 
 class _FakeSession(rtc.EventEmitter[str]):
     def __init__(self) -> None:
         super().__init__()
         self.history = ChatContext.empty()
-        self._keyterm_manager = KeytermManager()
 
     def add_user(self, text: str) -> None:
         msg = self.history.add_message(role="user", content=text)
@@ -225,110 +131,318 @@ class _FakeSession(rtc.EventEmitter[str]):
         self.emit("conversation_item_added", ConversationItemAddedEvent(item=msg))
 
 
-async def _drain(analyzer: KeytermAnalyzer) -> None:
+async def _drain(detector: KeytermDetector) -> None:
     await asyncio.sleep(0)
-    if analyzer._task is not None:
-        await analyzer._task
+    if detector._detect_task is not None:
+        with contextlib.suppress(Exception):  # a failed pass is logged + re-raised on the task
+            await detector._detect_task
 
 
-async def test_analyzer_applies_confirmed_terms() -> None:
-    session = _FakeSession()
-    fake_llm = _FakeLLM(keyterms=[{"term": "Acme Grand", "confirmation": "explicit"}])
-    analyzer = KeytermAnalyzer(fake_llm, turn_interval=1)
-    analyzer.start(session)
-
-    session.add_user("I'd like to book at the Acme Grand")
-    await _drain(analyzer)
-    assert fake_llm.calls == 1
-    assert session._keyterm_manager.keyterms == ["Acme Grand"]
-
-    await analyzer.aclose()
+# -- keyterm state machine (driven through one detection pass each) --
 
 
-async def test_analyzer_holds_unconfirmed_terms() -> None:
-    session = _FakeSession()
-    fake_llm = _FakeLLM(keyterms=[{"term": "Flandor", "confirmation": "unconfirmed"}])
-    analyzer = KeytermAnalyzer(fake_llm, turn_interval=1)
-    analyzer.start(session)
-
-    session.add_user("It crashes in the Flandor module")
-    await _drain(analyzer)
-    # tracked but not applied
-    assert session._keyterm_manager.auto_entries == [("Flandor", "unconfirmed")]
-    assert session._keyterm_manager.keyterms == []
-
-    await analyzer.aclose()
+async def test_only_confirmed_terms_are_applied() -> None:
+    d = _detector(user_keyterms=["Acme"], llm=_RecordingLLM((["Niamh"], ["Foo"], [])))
+    await d._run_once(_ctx())
+    # pending terms are tracked but not applied (auto_entries: confirmed then pending)
+    assert d.auto_entries == [("Foo", True), ("Niamh", False)]
+    assert d.keyterms == ["Acme", "Foo"]
 
 
-async def test_detect_without_session() -> None:
-    fake_llm = _FakeLLM(keyterms=[{"term": "Niamh", "confirmation": "explicit"}])
-    analyzer = KeytermAnalyzer(fake_llm)
-    result = await analyzer.detect(transcript="user: It's Niamh", current_keyterms=[])
-    assert result == [("Niamh", "explicit")]
+async def test_pending_then_confirmed() -> None:
+    d = _detector(llm=_RecordingLLM((["Kubernetes"], [], []), ([], ["Kubernetes"], [])))
+    await d._run_once(_ctx())
+    assert d.keyterms == []
+    await d._run_once(_ctx())
+    assert d.auto_entries == [("Kubernetes", True)]
+    assert d.keyterms == ["Kubernetes"]
 
 
-async def test_analyzer_triggers_every_n_user_turns() -> None:
-    session = _FakeSession()
-    fake_llm = _FakeLLM(keyterms=[{"term": "Acme", "confirmation": "explicit"}])
-    analyzer = KeytermAnalyzer(fake_llm, turn_interval=2)
-    analyzer.start(session)
-
-    session.add_user("first")  # below interval
-    await _drain(analyzer)
-    assert fake_llm.calls == 0
-
-    session.add_assistant("ack")  # agent turns don't advance the counter
-    await _drain(analyzer)
-    assert fake_llm.calls == 0
-
-    session.add_user("second")  # triggers
-    await _drain(analyzer)
-    assert fake_llm.calls == 1
-
-    await analyzer.aclose()
+async def test_user_precedence_and_dedup() -> None:
+    d = _detector(
+        user_keyterms=["Acme", "Acme", "LiveKit"],
+        llm=_RecordingLLM(([], ["LiveKit", "Foo"], [])),
+    )
+    assert d.user_keyterms == ["Acme", "LiveKit"]
+    await d._run_once(_ctx())  # an auto term equal to a user term is dropped
+    assert [t for t, _ in d.auto_entries] == ["Foo"]
+    assert d.keyterms == ["Acme", "LiveKit", "Foo"]
 
 
-async def test_analyzer_ignores_assistant_messages_for_counting() -> None:
-    session = _FakeSession()
-    fake_llm = _FakeLLM()
-    analyzer = KeytermAnalyzer(fake_llm, turn_interval=1)
-    analyzer.start(session)
-
-    session.add_assistant("hi")
-    await _drain(analyzer)
-    assert fake_llm.calls == 0
-
-    session.add_user("hello")
-    await _drain(analyzer)
-    assert fake_llm.calls == 1
-
-    await analyzer.aclose()
+async def test_confirmed_cannot_revert_to_pending() -> None:
+    d = _detector(llm=_RecordingLLM(([], ["Niamh"], []), (["Niamh"], [], [])))
+    await d._run_once(_ctx())
+    assert d.keyterms == ["Niamh"]
+    await d._run_once(_ctx())  # a stray `pending` must not reset a confirmed term
+    assert d.auto_entries == [("Niamh", True)]
 
 
-async def test_analyzer_stops_on_aclose() -> None:
-    session = _FakeSession()
-    fake_llm = _FakeLLM()
-    analyzer = KeytermAnalyzer(fake_llm, turn_interval=1)
-    analyzer.start(session)
-    await analyzer.aclose()
-
-    session.add_user("hi")
-    await asyncio.sleep(0)
-    assert fake_llm.calls == 0
+async def test_correction_removes_and_replaces() -> None:
+    d = _detector(llm=_RecordingLLM((["Jon"], [], []), (["John"], [], ["Jon"]), ([], ["John"], [])))
+    await d._run_once(_ctx())
+    assert d.auto_entries == [("Jon", False)]
+    await d._run_once(_ctx())  # misheard spelling removed, corrected one added as pending
+    assert d.auto_entries == [("John", False)]
+    await d._run_once(_ctx())
+    assert d.keyterms == ["John"]
 
 
-async def test_analyzer_swallows_llm_errors() -> None:
-    session = _FakeSession()
+async def test_remove_applies_to_confirmed_terms() -> None:
+    d = _detector(llm=_RecordingLLM(([], ["Jon"], []), ([], ["John"], ["Jon"])))
+    await d._run_once(_ctx())
+    assert d.keyterms == ["Jon"]
+    await d._run_once(_ctx())  # a user correction can remove an already-applied term
+    assert d.keyterms == ["John"]
 
-    class _BoomLLM:
-        def chat(self, *, chat_ctx: ChatContext, **kwargs: Any) -> Any:
+
+async def test_remove_unknown_is_noop() -> None:
+    d = _detector(llm=_RecordingLLM(([], ["Foo"], []), ([], [], ["does-not-exist"])))
+    await d._run_once(_ctx())
+    await d._run_once(_ctx())
+    assert d.keyterms == ["Foo"]
+
+
+async def test_cap_evicts_oldest_confirmed() -> None:
+    d = _detector(max_keyterms=3, llm=_RecordingLLM(([], ["a", "b", "c", "d", "e"], [])))
+    await d._run_once(_ctx())
+    assert [t for t, _ in d.auto_entries] == ["c", "d", "e"]
+
+
+async def test_pending_evicted_when_not_confirmed() -> None:
+    # pass 1 adds "Tmp" pending; later passes never confirm it, so it ages out
+    d = _detector(llm=_RecordingLLM((["Tmp"], [], []), ([], ["Other"], [])))
+    await d._run_once(_ctx())
+    for _ in range(_PENDING_TTL - 1):
+        await d._run_once(_ctx())
+    assert "Tmp" in dict(d.auto_entries)
+    await d._run_once(_ctx())  # TTL exceeded
+    assert "Tmp" not in dict(d.auto_entries)
+
+
+async def test_confirmed_not_evicted_by_staleness() -> None:
+    d = _detector(llm=_RecordingLLM(([], ["Keep"], []), (["x"], [], [])))
+    await d._run_once(_ctx())
+    for _ in range(_PENDING_TTL + 2):
+        await d._run_once(_ctx())  # pending churn ages out, but the confirmed term stays
+    assert d.keyterms == ["Keep"]
+
+
+async def test_failed_pass_keeps_state() -> None:
+    class _BoomLLM(LLM):
+        def chat(self, *, chat_ctx: ChatContext, **kwargs: Any) -> Any:  # type: ignore[override]
             raise RuntimeError("boom")
 
-    analyzer = KeytermAnalyzer(_BoomLLM(), turn_interval=1)
-    analyzer.start(session)
+    d = _detector(llm=_BoomLLM())
+    # a failed pass is logged and re-raised on the (fire-and-forget) task; state is untouched
+    with contextlib.suppress(RuntimeError):
+        await d._run_once(_ctx())
+    assert d.keyterms == []
+
+
+# -- STT binding --
+
+
+async def test_push_only_on_applied_change() -> None:
+    stt = _RecordingSTT()
+    session = _FakeSession()
+    d = _detector(
+        user_keyterms=["Acme"],
+        enabled=True,
+        llm=_RecordingLLM((["Foo"], [], []), ([], ["Foo"], [])),
+    )
+    d.start(session, stt=stt, llm=None)
+    assert stt.pushed == [["Acme"]]  # start pushes the current set
+
+    session.add_user("u1")
+    await _drain(d)  # pending Foo: tracked, no applied change -> no push
+    assert stt.pushed == [["Acme"]]
+
+    session.add_user("u2")
+    await _drain(d)  # confirm Foo: push
+    assert stt.pushed[-1] == ["Acme", "Foo"]
+    await d.aclose()
+
+
+async def test_start_same_stt_does_not_repush() -> None:
+    stt = _RecordingSTT()
+    session = _FakeSession()
+    d = _detector(user_keyterms=["Acme"], enabled=True, llm=_RecordingLLM())
+    d.start(session, stt=stt, llm=None)
+    assert stt.pushed == [["Acme"]]
+    await d.aclose()
+    # re-binding the same instance on the next activity must not re-push (some STTs reconnect)
+    d.start(session, stt=stt, llm=None)
+    assert stt.pushed == [["Acme"]]
+    await d.aclose()
+
+
+async def test_set_user_keyterms_pushes() -> None:
+    stt = _RecordingSTT()
+    session = _FakeSession()
+    d = _detector(enabled=True, llm=_RecordingLLM())
+    d.start(session, stt=stt, llm=None)
+    d.set_user_keyterms(["New"])
+    assert stt.pushed[-1] == ["New"]
+    await d.aclose()
+
+
+def test_unsupported_stt_warn_and_skip() -> None:
+    stt = _RecordingSTT(supports_keyterms=False)
+    # exercise the base method (warn-and-skip), not the recorder override
+    STT.update_keyterms(stt, ["a", "b"])
+    assert stt.pushed == []
+
+
+# -- triggering --
+
+
+async def test_triggers_every_n_user_turns() -> None:
+    session = _FakeSession()
+    fake = _RecordingLLM(([], ["Acme"], []))
+    d = _detector(enabled=True, turn_interval=2, llm=fake)
+    d.start(session, stt=None, llm=None)
+
+    session.add_user("first")  # below interval
+    await _drain(d)
+    assert fake.calls == 0
+
+    session.add_assistant("ack")  # assistant turns don't advance the counter
+    await _drain(d)
+    assert fake.calls == 0
+
+    session.add_user("second")  # triggers
+    await _drain(d)
+    assert fake.calls == 1
+
+    await d.aclose()
+
+
+async def test_ignores_assistant_messages_for_counting() -> None:
+    session = _FakeSession()
+    fake = _RecordingLLM()
+    d = _detector(enabled=True, llm=fake)
+    d.start(session, stt=None, llm=None)
+
+    session.add_assistant("hello")
+    await _drain(d)
+    assert fake.calls == 0
 
     session.add_user("hi")
-    await _drain(analyzer)  # must not raise
-    assert session._keyterm_manager.keyterms == []
+    await _drain(d)
+    assert fake.calls == 1
 
-    await analyzer.aclose()
+    await d.aclose()
+
+
+async def test_empty_user_turn_does_not_trigger() -> None:
+    session = _FakeSession()
+    fake = _RecordingLLM()
+    d = _detector(enabled=True, llm=fake)
+    d.start(session, stt=None, llm=None)
+
+    session.add_user("")
+    await _drain(d)
+    assert fake.calls == 0
+
+    await d.aclose()
+
+
+async def test_single_flight_skips_overlapping_pass() -> None:
+    session = _FakeSession()
+    fake = _BlockingLLM()
+    d = _detector(enabled=True, llm=fake)
+    d.start(session, stt=None, llm=None)
+
+    session.add_user("first")
+    await asyncio.sleep(0)
+    assert fake.calls == 1
+
+    session.add_user("second")  # a pass is still in flight -> skipped, not queued
+    await asyncio.sleep(0)
+    assert fake.calls == 1
+
+    fake.gate.set()
+    await _drain(d)
+    assert fake.calls == 1
+    await d.aclose()
+
+
+async def test_aclose_unsubscribes() -> None:
+    session = _FakeSession()
+    fake = _RecordingLLM()
+    d = _detector(enabled=True, llm=fake)
+    d.start(session, stt=None, llm=None)
+    await d.aclose()
+
+    session.add_user("hi")
+    await asyncio.sleep(0)
+    assert fake.calls == 0
+
+
+async def test_disabled_detection_does_not_trigger() -> None:
+    session = _FakeSession()
+    fake = _RecordingLLM(([], ["Acme"], []))
+    d = _detector(enabled=False, llm=fake)
+    d.start(session, stt=None, llm=None)
+
+    session.add_user("the Acme Grand")
+    await _drain(d)
+    assert fake.calls == 0
+    assert d.keyterms == []
+
+
+# -- module helpers --
+
+
+async def test_detect_keyterms_parses_result() -> None:
+    llm = _RecordingLLM(([], ["Niamh"], ["Jon"]))
+    pending, confirm, remove = await _detect_keyterms(llm, _ctx("It's Niamh"), current_keyterms=[])
+    assert pending == []
+    assert confirm == ["Niamh"]
+    assert remove == ["Jon"]
+    # no transcript -> no LLM call, empty result
+    assert await _detect_keyterms(llm, ChatContext.empty()) == ([], [], [])
+
+
+def test_parse_tool_call() -> None:
+    call = FunctionToolCall(
+        call_id="1",
+        name="record_keyterms",
+        arguments=json.dumps(
+            {
+                "pending": ["John", "  ", 5],  # blanks and non-strings are dropped
+                "confirm": ["Foo"],
+                "remove": ["Jon"],
+            }
+        ),
+    )
+    pending, confirm, remove = _parse_tool_call([call])
+    assert pending == ["John"]
+    assert confirm == ["Foo"]
+    assert remove == ["Jon"]
+
+
+def test_parse_tool_call_missing() -> None:
+    assert _parse_tool_call([]) == ([], [], [])
+    bad = FunctionToolCall(call_id="1", name="record_keyterms", arguments="not json")
+    assert _parse_tool_call([bad]) == ([], [], [])
+
+
+def test_format_input_splits_applied_and_candidate() -> None:
+    text = _format_input(_ctx("hi"), [("Term1", True), ("Term2", False)])
+    assert text is not None
+    assert "Applied keyterms" in text and "Term1" in text
+    assert "Candidate keyterms" in text and "Term2" in text
+    assert "record_keyterms" in text  # trailing instruction
+    # no transcript yet -> nothing to send
+    assert _format_input(ChatContext.empty(), []) is None
+
+
+def test_resolve_detection() -> None:
+    assert _resolve_detection(None)["enabled"] is False
+    assert _resolve_detection({"enabled": False})["enabled"] is False
+
+    resolved = _resolve_detection({"enabled": True})
+    assert resolved["enabled"] is True
+    assert resolved["turn_interval"] == 1
+    assert resolved["max_keyterms"] is None
