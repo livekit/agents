@@ -992,32 +992,7 @@ class SpeechStream(stt.SpeechStream):
             return None
         return float(value)
 
-    def _ensure_utterance_timing_state(self) -> None:
-        if not hasattr(self, "_audio_position"):
-            self._audio_position = 0.0
-        if not hasattr(self, "_utterance_start_audio_pos"):
-            self._utterance_start_audio_pos = 0.0
-        if not hasattr(self, "_utterance_speech_end_audio_pos"):
-            self._utterance_speech_end_audio_pos = None
-        if not hasattr(self, "_utterance_speech_start_wall"):
-            self._utterance_speech_start_wall = None
-        if not hasattr(self, "_utterance_speech_end_wall"):
-            self._utterance_speech_end_wall = None
-        if not hasattr(self, "_pending_final_data"):
-            self._pending_final_data = None
-        if not hasattr(self, "_pending_eos"):
-            self._pending_eos = False
-        if not hasattr(self, "_eos_fallback_task"):
-            self._eos_fallback_task = None
-        if not hasattr(self, "_eos_fallback_timeout"):
-            self._eos_fallback_timeout = EOS_FALLBACK_TIMEOUT
-        if not hasattr(self, "_final_received_for_utterance"):
-            self._final_received_for_utterance = False
-        if not hasattr(self, "_eos_emitted_for_utterance"):
-            self._eos_emitted_for_utterance = False
-
     def _reset_utterance_state(self) -> None:
-        self._ensure_utterance_timing_state()
         self._cancel_eos_fallback()
         self._pending_final_data = None
         self._pending_eos = False
@@ -1040,7 +1015,6 @@ class SpeechStream(stt.SpeechStream):
     def _send_final_transcript(
         self, transcript_data: dict[str, Any], *, require_end_time: bool = False
     ) -> bool:
-        self._ensure_utterance_timing_state()
         transcript_text = transcript_data.get("transcript", "")
         if not transcript_text:
             return False
@@ -1077,7 +1051,6 @@ class SpeechStream(stt.SpeechStream):
         return True
 
     def _try_commit_utterance(self) -> None:
-        self._ensure_utterance_timing_state()
         if (
             self._pending_final_data is None
             or self._utterance_speech_end_audio_pos is None
@@ -1099,7 +1072,6 @@ class SpeechStream(stt.SpeechStream):
             self._pending_final_data = None
 
     def _emit_end_of_speech(self) -> None:
-        self._ensure_utterance_timing_state()
         if self._eos_emitted_for_utterance:
             return
 
@@ -1650,7 +1622,6 @@ class SpeechStream(stt.SpeechStream):
 
     async def _handle_transcript_data(self, data: dict) -> None:
         """Handle transcription result messages."""
-        self._ensure_utterance_timing_state()
         transcript_data = data.get("data", {})
         transcript_text = transcript_data.get("transcript", "")
         self._maybe_set_server_request_id(transcript_data)
@@ -1713,7 +1684,6 @@ class SpeechStream(stt.SpeechStream):
 
     async def _handle_events(self, data: dict) -> None:
         """Handle VAD (Voice Activity Detection) events."""
-        self._ensure_utterance_timing_state()
         event_data = data.get("data", {})
         signal_type = event_data.get("signal_type")
         self._maybe_set_server_request_id(event_data)
