@@ -277,18 +277,31 @@ class JobContext:
 
         report = self.make_session_report(session)
 
-        # console recording, dump data to a local file
+        # dump the report to a local file: always when console recording, or in any
+        # mode when LIVEKIT_SESSION_REPORT_DIR is set (named per-room so concurrent
+        # jobs don't overwrite each other)
+        report_dir: Path | None = None
+        report_filename = "session_report.json"
         if c.enabled and c.record:
+            report_dir = Path(self._session_directory)
+        elif env_dir := os.environ.get("LIVEKIT_SESSION_REPORT_DIR"):
+            report_dir = Path(env_dir)
+            report_filename = f"session_report-{self.job.room.name or self.job.id}.json"
+
+        if report_dir is not None:
             try:
-                report_json = json.dumps(report.to_dict(), indent=2)
+                report_dict = report.to_dict()
+                report_dict["tags"] = sorted(self._tagger.tags)
+                report_dict["evaluations"] = self._tagger.evaluations
+                report_dict["outcome"] = self._tagger.outcome
+                report_dict["outcome_reason"] = self._tagger.outcome_reason
+                report_json = json.dumps(report_dict, indent=2)
 
                 import aiofiles
                 import aiofiles.os
 
-                await aiofiles.os.makedirs(self._session_directory, exist_ok=True)
-                async with aiofiles.open(
-                    self._session_directory / "session_report.json", mode="w"
-                ) as f:
+                await aiofiles.os.makedirs(report_dir, exist_ok=True)
+                async with aiofiles.open(report_dir / report_filename, mode="w") as f:
                     await f.write(report_json)
 
             except Exception:

@@ -5,7 +5,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Annotated
+from typing import Annotated, Literal
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -59,7 +59,7 @@ from livekit.agents.evals import (
     tool_use_judge,
 )
 
-load_dotenv()
+load_dotenv(".env.local")
 
 logger = logging.getLogger("hotel-receptionist")
 
@@ -226,8 +226,8 @@ class HotelReceptionistAgent(Agent):
         check_in: date,
         check_out: date,
         guests: Annotated[int, Field(ge=1, le=MAX_PARTY_SIZE)],
-        smoking: bool | None = None,
-        room_type: str | None = None,
+        smoking: Literal["smoking", "non_smoking", "no_preference"],
+        room_type: Literal["king", "queen_2beds", "double_queen", "suite", "penthouse", "any"],
     ) -> str:
         """Check what's available for a date range, with prices and views. One tool for every "what do you have?" / "how much?" / "any king available?" / "any smoking rooms?" question.
 
@@ -235,19 +235,20 @@ class HotelReceptionistAgent(Agent):
             check_in: Check-in date in ISO YYYY-MM-DD format (e.g. "2026-01-20").
             check_out: Check-out date in ISO YYYY-MM-DD format.
             guests: Number of guests in the room (must be >= 1; ask the caller if not specified).
-            smoking: Pass true for smoking-permitted rooms only, false to exclude smoking, or omit if the caller hasn't said.
-            room_type: Narrow to a single type ("king", "queen_2beds", "double_queen", "suite", "penthouse") when the caller has already picked one; omit to list everything.
+            smoking: The caller's stated smoking preference, or "no_preference" if they haven't said.
+            room_type: The room type the caller picked, or "any" to list everything.
         """
         if check_out <= check_in:
             raise ToolError("check-out must be after check-in")
+        smoking_filter = {"smoking": True, "non_smoking": False, "no_preference": None}[smoking]
         avail = await ctx.userdata.db.list_room_types_available(
-            check_in=check_in, check_out=check_out, guests=guests, smoking=smoking
+            check_in=check_in, check_out=check_out, guests=guests, smoking=smoking_filter
         )
-        if room_type is not None:
+        if room_type != "any":
             avail = [a for a in avail if a.type == room_type]
         if not avail:
-            kind = "smoking " if smoking else "non-smoking " if smoking is False else ""
-            what = f"{kind}{room_type.replace('_', ' ')}" if room_type else f"{kind}rooms"
+            kind = "smoking " if smoking_filter else "non-smoking " if smoking_filter is False else ""
+            what = f"{kind}{room_type.replace('_', ' ')}" if room_type != "any" else f"{kind}rooms"
             return f"no {what} available for those dates"
         return " | ".join(
             f"{a.type.replace('_', ' ')}: {speak_usd(a.nightly_rate)} per night, {a.sample_view} view"
@@ -664,7 +665,7 @@ async def hotel_receptionist_agent(ctx: JobContext) -> None:
     session = AgentSession[Userdata](
         userdata=userdata,
         stt=inference.STT("deepgram/nova-3"),
-        llm=inference.LLM("google/gemini-2.5-flash"),
+        llm=inference.LLM("google/gemma-4-31b-it"),
         tts=inference.TTS("cartesia/sonic-3", voice="39b376fc-488e-4d0c-8b37-e00b72059fdd"),
         max_tool_steps=5,
     )
