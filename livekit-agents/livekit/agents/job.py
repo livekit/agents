@@ -40,7 +40,7 @@ from .log import logger
 from .observability import Tagger
 from .telemetry import _upload_session_report, otel_metrics
 from .telemetry.traces import _BufferingHandler, _setup_cloud_tracer, _shutdown_telemetry
-from .types import NotGivenOr
+from .types import ATTRIBUTE_SIMULATOR, NotGivenOr
 from .utils import http_context, is_given, wait_for_participant
 from .utils.deprecation import deprecate_params
 from .utils.misc import is_cloud
@@ -776,8 +776,10 @@ class JobContext:
         self._flush_early_log_buffer(replay=options["logs"])
 
     def _on_simulator_disconnected(self, p: rtc.RemoteParticipant) -> None:
-        # the simulator disconnecting means the simulation is over: shut down now
-        # instead of waiting for the room to close
+        # the agent under test may add other participants (SIP legs, avatar workers)
+        if ATTRIBUTE_SIMULATOR not in p.attributes:
+            return
+
         logger.debug("simulator disconnected, shutting down the job")
         self.shutdown(reason="simulation completed")
 
