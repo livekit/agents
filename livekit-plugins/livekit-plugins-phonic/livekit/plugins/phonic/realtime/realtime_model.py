@@ -570,7 +570,9 @@ class RealtimeSession(llm.RealtimeSession):
             # The Phonic Python SDK uses an async context manager for connect()
             t0 = time.perf_counter()
             self._socket_ctx = self._client.conversations.connect(
-                request_options=RequestOptions(additional_headers={"x-phonic-client": "livekit-agents-py"})
+                request_options=RequestOptions(
+                    additional_headers={"x-phonic-client": "livekit-agents-py"}
+                )
             )
             self._socket = await self._socket_ctx.__aenter__()
             self._report_connection_acquired(time.perf_counter() - t0)
