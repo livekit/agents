@@ -78,7 +78,6 @@ from .generation import (
     remove_instructions,
     update_instructions,
 )
-from .keyterms import KeytermAnalyzer
 from .speech_handle import DEFAULT_INPUT_DETAILS, InputDetails, SpeechHandle
 from .tool_executor import _resolve_async_tool_options, _ToolExecutor
 from .turn import EndpointingOptions, TurnDetectionMode
@@ -159,7 +158,6 @@ class AgentActivity(RecognitionHooks):
         self._closed = False
         self._scheduling_paused = True
         self._new_turns_blocked = False
-        self._keyterm_analyzer: KeytermAnalyzer | None = None
 
         self._current_speech: SpeechHandle | None = None
         self._speech_q: list[tuple[int, float, SpeechHandle]] = []
@@ -856,37 +854,12 @@ class AgentActivity(RecognitionHooks):
         else:
             self._audio_recognition.start()
 
-        self._start_keyterm_detection()
-
-    def _start_keyterm_detection(self) -> None:
-        # push the current keyterms onto this activity's STT, and start the
-        # background analyzer when auto-detection is enabled
-        manager = self._session._keyterm_manager
-        manager.attach_stt(self.stt if isinstance(self.stt, stt.STT) else None)
-
-        detection = self._session._opts.keyterm_detection
-        if not detection["enabled"] or self._keyterm_analyzer is not None:
-            return
-
-        analyzer_llm = detection.get("llm") or (self.llm if isinstance(self.llm, llm.LLM) else None)
-        if analyzer_llm is None:
-            logger.warning(
-                "keyterm detection is enabled but no text LLM is available "
-                "(realtime models require an explicit `llm` in the detection config); skipping"
-            )
-            return
-
-        self._keyterm_analyzer = KeytermAnalyzer(
-            analyzer_llm,
-            turn_interval=detection["turn_interval"],
-            instructions=detection.get("instructions"),
+        # bind the session's keyterm detector to this activity's STT and LLM
+        self._session._keyterm_detector.start(
+            self._session,
+            stt=self.stt if isinstance(self.stt, stt.STT) else None,
+            llm=self.llm if isinstance(self.llm, llm.LLM) else None,
         )
-        self._keyterm_analyzer.start(self._session)
-
-    async def _stop_keyterm_detection(self) -> None:
-        if self._keyterm_analyzer is not None:
-            await self._keyterm_analyzer.aclose()
-            self._keyterm_analyzer = None
 
     @tracer.start_as_current_span("drain_agent_activity")
     async def drain(
@@ -937,7 +910,7 @@ class AgentActivity(RecognitionHooks):
         if self._scheduling_paused:
             return
 
-        await self._stop_keyterm_detection()
+        await self._session._keyterm_detector.aclose()
 
         self._scheduling_paused = True
         self._drain_blocked_tasks = blocked_tasks or []
@@ -1073,7 +1046,7 @@ class AgentActivity(RecognitionHooks):
 
             self._closed = True
             self._cancel_preemptive_generation()
-            await self._stop_keyterm_detection()
+            await self._session._keyterm_detector.aclose()
 
             # on_exit_task should be awaited in `drain`
             self._on_exit_task = None

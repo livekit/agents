@@ -61,7 +61,7 @@ from .events import (
     UserStateChangedEvent,
 )
 from .ivr import IVRActivity
-from .keyterms import KeytermDetectionOptions, KeytermManager, KeytermOptions, _resolve_detection
+from .keyterms import KeytermDetectionOptions, KeytermDetector, KeytermOptions, _resolve_detection
 from .recorder_io import RecorderIO
 from .remote_session import RoomSessionTransport, SessionHost
 from .run_result import RunResult
@@ -418,9 +418,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._llm = llm or None
         self._tts = tts or None
 
-        self._keyterm_manager = KeytermManager(
+        self._keyterm_detector = KeytermDetector(
             user_keyterms=keyterm_opts.get("terms"),
-            max_keyterms=self._opts.keyterm_detection["max_keyterms"],
+            options=self._opts.keyterm_detection,
         )
 
         self._turn_detection = raw_turn_detection
@@ -571,7 +571,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @property
     def keyterms(self) -> list[str]:
         """The effective keyterms (user-defined + auto-detected) currently applied to the STT."""
-        return self._keyterm_manager.keyterms
+        return self._keyterm_detector.keyterms
 
     @property
     def current_speech(self) -> SpeechHandle | None:
@@ -1091,7 +1091,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             max_endpointing_delay: Deprecated, use ``endpointing_opts`` instead.
         """
         if is_given(keyterms):
-            self._keyterm_manager.set_user_keyterms(keyterms)
+            self._keyterm_detector.set_user_keyterms(keyterms)
         if is_given(min_endpointing_delay) or is_given(max_endpointing_delay):
             logger.warning(
                 "min_endpointing_delay and max_endpointing_delay are deprecated, "

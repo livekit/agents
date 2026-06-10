@@ -268,15 +268,7 @@ class STT(
         )
 
     def update_keyterms(self, keyterms: list[str]) -> None:
-        """Set the keyterms used to bias recognition toward specific words/phrases.
-
-        Keyterms are a provider-agnostic list of strings (e.g. proper names, places,
-        product names, jargon). Plugins that support keyterm prompting override this
-        to map the list onto their native parameter and apply it to active streams.
-
-        The default implementation warns once and no-ops when the STT does not
-        support keyterms, so setting keyterms never crashes a session.
-        """
+        """Set the keyterms used to bias recognition toward specific words/phrases."""
         if not self._capabilities.keyterms:
             if not self._keyterms_unsupported_warned:
                 self._keyterms_unsupported_warned = True

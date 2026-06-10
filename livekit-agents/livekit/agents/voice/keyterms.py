@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 from typing_extensions import TypedDict
 
-from .. import llm as llm_module
+from .. import llm as llm_module, utils
 from ..llm import LLM, ChatContext, FunctionToolCall, function_tool
 from ..llm.utils import parse_function_arguments
 from ..log import logger
@@ -22,12 +22,12 @@ if TYPE_CHECKING:
 class KeytermDetectionOptions(TypedDict, total=False):
     """Configuration for automatic keyterm detection.
 
-    Lives under the ``detection`` key of :class:`KeytermsOptions`. Absent or
-    ``{"enabled": False}`` keeps the analyzer off.
+    Lives under the ``detection`` key of :class:`KeytermOptions`. Absent or
+    ``{"enabled": False}`` keeps detection off.
     """
 
     enabled: bool
-    """Whether to run the background analyzer. Defaults to ``False``."""
+    """Whether to run the background detector. Defaults to ``False``."""
     llm: LLM | None
     """LLM used for extraction. Defaults to the active agent activity's LLM."""
     turn_interval: int
@@ -65,109 +65,13 @@ _KEYTERM_DETECTION_DEFAULTS: KeytermDetectionOptions = {
     "instructions": None,
 }
 
-_PENDING_TTL_DEFAULT = 3  # A pending term not confirmed within this many passes is dropped
+_PENDING_TTL = 3  # a pending term not confirmed within this many passes is dropped
+_MAX_TRANSCRIPT_MESSAGES = 12
 
 
 def _resolve_detection(config: KeytermDetectionOptions | None) -> KeytermDetectionOptions:
     """Return a fully-defaulted detection config (``enabled`` defaults to False)."""
-    if config is None:
-        return KeytermDetectionOptions(**_KEYTERM_DETECTION_DEFAULTS)
-    return KeytermDetectionOptions(**{**_KEYTERM_DETECTION_DEFAULTS, **config})
-
-
-class KeytermManager:
-    """Tracks keyterms and pushes the confirmed set to the active STT.
-
-    User terms are always applied. Auto-detected terms apply only once confirmed; a pending
-    term is tracked (and fed back to the detector) but never biases recognition.
-    """
-
-    def __init__(
-        self,
-        *,
-        max_keyterms: int | None = None,
-        user_keyterms: list[str] | None = None,
-    ) -> None:
-        self._user_terms = list(dict.fromkeys(user_keyterms or []))
-        self._auto_terms: list[str] = []  # confirmed terms, insertion order (oldest first)
-        self._pending_terms: dict[str, int] = {}  # term -> pass it was added (for TTL)
-
-        self._max_keyterms = max_keyterms
-        self._pending_ttl = _PENDING_TTL_DEFAULT
-
-        self._tick = 0  # detection-pass counter
-        self._stt: STT | None = None
-
-    @property
-    def user_keyterms(self) -> list[str]:
-        return list(self._user_terms)
-
-    @property
-    def auto_entries(self) -> list[tuple[str, bool]]:
-        """All auto-detected terms with their confirmed flag (confirmed first, then pending)."""
-        return [(t, True) for t in self._auto_terms] + [(t, False) for t in self._pending_terms]
-
-    @property
-    def keyterms(self) -> list[str]:
-        """The effective list applied to the STT: user terms + confirmed auto terms."""
-        return list(dict.fromkeys([*self._user_terms, *self._auto_terms]))
-
-    def attach_stt(self, stt: STT | None) -> None:
-        """Bind the STT that keyterms are pushed to and push the current set."""
-        self._stt = stt
-        if stt is not None:
-            stt.update_keyterms(self.keyterms)
-
-    def set_user_keyterms(self, terms: list[str]) -> None:
-        self._user_terms = list(dict.fromkeys(terms))
-        if self._stt is not None:
-            self._stt.update_keyterms(self.keyterms)
-
-    def update(self, *, pending: list[str] | None = None, confirm: list[str] | None = None, remove: list[str] | None = None) -> bool:
-        """Apply one detector pass: drop ``remove``, track ``pending``, apply ``confirm``.
-
-        A term's state only moves forward; a pending term not confirmed within ``pending_ttl``
-        passes ages out. Returns whether the applied (confirmed) set changed.
-        """
-        before = self.keyterms
-        self._tick += 1
-        logger.debug(
-            f"KeytermManager: pending={pending}, confirm={confirm}, "
-            f"remove={remove}, current={self.keyterms}"
-        )
-        for term in remove or []:
-            self._pending_terms.pop(term, None)
-            if term in self._auto_terms:
-                self._auto_terms.remove(term)
-
-        for term in pending or []:
-            # track a new candidate; ignore user terms and ones already known
-            if not term or term in self._user_terms:
-                continue
-            if term not in self._auto_terms and term not in self._pending_terms:
-                self._pending_terms[term] = self._tick
-
-        for term in confirm or []:
-            if term and term not in self._user_terms:
-                self._pending_terms.pop(term, None)  # promote out of pending
-                if term not in self._auto_terms:
-                    self._auto_terms.append(term)
-
-        # evict stale pending terms
-        stale = [
-            t for t, since in self._pending_terms.items() if self._tick - since >= self._pending_ttl
-        ]
-        for term in stale:
-            del self._pending_terms[term]
-
-        # evict oldest confirmed terms if we're over the limit
-        if self._max_keyterms is not None:
-            while len(self._auto_terms) > self._max_keyterms:
-                self._auto_terms.pop(0)
-
-        if self.keyterms != before and self._stt is not None:
-            self._stt.update_keyterms(self.keyterms)
-        return self.keyterms != before
+    return KeytermDetectionOptions(**{**_KEYTERM_DETECTION_DEFAULTS, **(config or {})})
 
 
 _DEFAULT_INSTRUCTIONS = """\
@@ -195,8 +99,6 @@ on after the agent used it. Confirm promptly once it has settled; don't keep wai
 X (and confirm Y). Applied terms are otherwise sticky — never remove one because the topic \
 moved on or the assistant abbreviated it. If you have no replacement, remove nothing."""
 
-_MAX_TRANSCRIPT_MESSAGES = 12
-
 
 @function_tool(name="record_keyterms")
 async def _record_keyterms(pending: list[str], confirm: list[str], remove: list[str]) -> None:
@@ -211,81 +113,95 @@ async def _record_keyterms(pending: list[str], confirm: list[str], remove: list[
     ...
 
 
-class KeytermAnalyzer:
-    """Background analyzer that proposes keyterms during a conversation.
+class KeytermDetector:
+    """Maintains the STT keyterm set and, when enabled, auto-detects keyterms during a call.
 
-    The detection itself (:meth:`detect`) is independent of any session, so it can
-    be evaluated/benchmarked directly. :meth:`start` binds the analyzer to a session
-    for its lifetime: it triggers on user turns (the freshest point for new terms,
-    confirmations, and corrections), throttled by ``turn_interval``, and applies the
-    result to the session's :class:`KeytermManager`.
+    Owned by the :class:`AgentSession`, so the keyterm state survives agent handoffs. Each agent
+    activity binds it to that activity's STT/LLM via :meth:`start` and releases it via
+    :meth:`stop`. Only confirmed terms are pushed to the STT; a pending term is tracked (and fed
+    back to the detector) but never biases recognition.
     """
 
     def __init__(
         self,
-        llm: LLM,
         *,
-        turn_interval: int = 1,
-        instructions: str | None = None,
+        user_keyterms: list[str] | None = None,
+        options: KeytermDetectionOptions | None = None,
     ) -> None:
-        self._llm = llm
+        options = _resolve_detection(options)
+        self._options = options
+        self._max_keyterms = options["max_keyterms"]
+        self._turn_interval = max(1, options["turn_interval"])
+        self._instructions = options["instructions"] or _DEFAULT_INSTRUCTIONS
 
-        self._turn_interval = max(1, turn_interval)
-        self._instructions = instructions or _DEFAULT_INSTRUCTIONS
+        self._user_terms = list(dict.fromkeys(user_keyterms or []))
+        self._auto_terms: list[str] = []  # confirmed terms, oldest first (for eviction)
+        self._pending_terms: dict[str, int] = {}  # term -> pass it was added (for TTL)
+        self._tick = 0  # detection-pass counter
 
+        # bound per agent activity (see start/stop)
+        self._stt: STT | None = None
+        self._llm: LLM | None = options["llm"]
+        self._session: AgentSession | None = None
         self._turn_count = 0
         self._detect_task: asyncio.Task[None] | None = None
-        self._session: AgentSession | None = None
 
-    def start(self, session: AgentSession) -> None:
-        if self._session is not None:
+    @property
+    def keyterms(self) -> list[str]:
+        """The effective list applied to the STT: user terms + confirmed auto terms."""
+        return list(dict.fromkeys([*self._user_terms, *self._auto_terms]))
+
+    @property
+    def user_keyterms(self) -> list[str]:
+        return list(self._user_terms)
+
+    @property
+    def auto_entries(self) -> list[tuple[str, bool]]:
+        """All auto-detected terms with their confirmed flag (confirmed first, then pending)."""
+        return [(t, True) for t in self._auto_terms] + [(t, False) for t in self._pending_terms]
+
+    def set_user_keyterms(self, terms: list[str]) -> None:
+        self._user_terms = list(dict.fromkeys(terms))
+        if self._stt is not None:
+            self._stt.update_keyterms(self.keyterms)
+
+    def start(self, session: AgentSession, *, stt: STT | None, llm: LLM | None) -> None:
+        """Bind this activity's STT/LLM and start detection (if enabled)."""
+        if self._session is not None or not self._options["enabled"]:
             return
+
+        if stt is not self._stt:
+            self._stt = stt
+            if self._stt is not None:
+                self._stt.update_keyterms(self.keyterms)
+
+        detect_llm = self._options["llm"] or llm
+        if detect_llm is None:
+            logger.warning(
+                "keyterm detection is enabled but no text LLM is available "
+                "(realtime models need an explicit `llm` in the detection config); skipping"
+            )
+            return
+        self._llm = detect_llm
         self._session = session
+        self._turn_count = 0
         session.on("conversation_item_added", self._on_conversation_item_added)
 
     async def aclose(self) -> None:
-        if self._session is None:
-            return
-        self._session.off("conversation_item_added", self._on_conversation_item_added)
-        if self._detect_task:
+        """Stop detection for the current activity; keyterm state is kept."""
+        if self._session is not None:
+            self._session.off("conversation_item_added", self._on_conversation_item_added)
+            self._session = None
+        if self._detect_task is not None:
             await aio.cancel_and_wait(self._detect_task)
             self._detect_task = None
 
-        self._session = None
-
-    async def detect(
-        self,
-        chat_ctx: ChatContext,
-        *,
-        current_keyterms: list[tuple[str, bool]] | None = None,
-    ) -> tuple[list[str], list[str], list[str]]:
-        """Run one extraction pass over the conversation via a forced function call.
-
-        ``chat_ctx`` is the conversation history and ``current_keyterms`` the manager's
-        auto entries (``(term, confirmed)``). Returns ``(pending, confirm, remove)``.
-        Does not require a session.
-        """
-        current = current_keyterms or []
-        user_msg = _format_input(chat_ctx, current)
-        if user_msg is None:  # no transcript yet — nothing to detect
-            return [], [], []
-        req_ctx = ChatContext.empty()
-        req_ctx.add_message(role="system", content=self._instructions)
-        req_ctx.add_message(role="user", content=user_msg)
-        response = await self._llm.chat(
-            chat_ctx=req_ctx, tools=[_record_keyterms], tool_choice="required"
-        ).collect()
-        result = _parse_tool_call(response.tool_calls)
-        _debug_dump(current, user_msg, response.tool_calls, result)
-        return result
-
     def _on_conversation_item_added(self, ev: ConversationItemAddedEvent) -> None:
-        session = self._session
-        if session is None:
+        if (session := self._session) is None:
             return
-        # trigger on user turns: the freshest point for new terms and corrections; the prior
-        # assistant turn is still in the snapshot for its clean spelling
-        if ev.item.type != "message" or ev.item.role != "user":
+
+        # trigger on non-empty user turns
+        if ev.item.type != "message" or ev.item.role != "user" or not ev.item.text_content:
             return
 
         self._turn_count += 1
@@ -303,20 +219,80 @@ class KeytermAnalyzer:
             exclude_handoff=True,
             exclude_empty_message=True,
         )
-        self._detect_task = asyncio.create_task(self._run_once(session._keyterm_manager, chat_ctx))
+        self._detect_task = asyncio.create_task(self._run_once(chat_ctx))
 
-    async def _run_once(self, manager: KeytermManager, chat_ctx: ChatContext) -> None:
-        try:
-            pending, confirm, remove = await self.detect(
-                chat_ctx, current_keyterms=manager.auto_entries
-            )
-            if pending or confirm or remove:
-                manager.update(pending, confirm, remove)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            # sandboxed: a failed pass must never affect the session
-            logger.exception("keyterm detection pass failed")
+    @utils.log_exceptions(logger=logger)
+    async def _run_once(self, chat_ctx: ChatContext) -> None:
+        if not isinstance(self._llm, LLM):
+            return
+
+        pending, confirm, remove = await _detect_keyterms(
+            llm=self._llm,
+            chat_ctx=chat_ctx,
+            current_keyterms=self.auto_entries,
+            instructions=self._instructions,
+        )
+
+        before = self.keyterms
+        self._tick += 1
+
+        # update the keyterm state
+        for term in remove:
+            self._pending_terms.pop(term, None)
+            if term in self._auto_terms:
+                self._auto_terms.remove(term)
+
+        for term in pending:
+            # track a new candidate; ignore user terms and ones already known
+            if term and term not in self._user_terms:
+                if term not in self._auto_terms and term not in self._pending_terms:
+                    self._pending_terms[term] = self._tick
+
+        for term in confirm:
+            if term and term not in self._user_terms:
+                self._pending_terms.pop(term, None)  # promote out of pending
+                if term not in self._auto_terms:
+                    self._auto_terms.append(term)
+
+        # drop pending terms that were never confirmed in time
+        for term in [t for t, s in self._pending_terms.items() if self._tick - s >= _PENDING_TTL]:
+            del self._pending_terms[term]
+
+        # evict oldest confirmed terms if over the cap
+        if self._max_keyterms is not None:
+            while len(self._auto_terms) > self._max_keyterms:
+                self._auto_terms.pop(0)
+
+        # update the STT if the keyterms changed
+        if self.keyterms != before and self._stt is not None:
+            self._stt.update_keyterms(self.keyterms)
+
+
+async def _detect_keyterms(
+    llm: LLM,
+    chat_ctx: ChatContext,
+    *,
+    instructions: str | None = None,
+    current_keyterms: list[tuple[str, bool]] | None = None,
+) -> tuple[list[str], list[str], list[str]]:
+    """Run one extraction pass via a forced function call.
+
+    Returns ``(pending, confirm, remove)``.
+    """
+    current = current_keyterms or []
+    user_msg = _format_input(chat_ctx, current)
+    if user_msg is None:  # no transcript yet — nothing to detect
+        return [], [], []
+    req_ctx = ChatContext.empty()
+    req_ctx.add_message(role="system", content=instructions or _DEFAULT_INSTRUCTIONS)
+    req_ctx.add_message(role="user", content=user_msg)
+    response = await llm.chat(
+        chat_ctx=req_ctx, tools=[_record_keyterms], tool_choice="required"
+    ).collect()
+    result = _parse_tool_call(response.tool_calls)
+
+    _debug_dump(current, user_msg, response.tool_calls, result)
+    return result
 
 
 def _format_input(chat_ctx: ChatContext, current_keyterms: list[tuple[str, bool]]) -> str | None:
@@ -340,20 +316,16 @@ def _format_input(chat_ctx: ChatContext, current_keyterms: list[tuple[str, bool]
         return None
     turns.reverse()
 
-    sections = [
-        "## Transcript (USER = raw STT, may be wrong; ASSISTANT = correct spelling)\n"
-        + "\n\n".join(turns)  # blank line between turns
-    ]
     applied = [term for term, ok in current_keyterms if ok]
     candidates = [term for term, ok in current_keyterms if not ok]
     # always show both lists (even empty) so the model has explicit state to diff against
-    sections.append(
-        "## Applied keyterms (biasing the recognizer now)\n" + (", ".join(applied) or "(none)")
-    )
-    sections.append(
-        "## Candidate keyterms (seen, not yet applied)\n" + (", ".join(candidates) or "(none)")
-    )
-    sections.append("Update the keyterms from the latest turns, then call `record_keyterms` once.")
+    sections = [
+        "## Transcript (USER = raw STT, may be wrong; ASSISTANT = correct spelling)\n"
+        + "\n\n".join(turns),  # blank line between turns
+        "## Applied keyterms (biasing the recognizer now)\n" + (", ".join(applied) or "(none)"),
+        "## Candidate keyterms (seen, not yet applied)\n" + (", ".join(candidates) or "(none)"),
+        "Update the keyterms from the latest turns, then call `record_keyterms` once.",
+    ]
     return "\n\n".join(sections)  # blank line + ## heading between sections
 
 
