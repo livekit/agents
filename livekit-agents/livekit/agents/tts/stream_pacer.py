@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections import deque
 from dataclasses import dataclass
 
 from .. import utils
@@ -53,7 +54,7 @@ class StreamPacerWrapper(SentenceStream):
 
         self._closing = False
         self._input_ended = False
-        self._sentences: list[str] = []
+        self._sentences: deque[str] = deque()
         self._wakeup_event = asyncio.Event()
         self._wakeup_timer: asyncio.TimerHandle | None = None
 
@@ -135,11 +136,14 @@ class StreamPacerWrapper(SentenceStream):
                 generation_stopped and remaining_audio <= self._options.min_remaining_audio
             ):
                 batch: list[str] = []
+                batch_text_len = 0
                 while self._sentences:
-                    batch.append(self._sentences.pop(0))
+                    sentence = self._sentences.popleft()
+                    batch.append(sentence)
+                    batch_text_len += len(sentence)
                     if (
                         first_sentence  # send first sentence immediately
-                        or sum(len(s) for s in batch) >= self._options.max_text_length
+                        or batch_text_len >= self._options.max_text_length
                     ):
                         break
 
