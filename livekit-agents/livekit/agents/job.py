@@ -580,6 +580,10 @@ class JobContext:
 
             await self._room.connect(self._info.url, self._info.token, options=room_options)
             self._on_connect()
+
+            if self.simulation_context() is not None:
+                self._room.on("participant_disconnected", self._on_simulator_disconnected)
+
             for p in self._room.remote_participants.values():
                 self._participant_available(p)
 
@@ -770,6 +774,12 @@ class JobContext:
         # the logs would have already been emitted. we want to capture all of the logs as it
         # relates to the job
         self._flush_early_log_buffer(replay=options["logs"])
+
+    def _on_simulator_disconnected(self, p: rtc.RemoteParticipant) -> None:
+        # the simulator disconnecting means the simulation is over: shut down now
+        # instead of waiting for the room to close
+        logger.debug("simulator disconnected, shutting down the job")
+        self.shutdown(reason="simulation completed")
 
     def _participant_available(self, p: rtc.RemoteParticipant) -> None:
         for coro, kind in self._participant_entrypoints:
