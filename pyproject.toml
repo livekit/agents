@@ -1,5 +1,6 @@
 [tool.uv]
 constraint-dependencies = ['onnxruntime<1.24; python_version < "3.11"']
+default-groups = ["dev", "typing"]
 
 [tool.uv.sources]
 livekit-agents = { workspace = true }
@@ -96,6 +97,31 @@ dev = [
     "playwright>=1.58.0",
 ]
 docs = ["pdoc3", "setuptools", "beautifulsoup4", "markdownify"]
+typing = [
+    # .pyi stubs, never used at runtime
+    "pandas-stubs>=3.0.3.260530",
+    "scipy-stubs>=1.17.1.5",
+    "types-aiofiles>=25.1.0.20260518",
+    "types-cffi>=2.0.0.20260518",
+    "types-defusedxml>=0.7.0.20260504",
+    "types-grpcio>=1.0.0.20260607",
+    "types-grpcio-status>=1.0.0.20260408",
+    "types-gunicorn>=26.0.0.20260518",
+    "types-openpyxl>=3.1.5.20260518",
+    "types-pexpect>=4.9.0.20260518",
+    "types-psutil>=7.2.2.20260518",
+    "types-pyasn1>=0.6.0.20260408",
+    "types-pyaudio>=0.2.16.20260508",
+    "types-pygments>=2.20.0.20260518",
+    "types-pysocks>=1.7.1.20260518",
+    "types-python-dateutil>=2.9.0.20260518",
+    "types-pyyaml>=6.0.12.20260518",
+    "types-regex>=2026.5.9.20260518",
+    "types-simplejson>=3.20.0.20260518",
+    "types-tensorflow>=2.18.0.20260518",
+    "types-tqdm>=4.68.0.20260608",
+    "types-xlrd>=2.0.0.20260518",
+]
 
 [tool.ruff]
 line-length = 100
