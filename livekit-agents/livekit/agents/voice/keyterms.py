@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Literal
+import os
+from datetime import datetime
+from typing import TYPE_CHECKING
 
-from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
 from .. import llm as llm_module
@@ -20,13 +21,8 @@ if TYPE_CHECKING:
 
 DEFAULT_MAX_KEYTERMS = 50
 DEFAULT_TURN_INTERVAL = 1
-
-# Confirmation status of an auto-detected keyterm. Only confirmed terms
-# (implicit/explicit) are applied to the STT — an unconfirmed term has only been
-# seen once and might be a misrecognition, so it is tracked but not yet applied.
-KeytermConfirmation = Literal["unconfirmed", "implicit", "explicit"]
-_CONFIRMED: tuple[KeytermConfirmation, ...] = ("implicit", "explicit")
-_CONFIRMATION_VALUES: tuple[KeytermConfirmation, ...] = ("unconfirmed", "implicit", "explicit")
+# A pending term not confirmed within this many passes is dropped (confirmed terms persist).
+DEFAULT_PENDING_TTL = 3
 
 
 class KeytermDetectionOptions(TypedDict, total=False):
@@ -43,7 +39,7 @@ class KeytermDetectionOptions(TypedDict, total=False):
     turn_interval: int
     """Run a pass once per N user turns. Defaults to ``1``."""
     max_keyterms: int
-    """Cap on the auto-detected keyterm set. Defaults to ``50``."""
+    """Cap on the confirmed (applied) auto keyterms. Defaults to ``50``."""
     instructions: str | None
     """Override the built-in extraction prompt."""
 
@@ -84,13 +80,10 @@ def _resolve_detection(config: KeytermDetectionOptions | None) -> KeytermDetecti
 
 
 class KeytermManager:
-    """Holds keyterms and pushes the confirmed set to the active STT.
+    """Tracks keyterms and pushes the confirmed set to the active STT.
 
-    Keeps user-defined terms (immutable by auto-detection, always applied) and
-    auto-detected terms, each carrying a confirmation status. Only confirmed auto
-    terms (``implicit``/``explicit``) are applied to the STT — an unconfirmed term
-    has been seen but not yet corroborated, so it is tracked (and fed back to the
-    detector) without biasing recognition toward a possible misrecognition.
+    User terms are always applied. Auto-detected terms apply only once confirmed; a pending
+    term is tracked (and fed back to the detector) but never biases recognition.
     """
 
     def __init__(
@@ -98,27 +91,30 @@ class KeytermManager:
         *,
         user_keyterms: list[str] | None = None,
         max_keyterms: int = DEFAULT_MAX_KEYTERMS,
+        pending_ttl: int = DEFAULT_PENDING_TTL,
     ) -> None:
-        self._user = list(dict.fromkeys(user_keyterms or []))
-        # term -> status, kept in insertion order (oldest first for eviction)
-        self._auto: dict[str, KeytermConfirmation] = {}
+        self._user_terms = list(dict.fromkeys(user_keyterms or []))
+        self._auto_terms: list[str] = []  # confirmed terms, insertion order (oldest first)
+        self._pending_terms: dict[str, int] = {}  # term -> pass it was added (for TTL)
+
         self._max_keyterms = max(0, max_keyterms)
+        self._pending_ttl = max(0, pending_ttl)
+        self._tick = 0  # detection-pass counter
         self._stt: STT | None = None
 
     @property
     def user_keyterms(self) -> list[str]:
-        return list(self._user)
+        return list(self._user_terms)
 
     @property
-    def auto_entries(self) -> list[tuple[str, KeytermConfirmation]]:
-        """All auto-detected terms with their confirmation status (incl. unconfirmed)."""
-        return list(self._auto.items())
+    def auto_entries(self) -> list[tuple[str, bool]]:
+        """All auto-detected terms with their confirmed flag (confirmed first, then pending)."""
+        return [(t, True) for t in self._auto_terms] + [(t, False) for t in self._pending_terms]
 
     @property
     def keyterms(self) -> list[str]:
         """The effective list applied to the STT: user terms + confirmed auto terms."""
-        confirmed = [t for t, status in self._auto.items() if status in _CONFIRMED]
-        return list(dict.fromkeys([*self._user, *confirmed]))
+        return list(dict.fromkeys([*self._user_terms, *self._auto_terms]))
 
     @property
     def max_keyterms(self) -> int:
@@ -131,90 +127,129 @@ class KeytermManager:
             stt.update_keyterms(self.keyterms)
 
     def set_user_keyterms(self, terms: list[str]) -> None:
-        self._user = list(dict.fromkeys(terms))
+        self._user_terms = list(dict.fromkeys(terms))
         if self._stt is not None:
             self._stt.update_keyterms(self.keyterms)
 
-    def apply_detection(self, upsert: list[tuple[str, KeytermConfirmation]]) -> bool:
-        """Apply detector output: add or update auto terms with their status.
+    def update(
+        self,
+        pending: list[str] | None = None,
+        confirm: list[str] | None = None,
+        remove: list[str] | None = None,
+    ) -> bool:
+        """Apply one detector pass: drop ``remove``, track ``pending``, apply ``confirm``.
 
-        Pushes to the STT only when the *confirmed* (applied) set changes, so status
-        churn among unconfirmed terms doesn't trigger reconnects. Returns whether the
-        applied set changed.
+        A term's state only moves forward; a pending term not confirmed within ``pending_ttl``
+        passes ages out. Returns whether the applied (confirmed) set changed.
         """
         before = self.keyterms
-        for term, status in upsert:
-            # user terms take precedence; reassigning a key keeps its FIFO position
-            if term and term not in self._user:
-                self._auto[term] = status
-        while len(self._auto) > self._max_keyterms:
-            del self._auto[next(iter(self._auto))]  # FIFO eviction; user terms untouched
+        self._tick += 1
+        logger.debug(
+            f"KeytermManager: pending={pending}, confirm={confirm}, "
+            f"remove={remove}, current={self.keyterms}"
+        )
+        for term in remove or []:
+            self._pending_terms.pop(term, None)
+            if term in self._auto_terms:
+                self._auto_terms.remove(term)
+
+        for term in pending or []:
+            # track a new candidate; ignore user terms and ones already known
+            if not term or term in self._user_terms:
+                continue
+            if term not in self._auto_terms and term not in self._pending_terms:
+                self._pending_terms[term] = self._tick
+
+        for term in confirm or []:
+            if term and term not in self._user_terms:
+                self._pending_terms.pop(term, None)  # promote out of pending
+                if term not in self._auto_terms:
+                    self._auto_terms.append(term)
+
+        self._evict_stale_pending()
+        while len(self._auto_terms) > self._max_keyterms:
+            self._auto_terms.pop(0)  # FIFO eviction of the oldest confirmed term
 
         if self.keyterms != before and self._stt is not None:
             self._stt.update_keyterms(self.keyterms)
         return self.keyterms != before
 
+    def _evict_stale_pending(self) -> None:
+        """Drop pending terms not confirmed within ``pending_ttl`` passes of being added."""
+        if not self._pending_ttl:
+            return
+        stale = [
+            t for t, since in self._pending_terms.items() if self._tick - since >= self._pending_ttl
+        ]
+        for term in stale:
+            del self._pending_terms[term]
+
 
 _DEFAULT_INSTRUCTIONS = """\
-You maintain a list of STT keyterms — words and short phrases a speech recognizer is \
-likely to mishear — used to bias recognition toward them. Review the current keyterms \
-(with their confirmation status) and the recent transcript, then call `record_keyterms` \
-exactly once to update the list.
+You keep a small set of STT keyterms that bias a speech recognizer toward the correct \
+spelling of distinctive words — names, places, companies, products, technical terms. You run \
+repeatedly during a live call; each turn you see the recent transcript plus the keyterms \
+already applied and the candidates seen so far, and you adjust the set.
 
-INCLUDE terms that are specific and easily misheard:
-- People's names, first and last, especially uncommon ones.
-- Street, neighborhood, place, and city names — even when they contain ordinary words \
-like "Street" or "Park" (e.g. "Elm Street", "Tewkesbury").
-- Company, product, brand, and venue names.
-- Specialized jargon, medication or part names, model numbers, and UNCOMMON acronyms.
+CRITICAL: a keyterm you apply BIASES the recognizer toward that spelling. If you apply a \
+WRONG spelling, the recognizer keeps producing that wrong spelling — recognition gets worse, \
+not better, and the user cannot correct it. So only ever apply a spelling you are confident \
+is CORRECT. Missing a keyterm is harmless; applying a wrong one is damaging. When unsure, do \
+not apply.
 
-DO NOT INCLUDE (never record these at any confirmation status, even if the user spoke, \
-repeated, emphasized, or corrected them):
-- Common words, generic phrases, or full sentences.
-- Acronyms spoken as individual letters (e.g. SSO, VPN, MFA, API, FAQ, ID, USB, PDF) — \
-a recognizer transcribes letter sequences reliably, so they are never worth biasing, \
-even when they are central to the conversation. Only include an acronym if it is \
-pronounced as a word and is domain-specific.
-- Ordinary conversational vocabulary, including ordinary words a user stresses while \
-correcting a misunderstanding (e.g. "afternoon" vs "morning").
+Trust the inputs for different things:
+- USER lines are raw speech-to-text: words may be wrong, and the recognizer repeats the SAME \
+error every time, so a word recurring in USER lines is NOT proof it is correct.
+- ASSISTANT lines are the agent's own writing, so they SPELL real words correctly — but the \
+agent only knows what the (possibly wrong) transcript told it, so it can echo a misheard word \
+straight back. The assistant gives you correct SPELLING, never correct MEANING.
 
-The confirmation status below applies ONLY to terms that already pass the inclusion \
-rules above — it is never a reason to record an excluded term.
+What makes a term correct is the USER settling on it, so read the user's intent across the \
+recent turns. A term needs follow-up before you trust it — its first appearance alone is never \
+enough, however certain the spelling looks:
+- JUST APPEARED — shows up only in the latest turn, with nothing after it yet: keep it \
+`pending`, even a clean spelling. You have not seen the user carry on past it.
+- CORRECTING — says "no", "I mean…", spells it out, or the word keeps coming out different: \
+the current spelling is wrong. Do not apply it, and `remove` any garbled variant already \
+applied. The right spelling is the letters the user spelled, or the clean form the assistant \
+offered that the user then accepted.
+- ACCEPTING — a later turn bears the term out (the user moved on without correcting it, \
+repeated it, or built on it): it is settled. `confirm` it, spelled the way the assistant \
+writes it. The follow-up may be several turns back in the transcript you are given, not only \
+in a prior call.
 
-The transcript is raw speech-to-text output and may contain recognition errors, so each \
-keyterm carries a confirmation status reflecting how sure you are of its spelling — only \
-confirmed terms are actually applied to recognition:
-- "unconfirmed": the term has only appeared in the latest user message and has not yet \
-been corroborated. It might be a misrecognition; report it, but do not yet trust it.
-- "implicit": the user has continued for a turn or more without correcting it (e.g. the \
-agent repeated it back and the user moved on), so the spelling appears reliable.
-- "explicit": the user spelled it out, repeated it, confirmed it after a read-back, or \
-it is the user's own correction of an earlier term.
+Call `record_keyterms` once with three lists:
+- `confirm`: a distinctive term the user has SETTLED on (corroborated after its first \
+mention), in its correct spelling (spell it as the assistant does). Never confirm a word just \
+because it recurs in USER lines or because the assistant echoed it — the user must have \
+accepted it.
+- `pending`: a distinctive term the user seems to mean but has not settled on yet (just \
+appeared, still being corrected, or brand new) — track it, don't apply. (Pending terms drop \
+automatically if never confirmed, so you don't need to repeat or clean them up.)
+- `remove`: a wrong spelling that must stop biasing the recognizer — a misrecognition the \
+user corrected, or one the assistant has since spelled differently.
 
-First apply the include/exclude rules to decide whether a term qualifies at all; only \
-qualifying terms are ever recorded. For each qualifying term, record it with its current \
-status — including ones you are not yet sure of, marked "unconfirmed", so you can confirm \
-them later instead of dropping them — and re-report an existing keyterm whenever its \
-status should change (upgrade "unconfirmed" to "implicit"/"explicit" as evidence \
-accumulates). When the user corrects a term, record the corrected spelling as "explicit" \
-and leave the earlier misheard spelling "unconfirmed" so it is never applied."""
+Do NOT record ordinary language: fillers ("yes", "okay", "thanks"), greetings, common words, \
+or generic phrases (e.g. "voice agent", "the meeting"). When in doubt, leave it out. Never \
+repeat a term already applied unless you are removing it."""
 
 _MAX_TRANSCRIPT_MESSAGES = 12
 
 
-class _KeytermObservation(BaseModel):
-    term: str = Field(description="The keyterm spelling.")
-    confirmation: KeytermConfirmation = Field(
-        description="How confirmed the spelling is; upgrade it as evidence accumulates."
-    )
-
-
 @function_tool(name="record_keyterms")
-async def _record_keyterms(keyterms: list[_KeytermObservation]) -> None:
-    """Record the STT keyterms observed so far, each with its confirmation status.
+async def _record_keyterms(pending: list[str], confirm: list[str], remove: list[str]) -> None:
+    """Update the STT keyterms based on the latest transcript.
 
     Args:
-        keyterms: Every keyterm noticed, to add or update with its confirmation status.
+        pending: Distinctive terms seen but not yet corroborated — tracked, not applied. Put a
+            term here on its first appearance (no follow-up yet), even if the spelling looks
+            certain; wait for the conversation to bear it out before applying.
+        confirm: Terms to apply, in their correct spelling — only once the conversation has
+            corroborated the term AFTER its first mention (the user moved on without correcting
+            it, repeated it, spelled it, or accepted a read-back). Do not confirm a term whose
+            only appearance is the latest turn.
+        remove: Wrong spellings to drop so they stop biasing the recognizer — a USER-side
+            misrecognition the assistant has since spelled correctly, or one the user fixed.
     """
     # only used to elicit a structured tool call; never executed
     ...
@@ -225,9 +260,9 @@ class KeytermAnalyzer:
 
     The detection itself (:meth:`detect`) is independent of any session, so it can
     be evaluated/benchmarked directly. :meth:`start` binds the analyzer to a session
-    for its lifetime: it triggers on completed user turns (the freshest point for new
-    terms, confirmations, and corrections), throttled by ``turn_interval``, and
-    applies the result to the session's :class:`KeytermManager`.
+    for its lifetime: it triggers on user turns (the freshest point for new terms,
+    confirmations, and corrections), throttled by ``turn_interval``, and applies the
+    result to the session's :class:`KeytermManager`.
     """
 
     def __init__(
@@ -246,22 +281,29 @@ class KeytermAnalyzer:
 
     async def detect(
         self,
+        chat_ctx: ChatContext,
         *,
-        transcript: str,
-        current_keyterms: list[tuple[str, KeytermConfirmation]] | None = None,
-    ) -> list[tuple[str, KeytermConfirmation]]:
-        """Run one extraction pass via a forced function call.
+        current_keyterms: list[tuple[str, bool]] | None = None,
+    ) -> tuple[list[str], list[str], list[str]]:
+        """Run one extraction pass over the conversation via a forced function call.
 
-        Returns the observed keyterms as ``(term, confirmation)``. Does not require
-        a session.
+        ``chat_ctx`` is the conversation history and ``current_keyterms`` the manager's
+        auto entries (``(term, confirmed)``). Returns ``(pending, confirm, remove)``.
+        Does not require a session.
         """
-        chat_ctx = ChatContext.empty()
-        chat_ctx.add_message(role="system", content=self._instructions)
-        chat_ctx.add_message(role="user", content=_format_input(transcript, current_keyterms or []))
+        current = current_keyterms or []
+        user_msg = _format_input(chat_ctx, current)
+        if user_msg is None:  # no transcript yet — nothing to detect
+            return [], [], []
+        req_ctx = ChatContext.empty()
+        req_ctx.add_message(role="system", content=self._instructions)
+        req_ctx.add_message(role="user", content=user_msg)
         response = await self._llm.chat(
-            chat_ctx=chat_ctx, tools=[_record_keyterms], tool_choice="required"
+            chat_ctx=req_ctx, tools=[_record_keyterms], tool_choice="required"
         ).collect()
-        return _parse_tool_call(response.tool_calls)
+        result = _parse_tool_call(response.tool_calls)
+        _debug_dump(current, user_msg, response.tool_calls, result)
+        return result
 
     def start(self, session: AgentSession) -> None:
         if self._session is not None:
@@ -282,9 +324,8 @@ class KeytermAnalyzer:
         session = self._session
         if session is None:
             return
-        # trigger on user turns: the user's latest utterance is where new terms,
-        # confirmations, and corrections land, making it the most informative point
-        # to analyze (and we react right when the user corrects, not a turn late)
+        # trigger on user turns: the freshest point for new terms and corrections; the prior
+        # assistant turn is still in the snapshot for its clean spelling
         if ev.item.type != "message" or ev.item.role != "user":
             return
 
@@ -307,12 +348,11 @@ class KeytermAnalyzer:
 
     async def _run(self, manager: KeytermManager, chat_ctx: ChatContext) -> None:
         try:
-            transcript = _recent_transcript(chat_ctx)
-            if not transcript:
-                return
-            upsert = await self.detect(transcript=transcript, current_keyterms=manager.auto_entries)
-            if upsert:
-                manager.apply_detection(upsert)
+            pending, confirm, remove = await self.detect(
+                chat_ctx, current_keyterms=manager.auto_entries
+            )
+            if pending or confirm or remove:
+                manager.update(pending, confirm, remove)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -320,48 +360,88 @@ class KeytermAnalyzer:
             logger.exception("keyterm detection pass failed")
 
 
-def _format_input(transcript: str, current_keyterms: list[tuple[str, KeytermConfirmation]]) -> str:
-    parts = [f"Conversation so far:\n{transcript}"]
-    if current_keyterms:
-        rendered = ", ".join(f"{term} [{status}]" for term, status in current_keyterms)
-        parts.append(f"Current keyterms with status: {rendered}")
-    else:
-        parts.append("No keyterms recorded yet.")
-    return "\n\n".join(parts)
+def _format_input(chat_ctx: ChatContext, current_keyterms: list[tuple[str, bool]]) -> str | None:
+    """Render the detector's user message: recent transcript + current keyterms.
 
-
-def _recent_transcript(chat_ctx: ChatContext) -> str:
-    lines: list[str] = []
-    for item in chat_ctx.items:
+    Returns ``None`` when the transcript holds no user/assistant text yet.
+    """
+    # walk newest-first and stop once we have enough, then restore chronological order
+    turns: list[str] = []
+    for item in reversed(chat_ctx.items):
         if not isinstance(item, llm_module.ChatMessage) or item.role not in ("user", "assistant"):
             continue
         if text := item.text_content:
-            lines.append(f"{item.role}: {text.strip()}")
-    return "\n".join(lines[-_MAX_TRANSCRIPT_MESSAGES:])
+            # keep the message's line structure but drop blank lines, so the blank line
+            # between turns is the only blank line and reliably marks a turn boundary
+            body = "\n".join(line for line in text.splitlines() if line.strip())
+            turns.append(f"{item.role.upper()}: {body}")
+            if len(turns) >= _MAX_TRANSCRIPT_MESSAGES:
+                break
+    if not turns:
+        return None
+    turns.reverse()
+
+    sections = [
+        "## Transcript (USER = raw STT, may be wrong; ASSISTANT = correct spelling)\n"
+        + "\n\n".join(turns)  # blank line between turns
+    ]
+    applied = [term for term, ok in current_keyterms if ok]
+    candidates = [term for term, ok in current_keyterms if not ok]
+    if applied:
+        sections.append("## Applied keyterms (biasing the recognizer now)\n" + ", ".join(applied))
+    if candidates:
+        sections.append("## Candidate keyterms (seen, not yet applied)\n" + ", ".join(candidates))
+    sections.append("Update the keyterms from the latest turns, then call `record_keyterms` once.")
+    return "\n\n".join(sections)  # blank line + ## heading between sections
 
 
 def _parse_tool_call(
     tool_calls: list[FunctionToolCall],
-) -> list[tuple[str, KeytermConfirmation]]:
-    """Parse the `record_keyterms` tool call into a list of (term, confirmation)."""
-    call = next((c for c in tool_calls if c.name == _record_keyterms.info.name), None)
-    if call is None:
-        return []
+) -> tuple[list[str], list[str], list[str]]:
+    """Parse the `record_keyterms` tool call into (pending, confirm, remove)."""
+    fnc = next((c for c in tool_calls if c.name == _record_keyterms.info.name), None)
+    if fnc is None:
+        return [], [], []
     try:
-        data = parse_function_arguments(call.arguments)
+        data = parse_function_arguments(fnc.arguments)
     except ValueError:
-        return []
+        return [], [], []
 
-    keyterms: list[tuple[str, KeytermConfirmation]] = []
-    for entry in data.get("keyterms", []):
-        if not isinstance(entry, dict) or not isinstance(term := entry.get("term"), str):
-            continue
-        if not term.strip():
-            continue
-        status = entry.get("confirmation")
-        confirmation: KeytermConfirmation = (
-            status if status in _CONFIRMATION_VALUES else "unconfirmed"
-        )
-        keyterms.append((term, confirmation))
+    def _terms(key: str) -> list[str]:
+        return [t for t in data.get(key, []) if isinstance(t, str) and t.strip()]
 
-    return keyterms
+    return _terms("pending"), _terms("confirm"), _terms("remove")
+
+
+# Set LK_KEYTERMS_DEBUG_FILE to a path to append the LLM input/output of every detect pass
+# there (for live debugging). Unset -> no-op, no overhead beyond an env lookup.
+_DEBUG_FILE_ENV = "LK_KEYTERMS_DEBUG_FILE"
+
+
+def _debug_dump(
+    current_keyterms: list[tuple[str, bool]],
+    user_msg: str,
+    tool_calls: list[FunctionToolCall],
+    result: tuple[list[str], list[str], list[str]],
+) -> None:
+    path = os.environ.get(_DEBUG_FILE_ENV)
+    if not path:
+        return
+    pending, confirm, remove = result
+    current = ", ".join(f"{t} ({'confirmed' if ok else 'pending'})" for t, ok in current_keyterms)
+    raw = next(
+        (c.arguments for c in tool_calls if c.name == _record_keyterms.info.name), "<no call>"
+    )
+    block = (
+        f"==== detect @ {datetime.now().isoformat(timespec='seconds')} ====\n"
+        f"--- current keyterms ---\n{current or '(none)'}\n"
+        f"--- input ---\n{user_msg}\n"
+        f"--- output ---\n"
+        f"pending: {pending}\nconfirm: {confirm}\nremove: {remove}\n"
+        f"raw: {raw}\n\n"
+    )
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(block)
+    except Exception:
+        logger.exception("failed to write keyterm debug record")
