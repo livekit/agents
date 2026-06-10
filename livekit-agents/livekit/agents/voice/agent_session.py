@@ -394,7 +394,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             session_close_transcript_timeout=session_close_transcript_timeout,
         )
         self._conn_options = conn_options or SessionConnectOptions()
-        self._audio_models_disabled = False
+        self._text_only = False
         self._started = False
 
         if isinstance(stt, str):
@@ -700,7 +700,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             if text_simulation:
                 logger.info("text simulation: disabling STT/TTS/VAD and audio I/O")
-                self._audio_models_disabled = True
+                self._text_only = True
 
             self._session_span = current_span = tracer.start_span("agent_session")
             # we detach here to avoid context issues since tokens need to be detached
