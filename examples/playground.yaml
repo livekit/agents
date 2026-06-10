@@ -207,9 +207,9 @@ examples:
           - { value: xai/stt-1, label: xAI Speech-to-Text }
       - rpc: set_llm_model
         label: LLM
-        default: gemma-4-31b-it
+        default: google/gemma-4-31b-it
         options:
-          - { value: gemma-4-31b-it, label: Gemma 4 31B }
+          - { value: google/gemma-4-31b-it, label: Gemma 4 31B }
           - { value: openai/gpt-4.1, label: OpenAI GPT-4.1 }
           - { value: openai/gpt-4.1-mini, label: OpenAI GPT-4.1 mini }
           - { value: openai/gpt-4.1-nano, label: OpenAI GPT-4.1 nano }

@@ -1,6 +1,5 @@
 import json
 import logging
-import os
 from urllib.parse import urlencode
 
 from dotenv import load_dotenv
@@ -15,21 +14,17 @@ from livekit.agents import (
     tokenize,
 )
 from livekit.agents.voice import CONVERSATIONAL_EXPRESSIVENESS_PRESET
-from livekit.plugins import openai, silero
+from livekit.plugins import silero
 from livekit.rtc import RpcInvocationData
 
 logger = logging.getLogger("inference")
 logger.setLevel(logging.INFO)
 
-load_dotenv()
+load_dotenv('.env.local')
 
 DEFAULT_STT = "deepgram/nova-3"
-DEFAULT_LLM = "gemma-4-31b-it"
+DEFAULT_LLM = "google/gemma-4-31b-it"
 DEFAULT_TTS = "inworld/inworld-tts-2"
-
-GEMMA_BASE_URL = os.environ["GEMMA_BASE_URL"]
-GEMMA_API_KEY = os.environ["GEMMA_API_KEY"]
-GEMMA_MODEL = "gemma-4-31b-it"
 
 # Default starter prompt. Keep in sync with the `set_system_prompt`
 # control's `default` in examples/playground.yaml — the UI seeds the
@@ -78,11 +73,7 @@ server = AgentServer()
 async def entrypoint(ctx: JobContext) -> None:
     session = AgentSession(
         stt=inference.STT(model=DEFAULT_STT),
-        llm=openai.LLM(
-            model=GEMMA_MODEL,
-            base_url=GEMMA_BASE_URL,
-            api_key=GEMMA_API_KEY,
-        ),
+        llm=inference.LLM(model=DEFAULT_LLM),
         tts=inference.TTS(
             model=DEFAULT_TTS,
             voice="Sarah",
@@ -122,7 +113,7 @@ async def entrypoint(ctx: JobContext) -> None:
     @ctx.room.local_participant.register_rpc_method("set_llm_model")
     async def set_llm_model(data: RpcInvocationData) -> str:
         model = parse_value(data.payload, DEFAULT_LLM)
-        if isinstance(session.llm, openai.LLM) and session.llm.model == model:
+        if isinstance(session.llm, inference.LLM) and session.llm.model == model:
             return ""
         logger.info("switching LLM → %s", model)
         session.llm.update_options(model=model)
@@ -150,7 +141,7 @@ async def entrypoint(ctx: JobContext) -> None:
         params = {
             "modelMode": "pipeline",
             "instructions": agent.instructions or "",
-            "llm": session.llm.model if isinstance(session.llm, openai.LLM) else DEFAULT_LLM,
+            "llm": session.llm.model if isinstance(session.llm, inference.LLM) else DEFAULT_LLM,
             "stt": session.stt.model if isinstance(session.stt, inference.STT) else DEFAULT_STT,
             "tts": session.tts.model if isinstance(session.tts, inference.TTS) else DEFAULT_TTS,
         }
