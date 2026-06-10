@@ -897,7 +897,6 @@ def _strip_nones(data: dict[str, Any]) -> dict[str, Any]:
 def _synthesize_url(opts: _TTSOptions) -> str:
     base_url = opts.base_url
     voice_id = opts.voice_id
-    model_id = opts.model
     output_format = opts.encoding
     url = (
         f"{base_url}/text-to-speech/{voice_id}/stream?"
