@@ -350,8 +350,9 @@ class SpeechStream(stt.SpeechStream):
         )
         self._event_ch.send_nowait(usage_event)
 
-    def _uses_server_vad(self) -> bool:
-        return is_given(self._opts.server_vad) and self._opts.server_vad is not None
+    @property
+    def _server_vad(self) -> VADOptions | None:
+        return self._opts.server_vad if is_given(self._opts.server_vad) else None
 
     async def _run(self) -> None:
         """Run the streaming transcription session"""
@@ -484,7 +485,7 @@ class SpeechStream(stt.SpeechStream):
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         """Establish WebSocket connection to ElevenLabs Scribe v2 API"""
-        commit_strategy = "vad" if self._uses_server_vad() else "manual"
+        commit_strategy = "vad" if self._server_vad is not None else "manual"
         params = [
             f"model_id={self._opts.model_id}",
             f"audio_format=pcm_{self._opts.sample_rate}",
@@ -494,9 +495,7 @@ class SpeechStream(stt.SpeechStream):
         if not self._language:
             params.append("include_language_detection=true")
 
-        if self._uses_server_vad():
-            server_vad = self._opts.server_vad
-            assert is_given(server_vad) and server_vad is not None
+        if (server_vad := self._server_vad) is not None:
             if (
                 vad_silence_threshold_secs := server_vad.get("vad_silence_threshold_secs")
             ) is not None:
@@ -601,7 +600,7 @@ class SpeechStream(stt.SpeechStream):
                     alternatives=[speech_data],
                 )
                 self._event_ch.send_nowait(final_event)
-                if self._uses_server_vad():
+                if self._server_vad is not None:
                     self._event_ch.send_nowait(stt.SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
                     self._speaking = False
             else:
