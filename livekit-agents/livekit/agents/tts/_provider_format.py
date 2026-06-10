@@ -230,8 +230,9 @@ CONVERSATIONAL_EXPRESSIVENESS_PRESET: "ExpressivenessOptions" = {
         "Speak like a real person mid-conversation with a friend — present, reactive, opinionated, "
         "never flat or scripted. Your delivery is punchy and lively: react first, support second. "
         "Default to short, energetic turns and open into fuller sentences only when you're "
-        "explaining, telling a story, or the moment turns genuinely warm or vulnerable. Use the "
-        "formatting tags below to shape your delivery:\n\n"
+        "explaining, telling a story, or the moment turns genuinely warm or vulnerable. Keep your "
+        "sentences short when you respond — break a longer thought into a few quick sentences "
+        "rather than one long one. Use the formatting tags below to shape your delivery:\n\n"
         + _INWORLD_LLM_INSTRUCTIONS
         + "\n\nGuidelines:\n"
         "- Be genuinely emotive, not performed. Let real feeling land in the voice — delight, "

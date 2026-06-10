@@ -577,7 +577,6 @@ class TTS(tts.TTS):
 
         try:
             payload = json.dumps(params)
-            # logger.debug("[TTS→gateway] %s", payload)
             await ws.send_str(payload)
         except Exception as e:
             await ws.close()
@@ -707,7 +706,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 token_pkt["extra"] = self._opts.extra_kwargs if self._opts.extra_kwargs else {}
                 self._mark_started()
                 payload = json.dumps(token_pkt)
-                # logger.debug("[TTS→gateway] %s", payload)
+                logger.debug("[TTS→gateway] %s", payload)
                 await ws.send_str(payload)
                 input_sent_event.set()
 
@@ -715,7 +714,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                 "type": "session.flush",
             }
             flush_payload = json.dumps(end_pkt)
-            # logger.debug("[TTS→gateway] %s", flush_payload)
             await ws.send_str(flush_payload)
             # needed in case empty input is sent
             input_sent_event.set()

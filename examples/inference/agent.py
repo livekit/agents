@@ -20,7 +20,7 @@ from livekit.rtc import RpcInvocationData
 logger = logging.getLogger("inference")
 logger.setLevel(logging.INFO)
 
-load_dotenv('.env.local')
+load_dotenv()
 
 DEFAULT_STT = "deepgram/nova-3"
 DEFAULT_LLM = "google/gemma-4-31b-it"
@@ -60,9 +60,7 @@ class InferenceAgent(Agent):
         # client rather than spoken before the audio socket is up. Runs on
         # the session's default LLM (Gemma) — no model-routing needed here.
         self.session.generate_reply(
-            instructions="Greet the user with excitement, welcome them to the "
-            "LiveKit Playground, and invite them to chat or swap your STT, LLM, "
-            "or TTS models. Keep it to one or two short, natural sentences."
+            instructions="Greet the user with excitement, and ask them how their day is going. Keep it to one or two short, natural sentences."
         )
 
 
