@@ -285,6 +285,9 @@ def _run_worker(server: AgentServer, args: proto.CliArgs) -> None:
     if kwargs:
         server.update_options(**kwargs)
 
+    if args.simulation:
+        server._simulation = True
+
     if args.reload_addr and not args.dev:
         raise ValueError("--reload-addr requires --dev")
 

@@ -688,6 +688,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 job_ctx.init_recording(self._recording_options)
 
+            # Under a text simulation the simulated user interacts over text
+            # streams only: disable audio I/O here, and STT/TTS/VAD via
+            # AgentActivity (both consult _text_only).
+            if self._text_only:
+                logger.info("text simulation: disabling STT/TTS/VAD and audio I/O")
+
             self._session_span = current_span = tracer.start_span("agent_session")
             # we detach here to avoid context issues since tokens need to be detached
             # in the same context as it was created
@@ -737,6 +743,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     room_output_options=room_output_options,
                 )
                 room_options = copy.copy(room_options)  # shadow copy is enough
+
+                if self._text_only:
+                    room_options.audio_input = False
+                    room_options.audio_output = False
 
                 if self.input.audio is not None:
                     if room_options.audio_input:
@@ -1722,6 +1732,20 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._chat_ctx.insert(item)
 
     # move them to the end to avoid shadowing the same named modules for mypy
+    @property
+    def _text_only(self) -> bool:
+        """True when running under a text simulation: the session uses no audio
+        I/O and no audio models (STT/TTS/VAD)."""
+        from ..job import get_job_context
+
+        job_ctx = get_job_context(required=False)
+        if job_ctx is None or (sim_ctx := job_ctx.simulation_context()) is None:
+            return False
+
+        from ..simulation import SimulationMode
+
+        return sim_ctx.simulation_mode == SimulationMode.SIMULATION_MODE_TEXT
+
     @property
     def stt(self) -> stt.STT | None:
         return self._stt

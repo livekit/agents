@@ -72,6 +72,7 @@ def _dispatch(server: AgentServer, args: argparse.Namespace) -> None:
                 reload_addr=args.reload_addr,
                 log_format=args.log_format,
                 dev=args.dev,
+                simulation=args.simulation,
             ),
         )
 
@@ -111,6 +112,9 @@ def main(argv: list[str] | None = None) -> int:
     start_p.add_argument("--api-secret")
     start_p.add_argument("--dev", action="store_true", default=False)
     start_p.add_argument("--reload-addr")
+    # set by `lk simulate`: disables the worker load limit so simulation runs
+    # can saturate the agent
+    start_p.add_argument("--simulation", action="store_true", default=False)
 
     console_p = sub.add_parser("console")
     console_p.add_argument("entrypoint", nargs="?")
