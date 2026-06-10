@@ -141,9 +141,8 @@ class STT(stt.STT):
                 for barge-in; higher values produce more confident first partials. Only
                 supported with the 'u3-rt-pro' / 'u3-rt-pro-beta-1' models.
             agent_context: Free-text context describing what the agent said, used to bias
-                transcription of the user's reply. Typically set per-turn via
-                `update_options(agent_context=...)`; see `enable_agent_context` for wiring
-                this automatically to an `AgentSession`. Only supported with the
+                transcription of the user's reply. Set at construction or updated per-turn
+                via `update_options(agent_context=...)`. Only supported with the
                 'u3-rt-pro' / 'u3-rt-pro-beta-1' models (max 1500 characters).
             previous_context_n_turns: Maximum number of prior conversation entries (user
                 transcripts and any `agent_context` values) carried forward as context for

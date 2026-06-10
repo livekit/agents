@@ -15,7 +15,6 @@
 See https://docs.livekit.io/agents/integrations/stt/assemblyai/ for more information.
 """
 
-from .agent_context import enable_agent_context
 from .log import logger
 from .stt import STT, SpeechStream
 from .version import __version__
@@ -23,7 +22,6 @@ from .version import __version__
 __all__ = [
     "STT",
     "SpeechStream",
-    "enable_agent_context",
     "logger",
     "__version__",
 ]
