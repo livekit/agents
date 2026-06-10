@@ -11,6 +11,7 @@ from livekit.agents import (
     Agent,
     AgentServer,
     AgentSession,
+    APIError,
     JobContext,
     ModelSettings,
     cli,
@@ -87,15 +88,31 @@ class InferenceAgent(Agent):
     ) -> AsyncGenerator[llm.ChatChunk | str, None]:
         # Gemma → the session's default LLM; anything else → Inference.
         active = self.session.llm if self.llm_model == GEMMA_MODEL else self._inference_llm
+        logger.info("llm_node → llm_model=%s backend=%s", self.llm_model, type(active).__module__)
         tool_choice = model_settings.tool_choice if model_settings else NOT_GIVEN
-        async with active.chat(
-            chat_ctx=chat_ctx,
-            tools=tools,
-            tool_choice=tool_choice,
-            conn_options=self.session.conn_options.llm_conn_options,
-        ) as stream:
-            async for chunk in stream:
+        conn_options = self.session.conn_options.llm_conn_options
+
+        async def _run(backend: llm.LLM) -> AsyncGenerator[llm.ChatChunk, None]:
+            async with backend.chat(
+                chat_ctx=chat_ctx, tools=tools, tool_choice=tool_choice, conn_options=conn_options
+            ) as stream:
+                async for chunk in stream:
+                    yield chunk
+
+        started = False
+        try:
+            async for chunk in _run(active):
+                started = True
                 yield chunk
+        except APIError as e:
+            # A bad/unsupported model on the Inference gateway 404s here. Don't kill the
+            # session — fall back to the Gemma default if nothing has streamed yet.
+            if active is not self.session.llm and not started:
+                logger.warning("LLM %r failed (%s); falling back to Gemma", self.llm_model, e)
+                async for chunk in _run(self.session.llm):
+                    yield chunk
+            else:
+                raise
 
 
 server = AgentServer()
