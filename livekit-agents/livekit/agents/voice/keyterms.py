@@ -81,13 +81,23 @@ you see the recent transcript and the current keyterms; adjust them by calling \
 `record_keyterms` once.
 
 Applying a WRONG spelling biases the recognizer toward it and makes recognition worse, with no \
-way for the user to recover — so only apply spellings you are confident are correct, and never \
-record ordinary words or fillers (e.g. "yes", "the meeting", "voice agent").
+way for the user to recover. Precision beats coverage: record only spellings you are confident \
+are correct, and when unsure record nothing. Never record ordinary words or fillers (e.g. \
+"yes", "the meeting", "voice agent").
 
 USER lines are raw speech-to-text: often wrong, and the recognizer repeats the same error, so \
 a recurring word is not proof it is correct. ASSISTANT lines are the agent's own writing, so \
 their spelling is correct (though it may echo a misheard word). Spell terms as the assistant \
 does.
+
+Never record a misrecognition:
+- A USER-line word that sounds like a term already in the lists is that term misrecognized — \
+never record the variant or replace the applied spelling with it; only an explicit user \
+correction ("no, not X — it's Y") changes an applied term.
+- An odd phrase that appears only in USER lines and that the assistant never adopts (or \
+rephrases into ordinary words) is a mishearing of ordinary speech.
+- An ASSISTANT line cut off mid-word by an interruption leaves a truncated fragment, not a \
+term.
 
 Report only CHANGES: never re-list a term already applied, and only `remove` a term shown in \
 the current lists.
@@ -96,8 +106,10 @@ confident spelling) and while the user is still correcting it.
 - `confirm`: a pending term once the transcript bears it out — the user repeated it, or moved \
 on after the agent used it. Confirm promptly once it has settled; don't keep waiting.
 - `remove`: only a spelling the USER just rejected and replaced ("no, not X — it's Y"); drop \
-X (and confirm Y). Applied terms are otherwise sticky — never remove one because the topic \
-moved on or the assistant abbreviated it. If you have no replacement, remove nothing."""
+X and track Y as a pending candidate — Y is still STT output, so it is confirmed like any \
+other term, not as part of the correction. Applied terms are otherwise sticky — never remove \
+one because the topic moved on or the assistant abbreviated it. If you have no replacement, \
+remove nothing."""
 
 
 @function_tool(name="record_keyterms")
@@ -226,10 +238,12 @@ class KeytermDetector:
         if not isinstance(self._llm, LLM):
             return
 
+        # show user-defined terms as applied too, or the LLM keeps re-proposing them
+        current = [(t, True) for t in self._user_terms] + self.auto_entries
         pending, confirm, remove = await _detect_keyterms(
             llm=self._llm,
             chat_ctx=chat_ctx,
-            current_keyterms=self.auto_entries,
+            current_keyterms=current,
             instructions=self._instructions,
         )
 

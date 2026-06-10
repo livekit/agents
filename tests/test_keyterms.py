@@ -87,10 +87,12 @@ class _RecordingLLM(LLM):
         super().__init__()
         self._results = list(results) or [([], [], [])]
         self.calls = 0
+        self.last_chat_ctx: ChatContext | None = None
 
     def chat(self, *, chat_ctx: ChatContext, **kwargs: Any) -> _FakeStream:  # type: ignore[override]
         result = self._results[min(self.calls, len(self._results) - 1)]
         self.calls += 1
+        self.last_chat_ctx = chat_ctx
         return _FakeStream(*result)
 
 
@@ -156,6 +158,17 @@ async def test_pending_then_confirmed() -> None:
     await d._run_once(_ctx())
     assert d.auto_entries == [("Kubernetes", True)]
     assert d.keyterms == ["Kubernetes"]
+
+
+async def test_user_terms_shown_to_llm_as_applied() -> None:
+    fake = _RecordingLLM()
+    d = _detector(user_keyterms=["Acme Corp"], llm=fake)
+    await d._run_once(_ctx())
+    # user terms must appear in the applied list, or the LLM keeps re-proposing them
+    assert fake.last_chat_ctx is not None
+    user_msg = fake.last_chat_ctx.items[-1].text_content or ""
+    applied_section = user_msg.split("## Applied keyterms")[1].splitlines()[1]
+    assert "Acme Corp" in applied_section
 
 
 async def test_user_precedence_and_dedup() -> None:
