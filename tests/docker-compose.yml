@@ -1,9 +1,10 @@
 services:
   toxiproxy:
-    build:
-      context: ..
-      dockerfile: tests/Dockerfile.toxiproxy
-    command: ["toxiproxy-server", "-host", "0.0.0.0", "-port", "8474"]
+    # Prebuilt image instead of cloning + `go build`ing toxiproxy on every run
+    # (that build blocked `make test` before any test could start). The image's
+    # ENTRYPOINT is /toxiproxy; pass the bind flags as args.
+    image: ghcr.io/shopify/toxiproxy:2.12.0
+    command: ["-host=0.0.0.0", "-port=8474"]
     environment:
       - LOG_LEVEL=info
     # ports:

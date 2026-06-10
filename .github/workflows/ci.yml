@@ -25,16 +25,18 @@ jobs:
         with:
           python-version: "3.10"
 
-      - name: Install the project
-        run: uv sync --all-extras --dev
+      - name: Install ruff
+        # Just the locked ruff binary — linting needs neither the project nor
+        # its dependencies.
+        run: uv sync --only-group lint --frozen
 
       - name: Ruff
-        run: uv run ruff check --output-format=github .
+        run: uv run --no-sync ruff check --output-format=github .
         continue-on-error: true
         id: ruff-check
 
       - name: Check format
-        run: uv run ruff format --check .
+        run: uv run --no-sync ruff format --check .
         continue-on-error: true
         id: ruff-format
 
@@ -63,7 +65,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install the project
-        run: uv sync --all-extras --dev
+        run: uv sync --all-extras --frozen
 
       - name: Cache mypy
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
@@ -75,4 +77,7 @@ jobs:
             mypy-${{ matrix.python-version }}-
 
       - name: Check Types
-        run: uv run python scripts/check_types.py
+        # `--no-sync` is forwarded to the script's inner `uv run`: the env was
+        # fully synced above (typing group included via default-groups), so
+        # mypy must never re-sync or re-lock here.
+        run: uv run --no-sync python scripts/check_types.py -- --no-sync

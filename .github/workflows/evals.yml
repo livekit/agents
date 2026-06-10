@@ -38,7 +38,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install the project
-        run: uv sync --all-extras --dev
+        run: uv sync --all-extras --frozen
 
       - name: Setup Google credentials
         if: matrix.example == 'google'

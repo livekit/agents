@@ -25,8 +25,8 @@ test: up
 	  done"
 	echo 'Toxiproxy is ready'
 
-	docker compose exec app uv sync --all-extras --dev
-	docker compose exec -e PLUGIN="$(PLUGIN)" app uv run pytest -s --color=yes --tb=short --log-cli-level=DEBUG --tts --show-capture=all $(PYTEST_ARGS)
+	docker compose exec app uv sync --all-extras --frozen
+	docker compose exec -e PLUGIN="$(PLUGIN)" app uv run --no-sync pytest -s --color=yes --tb=short --log-cli-level=DEBUG --tts --show-capture=all $(PYTEST_ARGS)
 	$(MAKE) down
 
 unit-tests:
