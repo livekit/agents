@@ -463,9 +463,9 @@ class JobContext:
                 metadata = dispatch_json
                 break
         if not metadata:
-            # older servers sent the dispatch in the job/room metadata;
-            # fake_job_context places it on the job
-            metadata = self._info.job.metadata or self._room.metadata
+            # older servers sent the dispatch in the job metadata;
+            # fake_job_context places it there too
+            metadata = self._info.job.metadata
         if not metadata:
             return None
 
