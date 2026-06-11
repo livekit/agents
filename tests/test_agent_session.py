@@ -88,7 +88,7 @@ SESSION_TIMEOUT = 60.0
 
 
 async def test_events_and_metrics() -> None:
-    speed = 5.0
+    speed = 1
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "Hello, how are you?", stt_delay=0.2)  # EOU at 2.5+0.5=3.0s
     actions.add_llm("I'm doing well, thank you!", ttft=0.1, duration=0.3)
@@ -164,7 +164,7 @@ async def test_events_and_metrics() -> None:
 
 
 async def test_tool_call() -> None:
-    speed = 5.0
+    speed = 1
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "What's the weather in Tokyo?")
     actions.add_llm(
@@ -245,7 +245,7 @@ async def test_tool_call() -> None:
 async def test_interruption(
     resume_false_interruption: bool, expected_interruption_time: float
 ) -> None:
-    speed = 5.0
+    speed = 1
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "Tell me a story.")
     actions.add_llm("Here is a long story for you ... the end.")
@@ -296,7 +296,7 @@ async def test_interruption(
 
 
 async def test_interruption_options() -> None:
-    speed = 5.0
+    speed = 1
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "Tell me a story.")
     actions.add_llm("Here is a long story for you ... the end.")
@@ -337,7 +337,7 @@ async def test_interruption_options() -> None:
 
 
 async def test_interruption_by_text_input() -> None:
-    speed = 5.0
+    speed = 1
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "Tell me a story.")
     actions.add_llm("Here is a long story for you ... the end.")
@@ -359,7 +359,7 @@ async def test_interruption_by_text_input() -> None:
 
     asyncio.get_event_loop().call_later(5 / speed, fake_text_input)
 
-    await asyncio.wait_for(run_session(session, agent, drain_delay=0.5), timeout=SESSION_TIMEOUT)
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
 
     assert len(playback_finished_events) == 2
     assert playback_finished_events[0].interrupted is True
@@ -403,7 +403,7 @@ async def test_interruption_by_text_input() -> None:
 async def test_interruption_before_speaking(
     resume_false_interruption: bool, expected_interruption_time: float
 ) -> None:
-    speed = 5.0
+    speed = 1
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "Tell me a story.")
     actions.add_llm("Here is a long story for you ... the end.", duration=1.0)
@@ -457,7 +457,7 @@ async def test_interrupt_before_speaking_with_pausable_audio() -> None:
     User turn starting while the agent is ``thinking`` must pause the
     pausable output so the stale reply never promotes to ``speaking``.
     """
-    speed = 5.0
+    speed = 1
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "Tell me a story.")
     actions.add_llm("Here is a long story for you ... the end.", duration=1.0)
@@ -510,7 +510,7 @@ async def test_false_interruption_before_speaking_resumes() -> None:
     Brief VAD-only noise during ``thinking`` must pause then resume on VAD EOS,
     letting the stale reply play through normally.
     """
-    speed = 5.0
+    speed = 1
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "Tell me a story.")
     actions.add_llm("Here is a short reply.", ttft=0.05, duration=0.05)
@@ -547,7 +547,7 @@ async def test_generate_reply() -> None:
     """
     Test `generate_reply` in `on_enter` and tool call, `say` in `on_user_turn_completed`
     """
-    speed = 5.0
+    speed = 1
 
     actions = FakeActions()
     # llm and tts response for generate_reply() and say()
@@ -575,9 +575,7 @@ async def test_generate_reply() -> None:
     session.on("function_tools_executed", tool_executed_events.append)
     session.output.audio.on("playback_finished", playback_finished_events.append)
 
-    t_origin = await asyncio.wait_for(
-        run_session(session, agent, drain_delay=0.5), timeout=SESSION_TIMEOUT
-    )
+    t_origin = await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
 
     # playback_finished
     assert len(playback_finished_events) == 3
@@ -645,7 +643,7 @@ async def test_aec_warmup() -> None:
     The interruption is delayed to 5.5s (EOU: speech end 5.0 + 0.5 endpointing delay)
     because FakeSTT is timer-based and still produces transcripts during warmup.
     """
-    speed = 5.0
+    speed = 1
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "Tell me a story.")
     actions.add_llm("Here is a long story for you ... the end.")
@@ -687,7 +685,7 @@ async def test_start_boundary_does_not_block_vad_interruption() -> None:
     This validates that the backchannel_boundary config is properly handled and doesn't
     regress normal interruption behavior.
     """
-    speed = 5.0
+    speed = 1
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "Tell me a story.")
     actions.add_llm("Here is a long story for you ... the end.")
@@ -984,7 +982,7 @@ async def test_force_flush_held_transcripts_emits_buffered_events() -> None:
     ],
 )
 async def test_preemptive_generation(preemptive_generation: dict, expected_latency: float) -> None:
-    speed = 5.0
+    speed = 1
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.0, "Hello, how are you?", stt_delay=0.1)
     actions.add_llm("I'm doing great, thank you!", ttft=0.1, duration=0.3)
@@ -1042,7 +1040,7 @@ async def test_interrupt_during_on_user_turn_completed(
     """
     Test interrupt during preemptive generation and on_user_turn_completed.
     """
-    speed = 5.0
+    speed = 1
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.0, "Tell me a story", stt_delay=0.2)
     actions.add_llm("Here is a story for you...", ttft=0.1, duration=0.3)
@@ -1063,7 +1061,7 @@ async def test_interrupt_during_on_user_turn_completed(
     session.on("agent_state_changed", agent_state_events.append)
     session.on("conversation_item_added", conversation_events.append)
 
-    await asyncio.wait_for(run_session(session, agent, drain_delay=1.0), timeout=SESSION_TIMEOUT)
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
 
     assert agent_state_events[0].old_state == "initializing"
     assert agent_state_events[0].new_state == "listening"
@@ -1095,7 +1093,7 @@ async def test_interrupt_during_on_user_turn_completed(
 
 
 async def test_unknown_function_call() -> None:
-    speed = 5.0
+    speed = 1
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "Check the weather")
     actions.add_llm(
@@ -1141,7 +1139,7 @@ async def test_invalid_tool_arguments_surface_as_tool_error() -> None:
     stripped from the conversation. Instead the schema error is wrapped in a
     ToolError so the model receives a descriptive message and can self-correct
     on the next turn."""
-    speed = 5.0
+    speed = 1
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "What's the weather?")
     # get_weather requires `location: str` — emit a call with no args so it
@@ -1204,7 +1202,7 @@ async def test_tool_internal_exception_returns_generic_error() -> None:
             """Always blows up."""
             raise RuntimeError("kaboom: secret database password leaked")
 
-    speed = 5.0
+    speed = 1
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "What's the weather in Tokyo?")
     actions.add_llm(
@@ -1341,7 +1339,7 @@ def check_timestamp(
 
 
 async def test_silent_tool_call_pause_state_does_not_leak_into_tool_reply() -> None:
-    speed = 5.0
+    speed = 1
     actions = FakeActions()
     actions.add_user_speech(0.1, 0.2, "What's the weather in Tokyo?", stt_delay=0.05)
 
@@ -1418,7 +1416,7 @@ class FlushMultiSegmentAgent(Agent):
 
 
 async def test_pipeline_multi_segment_flush() -> None:
-    speed = 5.0
+    speed = 1
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "Hello, how are you?", stt_delay=0.2)
     # the agent's llm_node injects a FlushSentinel, splitting the reply into two
@@ -1447,7 +1445,7 @@ async def test_pipeline_multi_segment_flush() -> None:
 
 
 async def test_pipeline_multi_segment_interrupted() -> None:
-    speed = 5.0
+    speed = 1
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "Hello, how are you?", stt_delay=0.2)
     # long first segment so the interrupt lands while it is still playing
