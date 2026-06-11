@@ -14,7 +14,7 @@ pytestmark = pytest.mark.unit
 
 
 def _make_stream_under_test(
-    *, audio_position: float = 1.25, eos_fallback_timeout: float = 0.01
+    *, eos_fallback_timeout: float = 0.01
 ) -> tuple[SpeechStream, list[Any]]:
     instance = SpeechStream.__new__(SpeechStream)
     captured: list[Any] = []
@@ -28,12 +28,7 @@ def _make_stream_under_test(
     instance._opts = SimpleNamespace(language="en-IN", sample_rate=16000)  # type: ignore[attr-defined]
     instance._speaking = False  # type: ignore[attr-defined]
     instance._should_flush = False  # type: ignore[attr-defined]
-    instance._audio_position = audio_position  # type: ignore[attr-defined]
-    instance._utterance_start_audio_pos = 0.0  # type: ignore[attr-defined]
-    instance._utterance_server_speech_end = None  # type: ignore[attr-defined]
-    instance._utterance_speech_end_audio_pos = None  # type: ignore[attr-defined]
     instance._utterance_speech_start_wall = None  # type: ignore[attr-defined]
-    instance._utterance_speech_end_wall = None  # type: ignore[attr-defined]
     instance._pending_final_data = None  # type: ignore[attr-defined]
     instance._pending_eos = False  # type: ignore[attr-defined]
     instance._eos_fallback_task = None  # type: ignore[attr-defined]
@@ -78,8 +73,9 @@ async def test_start_speech_sets_speech_start_time() -> None:
     assert start_events[0].request_id == "req-session"
 
 
-async def test_end_speech_emits_end_time_alternative() -> None:
-    instance, captured = _make_stream_under_test(audio_position=1.4)
+async def test_end_speech_emits_bare_end_of_speech() -> None:
+    # Like every other STT plugin, END_OF_SPEECH carries no alternatives/timing.
+    instance, captured = _make_stream_under_test()
 
     await instance._handle_events(_event("START_SPEECH"))
     await instance._handle_events(_event("END_SPEECH"))
@@ -87,28 +83,42 @@ async def test_end_speech_emits_end_time_alternative() -> None:
 
     end_events = _events_of_type(captured, stt.SpeechEventType.END_OF_SPEECH)
     assert len(end_events) == 1
-    assert end_events[0].alternatives[0].end_time == pytest.approx(1.4)
+    assert end_events[0].alternatives == []
     assert end_events[0].request_id == "req-session"
 
 
-async def test_final_uses_fallback_when_api_timing_zero() -> None:
-    instance, captured = _make_stream_under_test(audio_position=1.25)
+async def test_final_end_time_is_zero_when_provider_omits_timing() -> None:
+    # Sarvam streaming exposes no word timestamps and a null speech_end, so the
+    # canonical fallback is 0.0 (the voice pipeline then uses wall-clock), never a
+    # fabricated send-clock value.
+    instance, captured = _make_stream_under_test()
 
     await instance._handle_events(_event("START_SPEECH"))
-    instance._audio_position = 1.4  # type: ignore[attr-defined]
     await instance._handle_events(_event("END_SPEECH"))
     await instance._handle_transcript_data(_ws_message(speech_start=0.0, speech_end=0.0))
 
     final = _events_of_type(captured, stt.SpeechEventType.FINAL_TRANSCRIPT)[0]
-    assert final.alternatives[0].start_time == pytest.approx(1.25)
-    assert final.alternatives[0].end_time == pytest.approx(1.4)
+    assert final.alternatives[0].start_time == 0.0
+    assert final.alternatives[0].end_time == 0.0
+
+
+async def test_final_end_time_uses_speech_end_when_present() -> None:
+    # If Sarvam ever populates the documented speech_start/speech_end fields over
+    # the socket, they flow through to the final transcript's timing.
+    instance, captured = _make_stream_under_test()
+
+    await instance._handle_events(_event("START_SPEECH"))
+    await instance._handle_transcript_data(_ws_message(speech_start=0.5, speech_end=1.7))
+
+    final = _events_of_type(captured, stt.SpeechEventType.FINAL_TRANSCRIPT)[0]
+    assert final.alternatives[0].start_time == pytest.approx(0.5)
+    assert final.alternatives[0].end_time == pytest.approx(1.7)
 
 
 async def test_commit_order_final_before_eos() -> None:
-    instance, captured = _make_stream_under_test(audio_position=1.4)
+    instance, captured = _make_stream_under_test()
 
     await instance._handle_events(_event("START_SPEECH"))
-    instance._audio_position = 1.4  # type: ignore[attr-defined]
     await instance._handle_transcript_data(_ws_message())
     await instance._handle_events(_event("END_SPEECH"))
 
@@ -128,10 +138,9 @@ async def test_commit_order_final_before_eos() -> None:
 
 
 async def test_commit_order_final_before_eos_when_speech_end_arrives_first() -> None:
-    instance, captured = _make_stream_under_test(audio_position=1.25)
+    instance, captured = _make_stream_under_test()
 
     await instance._handle_events(_event("START_SPEECH"))
-    instance._audio_position = 1.4  # type: ignore[attr-defined]
     await instance._handle_events(_event("END_SPEECH"))
     await instance._handle_transcript_data(_ws_message())
 
@@ -151,10 +160,9 @@ async def test_commit_order_final_before_eos_when_speech_end_arrives_first() -> 
 
 
 async def test_late_transcript_after_eos_fallback_is_emitted_after_eos() -> None:
-    instance, captured = _make_stream_under_test(audio_position=1.25)
+    instance, captured = _make_stream_under_test()
 
     await instance._handle_events(_event("START_SPEECH"))
-    instance._audio_position = 1.4  # type: ignore[attr-defined]
     await instance._handle_events(_event("END_SPEECH"))
     await asyncio.sleep(0.05)
     await instance._handle_transcript_data(_ws_message())
@@ -221,45 +229,17 @@ async def test_aclose_cancels_pending_eos_fallback(monkeypatch: pytest.MonkeyPat
     assert not _events_of_type(captured, stt.SpeechEventType.END_OF_SPEECH)
 
 
-async def test_end_speech_prefers_occured_at_over_send_clock() -> None:
-    # Sarvam stamps END_SPEECH with the audio-relative time speech actually ended.
-    # That must win over the send clock, which runs ahead of processed audio.
-    instance, captured = _make_stream_under_test(audio_position=1.4)
-
-    await instance._handle_events(_event("START_SPEECH"))
-    await instance._handle_events(_event("END_SPEECH", occured_at=1.1))
-    await asyncio.sleep(0.05)
-
-    end_events = _events_of_type(captured, stt.SpeechEventType.END_OF_SPEECH)
-    assert len(end_events) == 1
-    assert end_events[0].alternatives[0].end_time == pytest.approx(1.1)
-
-
-async def test_end_speech_ignores_out_of_range_occured_at() -> None:
-    # A wall-clock epoch (or any value outside the streamed-audio window) is not a
-    # usable audio-relative offset, so we fall back to the send clock.
-    instance, captured = _make_stream_under_test(audio_position=1.4)
+async def test_occured_at_is_ignored() -> None:
+    # `occured_at` is a wall-clock epoch, not an audio-relative offset, so it is
+    # never used: EOS stays bare and the final's end_time falls back to 0.0, even
+    # when END_SPEECH arrives before the final transcript.
+    instance, captured = _make_stream_under_test()
 
     await instance._handle_events(_event("START_SPEECH"))
     await instance._handle_events(_event("END_SPEECH", occured_at=1_700_000_000.0))
-    await asyncio.sleep(0.05)
-
-    end_events = _events_of_type(captured, stt.SpeechEventType.END_OF_SPEECH)
-    assert len(end_events) == 1
-    assert end_events[0].alternatives[0].end_time == pytest.approx(1.4)
-
-
-async def test_occured_at_authoritative_even_when_end_speech_first() -> None:
-    # END_SPEECH (with occured_at) arrives before the final transcript; the server
-    # time must drive both FINAL and EOS, never the send-clock fallback.
-    instance, captured = _make_stream_under_test(audio_position=1.25)
-
-    await instance._handle_events(_event("START_SPEECH"))
-    instance._audio_position = 1.4  # type: ignore[attr-defined]
-    await instance._handle_events(_event("END_SPEECH", occured_at=1.1))
     await instance._handle_transcript_data(_ws_message(speech_start=0.0, speech_end=0.0))
 
     final = _events_of_type(captured, stt.SpeechEventType.FINAL_TRANSCRIPT)[0]
     end = _events_of_type(captured, stt.SpeechEventType.END_OF_SPEECH)[0]
-    assert final.alternatives[0].end_time == pytest.approx(1.1)
-    assert end.alternatives[0].end_time == pytest.approx(1.1)
+    assert final.alternatives[0].end_time == 0.0
+    assert end.alternatives == []
