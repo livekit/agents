@@ -340,7 +340,7 @@ class ChunkedStream(tts.ChunkedStream):
         if is_given(self._opts.language):
             extra_params["language_code"] = self._opts.language.language
         if is_given(self._opts.apply_language_text_normalization):
-            extra_params["apply_language_text_normalization"] = (
+            extra_params["apply_language_text_normalization"] = bool(
                 self._opts.apply_language_text_normalization
             )
         try:
