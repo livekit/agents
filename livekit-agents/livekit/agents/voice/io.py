@@ -239,6 +239,11 @@ class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished", "playback_s
         self.__playback_finished_count = 0
 
     @property
+    def _pending_playback_count(self) -> int:
+        """Number of captured segments that haven't reported playback_finished yet."""
+        return self.__playback_segments_count - self.__playback_finished_count
+
+    @property
     def sample_rate(self) -> int | None:
         """The sample rate required by the audio sink, if None, any sample rate is accepted"""
         return self._sample_rate
@@ -304,6 +309,9 @@ class _AudioSinkProxy(AudioOutput):
         self._attached = False
         self.set_next_in_chain(next_in_chain)
 
+        self._capturing = False
+        self._pushed_duration: float = 0.0
+
     @property
     def next_in_chain(self) -> AudioOutput:
         assert self._next_in_chain is not None
@@ -328,6 +336,10 @@ class _AudioSinkProxy(AudioOutput):
         if old is not None:
             old.off("playback_finished", self._forward_next_playback_finished)
             old.off("playback_started", self._forward_next_playback_started)
+            if self._pending_playback_count > 0:
+                # stop audio still playing on the old sink
+                old.clear_buffer()
+
             if self._attached:
                 old.on_detached()
 
@@ -338,6 +350,11 @@ class _AudioSinkProxy(AudioOutput):
         if self._attached:
             new.on_attached()
 
+        # a segment already flushed to the old sink will never be reported by the
+        # new one; finish it as interrupted so wait_for_playout() doesn't hang
+        if old is not None and self._pending_playback_count > 0 and not self._capturing:
+            self.on_playback_finished(playback_position=self._pushed_duration, interrupted=True)
+
     @property
     def sample_rate(self) -> int | None:
         return self.next_in_chain.sample_rate
@@ -347,12 +364,18 @@ class _AudioSinkProxy(AudioOutput):
         return self.next_in_chain.can_pause
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
+        if not self._capturing:
+            self._capturing = True
+            self._pushed_duration = 0.0
+
         await super().capture_frame(frame)
         await self.next_in_chain.capture_frame(frame)
+        self._pushed_duration += frame.duration
 
     def flush(self) -> None:
         super().flush()
         self.next_in_chain.flush()
+        self._capturing = False
 
     def clear_buffer(self) -> None:
         self.next_in_chain.clear_buffer()

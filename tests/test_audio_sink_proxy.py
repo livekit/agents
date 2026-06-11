@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from livekit import rtc
@@ -205,6 +207,97 @@ async def test_swap_disconnects_old_leaf() -> None:
     # leaf_a is detached: any event it fires must not reach the wrapper
     leaf_a.on_playback_finished(playback_position=0.5, interrupted=False)
     assert received == []
+
+
+# ---------- swap with in-flight playback ----------
+
+
+class _ClearCountingSink(FakeAudioOutput):
+    def __init__(self) -> None:
+        super().__init__()
+        self.clear_calls = 0
+
+    def clear_buffer(self) -> None:
+        self.clear_calls += 1
+        super().clear_buffer()
+
+
+@pytest.mark.asyncio
+async def test_swap_finishes_pending_segment_as_interrupted() -> None:
+    leaf_a = FakeAudioOutput()
+    leaf_b = FakeAudioOutput()
+    wrapper = _PassthroughWrapper(next_in_chain=leaf_a)
+    proxy = wrapper.next_in_chain
+    assert isinstance(proxy, _AudioSinkProxy)
+
+    # a flushed segment still playing out on leaf_a (frames are pushed faster than realtime)
+    await wrapper.capture_frame(_silence(duration_s=1.0))
+    wrapper.flush()
+
+    received: list[PlaybackFinishedEvent] = []
+    wrapper.on("playback_finished", received.append)
+
+    proxy.set_next_in_chain(leaf_b)
+
+    # the pending segment must be finished as interrupted so wait_for_playout() doesn't hang
+    ev = await asyncio.wait_for(wrapper.wait_for_playout(), timeout=0.5)
+    assert ev.interrupted is True
+    assert ev.playback_position == pytest.approx(1.0)
+    assert len(received) == 1
+
+
+@pytest.mark.asyncio
+async def test_swap_clears_old_sink_with_inflight_audio() -> None:
+    leaf_a = _ClearCountingSink()
+    leaf_b = FakeAudioOutput()
+    wrapper = _PassthroughWrapper(next_in_chain=leaf_a)
+    proxy = wrapper.next_in_chain
+    assert isinstance(proxy, _AudioSinkProxy)
+
+    await wrapper.capture_frame(_silence(duration_s=1.0))
+    wrapper.flush()
+
+    proxy.set_next_in_chain(leaf_b)
+
+    assert leaf_a.clear_calls == 1
+
+
+def test_idle_swap_does_not_clear_old_sink() -> None:
+    leaf_a = _ClearCountingSink()
+    leaf_b = FakeAudioOutput()
+    wrapper = _PassthroughWrapper(next_in_chain=leaf_a)
+    proxy = wrapper.next_in_chain
+    assert isinstance(proxy, _AudioSinkProxy)
+
+    proxy.set_next_in_chain(leaf_b)
+
+    assert leaf_a.clear_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_swap_mid_capture_segment_finishes_on_new_leaf() -> None:
+    leaf_a = FakeAudioOutput()
+    leaf_b = FakeAudioOutput()
+    wrapper = _PassthroughWrapper(next_in_chain=leaf_a)
+    proxy = wrapper.next_in_chain
+    assert isinstance(proxy, _AudioSinkProxy)
+
+    received: list[PlaybackFinishedEvent] = []
+    wrapper.on("playback_finished", received.append)
+
+    # swap in the middle of a segment, before flush
+    await wrapper.capture_frame(_silence(duration_s=0.05))
+    proxy.set_next_in_chain(leaf_b)
+
+    # no synthesized event: the segment continues on leaf_b, which reports it
+    assert received == []
+
+    await wrapper.capture_frame(_silence(duration_s=0.05))
+    wrapper.flush()
+
+    ev = await asyncio.wait_for(wrapper.wait_for_playout(), timeout=1.0)
+    assert ev.interrupted is False
+    assert len(received) == 1
 
 
 # ---------- attached state ----------
