@@ -40,7 +40,7 @@ from .log import logger
 from .observability import Tagger
 from .telemetry import _upload_session_report, otel_metrics
 from .telemetry.traces import _BufferingHandler, _setup_cloud_tracer, _shutdown_telemetry
-from .types import ATTRIBUTE_SIMULATOR_DISPATCH, ATTRIBUTE_SIMULATOR, NotGivenOr
+from .types import ATTRIBUTE_SIMULATOR, ATTRIBUTE_SIMULATOR_DISPATCH, NotGivenOr
 from .utils import http_context, is_given, wait_for_participant
 from .utils.deprecation import deprecate_params
 from .utils.misc import is_cloud
