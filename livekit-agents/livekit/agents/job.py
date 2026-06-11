@@ -40,7 +40,7 @@ from .log import logger
 from .observability import Tagger
 from .telemetry import _upload_session_report, otel_metrics
 from .telemetry.traces import _BufferingHandler, _setup_cloud_tracer, _shutdown_telemetry
-from .types import ATTRIBUTE_SIMULATOR, NotGivenOr
+from .types import ATTRIBUTE_SIMULATION_DISPATCH, ATTRIBUTE_SIMULATOR, NotGivenOr
 from .utils import http_context, is_given, wait_for_participant
 from .utils.deprecation import deprecate_params
 from .utils.misc import is_cloud
@@ -455,16 +455,16 @@ class JobContext:
 
         self._simulation_resolved = True
 
-        # The simulation dispatch travels in the simulator participant's
-        # lk.simulation.dispatch attribute, leaving job and room metadata
-        # free for user payloads. Fall back to the job/room metadata sent by
-        # older servers (and by fake_job_context in tests).
         metadata = ""
         for participant in self._room.remote_participants.values():
-            if dispatch_json := participant.attributes.get("lk.simulation.dispatch"):
+            if participant.attributes.get(ATTRIBUTE_SIMULATOR) != "true":
+                continue
+            if dispatch_json := participant.attributes.get(ATTRIBUTE_SIMULATION_DISPATCH):
                 metadata = dispatch_json
                 break
         if not metadata:
+            # older servers sent the dispatch in the job/room metadata;
+            # fake_job_context places it on the job
             metadata = self._info.job.metadata or self._room.metadata
         if not metadata:
             return None
