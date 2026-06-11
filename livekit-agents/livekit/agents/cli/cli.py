@@ -306,7 +306,7 @@ def _run_worker(server: AgentServer, args: proto.CliArgs) -> None:
     for sig in HANDLED_SIGNALS:
         signal.signal(sig, _handle_exit)
 
-    setup_logging(args.log_level, devmode=colored_logs, console=False)
+    setup_logging(args.log_level, devmode=colored_logs, console=False, compact=args.simulation)
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
