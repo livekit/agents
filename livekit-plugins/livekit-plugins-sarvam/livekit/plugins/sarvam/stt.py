@@ -980,13 +980,14 @@ class SpeechStream(stt.SpeechStream):
         if request_id:
             self._server_request_id = str(request_id)
 
-    @staticmethod
-    def _positive_time(value: object) -> float | None:
+    def _positive_time(self, value: object) -> float | None:
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             return None
         if value <= 0:
             return None
-        return float(value)
+        # Shift into the stream timeline so the value survives reconnects: the base
+        # class advances start_time_offset by the session start -> audio start delay.
+        return float(value) + self.start_time_offset
 
     def _reset_utterance_state(self) -> None:
         self._cancel_eos_fallback()
