@@ -141,19 +141,6 @@ def test_swap_audio_endpoint_falls_back_when_no_proxy() -> None:
     assert output.audio is leaf
 
 
-def test_swap_audio_endpoint_none_detaches_proxy_inner() -> None:
-    leaf = FakeAudioOutput()
-    output = _make_agent_output()
-    wrapper = _PassthroughWrapper(next_in_chain=leaf)
-    output.audio = wrapper
-
-    output.swap_audio_endpoint(None)
-
-    proxy = wrapper.next_in_chain
-    assert isinstance(proxy, _AudioSinkProxy)
-    assert proxy.next_in_chain is None
-
-
 # ---------- proxy invariants ----------
 
 
@@ -161,8 +148,7 @@ def test_swap_audio_endpoint_none_detaches_proxy_inner() -> None:
 async def test_proxy_accepts_wrapper_chain_as_inner() -> None:
     leaf = FakeAudioOutput()
     wrapped_sink = _PassthroughWrapper(next_in_chain=leaf)
-    proxy = _AudioSinkProxy()
-    proxy.set_next_in_chain(wrapped_sink)
+    proxy = _AudioSinkProxy(wrapped_sink)
 
     assert proxy.next_in_chain is wrapped_sink
 
@@ -175,21 +161,6 @@ async def test_proxy_accepts_wrapper_chain_as_inner() -> None:
 
     assert len(received) == 1
     assert received[0].playback_position == 1.0
-
-
-@pytest.mark.asyncio
-async def test_proxy_synthesizes_playback_finished_when_detached() -> None:
-    proxy = _AudioSinkProxy()
-    received: list[PlaybackFinishedEvent] = []
-    proxy.on("playback_finished", received.append)
-
-    await proxy.capture_frame(_silence())
-    proxy.flush()
-
-    # detached proxy treats the segment as interrupted (no real sink played it)
-    assert len(received) == 1
-    assert received[0].interrupted is True
-    assert received[0].playback_position == 0.0
 
 
 # ---------- swap routing ----------

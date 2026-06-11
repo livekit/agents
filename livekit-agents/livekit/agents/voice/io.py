@@ -290,12 +290,10 @@ class _AudioSinkProxy(AudioOutput):
 
     Wrappers above hold a reference to the proxy; the actual sink lives in
     ``next_in_chain`` and can be replaced via :meth:`set_next_in_chain` without
-    disturbing them. When detached (``next_in_chain`` is None), the proxy acts
-    as a no-op sink that still cooperates with the playback-finished protocol
-    so upstream wrappers don't hang.
+    disturbing them.
     """
 
-    def __init__(self, next_in_chain: AudioOutput | None = None) -> None:
+    def __init__(self, next_in_chain: AudioOutput) -> None:
         super().__init__(
             label="AudioSinkProxy",
             capabilities=AudioOutputCapabilities(pause=True),
@@ -304,8 +302,12 @@ class _AudioSinkProxy(AudioOutput):
         # whether the wrapper above us has attached the proxy; set_next_in_chain
         # uses this to decide if a new/old downstream should be notified
         self._attached = False
-        if next_in_chain is not None:
-            self.set_next_in_chain(next_in_chain)
+        self.set_next_in_chain(next_in_chain)
+
+    @property
+    def next_in_chain(self) -> AudioOutput:
+        assert self._next_in_chain is not None
+        return self._next_in_chain
 
     def on_attached(self) -> None:
         self._attached = True
@@ -315,7 +317,7 @@ class _AudioSinkProxy(AudioOutput):
         self._attached = False
         super().on_detached()
 
-    def set_next_in_chain(self, new: AudioOutput | None) -> None:
+    def set_next_in_chain(self, new: AudioOutput) -> None:
         """Replace the downstream sink, transferring playback listeners
         and on_attached/on_detached state.
         """
@@ -331,36 +333,29 @@ class _AudioSinkProxy(AudioOutput):
 
         self._next_in_chain = new
 
-        if new is not None:
-            new.on("playback_finished", self._forward_next_playback_finished)
-            new.on("playback_started", self._forward_next_playback_started)
-            if self._attached:
-                new.on_attached()
+        new.on("playback_finished", self._forward_next_playback_finished)
+        new.on("playback_started", self._forward_next_playback_started)
+        if self._attached:
+            new.on_attached()
 
     @property
     def sample_rate(self) -> int | None:
-        return self.next_in_chain.sample_rate if self.next_in_chain else None
+        return self.next_in_chain.sample_rate
 
     @property
     def can_pause(self) -> bool:
-        return not self.next_in_chain or self.next_in_chain.can_pause
+        return self.next_in_chain.can_pause
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         await super().capture_frame(frame)
-        if self.next_in_chain:
-            await self.next_in_chain.capture_frame(frame)
+        await self.next_in_chain.capture_frame(frame)
 
     def flush(self) -> None:
         super().flush()
-        if self.next_in_chain:
-            self.next_in_chain.flush()
-        else:
-            # no real sink; synthesize a playback_finished
-            self.on_playback_finished(playback_position=0.0, interrupted=True)
+        self.next_in_chain.flush()
 
     def clear_buffer(self) -> None:
-        if self.next_in_chain:
-            self.next_in_chain.clear_buffer()
+        self.next_in_chain.clear_buffer()
 
 
 class TextOutput(ABC):
@@ -656,7 +651,7 @@ class AgentOutput:
             else:
                 self._audio_sink.on_detached()
 
-    def swap_audio_endpoint(self, sink: AudioOutput | None) -> None:
+    def swap_audio_endpoint(self, sink: AudioOutput) -> None:
         """Swap the endpoint sink at the bottom of the chain, keeping wrappers attached.
 
         Walks the chain looking for a :class:`_AudioSinkProxy` and swaps its
