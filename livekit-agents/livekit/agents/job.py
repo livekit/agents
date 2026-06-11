@@ -40,7 +40,7 @@ from .log import logger
 from .observability import Tagger
 from .telemetry import _upload_session_report, otel_metrics
 from .telemetry.traces import _BufferingHandler, _setup_cloud_tracer, _shutdown_telemetry
-from .types import ATTRIBUTE_SIMULATOR, NotGivenOr
+from .types import ATTRIBUTE_SIMULATOR, ATTRIBUTE_SIMULATOR_DISPATCH, NotGivenOr
 from .utils import http_context, is_given, wait_for_participant
 from .utils.deprecation import deprecate_params
 from .utils.misc import is_cloud
@@ -446,17 +446,26 @@ class JobContext:
         Resolved once and cached. The framework hands it to ``on_simulation_end``
         automatically, so you never need to call this to "prime" anything. Call it only
         when you want the scenario in your entrypoint (e.g. to seed scenario-specific
-        mocks). Resolves synchronously from the simulation room's metadata (a protojson
-        ``SimulationDispatch``); a production room has none and returns ``None``.
+        mocks). Resolves synchronously from the simulator participant's
+        ``lk.simulator.dispatch`` attribute (a protojson ``SimulationDispatch``); a
+        production room has none and returns ``None``.
         """
         if self._simulation_resolved:
             return self._simulation_ctx
 
         self._simulation_resolved = True
 
-        # The simulation dispatch travels in the agent's dispatch metadata
-        # (RoomAgentDispatch.Metadata -> job.metadata); fall back to room metadata.
-        metadata = self._info.job.metadata or self._room.metadata
+        metadata = ""
+        for participant in self._room.remote_participants.values():
+            if ATTRIBUTE_SIMULATOR not in participant.attributes:
+                continue
+            if dispatch_json := participant.attributes.get(ATTRIBUTE_SIMULATOR_DISPATCH):
+                metadata = dispatch_json
+                break
+        if not metadata:
+            # older servers sent the dispatch in the job metadata;
+            # fake_job_context places it there too
+            metadata = self._info.job.metadata
         if not metadata:
             return None
 
