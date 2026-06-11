@@ -457,7 +457,7 @@ class JobContext:
 
         metadata = ""
         for participant in self._room.remote_participants.values():
-            if participant.attributes.get(ATTRIBUTE_SIMULATOR) != "true":
+            if ATTRIBUTE_SIMULATOR not in participant.attributes:
                 continue
             if dispatch_json := participant.attributes.get(ATTRIBUTE_SIMULATION_DISPATCH):
                 metadata = dispatch_json
