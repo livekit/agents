@@ -605,10 +605,14 @@ class ToolContext:
         lifecycle remain the toolset's) — it just stops being callable.
         """
         current = self.flatten()
-        added = [t for t in tools if not any(t is c for c in current)]
-        removed = [c for c in current if not any(c is t for t in tools)]
-        if not added and not removed:
+        current_ids = {id(t) for t in current}
+        tool_ids = {id(t) for t in tools}
+        if current_ids == tool_ids:
             return
+
+        added = [t for t in tools if id(t) not in current_ids]
+        removed_ids = current_ids - tool_ids
+        removed = [c for c in current if id(c) in removed_ids]
 
         structured = [t for t in self._tools if not any(t is r for r in removed)]
         self._update_tools([*structured, *added], exclude=removed)
