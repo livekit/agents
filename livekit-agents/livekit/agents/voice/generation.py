@@ -346,9 +346,18 @@ class _AudioOutput:
     """Future that will be set with the timestamp of the first frame's capture"""
 
     started_forwarding_at: float | None = None
+    has_captured_own_frame: bool = False
+    """Set once this forwarder has captured its own first frame onto the output."""
 
     def _resolve_first_frame_fut(self, ev: io.PlaybackStartedEvent) -> None:
-        if not self.first_frame_fut.done():
+        # The audio output is shared across overlapping segments. When a speech is
+        # interrupted, the scheduler immediately authorizes the next speech, so this
+        # forwarder can register its listener while the interrupted segment's teardown
+        # is still emitting playback_started on the same output. Only honor the event
+        # once this forwarder has captured its own first frame, so a stray event from
+        # another segment can't resolve our first_frame_fut prematurely (which would
+        # skip resampler creation and push an unresampled frame to the AudioSource).
+        if self.has_captured_own_frame and not self.first_frame_fut.done():
             self.first_frame_fut.set_result(ev.created_at)
 
 
@@ -395,6 +404,10 @@ async def _audio_forwarding_task(
                     output_rate=audio_output.sample_rate,
                     num_channels=frame.num_channels,
                 )
+
+            # Mark before capturing so the playback_started emitted synchronously
+            # inside the first capture_frame is attributed to this segment.
+            out.has_captured_own_frame = True
 
             if resampler:
                 for f in resampler.push(frame):
