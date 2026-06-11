@@ -336,11 +336,11 @@ class ChunkedStream(tts.ChunkedStream):
             if is_given(self._opts.voice_settings)
             else None
         )
-        extra_params = {}
+        extra_params: dict[str, str | bool] = {}
         if is_given(self._opts.language):
             extra_params["language_code"] = self._opts.language.language
         if is_given(self._opts.apply_language_text_normalization):
-            extra_params["apply_language_text_normalization"] = bool(
+            extra_params["apply_language_text_normalization"] = (
                 self._opts.apply_language_text_normalization
             )
         try:
