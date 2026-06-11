@@ -2754,6 +2754,12 @@ class AgentActivity(RecognitionHooks):
 
         segment_ch = utils.aio.Chan[_SpeechSegment]()
 
+        # Raw LLM output with TTS markup intact, accumulated across all segments.
+        # The transcript path strips markup before it reaches forwarded_text (see
+        # _read_segment_text), so this is the only place the marked-up text survives
+        # for capture into expressive_content / _restore_expressive_content.
+        assistant_llm_text_parts: list[str] = []
+
         @utils.log_exceptions(logger=logger)
         async def _produce_segments() -> None:
             await llm_gen_data.started_fut  # keep the tts span under the llm span
@@ -2799,6 +2805,8 @@ class AgentActivity(RecognitionHooks):
                         continue
                     if current is None:
                         current = await _start_segment()
+                    if isinstance(chunk, str):
+                        assistant_llm_text_parts.append(chunk)
                     current.text.send_nowait(chunk)
                     if tts_text is not None:
                         tts_text.send_nowait(chunk)
@@ -3067,17 +3075,25 @@ class AgentActivity(RecognitionHooks):
             )
 
         if forwarded_text:
-            # strip TTS markup from transcript/chat history (only when expressiveness
-            # injected markup instructions into the LLM context); keep the marked-up
-            # text on the message so future LLM turns can see it (_restore_expressive_content)
+            # When expressiveness injected markup instructions into the LLM context,
+            # preserve the agent's own marked-up text on the message so future LLM
+            # turns can see its expressive style (_restore_expressive_content).
+            # forwarded_text is already markup-free here (the transcript stream is
+            # stripped in _read_segment_text), so the markup is recovered from the
+            # raw LLM output captured in assistant_llm_text_parts instead. Skip on
+            # interruption: the raw text covers the full reply, not just the spoken
+            # portion, so it wouldn't line up with the (partial) stored content.
             expressive_text: str | None = None
             expressive_source: str | None = None
-            if self.tts and self._resolve_expressiveness_options() is not None:
-                stripped_text = self.tts.markup.to_text(forwarded_text)
-                if stripped_text != forwarded_text:
-                    expressive_text = forwarded_text
+            if (
+                self.tts
+                and self._resolve_expressiveness_options() is not None
+                and not speech_handle.interrupted
+            ):
+                raw_text = "".join(assistant_llm_text_parts)
+                if raw_text and self.tts.markup.to_text(raw_text) != raw_text:
+                    expressive_text = raw_text
                     expressive_source = self.tts.label
-                forwarded_text = stripped_text
 
             extra_kwargs: dict = {}
             if llm_gen_data.generated_extra:
