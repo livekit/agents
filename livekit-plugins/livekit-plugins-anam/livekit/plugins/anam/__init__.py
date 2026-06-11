@@ -14,13 +14,14 @@
 
 from .avatar import AvatarSession
 from .errors import AnamException
-from .types import PersonaConfig
+from .types import PersonaConfig, SessionOptions
 from .version import __version__
 
 __all__ = [
     "AnamException",
     "AvatarSession",
     "PersonaConfig",
+    "SessionOptions",
     "__version__",
 ]
 

@@ -3959,7 +3959,14 @@ class AgentActivity(RecognitionHooks):
 
     # move them to the end to avoid shadowing the same named modules for mypy
     @property
+    def _text_only(self) -> bool:
+        # text simulations run without audio: no STT/TTS/VAD
+        return self._session._text_only
+
+    @property
     def vad(self) -> vad.VAD | None:
+        if self._text_only:
+            return None
         return self._agent.vad if is_given(self._agent.vad) else self._session.vad
 
     @property
@@ -4022,6 +4029,8 @@ class AgentActivity(RecognitionHooks):
 
     @property
     def stt(self) -> stt.STT | None:
+        if self._text_only:
+            return None
         return self._agent.stt if is_given(self._agent.stt) else self._session.stt
 
     @property
@@ -4030,4 +4039,6 @@ class AgentActivity(RecognitionHooks):
 
     @property
     def tts(self) -> tts.TTS | None:
+        if self._text_only:
+            return None
         return self._agent.tts if is_given(self._agent.tts) else self._session.tts

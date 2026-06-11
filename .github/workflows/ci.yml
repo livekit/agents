@@ -65,9 +65,14 @@ jobs:
       - name: Install the project
         run: uv sync --all-extras --dev
 
-      - name: Install pip
-        # mypy --install-types requires pip
-        run: uv pip install pip
+      - name: Cache mypy
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: .mypy_cache
+          key: mypy-${{ matrix.python-version }}-${{ hashFiles('uv.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            mypy-${{ matrix.python-version }}-${{ hashFiles('uv.lock') }}-
+            mypy-${{ matrix.python-version }}-
 
       - name: Check Types
         run: uv run python scripts/check_types.py

@@ -40,7 +40,7 @@ from .log import logger
 from .observability import Tagger
 from .telemetry import _upload_session_report, otel_metrics
 from .telemetry.traces import _BufferingHandler, _setup_cloud_tracer, _shutdown_telemetry
-from .types import NotGivenOr
+from .types import ATTRIBUTE_SIMULATOR, NotGivenOr
 from .utils import http_context, is_given, wait_for_participant
 from .utils.deprecation import deprecate_params
 from .utils.misc import is_cloud
@@ -467,7 +467,10 @@ class JobContext:
         from .simulation import SimulationContext
 
         try:
-            dispatch = json_format.Parse(metadata, sim_pb.SimulationDispatch())
+            # ignore unknown fields so dispatches from newer servers still parse
+            dispatch = json_format.Parse(
+                metadata, sim_pb.SimulationDispatch(), ignore_unknown_fields=True
+            )
         except json_format.ParseError:
             return None
 
@@ -580,6 +583,10 @@ class JobContext:
 
             await self._room.connect(self._info.url, self._info.token, options=room_options)
             self._on_connect()
+
+            if self.simulation_context() is not None:
+                self._room.on("participant_disconnected", self._on_simulator_disconnected)
+
             for p in self._room.remote_participants.values():
                 self._participant_available(p)
 
@@ -770,6 +777,14 @@ class JobContext:
         # the logs would have already been emitted. we want to capture all of the logs as it
         # relates to the job
         self._flush_early_log_buffer(replay=options["logs"])
+
+    def _on_simulator_disconnected(self, p: rtc.RemoteParticipant) -> None:
+        # the agent under test may add other participants (SIP legs, avatar workers)
+        if ATTRIBUTE_SIMULATOR not in p.attributes:
+            return
+
+        logger.debug("simulator disconnected, shutting down the job")
+        self.shutdown(reason="simulation completed")
 
     def _participant_available(self, p: rtc.RemoteParticipant) -> None:
         for coro, kind in self._participant_entrypoints:
