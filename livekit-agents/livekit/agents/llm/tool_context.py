@@ -552,12 +552,20 @@ class ToolContext:
         return True
 
     def update_tools(self, tools: Sequence[Tool | Toolset]) -> None:
+        self._update_tools(tools)
+
+    def _update_tools(
+        self, tools: Sequence[Tool | Toolset], *, exclude: Sequence[Tool] = ()
+    ) -> None:
         self._tools = list(tools)
         self._fnc_tools_map: dict[str, FunctionTool | RawFunctionTool] = {}
         self._provider_tools: list[ProviderTool] = []
         self._tool_sets: list[Toolset] = []
 
         def add_tool(tool: Tool | Toolset) -> None:
+            if any(tool is e for e in exclude):
+                return
+
             if isinstance(tool, ProviderTool):
                 self._provider_tools.append(tool)
 
@@ -588,6 +596,22 @@ class ToolContext:
 
         for tool in itertools.chain(tools, find_function_tools(self)):
             add_tool(tool)
+
+    def _sync_flattened(self, tools: Sequence[Tool]) -> None:
+        """Apply in-place edits of a ``flatten()`` list, preserving Toolset grouping.
+
+        Added tools become top-level entries; removed tools are dropped from the
+        flat lookup. A removed Toolset member stays in its toolset (membership and
+        lifecycle remain the toolset's) — it just stops being callable.
+        """
+        current = self.flatten()
+        added = [t for t in tools if not any(t is c for c in current)]
+        removed = [c for c in current if not any(c is t for t in tools)]
+        if not added and not removed:
+            return
+
+        structured = [t for t in self._tools if not any(t is r for r in removed)]
+        self._update_tools([*structured, *added], exclude=removed)
 
     def copy(self) -> ToolContext:
         return ToolContext(self._tools.copy())

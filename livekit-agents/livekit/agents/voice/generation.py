@@ -125,8 +125,10 @@ async def _llm_inference_task(
 
     # store any updated tools, to ensure subsequent tool calls in the same turn (nested calls)
     # are using the newer tools.
-    # tool_ctx here is ephemeral for this turn, and we allow manipulations
-    tool_ctx.update_tools(tools)
+    # tool_ctx here is ephemeral for this turn, and we allow manipulations.
+    # _sync_flattened writes back flat edits while preserving Toolset grouping
+    # (e.g. tool_ctx.toolsets stays intact for executor routing on handoff).
+    tool_ctx._sync_flattened(tools)
     tools_snapshot = tools.copy()
 
     if isinstance(llm_node, str):
@@ -163,7 +165,7 @@ async def _llm_inference_task(
                             tool_ctx.get_function_tool(tool.name) is None
                             and tools != tools_snapshot
                         ):
-                            tool_ctx.update_tools(tools)
+                            tool_ctx._sync_flattened(tools)
                             tools_snapshot = tools.copy()
 
                         fnc_call = llm.FunctionCall(
@@ -583,18 +585,10 @@ async def _execute_tools_task(
         )
         return
 
-    # Route AsyncToolset members to their own executor; everything else falls
-    # back to the activity executor. We rebuild the toolset list from the
-    # registered sources (session + agent + MCP) instead of `tool_ctx.toolsets`:
-    # `_llm_inference_task` flattens `tool_ctx` in place, so by now its toolset
-    # grouping is gone. Without it a session-scoped tool would route to the
-    # activity executor and be cancelled on handoff instead of surviving to
-    # deliver under the next agent.
-    routing_toolsets: list[llm.Toolset] = [t for t in session.tools if isinstance(t, llm.Toolset)]
-    routing_toolsets += [t for t in activity._agent.tools if isinstance(t, llm.Toolset)]
-    routing_toolsets += list(activity._mcp_tools)
+    # Route AsyncToolset members to their own executor so session-scoped async
+    # tools survive handoff; everything else falls back to the activity executor.
     executor_by_name = _build_executor_map(
-        toolsets=routing_toolsets, default=activity._tool_executor
+        toolsets=tool_ctx.toolsets, default=activity._tool_executor
     )
 
     tasks: list[asyncio.Task[Any]] = []

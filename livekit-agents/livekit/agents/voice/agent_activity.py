@@ -1044,19 +1044,6 @@ class AgentActivity(RecognitionHooks):
             # cancel cancellable tools and await the rest before teardown
             await self._tool_executor.drain()
 
-            # agent-scoped AsyncToolsets have their own executors; drain them too
-            # so a non-cancellable one is awaited rather than cancelled by the
-            # aclose() sweep below (session-scoped toolsets aren't drained here).
-            from ..llm.async_toolset import AsyncToolset
-
-            agent_async_executors = [
-                tool._executor for tool in self._agent.tools if isinstance(tool, AsyncToolset)
-            ]
-            if agent_async_executors:
-                await asyncio.gather(
-                    *(ex.drain() for ex in agent_async_executors), return_exceptions=True
-                )
-
             await self._close_session()
             await asyncio.gather(*self._interrupt_background_speeches(force=False))
 
