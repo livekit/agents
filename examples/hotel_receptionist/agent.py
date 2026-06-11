@@ -9,6 +9,7 @@ from typing import Annotated
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+from benchmark import build_expected, diff_databases
 from book_restaurant import BookRestaurantTask
 from book_room import BookRoomTask
 from dotenv import load_dotenv
@@ -40,6 +41,7 @@ from livekit.agents import (
     AgentSession,
     JobContext,
     RunContext,
+    SimulationContext,
     ToolError,
     cli,
     function_tool,
@@ -585,6 +587,30 @@ server = AgentServer()
 _SEED_DB_BYTES = build_seed_bytes(TODAY)
 
 
+async def on_simulation_end(ctx: SimulationContext) -> None:
+    # Grade the run on final DB state: build the scenario's `expected_state` on a
+    # fresh seed, then diff it against the agent's DB. The diff compares
+    # agent-decided facts only (room type, dates, extras, status), so minted
+    # codes / order / which-king don't matter and the agent need not reproduce the
+    # statements — while collateral damage still surfaces.
+    expected_state = ctx.userdata().get("expected_state") or []
+    if not expected_state:
+        return
+
+    session = ctx.job_context.primary_session
+    expected = await build_expected(_SEED_DB_BYTES, expected_state)
+    try:
+        diffs = diff_databases(expected.connection, session.userdata.db.connection)
+    finally:
+        await expected.aclose()
+
+    # Veto the run if the final DB state diverged. The effective result is the AND of
+    # this check and the simulator's conversation judgment, so a mismatch fails a run
+    # the simulator passed; a match simply leaves the simulator's verdict to stand.
+    if diffs:
+        ctx.fail(reason="final DB diverges from expected: " + " | ".join(diffs[:8]))
+
+
 async def on_session_end(ctx: JobContext) -> None:
     try:
         report = ctx.make_session_report()
@@ -624,7 +650,7 @@ async def on_session_end(ctx: JobContext) -> None:
         logger.exception("error closing hotel DB")
 
 
-@server.rtc_session(on_session_end=on_session_end)
+@server.rtc_session(on_session_end=on_session_end, on_simulation_end=on_simulation_end)
 async def hotel_receptionist_agent(ctx: JobContext) -> None:
     await ctx.connect()
 

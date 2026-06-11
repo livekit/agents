@@ -5,6 +5,9 @@ from typing import Any, Literal
 
 from ..llm import LLM, ChatContext, function_tool, utils as llm_utils
 from ..log import logger
+from ..types import APIConnectOptions
+
+_JUDGE_CONN_OPTIONS = APIConnectOptions(timeout=90.0)
 
 Verdict = Literal["pass", "fail", "maybe"]
 """The verdict of a judgment: pass, fail, or maybe (uncertain)."""
@@ -116,31 +119,25 @@ async def _evaluate_with_llm(llm: LLM, prompt: str) -> JudgmentResult:
     )
     eval_ctx.add_message(role="user", content=prompt)
 
-    extra_kwargs: dict[str, Any] = {}
+    extra_kwargs: dict[str, Any] = {"reasoning_effort": "none"}
     excluded_models_temperature = ["gpt-5"]
 
     if not any(excluded_model in llm.model for excluded_model in excluded_models_temperature):
         extra_kwargs["temperature"] = 0.0
 
-    arguments: str | None = None
-    async for chunk in llm.chat(
+    response = await llm.chat(
         chat_ctx=eval_ctx,
         tools=[submit_verdict],
         tool_choice={"type": "function", "function": {"name": "submit_verdict"}},
+        conn_options=_JUDGE_CONN_OPTIONS,
         extra_kwargs=extra_kwargs,
-    ):
-        if not chunk.delta:
-            continue
+    ).collect()
 
-        if chunk.delta.tool_calls:
-            tool = chunk.delta.tool_calls[0]
-            arguments = tool.arguments
-
-    if not arguments:
+    if not response.tool_calls:
         raise ValueError("LLM did not return verdict arguments")
 
     fnc_args, fnc_kwargs = llm_utils.prepare_function_arguments(
-        fnc=submit_verdict, json_arguments=arguments
+        fnc=submit_verdict, json_arguments=response.tool_calls[0].arguments
     )
     verdict, reasoning = await submit_verdict(*fnc_args, **fnc_kwargs)
 

@@ -10,7 +10,7 @@ from livekit.agents import Agent
 from livekit.agents.voice.agent import ModelSettings
 from livekit.agents.voice.agent_activity import AgentActivity
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
 
 
 def _make_activity(agent: Agent, stt: object) -> MagicMock:

@@ -2635,6 +2635,19 @@ class AgentActivity(RecognitionHooks):
         )
         tasks.append(llm_task)
 
+        def _on_llm_task_done(task: asyncio.Task[bool]) -> None:
+            # Surface a genuine LLM failure (not interruption/cancellation) so it
+            # propagates through the SpeechHandle to RunResult (i.e. session.run()).
+            # RunResult._mark_done() raises ``_maybe_run_final_output`` when it is a
+            # BaseException; this also retrieves the task exception (no "never
+            # retrieved" warning).
+            if task.cancelled():
+                return
+            if (exc := task.exception()) is not None:
+                speech_handle._maybe_run_final_output = exc
+
+        llm_task.add_done_callback(_on_llm_task_done)
+
         # split the LLM text on FlushSentinel into segments, each spoken independently;
         # without a FlushSentinel there is a single (continuous) segment
         @dataclass
@@ -3891,7 +3904,14 @@ class AgentActivity(RecognitionHooks):
 
     # move them to the end to avoid shadowing the same named modules for mypy
     @property
+    def _text_only(self) -> bool:
+        # text simulations run without audio: no STT/TTS/VAD
+        return self._session._text_only
+
+    @property
     def vad(self) -> vad.VAD | None:
+        if self._text_only:
+            return None
         return self._agent.vad if is_given(self._agent.vad) else self._session.vad
 
     def _resolve_interruption_detection(self) -> inference.AdaptiveInterruptionDetector | None:
@@ -3948,6 +3968,8 @@ class AgentActivity(RecognitionHooks):
 
     @property
     def stt(self) -> stt.STT | None:
+        if self._text_only:
+            return None
         return self._agent.stt if is_given(self._agent.stt) else self._session.stt
 
     @property
@@ -3956,4 +3978,6 @@ class AgentActivity(RecognitionHooks):
 
     @property
     def tts(self) -> tts.TTS | None:
+        if self._text_only:
+            return None
         return self._agent.tts if is_given(self._agent.tts) else self._session.tts

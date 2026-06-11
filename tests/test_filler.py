@@ -9,7 +9,7 @@ import pytest
 from livekit.agents.voice.events import AgentStateChangedEvent, UserStateChangedEvent
 from livekit.agents.voice.filler_scheduler import _FillerScheduler
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
 
 class _FakeSpeechHandle:

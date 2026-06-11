@@ -14,7 +14,7 @@ from livekit.agents.types import (
 
 from .fake_llm import FakeLLM, FakeLLMResponse
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
 
 
 def ai_function1(a: int, b: str = "default") -> None:
