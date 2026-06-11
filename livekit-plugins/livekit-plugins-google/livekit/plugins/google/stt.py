@@ -275,6 +275,8 @@ class STT(stt.STT):
             speech_end_timeout=speech_end_timeout,
             endpointing_sensitivity=endpointing_sensitivity,
         )
+        # user-tuned (phrase, boost) pairs, kept separate so keyterm updates can't clobber them
+        self._user_keywords: list[tuple[str, float]] = list(keywords) if is_given(keywords) else []
         self._streams = weakref.WeakSet[SpeechStream]()
         self._pool = utils.ConnectionPool[SpeechAsyncClientV2 | SpeechAsyncClientV1](
             max_session_duration=_max_session_duration,
@@ -519,6 +521,7 @@ class STT(stt.STT):
                 logger.warning(
                     "Both 'adaptation' and 'keywords' are set; 'keywords' will be ignored."
                 )
+            self._user_keywords = list(keywords)
             self._config.keywords = keywords
         if is_given(speech_start_timeout):
             self._config.speech_start_timeout = speech_start_timeout
@@ -551,9 +554,20 @@ class STT(stt.STT):
             )
 
     def _update_keyterms(self, keyterms: list[str]) -> None:
-        # Google biases recognition via (phrase, boost) pairs; apply a moderate
-        # default boost since the common keyterms API carries no per-term weight.
-        self.update_options(keywords=[(term, _DEFAULT_KEYTERM_BOOST) for term in keyterms])
+        if is_given(self._config.adaptation):
+            logger.warning("'adaptation' is set; ignoring keyterms update")
+            return
+
+        # Google biases recognition via (phrase, boost) pairs. Merge with the user-tuned
+        # keywords (their boosts win) and apply a moderate default boost to the rest,
+        # since the provider-agnostic hook carries no per-term weight.
+        user_phrases = {phrase for phrase, _ in self._user_keywords}
+        merged = self._user_keywords + [
+            (term, _DEFAULT_KEYTERM_BOOST) for term in keyterms if term not in user_phrases
+        ]
+        self._config.keywords = merged
+        for stream in self._streams:
+            stream.update_options(keywords=merged)
 
     async def aclose(self) -> None:
         await self._pool.aclose()
