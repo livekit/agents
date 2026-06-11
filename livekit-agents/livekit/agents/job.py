@@ -453,8 +453,6 @@ class JobContext:
         if self._simulation_resolved:
             return self._simulation_ctx
 
-        self._simulation_resolved = True
-
         metadata = ""
         for participant in self._room.remote_participants.values():
             if ATTRIBUTE_SIMULATOR not in participant.attributes:
@@ -467,7 +465,13 @@ class JobContext:
             # fake_job_context places it there too
             metadata = self._info.job.metadata
         if not metadata:
+            # The simulator participant is only visible once the room is
+            # connected; a miss before then (AgentSession.start consults
+            # _text_only pre-connect) must not be cached.
+            self._simulation_resolved = self._room.isconnected()
             return None
+
+        self._simulation_resolved = True
 
         from google.protobuf import json_format
 
