@@ -129,7 +129,7 @@ class STTCapabilities:
     offline_recognize: bool = True
     """Whether the STT supports batch recognition via recognize() method"""
     keyterms: bool = False
-    """Whether the STT supports keyterm prompting via update_keyterms()"""
+    """Whether the STT supports keyterm prompting (see STT._update_keyterms)"""
 
 
 class STTError(BaseModel):
@@ -267,13 +267,18 @@ class STT(
             ),
         )
 
-    def update_keyterms(self, keyterms: list[str]) -> None:
-        """Set the keyterms used to bias recognition toward specific words/phrases."""
+    def _update_keyterms(self, keyterms: list[str]) -> None:
+        """Set the keyterms used to bias recognition toward specific words/phrases.
+
+        Internal hook called by the framework (e.g. keyterm detection). Plugins that
+        support keyterm prompting set ``STTCapabilities.keyterms`` and override this
+        to forward the terms to their provider-specific ``update_options()``.
+        """
         if not self._capabilities.keyterms:
             if not self._keyterms_unsupported_warned:
                 self._keyterms_unsupported_warned = True
                 logger.warning(
-                    "keyterms are not supported by this STT, ignoring update_keyterms()",
+                    "keyterms are not supported by this STT, ignoring keyterms update",
                     extra={"stt": self._label},
                 )
             return

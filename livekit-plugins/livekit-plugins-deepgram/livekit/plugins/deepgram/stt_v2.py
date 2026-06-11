@@ -268,7 +268,7 @@ class STTv2(stt.STT):
                 eager_eot_threshold=eager_eot_threshold,
             )
 
-    def update_keyterms(self, keyterms: list[str]) -> None:
+    def _update_keyterms(self, keyterms: list[str]) -> None:
         self.update_options(keyterm=keyterms)
 
 

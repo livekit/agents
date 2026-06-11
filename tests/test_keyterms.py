@@ -36,7 +36,7 @@ def _ctx(text: str = "hello") -> ChatContext:
 
 
 class _RecordingSTT(STT):
-    """STT that records every update_keyterms() call."""
+    """STT that records every _update_keyterms() call."""
 
     def __init__(self, *, supports_keyterms: bool = True) -> None:
         super().__init__(
@@ -63,7 +63,7 @@ class _RecordingSTT(STT):
     ) -> RecognizeStream:
         raise NotImplementedError
 
-    def update_keyterms(self, keyterms: list[str]) -> None:
+    def _update_keyterms(self, keyterms: list[str]) -> None:
         self.pushed.append(list(keyterms))
 
 
@@ -322,7 +322,7 @@ async def test_set_user_keyterms_pushes() -> None:
 def test_unsupported_stt_warn_and_skip() -> None:
     stt = _RecordingSTT(supports_keyterms=False)
     # exercise the base method (warn-and-skip), not the recorder override
-    STT.update_keyterms(stt, ["a", "b"])
+    STT._update_keyterms(stt, ["a", "b"])
     assert stt.pushed == []
 
 
@@ -333,7 +333,7 @@ async def test_triggers_every_n_user_turns() -> None:
     session = _FakeSession()
     fake = _RecordingLLM(([], ["Acme"], []))
     d = _detector(enabled=True, turn_interval=2, llm=fake)
-    d.start(session, stt=None, llm=None)
+    d.start(session, stt=_RecordingSTT(), llm=None)
 
     session.add_user("first")  # below interval
     await _drain(d)
@@ -354,7 +354,7 @@ async def test_ignores_assistant_messages_for_counting() -> None:
     session = _FakeSession()
     fake = _RecordingLLM()
     d = _detector(enabled=True, llm=fake)
-    d.start(session, stt=None, llm=None)
+    d.start(session, stt=_RecordingSTT(), llm=None)
 
     session.add_assistant("hello")
     await _drain(d)
@@ -371,7 +371,7 @@ async def test_empty_user_turn_does_not_trigger() -> None:
     session = _FakeSession()
     fake = _RecordingLLM()
     d = _detector(enabled=True, llm=fake)
-    d.start(session, stt=None, llm=None)
+    d.start(session, stt=_RecordingSTT(), llm=None)
 
     session.add_user("")
     await _drain(d)
@@ -384,7 +384,7 @@ async def test_single_flight_skips_overlapping_pass() -> None:
     session = _FakeSession()
     fake = _BlockingLLM()
     d = _detector(enabled=True, llm=fake)
-    d.start(session, stt=None, llm=None)
+    d.start(session, stt=_RecordingSTT(), llm=None)
 
     session.add_user("first")
     await asyncio.sleep(0)
@@ -404,7 +404,7 @@ async def test_aclose_unsubscribes() -> None:
     session = _FakeSession()
     fake = _RecordingLLM()
     d = _detector(enabled=True, llm=fake)
-    d.start(session, stt=None, llm=None)
+    d.start(session, stt=_RecordingSTT(), llm=None)
     await d.aclose()
 
     session.add_user("hi")
@@ -416,12 +416,35 @@ async def test_disabled_detection_does_not_trigger() -> None:
     session = _FakeSession()
     fake = _RecordingLLM(([], ["Acme"], []))
     d = _detector(enabled=False, llm=fake)
-    d.start(session, stt=None, llm=None)
+    d.start(session, stt=_RecordingSTT(), llm=None)
 
     session.add_user("the Acme Grand")
     await _drain(d)
     assert fake.calls == 0
     assert d.keyterms == []
+
+
+async def test_unsupported_stt_skips_detection() -> None:
+    # no point running LLM detection passes when the STT can't consume the keyterms
+    session = _FakeSession()
+    fake = _RecordingLLM(([], ["Acme"], []))
+    d = _detector(enabled=True, llm=fake)
+    d.start(session, stt=_RecordingSTT(supports_keyterms=False), llm=None)
+
+    session.add_user("the Acme Grand")
+    await _drain(d)
+    assert fake.calls == 0
+
+
+async def test_no_stt_skips_detection() -> None:
+    session = _FakeSession()
+    fake = _RecordingLLM(([], ["Acme"], []))
+    d = _detector(enabled=True, llm=fake)
+    d.start(session, stt=None, llm=None)
+
+    session.add_user("the Acme Grand")
+    await _drain(d)
+    assert fake.calls == 0
 
 
 # -- module helpers --

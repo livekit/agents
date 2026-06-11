@@ -175,7 +175,7 @@ class KeytermDetector:
     def set_user_keyterms(self, terms: list[str]) -> None:
         self._user_terms = list(dict.fromkeys(terms))
         if self._stt is not None:
-            self._stt.update_keyterms(self.keyterms)
+            self._stt._update_keyterms(self.keyterms)
 
     def start(self, session: AgentSession, *, stt: STT | None, llm: LLM | None) -> None:
         """Bind this activity's STT (always) and start detection (if enabled)."""
@@ -183,9 +183,18 @@ class KeytermDetector:
         if stt is not self._stt:
             self._stt = stt
             if self._stt is not None and self.keyterms:
-                self._stt.update_keyterms(self.keyterms)
+                self._stt._update_keyterms(self.keyterms)
 
         if self._session is not None or not self._options["enabled"]:
+            return
+
+        # don't waste LLM detection passes when no STT can consume the keyterms
+        if stt is None or not stt.capabilities.keyterms:
+            logger.warning(
+                "keyterm detection is enabled but the STT does not support keyterms; "
+                "skipping detection",
+                extra={"stt": stt.label if stt is not None else None},
+            )
             return
 
         detect_llm = self._options["llm"] or llm
@@ -279,8 +288,9 @@ class KeytermDetector:
                 self._auto_terms.pop(0)
 
         # update the STT if the keyterms changed
-        if self.keyterms != before and self._stt is not None:
-            self._stt.update_keyterms(self.keyterms)
+        if (new_keyterms := self.keyterms) != before and self._stt is not None:
+            self._stt._update_keyterms(new_keyterms)
+            logger.debug("keyterms changed", extra={"added": confirm, "removed": remove})
 
 
 async def _detect_keyterms(

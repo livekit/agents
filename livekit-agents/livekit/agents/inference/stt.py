@@ -197,7 +197,7 @@ def _keyterms_extra_for_model(model: NotGivenOr[str], keyterms: list[str]) -> di
 
     Returns None when the model does not support keyterm prompting. Called with an empty
     list, it doubles as a capability check (non-None ⇒ supported). Keep every provider's
-    keyterm key here so capability inference and update_keyterms can't diverge.
+    keyterm key here so capability inference and _update_keyterms can't diverge.
     """
     if not (is_given(model) and isinstance(model, str)):
         return None
@@ -669,10 +669,10 @@ class STT(stt.STT):
         for stream in self._streams:
             stream.update_options(model=model, language=language, extra=extra)
 
-    def update_keyterms(self, keyterms: list[str]) -> None:
+    def _update_keyterms(self, keyterms: list[str]) -> None:
         extra = _keyterms_extra_for_model(self._opts.model, keyterms)
         if extra is None:
-            super().update_keyterms(keyterms)  # warn-and-skip for unsupported models
+            super()._update_keyterms(keyterms)  # warn-and-skip for unsupported models
             return
         self.update_options(extra=extra)
 

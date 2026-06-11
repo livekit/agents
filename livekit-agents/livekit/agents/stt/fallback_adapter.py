@@ -114,10 +114,10 @@ class FallbackAdapter(
     def provider(self) -> str:
         return "livekit"
 
-    def update_keyterms(self, keyterms: list[str]) -> None:
+    def _update_keyterms(self, keyterms: list[str]) -> None:
         # forward to every underlying STT; unsupported ones warn-and-skip internally
         for stt_instance in self._stt_instances:
-            stt_instance.update_keyterms(keyterms)
+            stt_instance._update_keyterms(keyterms)
 
     async def _try_recognize(
         self,

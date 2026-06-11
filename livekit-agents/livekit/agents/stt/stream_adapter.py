@@ -43,8 +43,8 @@ class StreamAdapter(STT):
     def provider(self) -> str:
         return self._stt.provider
 
-    def update_keyterms(self, keyterms: list[str]) -> None:
-        self._stt.update_keyterms(keyterms)
+    def _update_keyterms(self, keyterms: list[str]) -> None:
+        self._stt._update_keyterms(keyterms)
 
     async def _recognize_impl(
         self,

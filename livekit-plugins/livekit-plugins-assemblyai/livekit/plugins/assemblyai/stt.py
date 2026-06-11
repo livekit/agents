@@ -301,7 +301,7 @@ class STT(stt.STT):
                 interruption_delay=interruption_delay,
             )
 
-    def update_keyterms(self, keyterms: list[str]) -> None:
+    def _update_keyterms(self, keyterms: list[str]) -> None:
         self.update_options(keyterms_prompt=keyterms)
 
 

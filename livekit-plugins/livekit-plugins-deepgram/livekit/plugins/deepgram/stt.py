@@ -376,7 +376,7 @@ class STT(stt.STT):
                 endpoint_url=endpoint_url,
             )
 
-    def update_keyterms(self, keyterms: list[str]) -> None:
+    def _update_keyterms(self, keyterms: list[str]) -> None:
         # keyterm is supported by Nova-3 models; older models fall back server-side.
         self.update_options(keyterm=keyterms)
 
