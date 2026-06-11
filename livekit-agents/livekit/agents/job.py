@@ -446,24 +446,23 @@ class JobContext:
         Resolved once and cached. The framework hands it to ``on_simulation_end``
         automatically, so you never need to call this to "prime" anything. Call it only
         when you want the scenario in your entrypoint (e.g. to seed scenario-specific
-        mocks). Resolves synchronously from the simulator participant's metadata (a
-        protojson ``SimulationDispatch``); a production room has none and returns
-        ``None``.
+        mocks). Resolves synchronously from the simulator participant's
+        ``lk.simulation.dispatch`` attribute (a protojson ``SimulationDispatch``); a
+        production room has none and returns ``None``.
         """
         if self._simulation_resolved:
             return self._simulation_ctx
 
         self._simulation_resolved = True
 
-        # The simulation dispatch travels on the simulator participant's
-        # metadata (the participant carrying the lk.simulator attribute),
-        # leaving job and room metadata free for user payloads. Fall back to
-        # the job/room metadata sent by older servers (and by
-        # fake_job_context in tests).
+        # The simulation dispatch travels in the simulator participant's
+        # lk.simulation.dispatch attribute, leaving job and room metadata
+        # free for user payloads. Fall back to the job/room metadata sent by
+        # older servers (and by fake_job_context in tests).
         metadata = ""
         for participant in self._room.remote_participants.values():
-            if participant.attributes.get("lk.simulator") == "true" and participant.metadata:
-                metadata = participant.metadata
+            if dispatch_json := participant.attributes.get("lk.simulation.dispatch"):
+                metadata = dispatch_json
                 break
         if not metadata:
             metadata = self._info.job.metadata or self._room.metadata
