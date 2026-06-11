@@ -447,7 +447,7 @@ class JobContext:
         automatically, so you never need to call this to "prime" anything. Call it only
         when you want the scenario in your entrypoint (e.g. to seed scenario-specific
         mocks). Resolves synchronously from the simulator participant's
-        ``lk.simulation.dispatch`` attribute (a protojson ``SimulationDispatch``); a
+        ``lk.simulator.dispatch`` attribute (a protojson ``SimulationDispatch``); a
         production room has none and returns ``None``.
         """
         if self._simulation_resolved:
