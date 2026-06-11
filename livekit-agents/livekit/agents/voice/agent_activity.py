@@ -2353,6 +2353,39 @@ class AgentActivity(RecognitionHooks):
             if text.strip():
                 chat_ctx.add_message(role="system", content=text)
 
+    def _restore_expressive_content(self, chat_ctx: llm.ChatContext) -> None:
+        """Swap assistant message content for the marked-up text on the per-turn copy.
+
+        Chat history stores clean text (``content``) with the original marked-up text
+        preserved on ``expressive_content``. Re-injecting the markup lets the LLM see
+        its own past expressive style instead of being few-shotted by a tag-free
+        history. The items are shared with the persistent chat context, so swapped
+        messages are replaced with copies rather than mutated.
+
+        Markup is only restored for messages captured under the same TTS (matched by
+        label): tag vocabularies differ between providers, so after a TTS handoff
+        another provider's tags would teach the LLM the wrong vocabulary.
+        """
+        if self.tts is None:
+            return
+
+        current_label = self.tts.label
+        items = chat_ctx.items
+        for i, item in enumerate(items):
+            if (
+                item.type == "message"
+                and item.role == "assistant"
+                and item.expressive_content is not None
+                and item.expressive_content_source == current_label
+            ):
+                copied = item.model_copy()
+                # expressive_content is the full text of the message; non-text content
+                # (images/audio) is preserved as-is
+                copied.content = [item.expressive_content] + [
+                    c for c in item.content if not isinstance(c, str)
+                ]
+                items[i] = copied
+
     def _on_pipeline_reply_done(self, _: asyncio.Task[None]) -> None:
         if not self._speech_q and (not self._current_speech or self._current_speech.done()):
             self._session._update_agent_state("listening")
@@ -2690,6 +2723,10 @@ class AgentActivity(RecognitionHooks):
         _expr_opts = self._resolve_expressiveness_options()
         if _expr_opts is not None:
             self._inject_expressiveness_instructions(chat_ctx, _expr_opts, speech_handle)
+            # only restore markup when the current TTS understands it; after a handoff
+            # to a TTS without markup support, old tags would leak through unconverted
+            if self.tts and self.tts.markup.llm_instructions():
+                self._restore_expressive_content(chat_ctx)
 
         # TODO(theomonnom): since pause is closing STT/LLM/TTS, we have issues for SpeechHandle still in queue  # noqa: E501
         # I should implement a retry mechanism?
@@ -3031,9 +3068,16 @@ class AgentActivity(RecognitionHooks):
 
         if forwarded_text:
             # strip TTS markup from transcript/chat history (only when expressiveness
-            # injected markup instructions into the LLM context)
+            # injected markup instructions into the LLM context); keep the marked-up
+            # text on the message so future LLM turns can see it (_restore_expressive_content)
+            expressive_text: str | None = None
+            expressive_source: str | None = None
             if self.tts and self._resolve_expressiveness_options() is not None:
-                forwarded_text = self.tts.markup.to_text(forwarded_text)
+                stripped_text = self.tts.markup.to_text(forwarded_text)
+                if stripped_text != forwarded_text:
+                    expressive_text = forwarded_text
+                    expressive_source = self.tts.label
+                forwarded_text = stripped_text
 
             extra_kwargs: dict = {}
             if llm_gen_data.generated_extra:
@@ -3049,6 +3093,9 @@ class AgentActivity(RecognitionHooks):
             )
             if llm_gen_data.llm_output is not None:
                 msg.llm_output = llm_gen_data.llm_output
+            if expressive_text is not None:
+                msg.expressive_content = expressive_text
+                msg.expressive_content_source = expressive_source
             self._agent._chat_ctx.insert(msg)
             self._session._conversation_item_added(msg)
             speech_handle._item_added([msg])

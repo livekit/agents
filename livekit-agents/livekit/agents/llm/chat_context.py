@@ -283,6 +283,16 @@ class ChatMessage(BaseModel):
     type: Literal["message"] = "message"
     role: ChatRole
     content: list[ChatContent]
+    expressive_content: str | None = None
+    """The original assistant text including TTS expressiveness markup (e.g.
+    ``<expression value="..."/>`` tags), before the framework stripped it for the
+    user-facing transcript. Only set on assistant messages generated while
+    expressiveness is enabled and the reply actually contained markup. ``content``
+    always holds the clean text."""
+    expressive_content_source: str | None = None
+    """Label of the TTS that was active when ``expressive_content`` was captured.
+    The markup is only re-injected into the LLM context while the same TTS is in
+    use, since tag vocabularies differ between providers."""
     interrupted: bool = False
     transcript_confidence: float | None = None
     extra: dict[str, Any] = Field(default_factory=dict)
@@ -575,6 +585,7 @@ class ChatContext:
         exclude_function_call: bool = False,
         exclude_metrics: bool = False,
         exclude_config_update: bool = False,
+        exclude_expressive_content: bool = True,
     ) -> dict[str, Any]:
         items: list[ChatItem] = []
         for item in self.items:
@@ -601,6 +612,9 @@ class ChatContext:
             exclude_fields.add("created_at")
         if exclude_metrics:
             exclude_fields.add("metrics")
+        if exclude_expressive_content:
+            exclude_fields.add("expressive_content")
+            exclude_fields.add("expressive_content_source")
 
         return {
             "items": [
