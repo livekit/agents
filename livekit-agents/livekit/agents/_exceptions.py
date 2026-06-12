@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 
-class UnexpectedModelBehavior(Exception):
+class UnexpectedModelBehavior(RuntimeError):
     """Raised when the model behaves in a way the run cannot recover from,
     e.g. a run with an output_type ends without the expected output after
     exhausting its retries."""
