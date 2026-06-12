@@ -16,13 +16,14 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import inspect
 import uuid
 from dataclasses import dataclass, replace
 from typing import Any, cast
 
 import numpy as np
 
-from livekit.agents import APIConnectOptions, tts
+from livekit.agents import APIConnectOptions, tts, utils
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
@@ -31,6 +32,7 @@ NUM_CHANNELS = 1
 DEFAULT_MODEL = "KittenML/kitten-tts-nano-0.8"
 DEFAULT_VOICE = "expr-voice-5-m"
 DEFAULT_SPEED = 1.0
+DEFAULT_STREAM_CHUNK_SIZE = 120
 
 
 @dataclass
@@ -39,6 +41,7 @@ class _TTSOptions:
     voice: str
     speed: float
     clean_text: bool
+    chunk_size: int
     cache_dir: str | None
 
 
@@ -57,6 +60,13 @@ def _next_chunk(iterator: Any) -> Any | None:
         return None
 
 
+def _accepts_parameter(fn: Any, parameter: str) -> bool:
+    try:
+        return parameter in inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+
+
 class TTS(tts.TTS):
     def __init__(
         self,
@@ -65,11 +75,14 @@ class TTS(tts.TTS):
         voice: str = DEFAULT_VOICE,
         speed: float = DEFAULT_SPEED,
         clean_text: bool = True,
+        chunk_size: int = DEFAULT_STREAM_CHUNK_SIZE,
         cache_dir: str | None = None,
     ) -> None:
         """Create a KittenTTS text-to-speech instance."""
+        if chunk_size <= 0:
+            raise ValueError("chunk_size must be greater than 0")
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=False),
+            capabilities=tts.TTSCapabilities(streaming=True),
             sample_rate=SAMPLE_RATE,
             num_channels=NUM_CHANNELS,
         )
@@ -78,6 +91,7 @@ class TTS(tts.TTS):
             voice=voice,
             speed=speed,
             clean_text=clean_text,
+            chunk_size=chunk_size,
             cache_dir=cache_dir,
         )
         self._model: Any | None = None
@@ -99,6 +113,7 @@ class TTS(tts.TTS):
         voice: NotGivenOr[str] = NOT_GIVEN,
         speed: NotGivenOr[float] = NOT_GIVEN,
         clean_text: NotGivenOr[bool] = NOT_GIVEN,
+        chunk_size: NotGivenOr[int] = NOT_GIVEN,
         cache_dir: NotGivenOr[str | None] = NOT_GIVEN,
     ) -> None:
         reset_model = False
@@ -114,6 +129,10 @@ class TTS(tts.TTS):
             self._opts.speed = speed
         if is_given(clean_text):
             self._opts.clean_text = clean_text
+        if is_given(chunk_size):
+            if chunk_size <= 0:
+                raise ValueError("chunk_size must be greater than 0")
+            self._opts.chunk_size = chunk_size
         if reset_model:
             self._opts_revision += 1
             self._model = None
@@ -153,6 +172,51 @@ class TTS(tts.TTS):
     ) -> tts.ChunkedStream:
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
+    def stream(
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> tts.SynthesizeStream:
+        return SynthesizeStream(tts=self, conn_options=conn_options)
+
+
+async def _emit_audio(
+    *,
+    model: Any,
+    input_text: str,
+    opts: _TTSOptions,
+    output_emitter: tts.AudioEmitter,
+) -> None:
+    generate_stream = getattr(model, "generate_stream", None)
+    if generate_stream is None:
+        audio = await asyncio.to_thread(
+            model.generate,
+            input_text,
+            voice=opts.voice,
+            speed=opts.speed,
+            clean_text=opts.clean_text,
+        )
+        pcm = _audio_to_pcm16(audio)
+        if pcm:
+            output_emitter.push(pcm)
+        return
+
+    stream_kwargs: dict[str, Any] = {
+        "voice": opts.voice,
+        "speed": opts.speed,
+        "clean_text": opts.clean_text,
+    }
+    if _accepts_parameter(generate_stream, "chunk_size"):
+        stream_kwargs["chunk_size"] = opts.chunk_size
+
+    iterator = generate_stream(input_text, **stream_kwargs)
+
+    while True:
+        chunk = await asyncio.to_thread(_next_chunk, iterator)
+        if chunk is None:
+            break
+        pcm = _audio_to_pcm16(chunk)
+        if pcm:
+            output_emitter.push(pcm)
+
 
 class ChunkedStream(tts.ChunkedStream):
     def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
@@ -169,19 +233,52 @@ class ChunkedStream(tts.ChunkedStream):
         )
 
         model = await self._tts._ensure_model()
-        iterator = model.generate_stream(
-            self.input_text,
-            voice=self._opts.voice,
-            speed=self._opts.speed,
-            clean_text=self._opts.clean_text,
+        await _emit_audio(
+            model=model,
+            input_text=self.input_text,
+            opts=self._opts,
+            output_emitter=output_emitter,
         )
 
-        while True:
-            chunk = await asyncio.to_thread(_next_chunk, iterator)
-            if chunk is None:
+        output_emitter.flush()
+
+
+class SynthesizeStream(tts.SynthesizeStream):
+    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
+        super().__init__(tts=tts, conn_options=conn_options)
+        self._tts: TTS = tts
+        self._opts = replace(tts._opts)
+
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        request_id = utils.shortuuid()
+        segment_id = utils.shortuuid()
+        output_emitter.initialize(
+            request_id=request_id,
+            sample_rate=SAMPLE_RATE,
+            num_channels=NUM_CHANNELS,
+            mime_type="audio/pcm",
+            stream=True,
+        )
+
+        text_parts: list[str] = []
+        async for data in self._input_ch:
+            if isinstance(data, self._FlushSentinel):
                 break
-            pcm = _audio_to_pcm16(chunk)
-            if pcm:
-                output_emitter.push(pcm)
+            text_parts.append(data)
+
+        input_text = "".join(text_parts).strip()
+        if not input_text:
+            return
+
+        output_emitter.start_segment(segment_id=segment_id)
+        self._mark_started()
+
+        model = await self._tts._ensure_model()
+        await _emit_audio(
+            model=model,
+            input_text=input_text,
+            opts=self._opts,
+            output_emitter=output_emitter,
+        )
 
         output_emitter.flush()
