@@ -220,14 +220,25 @@ class BufferedTokenStream:
 
         if self._in_buf or self._out_buf:
             tokens = self._tokenize_fnc(self._in_buf)
-            if tokens:
+            for tok in tokens:
+                tok_text = tok[0] if isinstance(tok, tuple) else tok
+
+                # honor the cap here too: appending everything into one chunk could
+                # exceed max_token_len and trip a provider's send limit. Emit the
+                # buffer before it would overflow, then keep batching the rest.
+                if (
+                    self._max_token_len
+                    and self._out_buf
+                    and len(self._out_buf) + 1 + len(tok_text) > self._max_token_len
+                ):
+                    self._event_ch.send_nowait(
+                        TokenData(token=self._out_buf, segment_id=self._current_segment_id)
+                    )
+                    self._out_buf = ""
+
                 if self._out_buf:
                     self._out_buf += " "
-
-                if isinstance(tokens[0], tuple):
-                    self._out_buf += " ".join([tok[0] for tok in tokens])
-                else:
-                    self._out_buf += " ".join(tokens)
+                self._out_buf += tok_text
 
             if self._out_buf:
                 self._event_ch.send_nowait(

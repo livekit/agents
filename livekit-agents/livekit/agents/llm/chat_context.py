@@ -107,11 +107,12 @@ class Instructions:
                 k: str(v) if isinstance(v, Instructions) else v for k, v in kwargs.items()
             }
             audio_kw: dict[str, object] = {
-                k: (v.audio or str(v)) if isinstance(v, Instructions) else v
+                # an explicit "" removes the section; only None falls back to common
+                k: (v.audio if v.audio is not None else str(v)) if isinstance(v, Instructions) else v
                 for k, v in kwargs.items()
             }
             text_kw: dict[str, object] = {
-                k: (v.text or str(v)) if isinstance(v, Instructions) else v
+                k: (v.text if v.text is not None else str(v)) if isinstance(v, Instructions) else v
                 for k, v in kwargs.items()
             }
             return Instructions(
