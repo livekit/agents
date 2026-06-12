@@ -668,7 +668,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self._recording_options = _resolve_recording_options(record)  # type: ignore[arg-type]
             if self._text_only:
-                # text simulations have no audio I/O, so there is nothing to record
                 self._recording_options["audio"] = False
 
             is_primary = True

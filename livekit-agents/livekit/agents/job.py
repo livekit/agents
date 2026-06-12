@@ -461,15 +461,10 @@ class JobContext:
                 metadata = dispatch_json
                 break
         if not metadata and self._info.fake_job:
-            # fake_job_context injects the dispatch via job metadata
             metadata = self._info.job.metadata
         if not metadata:
-            # The simulator participant is only visible once the room is
-            # connected AND the participant list has synced; a miss before
-            # then (AgentSession.start consults _text_only pre-connect, and
-            # remote_participants populates asynchronously after connect)
-            # must not be cached. The simulator creates the room, so once any
-            # remote participant is visible the answer is final.
+            # The simulator joins before the agent, so a miss is only final
+            # once the room is connected and a remote participant is visible.
             self._simulation_resolved = (
                 self._room.isconnected() and len(self._room.remote_participants) > 0
             )
