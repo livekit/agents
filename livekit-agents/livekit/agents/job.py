@@ -460,8 +460,6 @@ class JobContext:
             if dispatch_json := participant.attributes.get(ATTRIBUTE_SIMULATOR_DISPATCH):
                 metadata = dispatch_json
                 break
-        if not metadata and self._info.fake_job:
-            metadata = self._info.job.metadata
         if not metadata:
             # The simulator joins before the agent, so a miss is only final
             # once the room is connected and a remote participant is visible.
