@@ -594,8 +594,10 @@ class JobContext:
             await self._room.connect(self._info.url, self._info.token, options=room_options)
             self._on_connect()
 
-            if self.simulation_context() is not None:
-                self._room.on("participant_disconnected", self._on_simulator_disconnected)
+            # Always registered: the callback ignores participants without the
+            # simulator attribute, and gating on simulation_context() here would
+            # race the participant-list sync.
+            self._room.on("participant_disconnected", self._on_simulator_disconnected)
 
             for p in self._room.remote_participants.values():
                 self._participant_available(p)
