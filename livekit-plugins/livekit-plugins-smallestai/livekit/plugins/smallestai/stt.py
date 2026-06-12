@@ -272,6 +272,7 @@ class STT(stt.STT):
         """Update STT options; propagates to all active streams (triggers reconnect)."""
         if is_given(model):
             self._opts.model = model
+            self._capabilities.streaming = model in _STREAMING_MODELS
         if is_given(language):
             self._opts.language = language
         if is_given(sample_rate):
