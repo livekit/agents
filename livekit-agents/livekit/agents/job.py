@@ -466,9 +466,14 @@ class JobContext:
             metadata = self._info.job.metadata
         if not metadata:
             # The simulator participant is only visible once the room is
-            # connected; a miss before then (AgentSession.start consults
-            # _text_only pre-connect) must not be cached.
-            self._simulation_resolved = self._room.isconnected()
+            # connected AND the participant list has synced; a miss before
+            # then (AgentSession.start consults _text_only pre-connect, and
+            # remote_participants populates asynchronously after connect)
+            # must not be cached. The simulator creates the room, so once any
+            # remote participant is visible the answer is final.
+            self._simulation_resolved = (
+                self._room.isconnected() and len(self._room.remote_participants) > 0
+            )
             return None
 
         self._simulation_resolved = True
