@@ -2308,6 +2308,23 @@ class AgentActivity(RecognitionHooks):
             return DEFAULT_EXPRESSIVENESS_OPTIONS
         return None
 
+    def _resolve_expressive_chunk_len(self, options: ExpressivenessOptions | None) -> int | None:
+        """Resolve the TTS batching target for this turn.
+
+        Returns ``None`` (per-sentence chunking) when expressiveness is off or the
+        TTS declares no max chunk length. Otherwise the requested ``chunk_len`` —
+        or the provider max when unset — capped at the provider max.
+        """
+        if options is None or self.tts is None:
+            return None
+        provider_max = self.tts.markup.max_chunk_len()
+        if provider_max is None:
+            return None
+        requested = options.get("chunk_len")
+        if requested is None:
+            return provider_max
+        return min(requested, provider_max)
+
     def _inject_expressiveness_instructions(
         self,
         chat_ctx: llm.ChatContext,

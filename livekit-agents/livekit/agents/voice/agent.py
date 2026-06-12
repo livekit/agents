@@ -566,6 +566,14 @@ class Agent:
 
             response_field = agent._response_field_name
 
+            # Resolve expressive batching for this synthesis and hand it to the TTS
+            # synchronously, just before stream() snapshots it. Doing it here (the
+            # single synthesis choke point for both generate_reply and say()) scopes
+            # the value to this turn rather than leaving stale state on the instance.
+            activity.tts._set_expressive_chunk_len(
+                activity._resolve_expressive_chunk_len(activity._resolve_expressiveness_options())
+            )
+
             conn_options = activity.session.conn_options.tts_conn_options
             async with wrapped_tts.stream(conn_options=conn_options) as stream:
 

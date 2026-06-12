@@ -130,6 +130,18 @@ class TTS(
             """
             return text
 
+        def max_chunk_len(self) -> int | None:
+            """Largest text chunk (in characters) this provider synthesizes well
+            in a single request.
+
+            When expressiveness is enabled, the framework batches the LLM output
+            into chunks up to this size so prosody stays continuous across the turn
+            (instead of resetting every sentence). ``None`` (the default) means the
+            provider declares no preferred chunk size, so no expressive batching is
+            applied. Plugins override this to expose their limit (e.g. Inworld: 900).
+            """
+            return None
+
     def __init__(
         self,
         *,
@@ -143,11 +155,26 @@ class TTS(
         self._num_channels = num_channels
         self._label = f"{type(self).__module__}.{type(self).__name__}"
         self._markup = self.Markup(self)
+        # Resolved expressive batching target (chars), set by the framework when
+        # expressiveness is active; None means per-sentence chunking (the default,
+        # unchanged behavior). TTS implementations that tokenize their own input
+        # read this to widen their chunks. See `_set_expressive_chunk_len`.
+        self._expressive_chunk_len: int | None = None
 
     @property
     def markup(self) -> Markup:
         """Access TTS markup capabilities (instructions for LLM, text stripping)."""
         return self._markup
+
+    def _set_expressive_chunk_len(self, chunk_len: int | None) -> None:
+        """Framework-internal: set the target chunk length for expressive batching.
+
+        Called by the voice pipeline each turn — the resolved value (already capped
+        at ``markup.max_chunk_len()``) when expressiveness is on, or ``None`` to
+        restore default per-sentence chunking. A no-op for TTS that don't tokenize
+        their own input.
+        """
+        self._expressive_chunk_len = chunk_len
 
     @property
     def label(self) -> str:

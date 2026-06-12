@@ -148,6 +148,18 @@ class ExpressivenessOptions(TypedDict, total=False):
     tts_instructions_template: Instructions | str
     audio_recognition_instructions_template: Instructions | str
 
+    chunk_len: int | None
+    """Target size (characters) for batching TTS synthesis requests, so prosody
+    stays continuous across the turn instead of resetting every sentence.
+
+    ``None`` (the default) uses the TTS provider's own maximum chunk length
+    (``tts.markup.max_chunk_len()``) — i.e. the largest chunks the provider
+    supports. Set a smaller value to trade some prosody continuity for lower
+    time-to-first-audio (the first request flushes sooner). Values larger than
+    the provider's maximum are capped to it. Has no effect on TTS that declare
+    no maximum chunk length, or when expressiveness is disabled.
+    """
+
 
 DEFAULT_EXPRESSIVENESS_OPTIONS: ExpressivenessOptions = ExpressivenessOptions(
     tts_instructions_template=Instructions(

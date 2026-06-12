@@ -503,6 +503,13 @@ class TTS(tts.TTS):
 
             return convert_markup(self._provider_key(), text)
 
+        def max_chunk_len(self) -> int | None:
+            from ..tts._provider_format import max_input_len
+
+            # Keyed on the raw provider (e.g. all "inworld/*" share the gateway
+            # send limit), matching the cap applied in SynthesizeStream._run.
+            return max_input_len(self._gateway_tts._opts.model.split("/")[0])
+
     @classmethod
     def from_model_string(cls, model: str) -> TTS:
         """Create a TTS instance from a model string
@@ -656,6 +663,11 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._tts: TTS = tts
 
         self._opts = replace(tts._opts)
+        # Snapshot the expressive batching target now, while the framework holds it
+        # fixed for this synthesis (set synchronously before stream()). Reading it
+        # lazily in _run would race with the next turn/session mutating the shared
+        # TTS instance.
+        self._expressive_chunk_len = tts._expressive_chunk_len
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
@@ -667,14 +679,24 @@ class SynthesizeStream(tts.SynthesizeStream):
             mime_type="audio/pcm",
         )
 
-        from ..tts._provider_format import max_input_len
-
-        provider = self._opts.model.split("/")[0]
+        # the provider send-limit cap (single source of truth: markup.max_chunk_len)
+        max_len = self._tts.markup.max_chunk_len()
+        expressive_len = self._expressive_chunk_len
         if is_given(self._opts.tokenizer):
+            # an explicit tokenizer always wins
             sent_tokenizer_stream = self._opts.tokenizer.stream()
-        else:
+        elif expressive_len is not None:
+            # expressiveness on: batch sentences up to the target so prosody stays
+            # continuous across the turn (min_token_len drives the batching; the
+            # provider cap is still respected via max_token_len).
             sent_tokenizer_stream = tokenize.blingfire.SentenceTokenizer(
-                max_token_len=max_input_len(provider),
+                min_token_len=expressive_len,
+                max_token_len=max_len,
+            ).stream()
+        else:
+            # default: per-sentence emission, capped at the provider limit
+            sent_tokenizer_stream = tokenize.blingfire.SentenceTokenizer(
+                max_token_len=max_len,
             ).stream()
         input_sent_event = asyncio.Event()
 
