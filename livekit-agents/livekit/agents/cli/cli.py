@@ -302,7 +302,7 @@ class AgentsConsole:
             "logging.level.critical": Style(color="red", bold=True, reverse=True),
         }
         self.tag_width = 11
-        self.console = Console(theme=Theme(theme))
+        self.console = Console(theme=Theme(theme), force_terminal=True)
 
         self._apm = rtc.AudioProcessingModule(
             echo_cancellation=True,
@@ -838,8 +838,12 @@ class RichLoggingHandler(logging.Handler):
 
         # used to avoid rendering two same time
         self._last_time: Text | None = None
+        self._broken_pipe = False
 
     def emit(self, record: logging.LogRecord) -> None:
+        if self._broken_pipe:
+            return
+
         def middle_truncate(s: str, max_width: int) -> str:
             if len(s) <= max_width:
                 return s
@@ -953,6 +957,8 @@ class RichLoggingHandler(logging.Handler):
             if has_exc:
                 self._print_plain_traceback(record)
 
+        except (BrokenPipeError, SystemExit):
+            self._broken_pipe = True
         except Exception:
             self.handleError(record)
 

@@ -198,3 +198,37 @@ class TestLogLevelValidation:
         result = runner.invoke(app, ["start"])
         assert result.exit_code == 0
         assert mock_run_worker.call_args.kwargs["args"].log_level == "ERROR"
+
+
+def test_agents_console_forces_terminal_colors():
+    from livekit.agents.cli.cli import AgentsConsole
+
+    console = AgentsConsole()
+    assert console.console.is_terminal is True
+
+
+def test_rich_logging_handler_suppresses_broken_pipe():
+    import logging
+
+    from livekit.agents.cli.cli import RichLoggingHandler
+
+    class BrokenConsole:
+        width = 80
+
+        def print(self, *args, **kwargs):
+            raise SystemExit(1)
+
+    class DummyAgentsConsole:
+        console = BrokenConsole()
+
+        def _render_tag(self, output, *, tag_width):
+            return output
+
+    handler = RichLoggingHandler(DummyAgentsConsole())
+    record = logging.LogRecord("test", logging.INFO, __file__, 1, "hello", (), None)
+
+    handler.emit(record)
+    assert handler._broken_pipe is True
+
+    # A follow-up log should be ignored instead of trying to write again.
+    handler.emit(record)
