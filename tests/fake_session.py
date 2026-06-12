@@ -93,7 +93,7 @@ def create_session(
     return session
 
 
-async def run_session(session: AgentSession, agent: Agent, *, drain_delay: float = 0.2) -> float:
+async def run_session(session: AgentSession, agent: Agent, *, drain_delay: float = 5) -> float:
     stt = session.stt
     audio_input = session.input.audio
     assert isinstance(stt, FakeSTT)
