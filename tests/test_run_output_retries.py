@@ -76,7 +76,7 @@ async def test_output_retry_custom_instructions() -> None:
     async with AgentSession(llm=llm) as sess:
         await sess.start(_Task())
         result = await sess.run(
-            user_input="hello", output_type=_Out, output_retry_instructions=custom
+            user_input="hello", output_type=_Out, output_retries={"instructions": custom}
         )
 
     assert result.final_output.value == "custom"

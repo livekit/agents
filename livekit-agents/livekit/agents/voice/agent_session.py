@@ -63,7 +63,7 @@ from .events import (
 from .ivr import IVRActivity
 from .recorder_io import RecorderIO
 from .remote_session import RoomSessionTransport, SessionHost, SessionTransport
-from .run_result import RunResult
+from .run_result import OutputRetryOptions, RunResult
 from .speech_handle import InputDetails, SpeechHandle
 from .tool_executor import ToolHandlingOptions, _resolve_async_tool_options
 from .turn import (
@@ -592,12 +592,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         user_input: str,
         input_modality: Literal["text", "audio"] = "text",
         output_type: type[Run_T] | None = None,
-        output_retries: int = 1,
-        output_retry_instructions: str | None = None,
+        output_retries: int | OutputRetryOptions = 1,
     ) -> RunResult[Run_T]:
         """output_retries: how many times to re-prompt the model when the run
-        ends without the expected output_type before raising RunOutputError.
-        output_retry_instructions: override the built-in retry prompt."""
+        ends without the expected output_type before raising RunOutputError;
+        pass :class:`OutputRetryOptions` to also override the retry prompt."""
         if self._global_run_state is not None and not self._global_run_state.done():
             raise RuntimeError("nested runs are not supported")
 
@@ -605,7 +604,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             user_input=user_input,
             output_type=output_type,
             output_retries=output_retries,
-            output_retry_instructions=output_retry_instructions,
             session=self,
         )
         self._global_run_state = run_state

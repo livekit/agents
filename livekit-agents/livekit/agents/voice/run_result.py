@@ -14,6 +14,7 @@ from typing import (
     Any,
     Generic,
     Literal,
+    TypedDict,
     TypeVar,
     overload,
 )
@@ -38,6 +39,24 @@ _OUTPUT_RETRY_PROMPT = (
     "Plain text responses are not permitted, call the appropriate function "
     "to provide your final output."
 )
+
+
+class OutputRetryOptions(TypedDict, total=False):
+    """Retry behavior for a run that ends without its ``output_type``.
+
+    Can be passed to :meth:`AgentSession.run` in place of a plain retry count::
+
+        sess.run(
+            user_input=...,
+            output_type=MyOutput,
+            output_retries={"max_retries": 2, "instructions": "Call submit_result."},
+        )
+    """
+
+    max_retries: int
+    """How many re-prompts before raising RunOutputError. Defaults to ``1``."""
+    instructions: str
+    """Override the built-in retry prompt."""
 
 Run_T = TypeVar("Run_T")
 
@@ -77,8 +96,7 @@ class RunResult(Generic[Run_T]):
         *,
         user_input: str | None = None,
         output_type: type[Run_T] | None,
-        output_retries: int = 1,
-        output_retry_instructions: str | None = None,
+        output_retries: int | OutputRetryOptions = 1,
         session: AgentSession | None = None,
     ) -> None:
         self._handles: set[SpeechHandle | asyncio.Task] = set()
@@ -86,8 +104,10 @@ class RunResult(Generic[Run_T]):
         self._done_fut = asyncio.Future[None]()
         self._user_input = user_input
         self._output_type = output_type
-        self._output_retries = output_retries
-        self._output_retry_instructions = output_retry_instructions or _OUTPUT_RETRY_PROMPT
+        if isinstance(output_retries, int):
+            output_retries = OutputRetryOptions(max_retries=output_retries)
+        self._output_retries = output_retries.get("max_retries", 1)
+        self._output_retry_instructions = output_retries.get("instructions", _OUTPUT_RETRY_PROMPT)
         self._session = session
         self._recorded_items: list[RunEvent] = []
         self._final_output: Run_T | None = None
