@@ -460,9 +460,8 @@ class JobContext:
             if dispatch_json := participant.attributes.get(ATTRIBUTE_SIMULATOR_DISPATCH):
                 metadata = dispatch_json
                 break
-        if not metadata:
-            # older servers sent the dispatch in the job metadata;
-            # fake_job_context places it there too
+        if not metadata and self._info.fake_job:
+            # fake_job_context injects the dispatch via job metadata
             metadata = self._info.job.metadata
         if not metadata:
             # The simulator participant is only visible once the room is
