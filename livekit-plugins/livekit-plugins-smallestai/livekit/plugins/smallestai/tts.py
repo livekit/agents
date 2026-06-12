@@ -196,6 +196,7 @@ class TTS(tts.TTS):
             self._opts.output_format = output_format
         if is_given(word_timestamps):
             self._opts.word_timestamps = word_timestamps
+            self._capabilities.aligned_transcript = word_timestamps
 
     def synthesize(
         self,
