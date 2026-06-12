@@ -231,7 +231,9 @@ class RunResult(Generic[Run_T]):
             final_output = self.__last_speech_handle._maybe_run_final_output
             if not isinstance(final_output, BaseException):
                 if self._output_type and not isinstance(final_output, self._output_type):
-                    if self._maybe_retry_output():
+                    # only the no-output case is retryable: a completed task is
+                    # one-shot, so a wrong type cannot change on a retry
+                    if final_output is None and self._maybe_retry_output():
                         return
                     from .._exceptions import UnexpectedModelBehavior
 
