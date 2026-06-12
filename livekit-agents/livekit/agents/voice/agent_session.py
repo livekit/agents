@@ -1412,6 +1412,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         wait_on_enter: bool = True,
     ) -> None:
         async with self._activity_lock:
+            if self._closing and new_activity == "start":
+                # checked again after the drain below: closing may start while it's in flight
+                logger.warning(
+                    f"session is closing, skipping start activity of agent {agent.id}",
+                )
+                return
+
             # _update_activity is called directly sometimes, update for redundancy
             self._agent = agent
 
