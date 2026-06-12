@@ -100,7 +100,7 @@ class OutputOptions(TypedDict, total=False):
 
     max_retries: int
     """Re-prompts when a run ends without its ``output_type``, before raising
-    UnexpectedModelBehavior. Defaults to ``1``."""
+    UnexpectedModelBehavior. Defaults to ``2``."""
     retry_instructions: str
     """Override the built-in retry prompt."""
 
@@ -620,7 +620,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         run_state = RunResult(
             user_input=user_input,
             output_type=output_type,
-            output_retries=output_options.get("max_retries", 1),
+            output_retries=output_options.get("max_retries", 2),
             output_retry_instructions=output_options.get("retry_instructions"),
             session=self,
         )
