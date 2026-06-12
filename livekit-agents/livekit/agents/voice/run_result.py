@@ -6,7 +6,6 @@ import contextvars
 import functools
 import json
 import os
-import weakref
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -1085,53 +1084,17 @@ class AgentHandoffAssert:
 if TYPE_CHECKING:
     MockTools = dict[type[Agent], dict[str, Callable]]
 _MockToolsContextVar = contextvars.ContextVar["MockTools"]("agents_mock_tools")
-_SessionMockTools: weakref.WeakKeyDictionary[AgentSession, MockTools] = (
-    weakref.WeakKeyDictionary()
-)
-
-
-@overload
-def mock_tools(
-    agent: type[Agent], mocks: dict[str, Callable]
-) -> contextlib.AbstractContextManager[None]: ...
-
-
-@overload
-def mock_tools(agent: type[Agent], mocks: dict[str, Callable], *, session: AgentSession) -> None: ...
-
-
-def mock_tools(
-    agent: type[Agent], mocks: dict[str, Callable], *, session: AgentSession | None = None
-) -> contextlib.AbstractContextManager[None] | None:
-    """Assign a set of mock tool callables to a specific Agent type.
-
-    Mocks intercept tool *execution* only — the LLM keeps seeing the real tool
-    schemas. A mock may declare any subset of the real tool's parameters
-    (extra arguments are dropped when it is invoked).
-
-    Without ``session``, returns a context manager scoping the mocks to the
-    current context (intended for tests):
-
-        with mock_tools(MyAgentClass, {"tool_name": mock_fn}):
-            # inside this block, MyAgentClass will see the given mocks
-
-    With ``session``, ``mocks`` becomes the mock set for the Agent type on that
-    session, effective immediately and for the session's lifetime:
-
-        mock_tools(MyAgentClass, {"tool_name": mock_fn}, session=session)
-
-    Call it again to replace the mock set, or pass ``{}`` to remove all mocks
-    for the Agent type. When both forms are active, the context-manager mocks
-    take precedence over the session ones.
-    """
-    if session is not None:
-        _SessionMockTools.setdefault(session, {})[agent] = dict(mocks)
-        return None
-    return _mock_tools_ctx(agent, mocks)
 
 
 @contextmanager
-def _mock_tools_ctx(agent: type[Agent], mocks: dict[str, Callable]) -> Generator[None, None, None]:
+def mock_tools(agent: type[Agent], mocks: dict[str, Callable]) -> Generator[None, None, None]:
+    """
+    Temporarily assign a set of mock tool callables to a specific Agent type within the current context.
+
+    Usage:
+        with mock_tools(MyAgentClass, {"tool_name": mock_fn}):
+            # inside this block, MyAgentClass will see the given mocks
+    """  # noqa: E501
     current = _MockToolsContextVar.get({})
     updated = {**current, agent: mocks}  # create a new dict
     token = _MockToolsContextVar.set(updated)

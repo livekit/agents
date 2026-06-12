@@ -10,15 +10,7 @@ from zoneinfo import ZoneInfo
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-import simulation
-from calendar_api import (
-    AvailableSlot,
-    CalComCalendar,
-    Calendar,
-    FakeCalendar,
-    SlotUnavailableError,
-    now,
-)
+from calendar_api import AvailableSlot, CalComCalendar, Calendar, FakeCalendar, SlotUnavailableError
 from dotenv import load_dotenv
 from ui_view import UIView
 
@@ -34,7 +26,6 @@ from livekit.agents import (
     function_tool,
     get_job_context,
     inference,
-    mock_tools,
 )
 from livekit.agents.evals import (
     JudgeGroup,
@@ -70,7 +61,7 @@ logger = logging.getLogger("front-desk")
 class FrontDeskAgent(Agent):
     def __init__(self, *, timezone: str) -> None:
         self.tz = ZoneInfo(timezone)
-        today = now(self.tz).strftime("%A, %B %d, %Y")
+        today = datetime.datetime.now(self.tz).strftime("%A, %B %d, %Y")
 
         super().__init__(
             instructions=(
@@ -163,7 +154,7 @@ class FrontDeskAgent(Agent):
         Args:
             range: Determines how far ahead to search for free time slots.
         """
-        current_time = now(self.tz)
+        now = datetime.datetime.now(self.tz)
         lines: list[str] = []
 
         if range == "+2week" or range == "default":
