@@ -308,6 +308,7 @@ class RecorderAudioInput(io.AudioInput):
         self.__acc_frames: list[rtc.AudioFrame] = []
         self.__started_time: None | float = None
         self.__padded: bool = False
+        self.__warned_no_speech: bool = False
 
     @property
     def started_wall_time(self) -> float | None:
@@ -338,10 +339,12 @@ class RecorderAudioInput(io.AudioInput):
         # we could pad with silence here with some fixed SR and channels,
         # but it's better for the user to know that this is happening
         elif pad_since and self.__started_time is None and not self.__padded and not frames:
-            logger.warning(
-                "input speech hasn't started yet, skipping silence padding, "
-                "recording may be inaccurate until the speech starts"
-            )
+            if not self.__warned_no_speech:
+                self.__warned_no_speech = True
+                logger.warning(
+                    "input speech hasn't started yet, skipping silence padding, "
+                    "recording may be inaccurate until the speech starts"
+                )
 
         return frames
 
