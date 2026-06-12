@@ -260,9 +260,12 @@ class RunResult(Generic[Run_T]):
 
         try:
             # generate_reply attaches the new handle to this run state (it is
-            # still the session's active run).
-            self._session.generate_reply(user_input=self._output_retry_instructions)
-        except RuntimeError:
+            # still the session's active run); instructions inject as a
+            # per-turn system message instead of a fake user message.
+            self._session.generate_reply(instructions=self._output_retry_instructions)
+        except Exception:
+            # an unhandled exception here would leave the run future
+            # unresolved; fall through to UnexpectedModelBehavior instead
             return False
         logger.warning(
             "run ended without the expected output type, retrying",

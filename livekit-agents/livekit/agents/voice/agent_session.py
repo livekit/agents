@@ -100,7 +100,7 @@ class OutputOptions(TypedDict, total=False):
 
     retries: int
     """Re-prompts when a run ends without its ``output_type``, before raising
-    RunOutputError. Defaults to ``1``."""
+    UnexpectedModelBehavior. Defaults to ``1``."""
     retry_instructions: str
     """Override the built-in retry prompt."""
 
