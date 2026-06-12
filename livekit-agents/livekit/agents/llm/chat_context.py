@@ -279,21 +279,32 @@ class MetricsReport(TypedDict, total=False):
     stt_metadata: MetricsMetadata
 
 
+class ExpressiveContent(BaseModel):
+    """An assistant message's text with its TTS expressiveness markup intact.
+
+    ``ChatMessage.content`` always holds the clean, tag-free transcript text; this
+    holds the marked-up version (e.g. ``<expression value="..."/>`` tags) plus the
+    TTS that produced it. The framework re-injects the markup into future LLM turns
+    so the model sees its own expressive style — but only while the same TTS is in
+    use, since tag vocabularies differ between providers.
+    """
+
+    markup: str
+    """The message text including TTS markup, e.g. ``<expression value="..."/> Hi there``."""
+    source: str
+    """Label of the TTS that was active when the markup was captured."""
+
+
 class ChatMessage(BaseModel):
     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
     type: Literal["message"] = "message"
     role: ChatRole
     content: list[ChatContent]
-    expressive_content: str | None = None
-    """The original assistant text including TTS expressiveness markup (e.g.
-    ``<expression value="..."/>`` tags), before the framework stripped it for the
-    user-facing transcript. Only set on assistant messages generated while
-    expressiveness is enabled and the reply actually contained markup. ``content``
-    always holds the clean text."""
-    expressive_content_source: str | None = None
-    """Label of the TTS that was active when ``expressive_content`` was captured.
-    The markup is only re-injected into the LLM context while the same TTS is in
-    use, since tag vocabularies differ between providers."""
+    expressive_content: ExpressiveContent | None = None
+    """The assistant text with TTS expressiveness markup intact (see
+    :class:`ExpressiveContent`). Set only on assistant messages generated while
+    expressiveness was enabled and the reply actually contained markup; ``None``
+    otherwise (including interrupted turns). ``content`` always holds the clean text."""
     interrupted: bool = False
     transcript_confidence: float | None = None
     extra: dict[str, Any] = Field(default_factory=dict)
@@ -615,7 +626,6 @@ class ChatContext:
             exclude_fields.add("metrics")
         if exclude_expressive_content:
             exclude_fields.add("expressive_content")
-            exclude_fields.add("expressive_content_source")
 
         return {
             "items": [

@@ -2393,12 +2393,12 @@ class AgentActivity(RecognitionHooks):
                 item.type == "message"
                 and item.role == "assistant"
                 and item.expressive_content is not None
-                and item.expressive_content_source == current_label
+                and item.expressive_content.source == current_label
             ):
                 copied = item.model_copy()
-                # expressive_content is the full text of the message; non-text content
-                # (images/audio) is preserved as-is
-                copied.content = [item.expressive_content] + [
+                # expressive_content.markup is the full text of the message; non-text
+                # content (images/audio) is preserved as-is
+                copied.content = [item.expressive_content.markup] + [
                     c for c in item.content if not isinstance(c, str)
                 ]
                 items[i] = copied
@@ -2530,6 +2530,7 @@ class AgentActivity(RecognitionHooks):
                     input=audio_source,
                     model_settings=model_settings,
                     text_transforms=self._session.options.tts_text_transforms,
+                    structured_output=self._agent.llm_output_format is not None,
                     model=self.tts.model if self.tts else None,
                     provider=self.tts.provider if self.tts else None,
                 )
@@ -2799,6 +2800,7 @@ class AgentActivity(RecognitionHooks):
                         input=tts_text,
                         model_settings=model_settings,
                         text_transforms=self._session.options.tts_text_transforms,
+                        structured_output=self._agent.llm_output_format is not None,
                         model=self.tts.model if self.tts else None,
                         provider=self.tts.provider if self.tts else None,
                     )
@@ -3126,9 +3128,10 @@ class AgentActivity(RecognitionHooks):
             )
             if llm_gen_data.llm_output is not None:
                 msg.llm_output = llm_gen_data.llm_output
-            if expressive_text is not None:
-                msg.expressive_content = expressive_text
-                msg.expressive_content_source = expressive_source
+            if expressive_text is not None and expressive_source is not None:
+                msg.expressive_content = llm.ExpressiveContent(
+                    markup=expressive_text, source=expressive_source
+                )
             self._agent._chat_ctx.insert(msg)
             self._session._conversation_item_added(msg)
             speech_handle._item_added([msg])
@@ -3520,6 +3523,7 @@ class AgentActivity(RecognitionHooks):
                         input=tts_text_input,
                         model_settings=model_settings,
                         text_transforms=self._session.options.tts_text_transforms,
+                        structured_output=self._agent.llm_output_format is not None,
                         model=self.tts.model if self.tts else None,
                         provider=self.tts.provider if self.tts else None,
                     )

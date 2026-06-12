@@ -974,25 +974,31 @@ class TTS(tts.TTS):
         )
 
     class Markup(tts.TTS.Markup):
+        def _provider_key(self) -> str:
+            # only inworld-tts-2 understands the markup tags; older models get no
+            # markup so the tags aren't injected, converted, or stripped (matches
+            # the inference gateway's behavior)
+            return "inworld" if "tts-2" in self._tts.model else ""
+
         def llm_instructions(self) -> str | None:
             from livekit.agents.tts._provider_format import llm_instructions
 
-            return llm_instructions("inworld")
+            return llm_instructions(self._provider_key())
 
         def normalize(self, text: str) -> str:
             from livekit.agents.tts._provider_format import normalize_markup
 
-            return normalize_markup("inworld", text)
+            return normalize_markup(self._provider_key(), text)
 
         def to_text(self, text: str) -> str:
             from livekit.agents.tts._provider_format import strip_markup
 
-            return strip_markup("inworld", text)
+            return strip_markup(self._provider_key(), text)
 
         def convert(self, text: str) -> str:
             from livekit.agents.tts._provider_format import convert_markup
 
-            return convert_markup("inworld", text)
+            return convert_markup(self._provider_key(), text)
 
     @property
     def model(self) -> str:

@@ -753,8 +753,8 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         userdata=userdata,
         stt=inference.STT("deepgram/nova-3", language="multi"),
-        llm=inference.LLM("openai/gpt-4.1-mini"),
-        tts=inference.TTS("inworld/inworld-tts-2"),
+        llm=inference.LLM("openai/gpt-5.5"),
+        tts=inference.TTS("inworld/inworld-tts-2", voice="Luna"),
         vad=silero.VAD.load(),
         expressiveness=HEALTHCARE_EXPRESSIVENESS_PRESET,
         preemptive_generation=True,

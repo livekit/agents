@@ -277,13 +277,23 @@ def perform_tts_inference(
     text_transforms: Sequence[TextTransforms] | None,
     model: str | None = None,
     provider: str | None = None,
+    structured_output: bool = False,
 ) -> tuple[asyncio.Task[bool], _TTSGenerationData]:
     audio_ch = aio.Chan[rtc.AudioFrame]()
     timed_texts_fut = asyncio.Future[aio.Chan[io.TimedString] | None]()
     data = _TTSGenerationData(audio_ch=audio_ch, timed_texts_fut=timed_texts_fut)
 
     tts_task = asyncio.create_task(
-        _tts_inference_task(node, input, model_settings, data, text_transforms, model, provider)
+        _tts_inference_task(
+            node,
+            input,
+            model_settings,
+            data,
+            text_transforms,
+            model,
+            provider,
+            structured_output=structured_output,
+        )
     )
 
     def _inference_done(_: asyncio.Task[bool]) -> None:
@@ -307,6 +317,7 @@ async def _tts_inference_task(
     text_transforms: Sequence[TextTransforms] | None,
     model: str | None = None,
     provider: str | None = None,
+    structured_output: bool = False,
 ) -> bool:
     current_span = trace.get_current_span()
     if model:
@@ -315,8 +326,10 @@ async def _tts_inference_task(
         current_span.set_attribute(trace_types.ATTR_GEN_AI_PROVIDER_NAME, provider)
 
     audio_ch, timed_texts_fut = data.audio_ch, data.timed_texts_fut
-    if text_transforms:
-        # text transforms only apply to plain text mode (no structured output)
+    if text_transforms and not structured_output:
+        # text transforms only apply to plain text mode; in structured-output mode
+        # the stream carries BaseModel chunks (not str), which the str-only
+        # transforms can't handle — so they're skipped entirely.
         input = _apply_text_transforms(input, text_transforms)  # type: ignore[arg-type]
 
     start_time: float | None = None

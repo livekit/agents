@@ -292,8 +292,8 @@ async def frontdesk_agent(ctx: JobContext):
     session = AgentSession[Userdata](
         userdata=userdata,
         stt=inference.STT("deepgram/nova-3"),
-        llm=inference.LLM("google/gemini-3.1-flash-lite"),
-        tts=inference.TTS("inworld/inworld-tts-2", voice="Sarah"),
+        llm=inference.LLM("openai/gpt-5.5"),
+        tts=inference.TTS("inworld/inworld-tts-2", voice="Nadia"),
         expressiveness=CUSTOMER_SERVICE_EXPRESSIVENESS_PRESET,
         turn_detection=MultilingualModel(),
         vad=silero.VAD.load(),
