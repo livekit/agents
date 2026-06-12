@@ -79,6 +79,7 @@ class RunResult(Generic[Run_T]):
         user_input: str | None = None,
         output_type: type[Run_T] | None,
         output_retries: int = 1,
+        output_retry_instructions: str | None = None,
         session: AgentSession | None = None,
     ) -> None:
         self._handles: set[SpeechHandle | asyncio.Task] = set()
@@ -87,6 +88,7 @@ class RunResult(Generic[Run_T]):
         self._user_input = user_input
         self._output_type = output_type
         self._output_retries = output_retries
+        self._output_retry_instructions = output_retry_instructions or _OUTPUT_RETRY_PROMPT
         self._session = session
         self._recorded_items: list[RunEvent] = []
         self._final_output: Run_T | None = None
@@ -254,11 +256,10 @@ class RunResult(Generic[Run_T]):
 
         from ..log import logger
 
-        instructions = self._session.options.output_retry_instructions or _OUTPUT_RETRY_PROMPT
         try:
             # generate_reply attaches the new handle to this run state (it is
             # still the session's active run).
-            self._session.generate_reply(user_input=instructions)
+            self._session.generate_reply(user_input=self._output_retry_instructions)
         except RuntimeError:
             return False
         logger.warning(

@@ -86,6 +86,23 @@ if TYPE_CHECKING:
     from .transcription.text_transforms import TextTransforms
 
 
+class OutputOptions(TypedDict, total=False):
+    """Structured-output behavior for :meth:`AgentSession.run`.
+
+    Can be passed as a plain dict::
+
+        AgentSession(
+            output_options={"retries": 2, "retry_instructions": "Call submit_result."},
+        )
+    """
+
+    retries: int
+    """Re-prompts when a run ends without its ``output_type``, before raising
+    RunOutputError. Defaults to ``1``."""
+    retry_instructions: str
+    """Override the built-in retry prompt."""
+
+
 class RecordingOptions(TypedDict, total=False):
     """Granular control over which recording features are active.
 
@@ -143,7 +160,7 @@ class SessionConnectOptions:
 class AgentSessionOptions:
     turn_handling: TurnHandlingOptions
     max_tool_steps: int
-    output_retry_instructions: str | None
+    output_options: OutputOptions
     user_away_timeout: float | None
     min_consecutive_speech_delay: float
     use_tts_aligned_transcript: bool | None
@@ -234,7 +251,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
         tool_handling: NotGivenOr[ToolHandlingOptions] = NOT_GIVEN,
         max_tool_steps: int = 3,
-        output_retry_instructions: str | None = None,
+        output_options: OutputOptions | None = None,
         # TTS settings
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
@@ -291,8 +308,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             max_endpointing_delay (float): Maximum time-in-seconds the agent
                 will wait before terminating the turn. Default ``3.0`` s.
             max_tool_steps (int): Maximum consecutive tool calls per LLM turn.
-            output_retry_instructions (str | None): Override the built-in re-prompt
-                used when a run with an output_type ends without it.
+            output_options (OutputOptions): Structured-output behavior for run():
+                retry budget and retry prompt.
                 Default ``3``.
             video_sampler (_VideoSampler, optional): Uses
                 :class:`VoiceActivityVideoSampler` when *NOT_GIVEN*; that sampler
@@ -383,7 +400,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 user_turn_limit=user_turn_limit,
             ),
             max_tool_steps=max_tool_steps,
-            output_retry_instructions=output_retry_instructions,
+            output_options=output_options or OutputOptions(),
             user_away_timeout=user_away_timeout,
             min_consecutive_speech_delay=min_consecutive_speech_delay,
             tts_text_transforms=(
@@ -597,18 +614,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         user_input: str,
         input_modality: Literal["text", "audio"] = "text",
         output_type: type[Run_T] | None = None,
-        output_retries: int = 1,
     ) -> RunResult[Run_T]:
-        """output_retries: how many times to re-prompt the model when the run
-        ends without the expected output_type before raising RunOutputError.
-        The session's output_retry_instructions overrides the retry prompt."""
         if self._global_run_state is not None and not self._global_run_state.done():
             raise RuntimeError("nested runs are not supported")
 
+        output_options = self.options.output_options
         run_state = RunResult(
             user_input=user_input,
             output_type=output_type,
-            output_retries=output_retries,
+            output_retries=output_options.get("retries", 1),
+            output_retry_instructions=output_options.get("retry_instructions"),
             session=self,
         )
         self._global_run_state = run_state

@@ -1,6 +1,11 @@
 from . import io, run_result
 from .agent import Agent, AgentTask, ModelSettings
-from .agent_session import AgentSession, RecordingOptions, VoiceActivityVideoSampler
+from .agent_session import (
+    AgentSession,
+    OutputOptions,
+    RecordingOptions,
+    VoiceActivityVideoSampler,
+)
 from .events import (
     AgentEvent,
     AgentFalseInterruptionEvent,
@@ -30,6 +35,7 @@ from .transcription import TranscriptSynchronizer, text_transforms
 __all__ = [
     "AgentSession",
     "RecordingOptions",
+    "OutputOptions",
     "VoiceActivityVideoSampler",
     "Agent",
     "ModelSettings",
