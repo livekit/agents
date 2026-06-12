@@ -402,7 +402,7 @@ class JobContext:
         LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET so this API is always
         usable inside job entrypoints.
         """
-        return api.LiveKitAPI(session=http_context.http_session())
+        return lkapi.LiveKitAPI(session=http_context.http_session())
 
     @property
     def proc(self) -> JobProcess:
