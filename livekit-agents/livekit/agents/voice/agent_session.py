@@ -86,7 +86,7 @@ if TYPE_CHECKING:
     from .transcription.text_transforms import TextTransforms
 
 
-class OutputOptions(TypedDict, total=False):
+class RunOutputOptions(TypedDict, total=False):
     """Structured-output behavior for :meth:`AgentSession.run`.
 
     Can be passed as a plain dict::
@@ -611,12 +611,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         user_input: str,
         input_modality: Literal["text", "audio"] = "text",
         output_type: type[Run_T] | None = None,
-        output_options: OutputOptions | None = None,
+        output_options: RunOutputOptions | None = None,
     ) -> RunResult[Run_T]:
         if self._global_run_state is not None and not self._global_run_state.done():
             raise RuntimeError("nested runs are not supported")
 
-        output_options = output_options or OutputOptions()
+        output_options = output_options or RunOutputOptions()
         run_state = RunResult(
             user_input=user_input,
             output_type=output_type,
