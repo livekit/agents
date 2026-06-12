@@ -233,10 +233,10 @@ class RunResult(Generic[Run_T]):
                 if self._output_type and not isinstance(final_output, self._output_type):
                     if self._maybe_retry_output():
                         return
-                    from .._exceptions import RunOutputError
+                    from .._exceptions import UnexpectedModelBehavior
 
                     self._done_fut.set_exception(
-                        RunOutputError(
+                        UnexpectedModelBehavior(
                             f"Expected output of type {self._output_type.__name__}, "
                             f"got {type(final_output).__name__}"
                         )

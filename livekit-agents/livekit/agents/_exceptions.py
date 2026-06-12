@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 
-class RunOutputError(Exception):
-    """Raised when a run with an output_type ends without the expected output
-    after exhausting output_retries."""
+class UnexpectedModelBehavior(Exception):
+    """Raised when the model behaves in a way the run cannot recover from,
+    e.g. a run with an output_type ends without the expected output after
+    exhausting its retries."""
 
 
 class AssignmentTimeoutError(Exception):

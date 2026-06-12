@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import BaseModel
 
-from livekit.agents import AgentSession, RunOutputError
+from livekit.agents import AgentSession, UnexpectedModelBehavior
 from livekit.agents.llm import FunctionToolCall, function_tool
 from livekit.agents.voice.agent import AgentTask
 from livekit.agents.voice.run_result import _OUTPUT_RETRY_PROMPT
@@ -82,7 +82,7 @@ async def test_output_retry_custom_instructions() -> None:
 
 @pytest.mark.asyncio
 async def test_output_retry_exhausted() -> None:
-    """With no retry budget, a prose ending raises RunOutputError."""
+    """With no retry budget, a prose ending raises UnexpectedModelBehavior."""
     llm = FakeLLM(
         fake_responses=[
             FakeLLMResponse(input="hello", content="chatting instead", ttft=0.01, duration=0.02),
@@ -90,5 +90,5 @@ async def test_output_retry_exhausted() -> None:
     )
     async with AgentSession(llm=llm, output_options={"retries": 0}) as sess:
         await sess.start(_Task())
-        with pytest.raises(RunOutputError):
+        with pytest.raises(UnexpectedModelBehavior):
             await sess.run(user_input="hello", output_type=_Out)
