@@ -73,9 +73,13 @@ async def test_output_retry_custom_instructions() -> None:
             ),
         ]
     )
-    async with AgentSession(llm=llm, output_options={"retry_instructions": custom}) as sess:
+    async with AgentSession(llm=llm) as sess:
         await sess.start(_Task())
-        result = await sess.run(user_input="hello", output_type=_Out)
+        result = await sess.run(
+            user_input="hello",
+            output_type=_Out,
+            output_options={"retry_instructions": custom},
+        )
 
     assert result.final_output.value == "custom"
 
@@ -88,7 +92,9 @@ async def test_output_retry_exhausted() -> None:
             FakeLLMResponse(input="hello", content="chatting instead", ttft=0.01, duration=0.02),
         ]
     )
-    async with AgentSession(llm=llm, output_options={"retries": 0}) as sess:
+    async with AgentSession(llm=llm) as sess:
         await sess.start(_Task())
         with pytest.raises(UnexpectedModelBehavior):
-            await sess.run(user_input="hello", output_type=_Out)
+            await sess.run(
+                user_input="hello", output_type=_Out, output_options={"retries": 0}
+            )
