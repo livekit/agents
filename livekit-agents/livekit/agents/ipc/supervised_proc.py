@@ -587,7 +587,7 @@ class SupervisedProc(ABC):
             process = self._psutil_process = psutil.Process(self._pid)
 
         try:
-            memory_info = process.memory_full_info()
+            memory_info: Any = process.memory_full_info()
         except (psutil.AccessDenied, NotImplementedError):
             memory_info = process.memory_info()
 
