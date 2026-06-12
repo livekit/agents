@@ -31,6 +31,11 @@ TRANSACTIONAL_TABLES: tuple[str, ...] = (
     "group_inquiries",
     "guest_messages",
     "wakeup_calls",
+    "tour_bookings",
+    "flight_reconfirmations",
+    "airport_cars",
+    "emergency_dispatches",
+    "walk_arrangements",
 )
 
 # The only columns excluded from comparison, by reason:
@@ -55,6 +60,7 @@ DENY_COLUMNS = frozenset(
         "notes",
         "late_arrival_note",
         "message",
+        "situation",
     }
 )
 

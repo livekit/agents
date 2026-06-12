@@ -5,7 +5,7 @@ import logging
 import os
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, fields
-from datetime import date, time
+from datetime import date, time, timedelta
 from itertools import groupby
 from typing import Any, Literal, get_args
 
@@ -247,6 +247,7 @@ class Invoice:
 
 
 FollowupKind = Literal[
+    "housekeeping",  # in-house guest needs something brought or fixed (towels, amenities, maintenance)
     "sales_lead",  # group bookings, events, weddings, corporate rates
     "identity_change",  # caller wants name/email/phone/card on file updated
     "callback",  # caller asked to be called back later
@@ -270,6 +271,65 @@ class Followup:
 
 # the predominant room-share arrangement for a group block
 GroupShareType = Literal["twin", "double", "single", "mixed"]
+
+
+@dataclass(frozen=True)
+class Tour:
+    name: str
+    pickup_time: time
+    pickup_location: str
+    price_per_person: int | None  # cents; None for flat-priced tours
+    flat_price: int | None
+    max_party: int
+    description: str
+
+
+# Bookable through the concierge desk. policies/tours.md describes the same
+# catalog to the agent - keep the two in sync.
+TOURS: dict[str, Tour] = {
+    "half_day_city": Tour(
+        name="Half-day city highlights",
+        pickup_time=time(9, 0),
+        pickup_location="hotel lobby",
+        price_per_person=6500,
+        flat_price=None,
+        max_party=12,
+        description="small group, English-speaking guide, about 4.5 hours, entry fees included",
+    ),
+    "full_day_city": Tour(
+        name="Full-day city and bay",
+        pickup_time=time(8, 30),
+        pickup_location="hotel lobby",
+        price_per_person=11000,
+        flat_price=None,
+        max_party=12,
+        description="small group, English-speaking guide, lunch and entry fees included, back about 5 PM",
+    ),
+    "private_city": Tour(
+        name="Private half-day tour",
+        pickup_time=time(10, 0),
+        pickup_location="hotel lobby",
+        price_per_person=None,
+        flat_price=29000,
+        max_party=4,
+        description="private car and English-speaking guide, flexible start, up to 4 guests",
+    ),
+}
+
+# The partner property used when a confirmed guest has to be walked.
+WALK_PARTNER_HOTEL = "the Harbor House"
+
+
+@dataclass
+class ConflictResolution:
+    """Result of resolve_room_conflict: exactly one of moved_to / walk is set."""
+
+    moved_to: str | None = None  # new room id, stay unchanged
+    moved_to_type: str = ""
+    moved_to_view: str = ""
+    upgraded: bool = False
+    walk_partner: str | None = None
+    walk_return_date: date | None = None
 
 
 class Unavailable(Exception):
@@ -482,8 +542,10 @@ class HotelDB:
                     "room_id": room_id,
                     "first_name": first_name,
                     "last_name": last_name,
-                    "email": email,
-                    "phone": phone,
+                    # spoken emails are case-free; transcription capitalization is noise
+                    "email": email.strip().lower(),
+                    # digits only: a spoken number transcribes with unpredictable punctuation
+                    "phone": "".join(c for c in phone if c.isdigit()),
                     "check_in": check_in.isoformat(),
                     "check_out": check_out.isoformat(),
                     "guests": guests,
@@ -638,7 +700,7 @@ class HotelDB:
                 "table_id": table_id,
                 "first_name": first_name,
                 "last_name": last_name,
-                "phone": phone,
+                "phone": "".join(c for c in phone if c.isdigit()),
                 "party_size": party_size,
                 "date": on_date.isoformat(),
                 "time": at_time.isoformat(),
@@ -709,6 +771,7 @@ class HotelDB:
         summary: str,
     ) -> str:
         code = shortuuid("FUP-")
+        digits = "".join(c for c in caller_phone if c.isdigit())
         conn = self.connection
         with conn:
             _insert(
@@ -718,7 +781,8 @@ class HotelDB:
                     "code": code,
                     "kind": kind,
                     "caller_name": caller_name,
-                    "caller_phone": caller_phone,
+                    # "room 402" and "415-555-0173" both normalize to digits
+                    "caller_phone": digits or caller_phone,
                     "summary": summary,
                 },
             )
@@ -734,15 +798,8 @@ class HotelDB:
         call_date: date,
         call_time: time,
     ) -> str:
-        # callers say "room 304"; rooms are keyed "RM_304"
-        room_id = room.strip().upper()
-        if not room_id.startswith("RM_"):
-            room_id = f"RM_{room_id}"
+        room_id = self._require_room(room)
         conn = self.connection
-        if not conn.execute(
-            "SELECT 1 FROM hotel_rooms WHERE id = :id", {"id": room_id}
-        ).fetchone():
-            raise NotFound(f"no such room: {room}")
         if call_date < TODAY:
             raise Unavailable(f"{call_date.isoformat()} is in the past")
         code = shortuuid("WUC-")
@@ -761,6 +818,200 @@ class HotelDB:
         if self.on_change:
             await self.on_change()
         return code
+
+    async def book_tour(
+        self,
+        *,
+        tour_id: str,
+        guest_name: str,
+        guest_phone: str,
+        on_date: date,
+        party_size: int,
+    ) -> tuple[str, Tour, int]:
+        tour = TOURS.get(tour_id)
+        if tour is None:
+            raise NotFound(f"no such tour: {tour_id} - options: {', '.join(TOURS)}")
+        if on_date < TODAY:
+            raise Unavailable(f"{on_date.isoformat()} is in the past")
+        if party_size > tour.max_party:
+            raise Unavailable(f"{tour.name} takes at most {tour.max_party} guests")
+        total = tour.flat_price or (tour.price_per_person or 0) * party_size
+        code = shortuuid("TUR-")
+        with self.connection as conn:
+            _insert(
+                conn,
+                "tour_bookings",
+                {
+                    "code": code,
+                    "tour_id": tour_id,
+                    "guest_name": guest_name,
+                    "guest_phone": "".join(c for c in guest_phone if c.isdigit()),
+                    "date": on_date.isoformat(),
+                    "party_size": party_size,
+                    "total": total,
+                },
+            )
+        if self.on_change:
+            await self.on_change()
+        return code, tour, total
+
+    async def request_flight_reconfirmation(
+        self,
+        *,
+        room: str,
+        airline: str,
+        flight_number: str,
+        flight_date: date,
+        booking_reference: str,
+        seat_check: bool,
+    ) -> str:
+        room_id = self._require_room(room)
+        code = shortuuid("FLT-")
+        with self.connection as conn:
+            _insert(
+                conn,
+                "flight_reconfirmations",
+                {
+                    "code": code,
+                    "room_id": room_id,
+                    "airline": airline.strip().title(),
+                    # spoken codes arrive with unpredictable spaces/dashes
+                    "flight_number": "".join(c for c in flight_number if c.isalnum()).upper(),
+                    "flight_date": flight_date.isoformat(),
+                    "booking_reference": "".join(
+                        c for c in booking_reference if c.isalnum()
+                    ).upper(),
+                    "seat_check": int(seat_check),
+                },
+            )
+        if self.on_change:
+            await self.on_change()
+        return code
+
+    async def book_airport_car(
+        self,
+        *,
+        room: str,
+        pickup_date: date,
+        pickup_time: time,
+        passengers: int,
+    ) -> str:
+        room_id = self._require_room(room)
+        if pickup_date < TODAY:
+            raise Unavailable(f"{pickup_date.isoformat()} is in the past")
+        code = shortuuid("CAR-")
+        with self.connection as conn:
+            _insert(
+                conn,
+                "airport_cars",
+                {
+                    "code": code,
+                    "room_id": room_id,
+                    "pickup_date": pickup_date.isoformat(),
+                    "pickup_time": pickup_time.isoformat(),
+                    "passengers": passengers,
+                },
+            )
+        if self.on_change:
+            await self.on_change()
+        return code
+
+    async def dispatch_emergency(self, *, room: str, situation: str) -> str:
+        room_id = self._require_room(room)
+        code = shortuuid("EMG-")
+        with self.connection as conn:
+            _insert(
+                conn,
+                "emergency_dispatches",
+                {"code": code, "room_id": room_id, "situation": situation},
+            )
+        if self.on_change:
+            await self.on_change()
+        return code
+
+    async def room_conflict(self, *, booking_code: str) -> tuple[date, date] | None:
+        """The overlap window if another confirmed booking holds this booking's room."""
+        row = self.connection.execute(_SQL_ROOM_CONFLICT, {"code": booking_code}).fetchone()
+        if not row:
+            return None
+        return date.fromisoformat(row[0]), date.fromisoformat(row[1])
+
+    async def resolve_room_conflict(self, *, booking_code: str) -> ConflictResolution:
+        """The house re-accommodation procedure, in fixed order: try to move the
+        booking to a free room of the same or higher category for the whole
+        (remaining) stay - an upgrade is free - and only when nothing in the
+        house fits, arrange a walk: tonight at the partner hotel on us, back in
+        the original room from the next day."""
+        conn = self.connection
+        booking = conn.execute(
+            "SELECT room_id, check_in, check_out, guests FROM hotel_bookings"
+            " WHERE code = :code AND status = 'confirmed'",
+            {"code": booking_code},
+        ).fetchone()
+        if not booking:
+            raise NotFound(f"booking not found: {booking_code}")
+        if await self.room_conflict(booking_code=booking_code) is None:
+            raise Unavailable("no room conflict on this booking - nothing to resolve")
+        room_id, check_in, check_out, guests = booking
+        original = conn.execute(
+            "SELECT smoking, nightly_rate FROM hotel_rooms WHERE id = :id", {"id": room_id}
+        ).fetchone()
+        start = max(date.fromisoformat(check_in), TODAY)
+
+        candidate = conn.execute(
+            _SQL_FREE_BETTER_ROOM,
+            {
+                "exclude_room": room_id,
+                "exclude_code": booking_code,
+                "guests": guests,
+                "smoking": original[0],
+                "min_rate": original[1],
+                "check_in": start.isoformat(),
+                "check_out": check_out,
+            },
+        ).fetchone()
+
+        if candidate:
+            new_room, new_type, new_view, new_rate = candidate
+            with conn:
+                # the rate on the booking doesn't change - a forced move is never
+                # the guest's cost, so an upgrade rides at the original total
+                _update(conn, "hotel_bookings", {"room_id": new_room}, {"code": booking_code})
+            if self.on_change:
+                await self.on_change()
+            return ConflictResolution(
+                moved_to=new_room,
+                moved_to_type=new_type,
+                moved_to_view=new_view,
+                upgraded=new_rate > original[1],
+            )
+
+        return_date = start + timedelta(days=1)
+        with conn:
+            _insert(
+                conn,
+                "walk_arrangements",
+                {
+                    "code": shortuuid("WLK-"),
+                    "booking_code": booking_code,
+                    "partner_hotel": WALK_PARTNER_HOTEL,
+                    "return_date": return_date.isoformat(),
+                },
+            )
+        if self.on_change:
+            await self.on_change()
+        return ConflictResolution(walk_partner=WALK_PARTNER_HOTEL, walk_return_date=return_date)
+
+    def _require_room(self, room: str) -> str:
+        """Normalize a spoken room number ("304") to its id and require it exists."""
+        room_id = room.strip().upper()
+        if not room_id.startswith("RM_"):
+            room_id = f"RM_{room_id}"
+        if not self.connection.execute(
+            "SELECT 1 FROM hotel_rooms WHERE id = :id", {"id": room_id}
+        ).fetchone():
+            raise NotFound(f"no such room: {room}")
+        return room_id
 
     async def take_guest_message(
         self,
@@ -800,6 +1051,40 @@ class HotelDB:
         if self.on_change:
             await self.on_change()
         return code
+
+    async def peek_stay_total(
+        self,
+        *,
+        room_type: str,
+        smoking: bool,
+        guests: int,
+        check_in: date,
+        check_out: date,
+        view: str | None,
+        extras: Sequence[str],
+    ) -> int | None:
+        """The exact total (with tax) for the room book_room would pick right now -
+        so the agent can quote the real number in the read-back instead of doing
+        per-night arithmetic itself (and forgetting tax)."""
+        row = self.connection.execute(
+            _SQL_FREE_ROOM,
+            {
+                "room_type": room_type,
+                "smoking": int(smoking),
+                "guests": guests,
+                "check_in": check_in.isoformat(),
+                "check_out": check_out.isoformat(),
+                "exclude": None,
+                "view": view,
+            },
+        ).fetchone()
+        if not row:
+            return None
+        nights = (check_out - check_in).days
+        _, _, total, _ = compute_invoice(
+            nightly_rate=row[1], nights=nights, extras=list(extras)
+        )
+        return total
 
     async def record_group_inquiry(
         self,
@@ -880,6 +1165,33 @@ def _install_schema(conn: apsw.Connection) -> None:
     for _ in conn.execute(VIEWS):
         pass
 
+
+_SQL_ROOM_CONFLICT = """
+SELECT MAX(b.check_in, a.check_in), MIN(b.check_out, a.check_out)
+FROM hotel_bookings a
+JOIN hotel_bookings b
+  ON b.room_id = a.room_id AND b.code != a.code AND b.status = 'confirmed'
+ AND b.check_in < a.check_out AND b.check_out > a.check_in
+WHERE a.code = :code AND a.status = 'confirmed'
+LIMIT 1
+"""
+
+# A room that can absorb a conflicted booking for its whole (remaining) stay:
+# fits the party, matches smoking, same or higher category (rate), cheapest first.
+_SQL_FREE_BETTER_ROOM = """
+SELECT r.id, r.type, r.room_view, r.nightly_rate
+FROM hotel_rooms r
+WHERE r.id != :exclude_room
+  AND r.max_occupancy >= :guests
+  AND r.smoking = :smoking
+  AND r.nightly_rate >= :min_rate
+  AND NOT EXISTS (
+    SELECT 1 FROM hotel_bookings b
+    WHERE b.room_id = r.id AND b.status = 'confirmed' AND b.code != :exclude_code
+      AND b.check_in < :check_out AND b.check_out > :check_in)
+ORDER BY r.nightly_rate, r.id
+LIMIT 1
+"""
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -963,11 +1275,63 @@ CREATE TABLE IF NOT EXISTS hotel_disputes (
 CREATE TABLE IF NOT EXISTS hotel_followups (
     id           INTEGER PRIMARY KEY,
     code         TEXT    NOT NULL UNIQUE,
-    kind         TEXT    NOT NULL CHECK (kind IN ('sales_lead','identity_change','callback','verification_help','early_checkout','abandoned_booking','other')),
+    kind         TEXT    NOT NULL CHECK (kind IN ('housekeeping','sales_lead','identity_change','callback','verification_help','early_checkout','abandoned_booking','other')),
     caller_name  TEXT    NOT NULL,
     caller_phone TEXT    NOT NULL,
     summary      TEXT    NOT NULL,
     status       TEXT    NOT NULL DEFAULT 'open' CHECK (status IN ('open','resolved'))
+);
+
+CREATE TABLE IF NOT EXISTS tour_bookings (
+    id           INTEGER PRIMARY KEY,
+    code         TEXT    NOT NULL UNIQUE,
+    tour_id      TEXT    NOT NULL CHECK (tour_id IN ('half_day_city','full_day_city','private_city')),
+    guest_name   TEXT    NOT NULL,
+    guest_phone  TEXT    NOT NULL,
+    date         DATE    NOT NULL,
+    party_size   INTEGER NOT NULL CHECK (party_size >= 1),
+    total        INTEGER NOT NULL,
+    status       TEXT    NOT NULL DEFAULT 'confirmed' CHECK (status IN ('confirmed','cancelled'))
+);
+
+CREATE TABLE IF NOT EXISTS flight_reconfirmations (
+    id                INTEGER PRIMARY KEY,
+    code              TEXT    NOT NULL UNIQUE,
+    room_id           TEXT    NOT NULL REFERENCES hotel_rooms(id),
+    airline           TEXT    NOT NULL,
+    flight_number     TEXT    NOT NULL,
+    flight_date       DATE    NOT NULL,
+    booking_reference TEXT    NOT NULL,
+    seat_check        BOOLEAN NOT NULL DEFAULT 0,
+    status            TEXT    NOT NULL DEFAULT 'pending'
+                              CHECK (status IN ('pending','confirmed','problem'))
+);
+
+CREATE TABLE IF NOT EXISTS airport_cars (
+    id          INTEGER PRIMARY KEY,
+    code        TEXT    NOT NULL UNIQUE,
+    room_id     TEXT    NOT NULL REFERENCES hotel_rooms(id),
+    pickup_date DATE    NOT NULL,
+    pickup_time TIME    NOT NULL,
+    passengers  INTEGER NOT NULL CHECK (passengers >= 1),
+    status      TEXT    NOT NULL DEFAULT 'booked' CHECK (status IN ('booked','cancelled'))
+);
+
+CREATE TABLE IF NOT EXISTS emergency_dispatches (
+    id        INTEGER PRIMARY KEY,
+    code      TEXT    NOT NULL UNIQUE,
+    room_id   TEXT    NOT NULL REFERENCES hotel_rooms(id),
+    situation TEXT    NOT NULL,
+    status    TEXT    NOT NULL DEFAULT 'dispatched' CHECK (status IN ('dispatched','resolved'))
+);
+
+CREATE TABLE IF NOT EXISTS walk_arrangements (
+    id            INTEGER PRIMARY KEY,
+    code          TEXT    NOT NULL UNIQUE,
+    booking_code  TEXT    NOT NULL REFERENCES hotel_bookings(code),
+    partner_hotel TEXT    NOT NULL,
+    return_date   DATE    NOT NULL,
+    status        TEXT    NOT NULL DEFAULT 'arranged' CHECK (status IN ('arranged','completed'))
 );
 
 CREATE TABLE IF NOT EXISTS wakeup_calls (

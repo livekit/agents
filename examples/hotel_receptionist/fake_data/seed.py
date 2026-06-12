@@ -71,6 +71,24 @@ BOOKINGS = [
     ("Jonathan", "Pierce", "j.pierce@gmail.com", "+1 415 555 0233", "JP65", "303", -1, 3, 1, [], "5151", "confirmed"),
     # In-house with an early flight - the wake-up call caller
     ("Frank", "Adler", "frank.adler@gmail.com", "+1 415 555 0277", "FA09", "304", -1, 3, 1, [], "6203", "confirmed"),
+    # --- Full house tonight (oversold) -------------------------------------
+    # Dana Holt holds room 301 through tomorrow morning - and so does Kenji
+    # Tanaka (RT88, checked in today): the double-booking behind the
+    # "Confirmed guest, no room available tonight" walk scenario. The four
+    # one-nighters fill every otherwise-free room TONIGHT ONLY, so the
+    # re-accommodation search honestly comes up empty and 301 frees tomorrow.
+    ("Dana", "Holt", "dana.holt@gmail.com", "+1 415 555 0341", "DH27", "301", -2, 3, 2, [], "9034", "confirmed"),
+    ("Paul", "Greer", "paul.greer@gmail.com", "+1 415 555 0356", "PG11", "203", 0, 1, 1, [], "2218", "confirmed"),
+    ("Rita", "Moss", "rita.moss@me.com", "+1 415 555 0368", "QM17", "204", 0, 1, 2, [], "7745", "confirmed"),
+    ("Omar", "Haddad", "omar.haddad@gmail.com", "+1 415 555 0379", "OH42", "205", 0, 1, 2, [], "3382", "confirmed"),
+    ("Lena", "Fischer", "lena.fischer@gmx.de", "+49 30 5550441", "LF73", "302", 0, 1, 1, [], "6071", "confirmed"),
+    # --- Double-booked next weekend, but the house can absorb it -----------
+    # Tom Whelan's double queen (206) collides with Grace Lin's stay, and the
+    # other double queen (304) is blocked by Noah Petrov - so the only room
+    # that fits his family of four is the suite: the free-upgrade scenario.
+    ("Tom", "Whelan", "tom.whelan@gmail.com", "+1 415 555 0457", "TW55", "206", 4, 3, 4, [], "5126", "confirmed"),
+    ("Grace", "Lin", "grace.lin@gmail.com", "+1 415 555 0463", "GL09", "206", 3, 3, 3, [], "8854", "confirmed"),
+    ("Noah", "Petrov", "noah.petrov@gmail.com", "+1 415 555 0478", "NP66", "304", 3, 4, 4, [], "1937", "confirmed"),
     ("Kenji", "Tanaka", "kenji.tanaka@gmail.com", "+1 415 555 0164", "RT88", "301", 0, 3, 2, ["valet"], "7782", "confirmed"),
     # Checked in today, king city room - the "unhappy with their room" caller
     # (insists he booked a garden view; the record says otherwise)

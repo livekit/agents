@@ -35,6 +35,8 @@ Each tool's return ends with a directive for the next action (e.g. "next: call o
 If the room sells out at the last second, just pick another - everything else stays captured.
 
 A booking is not complete unless "confirm_booking" is called. Bookings are only valid once you call "confirm_booking."
+
+Never speak the same question twice in a row. If a field was just captured ("name recorded", "email recorded"), it is DONE - asking for it again stalls the call; the only valid next move is the directive in the last tool return.
 """
 
 
@@ -62,6 +64,7 @@ class BookRoomTask(AgentTask[RoomBooking]):
         self._email: str | None = None
         self._phone: str | None = None
         self._card_last4: str | None = None
+        self._quoted_total: int | None = None
         super().__init__(
             instructions=f"{COMMON_INSTRUCTIONS}\n\n{_BOOK_ROOM_INSTRUCTIONS}",
             chat_ctx=chat_ctx,
@@ -92,7 +95,13 @@ class BookRoomTask(AgentTask[RoomBooking]):
             return "email captured - next: call open_phone_dialog"
         if not self._card_last4:
             return "phone captured - next: call open_credit_card_dialog"
-        return "all required details captured - call confirm_booking() now to finalize the booking"
+        total = f"total {speak_usd(self._quoted_total)} including tax, " if self._quoted_total else ""
+        return (
+            "all required details captured - read the booking back in one sentence "
+            f"(dates, room and extras, {total}card ending {self._card_last4}) and call "
+            "confirm_booking() the moment the caller agrees. Quote ONLY this total - "
+            "never compute your own."
+        )
 
     @function_tool()
     async def set_stay(
@@ -186,9 +195,25 @@ class BookRoomTask(AgentTask[RoomBooking]):
         self._view = view
         self._extras = list(extras)
         self._smoking = smoking_room
+        # The exact total (with tax) for the room that will be booked - quoted
+        # here so the read-back uses the real number, never per-night arithmetic.
+        self._quoted_total = await self._db.peek_stay_total(
+            room_type=room_type,
+            smoking=smoking_room,
+            guests=self._guests,
+            check_in=self._check_in,
+            check_out=self._check_out,
+            view=view,
+            extras=extras,
+        )
         view_part = f" with a {view} view" if view else ""
         extras_part = f", extras: {', '.join(extras)}" if extras else ""
-        return f"room recorded: {room_type.replace('_', ' ')}{view_part}{extras_part} | {self._status()}"
+        total_part = (
+            f"; total for the stay {speak_usd(self._quoted_total)} including tax"
+            if self._quoted_total
+            else ""
+        )
+        return f"room recorded: {room_type.replace('_', ' ')}{view_part}{extras_part}{total_part} | {self._status()}"
 
     @function_tool()
     async def open_name_dialog(self) -> str:

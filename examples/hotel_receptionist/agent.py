@@ -96,10 +96,13 @@ You're the lead receptionist, holding the whole call and routing each request to
 - Luggage hold at the front desk before check-in and after check-out, no charge.
 
 # Routing the call
+- EMERGENCY FIRST, above everything on this list: someone hurt, unresponsive, or in danger -> get the room number and call dispatch_emergency immediately (it alerts the desk and sends the manager and staff up). No verification, no other flow, no policy lookup. Then direct the caller to hang up and dial 911 themselves - the dispatcher needs them on the line and will coach them until help arrives. The hotel does not call 911 for them, and you never give medical instructions yourself.
 - Browse without booking: check_room_availability (rate + view + optional smoking/room_type filters), check_restaurant_availability, lookup_booking, lookup_restaurant_reservation. None of these change anything.
 - Caller wants to book: start_room_booking or start_restaurant_booking - the call IS your response, not something after an acknowledgment. Don't ask the caller for name, email, phone, or card without one of these running - that's the only path that creates a booking.
 - Existing booking changes: start_booking_modification (dates, room, extras, party size). Cancel via cancel_room_booking. Late arrival ("I'll be in past midnight") -> flag_late_arrival with a short note.
 - Wake-up call: schedule_wakeup_call (room, name, date, time) - it actually sets the call; never write it up as a followup note. The wake-up procedure for worried sleepers is in lookup_policy(topic="guest_services").
+- Concierge asks: sightseeing tours -> lookup_policy(topic="tours") to present options, then book_tour. Flight reconfirmation -> collect airline, flight number, date, and booking reference, then request_flight_reconfirmation (the concierge calls the carrier and rings the room - never claim the flight is confirmed yourself). Ride to the airport -> book_airport_car for the hotel car; taxi-vs-hotel-car costs are in lookup_policy(topic="location_and_transport").
+- A verified booking's room turns out to be double-booked (lookup_booking warns you): own it - apologize plainly, no hiding behind "the system" - then resolve_room_conflict applies the procedure (free in-house move or upgrade first; walk to the partner hotel only if the house is full). Full procedure: lookup_policy(topic="guest_walks").
 - Card on file not going through / guest offers a replacement card: start_card_update (it verifies, then collects the new card). Discretion is the whole game: "isn't going through at the moment - possibly a technical issue", never "declined" or "rejected", never speculate about their funds. If they have no other card handy, no pressure: the booking stays held, suggest they check with their card issuer in case it's a technical fault, and offer a callback (record_followup kind="callback") to retry - a working card is only needed by check-in.
 - Existing restaurant reservation: change isn't supported directly - with the caller's permission, cancel the old one and book a new slot. Be explicit about the two steps before doing them.
 - Sold out: offer adjacent dates or another room type. One tool call per turn; finish each tool's flow before starting another.
@@ -109,6 +112,7 @@ You're the lead receptionist, holding the whole call and routing each request to
 
 # Things you can't book directly - use record_followup
 You don't actually have the power to do everything a guest might ask. When the caller wants any of these, call record_followup with the right kind so a human can follow up. NEVER say "someone will follow up" without making this tool call - that's how requests get lost.
+- In-house guest needs something physical brought or fixed (towels, soap, blankets, amenities, maintenance) -> kind="housekeeping" with the room number as the contact and the guest's actual name (ask for it - never write a placeholder like "guest in 402"). Record it FIRST, then commit to the real timeline (housekeeping averages about 20 minutes) - reassurance without the record is how requests get lost, and this caller has usually been burned once already.
 - Events, weddings, corporate rates -> kind="sales_lead". Take their name and number and a one-sentence summary. (Group room blocks of 15+ are NOT a sales lead - use record_group_inquiry.)
 - Changes to identity fields on an existing booking (email, phone, name) -> kind="identity_change". Verify the booking first if not already verified. (A new card is NOT a followup - use start_card_update.)
 - "Call me back later" / "I'll think about it" -> kind="callback". Note when they want the callback and what about.
@@ -116,6 +120,7 @@ You don't actually have the power to do everything a guest might ask. When the c
 - In-house guest wants to check out early / shorten a stay they've already started -> kind="early_checkout". Front desk handles in person.
 - Anything else outside what your tools cover -> kind="other" with a clear summary.
 If the caller adds details after a followup is recorded (a refund request, urgency, anything they want passed along), call record_followup again with the fuller summary - never claim the notes were updated without making the call.
+A followup is a recorded request, not a dispatch: never promise that someone is physically on their way, will respond "immediately" or "right away", or will arrive by a specific time off the back of one. Say what's actually true - "I've logged this for the duty manager as urgent; they'll get to you as soon as they can."
 
 # Multiple needs in one call
 Callers commonly bring more than one thing - "I want to book a room AND a table" or "cancel my room and my dinner reservation." Hold every named need; complete one flow, then surface the next without prompting "anything else?" until they're all done. Don't drop a need just because you finished an unrelated one. If two flows conflict (e.g. caller wants to modify and cancel the same booking), confirm which one they actually want before acting.
@@ -127,7 +132,7 @@ Caller wants two (or more) rooms in one transaction - common for families. Call 
 start_room_booking, start_restaurant_booking, and start_booking_modification return the FINAL result - "You're booked", "You're set", "Your booking is updated". That returned result IS the confirmation: relay the code and total to the caller and move on to their next need. The flow is closed at that point - the read-back already happened inside it, there is no card to take, and there is no tool to call to "re-confirm" anything. Never re-run the confirmation conversation after the flow has returned its result.
 
 # Never invent a confirmation
-A booking, reservation, cancellation, refund, modification, or invoice lookup is only real if a tool just returned it. Never tell the caller "you're booked", "you're confirmed", "your changes are saved", or read back a confirmation code, total, or refund amount unless the corresponding tool actually ran in this turn and returned it. A tool ERROR - including "Unknown function" - means nothing happened this turn: never announce success, a code, or a total off the back of an error; fix the call (the error names the available tools) or tell the caller you need a moment. If you catch yourself about to confirm something without a tool result in hand, you're hallucinating - stop and call the right tool first.
+A booking, reservation, cancellation, refund, modification, invoice lookup, logged message, or recorded followup is only real if a tool just returned it. "I've logged that for you" with no tool call is a lie the caller will act on - if you owe the caller a tool call (a message to log, an inquiry to record), make it before or while answering whatever they asked next; an interleaved question doesn't cancel the debt. Never tell the caller "you're booked", "you're confirmed", "your changes are saved", or read back a confirmation code, total, or refund amount unless the corresponding tool actually ran in this turn and returned it. A tool ERROR - including "Unknown function" - means nothing happened this turn: never announce success, a code, or a total off the back of an error; fix the call (the error names the available tools) or tell the caller you need a moment. If you catch yourself about to confirm something without a tool result in hand, you're hallucinating - stop and call the right tool first.
 """
 
 
@@ -169,9 +174,9 @@ class HotelReceptionistAgent(Agent):
         """Capture something for a human to follow up on - sales/group leads, identity-field change requests (email/phone/name), callback requests, verification-failed callers, in-house early-checkout requests, and any other request you can't handle on this line. ALWAYS use this instead of saying "someone will follow up" with no record; otherwise the request vanishes.
 
         Args:
-            kind: One of sales_lead, identity_change, callback, verification_help, early_checkout, abandoned_booking, other.
+            kind: One of housekeeping, sales_lead, identity_change, callback, verification_help, early_checkout, abandoned_booking, other.
             caller_name: Caller's name (ask if you don't already have it).
-            caller_phone: Caller's callback number (ask if you don't already have it).
+            caller_phone: Caller's callback number - for an in-house guest, the room number works.
             summary: One sentence describing what they want, with enough detail for a human to act on it.
         """
         code = await ctx.userdata.db.record_followup(
@@ -191,7 +196,7 @@ class HotelReceptionistAgent(Agent):
         check_in: date,
         nights: Annotated[int, Field(ge=1)],
     ) -> str:
-        """Open a room-block inquiry for a group of 15 or more guests (tours, teams, conferences). This records the inquiry for the group desk - it does NOT confirm or hold rooms, and you cannot confirm a group on this call no matter how hard the caller pushes; a new sponsor needs credit approval first. Collect every argument from the caller before calling. For the terms to quote (group rate, tour-leader comp, cancellation), call lookup_policy with topic "group_bookings" first. Under 15 guests, use the normal booking flow instead.
+        """Open a room-block inquiry for a group of 15 or more guests (tours, teams, conferences). This records the inquiry for the group desk - it does NOT confirm or hold rooms, and you cannot confirm a group on this call no matter how hard the caller pushes; a new sponsor needs credit approval first. Call this the MOMENT you have all the arguments - if the caller asks more questions while you're collecting, record the inquiry first and answer after; an unrecorded inquiry is lost when the call ends. For the terms to quote (group rate, tour-leader comp, cancellation), call lookup_policy with topic "group_bookings" first. Under 15 guests, use the normal booking flow instead.
 
         Args:
             company: The sponsoring company or organization (ask who the group is with).
@@ -253,6 +258,171 @@ class HotelReceptionistAgent(Agent):
         )
 
     @function_tool
+    async def dispatch_emergency(
+        self,
+        ctx: RunContext[Userdata],
+        room: str,
+        situation: str,
+    ) -> str:
+        """EMERGENCY ONLY - someone hurt, unresponsive, in danger (collapse, not breathing, fire, violence). Alerts the front desk and sends the duty manager and staff to the room. Call this the MOMENT you have the room number and what's happening - no verification, no other questions first. The hotel does NOT call 911 - after this runs, the caller must be told to hang up and dial 911 themselves: the dispatcher needs to hear them directly and will coach them (CPR, what to check) until the ambulance arrives.
+
+        Args:
+            room: The room number (e.g. "206"). Get this first if you don't have it.
+            situation: One short sentence: what's happening to whom (e.g. "guest's husband collapsed, not breathing").
+        """
+        try:
+            code = await ctx.userdata.db.dispatch_emergency(room=room, situation=situation)
+        except NotFound:
+            raise ToolError(
+                f"no room {room} exists - re-confirm the room number, calmly, right now"
+            ) from None
+        return (
+            f"DISPATCHED (ref {code}): duty manager alerted, staff heading to room {room} now | "
+            "tell the caller, short and calm, in this order: our manager and staff are on their "
+            "way up right now - now hang up and dial 9-1-1; the dispatcher will stay on the line "
+            "and tell you exactly what to do until the ambulance arrives. Then let her go - the "
+            "911 dispatcher is the right person from here, not you. Don't give medical "
+            "instructions yourself."
+        )
+
+    @function_tool
+    async def book_tour(
+        self,
+        ctx: RunContext[Userdata],
+        tour: Literal["half_day_city", "full_day_city", "private_city"],
+        on_date: date,
+        party_size: Annotated[int, Field(ge=1)],
+        guest_name: str,
+        guest_phone: str,
+    ) -> str:
+        """Book a sightseeing tour through the desk. The catalog (times, prices, what's included) is in lookup_policy topic "tours" - look it up first and narrow with the caller (group or private, half or full day, date, party size) before booking. The options are for the CALLER to pick from, never pick for them.
+
+        Args:
+            tour: The tour the caller picked.
+            on_date: Tour date in ISO YYYY-MM-DD format.
+            party_size: How many people are going.
+            guest_name: The caller's full name.
+            guest_phone: The caller's phone number, in case the operator needs to reach them.
+        """
+        try:
+            code, t, total = await ctx.userdata.db.book_tour(
+                tour_id=tour, guest_name=guest_name, guest_phone=guest_phone,
+                on_date=on_date, party_size=party_size,
+            )
+        except (NotFound, Unavailable) as e:
+            raise ToolError(str(e)) from None
+        return (
+            f"{t.name} booked for {party_size} on {on_date.strftime('%A, %B %-d')}; reference "
+            f"{_speak_code(code)}. Pickup {speak_time(t.pickup_time)} at the {t.pickup_location}; "
+            f"total {speak_usd(total)} ({t.description}) | confirm the pickup time, spot, and "
+            "total to the caller - these are fixed, give them as facts; no further tool call "
+            "is needed for this tour."
+        )
+
+    @function_tool
+    async def request_flight_reconfirmation(
+        self,
+        ctx: RunContext[Userdata],
+        room: str,
+        airline: str,
+        flight_number: str,
+        flight_date: date,
+        booking_reference: str,
+        seat_check: bool,
+    ) -> str:
+        """Log a flight-reconfirmation request for an in-house guest: the concierge calls the carrier and rings the guest's room with the result. Collect ALL the flight details first and read the booking reference back before calling - a wrong reference makes the whole request useless.
+
+        Args:
+            room: The guest's room number.
+            airline: The carrier name (e.g. "Iberia").
+            flight_number: Airline code and number as given (e.g. "IB 6174").
+            flight_date: Flight date in ISO YYYY-MM-DD format. When the caller says a weekday ("Thursday"), resolve it against today and say the concrete date back ("Thursday - that's June eleventh?") BEFORE calling; a one-day slip sends the whole request to the wrong flight.
+            booking_reference: The airline booking reference, letters and digits only.
+            seat_check: True if the guest also wants their seat assignment checked - it's handled in the same carrier call.
+        """
+        try:
+            code = await ctx.userdata.db.request_flight_reconfirmation(
+                room=room, airline=airline, flight_number=flight_number,
+                flight_date=flight_date, booking_reference=booking_reference,
+                seat_check=seat_check,
+            )
+        except NotFound:
+            raise ToolError(f"no room {room} exists - re-confirm the room number") from None
+        return (
+            f"reconfirmation request logged; reference {_speak_code(code)} | tell the caller the "
+            "concierge will call the carrier and ring their room with the result within the hour"
+            + (", including the seat check" if seat_check else "")
+            + ". The flight is NOT confirmed yet - never say it is; promise the callback instead."
+        )
+
+    @function_tool
+    async def book_airport_car(
+        self,
+        ctx: RunContext[Userdata],
+        room: str,
+        pickup_date: date,
+        pickup_time: time,
+        passengers: Annotated[int, Field(ge=1, le=4)],
+    ) -> str:
+        """Book the hotel car to the airport for an in-house guest: flat eighty-five dollars to SFO, seats up to four with luggage, charged to the room. (Taxis are hailed at the door, metered roughly fifty-five to seventy dollars, and can't be reserved ahead - cost comparison in lookup_policy topic "location_and_transport".) Sanity-check the pickup time against the flight when you know it - about three hours before departure is right for international.
+
+        Args:
+            room: The guest's room number.
+            pickup_date: Pickup date in ISO YYYY-MM-DD format. Resolve a weekday against today and confirm the concrete date with the caller before booking.
+            pickup_time: Pickup time in 24-hour HH:MM format (2:30 p.m. = "14:30").
+            passengers: How many people are riding - ASK the caller; never assume one.
+        """
+        try:
+            code = await ctx.userdata.db.book_airport_car(
+                room=room, pickup_date=pickup_date, pickup_time=pickup_time,
+                passengers=passengers,
+            )
+        except NotFound:
+            raise ToolError(f"no room {room} exists - re-confirm the room number") from None
+        except Unavailable as e:
+            raise ToolError(f"can't book that: {e} - re-confirm the date") from None
+        return (
+            f"hotel car booked; reference {_speak_code(code)}. Pickup "
+            f"{pickup_date.strftime('%A, %B %-d')} at {speak_time(pickup_time)}, front entrance, "
+            f"{passengers} passenger{'s' if passengers != 1 else ''}, flat eighty-five dollars "
+            "charged to the room | confirm the time, the front-entrance pickup, the cost, and "
+            "the reference to the caller; no further tool call is needed for the car."
+        )
+
+    @function_tool
+    async def resolve_room_conflict(self, ctx: RunContext[Userdata]) -> str:
+        """Fix a double-booked / no-room situation on the caller's verified booking - run this when lookup_booking warned the room is double-booked. It applies the house procedure in fixed order: move the guest to a free room of the same or better category (an upgrade is free), and only if nothing in the house fits, arrange the walk (partner hotel tonight on us, covered taxi, their room back from the return date). Returns the concrete plan - relay it with ownership and an apology, and say "at no extra cost to you" explicitly. Procedure detail: lookup_policy topic "guest_walks"."""
+        booking = await self._verified_booking(ctx)
+        try:
+            r = await ctx.userdata.db.resolve_room_conflict(booking_code=booking.code)
+        except (NotFound, Unavailable) as e:
+            raise ToolError(str(e)) from None
+        if r.moved_to:
+            what = "an upgrade, free of charge" if r.upgraded else "same category, no charge"
+            return (
+                f"resolved: moved to {r.moved_to} - a {r.moved_to_view}-view "
+                f"{r.moved_to_type.replace('_', ' ')} ({what}), same dates, total unchanged | "
+                "confirm the WHOLE new arrangement out loud: they absolutely still have a place "
+                "to stay - the new room and what it is, for the same dates and the whole stay, "
+                "at the same total - it costs nothing extra. Apologize for the mix-up. No "
+                "further tool call is needed."
+            )
+        assert r.walk_return_date is not None
+        return_day = r.walk_return_date.strftime("%A")
+        return (
+            f"no room in the house fits (every room was checked) - walk arranged at "
+            f"{r.walk_partner}, room back here {r.walk_return_date.strftime('%A, %B %-d')} | "
+            "say this, word for word, then pause for the guest: \"I've checked every room in "
+            f"the house and nothing is available tonight - I'm so sorry. Here's what we'll do: "
+            f"we've arranged a comparable room for you tonight at {r.walk_partner}, two blocks "
+            f"away. The room there and the taxi over are both on us, and your room here is "
+            f"guaranteed from {return_day} - all at no extra cost to you.\" Every element "
+            "matters; don't shorten it. If the guest is still upset after hearing it, don't "
+            "argue - record a manager callback (record_followup, kind=\"callback\") and tell "
+            "them the manager will call; do this BEFORE wrapping up the call."
+        )
+
+    @function_tool
     async def take_guest_message(
         self,
         ctx: RunContext[Userdata],
@@ -264,11 +434,16 @@ class HotelReceptionistAgent(Agent):
         """Take a message for someone the caller says is staying at the hotel. It gets delivered only if that person is in fact a guest - the result never tells you whether they are, and you must never tell the caller either: no confirming or denying anyone's presence, no room numbers, no connecting calls (see lookup_policy topic "guest_privacy"). Read the caller's name, number, and message back before calling this.
 
         Args:
-            recipient: Full name of the person the message is for, as the caller gave it.
+            recipient: Full name of the person the message is for - first AND last. If the caller only gave a first name, ask for the last name before calling.
             caller_name: The caller's own name.
             caller_phone: The caller's callback number.
             message: The message, in the caller's words.
         """
+        if len(recipient.split()) < 2:
+            raise ToolError(
+                f"'{recipient}' is only one name - a message needs the recipient's full name "
+                "to reach the right person. Ask the caller for the last name, then call again."
+            )
         code = await ctx.userdata.db.take_guest_message(
             recipient=recipient,
             caller_name=caller_name,
@@ -441,7 +616,11 @@ class HotelReceptionistAgent(Agent):
         # made no changes (it completes with `self._existing`); identity check
         # is the cleanest signal that the modify flow was a no-op.
         if updated is booking:
-            return "Booking left unchanged."
+            return (
+                "Booking left unchanged | the modification flow is CLOSED - don't re-open it or "
+                "re-ask for dates. If the caller pivoted to something else (most often: they "
+                "decided to CANCEL instead), do that now with the right tool (cancel_room_booking)."
+            )
         delta = updated.total - booking.total
         if delta == 0:
             money = f"total stays at {speak_usd(updated.total)}"
@@ -462,16 +641,25 @@ class HotelReceptionistAgent(Agent):
         nights = b.nights
         extras = ", ".join(b.extras) if b.extras else "no extras"
         smoking = "smoking-permitted" if b.smoking else "non-smoking"
-        return (
+        info = (
             f"Booking for {b.first_name} {b.last_name}, {b.room_type.replace('_', ' ')} ({smoking}), "
             f"checking in {b.check_in.strftime('%A %B %-d')} and out {b.check_out.strftime('%A %B %-d')} "
             f"({nights} night{'s' if nights != 1 else ''}, {b.guests} guest{'s' if b.guests != 1 else ''}), "
             f"extras: {extras}. Total {speak_usd(b.total)} on card ending in {b.card_last4}."
         )
+        if conflict := await ctx.userdata.db.room_conflict(booking_code=b.code):
+            info += (
+                f" | WARNING: the room is double-booked {conflict[0].strftime('%B %-d')} to "
+                f"{conflict[1].strftime('%B %-d')} - no room is assigned to this booking for that "
+                "period. Break the news with ownership and an apology, then run "
+                "resolve_room_conflict to fix it (procedure: lookup_policy topic \"guest_walks\"). "
+                "Don't pretend the booking is fine."
+            )
+        return info
 
     @function_tool
     async def cancel_room_booking(self, ctx: RunContext[Userdata]) -> str:
-        """Cancel the caller's room booking. The right tool the moment the caller wants to cancel - including when they pivot mid-modification (staged changes are simply abandoned). Verifies the caller first if not already verified. Returns the refund outcome - relay it exactly as returned; never guess or invent a refund amount or "deposit"."""
+        """Cancel the caller's room booking. The right tool the moment the caller wants to cancel - including when they pivot mid-modification (staged changes are simply abandoned). Verifies the caller first if not already verified. Returns the refund outcome - relay it exactly as returned; never guess or invent a refund amount or "deposit". When the caller asks "will I lose my deposit if I cancel?" while asking to cancel, this tool's return IS the answer: confirm they want to proceed and run it - don't quote refund policy as if the cancellation already happened and leave the booking standing."""
         booking = await self._verified_booking(ctx)
         if booking.check_in < TODAY:
             raise ToolError("this booking's check-in has already passed; can't cancel a past stay")
@@ -490,8 +678,9 @@ class HotelReceptionistAgent(Agent):
                 f"I'll refund {speak_usd(booking.total - forfeit)} to the card on file."
             )
         return (
-            f"Cancelled. I'll refund the full {speak_usd(booking.total)} "
-            f"to the card on file - usually two to five business days."
+            f"Cancelled - well outside the {PRICING.cancellation_window_hours}-hour window, so "
+            f"there's no penalty and no deposit is lost. I'll refund the full "
+            f"{speak_usd(booking.total)} to the card on file - usually two to five business days."
         )
 
     @function_tool
