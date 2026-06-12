@@ -254,12 +254,7 @@ class RunResult(Generic[Run_T]):
 
         from ..log import logger
 
-        # The current task may override the retry prompt (it owns the
-        # vocabulary of its completion tool).
-        instructions = (
-            getattr(self._session.current_agent, "_output_retry_instructions", None)
-            or _OUTPUT_RETRY_PROMPT
-        )
+        instructions = self._session.options.output_retry_instructions or _OUTPUT_RETRY_PROMPT
         try:
             # generate_reply attaches the new handle to this run state (it is
             # still the session's active run).
