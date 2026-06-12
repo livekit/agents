@@ -461,14 +461,11 @@ class JobContext:
                 metadata = dispatch_json
                 break
         if not metadata:
-            # older servers sent the dispatch in the job metadata;
-            # fake_job_context places it there too
-            metadata = self._info.job.metadata
-        if not metadata:
-            # The simulator participant is only visible once the room is
-            # connected; a miss before then (AgentSession.start consults
-            # _text_only pre-connect) must not be cached.
-            self._simulation_resolved = self._room.isconnected()
+            # The simulator joins before the agent, so a miss is only final
+            # once the room is connected and a remote participant is visible.
+            self._simulation_resolved = (
+                self._room.isconnected() and len(self._room.remote_participants) > 0
+            )
             return None
 
         self._simulation_resolved = True
@@ -597,8 +594,10 @@ class JobContext:
             await self._room.connect(self._info.url, self._info.token, options=room_options)
             self._on_connect()
 
-            if self.simulation_context() is not None:
-                self._room.on("participant_disconnected", self._on_simulator_disconnected)
+            # Always registered: the callback ignores participants without the
+            # simulator attribute, and gating on simulation_context() here would
+            # race the participant-list sync.
+            self._room.on("participant_disconnected", self._on_simulator_disconnected)
 
             for p in self._room.remote_participants.values():
                 self._participant_available(p)
