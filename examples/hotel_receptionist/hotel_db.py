@@ -524,6 +524,7 @@ class HotelDB:
                     "check_out": check_out.isoformat(),
                     "exclude": None,
                     "view": view,
+                    "prefer": None,
                 },
             ).fetchone()
             if not row:
@@ -601,10 +602,16 @@ class HotelDB:
     ) -> RoomBooking:
         # Re-pick a free room of the new (type, smoking) for the new dates,
         # ignoring the booking being modified itself (so same-room "extend
-        # by one night" doesn't conflict with itself).
+        # by one night" doesn't conflict with itself). The room the guest
+        # already has wins when it still fits - a date change must never
+        # quietly move someone out of their garden view.
         clean_extras = sorted(e for e in extras if e in ALLOWED_EXTRAS)
         conn = self.connection
         with conn:
+            current = conn.execute(
+                "SELECT room_id FROM hotel_bookings WHERE code = ? AND status = 'confirmed'",
+                (booking_code,),
+            ).fetchone()
             row = conn.execute(
                 _SQL_FREE_ROOM,
                 {
@@ -615,6 +622,7 @@ class HotelDB:
                     "check_out": check_out.isoformat(),
                     "exclude": booking_code,
                     "view": None,
+                    "prefer": current[0] if current else None,
                 },
             ).fetchone()
             if not row:
@@ -1076,6 +1084,7 @@ class HotelDB:
                 "check_out": check_out.isoformat(),
                 "exclude": None,
                 "view": view,
+                "prefer": None,
             },
         ).fetchone()
         if not row:
@@ -1430,7 +1439,7 @@ WHERE type = :room_type AND smoking = :smoking AND max_occupancy >= :guests
     WHERE b.room_id = hotel_rooms.id AND b.status = 'confirmed'
       AND (:exclude IS NULL OR b.code != :exclude)
       AND NOT (b.check_out <= :check_in OR b.check_in >= :check_out))
-ORDER BY id LIMIT 1
+ORDER BY CASE WHEN id = :prefer THEN 0 ELSE 1 END, id LIMIT 1
 """
 
 _SQL_AVAILABILITY = """

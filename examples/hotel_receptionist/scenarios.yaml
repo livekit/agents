@@ -172,6 +172,46 @@ scenarios:
     expected_state:
     - |
       UPDATE hotel_bookings SET status = 'cancelled' WHERE code = 'HTL-AB12'
+
+  # --- 05b: Booking modification carried to completion (deterministic) ------
+- label: Move the stay and drop the valet
+  instructions: |
+    PERSONA: Marcus Johnson, a dad reorganizing a family trip - friendly, slightly rushed, juggling kids in the background.
+    OPENING LINE: "Hi - we've got a booking with you this month and our plans shifted, I need to move the dates."
+    FACTS (reveal each only when asked):
+    - last name: Johnson
+    - confirmation code: H-T-L-C-D-3-4 (or offer the card ending 1881)
+    - the change: arriving two days later than planned - June 19th, staying through June 22nd, same three nights
+    - still the four of you, nothing else about the party changes
+    DO, IN ORDER:
+    1. Verify yourself when asked.
+    2. Give the new dates and get them changed.
+    3. Once the dates are settled, add: "oh - and drop the valet parking, we're not driving this time. Keep the breakfast though."
+    4. Ask: "will it cost more?" - accept an honest "less, I'll confirm the exact figure" but do NOT accept a made-up number without the change being applied.
+    5. Don't hang up until the agent has confirmed the updated booking back to you - new dates AND the new total.
+    REACTIONS:
+    - if the agent proposes cancelling and rebooking instead, refuse: "no, don't cancel anything - just move the dates."
+  agent_expectations: >
+    Verifies the caller and carries the modification to completion rather than
+    leaving it as a promise: the stay moves to June 19-22 (still three nights),
+    the valet add-on is removed while breakfast is kept, and the change is
+    actually committed - not just acknowledged. The guest keeps the same
+    garden-view queen room; there is no cancel-and-rebook and no surprise room
+    swap. Answers "will it cost more?" honestly - it's less, since a paid
+    add-on was dropped - and quotes the new total only as produced by the
+    system after the change is applied (the difference goes back to the card
+    ending 1881), never inventing its own arithmetic. Closes by reading the
+    updated booking back: new dates, room, breakfast, new total.
+  userdata:
+    expected_state:
+    - |
+      UPDATE hotel_bookings
+      SET check_in = '2026-06-19', check_out = '2026-06-22', extras = 'breakfast'
+      WHERE code = 'HTL-CD34'
+  tags:
+    feature: booking_modification
+    channel: phone
+    difficulty: '2'
 - label: Angry no-show charge dispute
   instructions: |
     PERSONA: Tanya Richardson, an irritated guest who was charged for a stay you say you cancelled.
@@ -364,6 +404,7 @@ scenarios:
     1. Complain; answer questions tersely.
     2. Verify yourself when asked.
     3. Ask: "so what are you actually going to DO about it?"
+    4. If offered a move to a garden-view room, take it: "fine. yes. move me there." Don't hang up until the move is confirmed.
     REACTIONS:
     - calm down if the agent shows genuine empathy and a concrete plan
     - if the agent is cold or scripted, ask for a manager
@@ -372,10 +413,14 @@ scenarios:
     (last name Klein plus code or card last four works), and looks up the booking
     rather than taking the claim on faith — the record shows a king city-view
     room, not a garden view, and the agent is honest about that without calling
-    the guest a liar. Offers a concrete option within what it can actually do
-    (check availability for a move, offer goodwill, record a followup/manager
-    callback when it exceeds authority). States a clear next action. Does not
-    over-promise a room that isn't available.
+    the guest a liar. Then actually fixes it: checks availability, finds the
+    garden-view double queen open for his dates, offers the move, and completes
+    it once he accepts — confirming the new room back. (The new room is a lower
+    rate; there must be no extra charge.) Does not over-promise, does not fob
+    him off with only a followup note when a real move is available.
+  userdata:
+    expected_state:
+      - UPDATE hotel_bookings SET room_id = 'RM_205' WHERE code = 'HTL-RK20'
   tags:
     feature: complaint
     channel: phone
@@ -509,7 +554,7 @@ scenarios:
     1. Get the dinner table booked.
     2. Get the tour arranged.
     3. Ask: "what time will the tour pick us up, and how much?"
-    4. Don't hang up until both are confirmed.
+    4. Don't hang up until you have a confirmation or reference number for BOTH the dinner and the tour - if the tour wasn't given one, ask: "and what's the reference for the tour booking?"
   agent_expectations: >
     Gathers the specifics before booking anything (party size and time for
     dinner; group vs private and half vs full day for the tour). Books the

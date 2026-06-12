@@ -12,7 +12,6 @@ livekit-plugins-aws = { workspace = true }
 livekit-plugins-azure = { workspace = true }
 livekit-plugins-baseten = { workspace = true }
 livekit-plugins-bey = { workspace = true }
-livekit-plugins-bithuman = { workspace = true }
 livekit-plugins-cambai = { workspace = true }
 livekit-plugins-cartesia = { workspace = true }
 livekit-plugins-cerebras = { workspace = true }
@@ -79,6 +78,7 @@ exclude = [
     "livekit-plugins/livekit-blingfire",
     "livekit-plugins/livekit-blockguard",
     "livekit-plugins/livekit-durable",
+    "livekit-plugins/livekit-plugins-bithuman"
 ]
 
 [dependency-groups]

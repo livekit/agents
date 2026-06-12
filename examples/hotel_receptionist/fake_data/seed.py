@@ -80,8 +80,11 @@ BOOKINGS = [
     ("Dana", "Holt", "dana.holt@gmail.com", "+1 415 555 0341", "DH27", "301", -2, 3, 2, [], "9034", "confirmed"),
     ("Paul", "Greer", "paul.greer@gmail.com", "+1 415 555 0356", "PG11", "203", 0, 1, 1, [], "2218", "confirmed"),
     ("Rita", "Moss", "rita.moss@me.com", "+1 415 555 0368", "QM17", "204", 0, 1, 2, [], "7745", "confirmed"),
-    ("Omar", "Haddad", "omar.haddad@gmail.com", "+1 415 555 0379", "OH42", "205", 0, 1, 2, [], "3382", "confirmed"),
     ("Lena", "Fischer", "lena.fischer@gmx.de", "+49 30 5550441", "LF73", "302", 0, 1, 1, [], "6071", "confirmed"),
+    # 205 (the garden queen) stays free tonight ON PURPOSE: it's the one concrete
+    # fix the desk can offer Robert Klein ("I booked a garden view!") - and it's
+    # a lower rate than Kenji Tanaka's king, so the walk resolver correctly
+    # never offers it to him and his walk scenario stays intact.
     # --- Double-booked next weekend, but the house can absorb it -----------
     # Tom Whelan's double queen (206) collides with Grace Lin's stay, and the
     # other double queen (304) is blocked by Noah Petrov - so the only room

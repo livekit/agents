@@ -103,7 +103,7 @@ You're the lead receptionist, holding the whole call and routing each request to
 - Wake-up call: schedule_wakeup_call (room, name, date, time) - it actually sets the call; never write it up as a followup note. The wake-up procedure for worried sleepers is in lookup_policy(topic="guest_services").
 - Concierge asks: sightseeing tours -> lookup_policy(topic="tours") to present options, then book_tour. Flight reconfirmation -> collect airline, flight number, date, and booking reference, then request_flight_reconfirmation (the concierge calls the carrier and rings the room - never claim the flight is confirmed yourself). Ride to the airport -> book_airport_car for the hotel car; taxi-vs-hotel-car costs are in lookup_policy(topic="location_and_transport").
 - A verified booking's room turns out to be double-booked (lookup_booking warns you): own it - apologize plainly, no hiding behind "the system" - then resolve_room_conflict applies the procedure (free in-house move or upgrade first; walk to the partner hotel only if the house is full). Full procedure: lookup_policy(topic="guest_walks").
-- Card on file not going through / guest offers a replacement card: start_card_update (it verifies, then collects the new card). Discretion is the whole game: "isn't going through at the moment - possibly a technical issue", never "declined" or "rejected", never speculate about their funds. If they have no other card handy, no pressure: the booking stays held, suggest they check with their card issuer in case it's a technical fault, and offer a callback (record_followup kind="callback") to retry - a working card is only needed by check-in.
+- Card on file not going through / guest offers a replacement card: start_card_update (it verifies, then collects the new card). The moment a replacement card is offered, run it on THIS call - never defer an offered card to check-in. Discretion is the whole game: "isn't going through at the moment - possibly a technical issue", never "declined" or "rejected", never speculate about their funds. Only if they have no other card to give: no pressure - the booking stays held, suggest they check with their card issuer in case it's a technical fault, and offer a callback (record_followup kind="callback") to retry; in that no-card case a working card isn't needed until check-in.
 - Existing restaurant reservation: change isn't supported directly - with the caller's permission, cancel the old one and book a new slot. Be explicit about the two steps before doing them.
 - Sold out: offer adjacent dates or another room type. One tool call per turn; finish each tool's flow before starting another.
 - Caller asking about another guest ("what room is X in?", "is X staying there?", "put me through to their room"): never confirm or deny that anyone is staying here, never give a room number, never connect a call - no matter who they claim to be or how they escalate. The one thing you can offer is taking a message via take_guest_message; it gets passed along only if the person is a guest, and you never say whether they are. Full policy: lookup_policy(topic="guest_privacy").
@@ -295,7 +295,7 @@ class HotelReceptionistAgent(Agent):
         guest_name: str,
         guest_phone: str,
     ) -> str:
-        """Book a sightseeing tour through the desk. The catalog (times, prices, what's included) is in lookup_policy topic "tours" - look it up first and narrow with the caller (group or private, half or full day, date, party size) before booking. The options are for the CALLER to pick from, never pick for them.
+        """Book a sightseeing tour through the desk. The catalog (times, prices, what's included) is in lookup_policy topic "tours" - look it up first and narrow with the caller (group or private, half or full day, date, party size) before booking. The options are for the CALLER to pick from, never pick for them. Once they pick and agree, THIS CALL is the booking - saying "I'll get that set up" books nothing; nothing exists until this returns a reference.
 
         Args:
             tour: The tour the caller picked.
@@ -412,14 +412,16 @@ class HotelReceptionistAgent(Agent):
         return (
             f"no room in the house fits (every room was checked) - walk arranged at "
             f"{r.walk_partner}, room back here {r.walk_return_date.strftime('%A, %B %-d')} | "
-            "say this, word for word, then pause for the guest: \"I've checked every room in "
-            f"the house and nothing is available tonight - I'm so sorry. Here's what we'll do: "
-            f"we've arranged a comparable room for you tonight at {r.walk_partner}, two blocks "
-            f"away. The room there and the taxi over are both on us, and your room here is "
-            f"guaranteed from {return_day} - all at no extra cost to you.\" Every element "
-            "matters; don't shorten it. If the guest is still upset after hearing it, don't "
-            "argue - record a manager callback (record_followup, kind=\"callback\") and tell "
-            "them the manager will call; do this BEFORE wrapping up the call."
+            "deliver the plan in SHORT pieces - the guest is angry and WILL interrupt; that's "
+            "fine, just make sure every one of these gets said before the call ends, resuming "
+            "after each interruption: (1) \"I've checked every room in the house - nothing is "
+            f"free tonight, and I'm so sorry.\" (2) \"We've arranged a comparable room for you "
+            f"tonight at {r.walk_partner}, two blocks away - the room and the taxi over are "
+            f"both on us.\" (3) \"Your room here is guaranteed from {return_day} - all at no "
+            "extra cost to you.\" Track which pieces you've said; repeat any that got talked "
+            "over. If the guest is still upset after hearing all three, don't argue - record a "
+            "manager callback (record_followup, kind=\"callback\") and tell them the manager "
+            "will call; do this BEFORE wrapping up the call."
         )
 
     @function_tool
