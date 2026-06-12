@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 
+class RunOutputError(Exception):
+    """Raised when a run with an output_type ends without the expected output
+    after exhausting output_retries."""
+
+
 class AssignmentTimeoutError(Exception):
     """Raised when accepting a job but not receiving an assignment within the specified timeout.
     The server may have chosen another worker to handle this job."""

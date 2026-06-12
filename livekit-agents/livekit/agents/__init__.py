@@ -27,6 +27,7 @@ from ._exceptions import (
     APIStatusError,
     APITimeoutError,
     AssignmentTimeoutError,
+    RunOutputError,
     create_api_error_from_http,
 )
 from .job import (
@@ -208,6 +209,7 @@ __all__ = [
     "Agent",
     "AgentTask",
     "AssignmentTimeoutError",
+    "RunOutputError",
     "APIConnectionError",
     "APIError",
     "APIStatusError",

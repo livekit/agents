@@ -592,11 +592,19 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         user_input: str,
         input_modality: Literal["text", "audio"] = "text",
         output_type: type[Run_T] | None = None,
+        output_retries: int = 1,
     ) -> RunResult[Run_T]:
+        """output_retries: how many times to re-prompt the model when the run
+        ends without the expected output_type before raising RunOutputError."""
         if self._global_run_state is not None and not self._global_run_state.done():
             raise RuntimeError("nested runs are not supported")
 
-        run_state = RunResult(user_input=user_input, output_type=output_type)
+        run_state = RunResult(
+            user_input=user_input,
+            output_type=output_type,
+            output_retries=output_retries,
+            session=self,
+        )
         self._global_run_state = run_state
         self.generate_reply(user_input=user_input, input_modality=input_modality)
         return run_state
