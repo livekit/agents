@@ -21,7 +21,7 @@ from livekit.agents.llm.tool_context import ToolError, ToolFlag, function_tool
 from livekit.agents.voice.agent import AgentTask
 
 _MODIFY_INSTRUCTIONS = """\
-You're modifying an existing room booking. The caller has been verified and the booking is loaded - dates, room, extras, and party size are pre-filled with the current values. Your job is to apply ONLY the changes the caller asks for, then call confirm().
+You're modifying an existing room booking. The caller has been verified and the booking is loaded - dates, room, extras, and party size are pre-filled with the current values. Your job is to apply ONLY the changes the caller asks for, then call confirm_changes().
 
 Identity fields (name, email, phone, card) cannot be changed here. If the caller wants to change any of those, say so plainly and steer back to what this flow handles.
 
@@ -29,7 +29,7 @@ Run set_stay before choose_room when changing dates - new dates may make the cur
 
 For extras (breakfast, valet, late_checkout, pets) the caller adds and removes additively in conversation - merge their request with the current extras list and pass the full new list to choose_room.
 
-Each tool returns a short status with what's pending. When the status says all set, call confirm() - the call IS the next action, no filler turn.
+Each tool returns a short status with what's pending. When the status says all set, call confirm_changes() - the call IS the next action, no filler turn.
 
 If the caller decides they don't want to change anything after all, call give_up with a short reason and the booking stays as it was.
 """
@@ -37,7 +37,7 @@ If the caller decides they don't want to change anything after all, call give_up
 
 class ModifyBookingTask(AgentTask[RoomBooking]):
     """Modify a confirmed booking. Pre-fills draft state from the existing
-    booking; `set_stay` / `choose_room` mutate the draft; `confirm()` writes
+    booking; `set_stay` / `choose_room` mutate the draft; `confirm_changes()` writes
     the changes back via `HotelDB.update_booking()`. Identity fields (name,
     email, phone, card) are NOT touched."""
 
@@ -58,7 +58,7 @@ class ModifyBookingTask(AgentTask[RoomBooking]):
         self._extras: list[RoomExtra] = list(existing.extras)
         self._smoking: bool = existing.smoking
         # Set of slot names that diverge from `existing` after a tool call.
-        # `confirm()` consults this both to decide if there's anything to do
+        # `confirm_changes()` consults this both to decide if there's anything to do
         # and to produce a faithful summary of what changed.
         self._changed: set[str] = set()
         super().__init__(
@@ -80,7 +80,7 @@ class ModifyBookingTask(AgentTask[RoomBooking]):
         if not self._changed:
             return "draft unchanged so far - ask the caller what to update"
         parts = sorted(self._changed)
-        return f"pending changes: {', '.join(parts)} | call confirm() when the caller has nothing else to change"
+        return f"pending changes: {', '.join(parts)} | call confirm_changes() when the caller has nothing else to change"
 
     @function_tool()
     async def set_stay(
@@ -178,7 +178,7 @@ class ModifyBookingTask(AgentTask[RoomBooking]):
         return f"room updated: {room_type.replace('_', ' ')}{extras_part} | {self._status()}"
 
     @function_tool()
-    async def confirm(self) -> str | None:
+    async def confirm_changes(self) -> str | None:
         """Write the pending changes back to the booking. Call this once the
         caller has nothing more to change."""
         if not self._changed:

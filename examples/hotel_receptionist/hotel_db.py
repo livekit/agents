@@ -168,7 +168,9 @@ RoomType = Literal["king", "queen_2beds", "double_queen", "suite", "penthouse"]
 class RoomTypeAvailability:
     type: RoomType
     nightly_rate: int
-    sample_view: str
+    # every distinct view available for this type on the dates,
+    # e.g. ["city", "garden"]
+    views: list[str]
 
 
 @dataclass
@@ -264,6 +266,10 @@ class Followup:
     caller_phone: str
     summary: str
     status: Literal["open", "resolved"]
+
+
+# the predominant room-share arrangement for a group block
+GroupShareType = Literal["twin", "double", "single", "mixed"]
 
 
 class Unavailable(Exception):
@@ -363,7 +369,10 @@ class HotelDB:
                 "exclude": exclude_booking_code,
             },
         )
-        return [RoomTypeAvailability(*r) for r in rows]
+        return [
+            RoomTypeAvailability(t, rate, views=sorted((concat or "").split(",")))
+            for t, rate, concat in rows
+        ]
 
     async def list_restaurant_availability(
         self, *, on_date: date, party_size: int
@@ -439,6 +448,7 @@ class HotelDB:
         phone: str,
         card_last4: str,
         extras: list[RoomExtra],
+        view: str | None = None,
     ) -> RoomBooking:
         clean_extras = sorted(e for e in extras if e in ALLOWED_EXTRAS)
         code = shortuuid("HTL-")
@@ -453,10 +463,12 @@ class HotelDB:
                     "check_in": check_in.isoformat(),
                     "check_out": check_out.isoformat(),
                     "exclude": None,
+                    "view": view,
                 },
             ).fetchone()
             if not row:
-                raise Unavailable(f"sold out: {room_type}")
+                what = f"{view} {room_type}" if view else room_type
+                raise Unavailable(f"sold out: {what}")
             room_id, nightly_rate = row
             nights = (check_out - check_in).days
             subtotal, taxes, total, items = compute_invoice(
@@ -540,6 +552,7 @@ class HotelDB:
                     "check_in": check_in.isoformat(),
                     "check_out": check_out.isoformat(),
                     "exclude": booking_code,
+                    "view": None,
                 },
             ).fetchone()
             if not row:
@@ -674,6 +687,19 @@ class HotelDB:
         if self.on_change:
             await self.on_change()
 
+    async def update_booking_card(self, *, booking_code: str, card_last4: str) -> None:
+        conn = self.connection
+        changed = _update(
+            conn,
+            "hotel_bookings",
+            {"card_last4": card_last4},
+            {"code": booking_code, "status": "confirmed"},
+        )
+        if changed == 0:
+            raise NotFound(f"booking not found: {booking_code}")
+        if self.on_change:
+            await self.on_change()
+
     async def record_followup(
         self,
         *,
@@ -694,6 +720,115 @@ class HotelDB:
                     "caller_name": caller_name,
                     "caller_phone": caller_phone,
                     "summary": summary,
+                },
+            )
+        if self.on_change:
+            await self.on_change()
+        return code
+
+    async def schedule_wakeup_call(
+        self,
+        *,
+        room: str,
+        guest_name: str,
+        call_date: date,
+        call_time: time,
+    ) -> str:
+        # callers say "room 304"; rooms are keyed "RM_304"
+        room_id = room.strip().upper()
+        if not room_id.startswith("RM_"):
+            room_id = f"RM_{room_id}"
+        conn = self.connection
+        if not conn.execute(
+            "SELECT 1 FROM hotel_rooms WHERE id = :id", {"id": room_id}
+        ).fetchone():
+            raise NotFound(f"no such room: {room}")
+        if call_date < TODAY:
+            raise Unavailable(f"{call_date.isoformat()} is in the past")
+        code = shortuuid("WUC-")
+        with conn:
+            _insert(
+                conn,
+                "wakeup_calls",
+                {
+                    "code": code,
+                    "room_id": room_id,
+                    "guest_name": guest_name,
+                    "date": call_date.isoformat(),
+                    "time": call_time.isoformat(),
+                },
+            )
+        if self.on_change:
+            await self.on_change()
+        return code
+
+    async def take_guest_message(
+        self,
+        *,
+        recipient: str,
+        caller_name: str,
+        caller_phone: str,
+        message: str,
+    ) -> str:
+        """Record a message addressed to a (possibly) in-house guest. Whether the
+        recipient actually has a stay here is resolved internally and never
+        returned, so the agent taking the message cannot leak guest presence."""
+        code = shortuuid("MSG-")
+        conn = self.connection
+        with conn:
+            in_house = conn.execute(
+                "SELECT first_name || ' ' || last_name FROM hotel_bookings"
+                " WHERE status = 'confirmed'"
+                " AND LOWER(first_name || ' ' || last_name) = LOWER(TRIM(:name))"
+                " AND check_in <= :today AND check_out > :today",
+                {"name": recipient, "today": TODAY.isoformat()},
+            ).fetchone()
+            _insert(
+                conn,
+                "guest_messages",
+                {
+                    "code": code,
+                    # matched messages take the registered guest's casing so the
+                    # stored name doesn't depend on how the caller's was heard
+                    "recipient": in_house[0] if in_house else recipient,
+                    "caller_name": caller_name,
+                    "caller_phone": "".join(c for c in caller_phone if c.isdigit()),
+                    "message": message,
+                    "status": "delivered" if in_house else "undeliverable",
+                },
+            )
+        if self.on_change:
+            await self.on_change()
+        return code
+
+    async def record_group_inquiry(
+        self,
+        *,
+        company: str,
+        contact_name: str,
+        contact_phone: str,
+        party_size: int,
+        share_type: GroupShareType,
+        check_in: date,
+        nights: int,
+    ) -> str:
+        code = shortuuid("GRP-")
+        conn = self.connection
+        with conn:
+            _insert(
+                conn,
+                "group_inquiries",
+                {
+                    "code": code,
+                    "company": company,
+                    "contact_name": contact_name,
+                    # digits only: a spoken callback number transcribes with
+                    # unpredictable punctuation, and nothing dials it back out
+                    "contact_phone": "".join(c for c in contact_phone if c.isdigit()),
+                    "party_size": party_size,
+                    "share_type": share_type,
+                    "check_in": check_in.isoformat(),
+                    "nights": nights,
                 },
             )
         if self.on_change:
@@ -835,6 +970,41 @@ CREATE TABLE IF NOT EXISTS hotel_followups (
     status       TEXT    NOT NULL DEFAULT 'open' CHECK (status IN ('open','resolved'))
 );
 
+CREATE TABLE IF NOT EXISTS wakeup_calls (
+    id         INTEGER PRIMARY KEY,
+    code       TEXT    NOT NULL UNIQUE,
+    room_id    TEXT    NOT NULL REFERENCES hotel_rooms(id),
+    guest_name TEXT    NOT NULL,
+    date       DATE    NOT NULL,
+    time       TIME    NOT NULL,
+    status     TEXT    NOT NULL DEFAULT 'scheduled'
+                       CHECK (status IN ('scheduled','completed','cancelled'))
+);
+
+CREATE TABLE IF NOT EXISTS guest_messages (
+    id           INTEGER PRIMARY KEY,
+    code         TEXT    NOT NULL UNIQUE,
+    recipient    TEXT    NOT NULL,
+    caller_name  TEXT    NOT NULL,
+    caller_phone TEXT    NOT NULL,
+    message      TEXT    NOT NULL,
+    status       TEXT    NOT NULL CHECK (status IN ('delivered','undeliverable'))
+);
+
+CREATE TABLE IF NOT EXISTS group_inquiries (
+    id            INTEGER PRIMARY KEY,
+    code          TEXT    NOT NULL UNIQUE,
+    company       TEXT    NOT NULL,
+    contact_name  TEXT    NOT NULL,
+    contact_phone TEXT    NOT NULL,
+    party_size    INTEGER NOT NULL CHECK (party_size >= 15),
+    share_type    TEXT    NOT NULL CHECK (share_type IN ('twin','double','single','mixed')),
+    check_in      DATE    NOT NULL,
+    nights        INTEGER NOT NULL CHECK (nights >= 1),
+    status        TEXT    NOT NULL DEFAULT 'pending_credit_approval'
+                          CHECK (status IN ('pending_credit_approval','approved','declined'))
+);
+
 CREATE TABLE IF NOT EXISTS lk_descriptions (
     name        TEXT PRIMARY KEY,
     description TEXT NOT NULL
@@ -890,6 +1060,7 @@ _RESERVATION_COLS: tuple[str, ...] = tuple(f.name for f in fields(RestaurantRese
 _SQL_FREE_ROOM = """
 SELECT id, nightly_rate FROM hotel_rooms
 WHERE type = :room_type AND smoking = :smoking AND max_occupancy >= :guests
+  AND (:view IS NULL OR room_view = :view)
   AND NOT EXISTS (
     SELECT 1 FROM hotel_bookings b
     WHERE b.room_id = hotel_rooms.id AND b.status = 'confirmed'
@@ -899,7 +1070,7 @@ ORDER BY id LIMIT 1
 """
 
 _SQL_AVAILABILITY = """
-SELECT r.type, r.nightly_rate, MIN(r.room_view)
+SELECT r.type, r.nightly_rate, GROUP_CONCAT(DISTINCT r.room_view)
 FROM hotel_rooms r
 WHERE r.max_occupancy >= :guests
   AND (:smoking IS NULL OR r.smoking = :smoking)
@@ -941,7 +1112,7 @@ _SQL_FIND_BOOKING = f"""
 SELECT {_BOOKING_COLS} FROM hotel_bookings b
 JOIN hotel_rooms r ON r.id = b.room_id
 WHERE LOWER(b.last_name) = LOWER(:last_name)
-  AND (:code IS NULL OR b.code = :code)
+  AND (:code IS NULL OR REPLACE(b.code, '-', '') = REPLACE(:code, '-', ''))
   AND (:email IS NULL OR LOWER(b.email) = LOWER(:email))
   AND (:card_last4 IS NULL OR b.card_last4 = :card_last4)
 LIMIT 1
@@ -956,7 +1127,7 @@ WHERE b.code = :code LIMIT 1
 _SQL_FIND_RESERVATION = f"""
 SELECT {", ".join(_RESERVATION_COLS)} FROM restaurant_reservations
 WHERE LOWER(last_name) = LOWER(:last_name)
-  AND (:code IS NULL OR code = :code)
+  AND (:code IS NULL OR REPLACE(code, '-', '') = REPLACE(:code, '-', ''))
   AND (:date IS NULL OR date = :date)
 LIMIT 1
 """

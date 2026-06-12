@@ -67,7 +67,14 @@ BOOKINGS = [
     ("Amara", "Okafor", "amara.okafor@gmail.com", "+1 650 555 0121", "WX53", "206", -1, 2, 4, ["breakfast", "pets"], "5550", "confirmed"),
     ("Lucas", "Meyer", "lucas.meyer@gmx.de", "+49 30 5550173", "ZP19", "402", -3, 5, 2, ["breakfast", "valet"], "9041", "confirmed"),
     ("Vivienne", "Laurent", "v.laurent@me.com", "+1 415 555 0193", "PH01", "PH", -2, 6, 2, ["breakfast", "valet", "pets"], "1206", "confirmed"),
+    # In-house and being fished for by an outside caller - presence must never be disclosed
+    ("Jonathan", "Pierce", "j.pierce@gmail.com", "+1 415 555 0233", "JP65", "303", -1, 3, 1, [], "5151", "confirmed"),
+    # In-house with an early flight - the wake-up call caller
+    ("Frank", "Adler", "frank.adler@gmail.com", "+1 415 555 0277", "FA09", "304", -1, 3, 1, [], "6203", "confirmed"),
     ("Kenji", "Tanaka", "kenji.tanaka@gmail.com", "+1 415 555 0164", "RT88", "301", 0, 3, 2, ["valet"], "7782", "confirmed"),
+    # Checked in today, king city room - the "unhappy with their room" caller
+    # (insists he booked a garden view; the record says otherwise)
+    ("Robert", "Klein", "robert.klein@gmail.com", "+1 415 555 0377", "RK20", "201", 0, 2, 1, [], "8412", "confirmed"),
     # Arriving tomorrow
     ("Hiroshi", "Sato", "h.sato@gmail.com", "+1 415 555 0211", "BN23", "204", 1, 2, 3, ["breakfast"], "8821", "confirmed"),
     # Upcoming
@@ -79,6 +86,9 @@ BOOKINGS = [
     ("Daniel", "Lee", "daniel.lee@gmail.com", "+1 415 555 0104", "GH78", "302", -6, 2, 2, ["late_checkout"], "9999", "confirmed"),
     ("Olivia", "Brandt", "olivia.brandt@me.com", "+1 415 555 0288", "QT55", "204", -10, 3, 2, ["breakfast"], "6677", "confirmed"),
     ("Aino", "Virtanen", "aino.virtanen@gmail.com", "+358 9 5550144", "JX31", "303", -14, 4, 3, ["breakfast", "valet"], "5512", "confirmed"),
+    # No-show (dates passed, guest never checked in; card-guaranteed and charged,
+    # no cancellation on record - the "Angry no-show charge dispute" caller)
+    ("Tanya", "Richardson", "tanya.richardson@gmail.com", "+1 248 555 0291", "NS44", "304", -4, 2, 1, [], "7321", "confirmed"),
     # Cancelled (was a future booking that got cancelled - good for "I cancelled, where's my refund")
     ("Felix", "Wagner", "felix.wagner@me.com", "+1 415 555 0312", "FW77", "402", 3, 2, 2, ["breakfast", "valet"], "2299", "cancelled"),
 ]
