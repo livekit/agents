@@ -733,6 +733,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         preserve_function_call_history: bool = False,
+        output_retry_instructions: str | None = None,
         # deprecated
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
@@ -768,6 +769,9 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         self.__inactive_ev = asyncio.Event()
         self.__inactive_ev.set()  # set when the agent is not awaited or activity is closed
         self._preserve_function_call_history = preserve_function_call_history
+        # Override of the built-in re-prompt used when a run with an
+        # output_type ends without this task completing.
+        self._output_retry_instructions = output_retry_instructions
 
         self._old_agent: Agent | None = None
 

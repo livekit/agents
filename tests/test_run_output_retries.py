@@ -18,8 +18,10 @@ class _Out(BaseModel):
 
 
 class _Task(AgentTask[_Out]):
-    def __init__(self) -> None:
-        super().__init__(instructions="test")
+    def __init__(self, output_retry_instructions: str | None = None) -> None:
+        super().__init__(
+            instructions="test", output_retry_instructions=output_retry_instructions
+        )
 
     @function_tool
     async def submit_result(self, value: str) -> None:
@@ -74,10 +76,8 @@ async def test_output_retry_custom_instructions() -> None:
         ]
     )
     async with AgentSession(llm=llm) as sess:
-        await sess.start(_Task())
-        result = await sess.run(
-            user_input="hello", output_type=_Out, output_retries={"instructions": custom}
-        )
+        await sess.start(_Task(output_retry_instructions=custom))
+        result = await sess.run(user_input="hello", output_type=_Out)
 
     assert result.final_output.value == "custom"
 

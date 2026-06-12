@@ -14,7 +14,6 @@ from typing import (
     Any,
     Generic,
     Literal,
-    TypedDict,
     TypeVar,
     overload,
 )
@@ -40,23 +39,6 @@ _OUTPUT_RETRY_PROMPT = (
     "to provide your final output."
 )
 
-
-class OutputRetryOptions(TypedDict, total=False):
-    """Retry behavior for a run that ends without its ``output_type``.
-
-    Can be passed to :meth:`AgentSession.run` in place of a plain retry count::
-
-        sess.run(
-            user_input=...,
-            output_type=MyOutput,
-            output_retries={"max_retries": 2, "instructions": "Call submit_result."},
-        )
-    """
-
-    max_retries: int
-    """How many re-prompts before raising RunOutputError. Defaults to ``1``."""
-    instructions: str
-    """Override the built-in retry prompt."""
 
 Run_T = TypeVar("Run_T")
 
@@ -96,7 +78,7 @@ class RunResult(Generic[Run_T]):
         *,
         user_input: str | None = None,
         output_type: type[Run_T] | None,
-        output_retries: int | OutputRetryOptions = 1,
+        output_retries: int = 1,
         session: AgentSession | None = None,
     ) -> None:
         self._handles: set[SpeechHandle | asyncio.Task] = set()
@@ -104,10 +86,7 @@ class RunResult(Generic[Run_T]):
         self._done_fut = asyncio.Future[None]()
         self._user_input = user_input
         self._output_type = output_type
-        if isinstance(output_retries, int):
-            output_retries = OutputRetryOptions(max_retries=output_retries)
-        self._output_retries = output_retries.get("max_retries", 1)
-        self._output_retry_instructions = output_retries.get("instructions", _OUTPUT_RETRY_PROMPT)
+        self._output_retries = output_retries
         self._session = session
         self._recorded_items: list[RunEvent] = []
         self._final_output: Run_T | None = None
@@ -275,10 +254,16 @@ class RunResult(Generic[Run_T]):
 
         from ..log import logger
 
+        # The current task may override the retry prompt (it owns the
+        # vocabulary of its completion tool).
+        instructions = (
+            getattr(self._session.current_agent, "_output_retry_instructions", None)
+            or _OUTPUT_RETRY_PROMPT
+        )
         try:
             # generate_reply attaches the new handle to this run state (it is
             # still the session's active run).
-            self._session.generate_reply(user_input=self._output_retry_instructions)
+            self._session.generate_reply(user_input=instructions)
         except RuntimeError:
             return False
         logger.warning(
