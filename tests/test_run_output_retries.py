@@ -54,6 +54,35 @@ async def test_output_retry_recovers() -> None:
 
 
 @pytest.mark.asyncio
+async def test_output_retry_custom_instructions() -> None:
+    """The retry prompt is overridable, matching the keyterm-detection pattern."""
+    custom = "Submit your analysis via the tool, nothing else."
+    llm = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(input="hello", content="chatting instead", ttft=0.01, duration=0.02),
+            FakeLLMResponse(
+                input=custom,
+                content="",
+                ttft=0.01,
+                duration=0.02,
+                tool_calls=[
+                    FunctionToolCall(
+                        name="submit_result", arguments='{"value": "custom"}', call_id="call_2"
+                    )
+                ],
+            ),
+        ]
+    )
+    async with AgentSession(llm=llm) as sess:
+        await sess.start(_Task())
+        result = await sess.run(
+            user_input="hello", output_type=_Out, output_retry_instructions=custom
+        )
+
+    assert result.final_output.value == "custom"
+
+
+@pytest.mark.asyncio
 async def test_output_retry_exhausted() -> None:
     """With no retry budget, a prose ending raises RunOutputError."""
     llm = FakeLLM(
