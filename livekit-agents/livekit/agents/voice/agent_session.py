@@ -94,11 +94,11 @@ class OutputOptions(TypedDict, total=False):
         sess.run(
             user_input=...,
             output_type=MyOutput,
-            output_options={"retries": 2, "retry_instructions": "Call submit_result."},
+            output_options={"max_retries": 2, "retry_instructions": "Call submit_result."},
         )
     """
 
-    retries: int
+    max_retries: int
     """Re-prompts when a run ends without its ``output_type``, before raising
     UnexpectedModelBehavior. Defaults to ``1``."""
     retry_instructions: str
@@ -620,7 +620,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         run_state = RunResult(
             user_input=user_input,
             output_type=output_type,
-            output_retries=output_options.get("retries", 1),
+            output_retries=output_options.get("max_retries", 1),
             output_retry_instructions=output_options.get("retry_instructions"),
             session=self,
         )
