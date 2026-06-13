@@ -1,12 +1,3 @@
-"""Simulation glue for the front-desk agent.
-
-A scenario's ``userdata`` (see scenarios.yaml) drives the run:
-``available_slots`` seeds the FakeCalendar, the tools run mocked against it,
-and ``expected_booking`` grades the final calendar state in
-:func:`on_simulation_end`. Scenario dates are absolute; run with
-``FRONTDESK_NOW`` pinned.
-"""
-
 from __future__ import annotations
 
 import datetime
