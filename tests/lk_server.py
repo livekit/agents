@@ -11,6 +11,8 @@ import platform
 import socket
 import subprocess
 import time
+import urllib.error
+import urllib.request
 
 import pytest
 
@@ -27,13 +29,24 @@ def _port_in_use(port: int) -> bool:
         return s.connect_ex(("127.0.0.1", port)) == 0
 
 
-def _wait_for_port(port: int, timeout: float = 15.0) -> None:
+def _wait_for_ready(port: int, timeout: float = 15.0) -> None:
+    """Wait until the LiveKit server is fully ready to accept WebSocket connections.
+
+    Polls the HTTP endpoint on the same port rather than just checking TCP
+    reachability. The TCP port binding precedes full WebSocket handler
+    initialisation, so a raw port check can allow tests to connect before the
+    server is truly ready, causing transient ConnectError failures.
+    """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if _port_in_use(port):
-            return
-        time.sleep(0.3)
-    raise TimeoutError(f"LiveKit server did not start within {timeout}s (port {port})")
+        try:
+            urllib.request.urlopen(f"http://localhost:{port}", timeout=0.5)
+            return  # any HTTP response means the server is up
+        except urllib.error.HTTPError:
+            return  # a 4xx/5xx reply still means the server is ready
+        except Exception:
+            time.sleep(0.3)
+    raise TimeoutError(f"LiveKit server did not become ready within {timeout}s (port {port})")
 
 
 @pytest.fixture(scope="session")
@@ -65,7 +78,7 @@ def livekit_server():
         )
 
     try:
-        _wait_for_port(_PORT)
+        _wait_for_ready(_PORT)
         yield
     finally:
         proc.terminate()
