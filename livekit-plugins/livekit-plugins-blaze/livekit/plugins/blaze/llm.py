@@ -227,7 +227,14 @@ class LLMStream(llm.LLMStream):
         for item in self._chat_ctx.items:
             if isinstance(item, llm.FunctionCallOutput):
                 if item.output:
-                    messages.append({"role": "user", "content": item.output})
+                    if item.is_error:
+                        # Wrap error outputs so the LLM has context but can
+                        # distinguish them from normal tool results.
+                        messages.append(
+                            {"role": "user", "content": f"[Tool Error]: {item.output}"}
+                        )
+                    else:
+                        messages.append({"role": "user", "content": item.output})
                 continue
 
             if not isinstance(item, llm.ChatMessage):

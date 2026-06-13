@@ -277,6 +277,7 @@ class TTS(tts.TTS):
         batch_max_wait_s: float = 0.45,
         inter_sentence_silence_ms: int = 150,
         timeout: float | None = None,
+        stream_timeout: float | None = None,
         config: BlazeConfig | None = None,
     ) -> None:
         super().__init__(
@@ -303,6 +304,14 @@ class TTS(tts.TTS):
         self._audio_quality = int(audio_quality) if audio_quality is not None else 32
         self._sample_rate = sample_rate
         self._timeout = timeout if timeout is not None else self._config.tts_timeout
+        # Separate timeout for the full streaming session (WebSocket + all batches in a turn).
+        # Streaming turns can span many text batches; this guards against a truly hung session
+        # without killing healthy long-running turns the way a short per-request timeout would.
+        self._stream_timeout = (
+            stream_timeout
+            if stream_timeout is not None
+            else self._config.tts_stream_timeout
+        )
         self._normalization_rules = normalization_rules
 
         # Batching configuration
@@ -641,7 +650,7 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
         seg_count = 0
 
         try:
-            async with _asyncio_timeout(tts_cfg._timeout):
+            async with _asyncio_timeout(tts_cfg._stream_timeout):
                 async with websockets.connect(tts_cfg._ws_url) as ws:
                     await self._ws_connect_and_auth(ws, request_id)
 
