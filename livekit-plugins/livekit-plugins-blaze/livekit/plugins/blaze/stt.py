@@ -232,6 +232,7 @@ class STT(stt.STT):
             logger.warning("[%s] Empty audio buffer received, skipping", request_id)
             return stt.SpeechEvent(
                 type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                request_id=request_id,
                 alternatives=[],
             )
 
@@ -269,6 +270,7 @@ class STT(stt.STT):
                 files=files,
                 params=params,
                 headers=headers,
+                timeout=conn_options.timeout if conn_options.timeout else self._timeout,
             )
         except httpx.TimeoutException as e:
             raise APITimeoutError(f"STT request timed out: {e}") from e
@@ -340,6 +342,7 @@ class STT(stt.STT):
             # Return empty so StreamAdapter skips this segment as usual
             return stt.SpeechEvent(
                 type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                request_id=request_id,
                 alternatives=[
                     stt.SpeechData(
                         text="",
@@ -365,6 +368,7 @@ class STT(stt.STT):
 
         return stt.SpeechEvent(
             type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+            request_id=request_id,
             alternatives=[
                 stt.SpeechData(
                     text=text,
