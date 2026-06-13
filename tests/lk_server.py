@@ -46,7 +46,7 @@ def _wait_for_ready(port: int, timeout: float = 15.0) -> None:
                 return  # any HTTP response means the server is up
         except urllib.error.HTTPError:
             return  # a 4xx/5xx reply still means the server is ready
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        except (urllib.error.URLError, OSError) as exc:
             last_exc = exc
             time.sleep(0.3)
     raise TimeoutError(
