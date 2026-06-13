@@ -2153,7 +2153,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "blaze", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "google", "gradium", "groq", "hamming", "hedra", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "minimax", "mistralai", "murf", "neuphonic", "nltk", "nvidia", "openai", "perplexity", "phonic", "resemble", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "speechify", "speechmatics", "spitch", "tavus", "trugen", "turn-detector", "ultravox", "upliftai", "xai"]
+provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "blaze", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hedra", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "minimax", "mistralai", "murf", "neuphonic", "nltk", "nvidia", "openai", "perplexity", "phonic", "resemble", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "speechify", "speechmatics", "spitch", "tavus", "trugen", "turn-detector", "ultravox", "upliftai", "xai"]
 
 [[package]]
 name = "livekit-api"
@@ -2391,7 +2391,6 @@ dependencies = [
     { name = "httpx" },
     { name = "livekit-agents" },
     { name = "pydantic" },
-    { name = "pydantic-settings" },
     { name = "websockets" },
 ]
 
@@ -2400,7 +2399,6 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "livekit-agents", editable = "livekit-agents" },
     { name = "pydantic", specifier = ">=2.0.0" },
-    { name = "pydantic-settings", specifier = ">=2.0.0" },
     { name = "websockets", specifier = ">=12.0" },
 ]
 

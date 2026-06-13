@@ -74,13 +74,10 @@ class BlazeConfig:
         self.tts_stream_timeout: float = (
             tts_stream_timeout
             if tts_stream_timeout is not None
-            else float(
-                os.environ.get("BLAZE_TTS_STREAM_TIMEOUT", _DEFAULT_TTS_STREAM_TIMEOUT)
-            )
+            else float(os.environ.get("BLAZE_TTS_STREAM_TIMEOUT", _DEFAULT_TTS_STREAM_TIMEOUT))
         )
         self.llm_timeout: float = (
             llm_timeout
             if llm_timeout is not None
             else float(os.environ.get("BLAZE_LLM_TIMEOUT", _DEFAULT_LLM_TIMEOUT))
         )
-
