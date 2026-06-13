@@ -2368,7 +2368,6 @@ dependencies = [
     { name = "httpx" },
     { name = "livekit-agents" },
     { name = "pydantic" },
-    { name = "pydantic-settings" },
     { name = "websockets" },
 ]
 
@@ -2377,7 +2376,6 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "livekit-agents", editable = "livekit-agents" },
     { name = "pydantic", specifier = ">=2.0.0" },
-    { name = "pydantic-settings", specifier = ">=2.0.0" },
     { name = "websockets", specifier = ">=12.0" },
 ]
 
