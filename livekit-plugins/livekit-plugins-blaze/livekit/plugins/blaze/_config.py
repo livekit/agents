@@ -1,15 +1,23 @@
 """
 Blaze Configuration Module
 
-Provides centralized configuration for Blaze services using Pydantic settings.
-Configuration can be provided via environment variables with BLAZE_ prefix.
+Provides centralized configuration for Blaze services.
+Configuration can be provided via environment variables with BLAZE_ prefix
+or passed explicitly to the constructor.
 """
 
-from pydantic import Field
-from pydantic_settings import BaseSettings
+from __future__ import annotations
+
+import os
+
+_DEFAULT_API_URL = "https://api.blaze.vn"
+_DEFAULT_STT_TIMEOUT = 30.0
+_DEFAULT_TTS_TIMEOUT = 60.0
+_DEFAULT_TTS_STREAM_TIMEOUT = 300.0
+_DEFAULT_LLM_TIMEOUT = 60.0
 
 
-class BlazeConfig(BaseSettings):
+class BlazeConfig:
     """
     Configuration for Blaze AI services.
 
@@ -21,7 +29,8 @@ class BlazeConfig(BaseSettings):
         BLAZE_API_URL: Base URL for Blaze API gateway
         BLAZE_API_TOKEN: Bearer token for API authentication
         BLAZE_STT_TIMEOUT: STT request timeout in seconds
-        BLAZE_TTS_TIMEOUT: TTS request timeout in seconds
+        BLAZE_TTS_TIMEOUT: TTS per-request timeout in seconds
+        BLAZE_TTS_STREAM_TIMEOUT: TTS streaming session timeout in seconds
         BLAZE_LLM_TIMEOUT: LLM request timeout in seconds
 
     Example:
@@ -37,34 +46,41 @@ class BlazeConfig(BaseSettings):
         ... )
     """
 
-    # Service URL
-    api_url: str = Field(
-        default="https://api.blaze.vn",
-        description="Base URL for Blaze API gateway",
-    )
+    def __init__(
+        self,
+        *,
+        api_url: str | None = None,
+        api_token: str | None = None,
+        stt_timeout: float | None = None,
+        tts_timeout: float | None = None,
+        tts_stream_timeout: float | None = None,
+        llm_timeout: float | None = None,
+    ) -> None:
+        self.api_url: str = api_url or os.environ.get("BLAZE_API_URL", _DEFAULT_API_URL)
+        self.api_token: str = api_token or os.environ.get("BLAZE_API_TOKEN", "")
+        self.stt_timeout: float = (
+            stt_timeout
+            if stt_timeout is not None
+            else float(os.environ.get("BLAZE_STT_TIMEOUT", _DEFAULT_STT_TIMEOUT))
+        )
+        self.tts_timeout: float = (
+            tts_timeout
+            if tts_timeout is not None
+            else float(os.environ.get("BLAZE_TTS_TIMEOUT", _DEFAULT_TTS_TIMEOUT))
+        )
+        # Separate timeout for the full TTS streaming session (WebSocket + all batches).
+        # Streaming turns can span many text batches and require a longer timeout than
+        # individual per-request timeouts.
+        self.tts_stream_timeout: float = (
+            tts_stream_timeout
+            if tts_stream_timeout is not None
+            else float(
+                os.environ.get("BLAZE_TTS_STREAM_TIMEOUT", _DEFAULT_TTS_STREAM_TIMEOUT)
+            )
+        )
+        self.llm_timeout: float = (
+            llm_timeout
+            if llm_timeout is not None
+            else float(os.environ.get("BLAZE_LLM_TIMEOUT", _DEFAULT_LLM_TIMEOUT))
+        )
 
-    # Authentication
-    api_token: str = Field(
-        default="",
-        description="Bearer token for API authentication",
-    )
-
-    # Timeouts
-    stt_timeout: float = Field(
-        default=30.0,
-        description="STT request timeout in seconds",
-    )
-    tts_timeout: float = Field(
-        default=60.0,
-        description="TTS request timeout in seconds",
-    )
-    llm_timeout: float = Field(
-        default=60.0,
-        description="LLM request timeout in seconds",
-    )
-
-    model_config = {
-        "env_prefix": "BLAZE_",
-        "env_file": ".env",
-        "extra": "ignore",
-    }
