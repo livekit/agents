@@ -30,12 +30,13 @@ def _port_in_use(port: int) -> bool:
 
 
 def _wait_for_ready(port: int, timeout: float = 15.0) -> None:
-    """Wait until the LiveKit server is fully ready to accept WebSocket connections.
+    """Wait until the LiveKit server is ready to accept connections.
 
-    Polls the HTTP endpoint on the same port rather than just checking TCP
-    reachability. The TCP port binding precedes full WebSocket handler
-    initialisation, so a raw port check can allow tests to connect before the
-    server is truly ready, causing transient ConnectError failures.
+    Polls the HTTP endpoint on the same port as a readiness proxy. Any HTTP
+    response (including 4xx/5xx) confirms that the server's handler stack is
+    fully initialised — a stronger signal than TCP reachability alone, which
+    can return true before the WebSocket acceptor is ready, causing transient
+    ConnectError failures in tests that open multiple rapid connections.
     """
     deadline = time.monotonic() + timeout
     last_exc: Exception | None = None
