@@ -67,27 +67,3 @@ def tool_mocks(cal: FakeCalendar, tz: ZoneInfo) -> dict[str, Callable]:
         "list_available_slots": list_available_slots,
         "schedule_appointment": schedule_appointment,
     }
-
-
-async def on_simulation_end(ctx: SimulationContext) -> None:
-    # grade the run on final calendar state; a mismatch vetoes the run
-    userdata = ctx.userdata()
-    if "expected_booking" not in userdata:
-        return  # scenario graded on conversation only
-
-    cal: FakeCalendar = ctx.job_context.primary_session.userdata.cal
-    booked = cal.scheduled_appointments
-
-    def speak(dt: datetime.datetime) -> str:
-        return dt.astimezone(cal.tz).isoformat()
-
-    if (expected_raw := userdata["expected_booking"]) is None:
-        if booked:
-            times = ", ".join(speak(b.slot.start_time) for b in booked)
-            ctx.fail(reason=f"no booking was expected, but the agent booked: {times}")
-        return
-
-    expected = parse_slot(expected_raw, cal.tz)
-    if len(booked) != 1 or booked[0].slot.start_time != expected:
-        times = ", ".join(speak(b.slot.start_time) for b in booked) or "nothing"
-        ctx.fail(reason=f"expected a single booking at {speak(expected)}, got {times}")

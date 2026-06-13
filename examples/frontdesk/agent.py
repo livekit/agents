@@ -29,6 +29,7 @@ from livekit.agents import (
     AgentSession,
     JobContext,
     RunContext,
+    SimulationContext,
     ToolError,
     beta,
     cli,
@@ -213,6 +214,30 @@ class FrontDeskAgent(Agent):
 server = AgentServer()
 
 
+async def on_simulation_end(ctx: SimulationContext) -> None:
+    # grade the run on final calendar state; a mismatch vetoes the run
+    userdata = ctx.userdata()
+    if "expected_booking" not in userdata:
+        return  # scenario graded on conversation only
+
+    cal: FakeCalendar = ctx.job_context.primary_session.userdata.cal
+    booked = cal.scheduled_appointments
+
+    def speak(dt: datetime.datetime) -> str:
+        return dt.astimezone(cal.tz).isoformat()
+
+    if (expected_raw := userdata["expected_booking"]) is None:
+        if booked:
+            times = ", ".join(speak(b.slot.start_time) for b in booked)
+            ctx.fail(reason=f"no booking was expected, but the agent booked: {times}")
+        return
+
+    expected = simulation.parse_slot(expected_raw, cal.tz)
+    if len(booked) != 1 or booked[0].slot.start_time != expected:
+        times = ", ".join(speak(b.slot.start_time) for b in booked) or "nothing"
+        ctx.fail(reason=f"expected a single booking at {speak(expected)}, got {times}")
+
+
 async def on_session_end(ctx: JobContext) -> None:
     # `on_session_end` runs even if the job crashed before the AgentSession
     # started (e.g. a bad timezone, a calendar fault) — make_session_report
@@ -252,7 +277,7 @@ async def on_session_end(ctx: JobContext) -> None:
     logger.info("session tags: %s", ctx.tagger.tags)
 
 
-@server.rtc_session(on_session_end=on_session_end, on_simulation_end=simulation.on_simulation_end)
+@server.rtc_session(on_session_end=on_session_end, on_simulation_end=on_simulation_end)
 async def frontdesk_agent(ctx: JobContext):
     await ctx.connect()
 
