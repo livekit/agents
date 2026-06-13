@@ -30,6 +30,7 @@ from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
     from .agent import Agent
+    from .agent_session import AgentSession
 
 
 lk_evals_verbose = int(os.getenv("LIVEKIT_EVALS_VERBOSE", 0))
@@ -1037,9 +1038,7 @@ class AgentHandoffAssert:
 if TYPE_CHECKING:
     MockTools = dict[type[Agent], dict[str, Callable]]
 _MockToolsContextVar = contextvars.ContextVar["MockTools"]("agents_mock_tools")
-_SessionMockTools: weakref.WeakKeyDictionary[AgentSession, MockTools] = (
-    weakref.WeakKeyDictionary()
-)
+_SessionMockTools: weakref.WeakKeyDictionary[AgentSession, MockTools] = weakref.WeakKeyDictionary()
 
 
 @overload
@@ -1049,32 +1048,23 @@ def mock_tools(
 
 
 @overload
-def mock_tools(agent: type[Agent], mocks: dict[str, Callable], *, session: AgentSession) -> None: ...
+def mock_tools(
+    agent: type[Agent], mocks: dict[str, Callable], *, session: AgentSession
+) -> None: ...
 
 
 def mock_tools(
     agent: type[Agent], mocks: dict[str, Callable], *, session: AgentSession | None = None
 ) -> contextlib.AbstractContextManager[None] | None:
-    """Assign a set of mock tool callables to a specific Agent type.
+    """Assign mock tool callables to an Agent type.
 
-    Mocks intercept tool *execution* only; the LLM keeps seeing the real tool
-    schemas. A mock may declare any subset of the real tool's parameters
-    (extra arguments are dropped when it is invoked).
+    Mocks intercept tool execution only; the LLM keeps seeing the real tool
+    schemas, and a mock may declare any subset of the real tool's parameters.
 
     Without ``session``, returns a context manager scoping the mocks to the
-    current context (intended for tests):
-
-        with mock_tools(MyAgentClass, {"tool_name": mock_fn}):
-            # inside this block, MyAgentClass will see the given mocks
-
-    With ``session``, ``mocks`` becomes the mock set for the Agent type on that
-    session, effective immediately and for the session's lifetime:
-
-        mock_tools(MyAgentClass, {"tool_name": mock_fn}, session=session)
-
-    Call it again to replace the mock set, or pass ``{}`` to remove all mocks
-    for the Agent type. When both forms are active, the context-manager mocks
-    take precedence over the session ones.
+    current context. With ``session``, ``mocks`` becomes the mock set for the
+    Agent type on that session for its lifetime: call again to replace it, or
+    pass ``{}`` to remove it. Context-manager mocks take precedence.
     """
     if session is not None:
         _SessionMockTools.setdefault(session, {})[agent] = dict(mocks)

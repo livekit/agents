@@ -17,11 +17,8 @@ from livekit.agents.utils import http_context
 
 
 def now(tz: ZoneInfo) -> datetime.datetime:
-    """Current time, or the time pinned via the ``FRONTDESK_NOW`` env var.
-
-    Simulation scenarios reference absolute dates (see scenarios.yaml); pinning
-    the clock keeps them from going stale.
-    """
+    """Current time, or the time pinned via ``FRONTDESK_NOW`` (keeps the
+    absolute dates in scenarios.yaml from going stale)."""
     if pinned := os.getenv("FRONTDESK_NOW"):
         return datetime.datetime.fromisoformat(pinned).replace(tzinfo=tz)
     return datetime.datetime.now(tz)

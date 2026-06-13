@@ -259,16 +259,13 @@ async def frontdesk_agent(ctx: JobContext):
     timezone = "UTC"
     tool_mocks: dict[str, Callable] = {}
 
-    # simulation_context() resolves from the simulator participant's attributes,
-    # so the caller must have joined the room before we can detect a simulated run
+    # the simulator carries the scenario in its participant attributes;
+    # it must have joined before simulation_context() can resolve
     await ctx.wait_for_participant()
 
     if sim := ctx.simulation_context():
-        # the scenario's userdata drives the data source: deterministic
-        # availability per scenario (see simulation.py & scenarios.yaml)
+        # the scenario's userdata seeds the calendar; the tools run mocked
         cal = simulation.fake_calendar(sim, timezone=timezone)
-        # under simulation, the agent's tools always run mocked: same global
-        # mock_tools as in tests, but targeting the live session
         tool_mocks = simulation.tool_mocks(cal, ZoneInfo(timezone))
     elif cal_api_key := os.getenv("CAL_API_KEY", None):
         logger.info("CAL_API_KEY detected, using cal.com calendar")

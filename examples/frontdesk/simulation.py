@@ -1,18 +1,10 @@
 """Simulation glue for the front-desk agent.
 
-A scenario's ``userdata`` (see scenarios.yaml) drives the whole run:
-
-- ``available_slots`` seeds a :class:`FakeCalendar` with deterministic
-  availability, replacing the random/cal.com calendar used in production.
-- the agent's tools are mocked through the SDK's ``mock_tools``: both mocks
-  close over the same calendar, so booking through the mocked
-  ``schedule_appointment`` changes what the mocked ``list_available_slots``
-  returns on the next call.
-- ``expected_booking`` grades the run on final calendar state in
-  :func:`on_simulation_end`.
-
-Scenario dates are absolute; run with ``FRONTDESK_NOW`` pinned (see
-scenarios.yaml) so they never go stale.
+A scenario's ``userdata`` (see scenarios.yaml) drives the run:
+``available_slots`` seeds the FakeCalendar, the tools run mocked against it,
+and ``expected_booking`` grades the final calendar state in
+:func:`on_simulation_end`. Scenario dates are absolute; run with
+``FRONTDESK_NOW`` pinned.
 """
 
 from __future__ import annotations
@@ -29,7 +21,7 @@ SLOT_DURATION_MIN = 30
 
 
 def parse_slot(value: str, tz: ZoneInfo) -> datetime.datetime:
-    """Parse an ISO datetime from scenario userdata (e.g. "2026-06-15T14:30:00")."""
+    """Parse an ISO datetime from scenario userdata."""
     return datetime.datetime.fromisoformat(value).replace(tzinfo=tz)
 
 
@@ -45,12 +37,7 @@ def fake_calendar(sim: SimulationContext, *, timezone: str) -> FakeCalendar:
 
 def tool_mocks(cal: FakeCalendar, tz: ZoneInfo) -> dict[str, Callable]:
     """Tool mocks sharing live state: a booking changes what the mocked
-    list_available_slots returns on the next call.
-
-    The LLM keeps seeing the real tool schemas, only execution is intercepted,
-    and a mock may declare any subset of the real tool's parameters (here,
-    list_available_slots drops the ``range`` argument).
-    """
+    list_available_slots returns on the next call."""
     slots_map: dict[str, AvailableSlot] = {}
 
     async def list_available_slots() -> str:
@@ -71,7 +58,6 @@ def tool_mocks(cal: FakeCalendar, tz: ZoneInfo) -> dict[str, Callable]:
         if not (slot := slots_map.get(slot_id)):
             raise ToolError(f"error: slot {slot_id} was not found")
 
-        # the mock still collects the attendee email, like the real tool
         email_result = await beta.workflows.GetEmailTask(
             chat_ctx=ctx.session.current_agent.chat_ctx
         )
@@ -80,7 +66,6 @@ def tool_mocks(cal: FakeCalendar, tz: ZoneInfo) -> dict[str, Callable]:
 
         ctx.disallow_interruptions()
 
-        # mutates the shared calendar: the slot disappears from future listings
         await cal.schedule_appointment(
             start_time=slot.start_time, attendee_email=email_result.email_address
         )
@@ -94,9 +79,7 @@ def tool_mocks(cal: FakeCalendar, tz: ZoneInfo) -> dict[str, Callable]:
 
 
 async def on_simulation_end(ctx: SimulationContext) -> None:
-    # Grade the run on final calendar state. The effective result is the AND of
-    # this check and the simulator's conversation judgment, so a mismatch fails
-    # a run the simulator passed; a match leaves the simulator's verdict to stand.
+    # grade the run on final calendar state; a mismatch vetoes the run
     userdata = ctx.userdata()
     if "expected_booking" not in userdata:
         return  # scenario graded on conversation only
