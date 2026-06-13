@@ -40,11 +40,13 @@ def _wait_for_ready(port: int, timeout: float = 15.0) -> None:
     """
     deadline = time.monotonic() + timeout
     last_exc: Exception | None = None
+    req = urllib.request.Request(f"http://127.0.0.1:{port}", method="HEAD")
     while time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{port}", timeout=0.5):
+            with urllib.request.urlopen(req, timeout=0.5):
                 return  # any HTTP response means the server is up
-        except urllib.error.HTTPError:
+        except urllib.error.HTTPError as exc:
+            exc.close()  # HTTPError is a response object; close to avoid FD leak
             return  # a 4xx/5xx reply still means the server is ready
         except (urllib.error.URLError, OSError) as exc:
             last_exc = exc
