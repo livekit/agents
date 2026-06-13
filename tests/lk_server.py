@@ -38,15 +38,20 @@ def _wait_for_ready(port: int, timeout: float = 15.0) -> None:
     server is truly ready, causing transient ConnectError failures.
     """
     deadline = time.monotonic() + timeout
+    last_exc: Exception | None = None
     while time.monotonic() < deadline:
         try:
-            urllib.request.urlopen(f"http://localhost:{port}", timeout=0.5)
-            return  # any HTTP response means the server is up
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}", timeout=0.5):
+                return  # any HTTP response means the server is up
         except urllib.error.HTTPError:
             return  # a 4xx/5xx reply still means the server is ready
-        except Exception:
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            last_exc = exc
             time.sleep(0.3)
-    raise TimeoutError(f"LiveKit server did not become ready within {timeout}s (port {port})")
+    raise TimeoutError(
+        f"LiveKit server did not become ready within {timeout}s (port {port})"
+        + (f": last error: {last_exc!r}" if last_exc else "")
+    )
 
 
 @pytest.fixture(scope="session")
