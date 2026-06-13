@@ -78,13 +78,25 @@ class TTS(
         def __init__(self, tts: TTS) -> None:
             self._tts = tts
 
+        def _provider_key(self) -> str:
+            """Key into the shared ``_provider_format`` markup tables, or "" for none.
+
+            Plugins override this to opt into markup support; the default ("") means
+            no markup instructions, stripping, normalization, or conversion are applied.
+            The other markup methods delegate through this key, so a plugin only needs
+            to override ``_provider_key`` (and, if relevant, ``max_chunk_len``).
+            """
+            return ""
+
         def llm_instructions(self) -> str | None:
             """Return instructions for the LLM describing available markup tags.
 
             The framework injects this into the LLM system prompt when
-            ``expressiveness=True``.  Return ``None`` if this TTS has no markup support.
+            ``expressiveness=True``.  Returns ``None`` if this TTS has no markup support.
             """
-            return None
+            from ._provider_format import llm_instructions
+
+            return llm_instructions(self._provider_key())
 
         def to_text(self, text: str) -> str:
             """Strip TTS-specific markup from *text*, returning plain text.
@@ -92,7 +104,9 @@ class TTS(
             Used for transcripts streamed to the user and for chat history storage.
             The TTS itself receives the original marked-up text.
             """
-            return text
+            from ._provider_format import strip_markup
+
+            return strip_markup(self._provider_key(), text)
 
         async def to_text_stream(
             self, text_stream: AsyncIterable[str]
@@ -119,16 +133,20 @@ class TTS(
 
         def normalize(self, text: str) -> str:
             """Fix common LLM markup mistakes (e.g. unclosed self-closing tags)."""
-            return text
+            from ._provider_format import normalize_markup
+
+            return normalize_markup(self._provider_key(), text)
 
         def convert(self, text: str) -> str:
             """Convert framework-standard markup to the provider's native format.
 
-            Called before text is sent to the TTS. The default is a no-op.
-            Plugins that use non-XML formats (e.g. square brackets) override this
-            to convert ``<expression value="..."/>`` tags to their native syntax.
+            Called before text is sent to the TTS; a no-op when the provider declares
+            no markup. Plugins that use non-XML formats (e.g. square brackets) opt in
+            via ``_provider_key`` so ``<expression value="..."/>`` becomes native syntax.
             """
-            return text
+            from ._provider_format import convert_markup
+
+            return convert_markup(self._provider_key(), text)
 
         def max_chunk_len(self) -> int | None:
             """Largest text chunk (in characters) this provider synthesizes well

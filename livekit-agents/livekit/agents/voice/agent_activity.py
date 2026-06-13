@@ -2530,7 +2530,6 @@ class AgentActivity(RecognitionHooks):
                     input=audio_source,
                     model_settings=model_settings,
                     text_transforms=self._session.options.tts_text_transforms,
-                    structured_output=self._agent.llm_output_format is not None,
                     model=self.tts.model if self.tts else None,
                     provider=self.tts.provider if self.tts else None,
                 )
@@ -2800,7 +2799,6 @@ class AgentActivity(RecognitionHooks):
                         input=tts_text,
                         model_settings=model_settings,
                         text_transforms=self._session.options.tts_text_transforms,
-                        structured_output=self._agent.llm_output_format is not None,
                         model=self.tts.model if self.tts else None,
                         provider=self.tts.provider if self.tts else None,
                     )
@@ -3523,7 +3521,6 @@ class AgentActivity(RecognitionHooks):
                         input=tts_text_input,
                         model_settings=model_settings,
                         text_transforms=self._session.options.tts_text_transforms,
-                        structured_output=self._agent.llm_output_format is not None,
                         model=self.tts.model if self.tts else None,
                         provider=self.tts.provider if self.tts else None,
                     )

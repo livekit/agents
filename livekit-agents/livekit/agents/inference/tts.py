@@ -209,7 +209,6 @@ class _TTSOptions:
     api_key: str
     api_secret: str
     extra_kwargs: dict[str, Any]
-    tokenizer: NotGivenOr[tokenize.SentenceTokenizer]
     fallback: NotGivenOr[list[FallbackModel]]
     conn_options: NotGivenOr[APIConnectOptions]
 
@@ -229,7 +228,6 @@ class TTS(tts.TTS):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[CartesiaOptions] = NOT_GIVEN,
-        tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None:
@@ -249,7 +247,6 @@ class TTS(tts.TTS):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[DeepgramOptions] = NOT_GIVEN,
-        tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None:
@@ -269,7 +266,6 @@ class TTS(tts.TTS):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[ElevenlabsOptions] = NOT_GIVEN,
-        tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None:
@@ -289,7 +285,6 @@ class TTS(tts.TTS):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[RimeOptions] = NOT_GIVEN,
-        tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None:
@@ -309,7 +304,6 @@ class TTS(tts.TTS):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[InworldOptions] = NOT_GIVEN,
-        tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None:
@@ -329,7 +323,6 @@ class TTS(tts.TTS):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[XaiOptions] = NOT_GIVEN,
-        tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None:
@@ -349,7 +342,6 @@ class TTS(tts.TTS):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
-        tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None:
@@ -376,7 +368,6 @@ class TTS(tts.TTS):
             | InworldOptions
             | XaiOptions
         ] = NOT_GIVEN,
-        tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None:
@@ -393,10 +384,6 @@ class TTS(tts.TTS):
             api_secret (str, optional): LIVEKIT_API_SECRET, if not provided, read from environment variable.
             http_session (aiohttp.ClientSession, optional): HTTP session to use.
             extra_kwargs (dict, optional): Extra kwargs to pass to the TTS model.
-            tokenizer (tokenize.SentenceTokenizer, optional): Sentence tokenizer used to chunk
-                streamed text before synthesis. Defaults to a blingfire tokenizer capped at the
-                provider's max input length. Pass a tokenizer with a larger ``max_token_len`` to
-                synthesize bigger chunks at once (e.g. for smoother prosody at a latency cost).
             fallback (FallbackModelType, optional): Fallback models - either a list of model names,
                 a list of FallbackModel instances.
             conn_options (APIConnectOptions, optional): Connection options for request attempts.
@@ -456,7 +443,6 @@ class TTS(tts.TTS):
             api_key=lk_api_key,
             api_secret=lk_api_secret,
             extra_kwargs=resolved_extra_kwargs,
-            tokenizer=tokenizer,
             fallback=fallback_models,
             conn_options=conn_options if is_given(conn_options) else DEFAULT_API_CONNECT_OPTIONS,
         )
@@ -483,25 +469,8 @@ class TTS(tts.TTS):
                 return ""  # older inworld models don't support markup
             return provider
 
-        def llm_instructions(self) -> str | None:
-            from ..tts._provider_format import llm_instructions
-
-            return llm_instructions(self._provider_key())
-
-        def to_text(self, text: str) -> str:
-            from ..tts._provider_format import strip_markup
-
-            return strip_markup(self._provider_key(), text)
-
-        def normalize(self, text: str) -> str:
-            from ..tts._provider_format import normalize_markup
-
-            return normalize_markup(self._provider_key(), text)
-
-        def convert(self, text: str) -> str:
-            from ..tts._provider_format import convert_markup
-
-            return convert_markup(self._provider_key(), text)
+        # llm_instructions / to_text / normalize / convert are inherited from the
+        # base Markup, keyed on _provider_key() above.
 
         def max_chunk_len(self) -> int | None:
             from ..tts._provider_format import max_input_len
@@ -682,10 +651,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         # the provider send-limit cap (single source of truth: markup.max_chunk_len)
         max_len = self._tts.markup.max_chunk_len()
         expressive_len = self._expressive_chunk_len
-        if is_given(self._opts.tokenizer):
-            # an explicit tokenizer always wins
-            sent_tokenizer_stream = self._opts.tokenizer.stream()
-        elif expressive_len is not None:
+        if expressive_len is not None:
             # expressiveness on: batch sentences up to the target so prosody stays
             # continuous across the turn (min_token_len drives the batching; the
             # provider cap is still respected via max_token_len).

@@ -199,20 +199,9 @@ class TTS(tts.TTS):
                 )
 
     class Markup(tts.TTS.Markup):
-        def llm_instructions(self) -> str | None:
-            from livekit.agents.tts._provider_format import llm_instructions
-
-            return llm_instructions("cartesia")
-
-        def normalize(self, text: str) -> str:
-            from livekit.agents.tts._provider_format import normalize_markup
-
-            return normalize_markup("cartesia", text)
-
-        def to_text(self, text: str) -> str:
-            from livekit.agents.tts._provider_format import strip_markup
-
-            return strip_markup("cartesia", text)
+        # markup delegation lives in the base class, keyed on _provider_key()
+        def _provider_key(self) -> str:
+            return "cartesia"
 
     @property
     def model(self) -> str:
