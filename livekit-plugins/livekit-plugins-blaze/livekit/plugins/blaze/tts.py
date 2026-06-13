@@ -308,9 +308,7 @@ class TTS(tts.TTS):
         # Streaming turns can span many text batches; this guards against a truly hung session
         # without killing healthy long-running turns the way a short per-request timeout would.
         self._stream_timeout = (
-            stream_timeout
-            if stream_timeout is not None
-            else self._config.tts_stream_timeout
+            stream_timeout if stream_timeout is not None else self._config.tts_stream_timeout
         )
         self._normalization_rules = normalization_rules
 
@@ -723,9 +721,6 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
                                 msg = json.loads(frame)
                                 st = msg.get("status") or msg.get("type", "")
 
-                                if st == "started-byte-stream":
-                                    _ensure_output_initialized(msg.get("contentType"))
-
                                 if st == "speech-end":
                                     # Final flush with fade-out
                                     if runtime_is_pcm and pending_tail:
@@ -738,10 +733,15 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
                                         )
                                     break
 
-                                if st == "started-byte-stream":
-                                    # Silence between TTS segments (not before the first)
-                                    if runtime_is_pcm and has_prev_segment and silence_pcm:
-                                        output_emitter.push(silence_pcm)
+                                elif st == "started-byte-stream":
+                                    # Initialize output emitter on first segment.
+                                    _ensure_output_initialized(msg.get("contentType"))
+                                    # Insert inter-segment silence and reset fade-in
+                                    # flag so each new segment begins with a fade-in.
+                                    if has_prev_segment:
+                                        if runtime_is_pcm and silence_pcm:
+                                            output_emitter.push(silence_pcm)
+                                        first_audio = True  # reset for this segment's fade-in
 
                                 elif st == "finished-byte-stream":
                                     _seg_count += 1

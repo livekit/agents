@@ -230,9 +230,7 @@ class LLMStream(llm.LLMStream):
                     if item.is_error:
                         # Wrap error outputs so the LLM has context but can
                         # distinguish them from normal tool results.
-                        messages.append(
-                            {"role": "user", "content": f"[Tool Error]: {item.output}"}
-                        )
+                        messages.append({"role": "user", "content": f"[Tool Error]: {item.output}"})
                     else:
                         messages.append({"role": "user", "content": item.output})
                 continue
