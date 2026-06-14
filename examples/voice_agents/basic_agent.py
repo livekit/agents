@@ -18,6 +18,7 @@ from livekit.agents import (
 )
 from livekit.agents.beta import EndCallTool
 from livekit.agents.llm import function_tool
+from livekit.agents.voice.events import AgentBackchannelOpportunityEvent
 
 # uncomment to enable Krisp background voice/noise cancellation
 # from livekit.plugins import noise_cancellation
@@ -85,6 +86,11 @@ async def entrypoint(ctx: JobContext) -> None:
         # See all available models as well as voice selections at https://docs.livekit.io/agents/models/tts/
         tts=inference.TTS("cartesia/sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"),
         turn_handling=TurnHandlingOptions(
+            turn_detection=inference.TurnDetector(
+                base_url="http://0.0.0.0:8080/v1",
+                api_key="devkey",
+                api_secret="devsecret",
+            ),
             interruption={
                 # sometimes background noise could interrupt the agent session, these are considered false positive interruptions
                 # when it's detected, you may resume the agent's speech
@@ -103,6 +109,10 @@ async def entrypoint(ctx: JobContext) -> None:
             text_transforms.replace({"LiveKit": "<<ˈ|l|aɪ|v|k|ɪ|t>>"}),
         ],
     )
+
+    @session.on("agent_backchannel_opportunity")
+    def _on_agent_backchannel_opportunity(ev: AgentBackchannelOpportunityEvent) -> None:
+        session.say("""<emotion value="curious"/>yeah...""")
 
     @session.on("metrics_collected")
     def _on_metrics_collected(ev: MetricsCollectedEvent) -> None:
