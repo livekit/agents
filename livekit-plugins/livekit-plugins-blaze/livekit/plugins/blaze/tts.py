@@ -472,7 +472,7 @@ class ChunkedStream(tts.ChunkedStream):
 
         try:
             async with httpx.AsyncClient(
-                timeout=httpx.Timeout(tts_cfg._timeout, connect=5.0)
+                timeout=httpx.Timeout(self._conn_options.timeout or tts_cfg._timeout, connect=5.0)
             ) as client:
                 async with client.stream(
                     "POST",
