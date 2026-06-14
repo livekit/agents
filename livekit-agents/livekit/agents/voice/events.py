@@ -444,47 +444,34 @@ class ToolCallStarted(BaseModel):
 
 
 class ToolCallUpdated(BaseModel):
-    """A progress update or the terminal entry of a tool call.
-
-    ``status == "running"`` marks a ``ctx.update()``; any other value is the call's
-    terminal entry. Every call ends with exactly one terminal entry.
-    """
+    """A progress update (``status="running"``) or the single terminal entry
+    (``done`` / ``error`` / ``cancelled``) of a tool call."""
 
     type: Literal["tool_call_updated"] = "tool_call_updated"
     id: str
-    """Synthetic entry id: ``call_id`` when voiced within the normal turn,
-    ``{call_id}_update_N`` / ``{call_id}_final`` when deferred."""
+    """Entry id: ``call_id`` inline, ``{call_id}_update_N`` / ``{call_id}_final`` when deferred."""
     call_id: str
     message: str | None = None
-    """Raw update text, result text, or error message; None when there is nothing
-    to voice (cancellation, empty return)."""
+    """Update, result, or error text; None when there is nothing to voice."""
     status: Literal["running", "done", "error", "cancelled"]
 
 
 class ToolReplyUpdated(BaseModel):
-    """Status of the deferred reply that voices buffered tool updates.
-
-    Emitted with ``scheduled`` when the reply speech is queued, then once more with
-    the outcome: ``completed``, ``interrupted``, or ``skipped`` (already covered).
-    One reply can cover updates from multiple calls; the inline first update of a
-    tool never gets a reply event.
-    """
+    """Lifecycle of the deferred reply that voices buffered tool updates: ``scheduled``
+    when queued, then ``completed`` / ``interrupted`` / ``skipped``. One reply may cover
+    several calls; an inline first update never gets one."""
 
     type: Literal["tool_reply_updated"] = "tool_reply_updated"
     update_ids: list[str]
     """``ToolCallUpdated.id`` values this reply covers."""
     status: Literal["scheduled", "completed", "interrupted", "skipped"]
     speech_id: str
-    """Id of the reply speech; the ``speech_created`` event carries its handle."""
+    """Id of the reply speech; ``speech_created`` carries its handle."""
 
 
 class ToolStatusUpdatedEvent(BaseModel):
-    """Per-call tool lifecycle, one flat status update per occurrence.
-
-    Discriminate on ``update.type``: ``tool_call_started`` -> ``tool_call_updated``
-    (progress and terminal entries) -> ``tool_reply_updated`` (deferred-reply
-    lifecycle).
-    """
+    """One flat tool-lifecycle update. Discriminate on ``update.type``:
+    ``tool_call_started`` → ``tool_call_updated`` → ``tool_reply_updated``."""
 
     type: Literal["tool_status_updated"] = "tool_status_updated"
     update: Annotated[

@@ -136,13 +136,6 @@ def _render(template: str | Callable[[Any], str], args: dict[str, Any]) -> str:
     return template.format(**args)
 
 
-def _emit_tool_status_update(
-    session: AgentSession,
-    update: ToolCallStarted | ToolCallUpdated | ToolReplyUpdated,
-) -> None:
-    session.emit("tool_status_updated", ToolStatusUpdatedEvent(update=update))
-
-
 _ASYNC_TOOL_OPTIONS_DEFAULTS: AsyncToolOptions = {
     "update_template": UPDATE_TEMPLATE,
     "duplicate_reject_template": DUPLICATE_REJECT,
@@ -294,29 +287,8 @@ class _ToolExecutor:
         first_update_fut = asyncio.Future[Any]()
         run_ctx._attach_executor(self, first_update_fut)
 
-        # framework-internal tools (cancel/list) don't emit tool status events
-        track = not fnc_name.startswith("lk_agents_")
-        terminal_emitted = False
-
-        def _emit_terminal(
-            status: Literal["done", "error", "cancelled"],
-            message: str | None,
-            *,
-            entry_id: str | None = None,
-        ) -> None:
-            nonlocal terminal_emitted
-            if not track or terminal_emitted:
-                return
-            terminal_emitted = True
-            if entry_id is None:
-                # deferred entries get the _final id; the plain call_id belongs to the
-                # normal turn (or the first update, which keeps the original id)
-                entry_id = call_id + "_final" if run_ctx._updates else call_id
-            _emit_tool_status_update(
-                run_ctx.session,
-                ToolCallUpdated(id=entry_id, call_id=call_id, message=message, status=status),
-            )
-
+        # run the tool and return its raw output (or the caught exception); _on_done
+        # derives the call's single terminal entry from how the task ended
         async def _execute_tool() -> Any:
             try:
                 fnc_args, fnc_kwargs = prepare_function_arguments(
@@ -330,46 +302,22 @@ class _ToolExecutor:
                     output = await tool(*fnc_args, **fnc_kwargs)
             except asyncio.CancelledError:
                 logger.debug("tool cancelled", extra={"call_id": call_id, "function": fnc_name})
-                _emit_terminal("cancelled", None)
                 if not first_update_fut.done():
                     first_update_fut.set_result(None)
-                return
+                raise  # _on_done emits the cancelled terminal
             except Exception as e:
                 output = e
 
             if not first_update_fut.done():
                 # tool returned without ctx.update() — surface the result to dispatch
-                if isinstance(output, StopResponse):
-                    _emit_terminal("done", None)
-                    first_update_fut.set_exception(output)
-                elif isinstance(output, BaseException):
-                    _emit_terminal("error", str(output))
+                if isinstance(output, BaseException):
                     first_update_fut.set_exception(output)
                 else:
-                    from .agent import Agent
-
-                    message = None if output is None or isinstance(output, Agent) else str(output)
-                    _emit_terminal("done", message)
                     first_update_fut.set_result(output)
-                return
-
-            if isinstance(output, BaseException):
-                if isinstance(output, ToolError):
-                    logger.warning(
-                        "ToolError while executing tool: %s",
-                        output.message,
-                        extra={"function": fnc_name, "call_id": call_id},
-                    )
-                elif not isinstance(output, StopResponse):
-                    logger.error(
-                        "exception occurred while executing tool",
-                        extra={"function": fnc_name, "call_id": call_id},
-                        exc_info=output,
-                    )
+                return output
 
             if output is None or isinstance(output, StopResponse):
-                _emit_terminal("done", None)
-                return
+                return output
 
             # the first update has already been returned to dispatch, so an Agent
             # return now has no surface to carry an agent_task back
@@ -381,18 +329,27 @@ class _ToolExecutor:
                     "agent handoff after a progress update is not supported",
                     extra={"call_id": call_id, "function": fnc_name},
                 )
-                _emit_terminal("error", "agent handoff after a progress update is not supported")
-                return
+                raise RuntimeError("agent handoff after a progress update is not supported")
+
+            if isinstance(output, BaseException):
+                if isinstance(output, ToolError):
+                    logger.warning(
+                        "ToolError while executing tool: %s",
+                        output.message,
+                        extra={"function": fnc_name, "call_id": call_id},
+                    )
+                else:
+                    logger.error(
+                        "exception occurred while executing tool",
+                        extra={"function": fnc_name, "call_id": call_id},
+                        exc_info=output,
+                    )
 
             # final return goes through the coalescer as a synthetic output
             pair = run_ctx._make_update_pair(output, call_id_suffix="_final")
             run_ctx._updates.append(pair)
-            _emit_terminal(
-                "error" if isinstance(output, BaseException) else "done",
-                str(output),
-                entry_id=pair[0].call_id,
-            )
             await self._enqueue_reply(run_ctx, [pair[0], pair[1]])
+            return output
 
         exe_task = asyncio.create_task(_execute_tool(), name=f"tool_exec_{fnc_name}")
         from .agent import _pass_through_activity_task_info
@@ -410,8 +367,10 @@ class _ToolExecutor:
         session = run_ctx.session
         _RunningTasks.setdefault(session, {})[call_id] = running_task
 
-        if track:
-            _emit_tool_status_update(session, ToolCallStarted(function_call=run_ctx.function_call))
+        session.emit(
+            "tool_status_updated",
+            ToolStatusUpdatedEvent(update=ToolCallStarted(function_call=run_ctx.function_call)),
+        )
 
         def _on_done(task: asyncio.Task[Any]) -> None:
             self._running_tasks.pop(call_id, None)
@@ -419,12 +378,39 @@ class _ToolExecutor:
                 session_tasks.pop(call_id, None)
             # detach so a stashed RunContext can't drive the executor post-completion
             run_ctx._detach_executor()
-            # a task cancelled before its first step never runs the CancelledError
-            # handler — report the cancellation and release dispatch here instead
-            if task.cancelled():
-                _emit_terminal("cancelled", None)
+
+            # how the task ended: a returned value, a raised exception, or cancellation
+            try:
+                output = task.result()
+            except BaseException as e:
+                output = e
+
             if not first_update_fut.done():
-                first_update_fut.set_result(None)
+                first_update_fut.set_result(None)  # cancelled before the first update
+
+            # one terminal entry per call; deferred entries use the _final id
+            from .agent import Agent
+
+            status: Literal["done", "error", "cancelled"]
+            message: str | None
+            if task.cancelled() or isinstance(output, asyncio.CancelledError):
+                status, message = "cancelled", None
+            elif isinstance(output, BaseException) and not isinstance(output, StopResponse):
+                status, message = "error", str(output)
+            elif output is None or isinstance(output, (StopResponse, Agent)):
+                status, message = "done", None
+            else:
+                status, message = "done", str(output)
+
+            entry_id = call_id + "_final" if run_ctx._updates else call_id
+            session.emit(
+                "tool_status_updated",
+                ToolStatusUpdatedEvent(
+                    update=ToolCallUpdated(
+                        id=entry_id, call_id=call_id, message=message, status=status
+                    )
+                ),
+            )
 
         exe_task.add_done_callback(_on_done)
 
@@ -558,9 +544,13 @@ class _ToolExecutor:
             tool_choice="none",
             chat_ctx=chat_ctx,
         )
-        _emit_tool_status_update(
-            session,
-            ToolReplyUpdated(update_ids=call_ids, status="scheduled", speech_id=speech.id),
+        session.emit(
+            "tool_status_updated",
+            ToolStatusUpdatedEvent(
+                update=ToolReplyUpdated(
+                    update_ids=call_ids, status="scheduled", speech_id=speech.id
+                )
+            ),
         )
         logger.debug(
             "generate async tool reply",
@@ -592,9 +582,13 @@ class _ToolExecutor:
                 )
                 # TODO(long): reschedule interrupted replies?
 
-            _emit_tool_status_update(
-                session,
-                ToolReplyUpdated(update_ids=call_ids, status=reply_status, speech_id=speech.id),
+            session.emit(
+                "tool_status_updated",
+                ToolStatusUpdatedEvent(
+                    update=ToolReplyUpdated(
+                        update_ids=call_ids, status=reply_status, speech_id=speech.id
+                    )
+                ),
             )
 
         speech.add_done_callback(_on_speech_done)

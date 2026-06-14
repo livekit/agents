@@ -1523,6 +1523,14 @@ def _emitted_items(session: Any) -> list[Any]:
     return items
 
 
+async def _drain_executor(executor: Any) -> None:
+    """Yield until in-flight tool tasks settle, so their terminal events are emitted."""
+    import asyncio as _asyncio
+
+    while executor.has_running_tasks:
+        await _asyncio.sleep(0)
+
+
 def _make_fake_speech():
     """A SpeechHandle stand-in that lets tests fire the done callbacks manually."""
     from unittest.mock import MagicMock
@@ -1589,9 +1597,11 @@ class TestToolCallEvents:
             """q"""
             return "ok"
 
+        executor = _ToolExecutor()
         run_ctx = _make_run_context(call_id="c1", name="quick_tool")
-        result = await _ToolExecutor().execute(tool=quick_tool, run_ctx=run_ctx, raw_arguments={})
+        result = await executor.execute(tool=quick_tool, run_ctx=run_ctx, raw_arguments={})
         assert result == "ok"
+        await _drain_executor(executor)
 
         items = _emitted_items(run_ctx.session)
         assert isinstance(items[0], ToolCallStarted)
@@ -1608,9 +1618,11 @@ class TestToolCallEvents:
             """b"""
             raise RuntimeError("nope")
 
+        executor = _ToolExecutor()
         run_ctx = _make_run_context(call_id="c2", name="boom")
         with pytest.raises(RuntimeError, match="nope"):
-            await _ToolExecutor().execute(tool=boom, run_ctx=run_ctx, raw_arguments={})
+            await executor.execute(tool=boom, run_ctx=run_ctx, raw_arguments={})
+        await _drain_executor(executor)
 
         items = _emitted_items(run_ctx.session)
         assert isinstance(items[0], ToolCallStarted)
@@ -1677,7 +1689,8 @@ class TestToolCallEvents:
         )
 
     @pytest.mark.asyncio
-    async def test_internal_tools_not_tracked(self):
+    async def test_internal_tools_tracked(self):
+        from livekit.agents.voice.events import ToolCallStarted, ToolCallUpdated
         from livekit.agents.voice.tool_executor import _ToolExecutor
 
         @function_tool(name="lk_agents_test_tool")
@@ -1685,9 +1698,14 @@ class TestToolCallEvents:
             """i"""
             return "ok"
 
+        executor = _ToolExecutor()
         run_ctx = _make_run_context(call_id="c4", name="lk_agents_test_tool")
-        await _ToolExecutor().execute(tool=internal_tool, run_ctx=run_ctx, raw_arguments={})
-        assert _emitted_items(run_ctx.session) == []
+        await executor.execute(tool=internal_tool, run_ctx=run_ctx, raw_arguments={})
+        await _drain_executor(executor)
+
+        items = _emitted_items(run_ctx.session)
+        assert isinstance(items[0], ToolCallStarted)
+        assert items[1] == ToolCallUpdated(id="c4", call_id="c4", message="ok", status="done")
 
     @pytest.mark.asyncio
     async def test_updates_and_deferred_result_with_reply_lifecycle(self):

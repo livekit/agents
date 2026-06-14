@@ -206,7 +206,6 @@ class TravelAgent(Agent):
                 f"This will be spoken aloud, so keep it conversational and brief — "
                 f"3 to 5 top picks, no more than 200 words. No bullet points or markdown.\n\n"
                 f"Search results:\n{source_text}"
-                f"Present the results in a written format, no markdown or bullet points."
             ),
         )
 
