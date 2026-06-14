@@ -51,6 +51,7 @@ from .audio_recognition import (
 )
 from .endpointing import create_endpointing
 from .events import (
+    AgentBackchannelOpportunityEvent,
     AgentFalseInterruptionEvent,
     AgentState,
     AgentStateChangedEvent,
@@ -2056,6 +2057,9 @@ class AgentActivity(RecognitionHooks):
     def on_eot_prediction(self, ev: EotPredictionEvent) -> None:
         if (host := self._session._session_host) is not None:
             host._on_eot_prediction(ev)
+
+    def on_agent_backchannel_opportunity(self, ev: AgentBackchannelOpportunityEvent) -> None:
+        self._session.emit("agent_backchannel_opportunity", ev)
 
     def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool:
         # IMPORTANT: This method is sync to avoid it being cancelled by the AudioRecognition

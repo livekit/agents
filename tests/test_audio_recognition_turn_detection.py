@@ -69,6 +69,9 @@ def _make_full_recognition_for_eou() -> AudioRecognition:
     stream_mock = MagicMock(spec=_StreamingTurnDetectorStream)
     stream_mock.supports_language = AsyncMock(return_value=True)
     stream_mock.unlikely_threshold = AsyncMock(return_value=0.5)
+    # backchannel disabled by default (server sent no thresholds); the
+    # backchannel-emit tests override this with a positive threshold.
+    stream_mock.backchannel_threshold = AsyncMock(return_value=None)
     # each call hands out a fresh pending future, mirroring the real
     # predict; tests install resolved/pending futures directly on
     # ar._turn_detector_prediction_fut to model cached/awaiting predictions
@@ -127,6 +130,7 @@ def _resolved_prediction(
     *,
     inference_duration: float | None = None,
     detection_delay: float | None = None,
+    backchannel_probability: float | None = None,
 ) -> tuple[asyncio.Future[TurnDetectionEvent], TurnDetectionEvent]:
     """A resolved prediction future, as if the transport already answered."""
     event = TurnDetectionEvent(
@@ -135,6 +139,7 @@ def _resolved_prediction(
         end_of_turn_probability=probability,
         inference_duration=inference_duration,
         detection_delay=detection_delay,
+        backchannel_probability=backchannel_probability,
     )
     fut: asyncio.Future[TurnDetectionEvent] = asyncio.Future()
     fut.set_result(event)
@@ -354,6 +359,86 @@ class TestEotPredictionDedup:
         ar.clear_user_turn()
 
         assert ar._last_emitted_prediction is None
+
+
+class TestBackchannelOpportunityEmit:
+    """``on_agent_backchannel_opportunity`` fires only when the backchannel
+    probability clears its threshold AND the turn is still continuing (the same
+    pause must not both backchannel and commit a full reply)."""
+
+    @staticmethod
+    async def _drive(ar: AudioRecognition, chat_ctx: MagicMock) -> None:
+        ar._run_eou_detection(chat_ctx, trigger="vad")
+        for _ in range(5):
+            await asyncio.sleep(0)
+        await asyncio.sleep(0.02)
+        if ar._end_of_turn_task is not None:
+            await aio.cancel_and_wait(ar._end_of_turn_task)
+
+    async def test_emits_when_above_threshold_and_turn_continues(self) -> None:
+        ar = _make_full_recognition_for_eou()
+        ar._turn_detector_stream.backchannel_threshold = AsyncMock(return_value=0.5)
+        ar._last_language = "en"
+        chat_ctx = _make_chat_ctx_stub()
+        # eot 0.2 < unlikely 0.5 → turn continues; backchannel 0.8 >= 0.5 → emit
+        ar._turn_detector_prediction_fut, _ = _resolved_prediction(0.2, backchannel_probability=0.8)
+
+        await self._drive(ar, chat_ctx)
+
+        ar._hooks.on_agent_backchannel_opportunity.assert_called_once()
+        ev = ar._hooks.on_agent_backchannel_opportunity.call_args.args[0]
+        assert ev.probability == pytest.approx(0.8)
+        assert ev.threshold == pytest.approx(0.5)
+        assert ev.language == "en"
+
+    async def test_no_emit_when_turn_ends(self) -> None:
+        ar = _make_full_recognition_for_eou()
+        ar._turn_detector_stream.backchannel_threshold = AsyncMock(return_value=0.5)
+        chat_ctx = _make_chat_ctx_stub()
+        # eot 0.9 >= unlikely 0.5 → turn ends; backchannel high but must NOT emit
+        ar._turn_detector_prediction_fut, _ = _resolved_prediction(0.9, backchannel_probability=0.8)
+
+        await self._drive(ar, chat_ctx)
+
+        ar._hooks.on_agent_backchannel_opportunity.assert_not_called()
+
+    async def test_no_emit_below_threshold(self) -> None:
+        ar = _make_full_recognition_for_eou()
+        ar._turn_detector_stream.backchannel_threshold = AsyncMock(return_value=0.7)
+        chat_ctx = _make_chat_ctx_stub()
+        # backchannel 0.4 < 0.7 → no emit (turn continues at eot 0.2)
+        ar._turn_detector_prediction_fut, _ = _resolved_prediction(0.2, backchannel_probability=0.4)
+
+        await self._drive(ar, chat_ctx)
+
+        ar._hooks.on_agent_backchannel_opportunity.assert_not_called()
+
+    async def test_no_emit_when_backchannel_disabled(self) -> None:
+        ar = _make_full_recognition_for_eou()
+        # default helper threshold is None (server sent no backchannel defaults)
+        chat_ctx = _make_chat_ctx_stub()
+        ar._turn_detector_prediction_fut, _ = _resolved_prediction(0.2, backchannel_probability=0.9)
+
+        await self._drive(ar, chat_ctx)
+
+        ar._hooks.on_agent_backchannel_opportunity.assert_not_called()
+
+    async def test_no_emit_for_text_detector(self) -> None:
+        """A text detector produces no streaming prediction event, so there is
+        no backchannel probability to act on."""
+        ar = _make_full_recognition_for_eou()
+        text_detector = MagicMock()  # not an _StreamingTurnDetector
+        text_detector.supports_language = AsyncMock(return_value=True)
+        text_detector.predict_end_of_turn = AsyncMock(return_value=0.2)
+        text_detector.unlikely_threshold = AsyncMock(return_value=0.5)
+        ar._turn_detector = text_detector
+        ar._turn_detector_stream = None
+        ar._audio_transcript = "hello there"
+        chat_ctx = _make_chat_ctx_stub()
+
+        await self._drive(ar, chat_ctx)
+
+        ar._hooks.on_agent_backchannel_opportunity.assert_not_called()
 
 
 class TestPredictionFutureLifecycle:

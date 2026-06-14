@@ -58,6 +58,11 @@ class ThresholdOptions:
         self._thresholds: dict[str, float] = {}
         self._default: float | None = None
 
+        # backchannel thresholds: server-provided only (the local mini model
+        # produces no backchannel probability), no overrides, no fallback.
+        self._bc_thresholds: dict[str, float] = {}
+        self._bc_default: float | None = None
+
         self._resolve()
 
     @property
@@ -80,6 +85,15 @@ class ThresholdOptions:
         lang_key = language.language if language else "en"
         return self._thresholds.get(lang_key, self.default_threshold)
 
+    def lookup_backchannel(self, language: LanguageCode | None) -> float | None:
+        """Backchannel threshold for a language, or ``None`` when backchannel is
+        disabled (no server thresholds provided, or a non-positive value)."""
+        if not self._bc_thresholds and not self._bc_default:
+            return None
+        lang_key = language.language if language else "en"
+        threshold = self._bc_thresholds.get(lang_key, self._bc_default)
+        return threshold if threshold and threshold > 0 else None
+
     def supports(self, language: LanguageCode | None) -> bool:
         pending = self._model == "turn-detector-v1" and self._server_thresholds is None
         return pending or self.lookup(language) is not None
@@ -90,7 +104,13 @@ class ThresholdOptions:
         self._overrides = _normalize_overrides(overrides)
         self._resolve()
 
-    def _update_defaults(self, server_thresholds: dict[str, float], server_default: float) -> None:
+    def _update_defaults(
+        self,
+        server_thresholds: dict[str, float],
+        server_default: float,
+        backchannel_thresholds: dict[str, float] | None = None,
+        backchannel_default: float = 0.0,
+    ) -> None:
         if not server_thresholds or server_default <= 0:
             raise APIError(
                 "turn detector session created without usable default thresholds",
@@ -102,6 +122,13 @@ class ThresholdOptions:
             for lang, value in server_thresholds.items()
         }
         self._server_default = round(server_default, 4)
+
+        # backchannel defaults are optional; an absent/empty map keeps backchannel disabled
+        self._bc_thresholds = {
+            LanguageCode(lang).language: round(value, 4)
+            for lang, value in (backchannel_thresholds or {}).items()
+        }
+        self._bc_default = round(backchannel_default, 4) if backchannel_default > 0 else None
 
         self._resolve()
 
@@ -121,6 +148,9 @@ class ThresholdOptions:
         self._model = "turn-detector-v1-mini"
         self._server_thresholds = dict(LOCAL_LANGUAGES)
         self._server_default = LOCAL_LANGUAGES["en"]
+        # the mini model produces no backchannel probability
+        self._bc_thresholds = {}
+        self._bc_default = None
         self._resolve()
 
         if rescaled is not None:

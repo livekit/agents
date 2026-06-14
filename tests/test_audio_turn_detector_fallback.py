@@ -408,6 +408,58 @@ class TestServerDefaults:
         await stream.aclose()
 
 
+SERVER_BACKCHANNEL_THRESHOLDS: dict[str, float] = {"en": 0.62, "ja": 0.7}
+SERVER_BACKCHANNEL_DEFAULT = 0.6
+
+
+class TestBackchannelThresholds:
+    """Backchannel thresholds: server-provided only, no overrides, no fallback."""
+
+    @staticmethod
+    def _cloud() -> ThresholdOptions:
+        opts = ThresholdOptions("turn-detector-v1")
+        opts._update_defaults(
+            dict(SERVER_THRESHOLDS),
+            SERVER_DEFAULT_THRESHOLD,
+            dict(SERVER_BACKCHANNEL_THRESHOLDS),
+            SERVER_BACKCHANNEL_DEFAULT,
+        )
+        return opts
+
+    def test_lookup_per_language_and_default(self) -> None:
+        opts = self._cloud()
+        assert opts.lookup_backchannel(LanguageCode("en")) == pytest.approx(
+            SERVER_BACKCHANNEL_THRESHOLDS["en"]
+        )
+        # absent language → catch-all backchannel default
+        assert opts.lookup_backchannel(LanguageCode("de")) == pytest.approx(
+            SERVER_BACKCHANNEL_DEFAULT
+        )
+        # None language defaults to "en"
+        assert opts.lookup_backchannel(None) == pytest.approx(SERVER_BACKCHANNEL_THRESHOLDS["en"])
+
+    def test_disabled_when_server_omits_backchannel(self) -> None:
+        opts = ThresholdOptions("turn-detector-v1")
+        opts._update_defaults(dict(SERVER_THRESHOLDS), SERVER_DEFAULT_THRESHOLD)
+        assert opts.lookup_backchannel(LanguageCode("en")) is None
+
+    def test_disabled_for_local_mini_model(self) -> None:
+        opts = ThresholdOptions("turn-detector-v1-mini")
+        assert opts.lookup_backchannel(LanguageCode("en")) is None
+
+    def test_non_positive_threshold_treated_as_disabled(self) -> None:
+        opts = ThresholdOptions("turn-detector-v1")
+        opts._update_defaults(dict(SERVER_THRESHOLDS), SERVER_DEFAULT_THRESHOLD, {"en": 0.0}, 0.6)
+        # en explicitly 0 → disabled for en, but the positive default still applies elsewhere
+        assert opts.lookup_backchannel(LanguageCode("en")) is None
+        assert opts.lookup_backchannel(LanguageCode("de")) == pytest.approx(0.6)
+
+    def test_cleared_on_local_fallback(self) -> None:
+        opts = self._cloud()
+        opts._to_local_fallback()
+        assert opts.lookup_backchannel(LanguageCode("en")) is None
+
+
 class TestOverrideWarning:
     def test_warning_on_construction_with_override(self, caplog: pytest.LogCaptureFixture) -> None:
         caplog.set_level(logging.WARNING, logger="livekit.agents")

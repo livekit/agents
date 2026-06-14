@@ -283,6 +283,7 @@ EventTypes = Literal[
     "user_input_transcribed",
     "conversation_item_added",
     "agent_false_interruption",
+    "agent_backchannel_opportunity",
     "overlapping_speech",
     "function_tools_executed",
     "metrics_collected",
@@ -329,6 +330,19 @@ class EotPredictionEvent(BaseModel):
     delay: float
     """End of user speech → prediction received latency (s), anchored on the
     VAD-backdated last_speaking_time."""
+    created_at: float = Field(default_factory=time.time)
+
+
+class AgentBackchannelOpportunityEvent(BaseModel):
+    """Emitted when the turn detector predicts a window in which the agent could
+    backchannel (a short acknowledgment such as "mm-hmm") while the user is still
+    holding the floor. The library does not speak; subscribe and call
+    ``session.say(...)`` to produce the backchannel phrase."""
+
+    type: Literal["agent_backchannel_opportunity"] = "agent_backchannel_opportunity"
+    probability: float
+    threshold: float
+    language: str | None = None
     created_at: float = Field(default_factory=time.time)
 
 
@@ -491,6 +505,7 @@ AgentEvent = Annotated[
     | UserStateChangedEvent
     | AgentStateChangedEvent
     | AgentFalseInterruptionEvent
+    | AgentBackchannelOpportunityEvent
     | MetricsCollectedEvent
     | SessionUsageUpdatedEvent
     | ConversationItemAddedEvent

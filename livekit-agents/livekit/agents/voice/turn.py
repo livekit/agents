@@ -28,6 +28,9 @@ class TurnDetectionEvent:
     """Latest input audio creation time -> prediction receive time."""
     inference_duration: float | None = None
     """Server-side model inference time."""
+    backchannel_probability: float | None = None
+    """How appropriate it is for the agent to backchannel at this pause.
+    ``None`` when the detector does not produce one (e.g. the local mini model)."""
 
 
 class _TurnDetector(Protocol):
@@ -60,6 +63,7 @@ class _StreamingTurnDetectorStream(Protocol):
     def is_fallback(self) -> bool: ...
 
     async def unlikely_threshold(self, language: LanguageCode | None) -> float | None: ...
+    async def backchannel_threshold(self, language: LanguageCode | None) -> float | None: ...
     async def supports_language(self, language: LanguageCode | None) -> bool: ...
 
     def predict(self) -> asyncio.Future[TurnDetectionEvent]: ...
