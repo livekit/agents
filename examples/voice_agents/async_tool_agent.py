@@ -14,18 +14,18 @@ except ImportError as e:
         "ddgs (duckduckgo search) is required for this example. Install it with: pip install ddgs"
     ) from e
 
-from async_task_ui import AsyncTaskUI
-
 from livekit.agents import (
     Agent,
     AgentServer,
     AgentSession,
     JobContext,
     RunContext,
+    ToolStatusUpdatedEvent,
     cli,
     inference,
     llm,
 )
+from livekit.agents.utils import aio
 from livekit.plugins import silero
 
 logger = logging.getLogger("async-travel-helper")
@@ -231,15 +231,26 @@ async def entrypoint(ctx: JobContext):
         turn_handling={"interruption": {"mode": "vad"}},
     )
 
-    agent = TravelAgent()
+    # stream tool status (calls, ctx.update progress, reply lifecycle) to the frontend
+    status_ch = aio.Chan[ToolStatusUpdatedEvent]()
 
-    # Mirror every async tool call (status + ctx.update timeline + reply lifecycle)
-    # to the custom frontend over RPC. This wraps the tools without changing them.
-    task_ui = AsyncTaskUI(room=ctx.room)
-    task_ui.instrument(agent)
-    task_ui.attach(session)
+    @session.on("tool_status_updated")
+    def _on_tool_status(ev: ToolStatusUpdatedEvent) -> None:
+        status_ch.send_nowait(ev)
 
-    await session.start(agent=agent, room=ctx.room)
+    async def _publish_status() -> None:
+        async for ev in status_ch:
+            await ctx.room.local_participant.publish_data(ev.model_dump_json(), topic="tool_status")
+
+    publish_task = asyncio.create_task(_publish_status())
+
+    async def _close_status() -> None:
+        status_ch.close()
+        await aio.cancel_and_wait(publish_task)
+
+    ctx.add_shutdown_callback(_close_status)
+
+    await session.start(agent=TravelAgent(), room=ctx.room)
 
 
 if __name__ == "__main__":
