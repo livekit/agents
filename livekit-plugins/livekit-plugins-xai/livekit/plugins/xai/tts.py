@@ -119,13 +119,22 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "xAI"
 
-    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
-        params = {
-            "voice": self._opts.voice,
-            "language": self._opts.language,
+    async def _connect_ws(
+        self, timeout: float, opts: _TTSOptions
+    ) -> aiohttp.ClientWebSocketResponse:
+        params: dict[str, str | int | float] = {
+            "voice": opts.voice,
+            "language": opts.language,
             "codec": "pcm",
             "sample_rate": SAMPLE_RATE,
         }
+        if is_given(opts.optimize_streaming_latency):
+            params["optimize_streaming_latency"] = opts.optimize_streaming_latency
+        if is_given(opts.speed):
+            params["speed"] = opts.speed
+        if is_given(opts.text_normalization):
+            params["text_normalization"] = str(opts.text_normalization).lower()
+
         url = f"{XAI_WEBSOCKET_URL}?{urlencode(params)}"
         try:
             ws = await asyncio.wait_for(
@@ -315,7 +324,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 else:
                     logger.warning("Unexpected xAI message %s", data)
 
-        ws = await self._tts._connect_ws(self._conn_options.timeout)
+        ws = await self._tts._connect_ws(self._conn_options.timeout, self._opts)
         tasks = [
             asyncio.create_task(_send_task(ws)),
             asyncio.create_task(_recv_task(ws)),
