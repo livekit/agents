@@ -326,34 +326,38 @@ class TestSessionHostEvents:
         await host.aclose()
 
     @pytest.mark.asyncio
-    async def test_tool_status_updated(self, transport: InMemoryTransport) -> None:
+    async def test_tool_execution_updated(self, transport: InMemoryTransport) -> None:
         from livekit.agents.llm import FunctionCall
         from livekit.agents.voice.events import (
+            ToolCallEnded,
             ToolCallStarted,
             ToolCallUpdated,
+            ToolExecutionUpdatedEvent,
             ToolReplyUpdated,
-            ToolStatusUpdatedEvent,
         )
 
         host = SessionHost(transport)
         await host.start()
 
-        host._on_tool_status_updated(
-            ToolStatusUpdatedEvent(
+        host._on_tool_execution_updated(
+            ToolExecutionUpdatedEvent(
                 update=ToolCallStarted(
                     function_call=FunctionCall(call_id="c1", name="my_tool", arguments="{}")
                 )
             )
         )
-        host._on_tool_status_updated(
-            ToolStatusUpdatedEvent(
-                update=ToolCallUpdated(
-                    id="c1_update_1", call_id="c1", message="working", status="running"
-                )
+        host._on_tool_execution_updated(
+            ToolExecutionUpdatedEvent(
+                update=ToolCallUpdated(id="c1_update_1", call_id="c1", message="working")
             )
         )
-        host._on_tool_status_updated(
-            ToolStatusUpdatedEvent(
+        host._on_tool_execution_updated(
+            ToolExecutionUpdatedEvent(
+                update=ToolCallEnded(id="c1_final", call_id="c1", message="result", status="done")
+            )
+        )
+        host._on_tool_execution_updated(
+            ToolExecutionUpdatedEvent(
                 update=ToolReplyUpdated(
                     update_ids=["c1_update_1", "c1_final"],
                     status="completed",
@@ -363,20 +367,26 @@ class TestSessionHostEvents:
         )
         await asyncio.sleep(0.1)
 
-        assert len(transport.sent) == 3
-        started = transport.sent[0].event.tool_status_updated
+        assert len(transport.sent) == 4
+        started = transport.sent[0].event.tool_execution_updated
         assert started.WhichOneof("update") == "started"
         assert started.started.function_call.call_id == "c1"
         assert started.started.function_call.name == "my_tool"
 
-        call_updated = transport.sent[1].event.tool_status_updated
+        call_updated = transport.sent[1].event.tool_execution_updated
         assert call_updated.WhichOneof("update") == "call_updated"
         assert call_updated.call_updated.id == "c1_update_1"
         assert call_updated.call_updated.call_id == "c1"
         assert call_updated.call_updated.message == "working"
-        assert call_updated.call_updated.status == agent_pb.TC_RUNNING
 
-        reply_updated = transport.sent[2].event.tool_status_updated
+        ended = transport.sent[2].event.tool_execution_updated
+        assert ended.WhichOneof("update") == "ended"
+        assert ended.ended.id == "c1_final"
+        assert ended.ended.call_id == "c1"
+        assert ended.ended.message == "result"
+        assert ended.ended.status == agent_pb.TC_DONE
+
+        reply_updated = transport.sent[3].event.tool_execution_updated
         assert reply_updated.WhichOneof("update") == "reply_updated"
         assert list(reply_updated.reply_updated.update_ids) == ["c1_update_1", "c1_final"]
         assert reply_updated.reply_updated.status == agent_pb.TR_COMPLETED

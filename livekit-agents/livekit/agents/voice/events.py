@@ -216,13 +216,12 @@ class RunContext(Generic[Userdata_T]):
         self._updates.append(pair)
 
         self._session.emit(
-            "tool_status_updated",
-            ToolStatusUpdatedEvent(
+            "tool_execution_updated",
+            ToolExecutionUpdatedEvent(
                 update=ToolCallUpdated(
                     id=pair[0].call_id,
                     call_id=self.function_call.call_id,
                     message=raw_message,
-                    status="running",
                 )
             ),
         )
@@ -303,7 +302,7 @@ EventTypes = Literal[
     "metrics_collected",
     "session_usage_updated",
     "speech_created",
-    "tool_status_updated",
+    "tool_execution_updated",
     "error",
     "close",
     "debug_message",
@@ -444,16 +443,25 @@ class ToolCallStarted(BaseModel):
 
 
 class ToolCallUpdated(BaseModel):
-    """A progress update (``status="running"``) or the single terminal entry
-    (``done`` / ``error`` / ``cancelled``) of a tool call."""
+    """A progress update emitted via ``ctx.update()`` while a tool call runs."""
 
     type: Literal["tool_call_updated"] = "tool_call_updated"
     id: str
-    """Entry id: ``call_id`` inline, ``{call_id}_update_N`` / ``{call_id}_final`` when deferred."""
+    """Entry id: ``call_id`` inline, ``{call_id}_update_N`` when deferred."""
+    call_id: str
+    message: str
+
+
+class ToolCallEnded(BaseModel):
+    """A tool call's single terminal entry."""
+
+    type: Literal["tool_call_ended"] = "tool_call_ended"
+    id: str
+    """Entry id: ``call_id`` inline, ``{call_id}_final`` when deferred."""
     call_id: str
     message: str | None = None
-    """Update, result, or error text; None when there is nothing to voice."""
-    status: Literal["running", "done", "error", "cancelled"]
+    """Result or error text; None when there is nothing to voice."""
+    status: Literal["done", "error", "cancelled"]
 
 
 class ToolReplyUpdated(BaseModel):
@@ -469,13 +477,13 @@ class ToolReplyUpdated(BaseModel):
     """Id of the reply speech; ``speech_created`` carries its handle."""
 
 
-class ToolStatusUpdatedEvent(BaseModel):
-    """One flat tool-lifecycle update. Discriminate on ``update.type``:
-    ``tool_call_started`` → ``tool_call_updated`` → ``tool_reply_updated``."""
+class ToolExecutionUpdatedEvent(BaseModel):
+    """One flat tool-lifecycle update. Discriminate on ``update.type``: ``tool_call_started``
+    → ``tool_call_updated`` → ``tool_call_ended`` → ``tool_reply_updated``."""
 
-    type: Literal["tool_status_updated"] = "tool_status_updated"
+    type: Literal["tool_execution_updated"] = "tool_execution_updated"
     update: Annotated[
-        ToolCallStarted | ToolCallUpdated | ToolReplyUpdated,
+        ToolCallStarted | ToolCallUpdated | ToolCallEnded | ToolReplyUpdated,
         Field(discriminator="type"),
     ]
     created_at: float = Field(default_factory=time.time)
@@ -545,7 +553,7 @@ AgentEvent = Annotated[
     | ConversationItemAddedEvent
     | FunctionToolsExecutedEvent
     | SpeechCreatedEvent
-    | ToolStatusUpdatedEvent
+    | ToolExecutionUpdatedEvent
     | ErrorEvent
     | CloseEvent
     | OverlappingSpeechEvent,

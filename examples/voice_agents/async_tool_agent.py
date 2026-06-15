@@ -20,7 +20,7 @@ from livekit.agents import (
     AgentSession,
     JobContext,
     RunContext,
-    ToolStatusUpdatedEvent,
+    ToolExecutionUpdatedEvent,
     cli,
     inference,
     llm,
@@ -230,11 +230,11 @@ async def entrypoint(ctx: JobContext):
         turn_handling={"interruption": {"mode": "vad"}},
     )
 
-    # stream tool status (calls, ctx.update progress, reply lifecycle) to the frontend
-    status_ch = aio.Chan[ToolStatusUpdatedEvent]()
+    # stream tool execution (calls, ctx.update progress, reply lifecycle) to the frontend
+    status_ch = aio.Chan[ToolExecutionUpdatedEvent]()
 
-    @session.on("tool_status_updated")
-    def _on_tool_status(ev: ToolStatusUpdatedEvent) -> None:
+    @session.on("tool_execution_updated")
+    def _on_tool_status(ev: ToolExecutionUpdatedEvent) -> None:
         status_ch.send_nowait(ev)
 
     async def _publish_status() -> None:

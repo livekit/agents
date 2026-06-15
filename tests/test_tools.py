@@ -1511,14 +1511,14 @@ class TestAgentSessionWaitForIdle:
 
 
 def _emitted_items(session: Any) -> list[Any]:
-    """Updates carried by tool_status_updated events emitted on a mocked session."""
-    from livekit.agents.voice.events import ToolStatusUpdatedEvent
+    """Updates carried by tool_execution_updated events emitted on a mocked session."""
+    from livekit.agents.voice.events import ToolExecutionUpdatedEvent
 
     items = []
     for call in session.emit.call_args_list:
         name, ev = call.args
-        if name == "tool_status_updated":
-            assert isinstance(ev, ToolStatusUpdatedEvent)
+        if name == "tool_execution_updated":
+            assert isinstance(ev, ToolExecutionUpdatedEvent)
             items.append(ev.update)
     return items
 
@@ -1583,13 +1583,13 @@ def _make_run_context_with_session(session: Any, call_id: str, name: str):
 
 
 class TestToolCallEvents:
-    """tool_status_updated emission across the executor lifecycle."""
+    """tool_execution_updated emission across the executor lifecycle."""
 
     pytestmark = pytest.mark.usefixtures("_clear_running_tasks")
 
     @pytest.mark.asyncio
     async def test_sync_tool_started_then_done(self):
-        from livekit.agents.voice.events import ToolCallStarted, ToolCallUpdated
+        from livekit.agents.voice.events import ToolCallEnded, ToolCallStarted
         from livekit.agents.voice.tool_executor import _ToolExecutor
 
         @function_tool
@@ -1606,11 +1606,11 @@ class TestToolCallEvents:
         items = _emitted_items(run_ctx.session)
         assert isinstance(items[0], ToolCallStarted)
         assert items[0].function_call.call_id == "c1"
-        assert items[1] == ToolCallUpdated(id="c1", call_id="c1", message="ok", status="done")
+        assert items[1] == ToolCallEnded(id="c1", call_id="c1", message="ok", status="done")
 
     @pytest.mark.asyncio
     async def test_error_before_update_uses_plain_call_id(self):
-        from livekit.agents.voice.events import ToolCallStarted, ToolCallUpdated
+        from livekit.agents.voice.events import ToolCallEnded, ToolCallStarted
         from livekit.agents.voice.tool_executor import _ToolExecutor
 
         @function_tool
@@ -1626,13 +1626,13 @@ class TestToolCallEvents:
 
         items = _emitted_items(run_ctx.session)
         assert isinstance(items[0], ToolCallStarted)
-        assert items[1] == ToolCallUpdated(id="c2", call_id="c2", message="nope", status="error")
+        assert items[1] == ToolCallEnded(id="c2", call_id="c2", message="nope", status="error")
 
     @pytest.mark.asyncio
     async def test_cancelled_tool(self):
         import asyncio as _asyncio
 
-        from livekit.agents.voice.events import ToolCallUpdated
+        from livekit.agents.voice.events import ToolCallEnded
         from livekit.agents.voice.tool_executor import _ToolExecutor
 
         running = _asyncio.Event()
@@ -1654,7 +1654,7 @@ class TestToolCallEvents:
         assert await exec_task is None
 
         items = _emitted_items(run_ctx.session)
-        assert items[-1] == ToolCallUpdated(id="c3", call_id="c3", message=None, status="cancelled")
+        assert items[-1] == ToolCallEnded(id="c3", call_id="c3", message=None, status="cancelled")
 
     @pytest.mark.asyncio
     async def test_cancel_before_first_step_releases_dispatch(self):
@@ -1662,7 +1662,7 @@ class TestToolCallEvents:
         execute() and report the cancellation (the handler never gets to run)."""
         import asyncio as _asyncio
 
-        from livekit.agents.voice.events import ToolCallUpdated
+        from livekit.agents.voice.events import ToolCallEnded
         from livekit.agents.voice.tool_executor import _ToolExecutor
 
         @function_tool(flags=ToolFlag.CANCELLABLE)
@@ -1684,13 +1684,11 @@ class TestToolCallEvents:
         assert await _asyncio.wait_for(exec_task, timeout=5) is None
 
         items = _emitted_items(run_ctx.session)
-        assert items[-1] == ToolCallUpdated(
-            id="c3b", call_id="c3b", message=None, status="cancelled"
-        )
+        assert items[-1] == ToolCallEnded(id="c3b", call_id="c3b", message=None, status="cancelled")
 
     @pytest.mark.asyncio
     async def test_internal_tools_tracked(self):
-        from livekit.agents.voice.events import ToolCallStarted, ToolCallUpdated
+        from livekit.agents.voice.events import ToolCallEnded, ToolCallStarted
         from livekit.agents.voice.tool_executor import _ToolExecutor
 
         @function_tool(name="lk_agents_test_tool")
@@ -1705,12 +1703,13 @@ class TestToolCallEvents:
 
         items = _emitted_items(run_ctx.session)
         assert isinstance(items[0], ToolCallStarted)
-        assert items[1] == ToolCallUpdated(id="c4", call_id="c4", message="ok", status="done")
+        assert items[1] == ToolCallEnded(id="c4", call_id="c4", message="ok", status="done")
 
     @pytest.mark.asyncio
     async def test_updates_and_deferred_result_with_reply_lifecycle(self):
         from livekit.agents.voice.events import (
             RunContext,
+            ToolCallEnded,
             ToolCallStarted,
             ToolCallUpdated,
             ToolReplyUpdated,
@@ -1753,14 +1752,10 @@ class TestToolCallEvents:
         items = _emitted_items(session)
         assert isinstance(items[0], ToolCallStarted)
         # first update is inline (plain call_id), the second is buffered
-        assert items[1] == ToolCallUpdated(
-            id="c5", call_id="c5", message="step one", status="running"
-        )
-        assert items[2] == ToolCallUpdated(
-            id="c5_update_1", call_id="c5", message="step two", status="running"
-        )
+        assert items[1] == ToolCallUpdated(id="c5", call_id="c5", message="step one")
+        assert items[2] == ToolCallUpdated(id="c5_update_1", call_id="c5", message="step two")
         # the final return is deferred through the coalescer
-        assert items[3] == ToolCallUpdated(
+        assert items[3] == ToolCallEnded(
             id="c5_final", call_id="c5", message="all done", status="done"
         )
         # the deferred reply covering the buffered ids was scheduled
@@ -1811,7 +1806,7 @@ class TestToolCallEvents:
 
     @pytest.mark.asyncio
     async def test_error_after_update_is_deferred_with_final_id(self):
-        from livekit.agents.voice.events import RunContext, ToolCallUpdated
+        from livekit.agents.voice.events import RunContext, ToolCallEnded
         from livekit.agents.voice.tool_executor import _ToolExecutor
 
         @function_tool
@@ -1833,10 +1828,8 @@ class TestToolCallEvents:
         await executor._reply_task
 
         items = _emitted_items(session)
-        terminal = next(
-            i for i in items if isinstance(i, ToolCallUpdated) and i.status not in ("running",)
-        )
-        assert terminal == ToolCallUpdated(
+        terminal = next(i for i in items if isinstance(i, ToolCallEnded))
+        assert terminal == ToolCallEnded(
             id="c7_final", call_id="c7", message="late failure", status="error"
         )
 

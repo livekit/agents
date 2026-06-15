@@ -41,10 +41,11 @@ from .events import (
     ErrorEvent,
     FunctionToolsExecutedEvent,
     SessionUsageUpdatedEvent,
+    ToolCallEnded,
     ToolCallStarted,
     ToolCallUpdated,
+    ToolExecutionUpdatedEvent,
     ToolReplyUpdated,
-    ToolStatusUpdatedEvent,
     UserInputTranscribedEvent,
     UserState,
     UserStateChangedEvent,
@@ -254,7 +255,6 @@ _METRICS_FIELDS = (
 )
 
 _TOOL_CALL_STATUS_MAP: dict[str, agent_pb.ToolCallStatus] = {
-    "running": agent_pb.TC_RUNNING,
     "done": agent_pb.TC_DONE,
     "error": agent_pb.TC_ERROR,
     "cancelled": agent_pb.TC_CANCELLED,
@@ -388,7 +388,7 @@ class SessionHost:
             session.on("conversation_item_added", self._on_conversation_item_added)
             session.on("user_input_transcribed", self._on_user_input_transcribed)
             session.on("function_tools_executed", self._on_function_tools_executed)
-            session.on("tool_status_updated", self._on_tool_status_updated)
+            session.on("tool_execution_updated", self._on_tool_execution_updated)
             session.on("session_usage_updated", self._on_session_usage_updated)
             session.on("overlapping_speech", self._on_overlapping_speech)
             session.on("error", self._on_error)
@@ -413,7 +413,7 @@ class SessionHost:
             self._session.off("conversation_item_added", self._on_conversation_item_added)
             self._session.off("user_input_transcribed", self._on_user_input_transcribed)
             self._session.off("function_tools_executed", self._on_function_tools_executed)
-            self._session.off("tool_status_updated", self._on_tool_status_updated)
+            self._session.off("tool_execution_updated", self._on_tool_execution_updated)
             self._session.off("session_usage_updated", self._on_session_usage_updated)
             self._session.off("overlapping_speech", self._on_overlapping_speech)
             self._session.off("error", self._on_error)
@@ -533,9 +533,9 @@ class SessionHost:
             )
         )
 
-    def _on_tool_status_updated(self, event: ToolStatusUpdatedEvent) -> None:
-        pb = agent_pb.AgentSessionEvent.ToolStatusUpdated
-        updated: agent_pb.AgentSessionEvent.ToolStatusUpdated
+    def _on_tool_execution_updated(self, event: ToolExecutionUpdatedEvent) -> None:
+        pb = agent_pb.AgentSessionEvent.ToolExecutionUpdated
+        updated: agent_pb.AgentSessionEvent.ToolExecutionUpdated
         if isinstance(event.update, ToolCallStarted):
             fc = event.update.function_call
             updated = pb(
@@ -549,14 +549,22 @@ class SessionHost:
                 )
             )
         elif isinstance(event.update, ToolCallUpdated):
-            call_updated = pb.CallUpdated(
+            updated = pb(
+                call_updated=pb.CallUpdated(
+                    id=event.update.id,
+                    call_id=event.update.call_id,
+                    message=event.update.message,
+                )
+            )
+        elif isinstance(event.update, ToolCallEnded):
+            ended = pb.Ended(
                 id=event.update.id,
                 call_id=event.update.call_id,
                 status=_TOOL_CALL_STATUS_MAP[event.update.status],
             )
             if event.update.message is not None:
-                call_updated.message = event.update.message
-            updated = pb(call_updated=call_updated)
+                ended.message = event.update.message
+            updated = pb(ended=ended)
         elif isinstance(event.update, ToolReplyUpdated):
             updated = pb(
                 reply_updated=pb.ReplyUpdated(
@@ -569,7 +577,7 @@ class SessionHost:
             return
 
         self._send_event(
-            agent_pb.AgentSessionEvent(tool_status_updated=updated),
+            agent_pb.AgentSessionEvent(tool_execution_updated=updated),
             created_at=event.created_at,
         )
 
@@ -963,7 +971,7 @@ RemoteSessionEventTypes = Literal[
     "conversation_item_added",
     "user_input_transcribed",
     "function_tools_executed",
-    "tool_status_updated",
+    "tool_execution_updated",
     "session_usage_updated",
     "error",
 ]

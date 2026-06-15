@@ -27,10 +27,10 @@ from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from .events import (
     RunContext,
+    ToolCallEnded,
     ToolCallStarted,
-    ToolCallUpdated,
+    ToolExecutionUpdatedEvent,
     ToolReplyUpdated,
-    ToolStatusUpdatedEvent,
 )
 
 if TYPE_CHECKING:
@@ -368,8 +368,8 @@ class _ToolExecutor:
         _RunningTasks.setdefault(session, {})[call_id] = running_task
 
         session.emit(
-            "tool_status_updated",
-            ToolStatusUpdatedEvent(update=ToolCallStarted(function_call=run_ctx.function_call)),
+            "tool_execution_updated",
+            ToolExecutionUpdatedEvent(update=ToolCallStarted(function_call=run_ctx.function_call)),
         )
 
         def _on_done(task: asyncio.Task[Any]) -> None:
@@ -404,9 +404,9 @@ class _ToolExecutor:
 
             entry_id = call_id + "_final" if run_ctx._updates else call_id
             session.emit(
-                "tool_status_updated",
-                ToolStatusUpdatedEvent(
-                    update=ToolCallUpdated(
+                "tool_execution_updated",
+                ToolExecutionUpdatedEvent(
+                    update=ToolCallEnded(
                         id=entry_id, call_id=call_id, message=message, status=status
                     )
                 ),
@@ -545,8 +545,8 @@ class _ToolExecutor:
             chat_ctx=chat_ctx,
         )
         session.emit(
-            "tool_status_updated",
-            ToolStatusUpdatedEvent(
+            "tool_execution_updated",
+            ToolExecutionUpdatedEvent(
                 update=ToolReplyUpdated(
                     update_ids=call_ids, status="scheduled", speech_id=speech.id
                 )
@@ -583,8 +583,8 @@ class _ToolExecutor:
                 # TODO(long): reschedule interrupted replies?
 
             session.emit(
-                "tool_status_updated",
-                ToolStatusUpdatedEvent(
+                "tool_execution_updated",
+                ToolExecutionUpdatedEvent(
                     update=ToolReplyUpdated(
                         update_ids=call_ids, status=reply_status, speech_id=speech.id
                     )
