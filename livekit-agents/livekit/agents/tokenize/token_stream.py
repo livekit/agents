@@ -73,13 +73,13 @@ def _xml_wrap_tokenizer(
     the original text, and merges sentences with unclosed or tag-only content.
     """
 
-    def _wrapped(text: str) -> list[tuple[str, int, int]]:
+    def _wrapped(text: str) -> list[str] | list[tuple[str, int, int]]:
         try:
             return _wrapped_impl(text)
         except Exception:
             return [(text, 0, len(text))] if text.strip() else []
 
-    def _wrapped_impl(text: str) -> list[tuple[str, int, int]]:
+    def _wrapped_impl(text: str) -> list[str] | list[tuple[str, int, int]]:
         tag_spans = [(m.start(), m.end()) for m in _XML_TAG_RE.finditer(text)]
         if not tag_spans:
             return tokenize_fnc(text)

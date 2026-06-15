@@ -625,7 +625,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._tts: TTS = tts
 
         self._opts = replace(tts._opts)
-        # Snapshot whether expressiveness is active now, while the framework holds it
+        # Snapshot whether expressive is active now, while the framework holds it
         # fixed for this synthesis (set synchronously before stream()). Reading it
         # lazily in _run would race with the next turn/session mutating the shared
         # TTS instance.

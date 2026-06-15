@@ -11,9 +11,8 @@ from livekit.agents import (
     JobContext,
     cli,
     inference,
-    tokenize,
 )
-from livekit.agents.voice import CONVERSATIONAL_EXPRESSIVENESS_PRESET
+from livekit.agents.voice import CONVERSATIONAL_EXPRESSIVE_PRESET
 from livekit.plugins import silero
 from livekit.rtc import RpcInvocationData
 
@@ -79,14 +78,9 @@ async def entrypoint(ctx: JobContext) -> None:
             model=DEFAULT_TTS,
             voice="Sarah",
             extra_kwargs={"delivery_mode": "CREATIVE"},
-            # Batch sentences up to 900 chars per request — as large as we can go
-            # while staying under Inworld's 1000-char send_text limit (the server
-            # auto-flushes past 1000). All chunks share one session/context, so
-            # prosody stays continuous across the turn.
-            tokenizer=tokenize.blingfire.SentenceTokenizer(max_token_len=900),
         ),
         vad=silero.VAD.load(),
-        expressiveness=CONVERSATIONAL_EXPRESSIVENESS_PRESET,
+        expressive=CONVERSATIONAL_EXPRESSIVE_PRESET,
     )
 
     def parse_value(payload: str, fallback: str) -> str:

@@ -21,7 +21,7 @@ from livekit.agents import (
 )
 from livekit.agents.beta.workflows import GetEmailTask, TaskGroup
 from livekit.agents.llm import function_tool
-from livekit.agents.voice import CONVERSATIONAL_EXPRESSIVENESS_PRESET
+from livekit.agents.voice import CONVERSATIONAL_EXPRESSIVE_PRESET
 from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
@@ -357,7 +357,7 @@ async def entrypoint(ctx: JobContext):
         tts=inference.TTS("inworld/inworld-tts-2", voice="Nate"),
         vad=silero.VAD.load(),
         turn_detection=MultilingualModel(),
-        expressiveness=CONVERSATIONAL_EXPRESSIVENESS_PRESET,
+        expressive=CONVERSATIONAL_EXPRESSIVE_PRESET,
         preemptive_generation=True,
     )
 

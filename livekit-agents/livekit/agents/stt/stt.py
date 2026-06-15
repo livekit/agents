@@ -299,7 +299,7 @@ class SpeakerContext(Protocol):
     """Protocol for STT context models that can generate LLM instructions.
 
     STT plugins that provide speaker metadata should implement this protocol
-    on their context model so the expressiveness system can auto-inject
+    on their context model so the expressive system can auto-inject
     speaker context into the LLM.
     """
 

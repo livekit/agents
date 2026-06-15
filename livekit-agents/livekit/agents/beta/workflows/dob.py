@@ -71,6 +71,7 @@ class GetDOBTask(AgentTask[GetDOBResult]):
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         require_confirmation: NotGivenOr[bool] = NOT_GIVEN,
+        require_explicit_ask: bool = False,
     ) -> None:
         time_instructions = (
             ""
@@ -84,6 +85,12 @@ class GetDOBTask(AgentTask[GetDOBResult]):
             "Call `confirm_dob` after the user confirmed the date of birth is correct."
         )
         extra = extra_instructions if extra_instructions else ""
+
+        self._include_time = include_time
+        self._require_confirmation = require_confirmation
+        self._require_explicit_ask = require_explicit_ask
+        self._current_dob: date | None = None
+        self._current_time: time | None = None
 
         super().__init__(
             instructions=Instructions(
@@ -106,18 +113,13 @@ class GetDOBTask(AgentTask[GetDOBResult]):
             ),
             chat_ctx=chat_ctx,
             turn_detection=turn_detection,
-            tools=tools or [],
+            tools=[*(tools or []), self._build_update_dob_tool()],
             stt=stt,
             vad=vad,
             llm=llm,
             tts=tts,
             allow_interruptions=allow_interruptions,
         )
-
-        self._include_time = include_time
-        self._require_confirmation = require_confirmation
-        self._current_dob: date | None = None
-        self._current_time: time | None = None
 
         if include_time:
             self._tools.append(self._build_update_time_tool())
@@ -128,21 +130,27 @@ class GetDOBTask(AgentTask[GetDOBResult]):
             prompt = "Ask the user to provide their date of birth and, if they know it, their time of birth."
         self.session.generate_reply(instructions=prompt)
 
-    @function_tool
-    async def update_dob(
-        self,
-        year: int,
-        month: int,
-        day: int,
-        ctx: RunContext,
-    ) -> str | None:
-        """Update the date of birth provided by the user. Given a spoken month and year (e.g., 'July 2030'), return its numerical representation (7/2030).
+    def _build_update_dob_tool(self) -> llm.FunctionTool:
+        # Built dynamically so we can apply IGNORE_ON_ENTER per-instance
+        # based on require_explicit_ask.
+        flags = ToolFlag.IGNORE_ON_ENTER if self._require_explicit_ask else ToolFlag.NONE
 
-        Args:
-            year: The birth year (e.g., 1990)
-            month: The birth month (1-12)
-            day: The birth day (1-31)
-        """
+        @function_tool(flags=flags)
+        async def update_dob(year: int, month: int, day: int, ctx: RunContext) -> str | None:
+            """Update the date of birth provided by the user. Given a spoken month and year (e.g., 'July 2030'), return its numerical representation (7/2030).
+
+            Args:
+                year: The birth year (e.g., 1990)
+                month: The birth month (1-12)
+                day: The birth day (1-31)
+            """
+            return await self._update_dob_impl(year, month, day, ctx)
+
+        return update_dob
+
+    async def _update_dob_impl(
+        self, year: int, month: int, day: int, ctx: RunContext
+    ) -> str | None:
         try:
             dob = date(year, month, day)
         except ValueError as e:

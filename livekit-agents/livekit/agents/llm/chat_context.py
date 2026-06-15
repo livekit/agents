@@ -109,7 +109,9 @@ class Instructions:
             }
             audio_kw: dict[str, object] = {
                 # an explicit "" removes the section; only None falls back to common
-                k: (v.audio if v.audio is not None else str(v)) if isinstance(v, Instructions) else v
+                k: (v.audio if v.audio is not None else str(v))
+                if isinstance(v, Instructions)
+                else v
                 for k, v in kwargs.items()
             }
             text_kw: dict[str, object] = {
@@ -281,7 +283,7 @@ class MetricsReport(TypedDict, total=False):
 
 
 class ExpressiveContent(BaseModel):
-    """An assistant message's text with its TTS expressiveness markup intact.
+    """An assistant message's text with its TTS expressive markup intact.
 
     ``ChatMessage.content`` always holds the clean, tag-free transcript text; this
     holds the marked-up version (e.g. ``<expression value="..."/>`` tags) plus the
@@ -302,9 +304,9 @@ class ChatMessage(BaseModel):
     role: ChatRole
     content: list[ChatContent]
     expressive_content: ExpressiveContent | None = None
-    """The assistant text with TTS expressiveness markup intact (see
+    """The assistant text with TTS expressive markup intact (see
     :class:`ExpressiveContent`). Set only on assistant messages generated while
-    expressiveness was enabled and the reply actually contained markup; ``None``
+    expressive was enabled and the reply actually contained markup; ``None``
     otherwise (including interrupted turns). ``content`` always holds the clean text."""
     interrupted: bool = False
     transcript_confidence: float | None = None

@@ -1,7 +1,7 @@
 """Regression tests: sentence tokenizers must handle XML markup correctly.
 
 Covers blingfire sentence tokenizer (batch + streaming) with TTS markup tags
-used in expressiveness mode (Cartesia, ElevenLabs, Inworld).
+used in expressive mode (Cartesia, ElevenLabs, Inworld).
 """
 
 from __future__ import annotations

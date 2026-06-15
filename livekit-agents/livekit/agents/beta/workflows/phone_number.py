@@ -72,11 +72,16 @@ class GetPhoneNumberTask(AgentTask[GetPhoneNumberResult]):
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         require_confirmation: NotGivenOr[bool] = NOT_GIVEN,
+        require_explicit_ask: bool = False,
     ) -> None:
         confirmation_instructions = (
             "Call `confirm_phone_number` after the user confirmed the phone number is correct."
         )
         extra = extra_instructions if extra_instructions else ""
+
+        self._current_phone_number = ""
+        self._require_confirmation = require_confirmation
+        self._require_explicit_ask = require_explicit_ask
 
         super().__init__(
             instructions=Instructions(
@@ -97,7 +102,7 @@ class GetPhoneNumberTask(AgentTask[GetPhoneNumberResult]):
             ),
             chat_ctx=chat_ctx,
             turn_detection=turn_detection,
-            tools=tools or [],
+            tools=[*(tools or []), self._build_update_phone_number_tool()],
             stt=stt,
             vad=vad,
             llm=llm,
@@ -105,19 +110,26 @@ class GetPhoneNumberTask(AgentTask[GetPhoneNumberResult]):
             allow_interruptions=allow_interruptions,
         )
 
-        self._current_phone_number = ""
-        self._require_confirmation = require_confirmation
-
     async def on_enter(self) -> None:
         self.session.generate_reply(instructions="Ask the user to provide their phone number.")
 
-    @function_tool()
-    async def update_phone_number(self, phone_number: str, ctx: RunContext) -> str | None:
-        """Update the phone number provided by the user.
+    def _build_update_phone_number_tool(self) -> llm.FunctionTool:
+        # Built dynamically so we can apply IGNORE_ON_ENTER per-instance
+        # based on require_explicit_ask.
+        flags = ToolFlag.IGNORE_ON_ENTER if self._require_explicit_ask else ToolFlag.NONE
 
-        Args:
-            phone_number: The phone number provided by the user, digits only with optional leading +
-        """
+        @function_tool(flags=flags)
+        async def update_phone_number(phone_number: str, ctx: RunContext) -> str | None:
+            """Update the phone number provided by the user.
+
+            Args:
+                phone_number: The phone number provided by the user, digits only with optional leading +
+            """
+            return await self._update_phone_number_impl(phone_number, ctx)
+
+        return update_phone_number
+
+    async def _update_phone_number_impl(self, phone_number: str, ctx: RunContext) -> str | None:
         cleaned = re.sub(r"[\s\-().]+", "", phone_number.strip())
 
         if not re.match(PHONE_REGEX, cleaned):

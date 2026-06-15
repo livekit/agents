@@ -64,7 +64,7 @@ class WorkflowInstructions(Instructions):
         persona: NotGivenOr[Instructions | str] = NOT_GIVEN,
         extra: Instructions | str = "",
     ) -> None:
-        super().__init__(audio, text=text)
+        super().__init__(audio=audio, text=text)
         self.persona: NotGivenOr[Instructions | str] = persona
         self.extra: Instructions | str = extra
 

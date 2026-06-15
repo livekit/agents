@@ -69,7 +69,7 @@ class TTS(
     Generic[TEvent],
 ):
     class Markup:
-        """Declares TTS markup capabilities for the expressiveness pipeline.
+        """Declares TTS markup capabilities for the expressive pipeline.
 
         Plugins override this inner class to declare what markup tags the TTS supports
         and how to convert marked-up text back to plain text.
@@ -92,7 +92,7 @@ class TTS(
             """Return instructions for the LLM describing available markup tags.
 
             The framework injects this into the LLM system prompt when
-            ``expressiveness=True``.  Returns ``None`` if this TTS has no markup support.
+            ``expressive=True``.  Returns ``None`` if this TTS has no markup support.
             """
             from ._provider_format import llm_instructions
 
@@ -161,7 +161,7 @@ class TTS(
         self._num_channels = num_channels
         self._label = f"{type(self).__module__}.{type(self).__name__}"
         self._markup = self.Markup(self)
-        # Whether expressiveness is active for the current turn, set by the framework
+        # Whether expressive is active for the current turn, set by the framework
         # before each synthesis. TTS implementations that tokenize their own input
         # read this to batch into larger chunks (continuous prosody); False (the
         # default) means per-sentence chunking. See `_set_expressive`.
@@ -173,7 +173,7 @@ class TTS(
         return self._markup
 
     def _set_expressive(self, enabled: bool) -> None:
-        """Framework-internal: mark whether expressiveness is active for this turn.
+        """Framework-internal: mark whether expressive is active for this turn.
 
         Called by the voice pipeline before each synthesis. TTS implementations widen
         their input chunking when enabled; a no-op for TTS that don't tokenize their

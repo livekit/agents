@@ -32,7 +32,7 @@ from livekit.agents.beta.workflows import (
     WarmTransferTask,
 )
 from livekit.agents.llm import ToolError, function_tool
-from livekit.agents.voice import HEALTHCARE_EXPRESSIVENESS_PRESET
+from livekit.agents.voice import HEALTHCARE_EXPRESSIVE_PRESET
 from livekit.plugins import silero
 
 logger = logging.getLogger("HealthcareAgent")
@@ -756,7 +756,7 @@ async def entrypoint(ctx: JobContext):
         llm=inference.LLM("openai/gpt-5.5"),
         tts=inference.TTS("inworld/inworld-tts-2", voice="Luna"),
         vad=silero.VAD.load(),
-        expressiveness=HEALTHCARE_EXPRESSIVENESS_PRESET,
+        expressive=HEALTHCARE_EXPRESSIVE_PRESET,
         preemptive_generation=True,
     )
 

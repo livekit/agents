@@ -38,7 +38,7 @@ from livekit.agents.evals import (
     task_completion_judge,
     tool_use_judge,
 )
-from livekit.agents.voice import CUSTOMER_SERVICE_EXPRESSIVENESS_PRESET
+from livekit.agents.voice import CUSTOMER_SERVICE_EXPRESSIVE_PRESET
 from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
@@ -294,7 +294,7 @@ async def frontdesk_agent(ctx: JobContext):
         stt=inference.STT("deepgram/nova-3"),
         llm=inference.LLM("openai/gpt-5.5"),
         tts=inference.TTS("inworld/inworld-tts-2", voice="Nadia"),
-        expressiveness=CUSTOMER_SERVICE_EXPRESSIVENESS_PRESET,
+        expressive=CUSTOMER_SERVICE_EXPRESSIVE_PRESET,
         turn_detection=MultilingualModel(),
         vad=silero.VAD.load(),
         max_tool_steps=1,

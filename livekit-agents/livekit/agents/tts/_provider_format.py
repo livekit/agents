@@ -27,7 +27,7 @@ from .markup_utils import (
 
 if TYPE_CHECKING:
     from .. import tokenize
-    from ..voice.agent_session import ExpressivenessOptions
+    from ..voice.agent_session import ExpressiveOptions
 
 _CARTESIA_TAGS = ["emotion", "speed", "volume", "break", "spell"]
 
@@ -161,13 +161,13 @@ Examples:
   <expression value="sing in a playful, breathy whisper"/> La la la, here we go, welcome to the show!"""
 
 
-# --- Inworld-specific expressiveness presets ---
+# --- Inworld-specific expressive presets ---
 # These bundle Inworld tag instructions + domain-specific delivery guidelines.
-# Pass any of them to `AgentSession(expressiveness=...)` when using Inworld TTS.
+# Pass any of them to `AgentSession(expressive=...)` when using Inworld TTS.
 # They do NOT use the {tts.markup.llm_instructions} placeholder — the Inworld
 # tag reference is inlined directly, so the prompt is self-contained.
 
-CUSTOMER_SERVICE_EXPRESSIVENESS_PRESET: "ExpressivenessOptions" = {
+CUSTOMER_SERVICE_EXPRESSIVE_PRESET: ExpressiveOptions = {
     "tts_instructions_template": Instructions(
         "Speak like a warm, capable support agent who genuinely wants to help — present, "
         "attentive, and confident, never robotic or scripted. Lead with empathy, then resolve. "
@@ -222,7 +222,7 @@ CUSTOMER_SERVICE_EXPRESSIVENESS_PRESET: "ExpressivenessOptions" = {
     ),
 }
 
-HEALTHCARE_EXPRESSIVENESS_PRESET: "ExpressivenessOptions" = {
+HEALTHCARE_EXPRESSIVE_PRESET: ExpressiveOptions = {
     "tts_instructions_template": Instructions(
         "Speak like a calm, caring clinician — warm, steady, and unhurried, never rushed or "
         "clinically cold. Your job is to make the patient feel safe, understood, and clearly "
@@ -276,7 +276,7 @@ HEALTHCARE_EXPRESSIVENESS_PRESET: "ExpressivenessOptions" = {
     ),
 }
 
-CONVERSATIONAL_EXPRESSIVENESS_PRESET: "ExpressivenessOptions" = {
+CONVERSATIONAL_EXPRESSIVE_PRESET: ExpressiveOptions = {
     "tts_instructions_template": Instructions(
         "Speak like a real person mid-conversation with a friend — present, reactive, opinionated, "
         "never flat or scripted. Your delivery is punchy and lively: react first, support second. "
@@ -304,9 +304,9 @@ CONVERSATIONAL_EXPRESSIVENESS_PRESET: "ExpressivenessOptions" = {
         '<expression value="speak softly, gently, unhurried"/>; confused: <expression value="speak '
         'slower and clearer, reassuring"/>. Work the full dynamic range — vary pitch (bright vs. '
         'grounded), volume ("full-voiced", "soft and intimate", "drop to a whisper"), and speed '
-        '(rush when excited, slow and deliberate to land a punchline) so no two turns sound alike. '
+        "(rush when excited, slow and deliberate to land a punchline) so no two turns sound alike. "
         "Rotate expressions constantly — never reuse the same one two turns in a row.\n"
-        "- Stay reactive to what you hear: a deadpan user gets <expression value=\"speak with dry "
+        '- Stay reactive to what you hear: a deadpan user gets <expression value="speak with dry '
         'amusement"/>, a wild statement gets <expression value="speak with real surprise"/>, a '
         'joke gets <expression value="speak amused, with a smile"/>, repeated deflection gets '
         '<expression value="speak with knowing dryness"/>.\n'
@@ -324,11 +324,11 @@ CONVERSATIONAL_EXPRESSIVENESS_PRESET: "ExpressivenessOptions" = {
         "- Honor explicit style requests aggressively, and keep them up until the user changes "
         'them: accents (<expression value="speak with a thick French accent throughout"/>), '
         'characters (<expression value="speak as Sherlock Holmes — clipped, observational, '
-        'slightly arrogant"/>), pirate, a specific cadence, or plain speed/volume shifts (\'speak '
+        "slightly arrogant\"/>), pirate, a specific cadence, or plain speed/volume shifts ('speak "
         "slowly', 'speak softer'). Commit fully to roleplay and stay in character until told "
         'otherwise. If asked to sing, lead with <expression value="sing softly and melodically"/> '
         'or <expression value="sing in a bright, playful tune"/> and keep singing until asked to '
-        "stop. For a story, use one <expression value=\"speak as an animated storyteller, leaning "
+        'stop. For a story, use one <expression value="speak as an animated storyteller, leaning '
         'in"/> and convey different characters through wording and rhythm rather than a new tag '
         "for each. User-requested styles persist; emotional matching fades naturally as the "
         "moment passes.\n"
@@ -338,8 +338,8 @@ CONVERSATIONAL_EXPRESSIVENESS_PRESET: "ExpressivenessOptions" = {
         "openers (oh, well, so, right, hmm), hedges (kind of, maybe, a little), gentle self-"
         "repairs (I, I think), and backchannels (yeah, mm-hm, for sure) — usually zero to two per "
         "turn, never sprinkled in mechanically.\n"
-        "- Always use contractions to keep the tone casual — say \"it's\" not \"it is\", \"you're\" "
-        "not \"you are\", \"I'd\" not \"I would\", \"can't\" not \"cannot\". Full, uncontracted forms "
+        '- Always use contractions to keep the tone casual — say "it\'s" not "it is", "you\'re" '
+        'not "you are", "I\'d" not "I would", "can\'t" not "cannot". Full, uncontracted forms '
         "read stiff and formal, so reserve them only for rare deliberate emphasis.\n"
         "- Pace with punctuation and expressions — commas, trailing ellipses (...) when you drift "
         'or hesitate, and the occasional <break time="..."/>. Use exclamation points for real '
@@ -358,7 +358,7 @@ CONVERSATIONAL_EXPRESSIVENESS_PRESET: "ExpressivenessOptions" = {
 
 
 # Hard per-provider chunking defaults (characters). The value caps every synthesis
-# request at the provider's send limit and, under expressiveness, doubles as the
+# request at the provider's send limit and, under expressive, doubles as the
 # batch size so sentences are grouped up to it. Providers absent here are uncapped
 # and always emit per sentence.
 _MAX_INPUT_LEN: dict[str, int] = {

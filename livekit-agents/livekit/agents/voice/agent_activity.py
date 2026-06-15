@@ -84,7 +84,7 @@ from .turn import EndpointingOptions, TurnDetectionMode
 
 if TYPE_CHECKING:
     from ..llm import mcp
-    from .agent_session import AgentSession, ExpressivenessOptions
+    from .agent_session import AgentSession, ExpressiveOptions
 
 
 _AgentActivityContextVar = contextvars.ContextVar["AgentActivity"]("agents_activity")
@@ -2295,23 +2295,23 @@ class AgentActivity(RecognitionHooks):
 
     # endregion
 
-    def _resolve_expressiveness_options(self) -> ExpressivenessOptions | None:
-        """Resolve expressiveness from agent (overrides session). Returns None if disabled."""
-        from .agent_session import DEFAULT_EXPRESSIVENESS_OPTIONS, ExpressivenessOptions
+    def _resolve_expressive_options(self) -> ExpressiveOptions | None:
+        """Resolve expressive from agent (overrides session). Returns None if disabled."""
+        from .agent_session import DEFAULT_EXPRESSIVE_OPTIONS, ExpressiveOptions
 
-        expr = self._agent.expressiveness
+        expr = self._agent.expressive
         if not utils.is_given(expr):
-            expr = self._session.options.expressiveness
+            expr = self._session.options.expressive
         if isinstance(expr, dict):
-            return ExpressivenessOptions(**{**DEFAULT_EXPRESSIVENESS_OPTIONS, **expr})
+            return ExpressiveOptions(**{**DEFAULT_EXPRESSIVE_OPTIONS, **expr})
         if expr:
-            return DEFAULT_EXPRESSIVENESS_OPTIONS
+            return DEFAULT_EXPRESSIVE_OPTIONS
         return None
 
-    def _inject_expressiveness_instructions(
+    def _inject_expressive_instructions(
         self,
         chat_ctx: llm.ChatContext,
-        options: ExpressivenessOptions,
+        options: ExpressiveOptions,
         speech_handle: SpeechHandle,
     ) -> None:
         """Inject TTS markup guide and speaker context into the chat context."""
@@ -2719,10 +2719,10 @@ class AgentActivity(RecognitionHooks):
                 add_if_missing=False,
             )
 
-        # inject expressiveness instructions (TTS markup guide + speaker context)
-        _expr_opts = self._resolve_expressiveness_options()
+        # inject expressive instructions (TTS markup guide + speaker context)
+        _expr_opts = self._resolve_expressive_options()
         if _expr_opts is not None:
-            self._inject_expressiveness_instructions(chat_ctx, _expr_opts, speech_handle)
+            self._inject_expressive_instructions(chat_ctx, _expr_opts, speech_handle)
             # only restore markup when the current TTS understands it; after a handoff
             # to a TTS without markup support, old tags would leak through unconverted
             if self.tts and self.tts.markup.llm_instructions():
@@ -2882,10 +2882,10 @@ class AgentActivity(RecognitionHooks):
 
         reply_started_at = time.time()
 
-        # strip TTS markup from the live transcript stream when expressiveness injected
+        # strip TTS markup from the live transcript stream when expressive injected
         # markup into the LLM context (providers interpret the markup as audio directives,
         # so it must not leak into the user-visible transcript)
-        _strip_markup = self.tts is not None and self._resolve_expressiveness_options() is not None
+        _strip_markup = self.tts is not None and self._resolve_expressive_options() is not None
 
         async def _read_segment_text(
             segment_text: AsyncIterable[str | BaseModel],
@@ -3088,7 +3088,7 @@ class AgentActivity(RecognitionHooks):
             )
 
         if forwarded_text:
-            # When expressiveness injected markup instructions into the LLM context,
+            # When expressive injected markup instructions into the LLM context,
             # preserve the agent's own marked-up text on the message so future LLM
             # turns can see its expressive style (_restore_expressive_content).
             # forwarded_text is already markup-free here (the transcript stream is
@@ -3100,7 +3100,7 @@ class AgentActivity(RecognitionHooks):
             expressive_source: str | None = None
             if (
                 self.tts
-                and self._resolve_expressiveness_options() is not None
+                and self._resolve_expressive_options() is not None
                 and not speech_handle.interrupted
             ):
                 raw_text = "".join(assistant_llm_text_parts)

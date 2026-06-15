@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
     from .agent_activity import AgentActivity
-    from .agent_session import AgentSession, ExpressivenessOptions
+    from .agent_session import AgentSession, ExpressiveOptions
     from .audio_recognition import AudioRecognition
     from .io import TimedString
     from .turn import TurnDetectionMode
@@ -75,7 +75,7 @@ class Agent:
         tool_handling: NotGivenOr[ToolHandlingOptions] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
-        expressiveness: NotGivenOr[bool | ExpressivenessOptions] = NOT_GIVEN,
+        expressive: NotGivenOr[bool | ExpressiveOptions] = NOT_GIVEN,
         min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         # deprecated
@@ -149,7 +149,7 @@ class Agent:
                 "passing MCP servers to AgentSession or Agent is deprecated "
                 "and will be removed in a future version. Use `MCPToolset` instead."
             )
-        self._expressiveness = expressiveness
+        self._expressive = expressive
 
         self._response_field_name: str | None = None
         if self.llm_output_format is not None:
@@ -202,8 +202,8 @@ class Agent:
         return self._interruption_detection
 
     @property
-    def expressiveness(self) -> NotGivenOr[bool | ExpressivenessOptions]:
-        return self._expressiveness
+    def expressive(self) -> NotGivenOr[bool | ExpressiveOptions]:
+        return self._expressive
 
     @property
     def audio_recognition(self) -> AudioRecognition:
@@ -566,12 +566,12 @@ class Agent:
 
             response_field = agent._response_field_name
 
-            # Mark whether expressiveness is active for this synthesis, synchronously
+            # Mark whether expressive is active for this synthesis, synchronously
             # just before stream() snapshots it. Doing it here (the single synthesis
             # choke point for both generate_reply and say()) scopes it to this turn
             # rather than leaving stale state on the instance. The provider's chunk
             # defaults then drive the TTS's input tokenizer.
-            activity.tts._set_expressive(activity._resolve_expressiveness_options() is not None)
+            activity.tts._set_expressive(activity._resolve_expressive_options() is not None)
 
             conn_options = activity.session.conn_options.tts_conn_options
             async with wrapped_tts.stream(conn_options=conn_options) as stream:

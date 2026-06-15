@@ -1,13 +1,13 @@
+from ..tts._provider_format import (
+    CONVERSATIONAL_EXPRESSIVE_PRESET,
+    CUSTOMER_SERVICE_EXPRESSIVE_PRESET,
+    HEALTHCARE_EXPRESSIVE_PRESET,
+)
 from . import io, run_result
 from .agent import Agent, AgentTask, ModelSettings
-from ..tts._provider_format import (
-    CONVERSATIONAL_EXPRESSIVENESS_PRESET,
-    CUSTOMER_SERVICE_EXPRESSIVENESS_PRESET,
-    HEALTHCARE_EXPRESSIVENESS_PRESET,
-)
 from .agent_session import (
     AgentSession,
-    ExpressivenessOptions,
+    ExpressiveOptions,
     RecordingOptions,
     VoiceActivityVideoSampler,
 )
@@ -44,10 +44,10 @@ __all__ = [
     "VoiceActivityVideoSampler",
     "Agent",
     "ModelSettings",
-    "ExpressivenessOptions",
-    "CUSTOMER_SERVICE_EXPRESSIVENESS_PRESET",
-    "HEALTHCARE_EXPRESSIVENESS_PRESET",
-    "CONVERSATIONAL_EXPRESSIVENESS_PRESET",
+    "ExpressiveOptions",
+    "CUSTOMER_SERVICE_EXPRESSIVE_PRESET",
+    "HEALTHCARE_EXPRESSIVE_PRESET",
+    "CONVERSATIONAL_EXPRESSIVE_PRESET",
     "AgentTask",
     "SpeechHandle",
     "RunContext",
