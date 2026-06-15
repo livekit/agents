@@ -34,9 +34,9 @@ from . import io
 from ._utils import _set_participant_attributes
 from .endpointing import BaseEndpointing
 from .events import (
-    AgentBackchannelOpportunityEvent,
     EotPredictionEvent,
     UserTurnExceededEvent,
+    _AgentBackchannelOpportunityEvent,
 )
 from .turn import (
     TurnDetectionEvent,
@@ -91,7 +91,7 @@ class RecognitionHooks(Protocol):
     def on_final_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None = None) -> None: ...
     def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool: ...
     def on_eot_prediction(self, ev: EotPredictionEvent) -> None: ...
-    def on_agent_backchannel_opportunity(self, ev: AgentBackchannelOpportunityEvent) -> None: ...
+    def on_agent_backchannel_opportunity(self, ev: _AgentBackchannelOpportunityEvent) -> None: ...
     def on_preemptive_generation(self, info: _PreemptiveGenerationInfo) -> None: ...
     def on_user_turn_exceeded(self, ev: UserTurnExceededEvent) -> None: ...
     def retrieve_chat_ctx(self) -> llm.ChatContext: ...
@@ -1441,7 +1441,7 @@ class AudioRecognition:
                                 and end_of_turn_probability < unlikely_threshold
                             ):
                                 self._hooks.on_agent_backchannel_opportunity(
-                                    AgentBackchannelOpportunityEvent(
+                                    _AgentBackchannelOpportunityEvent(
                                         probability=backchannel_probability,
                                         threshold=backchannel_threshold,
                                         language=self._last_language,

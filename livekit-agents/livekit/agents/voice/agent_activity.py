@@ -51,7 +51,6 @@ from .audio_recognition import (
 )
 from .endpointing import create_endpointing
 from .events import (
-    AgentBackchannelOpportunityEvent,
     AgentFalseInterruptionEvent,
     AgentState,
     AgentStateChangedEvent,
@@ -63,6 +62,7 @@ from .events import (
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
     UserTurnExceededEvent,
+    _AgentBackchannelOpportunityEvent,
 )
 from .generation import (
     ToolExecutionOutput,
@@ -2058,7 +2058,7 @@ class AgentActivity(RecognitionHooks):
         if (host := self._session._session_host) is not None:
             host._on_eot_prediction(ev)
 
-    def on_agent_backchannel_opportunity(self, ev: AgentBackchannelOpportunityEvent) -> None:
+    def on_agent_backchannel_opportunity(self, ev: _AgentBackchannelOpportunityEvent) -> None:
         # TODO: consume the backchannel opportunity internally (e.g. trigger a
         # backchannel phrase). Kept internal for now — not surfaced as a public event.
         pass

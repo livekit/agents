@@ -332,7 +332,7 @@ class EotPredictionEvent(BaseModel):
     created_at: float = Field(default_factory=time.time)
 
 
-class AgentBackchannelOpportunityEvent(BaseModel):
+class _AgentBackchannelOpportunityEvent(BaseModel):
     """Internal: a window in which the agent could backchannel (a short
     acknowledgment such as "mm-hmm") while the user is still holding the floor,
     as predicted by the turn detector. Passed to ``AgentActivity`` only — not
