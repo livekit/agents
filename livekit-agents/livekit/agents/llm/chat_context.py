@@ -274,6 +274,14 @@ class MetricsReport(TypedDict, total=False):
     User `ChatMessage` only
     """
 
+    first_transcript_after_eos_delay: float
+    """Time between the end of speech (VAD or STT EOS) and the first transcript event
+    (interim or final) received after it. Unlike `transcription_delay` (time to the
+    *final* transcript), this measures the latency to the provider's *first* result.
+
+    User `ChatMessage` only
+    """
+
     on_user_turn_completed_delay: float
     """Time taken to invoke the developer's `Agent.on_user_turn_completed` callback.
 

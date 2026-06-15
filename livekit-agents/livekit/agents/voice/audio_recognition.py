@@ -55,6 +55,7 @@ class _EndOfTurnInfo:
     stopped_speaking_at: float | None
     transcription_delay: float | None
     end_of_turn_delay: float | None
+    first_transcript_after_eos_delay: float | None
 
 
 @dataclass
@@ -174,6 +175,12 @@ class AudioRecognition:
         self._last_final_transcript_time: float | None = None
         self._last_speaking_time: float | None = None
         self._speech_start_time: float | None = None
+
+        # anchors for the first_transcript_after_eos_delay metric: the time the user's
+        # speech ended (VAD or STT EOS) and the time of the first transcript event that
+        # arrives after that EOS. Both are reset when a new turn starts (START_OF_SPEECH).
+        self._end_of_speech_time: float | None = None
+        self._first_transcript_after_eos_time: float | None = None
 
         # used for manual commit_user_turn
         self._final_transcript_received = asyncio.Event()
@@ -723,6 +730,8 @@ class AudioRecognition:
         self._last_final_transcript_time = None
         self._speech_start_time = None
         self._last_speaking_time = None
+        self._end_of_speech_time = None
+        self._first_transcript_after_eos_time = None
         self._vad_speech_started = False
         self._user_turn_committed = False
         self._turn_tracker = _UserTurnTracker()
@@ -835,6 +844,23 @@ class AudioRecognition:
             return self._audio_transcript + " " + self._audio_interim_transcript
         return self._audio_transcript
 
+    def _mark_end_of_speech(self) -> None:
+        """Record an end-of-speech (VAD or STT EOS) for the ``first_transcript_after_eos``
+        metric and arm a fresh first-transcript measurement from this point.
+        """
+        self._end_of_speech_time = time.time()
+        self._first_transcript_after_eos_time = None
+
+    def _mark_first_transcript_after_eos(self) -> None:
+        """Record the arrival time of the first transcript event after end of speech.
+
+        Used to compute ``first_transcript_after_eos_delay``. The anchor is only set once
+        per turn — after an end-of-speech has been observed and before the next
+        START_OF_SPEECH clears it — so subsequent transcripts do not move it.
+        """
+        if self._end_of_speech_time is not None and self._first_transcript_after_eos_time is None:
+            self._first_transcript_after_eos_time = time.time()
+
     async def _on_stt_event(self, ev: stt.SpeechEvent) -> None:
         # Collect provider-known STT ids for this user turn. The actual attribute
         # is written once when the user_turn span ends (see _on_end_of_turn), to
@@ -904,6 +930,8 @@ class AudioRecognition:
             if not transcript:
                 return
 
+            self._mark_first_transcript_after_eos()
+
             self._hooks.on_final_transcript(
                 ev,
                 speaking=self._speaking
@@ -971,6 +999,8 @@ class AudioRecognition:
             if not transcript:
                 return
 
+            self._mark_first_transcript_after_eos()
+
             logger.debug(
                 "received user preflight transcript",
                 extra={"user_transcript": transcript, "language": self._last_language},
@@ -1003,6 +1033,8 @@ class AudioRecognition:
                 if self._vad or self._turn_detection_mode == "stt"
                 else None,
             )
+            if ev.alternatives and ev.alternatives[0].text:
+                self._mark_first_transcript_after_eos()
             self._audio_interim_transcript = ev.alternatives[0].text
 
         elif ev.type == stt.SpeechEventType.END_OF_SPEECH and self._turn_detection_mode == "stt":
@@ -1031,6 +1063,7 @@ class AudioRecognition:
                     )
 
             self._speaking = False
+            self._mark_end_of_speech()
             self._user_turn_committed = True
             if not self._vad or self._last_speaking_time is None:
                 # vad disabled or missed a speech, use stt timestamp
@@ -1089,6 +1122,7 @@ class AudioRecognition:
 
             self._vad_speech_started = False
             self._speaking = False
+            self._mark_end_of_speech()
 
             if self._vad_base_turn_detection or (
                 self._turn_detection_mode == "stt" and self._user_turn_committed
@@ -1127,6 +1161,8 @@ class AudioRecognition:
             last_speaking_time: float | None = None,
             last_final_transcript_time: float | None = None,
             speech_start_time: float | None = None,
+            end_of_speech_time: float | None = None,
+            first_transcript_after_eos_time: float | None = None,
         ) -> None:
             endpointing_delay = self._endpointing.min_delay
             user_turn_span = self._ensure_user_turn_span()
@@ -1201,6 +1237,7 @@ class AudioRecognition:
             stopped_speaking_at = None
             transcription_delay = None
             end_of_turn_delay = None
+            first_transcript_after_eos_delay = None
 
             # sometimes, we can't calculate the metrics because VAD was unreliable.
             # in this case, we just ignore the calculation, it's better than providing likely wrong values
@@ -1214,6 +1251,13 @@ class AudioRecognition:
                 transcription_delay = max(last_final_transcript_time - last_speaking_time, 0)
                 end_of_turn_delay = time.time() - last_speaking_time
 
+            # first transcript after end-of-speech: independent of the VAD speaking
+            # anchors above, only needs the EOS time and the first post-EOS transcript.
+            if end_of_speech_time is not None and first_transcript_after_eos_time is not None:
+                first_transcript_after_eos_delay = max(
+                    first_transcript_after_eos_time - end_of_speech_time, 0
+                )
+
             committed = self._hooks.on_end_of_turn(
                 _EndOfTurnInfo(
                     skip_reply=skip_reply,
@@ -1223,6 +1267,7 @@ class AudioRecognition:
                     end_of_turn_delay=end_of_turn_delay,
                     started_speaking_at=started_speaking_at,
                     stopped_speaking_at=stopped_speaking_at,
+                    first_transcript_after_eos_delay=first_transcript_after_eos_delay,
                 )
             )
             if committed:
@@ -1232,6 +1277,9 @@ class AudioRecognition:
                         trace_types.ATTR_TRANSCRIPT_CONFIDENCE: confidence_avg,
                         trace_types.ATTR_TRANSCRIPTION_DELAY: transcription_delay or 0,
                         trace_types.ATTR_END_OF_TURN_DELAY: end_of_turn_delay or 0,
+                        trace_types.ATTR_FIRST_TRANSCRIPT_AFTER_EOS_DELAY: (
+                            first_transcript_after_eos_delay or 0
+                        ),
                     }
                 )
                 if self._stt_request_ids:
@@ -1254,6 +1302,12 @@ class AudioRecognition:
                     self._vad_speech_started = False
                     self._last_speaking_time = None
 
+                # only reset the EOS anchors if no newer end-of-speech happened in
+                # the meantime (mirrors the last_speaking_time guard above)
+                if self._end_of_speech_time == end_of_speech_time:
+                    self._end_of_speech_time = None
+                    self._first_transcript_after_eos_time = None
+
             self._user_turn_committed = False
 
         if self._end_of_turn_task is not None:
@@ -1266,6 +1320,8 @@ class AudioRecognition:
                 self._last_speaking_time,
                 self._last_final_transcript_time,
                 self._user_turn_start,
+                self._end_of_speech_time,
+                self._first_transcript_after_eos_time,
             )
         )
 
