@@ -68,6 +68,7 @@ class STTOptions:
     keyterm: str | Sequence[str]
     profanity_filter: bool
     redact: str | list[str]
+    diarize_model: str
     endpoint_url: str
     vad_events: bool = True
     numerals: bool = False
@@ -89,6 +90,7 @@ class STT(stt.STT):
         no_delay: bool = True,
         endpointing_ms: int = 25,
         enable_diarization: bool = False,
+        diarize_model: NotGivenOr[str] = NOT_GIVEN,
         # enable filler words by default to improve turn detector accuracy
         filler_words: bool = True,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
@@ -117,6 +119,11 @@ class STT(stt.STT):
             sample_rate: The sample rate of the audio in Hz. Defaults to 16000.
             no_delay: When smart_format is used, ensures it does not wait for sequence to be complete before returning results. Defaults to True.
             endpointing_ms: Time in milliseconds of silence to consider end of speech. Set to 0 to disable. Defaults to 25.
+            diarize_model: Select the speaker diarization model version. Enabling this turns on
+                diarization without also needing ``enable_diarization``. Accepts "latest"
+                (newest GA diarizer), "v2" (improved batch diarizer, pre-recorded only) or "v1"
+                (original diarizer). The "v2" value is not supported for streaming requests.
+                See https://developers.deepgram.com/docs/diarization for details. Defaults to NOT_GIVEN.
             filler_words: Whether to include filler words (um, uh, etc.) in transcription. Defaults to True.
             keywords: List of tuples containing keywords and their boost values for improved recognition.
                      Each tuple should be (keyword: str, boost: float). Defaults to None.
@@ -186,6 +193,7 @@ class STT(stt.STT):
             keyterm=keyterm if is_given(keyterm) else [],
             profanity_filter=profanity_filter,
             redact=redact if is_given(redact) else [],
+            diarize_model=diarize_model if is_given(diarize_model) else "",
             numerals=numerals,
             mip_opt_out=mip_opt_out,
             vad_events=vad_events,
@@ -232,6 +240,8 @@ class STT(stt.STT):
             recognize_config["keyterm"] = self._opts.keyterm
         if config.redact:
             recognize_config["redact"] = config.redact
+        if config.diarize_model:
+            recognize_config["diarize_model"] = config.diarize_model
         if config.enable_diarization:
             logger.warning("speaker diarization is not supported in non-streaming mode, ignoring")
 
@@ -299,6 +309,7 @@ class STT(stt.STT):
         no_delay: NotGivenOr[bool] = NOT_GIVEN,
         endpointing_ms: NotGivenOr[int] = NOT_GIVEN,
         enable_diarization: NotGivenOr[bool] = NOT_GIVEN,
+        diarize_model: NotGivenOr[str] = NOT_GIVEN,
         filler_words: NotGivenOr[bool] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
         keyterm: NotGivenOr[str | list[str]] = NOT_GIVEN,
@@ -332,6 +343,8 @@ class STT(stt.STT):
             self._opts.endpointing_ms = endpointing_ms
         if is_given(enable_diarization):
             self._opts.enable_diarization = enable_diarization
+        if is_given(diarize_model):
+            self._opts.diarize_model = diarize_model
         if is_given(filler_words):
             self._opts.filler_words = filler_words
         if is_given(keywords):
@@ -368,6 +381,7 @@ class STT(stt.STT):
                 sample_rate=sample_rate,
                 no_delay=no_delay,
                 endpointing_ms=endpointing_ms,
+                diarize_model=diarize_model,
                 filler_words=filler_words,
                 keywords=keywords,
                 keyterm=keyterm,
@@ -444,6 +458,7 @@ class SpeechStream(stt.SpeechStream):
         no_delay: NotGivenOr[bool] = NOT_GIVEN,
         endpointing_ms: NotGivenOr[int] = NOT_GIVEN,
         enable_diarization: NotGivenOr[bool] = NOT_GIVEN,
+        diarize_model: NotGivenOr[str] = NOT_GIVEN,
         filler_words: NotGivenOr[bool] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
         keyterm: NotGivenOr[str | list[str]] = NOT_GIVEN,
@@ -477,6 +492,8 @@ class SpeechStream(stt.SpeechStream):
             self._opts.endpointing_ms = endpointing_ms
         if is_given(enable_diarization):
             self._opts.enable_diarization = enable_diarization
+        if is_given(diarize_model):
+            self._opts.diarize_model = diarize_model
         if is_given(filler_words):
             self._opts.filler_words = filler_words
         if is_given(keywords):
@@ -653,6 +670,8 @@ class SpeechStream(stt.SpeechStream):
         }
         if self._opts.enable_diarization:
             live_config["diarize"] = True
+        if self._opts.diarize_model:
+            live_config["diarize_model"] = self._opts.diarize_model
         if self._opts.keywords:
             live_config["keywords"] = self._opts.keywords
         if self._opts.keyterm:
