@@ -194,7 +194,7 @@ class ServerOptions:
     Defaults to 0.7 on "production" mode, and is disabled in "development" mode.
     """
 
-    job_memory_warn_mb: float = 500
+    job_memory_warn_mb: float = 1000
     """Memory warning threshold in MB. If the job process exceeds this limit, a warning will be logged."""  # noqa: E501
     job_memory_limit_mb: float = 0
     """Maximum memory usage for a job in MB, the job process will be killed if it exceeds this limit.
@@ -304,7 +304,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         *,
         job_executor_type: JobExecutorType = _default_job_executor_type,
         load_threshold: float | ServerEnvOption[float] = _default_load_threshold,
-        job_memory_warn_mb: float = 500,
+        job_memory_warn_mb: float = 1000,
         job_memory_limit_mb: float = 0,
         drain_timeout: int = 1800,
         num_idle_processes: int | ServerEnvOption[int] = _default_num_idle_processes,
@@ -637,35 +637,39 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             self._api: api.LiveKitAPI | None = None
             self._http_session: aiohttp.ClientSession | None = None
-            self._http_server = http_server.HttpServer(
-                self._host, ServerEnvOption.getvalue(self._port, devmode)
-            )
             self._worker_load: float = 0.0
             self._reserved_slots: int = 0  # jobs we said "available" to but not yet launched
 
-            async def health_check(_: Any) -> web.Response:
-                if self._inference_executor and not self._inference_executor.is_alive():
-                    return web.Response(status=503, text="inference process not running")
-
-                if self._connection_failed:
-                    return web.Response(status=503, text="failed to connect to livekit")
-
-                return web.Response(text="OK")
-
-            async def worker(_: Any) -> web.Response:
-                worker_info = agent_worker.WorkerInfo(
-                    worker_type=agent.JobType.Name(self._server_type.value),
-                    agent_name=self._agent_name,
-                    active_jobs=len(self.active_jobs),
-                    sdk_version=__version__,
-                    worker_load=self._worker_load,
-                    protocol_version=WORKER_PROTOCOL_VERSION,
+            # simulations run ephemeral workers side by side; a health
+            # endpoint on a fixed port would make concurrent runs collide
+            if not self._simulation:
+                self._http_server = http_server.HttpServer(
+                    self._host, ServerEnvOption.getvalue(self._port, devmode)
                 )
-                body = MessageToJson(worker_info, preserving_proto_field_name=True)
-                return web.Response(body=body, content_type="application/json")
 
-            self._http_server.app.add_routes([web.get("/", health_check)])
-            self._http_server.app.add_routes([web.get("/worker", worker)])
+                async def health_check(_: Any) -> web.Response:
+                    if self._inference_executor and not self._inference_executor.is_alive():
+                        return web.Response(status=503, text="inference process not running")
+
+                    if self._connection_failed:
+                        return web.Response(status=503, text="failed to connect to livekit")
+
+                    return web.Response(text="OK")
+
+                async def worker(_: Any) -> web.Response:
+                    worker_info = agent_worker.WorkerInfo(
+                        worker_type=agent.JobType.Name(self._server_type.value),
+                        agent_name=self._agent_name,
+                        active_jobs=len(self.active_jobs),
+                        sdk_version=__version__,
+                        worker_load=self._worker_load,
+                        protocol_version=WORKER_PROTOCOL_VERSION,
+                    )
+                    body = MessageToJson(worker_info, preserving_proto_field_name=True)
+                    return web.Response(body=body, content_type="application/json")
+
+                self._http_server.app.add_routes([web.get("/", health_check)])
+                self._http_server.app.add_routes([web.get("/worker", worker)])
 
             self._conn_task: asyncio.Task[None] | None = None
             self._load_task: asyncio.Task[None] | None = None
@@ -753,10 +757,11 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 self._job_lifecycle_tasks.add(t)
                 t.add_done_callback(self._job_lifecycle_tasks.discard)
 
-            await self._http_server.start()
-            logger.info(
-                f"HTTP server listening on {self._http_server.host}:{self._http_server.port}"
-            )
+            if self._http_server is not None:
+                await self._http_server.start()
+                logger.info(
+                    f"HTTP server listening on {self._http_server.host}:{self._http_server.port}"
+                )
 
             if self._prometheus_server:
                 await self._prometheus_server.start()

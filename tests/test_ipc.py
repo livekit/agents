@@ -488,6 +488,27 @@ def _create_proc(
     return proc, start_args
 
 
+async def test_aclose_after_cancelled_start():
+    """When start() is cancelled mid-flight, the shielded _start() keeps running;
+    aclose() must still tear down the supervise task and the child process."""
+    mp_ctx = mp.get_context("spawn")
+    proc, _ = _create_proc(close_timeout=10.0, mp_ctx=mp_ctx)
+
+    start_task = asyncio.create_task(proc.start())
+    await asyncio.sleep(0)  # let start() enter the shielded _start()
+    start_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await start_task
+
+    # mimics ProcPool._proc_spawn_task's cleanup after swallowing the cancellation
+    await proc.aclose()
+
+    assert proc._supervise_atask is not None, "start() should have completed under the shield"
+    assert proc._supervise_atask.done()
+    assert proc.pid is not None
+    assert not psutil.pid_exists(proc.pid)
+
+
 async def test_shutdown_no_job():
     mp_ctx = mp.get_context("spawn")
     proc, start_args = _create_proc(close_timeout=10.0, mp_ctx=mp_ctx)

@@ -184,7 +184,7 @@ class AgentActivity(RecognitionHooks):
         self._authorization_allowed = asyncio.Event()
         self._authorization_allowed.set()
 
-        self._drain_blocked_tasks: list[asyncio.Task[Any]] = []
+        self._drain_blocked_tasks: set[asyncio.Task[Any]] = set()
         self._mcp_tools: list[mcp.MCPToolset] = []
 
         # activity-scoped executor: cancels cancellable tools / awaits the rest on drain,
@@ -913,7 +913,8 @@ class AgentActivity(RecognitionHooks):
         await self._session._keyterm_detector.aclose()
 
         self._scheduling_paused = True
-        self._drain_blocked_tasks = blocked_tasks or []
+        if blocked_tasks:
+            self._add_drain_blocked_tasks(blocked_tasks)
         self._wake_up_scheduling_task()
 
         if self._scheduling_atask is not None:
@@ -921,6 +922,12 @@ class AgentActivity(RecognitionHooks):
             # This means that even if the SpeechHandle themselves have finished,
             # we still wait for the entire execution (e.g function_tools)
             await asyncio.shield(self._scheduling_atask)
+
+    def _add_drain_blocked_tasks(self, tasks: list[asyncio.Task[Any]]) -> None:
+        # tasks blocked on an agent handoff are excluded from the drain wait,
+        # otherwise drain would wait for them while the handoff waits for drain's lock
+        self._drain_blocked_tasks.update(tasks)
+        self._wake_up_scheduling_task()
 
     async def _resume_scheduling_task(self) -> None:
         assert self._lock.locked(), "_finalize_main_task should only be used when locked."
@@ -930,6 +937,7 @@ class AgentActivity(RecognitionHooks):
 
         self._scheduling_paused = False
         self._new_turns_blocked = False
+        self._drain_blocked_tasks.clear()
         self._scheduling_atask = asyncio.create_task(
             self._scheduling_task(), name="_scheduling_task"
         )
@@ -964,6 +972,10 @@ class AgentActivity(RecognitionHooks):
 
         # When resuming, the AgentSession.update_agent must use the same AgentActivity instance!
         async with self._lock:
+            if self._closed:
+                # already closed by the session close
+                return None
+
             span = tracer.start_span(
                 "pause_agent_activity",
                 attributes={trace_types.ATTR_AGENT_LABEL: self._agent.label},
