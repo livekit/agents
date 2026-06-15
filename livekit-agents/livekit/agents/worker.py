@@ -827,6 +827,16 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 )
                 tasks.append(self._conn_task)
 
+                # surface a terminal connection failure (e.g. exhausting
+                # max_retry) so run() stops awaiting and re-raises it
+                def _on_conn_task_done(task: asyncio.Task[None]) -> None:
+                    if task.cancelled() or self._close_future is None or self._close_future.done():
+                        return
+                    if (exc := task.exception()) is not None:
+                        self._close_future.set_exception(exc)
+
+                self._conn_task.add_done_callback(_on_conn_task_done)
+
             self.emit("worker_started")
 
         await self._close_future
