@@ -2222,8 +2222,8 @@ class AgentActivity(RecognitionHooks):
 
         eou_metrics = EOUMetrics(
             timestamp=time.time(),
-            end_of_utterance_delay=info.end_of_turn_delay or 0.0,
-            transcription_delay=info.transcription_delay or 0.0,
+            end_of_utterance_delay=info.metrics.end_of_turn_delay or 0.0,
+            transcription_delay=info.metrics.transcription_delay or 0.0,
             on_user_turn_completed_delay=on_user_turn_completed_delay,
             speech_id=speech_handle.id,
             metadata=metadata,
@@ -3890,17 +3890,17 @@ class AgentActivity(RecognitionHooks):
                 "model_name": self.stt.model,
                 "model_provider": self.stt.provider,
             }
-        if info.started_speaking_at is not None:
-            metrics_report["started_speaking_at"] = info.started_speaking_at
+        if info.metrics.started_speaking_at is not None:
+            metrics_report["started_speaking_at"] = info.metrics.started_speaking_at
 
-        if info.stopped_speaking_at is not None:
-            metrics_report["stopped_speaking_at"] = info.stopped_speaking_at
+        if info.metrics.stopped_speaking_at is not None:
+            metrics_report["stopped_speaking_at"] = info.metrics.stopped_speaking_at
 
-        if info.transcription_delay is not None:
-            metrics_report["transcription_delay"] = info.transcription_delay
+        if info.metrics.transcription_delay is not None:
+            metrics_report["transcription_delay"] = info.metrics.transcription_delay
 
-        if info.end_of_turn_delay is not None:
-            metrics_report["end_of_turn_delay"] = info.end_of_turn_delay
+        if info.metrics.end_of_turn_delay is not None:
+            metrics_report["end_of_turn_delay"] = info.metrics.end_of_turn_delay
 
         return metrics_report
 

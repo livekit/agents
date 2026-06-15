@@ -49,12 +49,7 @@ class _EndOfTurnInfo:
     """If True, a reply was already triggered and should be skipped after end of turn detection."""
     new_transcript: str
     transcript_confidence: float
-
-    # metrics report
-    started_speaking_at: float | None
-    stopped_speaking_at: float | None
-    transcription_delay: float | None
-    end_of_turn_delay: float | None
+    metrics: _EndOfTurnMetrics
 
 
 @dataclass
@@ -1255,20 +1250,12 @@ class AudioRecognition:
                 last_final_transcript_time=last_final_transcript_time,
                 now=time.time(),
             )
-            started_speaking_at = metrics.started_speaking_at
-            stopped_speaking_at = metrics.stopped_speaking_at
-            transcription_delay = metrics.transcription_delay
-            end_of_turn_delay = metrics.end_of_turn_delay
-
             committed = self._hooks.on_end_of_turn(
                 _EndOfTurnInfo(
                     skip_reply=skip_reply,
                     new_transcript=self._audio_transcript,
                     transcript_confidence=confidence_avg,
-                    transcription_delay=transcription_delay or 0,
-                    end_of_turn_delay=end_of_turn_delay,
-                    started_speaking_at=started_speaking_at,
-                    stopped_speaking_at=stopped_speaking_at,
+                    metrics=metrics,
                 )
             )
             if committed:
@@ -1276,8 +1263,8 @@ class AudioRecognition:
                     {
                         trace_types.ATTR_USER_TRANSCRIPT: self._audio_transcript,
                         trace_types.ATTR_TRANSCRIPT_CONFIDENCE: confidence_avg,
-                        trace_types.ATTR_TRANSCRIPTION_DELAY: transcription_delay or 0,
-                        trace_types.ATTR_END_OF_TURN_DELAY: end_of_turn_delay or 0,
+                        trace_types.ATTR_TRANSCRIPTION_DELAY: metrics.transcription_delay or 0,
+                        trace_types.ATTR_END_OF_TURN_DELAY: metrics.end_of_turn_delay or 0,
                     }
                 )
                 if self._stt_request_ids:
