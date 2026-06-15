@@ -151,11 +151,14 @@ class STT(stt.STT):
             the DEEPGRAM_API_KEY environmental variable.
         """  # noqa: E501
 
+        # diarize_model implies diarization without also needing enable_diarization
+        _diarization_enabled = enable_diarization or is_given(diarize_model)
+
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
                 interim_results=interim_results,
-                diarization=enable_diarization,
+                diarization=_diarization_enabled,
                 aligned_transcript="word",
             )
         )

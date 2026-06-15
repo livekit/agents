@@ -75,6 +75,27 @@ async def test_update_options_diarize_model():
     assert stt._opts.diarize_model == "v2"
 
 
+async def test_diarize_model_reports_diarization_capability():
+    from livekit.plugins.deepgram import STT
+
+    stt = STT(api_key="test-key", diarize_model="latest")
+    assert stt.capabilities.diarization is True
+
+
+async def test_enable_diarization_reports_diarization_capability():
+    from livekit.plugins.deepgram import STT
+
+    stt = STT(api_key="test-key", enable_diarization=True)
+    assert stt.capabilities.diarization is True
+
+
+async def test_no_diarization_reports_no_capability():
+    from livekit.plugins.deepgram import STT
+
+    stt = STT(api_key="test-key")
+    assert stt.capabilities.diarization is False
+
+
 async def test_update_options_uses_stored_language_for_model_validation():
     from livekit.plugins.deepgram import STT
 
