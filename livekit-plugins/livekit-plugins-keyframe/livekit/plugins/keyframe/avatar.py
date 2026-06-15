@@ -153,7 +153,7 @@ class AvatarSession(BaseAvatarSession):
 
         self._room = room
 
-        agent_session.output.swap_audio_endpoint(
+        agent_session.output.replace_audio_tail(
             DataStreamAudioOutput(
                 room=room,
                 destination_identity=self._avatar_participant_identity,

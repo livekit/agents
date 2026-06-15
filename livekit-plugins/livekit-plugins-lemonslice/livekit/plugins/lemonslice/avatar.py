@@ -102,9 +102,9 @@ class AvatarSession(BaseAvatarSession):
         # subsequent generations are routed to the (about-to-arrive)
         # avatar identity immediately. wait_remote_track buffers
         # frames until the video track shows up, so nothing is lost
-        # in the gap. swap_audio_endpoint keeps the TranscriptSynchronizer
+        # in the gap. replace_audio_tail keeps the TranscriptSynchronizer
         # / RecorderAudioOutput chain intact across hot swaps.
-        agent_session.output.swap_audio_endpoint(
+        agent_session.output.replace_audio_tail(
             DataStreamAudioOutput(
                 room=room,
                 destination_identity=self._avatar_participant_identity,

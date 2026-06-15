@@ -45,7 +45,7 @@ class CustomAvatarSession(AvatarSession):
     Subclasses the base :class:`AvatarSession` so we get the join-wait, metrics
     and teardown for free — :meth:`AvatarSession.aclose` already removes the
     avatar participant from the room. We only add the dispatcher handshake and
-    route the agent audio with :meth:`swap_audio_endpoint`.
+    route the agent audio with :meth:`replace_audio_tail`.
     """
 
     def __init__(self, *, avatar_dispatcher_url: str, avatar_identity: str) -> None:
@@ -87,10 +87,10 @@ class CustomAvatarSession(AvatarSession):
             response.raise_for_status()
         logger.info("avatar handshake completed", extra={"identity": self._avatar_identity})
 
-        # route the agent audio to this avatar. swap_audio_endpoint swaps only the
+        # route the agent audio to this avatar. replace_audio_tail swaps only the
         # bottom sink, keeping the TranscriptSynchronizer / recorder wrappers (and any
         # event listeners attached to session.output.audio) intact across hot swaps
-        agent_session.output.swap_audio_endpoint(
+        agent_session.output.replace_audio_tail(
             DataStreamAudioOutput(
                 room,
                 destination_identity=self._avatar_identity,
@@ -149,7 +149,7 @@ async def entrypoint(ctx: JobContext):
                 avatar_dispatcher_url=AVATAR_DISPATCHER_URL,
                 avatar_identity=AVATAR_IDENTITY,
             )
-            # start() routes audio to the new avatar via swap_audio_endpoint; frames are
+            # start() routes audio to the new avatar via replace_audio_tail; frames are
             # buffered until it publishes its video track, so playback resumes seamlessly
             await avatar.start(session, ctx.room)
             await avatar.wait_for_join()
@@ -157,7 +157,7 @@ async def entrypoint(ctx: JobContext):
             logger.info("avatar swapped")
             return "ok"
 
-    # these listeners are attached to the top of the audio chain, which swap_audio_endpoint
+    # these listeners are attached to the top of the audio chain, which replace_audio_tail
     # leaves untouched, so they keep firing across avatar swaps
     @session.output.audio.on("playback_finished")
     def on_playback_finished(ev: PlaybackFinishedEvent) -> None:

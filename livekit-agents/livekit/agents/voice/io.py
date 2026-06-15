@@ -674,8 +674,8 @@ class AgentOutput:
             else:
                 self._audio_sink.on_detached()
 
-    def swap_audio_endpoint(self, sink: AudioOutput) -> None:
-        """Swap the endpoint sink at the bottom of the chain, keeping wrappers attached.
+    def replace_audio_tail(self, sink: AudioOutput) -> None:
+        """Switch the tail sink at the bottom of the chain, keeping wrappers attached.
 
         Walks the chain looking for a :class:`_AudioSinkProxy` and swaps its
         downstream — leaving wrappers like :class:`TranscriptSynchronizer` and
