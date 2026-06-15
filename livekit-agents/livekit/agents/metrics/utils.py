@@ -82,6 +82,9 @@ def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None) 
             | {
                 "end_of_utterance_delay": round(metrics.end_of_utterance_delay, 2),
                 "transcription_delay": round(metrics.transcription_delay, 2),
+                "first_transcript_after_eos_delay": round(
+                    metrics.first_transcript_after_eos_delay, 2
+                ),
             },
         )
     elif isinstance(metrics, STTMetrics):

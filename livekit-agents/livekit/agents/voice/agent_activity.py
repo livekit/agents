@@ -2443,6 +2443,7 @@ class AgentActivity(RecognitionHooks):
             timestamp=time.time(),
             end_of_utterance_delay=info.metrics.end_of_turn_delay or 0.0,
             transcription_delay=info.metrics.transcription_delay or 0.0,
+            first_transcript_after_eos_delay=info.metrics.first_transcript_after_eos_delay or 0.0,
             on_user_turn_completed_delay=on_user_turn_completed_delay,
             speech_id=speech_handle.id,
             metadata=metadata,
@@ -4312,6 +4313,11 @@ class AgentActivity(RecognitionHooks):
 
         if info.metrics.end_of_turn_delay is not None:
             metrics_report["end_of_turn_delay"] = info.metrics.end_of_turn_delay
+
+        if info.metrics.first_transcript_after_eos_delay is not None:
+            metrics_report["first_transcript_after_eos_delay"] = (
+                info.metrics.first_transcript_after_eos_delay
+            )
 
         return metrics_report
 
