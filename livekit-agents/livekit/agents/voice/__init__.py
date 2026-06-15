@@ -1,6 +1,17 @@
 from . import io, run_result
 from .agent import Agent, AgentTask, ModelSettings
-from .agent_session import AgentSession, RecordingOptions, VoiceActivityVideoSampler
+from ..tts._provider_format import (
+    CONVERSATIONAL_EXPRESSIVENESS_PRESET,
+    CUSTOMER_SERVICE_EXPRESSIVENESS_PRESET,
+    HEALTHCARE_EXPRESSIVENESS_PRESET,
+)
+from .agent_session import (
+    AgentSession,
+    ExpressivenessOptions,
+    RecordingOptions,
+    VoiceActivityVideoSampler,
+)
+from .audio_recognition import AudioRecognition
 from .events import (
     AgentEvent,
     AgentFalseInterruptionEvent,
@@ -33,6 +44,10 @@ __all__ = [
     "VoiceActivityVideoSampler",
     "Agent",
     "ModelSettings",
+    "ExpressivenessOptions",
+    "CUSTOMER_SERVICE_EXPRESSIVENESS_PRESET",
+    "HEALTHCARE_EXPRESSIVENESS_PRESET",
+    "CONVERSATIONAL_EXPRESSIVENESS_PRESET",
     "AgentTask",
     "SpeechHandle",
     "RunContext",
@@ -59,6 +74,7 @@ __all__ = [
     "_ParticipantTranscriptionOutput",
     "_ParticipantStreamTranscriptionOutput",
     "text_transforms",
+    "AudioRecognition",
 ]
 
 # Cleanup docs of unexported modules

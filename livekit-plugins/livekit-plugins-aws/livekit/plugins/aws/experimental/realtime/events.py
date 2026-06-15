@@ -5,6 +5,7 @@ from typing import Any, Literal, cast
 from pydantic import BaseModel as _BaseModel, ConfigDict, Field
 
 from livekit.agents import llm
+from livekit.agents.llm.chat_context import Instructions
 
 from ...log import logger
 from .types import TURN_DETECTION
@@ -332,7 +333,7 @@ class SonicEventBuilder:
                 if (role := msg.role.upper()) not in ["USER", "ASSISTANT", "SYSTEM"]:
                     continue
 
-                text = "".join(c for c in msg.content if isinstance(c, str))
+                text = "".join(str(c) for c in msg.content if isinstance(c, (str, Instructions)))
                 if not text.strip():
                     continue
 

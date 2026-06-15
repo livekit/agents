@@ -5,7 +5,7 @@ import datetime
 import os
 import time
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterable, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator
 from dataclasses import dataclass
 from types import TracebackType
 from typing import TYPE_CHECKING, ClassVar, Generic, Literal, TypeVar
@@ -68,6 +68,86 @@ class TTS(
     rtc.EventEmitter[Literal["metrics_collected", "error"] | TEvent],
     Generic[TEvent],
 ):
+    class Markup:
+        """Declares TTS markup capabilities for the expressiveness pipeline.
+
+        Plugins override this inner class to declare what markup tags the TTS supports
+        and how to convert marked-up text back to plain text.
+        """
+
+        def __init__(self, tts: TTS) -> None:
+            self._tts = tts
+
+        def _provider_key(self) -> str:
+            """Key into the shared ``_provider_format`` markup tables, or "" for none.
+
+            Plugins override this to opt into markup support; the default ("") means
+            no markup instructions, stripping, normalization, or conversion are applied.
+            The other markup methods delegate through this key, so a plugin only needs
+            to override ``_provider_key``.
+            """
+            return ""
+
+        def llm_instructions(self) -> str | None:
+            """Return instructions for the LLM describing available markup tags.
+
+            The framework injects this into the LLM system prompt when
+            ``expressiveness=True``.  Returns ``None`` if this TTS has no markup support.
+            """
+            from ._provider_format import llm_instructions
+
+            return llm_instructions(self._provider_key())
+
+        def to_text(self, text: str) -> str:
+            """Strip TTS-specific markup from *text*, returning plain text.
+
+            Used for transcripts streamed to the user and for chat history storage.
+            The TTS itself receives the original marked-up text.
+            """
+            from ._provider_format import strip_markup
+
+            return strip_markup(self._provider_key(), text)
+
+        async def to_text_stream(
+            self, text_stream: AsyncIterable[str]
+        ) -> AsyncGenerator[str, None]:
+            """Strip TTS markup from a stream of text chunks.
+
+            Buffers partial XML tags across chunks so that ``to_text`` always
+            receives complete tags to strip.
+            """
+            buf = ""
+            async for chunk in text_stream:
+                buf += chunk
+                if buf.rfind("<") > buf.rfind(">"):
+                    continue
+                stripped = self.to_text(buf)
+                buf = ""
+                if stripped:
+                    yield stripped
+
+            if buf:
+                buf = self.to_text(buf)
+            if buf:
+                yield buf
+
+        def normalize(self, text: str) -> str:
+            """Fix common LLM markup mistakes (e.g. unclosed self-closing tags)."""
+            from ._provider_format import normalize_markup
+
+            return normalize_markup(self._provider_key(), text)
+
+        def convert(self, text: str) -> str:
+            """Convert framework-standard markup to the provider's native format.
+
+            Called before text is sent to the TTS; a no-op when the provider declares
+            no markup. Plugins that use non-XML formats (e.g. square brackets) opt in
+            via ``_provider_key`` so ``<expression value="..."/>`` becomes native syntax.
+            """
+            from ._provider_format import convert_markup
+
+            return convert_markup(self._provider_key(), text)
+
     def __init__(
         self,
         *,
@@ -80,6 +160,26 @@ class TTS(
         self._sample_rate = sample_rate
         self._num_channels = num_channels
         self._label = f"{type(self).__module__}.{type(self).__name__}"
+        self._markup = self.Markup(self)
+        # Whether expressiveness is active for the current turn, set by the framework
+        # before each synthesis. TTS implementations that tokenize their own input
+        # read this to batch into larger chunks (continuous prosody); False (the
+        # default) means per-sentence chunking. See `_set_expressive`.
+        self._expressive: bool = False
+
+    @property
+    def markup(self) -> Markup:
+        """Access TTS markup capabilities (instructions for LLM, text stripping)."""
+        return self._markup
+
+    def _set_expressive(self, enabled: bool) -> None:
+        """Framework-internal: mark whether expressiveness is active for this turn.
+
+        Called by the voice pipeline before each synthesis. TTS implementations widen
+        their input chunking when enabled; a no-op for TTS that don't tokenize their
+        own input.
+        """
+        self._expressive = enabled
 
     @property
     def label(self) -> str:

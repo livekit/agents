@@ -34,6 +34,7 @@ from livekit.agents import (
     function_tool,
     inference,
 )
+from livekit.agents.voice import CUSTOMER_SERVICE_EXPRESSIVENESS_PRESET
 from livekit.plugins import silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
@@ -485,8 +486,9 @@ async def drive_thru_agent(ctx: JobContext) -> None:
                 ],
             },
         ),
-        llm=inference.LLM("openai/gpt-4.1-mini"),
-        tts=inference.TTS("cartesia/sonic-3", voice="f786b574-daa5-4673-aa0c-cbe3e8534c02"),
+        llm=inference.LLM("openai/gpt-5.5"),
+        tts=inference.TTS("inworld/inworld-tts-2", voice="Sarah"),
+        expressiveness=CUSTOMER_SERVICE_EXPRESSIVENESS_PRESET,
         turn_detection=MultilingualModel(),
         vad=silero.VAD.load(),
         max_tool_steps=10,

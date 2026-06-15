@@ -11,7 +11,9 @@ from livekit.agents import (
     JobContext,
     cli,
     inference,
+    tokenize,
 )
+from livekit.agents.voice import CONVERSATIONAL_EXPRESSIVENESS_PRESET
 from livekit.plugins import silero
 from livekit.rtc import RpcInvocationData
 
@@ -21,8 +23,8 @@ logger.setLevel(logging.INFO)
 load_dotenv()
 
 DEFAULT_STT = "deepgram/nova-3"
-DEFAULT_LLM = "openai/gpt-4.1-mini"
-DEFAULT_TTS = "cartesia/sonic-3"
+DEFAULT_LLM = "google/gemma-4-31b-it"
+DEFAULT_TTS = "inworld/inworld-tts-2"
 
 # Default starter prompt. Keep in sync with the `set_system_prompt`
 # control's `default` in examples/playground.yaml — the UI seeds the
@@ -32,8 +34,14 @@ INSTRUCTIONS = (
     "You're a friendly agent in the LiveKit Playground. The person "
     "talking to you is prototyping their own voice agent — they can "
     "edit this prompt in the side panel and swap the STT / LLM / TTS "
-    "models live. Keep replies short, natural, and conversational. "
-    "If asked which models you're using, answer honestly."
+    "models live. Keep replies short, natural, and conversational, and "
+    "be expressive so they can hear what the selected voice can do. "
+    "At the start of the conversation, set the tone and pace — open with "
+    "warm, upbeat energy and a quick, inviting question to encourage the "
+    "user to engage and let them know they can talk to you naturally. "
+    "If the conversation lulls or they're not sure what to try, offer "
+    "to tell them a short joke — and if they say yes, deliver it with "
+    "good comic timing. If asked which models you're using, answer honestly."
 )
 
 _SWAP_PROMPT = (
@@ -49,6 +57,15 @@ class InferenceAgent(Agent):
     def __init__(self, instructions: str = INSTRUCTIONS) -> None:
         super().__init__(instructions=instructions)
 
+    async def on_enter(self) -> None:
+        # Fired once the agent is active and RoomIO has subscribed to the
+        # participant's tracks, so the greeting is delivered to a connected
+        # client rather than spoken before the audio socket is up. Runs on
+        # the session's default LLM (Gemma) — no model-routing needed here.
+        self.session.generate_reply(
+            instructions="Greet the user with excitement, and ask them how their day is going. Keep it to one or two short, natural sentences."
+        )
+
 
 server = AgentServer()
 
@@ -58,8 +75,18 @@ async def entrypoint(ctx: JobContext) -> None:
     session = AgentSession(
         stt=inference.STT(model=DEFAULT_STT),
         llm=inference.LLM(model=DEFAULT_LLM),
-        tts=inference.TTS(model=DEFAULT_TTS),
+        tts=inference.TTS(
+            model=DEFAULT_TTS,
+            voice="Sarah",
+            extra_kwargs={"delivery_mode": "CREATIVE"},
+            # Batch sentences up to 900 chars per request — as large as we can go
+            # while staying under Inworld's 1000-char send_text limit (the server
+            # auto-flushes past 1000). All chunks share one session/context, so
+            # prosody stays continuous across the turn.
+            tokenizer=tokenize.blingfire.SentenceTokenizer(max_token_len=900),
+        ),
         vad=silero.VAD.load(),
+        expressiveness=CONVERSATIONAL_EXPRESSIVENESS_PRESET,
     )
 
     def parse_value(payload: str, fallback: str) -> str:

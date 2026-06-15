@@ -8,6 +8,7 @@ from .chat_context import (
     ChatItem,
     ChatMessage,
     ChatRole,
+    ExpressiveContent,
     FunctionCall,
     FunctionCallOutput,
     ImageContent,
@@ -38,6 +39,7 @@ from .realtime import (
     RealtimeSessionReconnectedEvent,
     RemoteItemAddedEvent,
 )
+from .response_field import Response, ResponseField
 from .tool_context import (
     FunctionTool,
     ProviderTool,
@@ -65,6 +67,7 @@ __all__ = [
     "ChatContext",
     "ChatRole",
     "ChatMessage",
+    "ExpressiveContent",
     "ChatContent",
     "FunctionCall",
     "FunctionCallOutput",
@@ -110,6 +113,8 @@ __all__ = [
     "RealtimeSessionRestoredEvent",
     "LLMError",
     "RemoteItemAddedEvent",
+    "Response",
+    "ResponseField",
 ]
 
 # Cleanup docs of unexported modules
