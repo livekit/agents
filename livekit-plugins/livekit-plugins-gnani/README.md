@@ -3,9 +3,9 @@
 [![PyPI](https://img.shields.io/pypi/v/livekit-plugins-gnani)](https://pypi.org/project/livekit-plugins-gnani/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-[LiveKit Agents](https://github.com/livekit/agents) plugin for **[Gnani Vachana](https://gnani.ai/)** — high-accuracy Speech-to-Text and low-latency Text-to-Speech for Indian languages.
+[LiveKit Agents](https://github.com/livekit/agents) plugin for **[Gnani](https://gnani.ai/)** — high-accuracy Speech-to-Text (Prisma) and low-latency Text-to-Speech (Timbre) for Indian languages.
 
-> **Vachana** is a production-ready speech AI platform by [Gnani.ai](https://gnani.ai) supporting 10+ Indian languages with real-time streaming, multilingual transcription, and code-switching capabilities.
+>[Gnani.ai](https://gnani.ai) featuring **Prisma** (STT) and **Timbre** (TTS) models, supporting 10+ Indian languages with real-time streaming, multilingual transcription, and code-switching capabilities.
 
 ## Installation
 
@@ -80,7 +80,7 @@ In this plugin, STT is exposed as the `STT` class and supports two methods:
 - REST (batch)
 - ASR (real-time streaming over WebSocket)
 
-### STT access methods (REST + ASR)
+### STT access methods — Prisma (REST + ASR)
 
 ```python
 from livekit.plugins.gnani import STT
@@ -94,7 +94,7 @@ speech_event = await stt.recognize(audio_buffer)
 speech_stream = stt.stream()
 ```
 
-### TTS (Text-to-Speech) access methods
+### TTS access methods — Timbre
 
 ```python
 from livekit.plugins.gnani import TTS
@@ -114,15 +114,15 @@ tts_stream = tts_ws.stream()
 
 ## Features
 
-### STT
+### STT (Prisma)
 
 - **Batch recognition** — REST API (`POST /stt/v3`) for file-based transcription
 - **Real-time streaming** — WebSocket API for live audio transcription with VAD
-- **10+ Indian languages** — see [supported language codes](https://docs.inya.ai/vachana/STT/stt-websocket#supported-languages)
+- **10+ Indian languages** — see [supported language codes](https://docs.gnani.ai/api/STT/stt-websocket#supported-languages)
 - **Code-switching** — supports multilingual and code-mixed audio
 - **Sample rates** — 8 kHz and 16 kHz
 
-### TTS
+### TTS (Timbre)
 
 - **REST synthesis** — single-request batch audio generation (`synthesize_method="rest"`)
 - **SSE streaming** — lower-latency chunked synthesis via Server-Sent Events (`synthesize_method="sse"`)
@@ -132,20 +132,20 @@ tts_stream = tts_ws.stream()
 
 ## Supported Languages
 
-### STT Languages (Speech-to-Text)
+### STT Languages (Prisma)
 
-STT uses BCP-47 locale codes (e.g. `hi-IN`). For the full list of supported languages, see:
+Prisma uses BCP-47 locale codes (e.g. `hi-IN`). For the full list of supported languages, see:
 
-- **[STT REST — Supported Languages](https://docs.inya.ai/vachana/STT/speech-to-text#supported-languages)**
-- **[STT Realtime — Supported Languages](https://docs.inya.ai/vachana/STT/stt-websocket#supported-languages)**
+- **[STT REST — Supported Languages](https://docs.gnani.ai/api/STT/speech-to-text#supported-languages)**
+- **[STT Realtime — Supported Languages](https://docs.gnani.ai/api/STT/stt-websocket#supported-languages)**
 
 ---
 
-### TTS Languages (Text-to-Speech)
+### TTS Languages (Timbre)
 
-TTS uses ISO 639 language codes (e.g. `hi`, `bn`). Pass these via the `language` parameter.
+Timbre uses ISO 639 language codes (e.g. `hi`, `bn`). Pass these via the `language` parameter.
 
-For the full list of supported languages, see **[TTS — Supported Languages](https://docs.inya.ai/vachana/TTS/tts-inference#supported-languages)**.
+For the full list of supported languages, see **[TTS — Supported Languages](https://docs.gnani.ai/api/TTS/tts-inference#supported-languages)**.
 
 ## Available Voices
 
@@ -160,11 +160,11 @@ For the full list of supported languages, see **[TTS — Supported Languages](ht
 
 ## Architecture
 
-This plugin directly implements the Gnani Vachana REST and WebSocket APIs using `aiohttp` (for batch STT/TTS) and `websockets` (for streaming STT/TTS), adapting them into LiveKit's `stt.STT` and `tts.TTS` base classes. No external SDK is required — all connection logic, authentication, and audio format handling is self-contained. Authentication uses a single `api_key` passed via the `X-API-Key-ID` header.
+This plugin directly implements the Gnani REST and WebSocket APIs using `aiohttp` (for batch STT/TTS) and `websockets` (for streaming STT/TTS), adapting them into LiveKit's `stt.STT` and `tts.TTS` base classes. It uses the **Prisma** model for speech-to-text and the **Timbre** model for text-to-speech. No external SDK is required — all connection logic, authentication, and audio format handling is self-contained. Authentication uses a single `api_key` passed via the `X-API-Key-ID` header.
 
 ## Documentation
 
-- [Vachana API Docs](https://docs.inya.ai/vachana/introduction/introduction)
+- [Gnani API Docs](https://docs.gnani.ai/)
 - [LiveKit Agents Docs](https://docs.livekit.io/agents/)
 
 ## License
