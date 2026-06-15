@@ -215,6 +215,9 @@ class RunContext(Generic[Userdata_T]):
         )
         self._updates.append(pair)
 
+        if self._executor is None:
+            return  # standalone — no executor, so no tool lifecycle to report
+
         self._session.emit(
             "tool_execution_updated",
             ToolExecutionUpdatedEvent(
@@ -225,9 +228,6 @@ class RunContext(Generic[Userdata_T]):
                 )
             ),
         )
-
-        if self._executor is None:
-            return  # standalone — nothing else to do
 
         assert self._first_update_fut is not None
         if not self._first_update_fut.done():
