@@ -2,7 +2,6 @@ from . import io, run_result
 from .agent import Agent, AgentTask, ModelSettings
 from .agent_session import AgentSession, RecordingOptions, VoiceActivityVideoSampler
 from .events import (
-    AgentBackchannelOpportunityEvent,
     AgentEvent,
     AgentFalseInterruptionEvent,
     AgentStateChangedEvent,
@@ -50,7 +49,6 @@ __all__ = [
     "AgentStateChangedEvent",
     "FunctionToolsExecutedEvent",
     "AgentFalseInterruptionEvent",
-    "AgentBackchannelOpportunityEvent",
     "RemoteSession",
     "UserTurnExceededEvent",
     "TranscriptSynchronizer",

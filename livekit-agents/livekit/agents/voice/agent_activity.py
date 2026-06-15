@@ -2059,7 +2059,9 @@ class AgentActivity(RecognitionHooks):
             host._on_eot_prediction(ev)
 
     def on_agent_backchannel_opportunity(self, ev: AgentBackchannelOpportunityEvent) -> None:
-        self._session.emit("agent_backchannel_opportunity", ev)
+        # TODO: consume the backchannel opportunity internally (e.g. trigger a
+        # backchannel phrase). Kept internal for now — not surfaced as a public event.
+        pass
 
     def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool:
         # IMPORTANT: This method is sync to avoid it being cancelled by the AudioRecognition

@@ -283,7 +283,6 @@ EventTypes = Literal[
     "user_input_transcribed",
     "conversation_item_added",
     "agent_false_interruption",
-    "agent_backchannel_opportunity",
     "overlapping_speech",
     "function_tools_executed",
     "metrics_collected",
@@ -334,10 +333,10 @@ class EotPredictionEvent(BaseModel):
 
 
 class AgentBackchannelOpportunityEvent(BaseModel):
-    """Emitted when the turn detector predicts a window in which the agent could
-    backchannel (a short acknowledgment such as "mm-hmm") while the user is still
-    holding the floor. The library does not speak; subscribe and call
-    ``session.say(...)`` to produce the backchannel phrase."""
+    """Internal: a window in which the agent could backchannel (a short
+    acknowledgment such as "mm-hmm") while the user is still holding the floor,
+    as predicted by the turn detector. Passed to ``AgentActivity`` only — not
+    surfaced as a public ``AgentSession`` event yet."""
 
     type: Literal["agent_backchannel_opportunity"] = "agent_backchannel_opportunity"
     probability: float
@@ -505,7 +504,6 @@ AgentEvent = Annotated[
     | UserStateChangedEvent
     | AgentStateChangedEvent
     | AgentFalseInterruptionEvent
-    | AgentBackchannelOpportunityEvent
     | MetricsCollectedEvent
     | SessionUsageUpdatedEvent
     | ConversationItemAddedEvent
