@@ -827,8 +827,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 )
                 tasks.append(self._conn_task)
 
-                # surface a terminal connection failure (e.g. exhausting
-                # max_retry) so run() stops awaiting and re-raises it
+                # propagate a terminal connection failure out of run()
                 def _on_conn_task_done(task: asyncio.Task[None]) -> None:
                     if task.cancelled() or self._close_future is None or self._close_future.done():
                         return
@@ -1001,7 +1000,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         async with self._lock:
             if self._closed:
                 if self._close_future is not None:
-                    await self._close_future
+                    # _close_future may hold run()'s error; keep aclose() a no-op
+                    with contextlib.suppress(Exception):
+                        await self._close_future
                 return
 
             self._closed = True

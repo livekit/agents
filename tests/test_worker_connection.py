@@ -49,3 +49,4 @@ async def test_run_raises_when_connection_exhausts_retries() -> None:
                 await asyncio.wait_for(server.run(devmode=True), timeout=10)
         finally:
             await server.aclose()
+            await server.aclose()  # repeated aclose() stays a no-op
