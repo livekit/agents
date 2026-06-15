@@ -104,6 +104,16 @@ class EOUMetrics(_BaseMetrics):
     Set to 0.0 if the end of speech was not detected.
     """
 
+    first_transcript_after_eos_delay: float = 0.0
+    """Time between the end of speech (VAD or STT EOS) and the first transcript event
+    (interim or final) received after it.
+
+    Unlike ``transcription_delay`` (which measures the time to the *final* transcript),
+    this captures how quickly the provider returns its *first* result after the user
+    stops speaking, which is useful for comparing provider latency.
+    Set to 0.0 if the end of speech was not detected.
+    """
+
     on_user_turn_completed_delay: float
     """Time taken to invoke the user's `Agent.on_user_turn_completed` callback."""
 
