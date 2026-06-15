@@ -1134,7 +1134,14 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 retry_delay = min(retry_count * 2, 10)
                 retry_count += 1
 
-                logger.warning(
+                # The first reconnect runs at delay=0 and almost always succeeds —
+                # it's expected churn for control-plane websocket lifecycle and
+                # produces a steady trickle of self-healing WARNINGs that trip
+                # warning-level alerting with nothing actionable behind them.
+                # Only escalate to WARNING once a retry actually has to back
+                # off (second attempt onward, where retry_delay > 0).
+                log_fn = logger.info if retry_delay == 0 else logger.warning
+                log_fn(
                     f"failed to connect to livekit, retrying in {retry_delay}s",
                     extra={"retry_count": retry_count, "max_retry": self._max_retry, "error": e},
                 )
