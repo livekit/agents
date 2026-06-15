@@ -44,20 +44,20 @@ _EOU_MAX_HISTORY_TURNS = 6
 
 
 @dataclass
+class _EndOfTurnMetrics:
+    started_speaking_at: float | None
+    stopped_speaking_at: float | None
+    transcription_delay: float | None
+    end_of_turn_delay: float | None
+
+
+@dataclass
 class _EndOfTurnInfo:
     skip_reply: bool
     """If True, a reply was already triggered and should be skipped after end of turn detection."""
     new_transcript: str
     transcript_confidence: float
     metrics: _EndOfTurnMetrics
-
-
-@dataclass
-class _EndOfTurnMetrics:
-    started_speaking_at: float | None
-    stopped_speaking_at: float | None
-    transcription_delay: float | None
-    end_of_turn_delay: float | None
 
 
 def _compute_end_of_turn_metrics(
