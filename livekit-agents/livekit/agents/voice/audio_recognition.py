@@ -1426,9 +1426,9 @@ class AudioRecognition:
                                     delay=delay,
                                 )
                             )
-                            # a backchannel opportunity only makes sense while the user
-                            # still holds the floor (turn not ending) — otherwise the
-                            # agent generates a full reply for the same pause
+                            # surface the backchannel opportunity whenever it clears its
+                            # threshold, regardless of end-of-turn; AgentActivity decides
+                            # whether to acknowledge mid-turn or let it lead the reply
                             backchannel_probability = (
                                 prediction_event.backchannel_probability
                                 if prediction_event is not None
@@ -1438,12 +1438,12 @@ class AudioRecognition:
                                 backchannel_probability is not None
                                 and backchannel_threshold is not None
                                 and backchannel_probability >= backchannel_threshold
-                                and end_of_turn_probability < unlikely_threshold
                             ):
                                 self._hooks.on_agent_backchannel_opportunity(
                                     _AgentBackchannelOpportunityEvent(
                                         probability=backchannel_probability,
                                         threshold=backchannel_threshold,
+                                        end_of_turn=end_of_turn_probability >= unlikely_threshold,
                                         language=self._last_language,
                                     )
                                 )

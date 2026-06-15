@@ -334,13 +334,19 @@ class EotPredictionEvent(BaseModel):
 
 class _AgentBackchannelOpportunityEvent(BaseModel):
     """Internal: a window in which the agent could backchannel (a short
-    acknowledgment such as "mm-hmm") while the user is still holding the floor,
-    as predicted by the turn detector. Passed to ``AgentActivity`` only — not
-    surfaced as a public ``AgentSession`` event yet."""
+    acknowledgment such as "mm-hmm"), as predicted by the turn detector. Passed to
+    ``AgentActivity`` only — not surfaced as a public ``AgentSession`` event yet.
+
+    ``AgentActivity`` owns the decision of what to do with it: acknowledge while the
+    user keeps the floor (``end_of_turn`` False) or let the backchannel lead the reply
+    (``end_of_turn`` True)."""
 
     type: Literal["agent_backchannel_opportunity"] = "agent_backchannel_opportunity"
     probability: float
     threshold: float
+    end_of_turn: bool
+    """Whether the same prediction is also being treated as the end of the user's turn
+    (i.e. a reply is imminent)."""
     language: str | None = None
     created_at: float = Field(default_factory=time.time)
 

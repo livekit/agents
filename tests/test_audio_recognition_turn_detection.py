@@ -362,9 +362,9 @@ class TestEotPredictionDedup:
 
 
 class TestBackchannelOpportunityEmit:
-    """``on_agent_backchannel_opportunity`` fires only when the backchannel
-    probability clears its threshold AND the turn is still continuing (the same
-    pause must not both backchannel and commit a full reply)."""
+    """``on_agent_backchannel_opportunity`` fires whenever the backchannel
+    probability clears its threshold, regardless of end-of-turn; the event's
+    ``end_of_turn`` flag tells AgentActivity whether a reply is imminent."""
 
     @staticmethod
     async def _drive(ar: AudioRecognition, chat_ctx: MagicMock) -> None:
@@ -375,7 +375,7 @@ class TestBackchannelOpportunityEmit:
         if ar._end_of_turn_task is not None:
             await aio.cancel_and_wait(ar._end_of_turn_task)
 
-    async def test_emits_when_above_threshold_and_turn_continues(self) -> None:
+    async def test_emits_with_end_of_turn_false_when_turn_continues(self) -> None:
         ar = _make_full_recognition_for_eou()
         ar._turn_detector_stream.backchannel_threshold = AsyncMock(return_value=0.5)
         ar._last_language = "en"
@@ -390,17 +390,23 @@ class TestBackchannelOpportunityEmit:
         assert ev.probability == pytest.approx(0.8)
         assert ev.threshold == pytest.approx(0.5)
         assert ev.language == "en"
+        assert ev.end_of_turn is False
 
-    async def test_no_emit_when_turn_ends(self) -> None:
+    async def test_emits_with_end_of_turn_true_when_turn_ends(self) -> None:
+        """The turn-continuing gate was dropped: a backchannel above threshold
+        still fires at end-of-turn, flagged so AgentActivity can let it lead the
+        reply."""
         ar = _make_full_recognition_for_eou()
         ar._turn_detector_stream.backchannel_threshold = AsyncMock(return_value=0.5)
         chat_ctx = _make_chat_ctx_stub()
-        # eot 0.9 >= unlikely 0.5 → turn ends; backchannel high but must NOT emit
+        # eot 0.9 >= unlikely 0.5 → turn ends; backchannel 0.8 >= 0.5 → still emits
         ar._turn_detector_prediction_fut, _ = _resolved_prediction(0.9, backchannel_probability=0.8)
 
         await self._drive(ar, chat_ctx)
 
-        ar._hooks.on_agent_backchannel_opportunity.assert_not_called()
+        ar._hooks.on_agent_backchannel_opportunity.assert_called_once()
+        ev = ar._hooks.on_agent_backchannel_opportunity.call_args.args[0]
+        assert ev.end_of_turn is True
 
     async def test_no_emit_below_threshold(self) -> None:
         ar = _make_full_recognition_for_eou()
