@@ -420,7 +420,6 @@ class AgentActivity(RecognitionHooks):
         # Record the configuration change
         config_update = llm.AgentConfigUpdate(
             instructions=instructions,
-            agent_id=self._agent.id,
         )
         self._agent._chat_ctx.insert(config_update)
         self._session._chat_ctx.insert(config_update)
@@ -447,7 +446,6 @@ class AgentActivity(RecognitionHooks):
             config_update = llm.AgentConfigUpdate(
                 tools_added=tools_added,
                 tools_removed=tools_removed,
-                agent_id=self._agent.id,
             )
             config_update._tools = llm.ToolContext(tools).flatten()
             self._agent._chat_ctx.insert(config_update)
@@ -829,7 +827,6 @@ class AgentActivity(RecognitionHooks):
             initial_config = llm.AgentConfigUpdate(
                 instructions=self._agent.instructions,
                 tools_added=initial_tools,
-                agent_id=self._agent.id,
             )
             initial_config._tools = llm.ToolContext(self.tools).flatten()
             self._agent._chat_ctx.insert(initial_config)
