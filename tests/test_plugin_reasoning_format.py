@@ -51,6 +51,22 @@ async def test_cerebras_reasoning_format_omitted_by_default() -> None:
 
 
 @pytest.mark.asyncio
+async def test_openai_with_cerebras_reasoning_format_in_request() -> None:
+    """``LLM.with_cerebras`` forwards ``reasoning_format`` to the request body."""
+    llm = OpenAILLM.with_cerebras(
+        model="gpt-oss-120b",
+        api_key="test-key",
+        reasoning_format="hidden",
+    )
+    stream = llm.chat(chat_ctx=_chat_ctx())
+    try:
+        extra_body = stream._extra_kwargs.get("extra_body", {})
+        assert extra_body.get("reasoning_format") == "hidden"
+    finally:
+        await stream.aclose()
+
+
+@pytest.mark.asyncio
 async def test_xai_reasoning_format_in_request() -> None:
     """``LLM.with_x_ai`` forwards ``reasoning_format`` to the request body."""
     llm = OpenAILLM.with_x_ai(

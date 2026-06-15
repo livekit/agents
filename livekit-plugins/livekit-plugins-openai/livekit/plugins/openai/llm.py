@@ -277,6 +277,7 @@ class LLM(llm.LLM):
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        reasoning_format: NotGivenOr[ReasoningFormat] = NOT_GIVEN,
         safety_identifier: NotGivenOr[str] = NOT_GIVEN,
         prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
@@ -286,6 +287,10 @@ class LLM(llm.LLM):
 
         ``api_key`` must be set to your Cerebras API key, either using the argument or by setting
         the ``CEREBRAS_API_KEY`` environment variable.
+
+        ``reasoning_format`` controls how Cerebras reasoning models (e.g. ``gpt-oss-120b``) return
+        their thinking tokens; set it to ``"hidden"`` or ``"parsed"`` to keep reasoning out of the
+        spoken message content.
         """
 
         api_key = api_key or os.environ.get("CEREBRAS_API_KEY")
@@ -304,6 +309,7 @@ class LLM(llm.LLM):
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
             reasoning_effort=reasoning_effort,
+            reasoning_format=reasoning_format,
             safety_identifier=safety_identifier,
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
