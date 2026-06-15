@@ -413,7 +413,8 @@ SERVER_BACKCHANNEL_DEFAULT = 0.6
 
 
 class TestBackchannelThresholds:
-    """Backchannel thresholds: server-provided only, no overrides, no fallback."""
+    """Backchannel thresholds: server-provided defaults, disabled on the mini model
+    and after fallback (see TestResolveBackchannelThresholds for override layering)."""
 
     @staticmethod
     def _cloud() -> ThresholdOptions:
@@ -460,6 +461,61 @@ class TestBackchannelThresholds:
         assert opts.lookup_backchannel(LanguageCode("en")) is None
 
 
+class TestResolveBackchannelThresholds:
+    """User backchannel-threshold overrides layered against the server defaults,
+    mirroring the EOT override resolution in TestResolveThresholds."""
+
+    @staticmethod
+    def _cloud(overrides: Any = NOT_GIVEN) -> ThresholdOptions:
+        opts = ThresholdOptions(
+            "turn-detector-v1", backchannel_overrides=_normalize_overrides(overrides)
+        )
+        opts._update_defaults(
+            dict(SERVER_THRESHOLDS),
+            SERVER_DEFAULT_THRESHOLD,
+            dict(SERVER_BACKCHANNEL_THRESHOLDS),
+            SERVER_BACKCHANNEL_DEFAULT,
+        )
+        return opts
+
+    def test_no_override_adopts_server_backchannel(self) -> None:
+        opts = self._cloud()
+        assert opts.lookup_backchannel(LanguageCode("en")) == pytest.approx(
+            SERVER_BACKCHANNEL_THRESHOLDS["en"]
+        )
+
+    def test_scalar_override_applies_to_every_language(self) -> None:
+        opts = self._cloud(0.8)
+        assert opts.lookup_backchannel(LanguageCode("en")) == pytest.approx(0.8)
+        assert opts.lookup_backchannel(LanguageCode("ja")) == pytest.approx(0.8)
+
+    def test_dict_override_layers_on_server_map(self) -> None:
+        opts = self._cloud({"en": 0.5})
+        assert opts.lookup_backchannel(LanguageCode("en")) == pytest.approx(0.5)
+        # unmapped languages keep the server values + server default
+        assert opts.lookup_backchannel(LanguageCode("ja")) == pytest.approx(
+            SERVER_BACKCHANNEL_THRESHOLDS["ja"]
+        )
+        assert opts.lookup_backchannel(LanguageCode("de")) == pytest.approx(
+            SERVER_BACKCHANNEL_DEFAULT
+        )
+
+    def test_dict_keys_normalized(self) -> None:
+        opts = self._cloud({"English": 0.5})
+        assert opts.lookup_backchannel(LanguageCode("en")) == pytest.approx(0.5)
+
+    def test_scalar_override_enables_before_server_defaults(self) -> None:
+        # an explicit scalar override resolves up front, even though the server
+        # backchannel defaults haven't arrived yet
+        opts = ThresholdOptions("turn-detector-v1", backchannel_overrides=0.8)
+        assert opts.lookup_backchannel(LanguageCode("en")) == pytest.approx(0.8)
+
+    def test_update_backchannel_overrides_reresolves(self) -> None:
+        opts = self._cloud()
+        opts.update_backchannel_overrides(0.45)
+        assert opts.lookup_backchannel(LanguageCode("ja")) == pytest.approx(0.45)
+
+
 class TestOverrideWarning:
     def test_warning_on_construction_with_override(self, caplog: pytest.LogCaptureFixture) -> None:
         caplog.set_level(logging.WARNING, logger="livekit.agents")
@@ -467,6 +523,17 @@ class TestOverrideWarning:
             TurnDetector(unlikely_threshold=0.5)
         warnings = [
             r for r in caplog.records if "non-default turn detection threshold" in r.getMessage()
+        ]
+        assert len(warnings) == 1
+
+    def test_warning_on_construction_with_backchannel_override(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.WARNING, logger="livekit.agents")
+        with _clean_env(LIVEKIT_REMOTE_EOT_URL=None):
+            TurnDetector(backchannel_threshold=0.7)
+        warnings = [
+            r for r in caplog.records if "non-default backchannel threshold" in r.getMessage()
         ]
         assert len(warnings) == 1
 

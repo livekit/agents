@@ -36,6 +36,7 @@ class TurnDetector(_BaseStreamingTurnDetector):
         *,
         version: NotGivenOr[TurnDetectorVersions] = NOT_GIVEN,
         unlikely_threshold: NotGivenOr[float | dict[LanguageCode | str, float]] = NOT_GIVEN,
+        backchannel_threshold: NotGivenOr[float | dict[LanguageCode | str, float]] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
@@ -100,7 +101,7 @@ class TurnDetector(_BaseStreamingTurnDetector):
 
         opts = TurnDetectorOptions(
             sample_rate=sample_rate,
-            thresholds=ThresholdOptions(resolved_model, unlikely_threshold),
+            thresholds=ThresholdOptions(resolved_model, unlikely_threshold, backchannel_threshold),
         )
         super().__init__(opts=opts)
 
@@ -115,20 +116,32 @@ class TurnDetector(_BaseStreamingTurnDetector):
         return self._model
 
     def _warn_threshold_override(self) -> None:
-        if is_given(overrides := self._opts.thresholds.overrides):
+        thresholds = self._opts.thresholds
+        if is_given(overrides := thresholds.overrides):
             logger.warning(
                 "a non-default turn detection threshold was provided "
                 "(unlikely_threshold=%s); the server provides calibrated defaults and "
                 "overriding them may be suboptimal",
                 overrides,
             )
+        if is_given(bc_overrides := thresholds.backchannel_overrides):
+            logger.warning(
+                "a non-default backchannel threshold was provided "
+                "(backchannel_threshold=%s); the server provides calibrated defaults and "
+                "overriding them may be suboptimal",
+                bc_overrides,
+            )
 
     def update_options(
         self,
         *,
         unlikely_threshold: NotGivenOr[float | dict[LanguageCode | str, float]] = NOT_GIVEN,
+        backchannel_threshold: NotGivenOr[float | dict[LanguageCode | str, float]] = NOT_GIVEN,
     ) -> None:
-        self._opts.thresholds.update_overrides(unlikely_threshold)
+        if is_given(unlikely_threshold):
+            self._opts.thresholds.update_overrides(unlikely_threshold)
+        if is_given(backchannel_threshold):
+            self._opts.thresholds.update_backchannel_overrides(backchannel_threshold)
         self._warn_threshold_override()
 
     def stream(
