@@ -18,7 +18,7 @@ import inspect
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, cast
 
 import aiohttp
 
@@ -569,13 +569,24 @@ class RestSignalTransport:
                     request_id=None,
                     body=body[:500],
                 )
-            return await resp.json()
+            payload: object = await resp.json()
+            if not isinstance(payload, dict):
+                raise APIStatusError(
+                    message="resemble signal response was not a JSON object",
+                    status_code=resp.status,
+                    request_id=None,
+                    body=str(payload)[:500],
+                )
+
+            return cast(dict[str, Any], payload)
 
     def _ensure_session(self) -> aiohttp.ClientSession:
-        if not self._session:
-            self._session = utils.http_context.http_session()
+        session = self._session
+        if session is None:
+            session = utils.http_context.http_session()
+            self._session = session
 
-        return self._session
+        return session
 
 
 def _parse_signal_result(item: Mapping[str, Any]) -> SignalResult:
