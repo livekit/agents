@@ -1398,6 +1398,79 @@ async def test_silent_tool_call_pause_state_does_not_leak_into_tool_reply() -> N
     assert false_interruption_events[-1].resumed is True
 
 
+async def test_silent_tool_call_step_does_not_emit_false_interruption_resume() -> None:
+    """A silent tool-call step must not emit a false-interruption resume.
+
+    ``SpeechHandle`` is reused across the generation steps of a single turn. When
+    a silent tool-call step (no audio playout) records a preemptive pause and the
+    false-interruption timer fires *while that step is still active*, the runtime
+    must not report a false-interruption *resume*: nothing was ever played out for
+    this step, so resuming would leak stale per-step playout state. The pause is
+    undone silently and the later tool-reply step resumes playout on its own.
+    """
+    speed = 1
+    actions = FakeActions()
+    actions.add_user_speech(0.1, 0.2, "What's the weather in Tokyo?", stt_delay=0.05)
+
+    # Silent tool-call step: no spoken preamble/audio. The step stays active long
+    # enough that the false-interruption timer fires before it finishes.
+    actions.add_llm(
+        content="",
+        tool_calls=[
+            FunctionToolCall(
+                name="get_weather",
+                arguments='{"location": "Tokyo"}',
+                call_id="1",
+            )
+        ],
+        ttft=0.05,
+        duration=2.0,
+    )
+
+    # VAD-only speech that starts *and ends* during the silent tool-call step,
+    # so the false-interruption timer is scheduled and fires within that step.
+    actions.add_user_speech(0.85, 1.05, "", stt_delay=0.05)
+
+    actions.add_llm(
+        content="The weather in Tokyo is sunny today.",
+        input="The weather in Tokyo is sunny today.",
+        ttft=0.0,
+        duration=0.0,
+    )
+    actions.add_tts(0.5, ttfb=0.0, duration=0.0)
+
+    session = create_session(
+        actions,
+        speed_factor=speed,
+        can_pause_audio=True,
+        turn_handling={"interruption": {"false_interruption_timeout": 0.3 / speed}},
+    )
+    agent = MyAgent()
+
+    agent_state_events: list[AgentStateChangedEvent] = []
+    false_interruption_events: list[AgentFalseInterruptionEvent] = []
+
+    session.on("agent_state_changed", agent_state_events.append)
+    session.on("agent_false_interruption", false_interruption_events.append)
+
+    await asyncio.wait_for(
+        run_session(session, agent, drain_delay=1.5 / speed),
+        timeout=SESSION_TIMEOUT,
+    )
+
+    transitions = [(ev.old_state, ev.new_state) for ev in agent_state_events]
+
+    # The tool reply still plays out: the silent step transitions straight to
+    # speaking when the tool-reply audio starts.
+    assert ("thinking", "speaking") in transitions
+
+    # Before the fix, the false-interruption timer firing during the silent
+    # tool-call step emitted a spurious resume event even though no audio ever
+    # played for that step. After the fix, no such resume is reported because
+    # the current generation step never started playout.
+    assert not any(ev.resumed for ev in false_interruption_events)
+
+
 class FlushMultiSegmentAgent(Agent):
     """Agent whose llm_node flushes the reply into two segments via FlushSentinel."""
 

@@ -2411,6 +2411,7 @@ class AgentActivity(RecognitionHooks):
             except BaseException:
                 return
 
+            speech_handle._mark_generation_playout_started()
             self._session._update_agent_state(
                 "speaking",
                 start_time=started_speaking_at,
@@ -2805,6 +2806,7 @@ class AgentActivity(RecognitionHooks):
                 )
             self._session._early_assistant_metrics = early_metrics
 
+            speech_handle._mark_generation_playout_started()
             self._session._update_agent_state(
                 "speaking",
                 start_time=started_speaking_at,
@@ -3297,6 +3299,7 @@ class AgentActivity(RecognitionHooks):
             except BaseException:
                 return
 
+            speech_handle._mark_generation_playout_started()
             self._session._update_agent_state(
                 "speaking",
                 start_time=started_speaking_at,
@@ -3752,6 +3755,22 @@ class AgentActivity(RecognitionHooks):
             ):
                 # already new speech is scheduled, do nothing
                 self._paused_speech = None
+                return
+
+            if not self._paused_speech.handle._generation_playout_started:
+                # The current generation step never started audio playout (e.g. a
+                # silent tool-call step). The pause was recorded preemptively, so
+                # there is nothing to "resume" — undo the preemptive pause without
+                # emitting a false-interruption resume that would otherwise leak
+                # stale playout state into a later step.
+                if (
+                    self._session.options.interruption["resume_false_interruption"]
+                    and (audio_output := self._session.output.audio)
+                    and audio_output.can_pause
+                ):
+                    audio_output.resume()
+                self._paused_speech = None
+                self._false_interruption_timer = None
                 return
 
             resumed = False
