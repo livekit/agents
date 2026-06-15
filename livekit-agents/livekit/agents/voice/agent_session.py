@@ -248,7 +248,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
         # deprecated
-        preemptive_generation: NotGivenOr[bool] = NOT_GIVEN,
+        preemptive_generation: NotGivenOr[bool | PreemptiveGenerationOptions] = NOT_GIVEN,
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         false_interruption_timeout: NotGivenOr[float | None] = NOT_GIVEN,

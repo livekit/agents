@@ -258,7 +258,7 @@ def _migrate_turn_handling(
     allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
     resume_false_interruption: NotGivenOr[bool] = NOT_GIVEN,
     agent_false_interruption_timeout: NotGivenOr[float | None] = NOT_GIVEN,
-    preemptive_generation: NotGivenOr[bool] = NOT_GIVEN,
+    preemptive_generation: NotGivenOr[bool | PreemptiveGenerationOptions] = NOT_GIVEN,
 ) -> TurnHandlingOptions:
     """Build a TurnHandlingOptions from deprecated keyword arguments."""
     if is_given(agent_false_interruption_timeout):
@@ -296,6 +296,18 @@ def _migrate_turn_handling(
         result["turn_detection"] = turn_detection
 
     if is_given(preemptive_generation):
-        result["preemptive_generation"] = {"enabled": preemptive_generation}
+        # `preemptive_generation` is documented (and now typed) as
+        # `bool | PreemptiveGenerationOptions`. The bool form is the legacy
+        # shorthand for `{"enabled": <bool>}`; the dict form passes through
+        # so callers can also set `preemptive_tts` / `max_speech_duration`
+        # / `max_retries`. Without this branch the dict was re-wrapped as
+        # `{"enabled": {"enabled": False}}`, the `_resolve_preemptive_generation`
+        # merge produced a truthy `enabled` value, and the session report
+        # showed `enabled: True` regardless of what the caller passed
+        # (https://github.com/livekit/agents/issues/6112).
+        if isinstance(preemptive_generation, dict):
+            result["preemptive_generation"] = preemptive_generation
+        else:
+            result["preemptive_generation"] = {"enabled": preemptive_generation}
 
     return result
