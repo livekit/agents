@@ -807,6 +807,27 @@ async def test_stt_eos_falls_back_to_update_vad_when_no_active_stream() -> None:
         await _close_test_session(recognition._session)
 
 
+async def test_stt_eos_without_timestamp_preserves_previous_stt_anchor() -> None:
+    recognition = await _make_stt_eos_recognition()
+    input_started_at = time.time() - 10.0
+    recognition._input_started_at = input_started_at
+
+    try:
+        await recognition._on_stt_event(
+            _final_transcript_event(text="hello", start_time=1.0, end_time=2.5)
+        )
+        stt_anchor = recognition._last_speaking_time
+
+        await recognition._on_stt_event(SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
+
+        assert stt_anchor == input_started_at + 2.5
+        assert recognition._last_speaking_time == stt_anchor
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
 async def test_backchannel_boundary_releases_end_boundary_transcript() -> None:
     actions = FakeActions()
     session = create_session(

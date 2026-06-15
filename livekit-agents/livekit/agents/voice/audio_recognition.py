@@ -1032,7 +1032,7 @@ class AudioRecognition:
 
             self._speaking = False
             self._user_turn_committed = True
-            if not self._vad or self._last_speaking_time is None:
+            if (not self._vad and has_stt_end_time) or self._last_speaking_time is None:
                 # vad disabled or missed a speech, use stt timestamp
                 self._last_speaking_time = stt_last_speaking_time
 
