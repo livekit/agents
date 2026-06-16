@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import date
 from typing import Annotated
 
+from context import speech_only
+from get_card import GetCardTask
 from hotel_db import (
     MAX_PARTY_SIZE,
     TODAY,
@@ -13,8 +15,6 @@ from hotel_db import (
     Unavailable,
     speak_usd,
 )
-from context import speech_only
-from get_card import GetCardTask
 from persona import COMMON_INSTRUCTIONS
 from pydantic import Field
 

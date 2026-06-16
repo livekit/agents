@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import date, time
 from typing import Annotated
 
-from hotel_db import MAX_PARTY_SIZE, TODAY, HotelDB, RestaurantReservation, Unavailable, speak_time
 from context import speech_only
+from hotel_db import MAX_PARTY_SIZE, TODAY, HotelDB, RestaurantReservation, Unavailable, speak_time
 from persona import COMMON_INSTRUCTIONS
 from pydantic import Field
 

@@ -12,6 +12,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from benchmark import build_expected, diff_databases
 from book_restaurant import BookRestaurantTask
 from book_room import BookRoomTask
+from context import speech_only
 from dotenv import load_dotenv
 from fake_data.seed import build_seed_bytes
 from get_card import GetCardTask
@@ -32,7 +33,6 @@ from hotel_db import (
     speak_usd,
 )
 from modify_booking import ModifyBookingTask
-from context import speech_only
 from persona import COMMON_INSTRUCTIONS
 from policies import build_lookup_policy_tool
 from pydantic import Field
@@ -54,10 +54,7 @@ from livekit.agents import (
 from livekit.agents.evals import (
     JudgeGroup,
     accuracy_judge,
-    coherence_judge,
-    conciseness_judge,
     handoff_judge,
-    relevancy_judge,
     safety_judge,
     task_completion_judge,
     tool_use_judge,
