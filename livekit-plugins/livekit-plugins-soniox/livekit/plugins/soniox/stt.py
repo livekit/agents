@@ -124,12 +124,20 @@ class STTOptions:
     Range: 500–3000.
     See: https://soniox.com/docs/stt/rt/endpoint-detection"""
 
+    endpoint_sensitivity: float | None = None
+    """How readily the model emits speech endpoints. Range: -1.0 to 1.0.
+    Higher values make endpoints more likely (finalize sooner); lower values make them
+    less likely. Leave as None to use the server-side default.
+    Introduced in the Soniox v5 model; earlier models reject it."""
+
     client_reference_id: str | None = None
     translation: TranslationConfig | None = None
 
     def __post_init__(self) -> None:
         if not (500 <= self.max_endpoint_delay_ms <= 3000):
             raise ValueError("max_endpoint_delay_ms must be between 500 and 3000")
+        if self.endpoint_sensitivity is not None and not (-1.0 <= self.endpoint_sensitivity <= 1.0):
+            raise ValueError("endpoint_sensitivity must be between -1.0 and 1.0")
 
 
 class STT(stt.STT):
@@ -261,6 +269,8 @@ class SpeechStream(stt.SpeechStream):
             "client_reference_id": self._stt._params.client_reference_id,
         }
         config["max_endpoint_delay_ms"] = self._stt._params.max_endpoint_delay_ms
+        if self._stt._params.endpoint_sensitivity is not None:
+            config["endpoint_sensitivity"] = self._stt._params.endpoint_sensitivity
         if self._stt._params.translation is not None:
             tr = self._stt._params.translation
             translation_dict: dict[str, Any] = {"type": tr.type}
