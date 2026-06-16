@@ -1609,6 +1609,27 @@ async def test_agent_turn_detection_override_resolves_endpointing_per_activity()
         await session.aclose()
 
 
+async def test_runtime_endpointing_opts_survive_handoff() -> None:
+    """update_options changes are recorded as overrides, so a new activity keeps them."""
+    from livekit.agents.voice.agent_session import AgentSession
+
+    from .fake_vad import FakeVAD
+
+    session = AgentSession(vad=FakeVAD(fake_user_speeches=[]))
+    try:
+        session.update_options(endpointing_opts={"mode": "dynamic", "alpha": 0.5, "min_delay": 0.4})
+
+        # a fresh activity (as built on agent handoff) re-resolves from overrides
+        activity = AgentActivity(Agent(instructions="test"), session)
+        assert activity.endpointing_opts["mode"] == "dynamic"
+        assert activity.endpointing_opts["alpha"] == 0.5
+        assert activity.endpointing_opts["min_delay"] == 0.4
+        # untouched key still gets the streaming default
+        assert activity.endpointing_opts["max_delay"] == 2.5
+    finally:
+        await session.aclose()
+
+
 class FlushMultiSegmentAgent(Agent):
     """Agent whose llm_node flushes the reply into two segments via FlushSentinel."""
 

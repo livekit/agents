@@ -1107,23 +1107,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 "min_endpointing_delay and max_endpointing_delay are deprecated, "
                 "use endpointing_opts instead"
             )
-            endpointing_opts = EndpointingOptions(
-                mode=self._opts.endpointing["mode"],
-                min_delay=(
-                    min_endpointing_delay
-                    if is_given(min_endpointing_delay)
-                    else self._opts.endpointing["min_delay"]
-                ),
-                max_delay=(
-                    max_endpointing_delay
-                    if is_given(max_endpointing_delay)
-                    else self._opts.endpointing["max_delay"]
-                ),
-            )
+            endpointing_opts = EndpointingOptions()
+            if is_given(min_endpointing_delay):
+                endpointing_opts["min_delay"] = min_endpointing_delay
+            if is_given(max_endpointing_delay):
+                endpointing_opts["max_delay"] = max_endpointing_delay
 
         if is_given(endpointing_opts):
             if (mode := endpointing_opts.get("mode")) is not None:
                 self._opts.endpointing["mode"] = mode
+                self._opts.endpointing_overrides["mode"] = mode
             if (min_delay := endpointing_opts.get("min_delay")) is not None:
                 self._opts.endpointing["min_delay"] = min_delay
                 self._opts.endpointing_overrides["min_delay"] = min_delay
@@ -1132,6 +1125,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._opts.endpointing_overrides["max_delay"] = max_delay
             if (alpha := endpointing_opts.get("alpha")) is not None:
                 self._opts.endpointing["alpha"] = alpha
+                self._opts.endpointing_overrides["alpha"] = alpha
 
         if is_given(turn_detection):
             self._turn_detection = turn_detection
