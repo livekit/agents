@@ -753,7 +753,9 @@ async def entrypoint(ctx: JobContext):
         userdata=userdata,
         stt=inference.STT("deepgram/nova-3", language="multi"),
         llm=inference.LLM("google/gemini-2.5-flash"),
-        tts=inference.TTS("inworld/inworld-tts-2", voice="Luna"),
+        tts=inference.TTS(
+            "inworld/inworld-tts-2", voice="Luna", extra_kwargs={"delivery_mode": "CREATIVE"}
+        ),
         expressive=presets.HEALTHCARE,
         preemptive_generation=True,
     )

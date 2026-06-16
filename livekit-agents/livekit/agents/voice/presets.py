@@ -48,6 +48,11 @@ _REGISTRY: dict[str, dict[Preset, ExpressiveOptions]] = {
         Preset.HEALTHCARE: _pf._INWORLD_HEALTHCARE,
         Preset.CONVERSATIONAL: _pf._INWORLD_CONVERSATIONAL,
     },
+    "cartesia": {
+        Preset.CUSTOMER_SERVICE: _pf._CARTESIA_CUSTOMER_SERVICE,
+        Preset.HEALTHCARE: _pf._CARTESIA_HEALTHCARE,
+        Preset.CONVERSATIONAL: _pf._CARTESIA_CONVERSATIONAL,
+    },
 }
 
 

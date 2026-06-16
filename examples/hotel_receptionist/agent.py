@@ -668,7 +668,9 @@ async def hotel_receptionist_agent(ctx: JobContext) -> None:
         userdata=userdata,
         stt=inference.STT("deepgram/nova-3"),
         llm=inference.LLM("google/gemini-2.5-flash"),
-        tts=inference.TTS("inworld/inworld-tts-2", voice="Ashley"),
+        tts=inference.TTS(
+            "inworld/inworld-tts-2", voice="Ashley", extra_kwargs={"delivery_mode": "CREATIVE"}
+        ),
         expressive=presets.CUSTOMER_SERVICE,
         turn_detection=MultilingualModel(),
         vad=silero.VAD.load(),
