@@ -357,6 +357,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             async def sentence_task() -> None:
                 async for ev in sent_stream:
+                    self._mark_started()
                     await ws.send_json({"type": "input.text", "text": ev.token})
                 await ws.send_json({"type": "input.done"})
 
