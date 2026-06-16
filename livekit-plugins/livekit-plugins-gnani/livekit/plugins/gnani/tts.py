@@ -17,7 +17,7 @@ import base64
 import json
 import os
 from dataclasses import dataclass, replace
-from typing import Any, Literal
+from typing import Literal
 
 import aiohttp
 
@@ -53,13 +53,6 @@ GnaniTTSSynthesizeMethod = Literal["rest", "sse", "websocket"]
 SUPPORTED_SAMPLE_RATES = (8000, 16000, 22050, 44100)
 
 _WAV_HEADER_SIZE = 44
-
-
-def _check_deprecated_args(kwargs: dict[str, Any]) -> None:
-    """Warn about deprecated kwargs that are no longer used."""
-    for name in ("organization_id", "user_id", "http_session"):
-        if name in kwargs:
-            logger.warning(f"`{name}` is deprecated and no longer used")
 
 
 @dataclass
@@ -108,7 +101,6 @@ class TTS(tts.TTS):
         base_url: str = GNANI_TTS_BASE_URL,
         language: str = "hi",
         synthesize_method: GnaniTTSSynthesizeMethod = "rest",
-        **kwargs: Any,
     ) -> None:
         if sample_rate not in SUPPORTED_SAMPLE_RATES:
             raise ValueError(
@@ -120,8 +112,6 @@ class TTS(tts.TTS):
             sample_rate=sample_rate,
             num_channels=num_channels,
         )
-
-        _check_deprecated_args(kwargs)
 
         self._api_key = api_key or os.environ.get("GNANI_API_KEY")
         if not self._api_key:
