@@ -66,7 +66,10 @@ DENY_COLUMNS = frozenset(
 
 # Resolve FK surrogate -> stable attribute (correlated subquery, single table).
 FK_RESOLVE: dict[tuple[str, str], str] = {
-    ("hotel_bookings", "room_id"): "(SELECT type || '/' || room_view FROM hotel_rooms WHERE id = room_id) AS room_type_view",
+    (
+        "hotel_bookings",
+        "room_id",
+    ): "(SELECT type || '/' || room_view FROM hotel_rooms WHERE id = room_id) AS room_type_view",
     (
         "restaurant_reservations",
         "table_id",

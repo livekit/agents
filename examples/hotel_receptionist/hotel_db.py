@@ -1090,9 +1090,7 @@ class HotelDB:
         if not row:
             return None
         nights = (check_out - check_in).days
-        _, _, total, _ = compute_invoice(
-            nightly_rate=row[1], nights=nights, extras=list(extras)
-        )
+        _, _, total, _ = compute_invoice(nightly_rate=row[1], nights=nights, extras=list(extras))
         return total
 
     async def record_group_inquiry(

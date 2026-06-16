@@ -52,7 +52,9 @@ def build_lookup_policy_tool() -> RawFunctionTool:
     async def lookup_policy(raw_arguments: dict[str, object], ctx: RunContext) -> str:
         topic = str(raw_arguments.get("topic", ""))
         if topic not in policies:
-            raise ToolError(f"unknown topic {topic!r} - valid topics: {', '.join(sorted(policies))}")
+            raise ToolError(
+                f"unknown topic {topic!r} - valid topics: {', '.join(sorted(policies))}"
+            )
         return policies[topic]
 
     return lookup_policy

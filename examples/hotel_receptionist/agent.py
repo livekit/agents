@@ -303,8 +303,11 @@ class HotelReceptionistAgent(Agent):
         """
         try:
             code, t, total = await ctx.userdata.db.book_tour(
-                tour_id=tour, guest_name=guest_name, guest_phone=guest_phone,
-                on_date=on_date, party_size=party_size,
+                tour_id=tour,
+                guest_name=guest_name,
+                guest_phone=guest_phone,
+                on_date=on_date,
+                party_size=party_size,
             )
         except (NotFound, Unavailable) as e:
             raise ToolError(str(e)) from None
@@ -339,8 +342,11 @@ class HotelReceptionistAgent(Agent):
         """
         try:
             code = await ctx.userdata.db.request_flight_reconfirmation(
-                room=room, airline=airline, flight_number=flight_number,
-                flight_date=flight_date, booking_reference=booking_reference,
+                room=room,
+                airline=airline,
+                flight_number=flight_number,
+                flight_date=flight_date,
+                booking_reference=booking_reference,
                 seat_check=seat_check,
             )
         except NotFound:
@@ -371,7 +377,9 @@ class HotelReceptionistAgent(Agent):
         """
         try:
             code = await ctx.userdata.db.book_airport_car(
-                room=room, pickup_date=pickup_date, pickup_time=pickup_time,
+                room=room,
+                pickup_date=pickup_date,
+                pickup_time=pickup_time,
                 passengers=passengers,
             )
         except NotFound:
@@ -414,10 +422,10 @@ class HotelReceptionistAgent(Agent):
             "after each interruption: (1) \"I've checked every room in the house - nothing is "
             f"free tonight, and I'm so sorry.\" (2) \"We've arranged a comparable room for you "
             f"tonight at {r.walk_partner}, two blocks away - the room and the taxi over are "
-            f"both on us.\" (3) \"Your room here is guaranteed from {return_day} - all at no "
+            f'both on us." (3) "Your room here is guaranteed from {return_day} - all at no '
             "extra cost to you.\" Track which pieces you've said; repeat any that got talked "
             "over. If the guest is still upset after hearing all three, don't argue - record a "
-            "manager callback (record_followup, kind=\"callback\") and tell them the manager "
+            'manager callback (record_followup, kind="callback") and tell them the manager '
             "will call; do this BEFORE wrapping up the call."
         )
 
@@ -485,7 +493,9 @@ class HotelReceptionistAgent(Agent):
         if room_type != "any":
             avail = [a for a in avail if a.type == room_type]
         if not avail:
-            kind = "smoking " if smoking_filter else "non-smoking " if smoking_filter is False else ""
+            kind = (
+                "smoking " if smoking_filter else "non-smoking " if smoking_filter is False else ""
+            )
             what = f"{kind}{room_type.replace('_', ' ')}" if room_type != "any" else f"{kind}rooms"
             return f"no {what} available for those dates"
         return " | ".join(
@@ -532,7 +542,9 @@ class HotelReceptionistAgent(Agent):
     @function_tool
     async def start_restaurant_booking(self, ctx: RunContext[Userdata]) -> str | None:
         """Start the restaurant-reservation flow. Call it the moment the caller wants a table - the flow collects date, party size, time, name, and phone itself. Its return is the FINAL result of the reservation: relay it and move on - nothing further to confirm or call afterwards."""
-        reservation = await BookRestaurantTask(db=ctx.userdata.db, chat_ctx=speech_only(self.chat_ctx))
+        reservation = await BookRestaurantTask(
+            db=ctx.userdata.db, chat_ctx=speech_only(self.chat_ctx)
+        )
         ctx.userdata.booked_restaurant_codes.append(reservation.code)
         return (
             f"You're set for {speak_time(reservation.time)} on "
@@ -574,7 +586,9 @@ class HotelReceptionistAgent(Agent):
         """Verify the caller once per call. Tools that mutate the booking
         (modify, cancel) update or clear the cache themselves."""
         if ctx.userdata.verified_booking is None:
-            verify = await VerifyBookingTask(db=ctx.userdata.db, chat_ctx=speech_only(self.chat_ctx))
+            verify = await VerifyBookingTask(
+                db=ctx.userdata.db, chat_ctx=speech_only(self.chat_ctx)
+            )
             ctx.userdata.verified_booking = verify.booking
         return ctx.userdata.verified_booking
 
@@ -651,7 +665,7 @@ class HotelReceptionistAgent(Agent):
                 f" | WARNING: the room is double-booked {conflict[0].strftime('%B %-d')} to "
                 f"{conflict[1].strftime('%B %-d')} - no room is assigned to this booking for that "
                 "period. Break the news with ownership and an apology, then run "
-                "resolve_room_conflict to fix it (procedure: lookup_policy topic \"guest_walks\"). "
+                'resolve_room_conflict to fix it (procedure: lookup_policy topic "guest_walks"). '
                 "Don't pretend the booking is fine."
             )
         return info
@@ -926,8 +940,10 @@ async def on_session_end(ctx: JobContext) -> None:
     try:
         sim_ctx = ctx.simulation_context()
         if sim_ctx is None:
-            logger.info("local expected-state diff skipped: no simulation context "
-                        "(job/room metadata carried no SimulationDispatch)")
+            logger.info(
+                "local expected-state diff skipped: no simulation context "
+                "(job/room metadata carried no SimulationDispatch)"
+            )
         expected_state = (sim_ctx.userdata().get("expected_state") if sim_ctx else None) or []
         if sim_ctx is not None and not expected_state:
             logger.info("local expected-state diff skipped: scenario has no expected_state")

@@ -95,7 +95,9 @@ class BookRoomTask(AgentTask[RoomBooking]):
             return "email captured - next: call open_phone_dialog"
         if not self._card_last4:
             return "phone captured - next: call open_credit_card_dialog"
-        total = f"total {speak_usd(self._quoted_total)} including tax, " if self._quoted_total else ""
+        total = (
+            f"total {speak_usd(self._quoted_total)} including tax, " if self._quoted_total else ""
+        )
         return (
             "all required details captured - read the booking back in one sentence "
             f"(dates, room and extras, {total}card ending {self._card_last4}) and call "
@@ -184,9 +186,7 @@ class BookRoomTask(AgentTask[RoomBooking]):
             if view in ("", "null", "none", "any", "no preference", "unspecified"):
                 view = None
         if view is not None and view not in chosen.views:
-            where = ", ".join(
-                f"{a.type.replace('_', ' ')} ({' or '.join(a.views)})" for a in avail
-            )
+            where = ", ".join(f"{a.type.replace('_', ' ')} ({' or '.join(a.views)})" for a in avail)
             raise ToolError(
                 f"no {view}-view {room_type.replace('_', ' ')} for those dates - "
                 f"the views by room type are: {where}. Tell the caller and let them choose."

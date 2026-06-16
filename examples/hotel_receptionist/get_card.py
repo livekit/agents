@@ -99,8 +99,7 @@ class GetCardTask(AgentTask[GetCardResult]):
         digits = "".join(c for c in card_number if c.isdigit())
         if not 13 <= len(digits) <= 19:
             raise ToolError(
-                "that card number has the wrong number of digits - "
-                "ask the caller to read it again"
+                "that card number has the wrong number of digits - ask the caller to read it again"
             )
         if not _luhn_ok(digits):
             raise ToolError(
@@ -123,9 +122,7 @@ class GetCardTask(AgentTask[GetCardResult]):
         if not 0 <= year <= 99:
             raise ToolError("that expiration year is invalid - ask the caller to repeat it")
         if (2000 + year, month) < (TODAY.year, TODAY.month):
-            raise ToolError(
-                "that date is in the past, the card is expired - ask for another card"
-            )
+            raise ToolError("that date is in the past, the card is expired - ask for another card")
         self._expiration = f"{month:02d}/{year:02d}"
         return f"expiration recorded | {self._status()}"
 
@@ -138,7 +135,9 @@ class GetCardTask(AgentTask[GetCardResult]):
         """
         code = security_code.strip()
         if not code.isdigit() or not 3 <= len(code) <= 4:
-            raise ToolError("the security code should be 3 or 4 digits - ask the caller to repeat it")
+            raise ToolError(
+                "the security code should be 3 or 4 digits - ask the caller to repeat it"
+            )
         self._security_code = code
         return f"security code recorded | {self._status()}"
 
