@@ -1523,6 +1523,92 @@ async def test_user_supplied_turn_detector_passes_through() -> None:
         await session.aclose()
 
 
+async def test_streaming_detector_uses_streaming_endpointing_defaults() -> None:
+    """Default session → streaming detector → tighter 0.3/2.5 endpointing defaults."""
+    from livekit.agents.voice.agent_session import AgentSession
+
+    session = AgentSession()
+    try:
+        assert session._opts.endpointing["min_delay"] == 0.3
+        assert session._opts.endpointing["max_delay"] == 2.5
+        assert session._opts.endpointing_overrides == {}
+    finally:
+        await session.aclose()
+
+
+async def test_non_streaming_detector_uses_legacy_endpointing_defaults() -> None:
+    """A non-streaming mode keeps the legacy 0.5/3.0 defaults."""
+    from livekit.agents.voice.agent_session import AgentSession
+
+    session = AgentSession(turn_handling={"turn_detection": "vad"})
+    try:
+        assert session._opts.endpointing["min_delay"] == 0.5
+        assert session._opts.endpointing["max_delay"] == 3.0
+    finally:
+        await session.aclose()
+
+
+async def test_explicit_endpointing_overrides_streaming_default_per_key() -> None:
+    """An explicit delay is honored; the unset one still gets the streaming default."""
+    from livekit.agents.voice.agent_session import AgentSession
+
+    session = AgentSession(turn_handling={"endpointing": {"min_delay": 0.4}})
+    try:
+        assert session._opts.endpointing["min_delay"] == 0.4
+        assert session._opts.endpointing["max_delay"] == 2.5
+        assert session._opts.endpointing_overrides == {"min_delay": 0.4}
+    finally:
+        await session.aclose()
+
+
+async def test_user_streaming_detector_uses_streaming_defaults() -> None:
+    """A user-constructed streaming detector also triggers the streaming defaults."""
+    from livekit.agents import inference
+    from livekit.agents.voice.agent_session import AgentSession
+
+    session = AgentSession(
+        turn_handling={"turn_detection": inference.TurnDetector(version="v1-mini")}
+    )
+    try:
+        assert session._opts.endpointing["min_delay"] == 0.3
+        assert session._opts.endpointing["max_delay"] == 2.5
+    finally:
+        await session.aclose()
+
+
+async def test_deprecated_turn_detection_vad_uses_legacy_defaults() -> None:
+    """Deprecated turn_detection arg + no delays → legacy defaults (non-streaming)."""
+    from livekit.agents.voice.agent_session import AgentSession
+
+    session = AgentSession(turn_detection="vad")
+    try:
+        assert session._opts.endpointing["min_delay"] == 0.5
+        assert session._opts.endpointing["max_delay"] == 3.0
+    finally:
+        await session.aclose()
+
+
+async def test_agent_turn_detection_override_resolves_endpointing_per_activity() -> None:
+    """endpointing_opts uses the activity's resolved detector, not just the session's."""
+    from livekit.agents.voice.agent_session import AgentSession
+
+    from .fake_vad import FakeVAD
+
+    # session default → streaming detector; provide VAD so it validates
+    session = AgentSession(vad=FakeVAD(fake_user_speeches=[]))
+    try:
+        streaming_activity = AgentActivity(Agent(instructions="test"), session)
+        assert streaming_activity.endpointing_opts["min_delay"] == 0.3
+        assert streaming_activity.endpointing_opts["max_delay"] == 2.5
+
+        # an agent overriding to VAD falls back to legacy defaults for this activity
+        vad_activity = AgentActivity(Agent(instructions="test", turn_detection="vad"), session)
+        assert vad_activity.endpointing_opts["min_delay"] == 0.5
+        assert vad_activity.endpointing_opts["max_delay"] == 3.0
+    finally:
+        await session.aclose()
+
+
 class FlushMultiSegmentAgent(Agent):
     """Agent whose llm_node flushes the reply into two segments via FlushSentinel."""
 
