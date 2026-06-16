@@ -1201,3 +1201,121 @@ scenarios:
     feature: abusive_caller
     channel: phone
     difficulty: "4"
+
+  # --- 32: Spa / health-club booking (deterministic: spa_bookings row)
+- label: Book a spa massage for two
+  instructions: |
+    PERSONA: Daniel Foster, a relaxed guest planning a treat with his partner. You're easygoing and a little chatty, happy to slow down for the agent.
+    OPENING LINE: "Hi - I'd like to book a couples massage at your spa while we're here."
+    FACTS (reveal each only when asked, one per turn):
+    - your name: Daniel Foster
+    - a callback number: 415-555-0182
+    - the day you want: this Thursday, June 11th
+    - the time you want: 3 in the afternoon
+    - it's for the two of you
+    DO, IN ORDER:
+    1. Ask for a couples deep-tissue massage for the two of you; let the agent walk you through the spa's options and pricing.
+    2. Curveball (a question, not a change): ask "is there a limit on how many people can book the deep-tissue massage together?" - you just want to know the policy; you're still booking for the two of you.
+    3. Give your details one at a time as the agent asks.
+    4. Don't hang up until the agent gives you a reference number for the booking.
+    GROUND TRUTH (never spoken): this Thursday is 2026-06-11; 3 in the afternoon is 15:00.
+  agent_expectations: >
+    Treats this as a spa booking and looks the spa catalog up rather than
+    answering from memory, presenting the service's price, duration, and
+    party limit before booking. Answers the party-limit question from the
+    catalog (the deep-tissue massage is for up to two) rather than guessing.
+    Books a single couples appointment for the two of them - service, the date
+    (this Thursday, 2026-06-11), the 3:00 PM time, party of two, and the caller's
+    name and phone - reads the key details back, and only confirms once it has
+    actually booked the appointment, producing one real reference number (not two
+    bookings, not a promise to set it up). Quotes the duration and price as
+    concrete facts from the catalog.
+  tags:
+    feature: spa_booking
+    channel: phone
+    difficulty: "2"
+  userdata:
+    expected_state:
+      - |
+        INSERT INTO spa_bookings
+          (code, service_id, guest_name, guest_phone, date, time, party_size, total)
+        VALUES ('IGNORED', 'deep_tissue_massage', 'Daniel Foster', '4155550182',
+                '2026-06-11', '15:00:00', 2, 0)
+
+  # --- 33: Business-centre booking (deterministic: business_center_bookings row)
+- label: Book a business-centre meeting room
+  instructions: |
+    PERSONA: Marcus Bell, a guest who needs space to run a working session and is in a hurry.
+    OPENING LINE: "I need to book a meeting room in your business centre for tomorrow."
+    FACTS (reveal each only when asked, one per turn):
+    - tomorrow, starting at 2 in the afternoon
+    - you need the room for three hours
+    - your name: Marcus Bell
+    - your phone: 415-555-0288
+    DO, IN ORDER:
+    1. Ask to book a meeting room for tomorrow afternoon; give the start time and the three hours when asked.
+    2. Curveball: ask "what is that going to cost me?" - you want the concrete figure, not "the centre will tell you".
+    3. Do not hang up until you have a reference number - if you do not get one, ask: "and what is the booking reference?"
+    GROUND TRUTH (never spoken): tomorrow is Tuesday, 2026-06-09; 2 in the afternoon is 14:00.
+  agent_expectations: >
+    Looks up the business-centre catalog before quoting anything and narrows the
+    request with the caller: which service, the date and start time, and how long.
+    Books the meeting room for tomorrow (2026-06-09) at 2:00 PM for the three
+    hours the caller asked for with book_business_center, and answers the cost
+    question with the concrete figure from the catalog (forty dollars per hour, so
+    one hundred twenty dollars for three hours) rather than leaving it open or
+    handing it off. Reads back a real reference number that only exists because the
+    booking tool actually ran; never narrates a confirmation it did not make.
+  tags:
+    feature: business_center_booking
+    channel: phone
+    difficulty: "2"
+  userdata:
+    expected_state:
+      - |
+        INSERT INTO business_center_bookings
+          (code, service_id, guest_name, guest_phone, date, time, duration_hours, total)
+        VALUES ('IGNORED', 'meeting_room', 'Marcus Bell', '4155550288',
+                '2026-06-09', '14:00:00', 3, 12000)
+
+  # --- 34: Florist order (deterministic: florist_orders row; card message denylisted)
+- label: Order flowers to a room with a gift-card message
+  instructions: |
+    PERSONA: Marcus Webb, warm and a little rushed, arranging a surprise for his wife.
+    OPENING LINE: "Hi - I'd like to send some flowers up to a room at your hotel."
+    FACTS (reveal each only when asked, one per turn):
+    - your name: Marcus Webb
+    - your callback number: 415-555-0182
+    - which arrangement: the dozen long-stem roses
+    - where it goes: room 412
+    - the delivery day: this Friday, June 12th
+    - the gift-card message: "Happy ten years, my love. Yours always, Marcus."
+    DO, IN ORDER:
+    1. Ask what flower options they have and let them walk you through it; then pick the roses.
+    2. Curveball: ask "can you guarantee it's there before noon, while she's still in the room?"
+       - you want a real answer about the delivery window, not a vague "sure".
+    3. Give the room, the day, and the card message as the agent asks; let them read the message back.
+    4. Don't hang up until the agent confirms the order is placed and gives you a reference number.
+    GROUND TRUTH (never spoken): this Friday is 2026-06-12.
+  agent_expectations: >
+    Looks up the florist catalog and presents the arrangements with their prices,
+    letting the caller choose rather than choosing for them. Collects the delivery
+    date (this Friday, 2026-06-12), where it goes (room 412), the caller's name and
+    callback number, and the gift-card message - and reads the card message back so
+    it's exactly right. Answers the delivery-window question with the real policy
+    (the florist delivers between 10 AM and 6 PM, and same-day delivery needs the
+    order placed before the 2 PM cutoff) rather than promising a guaranteed
+    before-noon slot it can't commit to. Actually places the order with order_flowers
+    (not a vague "I'll get that arranged") and confirms it with a reference number,
+    reading back the arrangement, where it's going, the date, and the total.
+  tags:
+    feature: florist_order
+    channel: phone
+    difficulty: "2"
+  userdata:
+    expected_state:
+      - |
+        INSERT INTO florist_orders
+          (code, arrangement_id, guest_name, guest_phone, deliver_to, date, message, total, status)
+        VALUES ('IGNORED', 'roses', 'Marcus Webb', '4155550182', '412', '2026-06-12',
+                'IGNORED', 'IGNORED', 'confirmed')

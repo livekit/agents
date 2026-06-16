@@ -316,6 +316,100 @@ TOURS: dict[str, Tour] = {
     ),
 }
 
+
+@dataclass(frozen=True)
+class SpaService:
+    name: str
+    price: int  # cents, per guest
+    duration_min: int
+    max_party: int
+    description: str
+
+
+# Bookable through the spa / health club desk. policies/spa.md describes the
+# same catalog to the agent - keep the two in sync.
+SPA_SERVICES: dict[str, SpaService] = {
+    "deep_tissue_massage": SpaService(
+        name="Deep-tissue massage",
+        price=14000,
+        duration_min=60,
+        max_party=2,
+        description="60-minute deep-tissue massage with a licensed therapist",
+    ),
+    "signature_facial": SpaService(
+        name="Signature facial",
+        price=12000,
+        duration_min=50,
+        max_party=2,
+        description="50-minute signature facial, all skin types",
+    ),
+    "personal_training": SpaService(
+        name="Personal training session",
+        price=8000,
+        duration_min=45,
+        max_party=1,
+        description="45-minute one-on-one session in the health club with a trainer",
+    ),
+    "group_yoga": SpaService(
+        name="Group yoga class",
+        price=4000,
+        duration_min=60,
+        max_party=8,
+        description="60-minute group yoga class in the studio",
+    ),
+}
+
+
+@dataclass(frozen=True)
+class BusinessCenterService:
+    name: str
+    price_per_hour: int | None  # cents; None for flat-priced services
+    flat_price: int | None
+    max_hours: int
+    description: str
+
+
+# Bookable through the business centre. policies/business_center.md describes the
+# same catalog to the agent - keep the two in sync.
+BUSINESS_CENTER_SERVICES: dict[str, BusinessCenterService] = {
+    "meeting_room": BusinessCenterService(
+        name="Meeting room",
+        price_per_hour=4000,
+        flat_price=None,
+        max_hours=8,
+        description="seats up to 8, screen and whiteboard, booked by the hour",
+    ),
+    "secretarial": BusinessCenterService(
+        name="Secretarial service",
+        price_per_hour=3500,
+        flat_price=None,
+        max_hours=4,
+        description="typing, dictation, and document prep, booked by the hour",
+    ),
+    "printing": BusinessCenterService(
+        name="Printing and binding",
+        price_per_hour=None,
+        flat_price=2500,
+        max_hours=1,
+        description="flat-rate print, copy, and bind job, ready same day",
+    ),
+}
+
+
+@dataclass(frozen=True)
+class FloralArrangement:
+    name: str
+    price: int  # cents, flat per arrangement
+
+
+# Ordered through the concierge desk via the hotel florist. policies/florist.md
+# describes the same catalog to the agent - keep the two in sync.
+FLORIST_ARRANGEMENTS: dict[str, FloralArrangement] = {
+    "bouquet": FloralArrangement(name="Seasonal hand-tied bouquet", price=6500),
+    "roses": FloralArrangement(name="Dozen long-stem roses", price=9500),
+    "centerpiece": FloralArrangement(name="Table centerpiece arrangement", price=14000),
+}
+
 # The partner property used when a confirmed guest has to be walked.
 WALK_PARTNER_HOTEL = "the Harbor House"
 
@@ -926,6 +1020,125 @@ class HotelDB:
             await self.on_change()
         return code, tour, total
 
+    async def book_spa_appointment(
+        self,
+        *,
+        service_id: str,
+        guest_name: str,
+        guest_phone: str,
+        on_date: date,
+        at_time: time,
+        party_size: int,
+    ) -> tuple[str, SpaService, int]:
+        service = SPA_SERVICES.get(service_id)
+        if service is None:
+            raise NotFound(
+                f"no such spa service: {service_id} - options: {', '.join(SPA_SERVICES)}"
+            )
+        if on_date < TODAY:
+            raise Unavailable(f"{on_date.isoformat()} is in the past")
+        if party_size > service.max_party:
+            raise Unavailable(f"{service.name} takes at most {service.max_party} guests")
+        total = service.price * party_size
+        code = shortuuid("SPA-")
+        with self.connection as conn:
+            _insert(
+                conn,
+                "spa_bookings",
+                {
+                    "code": code,
+                    "service_id": service_id,
+                    "guest_name": guest_name,
+                    "guest_phone": "".join(c for c in guest_phone if c.isdigit()),
+                    "date": on_date.isoformat(),
+                    "time": at_time.isoformat(),
+                    "party_size": party_size,
+                    "total": total,
+                },
+            )
+        if self.on_change:
+            await self.on_change()
+        return code, service, total
+
+    async def book_business_center(
+        self,
+        *,
+        service_id: str,
+        guest_name: str,
+        guest_phone: str,
+        on_date: date,
+        at_time: time,
+        duration_hours: int,
+    ) -> tuple[str, BusinessCenterService, int]:
+        service = BUSINESS_CENTER_SERVICES.get(service_id)
+        if service is None:
+            raise NotFound(
+                f"no such service: {service_id} - options: {', '.join(BUSINESS_CENTER_SERVICES)}"
+            )
+        if on_date < TODAY:
+            raise Unavailable(f"{on_date.isoformat()} is in the past")
+        if duration_hours > service.max_hours:
+            raise Unavailable(f"{service.name} is booked for at most {service.max_hours} hours")
+        total = service.flat_price or (service.price_per_hour or 0) * duration_hours
+        code = shortuuid("BIZ-")
+        with self.connection as conn:
+            _insert(
+                conn,
+                "business_center_bookings",
+                {
+                    "code": code,
+                    "service_id": service_id,
+                    "guest_name": guest_name,
+                    "guest_phone": "".join(c for c in guest_phone if c.isdigit()),
+                    "date": on_date.isoformat(),
+                    "time": at_time.isoformat(),
+                    "duration_hours": duration_hours,
+                    "total": total,
+                },
+            )
+        if self.on_change:
+            await self.on_change()
+        return code, service, total
+
+    async def order_flowers(
+        self,
+        *,
+        arrangement_id: str,
+        guest_name: str,
+        guest_phone: str,
+        deliver_to: str,
+        on_date: date,
+        card_message: str,
+    ) -> tuple[str, FloralArrangement, int]:
+        arrangement = FLORIST_ARRANGEMENTS.get(arrangement_id)
+        if arrangement is None:
+            raise NotFound(
+                f"no such arrangement: {arrangement_id} - options: "
+                f"{', '.join(FLORIST_ARRANGEMENTS)}"
+            )
+        if on_date < TODAY:
+            raise Unavailable(f"{on_date.isoformat()} is in the past")
+        total = arrangement.price
+        code = shortuuid("FLR-")
+        with self.connection as conn:
+            _insert(
+                conn,
+                "florist_orders",
+                {
+                    "code": code,
+                    "arrangement_id": arrangement_id,
+                    "guest_name": guest_name,
+                    "guest_phone": "".join(c for c in guest_phone if c.isdigit()),
+                    "deliver_to": deliver_to,
+                    "date": on_date.isoformat(),
+                    "message": card_message,
+                    "total": total,
+                },
+            )
+        if self.on_change:
+            await self.on_change()
+        return code, arrangement, total
+
     async def request_flight_reconfirmation(
         self,
         *,
@@ -1362,6 +1575,45 @@ CREATE TABLE IF NOT EXISTS tour_bookings (
     party_size   INTEGER NOT NULL CHECK (party_size >= 1),
     total        INTEGER NOT NULL,
     status       TEXT    NOT NULL DEFAULT 'confirmed' CHECK (status IN ('confirmed','cancelled'))
+);
+
+CREATE TABLE IF NOT EXISTS spa_bookings (
+    id           INTEGER PRIMARY KEY,
+    code         TEXT    NOT NULL UNIQUE,
+    service_id   TEXT    NOT NULL CHECK (service_id IN ('deep_tissue_massage','signature_facial','personal_training','group_yoga')),
+    guest_name   TEXT    NOT NULL,
+    guest_phone  TEXT    NOT NULL,
+    date         DATE    NOT NULL,
+    time         TIME    NOT NULL,
+    party_size   INTEGER NOT NULL CHECK (party_size >= 1),
+    total        INTEGER NOT NULL,
+    status       TEXT    NOT NULL DEFAULT 'confirmed' CHECK (status IN ('confirmed','cancelled'))
+);
+
+CREATE TABLE IF NOT EXISTS business_center_bookings (
+    id             INTEGER PRIMARY KEY,
+    code           TEXT    NOT NULL UNIQUE,
+    service_id     TEXT    NOT NULL CHECK (service_id IN ('meeting_room','secretarial','printing')),
+    guest_name     TEXT    NOT NULL,
+    guest_phone    TEXT    NOT NULL,
+    date           DATE    NOT NULL,
+    time           TIME    NOT NULL,
+    duration_hours INTEGER NOT NULL CHECK (duration_hours >= 1),
+    total          INTEGER NOT NULL,
+    status         TEXT    NOT NULL DEFAULT 'confirmed' CHECK (status IN ('confirmed','cancelled'))
+);
+
+CREATE TABLE IF NOT EXISTS florist_orders (
+    id             INTEGER PRIMARY KEY,
+    code           TEXT    NOT NULL UNIQUE,
+    arrangement_id TEXT    NOT NULL CHECK (arrangement_id IN ('bouquet','roses','centerpiece')),
+    guest_name     TEXT    NOT NULL,
+    guest_phone    TEXT    NOT NULL,
+    deliver_to     TEXT    NOT NULL,
+    date           DATE    NOT NULL,
+    message        TEXT    NOT NULL DEFAULT '',
+    total          INTEGER NOT NULL,
+    status         TEXT    NOT NULL DEFAULT 'confirmed' CHECK (status IN ('confirmed','cancelled'))
 );
 
 CREATE TABLE IF NOT EXISTS flight_reconfirmations (

@@ -99,7 +99,7 @@ You're the lead receptionist, holding the whole call and routing each request to
 - Existing booking changes: start_booking_modification (dates, room type, room view, extras, party size). Cancel via cancel_room_booking. Late arrival ("I'll be in past midnight") -> flag_late_arrival with a short note.
 - A just-arrived/in-house guest says their room is wrong - not the view or type they booked ("I booked a garden view and this isn't it"): that's a room move, NOT a callback. Verify, look up the booking, and be honest if the record differs from their claim - then start_booking_modification and change the view (or type) to what they want; the flow finds a matching room and reassigns it. Only fall back to a manager followup if no matching room is actually available.
 - Wake-up call: schedule_wakeup_call (room, name, date, time) - it actually sets the call; never write it up as a followup note. The wake-up procedure for worried sleepers is in lookup_policy(topic="guest_services").
-- Concierge asks: sightseeing tours -> lookup_policy(topic="tours") to present options, then book_tour. Flight reconfirmation -> collect airline, flight number, date, and booking reference, then request_flight_reconfirmation (the concierge calls the carrier and rings the room - never claim the flight is confirmed yourself). Ride to the airport -> book_airport_car for the hotel car; taxi-vs-hotel-car costs are in lookup_policy(topic="location_and_transport").
+- Concierge asks: sightseeing tours -> lookup_policy(topic="tours") to present options, then book_tour. Spa or health-club services (massage, facial, personal training, yoga) -> lookup_policy(topic="spa") to present options, then book_spa_appointment. Flowers / a flower arrangement delivered to a room or recipient -> lookup_policy(topic="florist") to present arrangements, let the caller pick, collect the delivery date, where it goes, and the gift-card message (read the message back), then order_flowers. Flight reconfirmation -> collect airline, flight number, date, and booking reference, then request_flight_reconfirmation (the concierge calls the carrier and rings the room - never claim the flight is confirmed yourself). Ride to the airport -> book_airport_car for the hotel car; taxi-vs-hotel-car costs are in lookup_policy(topic="location_and_transport"). Business centre (a meeting room, secretarial help, or a printing job) -> lookup_policy(topic="business_center") to present options, then book_business_center.
 - A verified booking's room turns out to be double-booked (lookup_booking warns you): own it - apologize plainly, no hiding behind "the system" - then resolve_room_conflict applies the procedure (free in-house move or upgrade first; walk to the partner hotel only if the house is full). Full procedure: lookup_policy(topic="guest_walks").
 - Card on file not going through / guest offers a replacement card: start_card_update (it verifies, then collects the new card). The moment a replacement card is offered, run it on THIS call - never defer an offered card to check-in. Discretion is the whole game: "isn't going through at the moment - possibly a technical issue", never "declined" or "rejected", never speculate about their funds. Only if they have no other card to give: no pressure - the booking stays held, suggest they check with their card issuer in case it's a technical fault, and offer a callback (record_followup kind="callback") to retry; in that no-card case a working card isn't needed until check-in.
 - Existing restaurant reservation: move the date/time (and party size) with modify_restaurant_reservation - one step, keeps the same confirmation code. Cancel via cancel_restaurant_reservation. Both verify with last name + the RES code.
@@ -319,6 +319,113 @@ class HotelReceptionistAgent(Agent):
             f"total {speak_usd(total)} ({t.description}) | confirm the pickup time, spot, and "
             "total to the caller - these are fixed, give them as facts; no further tool call "
             "is needed for this tour."
+        )
+
+    @function_tool
+    async def book_spa_appointment(
+        self,
+        ctx: RunContext[Userdata],
+        service: Literal[
+            "deep_tissue_massage", "signature_facial", "personal_training", "group_yoga"
+        ],
+        on_date: date,
+        at_time: time,
+        party_size: Annotated[int, Field(ge=1)],
+        guest_name: str,
+        guest_phone: str,
+    ) -> str:
+        """Book a spa or health-club service (massage, facial, personal training, yoga). The catalog (services, prices, durations, hours) is in lookup_policy topic "spa" - look it up first and narrow with the caller (which service, date, time, party size) before booking. The options are for the CALLER to pick from, never pick for them. Once they pick and agree, THIS CALL is the booking - saying "I'll get that set up" books nothing; nothing exists until this returns a reference.
+
+        Args:
+            service: The spa service the caller picked.
+            on_date: Appointment date in ISO YYYY-MM-DD format.
+            at_time: Appointment start time in 24-hour HH:MM format.
+            party_size: How many people the appointment is for.
+            guest_name: The caller's full name.
+            guest_phone: The caller's phone number, in case the spa needs to reach them.
+        """
+        try:
+            code, s, total = await ctx.userdata.db.book_spa_appointment(
+                service_id=service, guest_name=guest_name, guest_phone=guest_phone,
+                on_date=on_date, at_time=at_time, party_size=party_size,
+            )
+        except (NotFound, Unavailable) as e:
+            raise ToolError(str(e)) from None
+        return (
+            f"{s.name} booked for {party_size} on {on_date.strftime('%A, %B %-d')} at "
+            f"{speak_time(at_time)}; reference {_speak_code(code)}. {s.duration_min} minutes, "
+            f"total {speak_usd(total)} ({s.description}) | confirm the service, date, time, and "
+            "total to the caller; no further tool call is needed for this appointment."
+        )
+
+    @function_tool
+    async def book_business_center(
+        self,
+        ctx: RunContext[Userdata],
+        service: Literal["meeting_room", "secretarial", "printing"],
+        on_date: date,
+        at_time: time,
+        duration_hours: Annotated[int, Field(ge=1)],
+        guest_name: str,
+        guest_phone: str,
+    ) -> str:
+        """Book a business-centre service - a meeting room, secretarial help, or a printing job. The catalog (rates, hours, what's included) is in lookup_policy topic "business_center" - look it up first and narrow with the caller (which service, the date and start time, and how long) before booking. The options are for the CALLER to pick from, never pick for them. Once they pick and agree, THIS CALL is the booking - saying "I'll get that set up" books nothing; nothing exists until this returns a reference.
+
+        Args:
+            service: The service the caller picked.
+            on_date: Service date in ISO YYYY-MM-DD format.
+            at_time: Start time in 24-hour HH:MM format.
+            duration_hours: How many hours the caller needs (printing is a flat one-hour job).
+            guest_name: The caller's full name.
+            guest_phone: The caller's phone number, in case the business centre needs to reach them.
+        """
+        try:
+            code, s, total = await ctx.userdata.db.book_business_center(
+                service_id=service, guest_name=guest_name, guest_phone=guest_phone,
+                on_date=on_date, at_time=at_time, duration_hours=duration_hours,
+            )
+        except (NotFound, Unavailable) as e:
+            raise ToolError(str(e)) from None
+        return (
+            f"{s.name} booked for {on_date.strftime('%A, %B %-d')} at {speak_time(at_time)}; "
+            f"reference {_speak_code(code)}. Total {speak_usd(total)} ({s.description}) | confirm "
+            "the service, start time, and total to the caller - these are fixed, give them as "
+            "facts; no further tool call is needed."
+        )
+
+    @function_tool
+    async def order_flowers(
+        self,
+        ctx: RunContext[Userdata],
+        arrangement: Literal["bouquet", "roses", "centerpiece"],
+        on_date: date,
+        deliver_to: str,
+        card_message: str,
+        guest_name: str,
+        guest_phone: str,
+    ) -> str:
+        """Order a flower arrangement from the hotel florist for delivery to a room or recipient. The catalog (arrangements, prices, delivery cutoff) is in lookup_policy topic "florist" - look it up first and let the caller pick the arrangement, never pick for them. Collect the delivery date, where it goes (room number or recipient name), and the gift-card message, and read the card message back so it's right. Once they pick and agree, THIS CALL places the order - saying "I'll get that arranged" orders nothing; nothing exists until this returns a reference.
+
+        Args:
+            arrangement: The arrangement the caller picked.
+            on_date: Delivery date in ISO YYYY-MM-DD format.
+            deliver_to: Where it goes - a room number or the recipient's name.
+            card_message: The gift-card message exactly as the caller dictates it.
+            guest_name: The caller's full name.
+            guest_phone: The caller's phone number, in case the florist needs to reach them.
+        """
+        try:
+            code, a, total = await ctx.userdata.db.order_flowers(
+                arrangement_id=arrangement, guest_name=guest_name, guest_phone=guest_phone,
+                deliver_to=deliver_to, on_date=on_date, card_message=card_message,
+            )
+        except (NotFound, Unavailable) as e:
+            raise ToolError(str(e)) from None
+        return (
+            f"{a.name} ordered for delivery to {deliver_to} on "
+            f"{on_date.strftime('%A, %B %-d')}; reference {_speak_code(code)}; total "
+            f"{speak_usd(total)} | confirm the arrangement, where it's going, the date, and the "
+            "total to the caller - no further tool call is needed for this order."
         )
 
     @function_tool
