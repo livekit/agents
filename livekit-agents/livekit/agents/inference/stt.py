@@ -48,7 +48,6 @@ DeepgramFluxModels = Literal[
 CartesiaModels = Literal[
     "cartesia/ink-whisper",
     "cartesia/ink-2",
-    "cartesia/ink-2-latest",
 ]
 AssemblyAIModels = Literal[
     "assemblyai/universal-streaming",

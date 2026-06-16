@@ -1,3 +1,5 @@
+"""Unit tests for ElevenLabs STT plugin configuration."""
+
 from __future__ import annotations
 
 import pytest
@@ -29,6 +31,7 @@ def _new_stream(*, server_vad=NOT_GIVEN) -> elevenlabs_stt.SpeechStream:
         sample_rate=16000,
         server_vad=server_vad,
         keyterms=NOT_GIVEN,
+        no_verbatim=False,
     )
     stream._language = None
     stream._event_ch = _EventSink()
@@ -78,3 +81,45 @@ def test_manual_commit_still_waits_for_empty_commit() -> None:
 
     assert stream._event_ch.events[-1].type == stt.SpeechEventType.END_OF_SPEECH
     assert stream._speaking is False
+
+
+def _stt(**kwargs: object) -> elevenlabs_stt.STT:
+    return elevenlabs_stt.STT(api_key="test-key", model_id="scribe_v2_realtime", **kwargs)
+
+
+def test_no_verbatim_defaults_to_false() -> None:
+    assert _stt()._opts.no_verbatim is False
+
+
+def test_no_verbatim_can_be_enabled() -> None:
+    assert _stt(no_verbatim=True)._opts.no_verbatim is True
+
+
+def test_update_options_sets_no_verbatim() -> None:
+    instance = _stt()
+    assert instance._opts.no_verbatim is False
+    instance.update_options(no_verbatim=True)
+    assert instance._opts.no_verbatim is True
+
+
+def test_update_options_leaves_no_verbatim_untouched_when_not_given() -> None:
+    instance = _stt(no_verbatim=True)
+    instance.update_options(tag_audio_events=False)
+    assert instance._opts.no_verbatim is True
+
+
+def test_update_options_forwards_no_verbatim_to_active_streams() -> None:
+    # no_verbatim is a WebSocket query param applied at connect time, so a live
+    # realtime stream must be told to reconnect. Verify STT.update_options
+    # forwards it to active streams (which trigger a reconnect).
+    instance = _stt()
+    captured: dict[str, object] = {}
+
+    class _FakeStream:
+        def update_options(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    fake = _FakeStream()
+    instance._streams.add(fake)
+    instance.update_options(no_verbatim=True)
+    assert captured.get("no_verbatim") is True

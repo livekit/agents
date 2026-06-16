@@ -102,14 +102,17 @@ class AvatarSession(BaseAvatarSession):
         # subsequent generations are routed to the (about-to-arrive)
         # avatar identity immediately. wait_remote_track buffers
         # frames until the video track shows up, so nothing is lost
-        # in the gap.
-        agent_session.output.audio = DataStreamAudioOutput(
-            room=room,
-            destination_identity=self._avatar_participant_identity,
-            sample_rate=SAMPLE_RATE,
-            wait_remote_track=rtc.TrackKind.KIND_VIDEO,
-            clear_buffer_timeout=None,
-            wait_playback_start=True,
+        # in the gap. replace_audio_tail keeps the TranscriptSynchronizer
+        # / RecorderAudioOutput chain intact across hot swaps.
+        agent_session.output.replace_audio_tail(
+            DataStreamAudioOutput(
+                room=room,
+                destination_identity=self._avatar_participant_identity,
+                sample_rate=SAMPLE_RATE,
+                wait_remote_track=rtc.TrackKind.KIND_VIDEO,
+                clear_buffer_timeout=None,
+                wait_playback_start=True,
+            ),
         )
 
         async with LemonSliceAPI(

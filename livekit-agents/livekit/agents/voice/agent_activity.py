@@ -84,6 +84,7 @@ from .speech_handle import DEFAULT_INPUT_DETAILS, InputDetails, SpeechHandle
 from .tool_executor import _resolve_async_tool_options, _ToolExecutor
 from .turn import (
     EndpointingOptions,
+    PreemptiveGenerationOptions,
     TurnDetectionMode,
     _StreamingTurnDetector,
     _StreamingTurnDetectorStream,
@@ -195,7 +196,7 @@ class AgentActivity(RecognitionHooks):
         self._authorization_allowed = asyncio.Event()
         self._authorization_allowed.set()
 
-        self._drain_blocked_tasks: list[asyncio.Task[Any]] = []
+        self._drain_blocked_tasks: set[asyncio.Task[Any]] = set()
         self._mcp_tools: list[mcp.MCPToolset] = []
 
         # activity-scoped executor: cancels cancellable tools / awaits the rest on drain,
@@ -395,6 +396,13 @@ class AgentActivity(RecognitionHooks):
         )
 
     @property
+    def preemptive_generation_opts(self) -> PreemptiveGenerationOptions:
+        # session is always fully resolved; agent-level keys override it
+        agent_preemptive = self._agent._turn_handling.get("preemptive_generation", {})
+        session_preemptive = self._session.options.preemptive_generation
+        return PreemptiveGenerationOptions(**{**session_preemptive, **agent_preemptive})
+
+    @property
     def min_endpointing_delay(self) -> float:
         # this resolves to the fixed value from either agent or session instead of the dynamic one
         return self.endpointing_opts["min_delay"]
@@ -450,7 +458,6 @@ class AgentActivity(RecognitionHooks):
         # Record the configuration change
         config_update = llm.AgentConfigUpdate(
             instructions=instructions,
-            agent_id=self._agent.id,
         )
         self._agent._chat_ctx.insert(config_update)
         self._session._chat_ctx.insert(config_update)
@@ -477,7 +484,6 @@ class AgentActivity(RecognitionHooks):
             config_update = llm.AgentConfigUpdate(
                 tools_added=tools_added,
                 tools_removed=tools_removed,
-                agent_id=self._agent.id,
             )
             config_update._tools = llm.ToolContext(tools).flatten()
             self._agent._chat_ctx.insert(config_update)
@@ -870,7 +876,6 @@ class AgentActivity(RecognitionHooks):
             initial_config = llm.AgentConfigUpdate(
                 instructions=self._agent.instructions,
                 tools_added=initial_tools,
-                agent_id=self._agent.id,
             )
             initial_config._tools = llm.ToolContext(self.tools).flatten()
             self._agent._chat_ctx.insert(initial_config)
@@ -963,7 +968,8 @@ class AgentActivity(RecognitionHooks):
             return
 
         self._scheduling_paused = True
-        self._drain_blocked_tasks = blocked_tasks or []
+        if blocked_tasks:
+            self._add_drain_blocked_tasks(blocked_tasks)
         self._wake_up_scheduling_task()
 
         if self._scheduling_atask is not None:
@@ -971,6 +977,12 @@ class AgentActivity(RecognitionHooks):
             # This means that even if the SpeechHandle themselves have finished,
             # we still wait for the entire execution (e.g function_tools)
             await asyncio.shield(self._scheduling_atask)
+
+    def _add_drain_blocked_tasks(self, tasks: list[asyncio.Task[Any]]) -> None:
+        # tasks blocked on an agent handoff are excluded from the drain wait,
+        # otherwise drain would wait for them while the handoff waits for drain's lock
+        self._drain_blocked_tasks.update(tasks)
+        self._wake_up_scheduling_task()
 
     async def _resume_scheduling_task(self) -> None:
         assert self._lock.locked(), "_finalize_main_task should only be used when locked."
@@ -980,6 +992,7 @@ class AgentActivity(RecognitionHooks):
 
         self._scheduling_paused = False
         self._new_turns_blocked = False
+        self._drain_blocked_tasks.clear()
         self._scheduling_atask = asyncio.create_task(
             self._scheduling_task(), name="_scheduling_task"
         )
@@ -1014,6 +1027,10 @@ class AgentActivity(RecognitionHooks):
 
         # When resuming, the AgentSession.update_agent must use the same AgentActivity instance!
         async with self._lock:
+            if self._closed:
+                # already closed by the session close
+                return None
+
             span = tracer.start_span(
                 "pause_agent_activity",
                 attributes={trace_types.ATTR_AGENT_LABEL: self._agent.label},
@@ -2006,7 +2023,7 @@ class AgentActivity(RecognitionHooks):
         )
 
     def on_preemptive_generation(self, info: _PreemptiveGenerationInfo) -> None:
-        preemptive_opts = self._session.options.preemptive_generation
+        preemptive_opts = self.preemptive_generation_opts
         if (
             not preemptive_opts["enabled"]
             or self._scheduling_paused
@@ -2773,7 +2790,7 @@ class AgentActivity(RecognitionHooks):
 
         # start synthesis preemptively (before the speech is scheduled) when enabled;
         # otherwise it starts right after scheduling below
-        preemptive_opts = self._session.options.preemptive_generation
+        preemptive_opts = self.preemptive_generation_opts
         synthesize_task: asyncio.Task[None] | None = None
         if (
             audio_output is not None
