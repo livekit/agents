@@ -363,8 +363,9 @@ class TestEotPredictionDedup:
 
 class TestBackchannelOpportunityEmit:
     """``on_agent_backchannel_opportunity`` fires whenever the backchannel
-    probability clears its threshold, regardless of end-of-turn; the event's
-    ``end_of_turn`` flag tells AgentActivity whether a reply is imminent."""
+    probability clears its threshold, regardless of end-of-turn; the event carries
+    the end-of-turn probability and threshold so AgentActivity can gauge how close
+    the pause is to a reply."""
 
     @staticmethod
     async def _drive(ar: AudioRecognition, chat_ctx: MagicMock) -> None:
@@ -375,7 +376,7 @@ class TestBackchannelOpportunityEmit:
         if ar._end_of_turn_task is not None:
             await aio.cancel_and_wait(ar._end_of_turn_task)
 
-    async def test_emits_with_end_of_turn_false_when_turn_continues(self) -> None:
+    async def test_emits_with_eot_context_when_turn_continues(self) -> None:
         ar = _make_full_recognition_for_eou()
         ar._turn_detector_stream.backchannel_threshold = AsyncMock(return_value=0.5)
         ar._last_language = "en"
@@ -390,12 +391,13 @@ class TestBackchannelOpportunityEmit:
         assert ev.probability == pytest.approx(0.8)
         assert ev.threshold == pytest.approx(0.5)
         assert ev.language == "en"
-        assert ev.end_of_turn is False
+        assert ev.end_of_turn_probability == pytest.approx(0.2)
+        assert ev.end_of_turn_threshold == pytest.approx(0.5)
 
-    async def test_emits_with_end_of_turn_true_when_turn_ends(self) -> None:
+    async def test_emits_with_eot_context_when_turn_ends(self) -> None:
         """The turn-continuing gate was dropped: a backchannel above threshold
-        still fires at end-of-turn, flagged so AgentActivity can let it lead the
-        reply."""
+        still fires at end-of-turn, carrying the EOT context (probability past the
+        threshold) so AgentActivity can let it lead the reply."""
         ar = _make_full_recognition_for_eou()
         ar._turn_detector_stream.backchannel_threshold = AsyncMock(return_value=0.5)
         chat_ctx = _make_chat_ctx_stub()
@@ -406,7 +408,8 @@ class TestBackchannelOpportunityEmit:
 
         ar._hooks.on_agent_backchannel_opportunity.assert_called_once()
         ev = ar._hooks.on_agent_backchannel_opportunity.call_args.args[0]
-        assert ev.end_of_turn is True
+        assert ev.end_of_turn_probability == pytest.approx(0.9)
+        assert ev.end_of_turn_threshold == pytest.approx(0.5)
 
     async def test_no_emit_below_threshold(self) -> None:
         ar = _make_full_recognition_for_eou()

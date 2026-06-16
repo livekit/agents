@@ -1443,7 +1443,8 @@ class AudioRecognition:
                                     _AgentBackchannelOpportunityEvent(
                                         probability=backchannel_probability,
                                         threshold=backchannel_threshold,
-                                        end_of_turn=end_of_turn_probability >= unlikely_threshold,
+                                        end_of_turn_probability=end_of_turn_probability,
+                                        end_of_turn_threshold=unlikely_threshold,
                                         language=self._last_language,
                                     )
                                 )
