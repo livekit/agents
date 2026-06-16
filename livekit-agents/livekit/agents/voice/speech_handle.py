@@ -50,6 +50,18 @@ class SpeechHandle:
         self._num_steps = 1
         self._agent_turn_context: otel_context.Context | None = None
 
+        # per generation-step playout state.
+        #
+        # ``SpeechHandle`` is the public whole-turn handle, but a multi-step turn
+        # (e.g. a silent tool-call step followed by a tool-reply step) reuses the
+        # same handle across steps. ``_playout_started`` is scoped to the current
+        # step: it becomes ``True`` once the step produces audio playout and is
+        # reset on every step advance (see ``_authorize_generation``). It lets the
+        # runtime tell whether the *current* step is actually playing audio, so
+        # pause/false-interruption bookkeeping captured during a silent step does
+        # not leak into a later step.
+        self._playout_started = False
+
         self._interrupt_timeout_handle: asyncio.TimerHandle | None = None
 
         self._item_added_callbacks: set[Callable[[llm.ChatItem], None]] = set()
@@ -246,9 +258,21 @@ class SpeechHandle:
 
             self._chat_items.append(item)
 
+    @property
+    def _generation_playout_started(self) -> bool:
+        """Whether the current generation step has started audio playout."""
+        return self._playout_started
+
+    def _mark_generation_playout_started(self) -> None:
+        self._playout_started = True
+
     def _authorize_generation(self) -> None:
         fut = asyncio.Future[None]()
         self._generations.append(fut)
+        # a new generation step starts with no playout; pause/false-interruption
+        # state captured during the previous step must not be treated as belonging
+        # to this one.
+        self._playout_started = False
         self._authorize_event.set()
 
     def _clear_authorization(self) -> None:
