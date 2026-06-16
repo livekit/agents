@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
@@ -42,6 +43,7 @@ from openai.types.chat import ChatCompletionToolChoiceOptionParam, completion_cr
 from .models import (
     CerebrasChatModels,
     ChatModels,
+    CloudflareGatewayOptions,
     CometAPIChatModels,
     DeepSeekChatModels,
     NebiusChatModels,
@@ -936,6 +938,125 @@ class LLM(llm.LLM):
             temperature=NOT_GIVEN,
             parallel_tool_calls=NOT_GIVEN,
             tool_choice=NOT_GIVEN,
+        )
+
+    @staticmethod
+    def with_cloudflare(
+        *,
+        model: str,
+        account_id: str | None = None,
+        gateway_id: str = "default",
+        base_url: str | None = None,
+        api_key: str | None = None,
+        cf_aig_token: str | None = None,
+        gateway_options: CloudflareGatewayOptions | None = None,
+        client: openai.AsyncClient | None = None,
+        user: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: ToolChoice = "auto",
+        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        safety_identifier: NotGivenOr[str] = NOT_GIVEN,
+        prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+        timeout: httpx.Timeout | None = None,
+    ) -> LLM:
+        """
+        Create a new instance of an LLM backed by the Cloudflare AI Gateway.
+
+        The gateway exposes a unified OpenAI-compatible endpoint. The endpoint URL is built
+        from ``account_id`` and ``gateway_id`` unless an explicit ``base_url`` is given, and the
+        model is a ``provider/model`` string.
+
+        Args:
+            model (str): Model in ``provider/model`` form, e.g.
+                ``"workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast"`` or ``"openai/gpt-4o"``.
+            account_id (str | None, optional): Cloudflare account ID used to build the gateway
+                URL. Falls back to ``CLOUDFLARE_ACCOUNT_ID``. Required unless ``base_url`` is set.
+            gateway_id (str): Gateway name used to build the URL. Defaults to ``"default"``, which
+                Cloudflare creates automatically on first request.
+            base_url (str | None, optional): Full gateway endpoint, e.g.
+                ``"https://gateway.ai.cloudflare.com/v1/<account_id>/<gateway_id>/compat"``.
+                Overrides ``account_id`` / ``gateway_id`` when provided.
+            api_key (str | None, optional): Downstream provider key for "bring your own key"
+                mode, sent as the ``Authorization`` header. Falls back to ``CLOUDFLARE_API_KEY``.
+            cf_aig_token (str | None, optional): Gateway token sent as the
+                ``cf-aig-authorization`` header, required for authenticated gateways. Falls
+                back to ``CLOUDFLARE_AI_GATEWAY_TOKEN``.
+            gateway_options (CloudflareGatewayOptions | None, optional): Per-request gateway
+                options (caching, retries, timeout, metadata, custom cost), translated into
+                ``cf-aig-*`` request headers.
+
+        Returns:
+            LLM: A configured LLM instance routed through the Cloudflare AI Gateway.
+        """
+
+        if base_url is None:
+            account_id = account_id or os.environ.get("CLOUDFLARE_ACCOUNT_ID")
+            if account_id is None:
+                raise ValueError(
+                    "Cloudflare account_id is required, either as argument or set "
+                    "CLOUDFLARE_ACCOUNT_ID environment variable (or pass base_url directly)"
+                )
+            base_url = f"https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/compat"
+
+        parsed = urlparse(base_url)
+        if parsed.scheme not in {"http", "https"}:
+            raise ValueError(f"Invalid URL scheme: '{parsed.scheme}'. Must be 'http' or 'https'.")
+        if not parsed.netloc:
+            raise ValueError(f"URL '{base_url}' is missing a network location (e.g., domain name).")
+
+        cf_aig_token = cf_aig_token or os.environ.get("CLOUDFLARE_AI_GATEWAY_TOKEN")
+        api_key = api_key or os.environ.get("CLOUDFLARE_API_KEY")
+        if cf_aig_token is None and api_key is None:
+            raise ValueError(
+                "Cloudflare authentication is required: set api_key/CLOUDFLARE_API_KEY "
+                "(bring your own provider key) and/or cf_aig_token/CLOUDFLARE_AI_GATEWAY_TOKEN "
+                "(gateway token)"
+            )
+
+        default_headers: dict[str, str] = {}
+        if cf_aig_token:
+            default_headers["cf-aig-authorization"] = f"Bearer {cf_aig_token}"
+
+        if gateway_options:
+            if "cache_ttl" in gateway_options:
+                default_headers["cf-aig-cache-ttl"] = str(gateway_options["cache_ttl"])
+            if gateway_options.get("skip_cache"):
+                default_headers["cf-aig-skip-cache"] = "true"
+            if "cache_key" in gateway_options:
+                default_headers["cf-aig-cache-key"] = gateway_options["cache_key"]
+            if "request_timeout" in gateway_options:
+                default_headers["cf-aig-request-timeout"] = str(gateway_options["request_timeout"])
+            if "max_attempts" in gateway_options:
+                default_headers["cf-aig-max-attempts"] = str(gateway_options["max_attempts"])
+            if "retry_delay" in gateway_options:
+                default_headers["cf-aig-retry-delay"] = str(gateway_options["retry_delay"])
+            if "backoff" in gateway_options:
+                default_headers["cf-aig-backoff"] = gateway_options["backoff"]
+            if "metadata" in gateway_options:
+                default_headers["cf-aig-metadata"] = json.dumps(gateway_options["metadata"])
+            if "custom_cost" in gateway_options:
+                default_headers["cf-aig-custom-cost"] = json.dumps(gateway_options["custom_cost"])
+
+        return LLM(
+            model=model,
+            # The OpenAI SDK requires a non-empty api_key for the Authorization header; in
+            # gateway-stored-keys mode the real auth rides on cf-aig-authorization, so a
+            # placeholder is used (matches the with_ollama precedent).
+            api_key=api_key or "cloudflare",
+            base_url=base_url,
+            client=client,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+            reasoning_effort=reasoning_effort,
+            safety_identifier=safety_identifier,
+            prompt_cache_key=prompt_cache_key,
+            top_p=top_p,
+            extra_headers=default_headers,
+            timeout=timeout,
         )
 
     def chat(
