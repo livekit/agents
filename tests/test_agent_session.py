@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 
 from livekit.agents import (
+    NOT_GIVEN,
     Agent,
     AgentFalseInterruptionEvent,
     AgentStateChangedEvent,
@@ -17,6 +18,8 @@ from livekit.agents import (
     LanguageCode,
     MetricsCollectedEvent,
     ModelSettings,
+    NotGivenOr,
+    TurnHandlingOptions,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
     function_tool,
@@ -47,9 +50,11 @@ class MyAgent(Agent):
         generate_reply_on_enter: bool = False,
         say_on_user_turn_completed: bool = False,
         on_user_turn_completed_delay: float = 0.0,
+        turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
     ) -> None:
         super().__init__(
             instructions=("You are a helpful assistant."),
+            turn_handling=turn_handling,
         )
         self.generate_reply_on_enter = generate_reply_on_enter
         self.say_on_user_turn_completed = say_on_user_turn_completed
@@ -1023,6 +1028,50 @@ async def test_preemptive_generation(preemptive_generation: dict, expected_laten
         max_abs_diff=0.2,
     )
     assert agent_state_events[3].new_state == "listening"
+
+
+@pytest.mark.parametrize(
+    "session_preemptive, agent_preemptive, expected_latency",
+    [
+        # agent disables what the session enabled -> no preemptive generation (1.1s)
+        ({"preemptive_tts": True}, {"enabled": False}, 1.1),
+        # agent enables (with TTS) what the session disabled -> fully preemptive (0.7s)
+        ({"enabled": False}, {"enabled": True, "preemptive_tts": True}, 0.7),
+    ],
+)
+async def test_preemptive_generation_on_agent(
+    session_preemptive: dict, agent_preemptive: dict, expected_latency: float
+) -> None:
+    # preemptive generation set on the agent must override the session value
+    speed = 1
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.0, "Hello, how are you?", stt_delay=0.1)
+    actions.add_llm("I'm doing great, thank you!", ttft=0.1, duration=0.3)
+    actions.add_tts(3.0, ttfb=0.3)
+    # preemptive_generation with TTS enabled: e2e latency is 0.1+0.3+0.3=0.7s
+    # preemptive_generation disabled: e2e latency is 0.5+0.3+0.3=1.1s
+
+    session = create_session(
+        actions,
+        speed_factor=speed,
+        turn_handling={"preemptive_generation": session_preemptive},
+    )
+    agent = MyAgent(turn_handling={"preemptive_generation": agent_preemptive})
+
+    agent_state_events: list[AgentStateChangedEvent] = []
+    user_state_events: list[UserStateChangedEvent] = []
+    session.on("agent_state_changed", agent_state_events.append)
+    session.on("user_state_changed", user_state_events.append)
+
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+    t_user_stop_speaking = user_state_events[1].created_at
+    t_agent_start_speaking = agent_state_events[2].created_at
+    check_timestamp(
+        t_agent_start_speaking - t_user_stop_speaking,
+        t_target=expected_latency,
+        speed_factor=speed,
+        max_abs_diff=0.2,
+    )
 
 
 @pytest.mark.parametrize(

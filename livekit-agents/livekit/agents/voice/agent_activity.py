@@ -80,7 +80,7 @@ from .generation import (
 )
 from .speech_handle import DEFAULT_INPUT_DETAILS, InputDetails, SpeechHandle
 from .tool_executor import _resolve_async_tool_options, _ToolExecutor
-from .turn import EndpointingOptions, TurnDetectionMode
+from .turn import EndpointingOptions, PreemptiveGenerationOptions, TurnDetectionMode
 
 if TYPE_CHECKING:
     from ..llm import mcp
@@ -363,6 +363,13 @@ class AgentActivity(RecognitionHooks):
             max_delay=agent_endpointing.get("max_delay", session_endpointing["max_delay"]),
             alpha=agent_endpointing.get("alpha", session_endpointing["alpha"]),
         )
+
+    @property
+    def preemptive_generation_opts(self) -> PreemptiveGenerationOptions:
+        # session is always fully resolved; agent-level keys override it
+        agent_preemptive = self._agent._turn_handling.get("preemptive_generation", {})
+        session_preemptive = self._session.options.preemptive_generation
+        return PreemptiveGenerationOptions(**{**session_preemptive, **agent_preemptive})
 
     @property
     def min_endpointing_delay(self) -> float:
@@ -1953,7 +1960,7 @@ class AgentActivity(RecognitionHooks):
         )
 
     def on_preemptive_generation(self, info: _PreemptiveGenerationInfo) -> None:
-        preemptive_opts = self._session.options.preemptive_generation
+        preemptive_opts = self.preemptive_generation_opts
         if (
             not preemptive_opts["enabled"]
             or self._scheduling_paused
@@ -2710,7 +2717,7 @@ class AgentActivity(RecognitionHooks):
 
         # start synthesis preemptively (before the speech is scheduled) when enabled;
         # otherwise it starts right after scheduling below
-        preemptive_opts = self._session.options.preemptive_generation
+        preemptive_opts = self.preemptive_generation_opts
         synthesize_task: asyncio.Task[None] | None = None
         if (
             audio_output is not None
