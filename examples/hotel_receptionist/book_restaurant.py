@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, time
 from typing import Annotated
 
+from context import speech_only
 from hotel_db import MAX_PARTY_SIZE, TODAY, HotelDB, RestaurantReservation, Unavailable, speak_time
 from persona import COMMON_INSTRUCTIONS
 from pydantic import Field
@@ -17,9 +18,11 @@ You're handling a restaurant reservation from start to finish. Collect details i
 
 Before asking anything, scan the conversation so far. If date, party size, time, or special-request notes were already discussed, call the matching recording tools (set_party, choose_time) right away with those values - don't re-ask the caller for details they already gave.
 
-Run set_party before choose_time - open slots depend on the date and party size. Before calling confirm, make sure you've collected the date, party, time, and the caller's name and phone.
+Run set_party before choose_time - open slots depend on the date and party size. Before calling confirm_reservation, make sure you've collected the date, party, time, and the caller's name and phone - then read the reservation back in one short sentence (date, time, party size, name) and let the caller agree. confirm_reservation only fires once they've agreed to the read-back.
 
-Each tool's return ends with a directive for the next action (e.g. "next: call open_phone_dialog"). Follow that directive immediately - don't narrate what the tool just did. When the directive says "call confirm() now", call it - the call IS the next action, no filler turn.
+Each tool's return ends with a directive for the next action (e.g. "next: call open_phone_dialog"). Follow that directive immediately - don't narrate what the tool just did. When the directive says "call confirm_reservation() now", call it - the call IS the next action, no filler turn.
+
+Never speak the same question twice in a row. If a field was just captured ("name recorded", "time recorded"), it is DONE - asking for it again stalls the call; the only valid next move is the directive in the last tool return.
 """
 
 
@@ -27,7 +30,7 @@ class BookRestaurantTask(AgentTask[RestaurantReservation]):
     """Restaurant booking as one focused task, mirroring BookRoomTask: `set_party`
     / `choose_time` handle the date <-> slot-availability coupling, the
     `open_*_dialog` tools capture each detail the moment it's offered (stored on
-    the draft so a later hiccup never re-asks it), and `confirm()` books the
+    the draft so a later hiccup never re-asks it), and `confirm_reservation()` books the
     table."""
 
     def __init__(self, db: HotelDB, *, chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN) -> None:
@@ -65,13 +68,13 @@ class BookRestaurantTask(AgentTask[RestaurantReservation]):
             return "party and time captured - next: call open_name_dialog"
         if not self._phone:
             return "name captured - next: call open_phone_dialog"
-        return "all required details captured - call confirm() now to finalize the reservation"
+        return "all required details captured - call confirm_reservation() now to finalize the reservation"
 
     @function_tool()
     async def set_party(
         self, on_date: date, party_size: Annotated[int, Field(ge=1, le=MAX_PARTY_SIZE)]
     ) -> str:
-        """Record the date + party size; returns the open time slots for them.
+        """Record the date + party size. The return lists the open time slots - offer them to the caller and let them pick; don't choose a slot yourself.
 
         Args:
             on_date: Reservation date in ISO YYYY-MM-DD format (e.g. "2026-01-20").
@@ -99,7 +102,7 @@ class BookRestaurantTask(AgentTask[RestaurantReservation]):
         """Record the chosen time slot and any special request.
 
         Args:
-            at_time: Slot time - one of the open slots returned by set_party.
+            at_time: The slot the CALLER picked, from the open times set_party returned.
             notes: Optional special request (allergy, anniversary...), or null.
         """
         if self._date is None:
@@ -118,7 +121,7 @@ class BookRestaurantTask(AgentTask[RestaurantReservation]):
         r = await beta.workflows.GetNameTask(
             first_name=True,
             last_name=True,
-            chat_ctx=self.chat_ctx,
+            chat_ctx=speech_only(self.chat_ctx),
             extra_instructions=COMMON_INSTRUCTIONS,
         )
         self._first_name, self._last_name = r.first_name or "", r.last_name or ""
@@ -128,13 +131,13 @@ class BookRestaurantTask(AgentTask[RestaurantReservation]):
     async def open_phone_dialog(self) -> str:
         """Open the phone dialog. It collects the guest's phone number (read back and confirmed) from the caller."""
         r = await beta.workflows.GetPhoneNumberTask(
-            chat_ctx=self.chat_ctx, extra_instructions=COMMON_INSTRUCTIONS
+            chat_ctx=speech_only(self.chat_ctx), extra_instructions=COMMON_INSTRUCTIONS
         )
         self._phone = r.phone_number
         return f"phone recorded: {self._phone} | {self._status()}"
 
     @function_tool()
-    async def confirm(self) -> str | None:
+    async def confirm_reservation(self) -> str | None:
         """Finalize once the date, party, time, and the caller's details are all captured: book
         the table."""
         on_date, party_size, at_time = self._date, self._party_size, self._time
