@@ -2061,7 +2061,8 @@ class AgentActivity(RecognitionHooks):
     def on_agent_backchannel_opportunity(self, ev: _AgentBackchannelOpportunityEvent) -> None:
         # TODO: consume the backchannel opportunity internally (e.g. trigger a
         # backchannel phrase). Kept internal for now — not surfaced as a public event.
-        pass
+        print(ev)
+        self._session.say("right")
 
     def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool:
         # IMPORTANT: This method is sync to avoid it being cancelled by the AudioRecognition
