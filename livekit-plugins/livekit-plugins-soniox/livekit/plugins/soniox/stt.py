@@ -119,7 +119,7 @@ class STTOptions:
     enable_speaker_diarization: bool = False
     enable_language_identification: bool = True
 
-    max_endpoint_delay_ms: int = 500
+    max_endpoint_delay_ms: int = 2000
     """Maximum delay in milliseconds between speech cessation and endpoint detection.
     Range: 500–3000.
     See: https://soniox.com/docs/stt/rt/endpoint-detection"""
