@@ -29,7 +29,8 @@ dependencies = [
     "certifi>=2025.6.15",
     "livekit==1.1.9",
     "livekit-api>=1.0.7,<2",
-    "livekit-protocol>=1.1.15,<2",
+    "livekit-local-inference>=0.2.5",
+    "livekit-protocol>=1.1.17,<2",
     "livekit-blingfire~=1.1,<2",
     "protobuf>=3",
     "pyjwt>=2.0",
@@ -56,7 +57,7 @@ dependencies = [
     "typer>=0.15.1",
     "click~=8.1",
     "sounddevice>=0.5",
-    "watchfiles>=1.0"
+    "watchfiles>=1.0",
 ]
 
 [project.optional-dependencies]

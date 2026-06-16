@@ -37,9 +37,9 @@ The `end_of_utterance_silence_trigger` parameter controls the amount of silence 
 Usage:
 
 ```python
-from livekit.agents import AgentSession
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
-from livekit.plugins import speechmatics, silero
+from livekit.agents import AgentSession, inference
+from livekit.agents.inference import TurnDetector
+from livekit.plugins import speechmatics
 
 agent = AgentSession(
     stt=speechmatics.STT(
@@ -47,8 +47,8 @@ agent = AgentSession(
         speaker_active_format="[Speaker {speaker_id}] {text}",
         speaker_passive_format="[Speaker {speaker_id} *PASSIVE*] {text}",
     ),
-    vad=silero.VAD.load(),
-    turn_detection=MultilingualModel(),
+    vad=inference.VAD(),
+    turn_detection=TurnDetector(),
     min_endpointing_delay=0.3,
     max_endpointing_delay=5.0,
     ...

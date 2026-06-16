@@ -12,7 +12,6 @@ from livekit.agents import (
     cli,
     inference,
 )
-from livekit.plugins import silero
 from livekit.rtc import RpcInvocationData
 
 logger = logging.getLogger("inference")
@@ -59,7 +58,6 @@ async def entrypoint(ctx: JobContext) -> None:
         stt=inference.STT(model=DEFAULT_STT),
         llm=inference.LLM(model=DEFAULT_LLM),
         tts=inference.TTS(model=DEFAULT_TTS),
-        vad=silero.VAD.load(),
     )
 
     def parse_value(payload: str, fallback: str) -> str:

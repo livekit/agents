@@ -21,7 +21,7 @@ export XAI_API_KEY=<your-xai-api-key>
 ### 2. Install dependencies
 
 ```bash
-uv add "livekit-agents[xai,silero,turn-detector]" livekit-plugins-noise-cancellation
+uv add "livekit-agents[xai,silero]" livekit-plugins-noise-cancellation
 ```
 
 ### 3. Run the agent
