@@ -121,9 +121,9 @@ class TravelAgent(Agent):
                 )
             self._user_email = email.email_address
             logger.info(f"User's email address: {self._user_email}")
-        await ctx.update(
-            "Thanks for providing your email address, we are confirming the booking now."
-        )
+            await ctx.update(
+                "Thanks for providing your email address, we are confirming the booking now."
+            )
 
         await asyncio.sleep(40)
 
