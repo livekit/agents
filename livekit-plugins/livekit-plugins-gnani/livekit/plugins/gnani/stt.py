@@ -87,6 +87,13 @@ class GnaniSTTOptions:
     base_url: str = GNANI_STT_BASE_URL
 
 
+def _check_deprecated_args(kwargs: dict[str, Any]) -> None:
+    """Warn about deprecated kwargs that are no longer used."""
+    for name in ("organization_id", "user_id", "http_session"):
+        if name in kwargs:
+            logger.warning(f"`{name}` is deprecated and no longer used")
+
+
 class STT(stt.STT):
     """Gnani Vachana Speech-to-Text implementation.
 
@@ -107,7 +114,7 @@ class STT(stt.STT):
         api_key: str | None = None,
         sample_rate: int = SAMPLE_RATE_16K,
         base_url: str = GNANI_STT_BASE_URL,
-        http_session: None = None,
+        **kwargs: Any,
     ) -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -116,6 +123,8 @@ class STT(stt.STT):
                 aligned_transcript=False,
             )
         )
+
+        _check_deprecated_args(kwargs)
 
         self._api_key = api_key or os.environ.get("GNANI_API_KEY")
         if not self._api_key:
