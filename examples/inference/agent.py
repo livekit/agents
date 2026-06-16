@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from urllib.parse import urlencode
@@ -12,7 +13,7 @@ from livekit.agents import (
     cli,
     inference,
 )
-from livekit.agents.voice import CONVERSATIONAL_EXPRESSIVE_PRESET
+from livekit.agents.voice import CONVERSATIONAL_EXPRESSIVE_PRESET, UserStateChangedEvent
 from livekit.plugins import silero
 from livekit.rtc import RpcInvocationData
 
@@ -81,7 +82,32 @@ async def entrypoint(ctx: JobContext) -> None:
         ),
         vad=silero.VAD.load(),
         expressive=CONVERSATIONAL_EXPRESSIVE_PRESET,
+        # Flip user_state to "away" after 10s of mutual silence so we can
+        # check whether they're still there (default is 15s).
+        user_away_timeout=10.0,
     )
+
+    idle_task: asyncio.Task[None] | None = None
+
+    async def _nudge_while_idle() -> None:
+        # Nudge every 10s until the user speaks again — speaking flips
+        # user_state out of "away", which cancels this task below.
+        while True:
+            logger.info("user idle — checking if they're still there")
+            await session.generate_reply(
+                instructions="The user has been idle, see if they're still there"
+            )
+            await asyncio.sleep(10)
+
+    @session.on("user_state_changed")
+    def _on_user_state_changed(ev: UserStateChangedEvent) -> None:
+        nonlocal idle_task
+        if ev.new_state == "away":
+            if idle_task is None or idle_task.done():
+                idle_task = asyncio.create_task(_nudge_while_idle())
+        elif idle_task is not None:
+            idle_task.cancel()
+            idle_task = None
 
     def parse_value(payload: str, fallback: str) -> str:
         try:
