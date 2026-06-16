@@ -749,16 +749,21 @@ async def execute_function_call(
     function_tool = tool_ctx.function_tools.get(tool_call.name)
     if function_tool is None:
         logger.warning(f"unknown AI function `{tool_call.name}`")
+        # Name the available tools so the model can self-correct
+        msg = (
+            f"Unknown function: {tool_call.name} - available tools: "
+            f"{', '.join(tool_ctx.function_tools.keys())}"
+        )
         return FunctionCallResult(
             fnc_call=fnc_call,
             fnc_call_out=FunctionCallOutput(
                 name=tool_call.name,
                 call_id=tool_call.call_id,
-                output=f"Unknown function: {tool_call.name}",
+                output=msg,
                 is_error=True,
             ),
             raw_output=None,
-            raw_exception=ValueError(f"Unknown function: {tool_call.name}"),
+            raw_exception=ValueError(msg),
         )
 
     try:
