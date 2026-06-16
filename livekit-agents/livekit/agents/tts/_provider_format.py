@@ -161,13 +161,14 @@ Examples:
   <expression value="sing in a playful, breathy whisper"/> La la la, here we go, welcome to the show!"""
 
 
-# --- Inworld-specific expressive presets ---
-# These bundle Inworld tag instructions + domain-specific delivery guidelines.
-# Pass any of them to `AgentSession(expressive=...)` when using Inworld TTS.
-# They do NOT use the {tts.markup.llm_instructions} placeholder — the Inworld
-# tag reference is inlined directly, so the prompt is self-contained.
+# --- Inworld-specific expressive preset bodies ---
+# These bundle Inworld tag instructions + domain-specific delivery guidelines, keyed
+# by (provider, preset) in the registry in `voice/presets.py`. The public, provider-
+# agnostic markers (`presets.CUSTOMER_SERVICE`, ...) resolve to one of these based on
+# the active TTS. They do NOT use the {tts.markup.llm_instructions} placeholder — the
+# Inworld tag reference is inlined directly, so the prompt is self-contained.
 
-CUSTOMER_SERVICE_EXPRESSIVE_PRESET: ExpressiveOptions = {
+_INWORLD_CUSTOMER_SERVICE: ExpressiveOptions = {
     "tts_instructions_template": Instructions(
         "Speak like a warm, capable support agent who genuinely wants to help — present, "
         "attentive, and confident, never robotic or scripted. Lead with empathy, then resolve. "
@@ -222,7 +223,7 @@ CUSTOMER_SERVICE_EXPRESSIVE_PRESET: ExpressiveOptions = {
     ),
 }
 
-HEALTHCARE_EXPRESSIVE_PRESET: ExpressiveOptions = {
+_INWORLD_HEALTHCARE: ExpressiveOptions = {
     "tts_instructions_template": Instructions(
         "Speak like a calm, caring clinician — warm, steady, and unhurried, never rushed or "
         "clinically cold. Your job is to make the patient feel safe, understood, and clearly "
@@ -276,7 +277,7 @@ HEALTHCARE_EXPRESSIVE_PRESET: ExpressiveOptions = {
     ),
 }
 
-CONVERSATIONAL_EXPRESSIVE_PRESET: ExpressiveOptions = {
+_INWORLD_CONVERSATIONAL: ExpressiveOptions = {
     "tts_instructions_template": Instructions(
         "Speak like a real person mid-conversation with a friend — present, reactive, opinionated, "
         "never flat or scripted. Your delivery is punchy and lively: react first, support second. "

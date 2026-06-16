@@ -2297,13 +2297,19 @@ class AgentActivity(RecognitionHooks):
 
     def _resolve_expressive_options(self) -> ExpressiveOptions | None:
         """Resolve expressive from agent (overrides session). Returns None if disabled."""
-        from .agent_session import DEFAULT_EXPRESSIVE_OPTIONS, ExpressiveOptions
+        from . import presets
+        from .agent_session import DEFAULT_EXPRESSIVE_OPTIONS
 
         expr = self._agent.expressive
         if not utils.is_given(expr):
             expr = self._session.options.expressive
         if isinstance(expr, dict):
-            return ExpressiveOptions(**{**DEFAULT_EXPRESSIVE_OPTIONS, **expr})
+            # a `preset` selector resolves to the active TTS provider's tuned preset
+            # (falling back to the agnostic default); explicit fields override on top
+            provider_key = self.tts.markup._provider_key() if self.tts else ""
+            return presets.resolve_options(
+                expr, provider_key=provider_key, default=DEFAULT_EXPRESSIVE_OPTIONS
+            )
         if expr:
             return DEFAULT_EXPRESSIVE_OPTIONS
         return None

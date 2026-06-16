@@ -13,7 +13,7 @@ from livekit.agents import (
     cli,
     inference,
 )
-from livekit.agents.voice import CONVERSATIONAL_EXPRESSIVE_PRESET, UserStateChangedEvent
+from livekit.agents.voice import UserStateChangedEvent, presets
 from livekit.plugins import silero
 from livekit.rtc import RpcInvocationData
 
@@ -81,7 +81,7 @@ async def entrypoint(ctx: JobContext) -> None:
             extra_kwargs={"delivery_mode": "CREATIVE"},
         ),
         vad=silero.VAD.load(),
-        expressive=CONVERSATIONAL_EXPRESSIVE_PRESET,
+        expressive=presets.CONVERSATIONAL,
         # Flip user_state to "away" after 10s of mutual silence so we can
         # check whether they're still there (default is 15s).
         user_away_timeout=10.0,

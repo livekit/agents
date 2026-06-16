@@ -83,6 +83,7 @@ if TYPE_CHECKING:
     from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput
     from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
+    from .presets import Preset
     from .transcription.text_transforms import TextTransforms
 
 
@@ -142,11 +143,22 @@ class SessionConnectOptions:
 class ExpressiveOptions(TypedDict, total=False):
     """Configuration for the expressive pipeline.
 
-    Controls how TTS markup instructions and speaker context are injected
-    into the LLM when expressive is enabled.
+    Controls how TTS markup instructions and speaker context are injected into the LLM
+    when expressive is enabled. All keys are optional; common shapes:
+
+    - ``{"preset": Preset.CONVERSATIONAL}`` — a domain preset, resolved to the active
+      TTS provider's tuned tags (see ``voice.presets``). Prefer the ``presets.*`` constants.
+    - ``{"preset": ..., "tts_instructions_append": "..."}`` — a preset plus your own
+      rules appended after it resolves.
+    - ``{"tts_instructions_template": "..."}`` — a fully custom prompt.
+
+    Any explicit template overrides the corresponding part of the resolved preset; unset
+    parts fall back to the resolved preset (or the provider-agnostic default).
     """
 
+    preset: Preset
     tts_instructions_template: Instructions | str
+    tts_instructions_append: str
     audio_recognition_instructions_template: Instructions | str
 
 
