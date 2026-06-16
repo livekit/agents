@@ -107,7 +107,7 @@ class TranslationConfig:
 class STTOptions:
     """Configuration options for Soniox Speech-to-Text service."""
 
-    model: str = "stt-rt-v4"
+    model: str = "stt-rt-v5"
 
     language_hints: list[str] | None = None
     language_hints_strict: bool = False
