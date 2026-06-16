@@ -33,7 +33,11 @@ from ..vad import VADStream
 from . import io
 from ._utils import _set_participant_attributes
 from .endpointing import BaseEndpointing
-from .events import EotPredictionEvent, UserTurnExceededEvent
+from .events import (
+    EotPredictionEvent,
+    UserTurnExceededEvent,
+    _AgentBackchannelOpportunityEvent,
+)
 from .turn import (
     TurnDetectionEvent,
     TurnDetectionMode as TurnDetectionMode,
@@ -87,6 +91,7 @@ class RecognitionHooks(Protocol):
     def on_final_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None = None) -> None: ...
     def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool: ...
     def on_eot_prediction(self, ev: EotPredictionEvent) -> None: ...
+    def on_agent_backchannel_opportunity(self, ev: _AgentBackchannelOpportunityEvent) -> None: ...
     def on_preemptive_generation(self, info: _PreemptiveGenerationInfo) -> None: ...
     def on_user_turn_exceeded(self, ev: UserTurnExceededEvent) -> None: ...
     def retrieve_chat_ctx(self) -> llm.ChatContext: ...
@@ -1291,6 +1296,7 @@ class AudioRecognition:
 
             end_of_turn_probability: float | None = None
             unlikely_threshold: float | None = None
+            backchannel_threshold: float | None = None
 
             if turn_detector is not None:
                 if not await turn_detector.supports_language(self._last_language):
@@ -1316,6 +1322,11 @@ class AudioRecognition:
                                     )
                                     unlikely_threshold = await turn_detector.unlikely_threshold(
                                         self._last_language
+                                    )
+                                    backchannel_threshold = (
+                                        await turn_detector.backchannel_threshold(
+                                            self._last_language
+                                        )
                                     )
                                 else:
                                     logger.warning(
@@ -1415,6 +1426,28 @@ class AudioRecognition:
                                     delay=delay,
                                 )
                             )
+                            # surface the backchannel opportunity whenever it clears its
+                            # threshold, regardless of end-of-turn; AgentActivity decides
+                            # whether to acknowledge mid-turn or let it lead the reply
+                            backchannel_probability = (
+                                prediction_event.backchannel_probability
+                                if prediction_event is not None
+                                else None
+                            )
+                            if (
+                                backchannel_probability is not None
+                                and backchannel_threshold is not None
+                                and backchannel_probability >= backchannel_threshold
+                            ):
+                                self._hooks.on_agent_backchannel_opportunity(
+                                    _AgentBackchannelOpportunityEvent(
+                                        probability=backchannel_probability,
+                                        threshold=backchannel_threshold,
+                                        end_of_turn_probability=end_of_turn_probability,
+                                        end_of_turn_threshold=unlikely_threshold,
+                                        language=self._last_language,
+                                    )
+                                )
                         if (
                             prediction_event is not None
                             and prediction_event.detection_delay is not None

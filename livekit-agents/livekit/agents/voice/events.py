@@ -332,6 +332,27 @@ class EotPredictionEvent(BaseModel):
     created_at: float = Field(default_factory=time.time)
 
 
+class _AgentBackchannelOpportunityEvent(BaseModel):
+    """Internal: a window in which the agent could backchannel (a short
+    acknowledgment such as "mm-hmm"), as predicted by the turn detector. Passed to
+    ``AgentActivity`` only — not surfaced as a public ``AgentSession`` event yet.
+
+    ``AgentActivity`` owns the decision of what to do with it. The end-of-turn margin
+    (``end_of_turn_threshold - end_of_turn_probability``) gives a progressive risk axis:
+    a large positive margin means the user is clearly still going, so riskier
+    backchannels (yeah/okay/right) are safe; a small margin (or a negative one, where
+    ``end_of_turn_probability >= end_of_turn_threshold`` and a reply is imminent) calls
+    for safe, less ambiguous ones (hmm/uh-huh) that won't collide with the reply."""
+
+    type: Literal["agent_backchannel_opportunity"] = "agent_backchannel_opportunity"
+    probability: float
+    threshold: float
+    end_of_turn_probability: float
+    end_of_turn_threshold: float
+    language: str | None = None
+    created_at: float = Field(default_factory=time.time)
+
+
 class AgentFalseInterruptionEvent(BaseModel):
     type: Literal["agent_false_interruption"] = "agent_false_interruption"
     resumed: bool

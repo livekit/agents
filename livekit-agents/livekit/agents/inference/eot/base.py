@@ -76,6 +76,9 @@ class _BaseStreamingTurnDetector(rtc.EventEmitter[Literal["metrics_collected"]])
     async def unlikely_threshold(self, language: LanguageCode | None) -> float | None:
         return self._opts.thresholds.lookup(language)
 
+    async def backchannel_threshold(self, language: LanguageCode | None) -> float | None:
+        return self._opts.thresholds.lookup_backchannel(language)
+
     async def supports_language(self, language: LanguageCode | None) -> bool:
         return self._opts.thresholds.supports(language)
 
@@ -139,6 +142,9 @@ class _BaseStreamingTurnDetectorStream:
 
     async def unlikely_threshold(self, language: LanguageCode | None) -> float | None:
         return self._opts.thresholds.lookup(language)
+
+    async def backchannel_threshold(self, language: LanguageCode | None) -> float | None:
+        return self._opts.thresholds.lookup_backchannel(language)
 
     async def supports_language(self, language: LanguageCode | None) -> bool:
         return self._opts.thresholds.supports(language)
@@ -259,6 +265,7 @@ class _BaseStreamingTurnDetectorStream:
         *,
         inference_duration: float | None = None,
         detection_delay: float | None = None,
+        backchannel_probability: float | None = None,
     ) -> None:
         """Accept a prediction from a transport. Stale response is ignored."""
         if request_id != self._request_id:
@@ -274,6 +281,7 @@ class _BaseStreamingTurnDetectorStream:
                     end_of_turn_probability=probability,
                     detection_delay=detection_delay,
                     inference_duration=inference_duration,
+                    backchannel_probability=backchannel_probability,
                 )
             )
 

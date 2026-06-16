@@ -215,6 +215,7 @@ class _CloudTransport:
                     prediction.probability,
                     detection_delay=detection_delay_ms / 1000.0,
                     inference_duration=inference_duration_ms / 1000.0,
+                    backchannel_probability=prediction.backchannel_probability,
                 )
 
                 client_e2e_ms = inference_stats.client_e2e_latency.ToMilliseconds()
@@ -239,7 +240,10 @@ class _CloudTransport:
                 created = msg.session_created
                 thresholds = stream._opts.thresholds
                 thresholds._update_defaults(
-                    dict(created.default_thresholds), created.default_threshold
+                    dict(created.default_thresholds),
+                    created.default_threshold,
+                    dict(created.default_backchannel_thresholds),
+                    created.default_backchannel_threshold,
                 )
                 logger.debug(
                     "audio turn detector initialized",
