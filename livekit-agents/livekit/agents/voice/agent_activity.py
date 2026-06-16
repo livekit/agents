@@ -1727,8 +1727,16 @@ class AgentActivity(RecognitionHooks):
             )
 
     def _on_input_audio_transcription_completed(self, ev: llm.InputTranscriptionCompleted) -> None:
+        # `item_id` is threaded through so every interim/final transcript of the
+        # same utterance carries the same id — consumers that need per-utterance
+        # dedup (e.g. "render a `user-speech-received` placeholder exactly once")
+        # can correlate via the provider-agnostic event surface instead of
+        # dropping into provider-specific `openai_server_event_received`, which
+        # isn't portable across realtime backends (#6109).
         self._session._user_input_transcribed(
-            UserInputTranscribedEvent(transcript=ev.transcript, is_final=ev.is_final)
+            UserInputTranscribedEvent(
+                transcript=ev.transcript, is_final=ev.is_final, item_id=ev.item_id
+            )
         )
 
         if ev.is_final:
