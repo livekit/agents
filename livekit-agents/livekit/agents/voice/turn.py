@@ -137,6 +137,13 @@ _ENDPOINTING_DEFAULTS: EndpointingOptions = {
     "alpha": 0.9,
 }
 
+_STREAMING_ENDPOINTING_DEFAULTS: EndpointingOptions = {
+    "mode": "fixed",
+    "min_delay": 0.3,
+    "max_delay": 2.5,
+    "alpha": 0.9,
+}
+
 
 class InterruptionOptions(TypedDict, total=False):
     """Configuration for interruption handling.
@@ -286,11 +293,24 @@ def _resolve_preemptive_generation(
     return PreemptiveGenerationOptions(**{**_PREEMPTIVE_GENERATION_DEFAULTS, **config})
 
 
-def _resolve_endpointing(config: EndpointingOptions | None = None) -> EndpointingOptions:
-    """Fill in defaults for missing keys."""
+def _resolve_endpointing(
+    config: EndpointingOptions | None = None,
+    *,
+    turn_detection: TurnDetectionMode | None = None,
+) -> EndpointingOptions:
+    """Fill in defaults for missing keys.
+
+    When ``turn_detection`` is a streaming turn detector, keys the caller did
+    not provide fall back to the tighter streaming defaults instead of the
+    legacy ones."""
+    base = (
+        _STREAMING_ENDPOINTING_DEFAULTS
+        if isinstance(turn_detection, _StreamingTurnDetector)
+        else _ENDPOINTING_DEFAULTS
+    )
     if config is None:
-        return EndpointingOptions(**_ENDPOINTING_DEFAULTS)
-    return EndpointingOptions(**{**_ENDPOINTING_DEFAULTS, **config})
+        return EndpointingOptions(**base)
+    return EndpointingOptions(**{**base, **config})
 
 
 def _resolve_interruption(

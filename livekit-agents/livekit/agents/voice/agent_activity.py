@@ -86,6 +86,7 @@ from .turn import (
     EndpointingOptions,
     PreemptiveGenerationOptions,
     TurnDetectionMode,
+    _resolve_endpointing,
     _StreamingTurnDetector,
     _StreamingTurnDetectorStream,
 )
@@ -385,15 +386,11 @@ class AgentActivity(RecognitionHooks):
 
     @property
     def endpointing_opts(self) -> EndpointingOptions:
-        # session should always have a valid endpointing val based on either defaults or overrides
-        agent_endpointing = self._agent._turn_handling.get("endpointing", {})
-        session_endpointing = self.session._opts.turn_handling["endpointing"]
-        return EndpointingOptions(
-            mode=agent_endpointing.get("mode", session_endpointing["mode"]),
-            min_delay=agent_endpointing.get("min_delay", session_endpointing["min_delay"]),
-            max_delay=agent_endpointing.get("max_delay", session_endpointing["max_delay"]),
-            alpha=agent_endpointing.get("alpha", session_endpointing["alpha"]),
-        )
+        overrides: EndpointingOptions = {
+            **self.session._opts.endpointing_overrides,
+            **(self._agent._turn_handling.get("endpointing") or EndpointingOptions()),  # type: ignore[typeddict-item]
+        }
+        return _resolve_endpointing(overrides, turn_detection=self._turn_detection)
 
     @property
     def preemptive_generation_opts(self) -> PreemptiveGenerationOptions:
