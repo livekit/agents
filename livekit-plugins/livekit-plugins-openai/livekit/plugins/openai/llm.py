@@ -124,8 +124,8 @@ class LLM(llm.LLM):
         ``api_key`` must be set to your OpenAI API key, either using the argument or by setting the
         ``OPENAI_API_KEY`` environmental variable.
 
-        ``reasoning_format`` controls how reasoning models (e.g. ``gpt-oss-120b`` served by
-        Cerebras or xAI) return their thinking tokens. Set it to ``"hidden"`` or ``"parsed"`` to
+        ``reasoning_format`` controls how reasoning models (e.g. ``gpt-oss-120b`` on Cerebras,
+        or Grok on xAI) return their thinking tokens. Set it to ``"hidden"`` or ``"parsed"`` to
         keep the model's internal monologue out of the message content so it isn't spoken by the
         TTS pipeline. This is forwarded as a request body field and is only honored by providers
         that support it.
