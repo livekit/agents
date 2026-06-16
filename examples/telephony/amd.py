@@ -11,12 +11,9 @@ from livekit.agents import (
     AgentServer,
     AgentSession,
     JobContext,
-    JobProcess,
     cli,
     inference,
 )
-from livekit.plugins import silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("basic-agent")
 
@@ -35,13 +32,6 @@ class MyAgent(Agent):
 server = AgentServer()
 
 
-def prewarm(proc: JobProcess):
-    proc.userdata["vad"] = silero.VAD.load()
-
-
-server.setup_fnc = prewarm
-
-
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     ctx.log_context_fields = {
@@ -51,8 +41,6 @@ async def entrypoint(ctx: JobContext):
         stt=inference.STT("deepgram/nova-3", language="multi"),
         llm=inference.LLM("openai/gpt-4.1-mini"),
         tts=inference.TTS("cartesia/sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"),
-        turn_detection=MultilingualModel(),
-        vad=ctx.proc.userdata["vad"],
         preemptive_generation=True,
     )
 

@@ -35,8 +35,6 @@ from livekit.agents import (
     inference,
 )
 from livekit.agents.voice import presets
-from livekit.plugins import silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 load_dotenv()
 
@@ -489,8 +487,6 @@ async def drive_thru_agent(ctx: JobContext) -> None:
         llm=inference.LLM("openai/gpt-5.5"),
         tts=inference.TTS("inworld/inworld-tts-2", voice="Sarah"),
         expressive=presets.CUSTOMER_SERVICE,
-        turn_detection=MultilingualModel(),
-        vad=silero.VAD.load(),
         max_tool_steps=10,
     )
 

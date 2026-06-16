@@ -101,7 +101,7 @@ async def test_vad_threshold_partial_update():
 # ---------------------------------------------------------------------------
 
 
-def _make_stream_for_unit_test():
+def _make_stream_for_unit_test(stt=None):
     """Construct a SpeechStream without triggering the _main_task WebSocket
     loop. Patches asyncio.create_task during __init__ so the stream doesn't
     try to open a real connection; also closes the coroutines that would
@@ -110,7 +110,8 @@ def _make_stream_for_unit_test():
     from livekit.plugins.assemblyai import STT
     from livekit.plugins.assemblyai.stt import SpeechStream
 
-    stt = STT(api_key="test-key")
+    if stt is None:
+        stt = STT(api_key="test-key")
 
     def _fake_create_task(coro, *args, **kwargs):
         # Close the coroutine so we don't get RuntimeWarning about it never
@@ -303,3 +304,197 @@ async def test_interruption_delay_requires_u3_rt_pro():
 
     with pytest.raises(ValueError, match="interruption_delay"):
         STT(api_key="test-key", interruption_delay=200)
+
+
+# ---------------------------------------------------------------------------
+# agent_context
+#
+# agent_context carries "what the agent said" so the model can use it to bias
+# transcription of the user's reply. It is threaded through STTOptions, the
+# constructor, and both update_options paths, and is sent over the live
+# websocket as an UpdateConfiguration message.
+# ---------------------------------------------------------------------------
+
+
+async def test_agent_context_default():
+    """Test agent_context is not set by default."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key")
+    assert stt._opts.agent_context is NOT_GIVEN
+
+
+async def test_agent_context_set():
+    """Test agent_context can be set in the constructor (u3-rt-pro only)."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(
+        api_key="test-key",
+        model="u3-rt-pro",
+        agent_context="The agent asked for a booking date.",
+    )
+    assert stt._opts.agent_context == "The agent asked for a booking date."
+
+
+async def test_agent_context_update():
+    """Test agent_context can be updated dynamically via update_options."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key")
+    assert stt._opts.agent_context is NOT_GIVEN
+
+    stt.update_options(agent_context="What is your account number?")
+    assert stt._opts.agent_context == "What is your account number?"
+
+    # A subsequent update overwrites (most-recent-turn semantics).
+    stt.update_options(agent_context="Thanks, and your zip code?")
+    assert stt._opts.agent_context == "Thanks, and your zip code?"
+
+
+async def test_agent_context_stream_sends_update_configuration():
+    """SpeechStream.update_options enqueues an UpdateConfiguration message
+    containing agent_context, even when it's the only field updated (the
+    len(config_msg) > 1 guard)."""
+    stream = _make_stream_for_unit_test()
+
+    stream.update_options(agent_context="The agent confirmed the order.")
+
+    assert stream._opts.agent_context == "The agent confirmed the order."
+    msg = stream._config_update_queue.get_nowait()
+    assert msg["type"] == "UpdateConfiguration"
+    assert msg["agent_context"] == "The agent confirmed the order."
+
+
+async def test_agent_context_propagates_from_stt_to_active_stream():
+    """STT.update_options(agent_context=...) propagates to an already-active
+    stream and sends it over that stream's websocket queue."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", http_session=MagicMock())
+
+    def _fake_create_task(coro, *args, **kwargs):
+        coro.close()
+        return MagicMock()
+
+    with patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=_fake_create_task):
+        stream = stt.stream()
+
+    stt.update_options(agent_context="The agent greeted the caller.")
+
+    assert stt._opts.agent_context == "The agent greeted the caller."
+    assert stream._opts.agent_context == "The agent greeted the caller."
+    msg = stream._config_update_queue.get_nowait()
+    assert msg["type"] == "UpdateConfiguration"
+    assert msg["agent_context"] == "The agent greeted the caller."
+
+
+# ---------------------------------------------------------------------------
+# u3-rt-pro-beta-1 model + u3-pro param family
+#
+# u3-rt-pro-beta-1 shares all u3-rt-pro behavior, so the u3-pro-gated params
+# (prompt, agent_context, previous_context_n_turns, continuous_partials,
+# interruption_delay) are accepted with it, and continuous_partials defaults to True.
+# ---------------------------------------------------------------------------
+
+
+async def test_u3_rt_pro_beta_1_accepted():
+    """u3-rt-pro-beta-1 is a valid model and gets the u3-rt-pro defaults."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model="u3-rt-pro-beta-1")
+    assert stt._opts.speech_model == "u3-rt-pro-beta-1"
+    # continuous_partials defaults to True for the u3-rt-pro family
+    assert stt._opts.continuous_partials is True
+
+
+async def test_u3_rt_pro_beta_1_accepts_u3_pro_params():
+    """The u3-pro-gated params are accepted with u3-rt-pro-beta-1."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(
+        api_key="test-key",
+        model="u3-rt-pro-beta-1",
+        prompt="medical dictation",
+        agent_context="The agent asked for the patient's name.",
+        previous_context_n_turns=10,
+        interruption_delay=300,
+    )
+    assert stt._opts.prompt == "medical dictation"
+    assert stt._opts.agent_context == "The agent asked for the patient's name."
+    assert stt._opts.previous_context_n_turns == 10
+    assert stt._opts.interruption_delay == 300
+
+
+# ---------------------------------------------------------------------------
+# agent_context is u3-rt-pro-only
+# ---------------------------------------------------------------------------
+
+
+async def test_agent_context_requires_u3_rt_pro():
+    """agent_context in the constructor raises for non-u3-rt-pro models."""
+    from livekit.plugins.assemblyai import STT
+
+    with pytest.raises(ValueError, match="agent_context"):
+        STT(api_key="test-key", agent_context="hello")
+
+
+async def test_agent_context_allowed_for_u3_rt_pro_models():
+    """agent_context is accepted for both u3-rt-pro and u3-rt-pro-beta-1."""
+    from livekit.plugins.assemblyai import STT
+
+    for model in ("u3-rt-pro", "u3-rt-pro-beta-1"):
+        stt = STT(api_key="test-key", model=model, agent_context="ctx")
+        assert stt._opts.agent_context == "ctx"
+
+
+# ---------------------------------------------------------------------------
+# previous_context_n_turns (u3-rt-pro only, connect-only)
+# ---------------------------------------------------------------------------
+
+
+async def test_previous_context_n_turns_set():
+    """previous_context_n_turns can be set for u3-rt-pro models."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model="u3-rt-pro", previous_context_n_turns=5)
+    assert stt._opts.previous_context_n_turns == 5
+
+
+async def test_previous_context_n_turns_default_unset():
+    """previous_context_n_turns is unset by default (server default applies)."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model="u3-rt-pro")
+    assert stt._opts.previous_context_n_turns is NOT_GIVEN
+
+
+async def test_previous_context_n_turns_requires_u3_rt_pro():
+    """previous_context_n_turns raises for non-u3-rt-pro models."""
+    from livekit.plugins.assemblyai import STT
+
+    with pytest.raises(ValueError, match="previous_context_n_turns"):
+        STT(api_key="test-key", previous_context_n_turns=5)
+
+
+async def test_previous_context_n_turns_zero_is_forwarded():
+    """0 is a meaningful value (disable carryover), distinct from unset, and must
+    be sent in the connect config rather than dropped."""
+    from urllib.parse import parse_qs, urlparse
+
+    from livekit.plugins.assemblyai import STT
+
+    captured: dict = {}
+
+    async def _fake_ws_connect(url, **kwargs):
+        captured["url"] = url
+        return MagicMock()
+
+    stt = STT(api_key="test-key", model="u3-rt-pro", previous_context_n_turns=0)
+    assert stt._opts.previous_context_n_turns == 0
+
+    stream = _make_stream_for_unit_test(stt)
+    stream._session.ws_connect = _fake_ws_connect
+    await stream._connect_ws()
+
+    query = parse_qs(urlparse(captured["url"]).query)
+    assert query["previous_context_n_turns"] == ["0"]

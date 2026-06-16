@@ -22,8 +22,6 @@ from livekit.agents import (
 from livekit.agents.beta.workflows import GetEmailTask, TaskGroup
 from livekit.agents.llm import function_tool
 from livekit.agents.voice import presets
-from livekit.plugins import silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("SurveyAgent")
 
@@ -355,8 +353,6 @@ async def entrypoint(ctx: JobContext):
         llm=inference.LLM("google/gemini-2.5-flash"),
         stt=inference.STT("deepgram/nova-3", language="multi"),
         tts=inference.TTS("inworld/inworld-tts-2", voice="Nate"),
-        vad=silero.VAD.load(),
-        turn_detection=MultilingualModel(),
         expressive=presets.CONVERSATIONAL,
         preemptive_generation=True,
     )

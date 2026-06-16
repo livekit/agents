@@ -71,7 +71,7 @@ class VAD(agents.vad.VAD):
         deactivation_threshold: NotGivenOr[float] = NOT_GIVEN,
         # deprecated
         padding_duration: NotGivenOr[float] = NOT_GIVEN,
-    ) -> VAD:
+    ) -> agents.vad.VAD:
         """
         Load and initialize the Silero VAD model.
 
@@ -127,6 +127,32 @@ class VAD(agents.vad.VAD):
 
         if is_given(deactivation_threshold) and deactivation_threshold <= 0:
             raise ValueError("deactivation_threshold must be greater than 0")
+
+        # When the requested settings are compatible with the native
+        # implementation in `livekit-local-inference`, delegate to the new
+        # `livekit.agents.inference.VAD(model="silero")` so users get the
+        # COW-shared / faster path without changing their call sites. The
+        # native lib only supports 16 kHz with the bundled model file, so
+        # custom sample rate or `onnx_file_path` falls back to the legacy
+        # onnxruntime path.
+        if sample_rate == 16000 and not is_given(onnx_file_path):
+            if not force_cpu:
+                logger.warning(
+                    "force_cpu=False is ignored when using the bundled native "
+                    "VAD; the model runs CPU-only. Pass `onnx_file_path=...` "
+                    "to keep the legacy onnxruntime path that honors force_cpu."
+                )
+            from livekit.agents import inference
+
+            return inference.VAD(
+                model="silero",
+                min_speech_duration=min_speech_duration,
+                min_silence_duration=min_silence_duration,
+                prefix_padding_duration=prefix_padding_duration,
+                max_buffered_speech=max_buffered_speech,
+                activation_threshold=activation_threshold,
+                deactivation_threshold=deactivation_threshold,
+            )
 
         session = onnx_model.new_inference_session(force_cpu, onnx_file_path=onnx_file_path or None)
         opts = _VADOptions(
@@ -220,6 +246,10 @@ class VAD(agents.vad.VAD):
                 activation_threshold=activation_threshold,
                 deactivation_threshold=deactivation_threshold,
             )
+
+    @property
+    def min_silence_duration(self) -> float | None:
+        return self._opts.min_silence_duration
 
 
 class VADStream(agents.vad.VADStream):

@@ -13,7 +13,7 @@ from livekit.agents import (
     llm,
 )
 from livekit.agents.llm.chat_context import ChatContext, ChatMessage
-from livekit.plugins import deepgram, groq, openai, silero
+from livekit.plugins import deepgram, groq, openai
 
 logger = logging.getLogger("pre-reseponse-agent")
 
@@ -82,7 +82,6 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         stt=deepgram.STT(),
         tts=openai.TTS(),
-        vad=silero.VAD.load(),
     )
     await session.start(PreResponseAgent(), room=ctx.room)
 

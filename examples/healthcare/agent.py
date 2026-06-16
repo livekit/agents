@@ -33,7 +33,6 @@ from livekit.agents.beta.workflows import (
 )
 from livekit.agents.llm import ToolError, function_tool
 from livekit.agents.voice import presets
-from livekit.plugins import silero
 
 logger = logging.getLogger("HealthcareAgent")
 
@@ -755,7 +754,6 @@ async def entrypoint(ctx: JobContext):
         stt=inference.STT("deepgram/nova-3", language="multi"),
         llm=inference.LLM("google/gemini-2.5-flash"),
         tts=inference.TTS("inworld/inworld-tts-2", voice="Luna"),
-        vad=silero.VAD.load(),
         expressive=presets.HEALTHCARE,
         preemptive_generation=True,
     )

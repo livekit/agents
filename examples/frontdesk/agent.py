@@ -39,8 +39,6 @@ from livekit.agents.evals import (
     tool_use_judge,
 )
 from livekit.agents.voice import presets
-from livekit.plugins import silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 load_dotenv()
 
@@ -295,8 +293,6 @@ async def frontdesk_agent(ctx: JobContext):
         llm=inference.LLM("google/gemini-2.5-flash"),
         tts=inference.TTS("inworld/inworld-tts-2", voice="Nadia"),
         expressive=presets.CUSTOMER_SERVICE,
-        turn_detection=MultilingualModel(),
-        vad=silero.VAD.load(),
         max_tool_steps=1,
     )
 

@@ -285,6 +285,9 @@ def _run_worker(server: AgentServer, args: proto.CliArgs) -> None:
     if kwargs:
         server.update_options(**kwargs)
 
+    if args.simulation:
+        server._simulation = True
+
     if args.reload_addr and not args.dev:
         raise ValueError("--reload-addr requires --dev")
 
@@ -303,7 +306,7 @@ def _run_worker(server: AgentServer, args: proto.CliArgs) -> None:
     for sig in HANDLED_SIGNALS:
         signal.signal(sig, _handle_exit)
 
-    setup_logging(args.log_level, devmode=colored_logs, console=False)
+    setup_logging(args.log_level, devmode=colored_logs, console=False, compact=args.simulation)
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)

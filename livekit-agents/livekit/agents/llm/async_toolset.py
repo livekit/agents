@@ -90,4 +90,5 @@ class AsyncToolset(Toolset):
 
     async def aclose(self) -> None:
         await super().aclose()
+        await self._executor.drain()
         await self._executor.aclose()

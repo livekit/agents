@@ -14,6 +14,7 @@ Scenario = proto.Scenario
 ScenarioGroup = proto.ScenarioGroup
 SimulationRun = proto.SimulationRun
 SimulationDispatch = proto.SimulationDispatch
+SimulationMode = proto.SimulationMode
 
 # Decoded form of a Scenario's `userdata` (arbitrary JSON). On the wire it is a
 # JSON-encoded string; in a scenarios.yaml it is written as a nested mapping.
@@ -24,6 +25,7 @@ __all__ = [
     "ScenarioGroup",
     "SimulationRun",
     "SimulationDispatch",
+    "SimulationMode",
     "ScenarioUserdata",
     "SimulationVerdict",
     "SimulationContext",
@@ -66,11 +68,20 @@ class SimulationContext:
         return self._scenario
 
     @property
-    def run(self) -> proto.SimulationRun | None:
+    def simulation_mode(self) -> int:
+        """How the simulated user interacts with the agent (text chat or audio).
+        Unspecified is treated as text, since simulations predating the field
+        were all text-only."""
+        if self._dispatch.mode == proto.SimulationMode.SIMULATION_MODE_UNSPECIFIED:
+            return proto.SimulationMode.SIMULATION_MODE_TEXT
+        return self._dispatch.mode
+
+    @property
+    def simulation_run(self) -> proto.SimulationRun | None:
         return self._run
 
     @property
-    def job(self) -> proto.SimulationRun.Job | None:
+    def simulation_job(self) -> proto.SimulationRun.Job | None:
         return self._job
 
     @property

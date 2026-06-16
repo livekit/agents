@@ -35,6 +35,7 @@ it.
 | Marker | Flag | Meaning |
 |--------|------|---------|
 | `pytest.mark.unit` | `--unit` | fast, hermetic, no external providers/credentials/network |
+| `pytest.mark.audio_eot` | `--audio_eot` | hermetic audio end-of-turn / turn-detection suite |
 | `pytest.mark.plugin("name")` | `--plugin [name]` | provider integration test (needs that provider's deps/keys) |
 | `pytest.mark.stt` | `--stt` | cross-provider speech-to-text suite (`tests/test_stt.py`) |
 | `pytest.mark.tts` | `--tts` | cross-provider text-to-speech suite (`tests/test_tts.py`) |

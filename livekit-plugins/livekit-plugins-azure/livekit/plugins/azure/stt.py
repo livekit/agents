@@ -286,6 +286,7 @@ class SpeechStream(stt.SpeechStream):
                 wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
                 wait_stopped_task = asyncio.create_task(self._session_stopped_event.wait())
 
+                input_ended = False
                 try:
                     done, _ = await asyncio.wait(
                         [process_input_task, wait_reconnect_task, wait_stopped_task],
@@ -298,14 +299,22 @@ class SpeechStream(stt.SpeechStream):
                     if wait_stopped_task in done:
                         raise APIConnectionError("SpeechRecognition session stopped")
 
-                    if wait_reconnect_task not in done:
-                        break
-                    self._reconnect_event.clear()
+                    # session-stopped is handled above, so the wait unblocked
+                    # either because input ended (process_input drained) or a
+                    # reconnect was requested; reset the event in the latter case
+                    input_ended = wait_reconnect_task not in done
+                    if not input_ended:
+                        self._reconnect_event.clear()
                 finally:
                     await utils.aio.gracefully_cancel(process_input_task, wait_reconnect_task)
 
+                # close the push stream to flush finals for buffered audio before
+                # teardown, otherwise ending input truncates the transcript
                 self._stream.close()
                 await self._session_stopped_event.wait()
+
+                if input_ended:
+                    break
             finally:
 
                 def _cleanup() -> None:

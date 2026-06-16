@@ -47,7 +47,7 @@ agents that can see, hear, and understand.
 To install the core Agents library, along with plugins for popular model providers:
 
 ```bash
-pip install "livekit-agents[openai,silero,deepgram,cartesia,turn-detector]"
+pip install "livekit-agents[openai,deepgram,cartesia]"
 ```
 
 ## Docs and guides
@@ -92,7 +92,6 @@ from livekit.agents import (
     function_tool,
     inference,
 )
-from livekit.plugins import silero
 
 
 @function_tool
@@ -111,7 +110,7 @@ server = AgentServer()
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
-        vad=silero.VAD.load(),
+        vad=inference.VAD(),
         # any combination of STT, LLM, TTS, or realtime API can be used
         # this example shows LiveKit Inference, a unified API to access different models via LiveKit Cloud
         # to use model provider keys directly, replace with the following:
@@ -200,7 +199,7 @@ class StoryAgent(Agent):
 async def entrypoint(ctx: JobContext):
     userdata = StoryData()
     session = AgentSession[StoryData](
-        vad=silero.VAD.load(),
+        vad=inference.VAD(),
         stt="deepgram/nova-3",
         llm="openai/gpt-4.1-mini",
         tts="cartesia/sonic-3:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
@@ -381,6 +380,10 @@ python myagent.py start
 ```
 
 Runs the agent with production-ready optimizations.
+
+## License
+
+The Agents framework is licensed under [Apache-2.0](LICENSE). The LiveKit turn detection models are licensed under the [LiveKit Model License](MODEL_LICENSE).
 
 ## Contributing
 

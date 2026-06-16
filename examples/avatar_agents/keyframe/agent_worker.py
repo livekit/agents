@@ -14,9 +14,8 @@ from livekit.agents import (
     function_tool,
     inference,
 )
-from livekit.plugins import keyframe, silero
+from livekit.plugins import keyframe
 from livekit.plugins.keyframe import Emotion
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 load_dotenv()
 
@@ -51,8 +50,6 @@ async def entrypoint(ctx: JobContext):
         llm=inference.LLM("google/gemini-2.5-flash"),
         tts=inference.TTS("cartesia/sonic-3"),
         resume_false_interruption=False,
-        vad=silero.VAD.load(),
-        turn_detection=MultilingualModel(),
     )
 
     avatar = keyframe.AvatarSession(persona_slug="public:cosmo_persona-1.5-live")
