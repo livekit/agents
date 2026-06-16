@@ -228,6 +228,8 @@ class STT(stt.STT):
             "numerals": config.numerals,
             "mip_opt_out": config.mip_opt_out,
         }
+        if self._opts.keyterm:
+            recognize_config["keyterm"] = self._opts.keyterm
         if config.redact:
             recognize_config["redact"] = config.redact
         if config.enable_diarization:

@@ -675,6 +675,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 record = job_ctx.job.enable_recording if job_ctx else False
 
             self._recording_options = _resolve_recording_options(record)  # type: ignore[arg-type]
+            if self._text_only:
+                self._recording_options["audio"] = False
 
             is_primary = True
             if job_ctx:
@@ -1418,6 +1420,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         wait_on_enter: bool = True,
     ) -> None:
         async with self._activity_lock:
+            if self._closing and new_activity == "start":
+                # checked again after the drain below: closing may start while it's in flight
+                logger.warning(
+                    f"session is closing, skipping start activity of agent {agent.id}",
+                )
+                return
+
             # _update_activity is called directly sometimes, update for redundancy
             self._agent = agent
 

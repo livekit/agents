@@ -159,8 +159,10 @@ class AvatarSession(BaseAvatarSession):
                 f"failed to connect to simli avatar session server returned {avatarConnectionRequest.status} and detail {body}"
             )
             return
-        agent_session.output.audio = DataStreamAudioOutput(
-            room=room,
-            destination_identity=self._avatar_participant_identity,
-            sample_rate=SAMPLE_RATE,
+        agent_session.output.replace_audio_tail(
+            DataStreamAudioOutput(
+                room=room,
+                destination_identity=self._avatar_participant_identity,
+                sample_rate=SAMPLE_RATE,
+            ),
         )

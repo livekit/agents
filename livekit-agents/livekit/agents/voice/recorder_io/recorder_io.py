@@ -371,7 +371,6 @@ class RecorderAudioOutput(io.AudioOutput):
         super().__init__(
             label="RecorderIO",
             next_in_chain=audio_output,
-            sample_rate=audio_output.sample_rate if audio_output else None,
             # TODO: support pause
             capabilities=io.AudioOutputCapabilities(pause=True),  # depends on the next_in_chain
         )
@@ -385,6 +384,12 @@ class RecorderAudioOutput(io.AudioOutput):
         # pause tracking
         self.__current_pause_start: float | None = None
         self.__pause_wall_times: list[tuple[float, float]] = []
+
+    @property
+    def sample_rate(self) -> int | None:
+        if self._sample_rate is not None:
+            return self._sample_rate
+        return self.next_in_chain.sample_rate if self.next_in_chain else None
 
     @property
     def started_wall_time(self) -> float | None:

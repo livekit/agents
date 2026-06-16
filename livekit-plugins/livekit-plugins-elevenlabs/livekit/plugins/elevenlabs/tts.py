@@ -336,6 +336,13 @@ class ChunkedStream(tts.ChunkedStream):
             if is_given(self._opts.voice_settings)
             else None
         )
+        extra_params: dict[str, str | bool] = {}
+        if is_given(self._opts.language):
+            extra_params["language_code"] = self._opts.language.language
+        if is_given(self._opts.apply_language_text_normalization):
+            extra_params["apply_language_text_normalization"] = (
+                self._opts.apply_language_text_normalization
+            )
         try:
             async with self._tts._ensure_session().post(
                 _synthesize_url(self._opts),
@@ -344,6 +351,8 @@ class ChunkedStream(tts.ChunkedStream):
                     "text": self._input_text,
                     "model_id": self._opts.model,
                     "voice_settings": voice_settings,
+                    "apply_text_normalization": self._opts.apply_text_normalization,
+                    **extra_params,
                 },
                 timeout=aiohttp.ClientTimeout(
                     total=30,
@@ -887,11 +896,10 @@ def _strip_nones(data: dict[str, Any]) -> dict[str, Any]:
 def _synthesize_url(opts: _TTSOptions) -> str:
     base_url = opts.base_url
     voice_id = opts.voice_id
-    model_id = opts.model
     output_format = opts.encoding
     url = (
         f"{base_url}/text-to-speech/{voice_id}/stream?"
-        f"model_id={model_id}&output_format={output_format}"
+        f"output_format={output_format}&enable_logging={str(opts.enable_logging).lower()}"
     )
     if is_given(opts.streaming_latency):
         url += f"&optimize_streaming_latency={opts.streaming_latency}"
