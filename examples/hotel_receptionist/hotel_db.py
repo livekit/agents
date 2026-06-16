@@ -599,12 +599,15 @@ class HotelDB:
         check_in: date,
         check_out: date,
         extras: list[RoomExtra],
+        view: str | None = None,
     ) -> RoomBooking:
         # Re-pick a free room of the new (type, smoking) for the new dates,
         # ignoring the booking being modified itself (so same-room "extend
         # by one night" doesn't conflict with itself). The room the guest
         # already has wins when it still fits - a date change must never
-        # quietly move someone out of their garden view.
+        # quietly move someone out of their garden view. A requested `view`
+        # filters to rooms with that view, which is how the guest gets moved
+        # to a different room (e.g. a city-view room to a garden-view one).
         clean_extras = sorted(e for e in extras if e in ALLOWED_EXTRAS)
         conn = self.connection
         with conn:
@@ -621,12 +624,13 @@ class HotelDB:
                     "check_in": check_in.isoformat(),
                     "check_out": check_out.isoformat(),
                     "exclude": booking_code,
-                    "view": None,
+                    "view": view,
                     "prefer": current[0] if current else None,
                 },
             ).fetchone()
             if not row:
-                raise Unavailable(f"sold out: {room_type}")
+                what = f"{view} {room_type}" if view else room_type
+                raise Unavailable(f"sold out: {what}")
             room_id, nightly_rate = row
             nights = (check_out - check_in).days
             subtotal, taxes, total, items = compute_invoice(
@@ -743,6 +747,65 @@ class HotelDB:
             raise NotFound(f"reservation not found: {code}")
         if self.on_change:
             await self.on_change()
+
+    async def modify_restaurant_reservation(
+        self,
+        *,
+        code: str,
+        on_date: date,
+        at_time: time,
+        party_size: int | None = None,
+    ) -> RestaurantReservation:
+        """Change a confirmed reservation's date/time (and optionally party size).
+
+        Prefers the reservation's current table when it's still free at the new
+        slot (mirrors the prefer-current-room logic in update_booking), so a
+        same-table time shift leaves table_location unchanged. Falls back to the
+        next free table only if the current one is taken or too small.
+        """
+        conn = self.connection
+        with conn:
+            current = conn.execute(
+                "SELECT table_id, party_size FROM restaurant_reservations "
+                "WHERE code = :code AND status = 'confirmed'",
+                {"code": code},
+            ).fetchone()
+            if not current:
+                raise NotFound(f"reservation not found: {code}")
+            current_table_id, current_party = current
+            new_party = party_size if party_size is not None else current_party
+            row = conn.execute(
+                _SQL_FREE_TABLE_FOR_MODIFY,
+                {
+                    "party_size": new_party,
+                    "date": on_date.isoformat(),
+                    "time": at_time.isoformat(),
+                    "code": code,
+                    "current_table_id": current_table_id,
+                },
+            ).fetchone()
+            if not row:
+                raise Unavailable(f"restaurant full: {on_date} {at_time}")
+            table_id = row[0]
+            _update(
+                conn,
+                "restaurant_reservations",
+                {
+                    "table_id": table_id,
+                    "party_size": new_party,
+                    "date": on_date.isoformat(),
+                    "time": at_time.isoformat(),
+                },
+                {"code": code, "status": "confirmed"},
+            )
+        if self.on_change:
+            await self.on_change()
+        updated = _row_to_reservation(
+            conn.execute(_SQL_RESERVATION_BY_CODE, {"code": code}).fetchone()
+        )
+        if updated is None:
+            raise NotFound(f"reservation vanished mid-update: {code}")
+        return updated
 
     async def flag_late_arrival(self, *, booking_code: str, note: str) -> None:
         conn = self.connection
@@ -1465,6 +1528,21 @@ WHERE t.capacity >= :party_size
 ORDER BY t.capacity, t.id LIMIT 1
 """
 
+# Pick a table for a modified reservation: prefer the reservation's CURRENT
+# table when it's still big enough and free at the new slot (so a same-evening
+# time shift keeps the same table_id and table_location), otherwise fall back to
+# the next free table. Excludes the reservation being modified from the conflict
+# check so shifting in place doesn't collide with itself.
+_SQL_FREE_TABLE_FOR_MODIFY = """
+SELECT t.id FROM restaurant_tables t
+WHERE t.capacity >= :party_size
+  AND NOT EXISTS (
+    SELECT 1 FROM restaurant_reservations r
+    WHERE r.table_id = t.id AND r.status = 'confirmed' AND r.code != :code
+      AND r.date = :date AND r.time = :time)
+ORDER BY (t.id = :current_table_id) DESC, t.capacity, t.id LIMIT 1
+"""
+
 _SQL_DINING_AVAILABILITY = """
 WITH slots(slot) AS (
     VALUES ('17:30:00'),('18:00:00'),('18:30:00'),('19:00:00'),
@@ -1503,6 +1581,11 @@ WHERE LOWER(last_name) = LOWER(:last_name)
   AND (:code IS NULL OR REPLACE(code, '-', '') = REPLACE(:code, '-', ''))
   AND (:date IS NULL OR date = :date)
 LIMIT 1
+"""
+
+_SQL_RESERVATION_BY_CODE = f"""
+SELECT {", ".join(_RESERVATION_COLS)} FROM restaurant_reservations
+WHERE code = :code LIMIT 1
 """
 
 _SQL_GET_INVOICE = "SELECT id, line_items, subtotal, taxes, total, paid FROM hotel_invoices WHERE booking_code = :code"

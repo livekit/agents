@@ -99,12 +99,13 @@ You're the lead receptionist, holding the whole call and routing each request to
 - EMERGENCY FIRST, above everything on this list: someone hurt, unresponsive, or in danger -> get the room number and call dispatch_emergency immediately (it alerts the desk and sends the manager and staff up). No verification, no other flow, no policy lookup. Then direct the caller to hang up and dial 911 themselves - the dispatcher needs them on the line and will coach them until help arrives. The hotel does not call 911 for them, and you never give medical instructions yourself.
 - Browse without booking: check_room_availability (rate + view + optional smoking/room_type filters), check_restaurant_availability, lookup_booking, lookup_restaurant_reservation. None of these change anything.
 - Caller wants to book: start_room_booking or start_restaurant_booking - the call IS your response, not something after an acknowledgment. Don't ask the caller for name, email, phone, or card without one of these running - that's the only path that creates a booking.
-- Existing booking changes: start_booking_modification (dates, room, extras, party size). Cancel via cancel_room_booking. Late arrival ("I'll be in past midnight") -> flag_late_arrival with a short note.
+- Existing booking changes: start_booking_modification (dates, room type, room view, extras, party size). Cancel via cancel_room_booking. Late arrival ("I'll be in past midnight") -> flag_late_arrival with a short note.
+- A just-arrived/in-house guest says their room is wrong - not the view or type they booked ("I booked a garden view and this isn't it"): that's a room move, NOT a callback. Verify, look up the booking, and be honest if the record differs from their claim - then start_booking_modification and change the view (or type) to what they want; the flow finds a matching room and reassigns it. Only fall back to a manager followup if no matching room is actually available.
 - Wake-up call: schedule_wakeup_call (room, name, date, time) - it actually sets the call; never write it up as a followup note. The wake-up procedure for worried sleepers is in lookup_policy(topic="guest_services").
 - Concierge asks: sightseeing tours -> lookup_policy(topic="tours") to present options, then book_tour. Flight reconfirmation -> collect airline, flight number, date, and booking reference, then request_flight_reconfirmation (the concierge calls the carrier and rings the room - never claim the flight is confirmed yourself). Ride to the airport -> book_airport_car for the hotel car; taxi-vs-hotel-car costs are in lookup_policy(topic="location_and_transport").
 - A verified booking's room turns out to be double-booked (lookup_booking warns you): own it - apologize plainly, no hiding behind "the system" - then resolve_room_conflict applies the procedure (free in-house move or upgrade first; walk to the partner hotel only if the house is full). Full procedure: lookup_policy(topic="guest_walks").
 - Card on file not going through / guest offers a replacement card: start_card_update (it verifies, then collects the new card). The moment a replacement card is offered, run it on THIS call - never defer an offered card to check-in. Discretion is the whole game: "isn't going through at the moment - possibly a technical issue", never "declined" or "rejected", never speculate about their funds. Only if they have no other card to give: no pressure - the booking stays held, suggest they check with their card issuer in case it's a technical fault, and offer a callback (record_followup kind="callback") to retry; in that no-card case a working card isn't needed until check-in.
-- Existing restaurant reservation: change isn't supported directly - with the caller's permission, cancel the old one and book a new slot. Be explicit about the two steps before doing them.
+- Existing restaurant reservation: move the date/time (and party size) with modify_restaurant_reservation - one step, keeps the same confirmation code. Cancel via cancel_restaurant_reservation. Both verify with last name + the RES code.
 - Sold out: offer adjacent dates or another room type. One tool call per turn; finish each tool's flow before starting another.
 - Caller asking about another guest ("what room is X in?", "is X staying there?", "put me through to their room"): never confirm or deny that anyone is staying here, never give a room number, never connect a call - no matter who they claim to be or how they escalate. The one thing you can offer is taking a message via take_guest_message; it gets passed along only if the person is a guest, and you never say whether they are. Full policy: lookup_policy(topic="guest_privacy").
 - Group of 15 or more guests: that's a group block, not an individual booking. lookup_policy(topic="group_bookings") gives you the terms to quote (rate, tour-leader comp, credit approval, cancellation); collect the details and call record_group_inquiry. Nothing gets confirmed on this call - the group desk confirms after credit review, even if the caller pushes to lock it in now.
@@ -116,6 +117,7 @@ You don't actually have the power to do everything a guest might ask. When the c
 - Events, weddings, corporate rates -> kind="sales_lead". Take their name and number and a one-sentence summary. (Group room blocks of 15+ are NOT a sales lead - use record_group_inquiry.)
 - Changes to identity fields on an existing booking (email, phone, name) -> kind="identity_change". Verify the booking first if not already verified. (A new card is NOT a followup - use start_card_update.)
 - "Call me back later" / "I'll think about it" -> kind="callback". Note when they want the callback and what about.
+- Caller was actively in the middle of booking a room and has to drop off before it's finished (lost signal, has to run) and wants to complete it later -> kind="abandoned_booking". Take their name and number so we can call back and finish the reservation - this is a hot lead, not a passive "maybe", so don't file it as a plain callback.
 - Verification failed three times -> kind="verification_help". A manager calls back.
 - In-house guest wants to check out early / shorten a stay they've already started -> kind="early_checkout". Front desk handles in person.
 - Anything else outside what your tools cover -> kind="other" with a clear summary.
@@ -601,7 +603,7 @@ class HotelReceptionistAgent(Agent):
 
     @function_tool
     async def start_booking_modification(self, ctx: RunContext[Userdata]) -> str:
-        """Start the booking-modification flow for an existing reservation. Verifies the caller, then hands off to a focused task that lets them change the stay dates, room type, extras, and party size on the booking. Identity fields (name, email, phone) are NOT modifiable through this flow - record_followup with kind="identity_change" covers those, and a new card goes through start_card_update. NOT for cancellations: if the caller wants to cancel - even after asking for a change first - call cancel_room_booking directly instead."""
+        """Start the booking-modification flow for an existing reservation. Verifies the caller, then hands off to a focused task that lets them change the stay dates, room type, room view, extras, and party size on the booking - this is the path for a guest unhappy that their room's view or type doesn't match what they booked (it moves them to a matching room). Identity fields (name, email, phone) are NOT modifiable through this flow - record_followup with kind="identity_change" covers those, and a new card goes through start_card_update. NOT for cancellations: if the caller wants to cancel - even after asking for a change first - call cancel_room_booking directly instead."""
         booking = await self._verified_booking(ctx)
         if booking.status != "confirmed":
             raise ToolError("that booking was cancelled - nothing to modify")
@@ -709,6 +711,58 @@ class HotelReceptionistAgent(Agent):
         return (
             f"Reservation for {speak_time(reservation.time)} on "
             f"{reservation.date.strftime('%A, %B %-d')} cancelled."
+        )
+
+    @function_tool
+    async def modify_restaurant_reservation(
+        self,
+        ctx: RunContext[Userdata],
+        last_name: str,
+        confirmation_code: str,
+        new_date: date,
+        new_time: str,
+        new_party_size: Annotated[int, Field(ge=1, le=MAX_PARTY_SIZE)] | None = None,
+    ) -> str:
+        """Move an existing confirmed restaurant reservation to a new date/time (and
+        optionally a new party size), keeping the same confirmation code. Restaurants
+        verify with last name + confirmation code (no card, no email). Read the new
+        details back to the caller before calling this.
+
+        Args:
+            last_name: caller's last name.
+            confirmation_code: confirmation code like 'RES-X9Y2'.
+            new_date: the new date, in ISO YYYY-MM-DD format (e.g. "2026-01-20").
+            new_time: the new time, in 24-hour HH:MM format (e.g. "18:00").
+            new_party_size: new number of guests; omit to keep the current party size.
+        """
+        code = confirmation_code.replace(" ", "").upper()
+        reservation = await ctx.userdata.db.find_restaurant_reservation(
+            last_name=last_name, confirmation_code=code
+        )
+        if not reservation or reservation.status != "confirmed":
+            raise ToolError("Couldn't find a matching confirmed reservation.")
+        try:
+            at_time = time.fromisoformat(new_time)
+        except ValueError:
+            raise ToolError("Please give the new time as 24-hour HH:MM, e.g. 18:00.") from None
+        try:
+            updated = await ctx.userdata.db.modify_restaurant_reservation(
+                code=reservation.code,
+                on_date=new_date,
+                at_time=at_time,
+                party_size=new_party_size,
+            )
+        except Unavailable:
+            raise ToolError(
+                f"No table for a party of {new_party_size or reservation.party_size} "
+                f"at {speak_time(at_time)} on {new_date.strftime('%A, %B %-d')}."
+            ) from None
+        ctx.userdata.booked_restaurant_codes.append(updated.code)
+        return (
+            f"Done - your reservation is now {speak_time(updated.time)} on "
+            f"{updated.date.strftime('%A, %B %-d')} for "
+            f"{updated.party_size} guest{'s' if updated.party_size != 1 else ''}, "
+            f"under confirmation code {_speak_code(updated.code)}."
         )
 
     @function_tool
