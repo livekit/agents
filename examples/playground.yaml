@@ -294,6 +294,33 @@ examples:
         source: transcript
         title: "\uf075 Transcript"
 
+  hotel_receptionist:
+    title: Hotel Receptionist
+    description: A hotel front-desk agent that books rooms and restaurant reservations, modifies and verifies existing bookings, and confirms guest details — all backed by a live database.
+    # brand palette — teal-500
+    accent: "#14B8A6"
+    agent_id: CA_ZVVNHj3sPjJ5
+    entry: agent.py
+    github: "https://github.com/livekit/agents/tree/main/examples/hotel_receptionist"
+    tags: [multi-agent, tools]
+    icon:
+      # Concierge service bell: domed bell with a top-left specular
+      # highlight, sitting on a full-width base plate.
+      size: 12
+      pixels: |
+        000000000000
+        000000000000
+        000001100000
+        000011110000
+        000221111000
+        002211111100
+        011111111110
+        011111111110
+        111111111111
+        000000000000
+        000000000000
+        000000000000
+
   avatar:
     title: Avatar
     description: Talk to a LemonSlice avatar. Pick anyone from the dropdown to swap who you're chatting with, from Leila to a Pixar fox.
