@@ -3049,7 +3049,15 @@ class AgentActivity(RecognitionHooks):
 
             tool_messages = new_calls + new_fnc_outputs
             if fnc_executed_ev._reply_required:
+                # refresh conversation items added during tool execution: a tool that
+                # awaits an inline AgentTask runs a whole sub-conversation, merged into
+                # the agent's chat_ctx at handoff-return - this turn's snapshot predates
+                # it. Without the refresh, the tool response is generated blind to what
+                # was actually said inside the tool call (and re-asks captured fields).
+                # Conversational analog of the update_instructions() refresh below.
+                # tool_messages must be added first so merge() dedups them by id.
                 chat_ctx.items.extend(tool_messages)
+                chat_ctx.merge(self._agent._chat_ctx, exclude_instructions=True)
 
                 # refresh instructions in chat_ctx so that any update_instructions()
                 # calls made inside tool functions are reflected in the tool response
