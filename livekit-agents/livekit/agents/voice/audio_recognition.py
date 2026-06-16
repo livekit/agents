@@ -44,17 +44,61 @@ _EOU_MAX_HISTORY_TURNS = 6
 
 
 @dataclass
+class _EndOfTurnMetrics:
+    started_speaking_at: float | None
+    stopped_speaking_at: float | None
+    transcription_delay: float | None
+    end_of_turn_delay: float | None
+
+
+@dataclass
 class _EndOfTurnInfo:
     skip_reply: bool
     """If True, a reply was already triggered and should be skipped after end of turn detection."""
     new_transcript: str
     transcript_confidence: float
+    metrics: _EndOfTurnMetrics
 
-    # metrics report
-    started_speaking_at: float | None
-    stopped_speaking_at: float | None
-    transcription_delay: float | None
-    end_of_turn_delay: float | None
+
+def _compute_end_of_turn_metrics(
+    *,
+    speech_start_time: float | None,
+    last_speaking_time: float | None,
+    last_final_transcript_time: float | None,
+    now: float,
+) -> _EndOfTurnMetrics:
+    """Compute the end-of-turn timing metrics from the captured turn anchors.
+
+    ``last_speaking_time`` is the internal ``_last_speaking_time`` anchor (reported
+    as ``stopped_speaking_at``). When the turn detector commits a turn whose anchor
+    was never refreshed for this segment, that value can be stale and predate the
+    start of the current turn, producing wildly inflated delays (see issue #6093).
+
+    We treat such an inconsistent anchor the same way we treat unreliable VAD: skip
+    the calculation and return ``None`` rather than emit a likely wrong value. A
+    valid anchor must satisfy ``last_speaking_time >= speech_start_time`` (you cannot
+    stop speaking before the turn started).
+    """
+    if (
+        speech_start_time is None
+        or last_speaking_time is None
+        or last_final_transcript_time is None
+        # stale/out-of-order anchor: stopping to speak cannot predate the turn start
+        or last_speaking_time < speech_start_time
+    ):
+        return _EndOfTurnMetrics(
+            started_speaking_at=None,
+            stopped_speaking_at=None,
+            transcription_delay=None,
+            end_of_turn_delay=None,
+        )
+
+    return _EndOfTurnMetrics(
+        started_speaking_at=speech_start_time,
+        stopped_speaking_at=last_speaking_time,
+        transcription_delay=max(last_final_transcript_time - last_speaking_time, 0),
+        end_of_turn_delay=max(now - last_speaking_time, 0),
+    )
 
 
 @dataclass
@@ -1197,32 +1241,21 @@ class AudioRecognition:
                 else 0
             )
 
-            started_speaking_at = None
-            stopped_speaking_at = None
-            transcription_delay = None
-            end_of_turn_delay = None
-
-            # sometimes, we can't calculate the metrics because VAD was unreliable.
-            # in this case, we just ignore the calculation, it's better than providing likely wrong values
-            if (
-                last_final_transcript_time is not None
-                and last_speaking_time is not None
-                and speech_start_time is not None
-            ):
-                started_speaking_at = speech_start_time
-                stopped_speaking_at = last_speaking_time
-                transcription_delay = max(last_final_transcript_time - last_speaking_time, 0)
-                end_of_turn_delay = time.time() - last_speaking_time
-
+            # sometimes, we can't calculate the metrics because VAD was unreliable or
+            # the speaking anchor is stale/out-of-order (see issue #6093). in this case,
+            # we just ignore the calculation, it's better than providing likely wrong values
+            metrics = _compute_end_of_turn_metrics(
+                speech_start_time=speech_start_time,
+                last_speaking_time=last_speaking_time,
+                last_final_transcript_time=last_final_transcript_time,
+                now=time.time(),
+            )
             committed = self._hooks.on_end_of_turn(
                 _EndOfTurnInfo(
                     skip_reply=skip_reply,
                     new_transcript=self._audio_transcript,
                     transcript_confidence=confidence_avg,
-                    transcription_delay=transcription_delay or 0,
-                    end_of_turn_delay=end_of_turn_delay,
-                    started_speaking_at=started_speaking_at,
-                    stopped_speaking_at=stopped_speaking_at,
+                    metrics=metrics,
                 )
             )
             if committed:
@@ -1230,8 +1263,8 @@ class AudioRecognition:
                     {
                         trace_types.ATTR_USER_TRANSCRIPT: self._audio_transcript,
                         trace_types.ATTR_TRANSCRIPT_CONFIDENCE: confidence_avg,
-                        trace_types.ATTR_TRANSCRIPTION_DELAY: transcription_delay or 0,
-                        trace_types.ATTR_END_OF_TURN_DELAY: end_of_turn_delay or 0,
+                        trace_types.ATTR_TRANSCRIPTION_DELAY: metrics.transcription_delay or 0,
+                        trace_types.ATTR_END_OF_TURN_DELAY: metrics.end_of_turn_delay or 0,
                     }
                 )
                 if self._stt_request_ids:
