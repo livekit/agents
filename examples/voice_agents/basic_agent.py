@@ -102,6 +102,7 @@ async def entrypoint(ctx: JobContext) -> None:
             "filter_markdown",
             text_transforms.replace({"LiveKit": "<<ˈ|l|aɪ|v|k|ɪ|t>>"}),
         ],
+        expressive={"backchannel": True},
     )
 
     @session.on("metrics_collected")

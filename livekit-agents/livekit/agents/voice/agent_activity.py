@@ -94,6 +94,7 @@ from .turn import (
 if TYPE_CHECKING:
     from ..llm import mcp
     from .agent_session import AgentSession, ExpressiveOptions
+    from .backchannel import _BackchannelEmitter
 
 
 _AgentActivityContextVar = contextvars.ContextVar["AgentActivity"]("agents_activity")
@@ -250,6 +251,9 @@ class AgentActivity(RecognitionHooks):
         self._default_interruption_by_audio_activity_enabled = (
             self._interruption_by_audio_activity_enabled
         )
+
+        # short acknowledgments emitted during the user's pauses (None when disabled)
+        self._backchannel_emitter = self._resolve_backchannel_emitter()
 
         # speeches that audio playout finished but not done because of tool calls
         self._background_speeches: set[SpeechHandle] = set()
@@ -2073,9 +2077,8 @@ class AgentActivity(RecognitionHooks):
             host._on_eot_prediction(ev)
 
     def on_agent_backchannel_opportunity(self, ev: _AgentBackchannelOpportunityEvent) -> None:
-        # TODO: consume the backchannel opportunity internally (e.g. trigger a
-        # backchannel phrase). Kept internal for now — not surfaced as a public event.
-        pass
+        if self._backchannel_emitter is not None:
+            self._backchannel_emitter.maybe_emit(ev, self)
 
     def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool:
         # IMPORTANT: This method is sync to avoid it being cancelled by the AudioRecognition
@@ -2379,6 +2382,33 @@ class AgentActivity(RecognitionHooks):
         return self._agent.chat_ctx
 
     # endregion
+
+    def _resolve_backchannel_emitter(self) -> _BackchannelEmitter | None:
+        """Build the per-activity backchannel emitter, or ``None`` when disabled or
+        unsupported by the active turn detector."""
+        from .backchannel import _BackchannelEmitter, resolve_backchannel_options
+
+        expr = self._agent.expressive
+        if not utils.is_given(expr):
+            expr = self._session.options.expressive
+        if not expr:
+            return None  # expressive off → no backchannel
+
+        backchannel = expr.get("backchannel", NOT_GIVEN) if isinstance(expr, dict) else NOT_GIVEN
+        options = resolve_backchannel_options(backchannel)
+        if options is None:
+            return None
+
+        # only the cloud turn detector supplies the backchannel signal; the local
+        # mini model never emits it, so the opportunity hook would never fire
+        if not isinstance(self._turn_detection, inference.TurnDetector):
+            logger.warning(
+                "backchannel is enabled but the active turn detector does not provide a "
+                "backchannel signal (requires the LiveKit cloud turn detector); disabling it"
+            )
+            return None
+
+        return _BackchannelEmitter(options)
 
     def _resolve_expressive_options(self) -> ExpressiveOptions | None:
         """Resolve expressive from agent (overrides session). Returns None if disabled."""
