@@ -151,6 +151,14 @@ class GetDOBTask(AgentTask[GetDOBResult]):
     async def _update_dob_impl(
         self, year: int, month: int, day: int, ctx: RunContext
     ) -> str | None:
+        # Normalize two-digit years to the intended century, matching what the
+        # prompt already asks the model to do ("90" -> 1990, "05" -> 2005). A
+        # literal two-digit year is otherwise a valid date (e.g. 90 -> year 90 AD)
+        # that passes the future-date check and silently corrupts the result.
+        if 0 <= year < 100:
+            current_yy = date.today().year % 100
+            year += 2000 if year <= current_yy else 1900
+
         try:
             dob = date(year, month, day)
         except ValueError as e:
