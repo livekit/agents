@@ -87,6 +87,31 @@ def test_derive_ws_url_from_base() -> None:
     )
 
 
+def test_normalize_chunk_notation_replaces_question_mark() -> None:
+    from livekit.plugins.avaz.tts import _normalize_text_for_chunk_notation
+
+    # Appending "?" before "." yields chunks_generated: 0 on Avaz dashboard builds.
+    assert _normalize_text_for_chunk_notation("How are you?", ".") == "How are you."
+
+
+def test_normalize_chunk_notation_replaces_exclamation() -> None:
+    from livekit.plugins.avaz.tts import _normalize_text_for_chunk_notation
+
+    assert _normalize_text_for_chunk_notation("Harika!", ".") == "Harika."
+
+
+def test_normalize_chunk_notation_appends_boundary() -> None:
+    from livekit.plugins.avaz.tts import _normalize_text_for_chunk_notation
+
+    assert _normalize_text_for_chunk_notation("Merhaba", ".") == "Merhaba."
+
+
+def test_normalize_chunk_notation_preserves_existing_boundary() -> None:
+    from livekit.plugins.avaz.tts import _normalize_text_for_chunk_notation
+
+    assert _normalize_text_for_chunk_notation("Merhaba.", ".") == "Merhaba."
+
+
 def test_auth_headers() -> None:
     from livekit.plugins.avaz import build_auth_headers
 
