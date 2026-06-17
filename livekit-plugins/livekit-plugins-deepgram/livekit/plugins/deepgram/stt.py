@@ -271,6 +271,9 @@ class STT(stt.STT):
             sample_rate=sample_rate,
             base_url=base_url,
             http_session=http_session,
+            # explicit empty key opts out of the DEEPGRAM_API_KEY env fallback, so the gateway
+            # only ever receives cf-aig-authorization (no stray Authorization: Token header)
+            api_key="",
             extra_headers={"cf-aig-authorization": cf_aig_token},
         )
 
@@ -912,6 +915,12 @@ def prerecorded_transcription_to_speech_event(
     )
 
 
+def _bare_model(model: DeepgramModels | str) -> str:
+    # Cloudflare AI Gateway routes Deepgram models as "@cf/deepgram/<model>"; strip the routing
+    # prefix so model-name checks see the underlying Deepgram model (e.g. "nova-3").
+    return model.removeprefix("@cf/deepgram/")
+
+
 def _validate_model(
     model: DeepgramModels | str, language: NotGivenOr[DeepgramLanguages | str]
 ) -> DeepgramModels | str:
@@ -926,7 +935,11 @@ def _validate_model(
         "nova-2-drivethru",
         "nova-2-automotive",
     }
-    if is_given(language) and language not in ("en-US", "en") and model in en_only_models:
+    if (
+        is_given(language)
+        and language not in ("en-US", "en")
+        and _bare_model(model) in en_only_models
+    ):
         logger.warning(
             f"{model} does not support language {language}, falling back to nova-2-general"
         )
@@ -951,13 +964,13 @@ def _validate_keyterm(
     Validating keyterm and keywords for model compatibility.
     See: https://developers.deepgram.com/docs/keyterm and https://developers.deepgram.com/docs/keywords
     """
-    if model.startswith("nova-3") and is_given(keywords):
+    if _bare_model(model).startswith("nova-3") and is_given(keywords):
         raise ValueError(
             "Keywords is only available for use with Nova-2, Nova-1, Enhanced, and "
             "Base speech to text models. For Nova-3, use Keyterm Prompting."
         )
 
-    if is_given(keyterm) and (not model.startswith("nova-3")):
+    if is_given(keyterm) and (not _bare_model(model).startswith("nova-3")):
         raise ValueError(
             "Keyterm Prompting is only available for transcription using the Nova-3 Model. "
             "To boost recognition of keywords using another model, use the Keywords feature."

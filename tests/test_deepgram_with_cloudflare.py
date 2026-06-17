@@ -133,3 +133,22 @@ def test_no_key_and_no_extra_headers_raises() -> None:
         deepgram.STT()
     with pytest.raises(ValueError):
         deepgram.TTS()
+
+
+def test_with_cloudflare_ignores_deepgram_api_key_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    # a DEEPGRAM_API_KEY in the environment must not leak into the gateway request
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "leaked-key")
+    stt = deepgram.STT.with_cloudflare(account_id="a", cf_aig_token="cf")
+    assert stt._connect_headers == {"cf-aig-authorization": "cf"}
+    tts = deepgram.TTS.with_cloudflare(account_id="a", cf_aig_token="cf")
+    assert tts._connect_headers == {"cf-aig-authorization": "cf"}
+
+
+def test_keyterm_allowed_for_cf_prefixed_nova3() -> None:
+    # @cf/deepgram/nova-3 is still nova-3; keyterm must not be rejected by the routing prefix
+    stt = deepgram.STT(
+        model="@cf/deepgram/nova-3",
+        extra_headers={"cf-aig-authorization": "cf"},
+        keyterm=["livekit"],
+    )
+    assert stt._opts.model == "@cf/deepgram/nova-3"

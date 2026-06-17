@@ -78,7 +78,10 @@ class TTS(tts.TTS):
             num_channels=NUM_CHANNELS,
         )
 
-        api_key = api_key or os.environ.get("DEEPGRAM_API_KEY")
+        # only fall back to the env var when no api_key was passed at all; an explicit "" means
+        # "no Deepgram key" (e.g. with_cloudflare), so it must not pick up DEEPGRAM_API_KEY
+        if api_key is None:
+            api_key = os.environ.get("DEEPGRAM_API_KEY")
         extra = dict(extra_headers) if is_given(extra_headers) else {}
         if not api_key and not extra:
             raise ValueError("Deepgram API key required. Set DEEPGRAM_API_KEY or provide api_key.")
@@ -173,6 +176,9 @@ class TTS(tts.TTS):
             base_url=base_url,
             word_tokenizer=word_tokenizer,
             http_session=http_session,
+            # explicit empty key opts out of the DEEPGRAM_API_KEY env fallback, so the gateway
+            # only ever receives cf-aig-authorization (no stray Authorization: Token header)
+            api_key="",
             extra_headers={"cf-aig-authorization": cf_aig_token},
         )
 
