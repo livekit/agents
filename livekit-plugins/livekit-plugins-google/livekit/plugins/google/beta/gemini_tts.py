@@ -15,7 +15,7 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
-GEMINI_TTS_MODELS = Literal["gemini-2.5-flash-preview-tts", "gemini-2.5-pro-preview-tts"]
+GEMINI_TTS_MODELS = Literal["gemini-2.5-flash-preview-tts", "gemini-2.5-pro-preview-tts", "gemini-3.1-flash-tts-preview"]
 GEMINI_VOICES = Literal[
     "Zephyr",
     "Puck",
@@ -49,7 +49,7 @@ GEMINI_VOICES = Literal[
     "Sulafat",
 ]
 
-DEFAULT_MODEL = "gemini-2.5-flash-preview-tts"
+DEFAULT_MODEL = "gemini-3.1-flash-tts-preview"
 DEFAULT_VOICE = "Kore"
 DEFAULT_SAMPLE_RATE = 24000  # not configurable
 NUM_CHANNELS = 1
@@ -200,7 +200,7 @@ class ChunkedStream(tts.ChunkedStream):
             if self._tts._opts.instructions is not None:
                 input_text = f'{self._tts._opts.instructions}:\n"{input_text}"'
 
-            response = await self._tts._client.aio.models.generate_content(
+            response = await self._tts._client.aio.models.generate_content_stream(
                 model=self._tts._opts.model,
                 contents=input_text,
                 config=config,
@@ -213,22 +213,21 @@ class ChunkedStream(tts.ChunkedStream):
                 mime_type="audio/pcm",
             )
 
-            if (
-                not response.candidates
-                or not (content := response.candidates[0].content)
-                or not content.parts
-            ):
-                raise APIStatusError("No audio content generated")
-
-            for part in content.parts:
+            async for chunk in response:
                 if (
-                    (inline_data := part.inline_data)
-                    and inline_data.data
-                    and inline_data.mime_type
-                    and inline_data.mime_type.startswith("audio/")
+                    chunk.candidates
+                    and chunk.candidates[0].content
+                    and chunk.candidates[0].content.parts
                 ):
-                    # mime_type: audio/L16;codec=pcm;rate=24000
-                    output_emitter.push(inline_data.data)
+                    for part in chunk.candidates[0].content.parts:
+                        if (
+                            (inline_data := part.inline_data)
+                            and inline_data.data
+                            and inline_data.mime_type
+                            and inline_data.mime_type.startswith("audio/")
+                        ):
+                            # mime_type: audio/L16;codec=pcm;rate=24000
+                            output_emitter.push(inline_data.data)
 
         except ClientError as e:
             raise APIStatusError(
