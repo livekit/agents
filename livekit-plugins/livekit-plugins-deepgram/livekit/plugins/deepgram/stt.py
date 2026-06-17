@@ -102,6 +102,7 @@ class STT(stt.STT):
         numerals: bool = False,
         mip_opt_out: bool = False,
         vad_events: bool = True,
+        _connect_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         # deprecated
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
@@ -137,7 +138,8 @@ class STT(stt.STT):
                        When enabled, SpeechStarted events are sent when speech is detected. Defaults to True.
 
         Raises:
-            ValueError: If no API key is provided or found in environment variables.
+            ValueError: If no API key is provided or found in environment variables
+                (unless ``_connect_headers`` is supplied).
 
         Note:
             The api_key must be set either through the constructor argument or by setting
@@ -154,12 +156,18 @@ class STT(stt.STT):
         )
 
         deepgram_api_key = api_key if is_given(api_key) else os.environ.get("DEEPGRAM_API_KEY")
-        if not deepgram_api_key:
-            raise ValueError(
-                "Deepgram API key is required, either as argument or set"
-                " DEEPGRAM_API_KEY environment variable"
-            )
-        self._api_key = deepgram_api_key
+        if is_given(_connect_headers):
+            # alternate transport (e.g. Cloudflare AI Gateway) supplies its own auth header
+            self._api_key = deepgram_api_key or ""
+            self._connect_headers = dict(_connect_headers)
+        else:
+            if not deepgram_api_key:
+                raise ValueError(
+                    "Deepgram API key is required, either as argument or set"
+                    " DEEPGRAM_API_KEY environment variable"
+                )
+            self._api_key = deepgram_api_key
+            self._connect_headers = {"Authorization": f"Token {deepgram_api_key}"}
 
         model = _validate_model(model, language)
         if is_given(keyterms):
@@ -243,7 +251,7 @@ class STT(stt.STT):
                 url=_to_deepgram_url(recognize_config, self._opts.endpoint_url, websocket=False),
                 data=rtc.combine_audio_frames(buffer).to_wav_bytes(),
                 headers={
-                    "Authorization": f"Token {self._api_key}",
+                    **self._connect_headers,
                     "Accept": "application/json",
                     "Content-Type": "audio/wav",
                 },
@@ -283,6 +291,7 @@ class STT(stt.STT):
             api_key=self._api_key,
             http_session=self._ensure_session(),
             base_url=self._opts.endpoint_url,
+            connect_headers=self._connect_headers,
         )
         self._streams.add(stream)
         return stream
@@ -406,6 +415,7 @@ class SpeechStream(stt.SpeechStream):
         api_key: str,
         http_session: aiohttp.ClientSession,
         base_url: str,
+        connect_headers: dict[str, str],
     ) -> None:
         if opts.detect_language or opts.language is None:
             raise ValueError(
@@ -416,6 +426,7 @@ class SpeechStream(stt.SpeechStream):
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
         self._api_key = api_key
+        self._connect_headers = dict(connect_headers)
         self._session = http_session
         self._opts.endpoint_url = base_url
         self._speaking = False
@@ -671,7 +682,7 @@ class SpeechStream(stt.SpeechStream):
             ws = await asyncio.wait_for(
                 self._session.ws_connect(
                     _to_deepgram_url(live_config, base_url=self._opts.endpoint_url, websocket=True),
-                    headers={"Authorization": f"Token {self._api_key}"},
+                    headers=self._connect_headers,
                 ),
                 self._conn_options.timeout,
             )
