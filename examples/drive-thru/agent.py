@@ -484,7 +484,7 @@ async def drive_thru_agent(ctx: JobContext) -> None:
                 ],
             },
         ),
-        llm=inference.LLM("openai/gpt-5.5"),
+        llm=inference.LLM("google/gemma-4-31b-it"),
         tts=inference.TTS(
             "inworld/inworld-tts-2", voice="Sarah", extra_kwargs={"delivery_mode": "CREATIVE"}
         ),

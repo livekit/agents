@@ -290,7 +290,7 @@ async def frontdesk_agent(ctx: JobContext):
     session = AgentSession[Userdata](
         userdata=userdata,
         stt=inference.STT("deepgram/nova-3"),
-        llm=inference.LLM("google/gemini-2.5-flash"),
+        llm=inference.LLM("google/gemma-4-31b-it"),
         tts=inference.TTS(
             "inworld/inworld-tts-2", voice="Nadia", extra_kwargs={"delivery_mode": "CREATIVE"}
         ),
