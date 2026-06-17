@@ -95,8 +95,8 @@ _CASES = [
     pytest.param(True,      _OTHER,   Outcome.REGISTERS,     id="non_primary/force"),
     pytest.param(NOT_GIVEN, None,     Outcome.REGISTERS,     id="no_ctx/default"),
     pytest.param(NOT_GIVEN, _PRIMARY, Outcome.REGISTERS,     id="primary/default"),
-    pytest.param(False,     _PRIMARY, Outcome.NOT_REGISTERS, id="primary/opt-out"),
     pytest.param(NOT_GIVEN, _OTHER,   Outcome.NOT_REGISTERS, id="non_primary/default"),
+    pytest.param(False,     _PRIMARY, Outcome.NOT_REGISTERS, id="primary/opt-out"),
     pytest.param(False,     None,     Outcome.NOT_REGISTERS, id="no_ctx/opt-out"),
 ]
 # @formatter:on
