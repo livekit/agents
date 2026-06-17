@@ -494,7 +494,7 @@ async def drive_thru_agent(ctx: JobContext) -> None:
             **presets.CUSTOMER_SERVICE,
             "backchannel": {
                 "frequency": 0.8,
-                "source": ["mm-hmm", "yep", "got it", "ok", "uh huh", "gotcha"],
+                "source": ["mm-hmm", "yep", "got it", "uh huh", "gotcha"],
             },
         },
         max_tool_steps=10,

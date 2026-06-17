@@ -59,8 +59,6 @@ from livekit.agents.evals import (
     tool_use_judge,
 )
 from livekit.agents.voice import presets
-from livekit.plugins import silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 load_dotenv()
 
@@ -671,9 +669,7 @@ async def hotel_receptionist_agent(ctx: JobContext) -> None:
         tts=inference.TTS(
             "inworld/inworld-tts-2", voice="Ashley", extra_kwargs={"delivery_mode": "CREATIVE"}
         ),
-        expressive=presets.CUSTOMER_SERVICE,
-        turn_detection=MultilingualModel(),
-        vad=silero.VAD.load(),
+        expressive={**presets.CUSTOMER_SERVICE, "backchannel": True},
         max_tool_steps=5,
     )
 
