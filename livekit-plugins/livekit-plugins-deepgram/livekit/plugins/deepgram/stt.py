@@ -211,6 +211,64 @@ class STT(stt.STT):
     def provider(self) -> str:
         return "Deepgram"
 
+    @staticmethod
+    def with_cloudflare(
+        *,
+        model: str = "@cf/deepgram/nova-3",
+        account_id: str | None = None,
+        gateway_id: str = "default",
+        cf_aig_token: str | None = None,
+        base_url: str | None = None,
+        language: DeepgramLanguages | str = "en-US",
+        interim_results: bool = True,
+        sample_rate: int = 16000,
+        http_session: aiohttp.ClientSession | None = None,
+    ) -> STT:
+        """Create a Deepgram STT routed through the Cloudflare AI Gateway.
+
+        Connects to the gateway's ``workers-ai`` WebSocket, which proxies Deepgram's
+        streaming protocol. Auth uses the ``cf-aig-authorization`` header (the raw
+        Cloudflare token); no Deepgram API key is required.
+
+        Args:
+            model: Cloudflare Deepgram STT model, e.g. ``"@cf/deepgram/nova-3"`` or
+                ``"@cf/deepgram/flux"``.
+            account_id: Cloudflare account ID. Falls back to ``CLOUDFLARE_ACCOUNT_ID``.
+                Required unless ``base_url`` is given.
+            gateway_id: Gateway name. Defaults to ``"default"``.
+            cf_aig_token: Gateway token for ``cf-aig-authorization``. Falls back to
+                ``CLOUDFLARE_AI_GATEWAY_TOKEN``.
+            base_url: Full gateway endpoint; overrides ``account_id`` / ``gateway_id``.
+            language: Recognition language, forwarded to ``STT``. Defaults to ``"en-US"``.
+            interim_results: Whether to emit interim transcripts, forwarded to ``STT``.
+            sample_rate: Audio sample rate in Hz, forwarded to ``STT``.
+            http_session: Optional aiohttp session, forwarded to ``STT``.
+        """
+        cf_aig_token = cf_aig_token or os.environ.get("CLOUDFLARE_AI_GATEWAY_TOKEN")
+        if not cf_aig_token:
+            raise ValueError(
+                "Cloudflare AI Gateway token is required, either as argument or set"
+                " CLOUDFLARE_AI_GATEWAY_TOKEN environment variable"
+            )
+        if base_url is None:
+            account_id = account_id or os.environ.get("CLOUDFLARE_ACCOUNT_ID")
+            if not account_id:
+                raise ValueError(
+                    "Cloudflare account_id is required, either as argument or set"
+                    " CLOUDFLARE_ACCOUNT_ID environment variable (or pass base_url directly)"
+                )
+            base_url = f"https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/workers-ai"
+
+        return STT(
+            model=model,
+            language=language,
+            interim_results=interim_results,
+            sample_rate=sample_rate,
+            base_url=base_url,
+            http_session=http_session,
+            _connect_headers={"cf-aig-authorization": cf_aig_token},
+        )
+
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()
