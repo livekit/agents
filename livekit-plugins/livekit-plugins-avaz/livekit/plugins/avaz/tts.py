@@ -509,7 +509,7 @@ class TTS(tts.TTS):
                 await task
             except asyncio.CancelledError:
                 pass
-        return
+        await super().aclose()
 
 
 class SynthesizeStream(tts.SynthesizeStream):
