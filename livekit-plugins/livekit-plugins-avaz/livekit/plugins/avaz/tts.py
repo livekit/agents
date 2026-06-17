@@ -399,8 +399,8 @@ class TTS(tts.TTS):
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> "AvazSynthesizeStream":
-        return AvazSynthesizeStream(tts=self, conn_options=conn_options)
+    ) -> "SynthesizeStream":
+        return SynthesizeStream(tts=self, conn_options=conn_options)
 
     def set_voice_ids(
         self,
