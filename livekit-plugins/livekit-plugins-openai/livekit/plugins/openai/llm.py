@@ -44,6 +44,7 @@ from .models import (
     ChatModels,
     CometAPIChatModels,
     DeepSeekChatModels,
+    HopperChatModels,
     NebiusChatModels,
     OctoChatModels,
     OpenRouterProviderPreferences,
@@ -805,6 +806,54 @@ class LLM(llm.LLM):
             safety_identifier=safety_identifier,
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
+        )
+
+    @staticmethod
+    def with_hopper(
+        *,
+        model: str | HopperChatModels = "Qwen/Qwen3.6-35B-A3B",
+        api_key: str | None = None,
+        base_url: str = "https://api.withhopper.com/v1",
+        client: openai.AsyncClient | None = None,
+        user: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        safety_identifier: NotGivenOr[str] = NOT_GIVEN,
+        prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+    ) -> LLM:
+        """
+        Create a new instance of Hopper LLM (OpenAI-compatible).
+
+        Hopper serves open-source models optimized for low time-to-first-token, aimed at
+        voice agents. See https://withhopper.com.
+
+        ``api_key`` must be set to your Hopper API key, either using the argument or by setting
+        the ``HOPPER_API_KEY`` environment variable.
+        """
+
+        api_key = api_key or os.environ.get("HOPPER_API_KEY")
+        if api_key is None:
+            raise ValueError(
+                "Hopper API key is required, either as argument or set HOPPER_API_KEY environment variable"  # noqa: E501
+            )
+
+        return LLM(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            client=client,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+            reasoning_effort=reasoning_effort,
+            safety_identifier=safety_identifier,
+            prompt_cache_key=prompt_cache_key,
+            top_p=top_p,
+            _strict_tool_schema=False,
         )
 
     @staticmethod
