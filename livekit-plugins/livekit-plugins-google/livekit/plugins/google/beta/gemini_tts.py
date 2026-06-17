@@ -15,7 +15,9 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
-GEMINI_TTS_MODELS = Literal["gemini-2.5-flash-preview-tts", "gemini-2.5-pro-preview-tts", "gemini-3.1-flash-tts-preview"]
+GEMINI_TTS_MODELS = Literal[
+    "gemini-2.5-flash-preview-tts", "gemini-2.5-pro-preview-tts", "gemini-3.1-flash-tts-preview"
+]
 GEMINI_VOICES = Literal[
     "Zephyr",
     "Puck",
