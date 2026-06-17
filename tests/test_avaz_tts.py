@@ -273,6 +273,64 @@ async def test_stream_run_drains_audio_with_ws(monkeypatch: pytest.MonkeyPatch) 
 
 
 @pytest.mark.asyncio
+async def test_stream_run_turn_avoids_fixed_pre_flush_sleeps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pre-flush path uses recv idle drains, not fixed asyncio.sleep padding."""
+    from livekit.plugins.avaz import TTS
+
+    engine = TTS(
+        ws_url=_TEST_WS,
+        api_key="test-api-key",
+        post_text_drain_s=0.01,
+        recv_idle_timeout_s=0.05,
+        flush_recv_timeout_s=0.05,
+        turn_timeout_s=5.0,
+    )
+    stream = engine.stream()
+    stream.push_text("Merhaba.")
+    stream.end_input()
+
+    audio_b64 = _minimal_wav_b64()
+    recv_queue = [
+        '{"status":"initialized"}',
+        json.dumps({"audio": audio_b64}),
+        '{"status":"closed","chunks_generated":1}',
+    ]
+
+    mock_ws = AsyncMock()
+    mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
+    mock_ws.__aexit__ = AsyncMock(return_value=None)
+
+    async def recv_side_effect() -> str:
+        if recv_queue:
+            return recv_queue.pop(0)
+        raise asyncio.TimeoutError
+
+    mock_ws.recv = AsyncMock(side_effect=recv_side_effect)
+    mock_ws.send = AsyncMock()
+
+    sleep_calls: list[float] = []
+
+    async def track_sleep(delay: float) -> None:
+        sleep_calls.append(delay)
+
+    monkeypatch.setattr(asyncio, "sleep", track_sleep)
+
+    async def fake_warmup(timeout_s: float = 10.0) -> bool:
+        engine._warmed = True
+        return True
+
+    monkeypatch.setattr(engine, "warmup", fake_warmup)
+
+    with patch("livekit.plugins.avaz.tts.websockets.connect", return_value=mock_ws):
+        async for _ev in stream:
+            pass
+
+    assert sleep_calls == []
+
+
+@pytest.mark.asyncio
 async def test_stream_connect_errors_raise_api_connection_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -344,6 +344,10 @@ class TTS(tts.TTS):
 
     Dashboard mode: pass ``api_key``, ``base_url``, and ``model_id`` (UUID).
     Override WebSocket URL via ``ws_url=`` or ``AVAZ_BASE_URL``.
+
+    Timing: ``recv_idle_timeout_s`` and ``post_text_drain_s`` are WebSocket recv
+    idle windows (not fixed sleeps). Tune them if the server needs longer gaps
+    between audio chunks before ``flush``.
     """
 
     def __init__(
@@ -690,12 +694,11 @@ class SynthesizeStream(tts.SynthesizeStream):
             # Send full utterance in one frame (integration tests / greeting path).
             await ws.send(json.dumps({"text": sent_text}))
             self._mark_started()
-            await asyncio.sleep(0.05)
             await _drain_audio(ws, timeout=self._opts.recv_idle_timeout_s)
 
-            # Match test_ws_avaz3.py: wait for trailing audio before flush.
-            await asyncio.sleep(self._opts.post_text_drain_s)
-            await _drain_audio(ws, timeout=self._opts.recv_idle_timeout_s)
+            # Trailing chunks: recv idle window (not a fixed sleep) before flush.
+            if self._opts.post_text_drain_s > 0:
+                await _drain_audio(ws, timeout=self._opts.post_text_drain_s)
 
             await ws.send(json.dumps({"flush": True}))
             flush_status: dict[str, Any] | None = None
@@ -726,7 +729,6 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             # Server may still be synthesizing after status=closed (test client waits 2s more).
             if not emitter_ready:
-                await asyncio.sleep(self._opts.post_text_drain_s)
                 await _drain_audio(ws, timeout=self._opts.flush_recv_timeout_s)
 
             if not emitter_ready and flush_status is not None:
