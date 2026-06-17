@@ -756,8 +756,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             output_emitter.push(padded)
             pcm_accum.extend(b"\x00" * (bytes_per_frame - len(leftover)))
 
-        output_emitter.end_segment()
-
         total_elapsed_ms = (time.monotonic() - node_start) * 1000
         audio_total_ms = (
             (len(pcm_accum) / 2 / sample_rate) * 1000 if sample_rate and pcm_accum else 0.0
