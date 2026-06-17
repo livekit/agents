@@ -723,16 +723,21 @@ class SynthesizeStream(tts.SynthesizeStream):
                         f"Avaz TTS produced no audio: {flush_status}"
                     )
 
+        async def _connect_and_run_turn() -> None:
+            async with websockets.connect(
+                uri,
+                open_timeout=self._opts.connect_timeout_s,
+                max_size=_WS_MAX_SIZE,
+                **_ws_connect_kwargs(self._opts.api_key),
+            ) as ws:
+                await _run_turn(ws)
+
         try:
-            async with asyncio.timeout(self._opts.turn_timeout_s):
-                async with websockets.connect(
-                    uri,
-                    open_timeout=self._opts.connect_timeout_s,
-                    max_size=_WS_MAX_SIZE,
-                    **_ws_connect_kwargs(self._opts.api_key),
-                ) as ws:
-                    await _run_turn(ws)
-        except TimeoutError as exc:
+            await asyncio.wait_for(
+                _connect_and_run_turn(),
+                timeout=self._opts.turn_timeout_s,
+            )
+        except asyncio.TimeoutError as exc:
             raise APIConnectionError(
                 f"Avaz TTS turn timed out after {self._opts.turn_timeout_s:.0f}s ({uri})"
             ) from exc
