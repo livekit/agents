@@ -141,13 +141,15 @@ def _resolve_model_id(value: NotGivenOr[str]) -> str:
 def _resolve_stream_model(
     *,
     stream_model: NotGivenOr[str],
-    model_id: NotGivenOr[str],
     agent_model_id: str,
 ) -> str:
+    """Resolve upstream WebSocket model string (avaz1/2/3).
+
+    ``agent_model_id`` is the dashboard catalog id (usually a UUID). When it is
+    a non-UUID agent name, derive the upstream stream model from it.
+    """
     if is_given(stream_model) and stream_model:
         return str(stream_model).strip()
-    if is_given(model_id) and model_id and not _is_uuid(str(model_id)):
-        return str(model_id).strip()
     env = os.environ.get("AVAZ_STREAM_MODEL", "").strip()
     if env:
         return env
@@ -187,11 +189,26 @@ def _build_init_message(opts: _TTSOptions) -> dict[str, Any]:
     }
 
 
+def _summarize_server_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    summary: dict[str, Any] = {}
+    for key, value in payload.items():
+        if key == "audio" and isinstance(value, str):
+            summary[key] = f"<base64 {len(value)} chars>"
+        else:
+            summary[key] = value
+    return summary
+
+
 def _log_server_payload(payload: dict[str, Any], *, phase: str = "") -> None:
     tag = "[Avaz TTS] recv"
     if phase:
         tag += f" ({phase})"
-    logger.info("%s payload keys=%s payload=%s", tag, list(payload.keys()), payload)
+    logger.debug(
+        "%s payload keys=%s summary=%s",
+        tag,
+        list(payload.keys()),
+        _summarize_server_payload(payload),
+    )
 
 
 def _normalize_text_for_chunk_notation(text: str, chunk_notation: str) -> str:
@@ -357,7 +374,6 @@ class TTS(tts.TTS):
         resolved_model_id = _resolve_model_id(model_id)
         resolved_stream_model = _resolve_stream_model(
             stream_model=stream_model,
-            model_id=NOT_GIVEN,
             agent_model_id=resolved_model_id,
         )
         resolved_ws_url = _resolve_ws_url(ws_url, base_url)

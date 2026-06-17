@@ -135,11 +135,27 @@ def test_resolve_stream_model_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert (
         _resolve_stream_model(
             stream_model=NOT_GIVEN,
-            model_id=NOT_GIVEN,
             agent_model_id=_TEST_UUID,
         )
         == "avaz2"
     )
+
+
+def test_resolve_stream_model_from_agent_name() -> None:
+    from livekit.plugins.avaz.tts import _resolve_stream_model
+
+    assert _resolve_stream_model(stream_model=NOT_GIVEN, agent_model_id="Avaz3") == "avaz3"
+
+
+def test_log_server_payload_truncates_audio(caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    from livekit.plugins.avaz.tts import _log_server_payload
+
+    caplog.set_level(logging.DEBUG, logger="livekit.plugins.avaz")
+    _log_server_payload({"audio": "A" * 1000, "status": "ok"}, phase="drain")
+    assert "<base64 1000 chars>" in caplog.text
+    assert "A" * 100 not in caplog.text
 
 
 @pytest.mark.asyncio
