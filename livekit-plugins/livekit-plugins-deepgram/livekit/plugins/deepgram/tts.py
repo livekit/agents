@@ -118,6 +118,63 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Deepgram"
 
+    @staticmethod
+    def with_cloudflare(
+        *,
+        model: str = "@cf/deepgram/aura-1",
+        account_id: str | None = None,
+        gateway_id: str = "default",
+        cf_aig_token: str | None = None,
+        base_url: str | None = None,
+        encoding: str = "linear16",
+        sample_rate: int = 24000,
+        word_tokenizer: NotGivenOr[tokenize.WordTokenizer] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+    ) -> TTS:
+        """Create a Deepgram TTS routed through the Cloudflare AI Gateway.
+
+        Connects to the gateway's ``workers-ai`` WebSocket, which proxies Deepgram's
+        streaming protocol. Auth uses the ``cf-aig-authorization`` header (the raw
+        Cloudflare token); no Deepgram API key is required.
+
+        Args:
+            model: Cloudflare Deepgram TTS model, e.g. ``"@cf/deepgram/aura-1"``.
+            account_id: Cloudflare account ID. Falls back to ``CLOUDFLARE_ACCOUNT_ID``.
+                Required unless ``base_url`` is given.
+            gateway_id: Gateway name. Defaults to ``"default"``.
+            cf_aig_token: Gateway token for ``cf-aig-authorization``. Falls back to
+                ``CLOUDFLARE_AI_GATEWAY_TOKEN``.
+            base_url: Full gateway endpoint; overrides ``account_id`` / ``gateway_id``.
+            encoding: Audio encoding, forwarded to ``TTS``. Defaults to ``"linear16"``.
+            sample_rate: Audio sample rate in Hz, forwarded to ``TTS``.
+            word_tokenizer: Optional tokenizer, forwarded to ``TTS``.
+            http_session: Optional aiohttp session, forwarded to ``TTS``.
+        """
+        cf_aig_token = cf_aig_token or os.environ.get("CLOUDFLARE_AI_GATEWAY_TOKEN")
+        if not cf_aig_token:
+            raise ValueError(
+                "Cloudflare AI Gateway token is required, either as argument or set"
+                " CLOUDFLARE_AI_GATEWAY_TOKEN environment variable"
+            )
+        if base_url is None:
+            account_id = account_id or os.environ.get("CLOUDFLARE_ACCOUNT_ID")
+            if not account_id:
+                raise ValueError(
+                    "Cloudflare account_id is required, either as argument or set"
+                    " CLOUDFLARE_ACCOUNT_ID environment variable (or pass base_url directly)"
+                )
+            base_url = f"https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/workers-ai"
+
+        return TTS(
+            model=model,
+            encoding=encoding,
+            sample_rate=sample_rate,
+            base_url=base_url,
+            word_tokenizer=word_tokenizer,
+            http_session=http_session,
+            _connect_headers={"cf-aig-authorization": cf_aig_token},
+        )
+
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
         config = {
