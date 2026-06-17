@@ -39,8 +39,10 @@ def test_stt_model_accepts_bare_and_prefixed_names() -> None:
         "@cf/deepgram/nova-3"
     )
     assert (
-        deepgram.STT.with_cloudflare(account_id="a", cf_aig_token="t", model="flux")._opts.model
-        == "@cf/deepgram/flux"
+        deepgram.STT.with_cloudflare(
+            account_id="a", cf_aig_token="t", model="nova-2-general"
+        )._opts.model
+        == "@cf/deepgram/nova-2-general"
     )
     # an already-prefixed value is passed through unchanged
     assert (
