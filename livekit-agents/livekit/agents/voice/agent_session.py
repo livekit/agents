@@ -613,6 +613,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
+        _register_as_room_host: NotGivenOr[bool] = NOT_GIVEN,
     ) -> RunResult: ...
 
     @overload
@@ -627,6 +628,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
+        _register_as_room_host: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None: ...
 
     async def start(
@@ -640,6 +642,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
+        _register_as_room_host: NotGivenOr[bool] = NOT_GIVEN,
     ) -> RunResult | None:
         """Start the voice agent.
 
@@ -670,13 +673,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._text_only:
                 self._recording_options["audio"] = False
 
-            is_primary = True
             if job_ctx:
                 # set the primary session
                 if job_ctx._primary_agent_session is None or job_ctx._primary_agent_session is self:
                     job_ctx._primary_agent_session = self
                 else:
-                    is_primary = False
+                    if not is_given(_register_as_room_host):
+                        _register_as_room_host = False
                     if any(self._recording_options.values()):
                         if record_is_given:
                             raise RuntimeError(
@@ -774,7 +777,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._room_io = room_io.RoomIO(room=room, agent_session=self, options=room_options)
                 await self._room_io.start()
 
-                if is_primary:
+                if _register_as_room_host or not is_given(_register_as_room_host):
                     # only the primary session can have a session host
                     transport = RoomSessionTransport(room)
                     self._session_host = SessionHost(transport)
