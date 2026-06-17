@@ -87,7 +87,7 @@ class TTS(tts.TTS):
         - For Google Gemini API: Set the `api_key` argument or the `GOOGLE_API_KEY` environment variable.
 
         Args:
-            model (str, optional): The Gemini TTS model to use. Defaults to "gemini-2.5-flash-preview-tts".
+            model (str, optional): The Gemini TTS model to use. Defaults to "gemini-3.1-flash-tts-preview".
             voice_name (str, optional): The voice to use for synthesis. Defaults to "Kore".
             api_key (str, optional): The API key for Google Gemini. If not provided, it attempts to read from the `GOOGLE_API_KEY` environment variable.
             vertexai (bool, optional): Whether to use VertexAI. Defaults to False.

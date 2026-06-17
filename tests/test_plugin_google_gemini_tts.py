@@ -10,7 +10,7 @@ from livekit.agents import tts
 pytestmark = pytest.mark.plugin("google")
 
 @pytest.mark.asyncio
-@patch("google.genai.Client")
+@patch("livekit.plugins.google.beta.gemini_tts.Client")
 async def test_gemini_tts_success(mock_genai_client_class) -> None:
     # Setup mocks for GenAI Client
     mock_client = MagicMock()
