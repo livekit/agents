@@ -152,3 +152,17 @@ def test_keyterm_allowed_for_cf_prefixed_nova3() -> None:
         keyterm=["livekit"],
     )
     assert stt._opts.model == "@cf/deepgram/nova-3"
+
+
+def test_en_only_fallback_preserves_cf_prefix() -> None:
+    # an en-only model with a non-English language falls back to nova-2-general,
+    # but the @cf/deepgram/ routing prefix must be preserved
+    stt = deepgram.STT(
+        model="@cf/deepgram/nova-2-meeting",
+        language="fr",
+        extra_headers={"cf-aig-authorization": "cf"},
+    )
+    assert stt._opts.model == "@cf/deepgram/nova-2-general"
+    # the bare (non-prefixed) path is unchanged
+    bare = deepgram.STT(model="nova-2-meeting", language="fr", api_key="k")
+    assert bare._opts.model == "nova-2-general"

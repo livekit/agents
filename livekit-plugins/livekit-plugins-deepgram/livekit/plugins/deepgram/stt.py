@@ -935,15 +935,14 @@ def _validate_model(
         "nova-2-drivethru",
         "nova-2-automotive",
     }
-    if (
-        is_given(language)
-        and language not in ("en-US", "en")
-        and _bare_model(model) in en_only_models
-    ):
+    bare = _bare_model(model)
+    if is_given(language) and language not in ("en-US", "en") and bare in en_only_models:
         logger.warning(
             f"{model} does not support language {language}, falling back to nova-2-general"
         )
-        return "nova-2-general"
+        # preserve any routing prefix (e.g. "@cf/deepgram/") on the fallback model
+        prefix = model[: len(model) - len(bare)]
+        return f"{prefix}nova-2-general"
     return model
 
 
