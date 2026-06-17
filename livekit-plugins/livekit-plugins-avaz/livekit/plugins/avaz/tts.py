@@ -23,15 +23,16 @@ import re
 import time
 import wave
 from dataclasses import dataclass, replace
-from typing import Any, Optional
+from typing import Any
 from urllib.parse import urlparse, urlunparse
 
 import websockets
 import websockets.exceptions
+
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
-    APIConnectOptions,
     APIConnectionError,
+    APIConnectOptions,
     tts,
     utils,
 )
@@ -401,7 +402,7 @@ class TTS(tts.TTS):
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> "SynthesizeStream":
+    ) -> SynthesizeStream:
         return SynthesizeStream(tts=self, conn_options=conn_options)
 
     def set_voice_ids(
@@ -524,8 +525,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         init_msg = _build_init_message(self._opts)
 
         pcm_accum = bytearray()
-        first_text_time: Optional[float] = None
-        first_audio_time: Optional[float] = None
+        first_text_time: float | None = None
+        first_audio_time: float | None = None
         total_text_chars = 0
         audio_chunk_count = 0
         emitter_ready = False
@@ -632,7 +633,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             )
             await _push_pcm(pcm, sr)
 
-        async def _drain_audio(*, timeout: float) -> bool:
+        async def _drain_audio(ws: Any, *, timeout: float) -> bool:
             """Return True if at least one audio message was received."""
             got_audio = False
             deadline = time.monotonic() + max(0.0, timeout)
@@ -673,11 +674,11 @@ class SynthesizeStream(tts.SynthesizeStream):
             await ws.send(json.dumps({"text": sent_text}))
             self._mark_started()
             await asyncio.sleep(0.05)
-            await _drain_audio(timeout=self._opts.recv_idle_timeout_s)
+            await _drain_audio(ws, timeout=self._opts.recv_idle_timeout_s)
 
             # Match test_ws_avaz3.py: wait for trailing audio before flush.
             await asyncio.sleep(self._opts.post_text_drain_s)
-            await _drain_audio(timeout=self._opts.recv_idle_timeout_s)
+            await _drain_audio(ws, timeout=self._opts.recv_idle_timeout_s)
 
             await ws.send(json.dumps({"flush": True}))
             flush_status: dict[str, Any] | None = None
@@ -704,12 +705,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                     f"Avaz TTS invalid flush response: {flush_text[:500]!r}"
                 ) from exc
 
-            await _drain_audio(timeout=self._opts.flush_recv_timeout_s)
+            await _drain_audio(ws, timeout=self._opts.flush_recv_timeout_s)
 
             # Server may still be synthesizing after status=closed (test client waits 2s more).
             if not emitter_ready:
                 await asyncio.sleep(self._opts.post_text_drain_s)
-                await _drain_audio(timeout=self._opts.flush_recv_timeout_s)
+                await _drain_audio(ws, timeout=self._opts.flush_recv_timeout_s)
 
             if not emitter_ready and flush_status is not None:
                 chunks_gen = int(flush_status.get("chunks_generated", -1))

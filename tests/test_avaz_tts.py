@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import io
 import json
+import wave
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -15,6 +18,16 @@ pytestmark = pytest.mark.unit
 
 _TEST_WS = "ws://127.0.0.1:8893/tts/stream-input"
 _TEST_UUID = "15658888-374f-4739-a0c5-4f1d1c128d2a"
+
+
+def _minimal_wav_b64() -> str:
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(48_000)
+        wf.writeframes(b"\x00" * 960)
+    return base64.b64encode(buf.getvalue()).decode()
 
 
 def test_tts_init_with_ws_url(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -132,3 +145,55 @@ def test_parse_init_response_error() -> None:
 
     with pytest.raises(APIConnectionError, match="init error"):
         _parse_init_response('{"error":"model not found"}')
+
+
+@pytest.mark.asyncio
+async def test_stream_run_drains_audio_with_ws(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: _drain_audio must receive ws explicitly (not closure)."""
+    from livekit.plugins.avaz import TTS, SynthesizeStream
+
+    engine = TTS(
+        ws_url=_TEST_WS,
+        api_key="test-api-key",
+        post_text_drain_s=0.01,
+        recv_idle_timeout_s=0.05,
+        flush_recv_timeout_s=0.05,
+        turn_timeout_s=5.0,
+    )
+    stream = engine.stream()
+    assert isinstance(stream, SynthesizeStream)
+    stream.push_text("Merhaba.")
+    stream.end_input()
+
+    audio_b64 = _minimal_wav_b64()
+    recv_queue = [
+        '{"status":"initialized"}',
+        json.dumps({"audio": audio_b64}),
+        '{"status":"closed","chunks_generated":1}',
+    ]
+
+    mock_ws = AsyncMock()
+    mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
+    mock_ws.__aexit__ = AsyncMock(return_value=None)
+
+    async def recv_side_effect() -> str:
+        if recv_queue:
+            return recv_queue.pop(0)
+        raise asyncio.TimeoutError
+
+    mock_ws.recv = AsyncMock(side_effect=recv_side_effect)
+    mock_ws.send = AsyncMock()
+
+    async def fake_warmup(timeout_s: float = 10.0) -> bool:
+        engine._warmed = True
+        return True
+
+    monkeypatch.setattr(engine, "warmup", fake_warmup)
+
+    with patch("livekit.plugins.avaz.tts.websockets.connect", return_value=mock_ws):
+        frames = 0
+        async for _ev in stream:
+            frames += 1
+
+    assert frames >= 1
+    assert mock_ws.send.await_count >= 2
