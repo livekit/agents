@@ -777,7 +777,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._room_io = room_io.RoomIO(room=room, agent_session=self, options=room_options)
                 await self._room_io.start()
 
-                if _register_as_room_host or not is_given(_register_as_room_host):
+                if _register_as_room_host is not False:
                     # only the primary session can have a session host
                     transport = RoomSessionTransport(room)
                     self._session_host = SessionHost(transport)
