@@ -34,6 +34,7 @@ async def entrypoint(ctx: JobContext) -> None:
         tts=GeminiTTS(
             api_key=os.environ.get("GOOGLE_API_KEY"),
             voice_name="Kore",
+            model="gemini-3.1-flash-tts-preview"
         ),
     )
     await session.start(agent=GeminiTTSAgent(), room=ctx.room)
