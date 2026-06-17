@@ -140,6 +140,38 @@ async def test_warmup_passes_auth_headers() -> None:
         assert kwargs["additional_headers"]["X-API-Key"] == "test-api-key"
 
 
+@pytest.mark.asyncio
+async def test_ensure_warmed_retries_after_failed_prewarm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.plugins.avaz import TTS
+
+    engine = TTS(ws_url=_TEST_WS)
+    engine._warmed = False
+
+    async def failed_prewarm() -> bool:
+        engine._warmed = False
+        return False
+
+    prewarm_task = asyncio.create_task(failed_prewarm())
+    await prewarm_task
+    engine._prewarm_task = prewarm_task
+
+    warmup_calls = 0
+
+    async def retry_warmup(timeout_s: float = 10.0) -> bool:
+        nonlocal warmup_calls
+        warmup_calls += 1
+        return True
+
+    monkeypatch.setattr(engine, "warmup", retry_warmup)
+
+    await engine._ensure_warmed()
+
+    assert engine._warmed is True
+    assert warmup_calls == 1
+
+
 def test_parse_init_response_error() -> None:
     from livekit.plugins.avaz.tts import _parse_init_response
 

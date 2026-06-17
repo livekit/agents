@@ -468,7 +468,8 @@ class TTS(tts.TTS):
                 await task
             except Exception:
                 pass
-            return
+            if self._warmed:
+                return
         self._warmed = await self.warmup()
 
     def prewarm(self) -> None:
@@ -753,7 +754,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         if leftover:
             padded = bytes(leftover) + b"\x00" * (bytes_per_frame - len(leftover))
             output_emitter.push(padded)
-            pcm_accum.extend(padded)
+            pcm_accum.extend(b"\x00" * (bytes_per_frame - len(leftover)))
 
         output_emitter.end_segment()
 
