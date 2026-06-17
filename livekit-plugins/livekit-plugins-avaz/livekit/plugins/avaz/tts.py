@@ -581,7 +581,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                 )
                 output_emitter.start_segment(segment_id=segment_id)
                 emitter_ready = True
-                self._mark_started()
             pcm_accum.extend(pcm)
             buf = leftover + pcm
             offset = 0
@@ -662,6 +661,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             # Send full utterance in one frame (integration tests / greeting path).
             await ws.send(json.dumps({"text": sent_text}))
+            self._mark_started()
             await asyncio.sleep(0.05)
             await _drain_audio(timeout=self._opts.recv_idle_timeout_s)
 
