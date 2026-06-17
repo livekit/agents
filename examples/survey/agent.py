@@ -350,9 +350,11 @@ server = AgentServer()
 async def entrypoint(ctx: JobContext):
     session = AgentSession[Userdata](
         userdata=Userdata(filename="results.csv", candidate_name="", task_results={}),
-        llm=inference.LLM("google/gemini-2.5-flash"),
+        llm=inference.LLM("google/gemma-4-31b-it"),
         stt=inference.STT("deepgram/nova-3", language="multi"),
-        tts=inference.TTS("inworld/inworld-tts-2", voice="Nate"),
+        tts=inference.TTS(
+            "inworld/inworld-tts-2", voice="Nate", extra_kwargs={"delivery_mode": "CREATIVE"}
+        ),
         expressive=presets.CONVERSATIONAL,
         preemptive_generation=True,
     )

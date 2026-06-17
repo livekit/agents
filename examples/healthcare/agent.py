@@ -752,8 +752,10 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         userdata=userdata,
         stt=inference.STT("deepgram/nova-3", language="multi"),
-        llm=inference.LLM("google/gemini-2.5-flash"),
-        tts=inference.TTS("inworld/inworld-tts-2", voice="Luna"),
+        llm=inference.LLM("google/gemma-4-31b-it"),
+        tts=inference.TTS(
+            "inworld/inworld-tts-2", voice="Luna", extra_kwargs={"delivery_mode": "CREATIVE"}
+        ),
         expressive=presets.HEALTHCARE,
         preemptive_generation=True,
     )
