@@ -158,7 +158,6 @@ class STT(stt.STT):
         deepgram_api_key = api_key if is_given(api_key) else os.environ.get("DEEPGRAM_API_KEY")
         if is_given(_connect_headers):
             # alternate transport (e.g. Cloudflare AI Gateway) supplies its own auth header
-            self._api_key = deepgram_api_key or ""
             self._connect_headers = dict(_connect_headers)
         else:
             if not deepgram_api_key:
@@ -166,7 +165,6 @@ class STT(stt.STT):
                     "Deepgram API key is required, either as argument or set"
                     " DEEPGRAM_API_KEY environment variable"
                 )
-            self._api_key = deepgram_api_key
             self._connect_headers = {"Authorization": f"Token {deepgram_api_key}"}
 
         model = _validate_model(model, language)
@@ -346,7 +344,6 @@ class STT(stt.STT):
             stt=self,
             conn_options=conn_options,
             opts=config,
-            api_key=self._api_key,
             http_session=self._ensure_session(),
             base_url=self._opts.endpoint_url,
             connect_headers=self._connect_headers,
@@ -470,7 +467,6 @@ class SpeechStream(stt.SpeechStream):
         stt: STT,
         opts: STTOptions,
         conn_options: APIConnectOptions,
-        api_key: str,
         http_session: aiohttp.ClientSession,
         base_url: str,
         connect_headers: dict[str, str],
@@ -483,7 +479,6 @@ class SpeechStream(stt.SpeechStream):
 
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
-        self._api_key = api_key
         self._connect_headers = dict(connect_headers)
         self._session = http_session
         self._opts.endpoint_url = base_url

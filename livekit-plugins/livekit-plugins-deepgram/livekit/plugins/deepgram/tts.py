@@ -39,7 +39,6 @@ class _TTSOptions:
     sample_rate: int
     word_tokenizer: tokenize.WordTokenizer
     base_url: str
-    api_key: str
     mip_opt_out: bool = False
 
 
@@ -97,7 +96,6 @@ class TTS(tts.TTS):
             sample_rate=sample_rate,
             word_tokenizer=word_tokenizer,
             base_url=base_url,
-            api_key=api_key,
             mip_opt_out=mip_opt_out,
         )
         self._session = http_session
