@@ -759,8 +759,10 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise APIConnectionError(
                 f"Avaz TTS turn timed out after {self._opts.turn_timeout_s:.0f}s ({uri})"
             ) from exc
-        except websockets.exceptions.ConnectionClosed as exc:
-            raise APIConnectionError(f"Avaz TTS WebSocket closed: {exc}") from exc
+        except APIConnectionError:
+            raise
+        except Exception as exc:
+            raise APIConnectionError(f"Avaz TTS connection failed: {exc}") from exc
 
         if not emitter_ready:
             raise APIConnectionError(

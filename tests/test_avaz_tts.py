@@ -270,3 +270,37 @@ async def test_stream_run_drains_audio_with_ws(monkeypatch: pytest.MonkeyPatch) 
 
     assert frames >= 1
     assert mock_ws.send.await_count >= 2
+
+
+@pytest.mark.asyncio
+async def test_stream_connect_errors_raise_api_connection_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.plugins.avaz import TTS
+
+    engine = TTS(ws_url=_TEST_WS, api_key="test-api-key", turn_timeout_s=5.0)
+    stream = engine.stream()
+    stream.push_text("Merhaba.")
+    stream.end_input()
+
+    async def fake_warmup(timeout_s: float = 10.0) -> bool:
+        engine._warmed = True
+        return True
+
+    monkeypatch.setattr(engine, "warmup", fake_warmup)
+
+    def failing_connect(*_args: object, **_kwargs: object):
+        class CM:
+            async def __aenter__(self):
+                raise ConnectionRefusedError("connection refused")
+
+            async def __aexit__(self, *_exc: object):
+                return None
+
+        return CM()
+
+    monkeypatch.setattr("livekit.plugins.avaz.tts.websockets.connect", failing_connect)
+
+    with pytest.raises(APIConnectionError, match="connection failed"):
+        async for _ in stream:
+            pass
