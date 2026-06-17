@@ -78,6 +78,7 @@ members = [
     "livekit-plugins-turn-detector",
     "livekit-plugins-ultravox",
     "livekit-plugins-upliftai",
+    "livekit-plugins-voxcpm",
     "livekit-plugins-xai",
 ]
 constraints = [{ name = "onnxruntime", marker = "python_full_version < '3.11'", specifier = "<1.24" }]
@@ -2041,6 +2042,9 @@ ultravox = [
 upliftai = [
     { name = "livekit-plugins-upliftai" },
 ]
+voxcpm = [
+    { name = "livekit-plugins-voxcpm" },
+]
 xai = [
     { name = "livekit-plugins-xai" },
 ]
@@ -2125,6 +2129,7 @@ requires-dist = [
     { name = "livekit-plugins-turn-detector", marker = "extra == 'turn-detector'", editable = "livekit-plugins/livekit-plugins-turn-detector" },
     { name = "livekit-plugins-ultravox", marker = "extra == 'ultravox'", editable = "livekit-plugins/livekit-plugins-ultravox" },
     { name = "livekit-plugins-upliftai", marker = "extra == 'upliftai'", editable = "livekit-plugins/livekit-plugins-upliftai" },
+    { name = "livekit-plugins-voxcpm", marker = "extra == 'voxcpm'", editable = "livekit-plugins/livekit-plugins-voxcpm" },
     { name = "livekit-plugins-xai", marker = "extra == 'xai'", editable = "livekit-plugins/livekit-plugins-xai" },
     { name = "livekit-protocol", specifier = ">=1.1.17,<2" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.24.0,<2" },
@@ -2148,7 +2153,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hedra", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "minimax", "mistralai", "murf", "neuphonic", "nltk", "nvidia", "openai", "perplexity", "phonic", "resemble", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "speechify", "speechmatics", "spitch", "tavus", "trugen", "turn-detector", "ultravox", "upliftai", "xai"]
+provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hedra", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "minimax", "mistralai", "murf", "neuphonic", "nltk", "nvidia", "openai", "perplexity", "phonic", "resemble", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "speechify", "speechmatics", "spitch", "tavus", "trugen", "turn-detector", "ultravox", "upliftai", "voxcpm", "xai"]
 
 [[package]]
 name = "livekit-api"
@@ -3137,6 +3142,20 @@ dependencies = [
 requires-dist = [
     { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
     { name = "numpy", specifier = ">=1.26" },
+]
+
+[[package]]
+name = "livekit-plugins-voxcpm"
+source = { editable = "livekit-plugins/livekit-plugins-voxcpm" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "livekit-agents" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiohttp", specifier = ">=3.10" },
+    { name = "livekit-agents", editable = "livekit-agents" },
 ]
 
 [[package]]

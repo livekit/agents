@@ -68,6 +68,7 @@ livekit-plugins-trugen = { workspace = true }
 livekit-plugins-turn-detector = { workspace = true }
 livekit-plugins-ultravox = { workspace = true }
 livekit-plugins-upliftai = { workspace = true }
+livekit-plugins-voxcpm = { workspace = true }
 livekit-plugins-gradium = { workspace = true }
 livekit-plugins-xai = { workspace = true }
 livekit-plugins-phonic = { workspace = true }
