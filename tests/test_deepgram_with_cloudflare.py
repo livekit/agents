@@ -11,6 +11,7 @@ pytestmark = pytest.mark.unit
 def _clear_cloudflare_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CLOUDFLARE_ACCOUNT_ID", raising=False)
     monkeypatch.delenv("CLOUDFLARE_AI_GATEWAY_TOKEN", raising=False)
+    monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)
 
 
 def test_stt_builds_gateway_url_and_auth() -> None:
@@ -31,6 +32,23 @@ def test_stt_token_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLOUDFLARE_AI_GATEWAY_TOKEN", "env-tok")
     stt = deepgram.STT.with_cloudflare(account_id="acct")
     assert stt._connect_headers == {"cf-aig-authorization": "env-tok"}
+
+
+def test_stt_model_accepts_bare_and_prefixed_names() -> None:
+    assert deepgram.STT.with_cloudflare(account_id="a", cf_aig_token="t")._opts.model == (
+        "@cf/deepgram/nova-3"
+    )
+    assert (
+        deepgram.STT.with_cloudflare(account_id="a", cf_aig_token="t", model="flux")._opts.model
+        == "@cf/deepgram/flux"
+    )
+    # an already-prefixed value is passed through unchanged
+    assert (
+        deepgram.STT.with_cloudflare(
+            account_id="a", cf_aig_token="t", model="@cf/deepgram/nova-3"
+        )._opts.model
+        == "@cf/deepgram/nova-3"
+    )
 
 
 def test_stt_base_url_override() -> None:
@@ -85,3 +103,33 @@ def test_tts_missing_account_id_raises() -> None:
 def test_tts_missing_token_raises() -> None:
     with pytest.raises(ValueError, match=r"[Tt]oken"):
         deepgram.TTS.with_cloudflare(account_id="acct")
+
+
+# --- extra_headers seam (default Deepgram behavior preserved; additive; sole auth) ---
+
+
+def test_default_token_auth_unchanged() -> None:
+    assert deepgram.STT(api_key="k")._connect_headers == {"Authorization": "Token k"}
+    assert deepgram.TTS(api_key="k")._connect_headers == {"Authorization": "Token k"}
+
+
+def test_extra_headers_merge_over_token_auth() -> None:
+    stt = deepgram.STT(api_key="k", extra_headers={"X-Trace": "1"})
+    assert stt._connect_headers == {"Authorization": "Token k", "X-Trace": "1"}
+    tts = deepgram.TTS(api_key="k", extra_headers={"X-Trace": "1"})
+    assert tts._connect_headers == {"Authorization": "Token k", "X-Trace": "1"}
+
+
+def test_extra_headers_are_sole_auth_without_key() -> None:
+    # no Deepgram key -> no default Authorization header; extra_headers carry auth
+    stt = deepgram.STT(extra_headers={"cf-aig-authorization": "Bearer x"})
+    assert stt._connect_headers == {"cf-aig-authorization": "Bearer x"}
+    tts = deepgram.TTS(extra_headers={"cf-aig-authorization": "Bearer x"})
+    assert tts._connect_headers == {"cf-aig-authorization": "Bearer x"}
+
+
+def test_no_key_and_no_extra_headers_raises() -> None:
+    with pytest.raises(ValueError):
+        deepgram.STT()
+    with pytest.raises(ValueError):
+        deepgram.TTS()

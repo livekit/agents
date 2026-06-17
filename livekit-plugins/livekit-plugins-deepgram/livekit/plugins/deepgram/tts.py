@@ -54,7 +54,7 @@ class TTS(tts.TTS):
         word_tokenizer: NotGivenOr[tokenize.WordTokenizer] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         mip_opt_out: bool = False,
-        _connect_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
+        extra_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of Deepgram TTS.
@@ -67,6 +67,9 @@ class TTS(tts.TTS):
             base_url (str): Base URL for Deepgram TTS API. Defaults to "https://api.deepgram.com/v1/speak"
             word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to basic WordTokenizer.
             http_session (aiohttp.ClientSession): Optional aiohttp session to use for requests.
+            extra_headers: Additional HTTP headers sent on every connection, merged over the
+                default ``Authorization: Token`` header. When no API key is set, these become
+                the sole auth (e.g. the Cloudflare AI Gateway).
 
         """  # noqa: E501
         super().__init__(
@@ -76,16 +79,12 @@ class TTS(tts.TTS):
         )
 
         api_key = api_key or os.environ.get("DEEPGRAM_API_KEY")
-        if is_given(_connect_headers):
-            # alternate transport (e.g. Cloudflare AI Gateway) supplies its own auth header
-            self._connect_headers = dict(_connect_headers)
-            api_key = api_key or ""
-        else:
-            if not api_key:
-                raise ValueError(
-                    "Deepgram API key required. Set DEEPGRAM_API_KEY or provide api_key."
-                )
-            self._connect_headers = {"Authorization": f"Token {api_key}"}
+        extra = dict(extra_headers) if is_given(extra_headers) else {}
+        if not api_key and not extra:
+            raise ValueError("Deepgram API key required. Set DEEPGRAM_API_KEY or provide api_key.")
+        # default Token auth only when a key is present; extra_headers merge on top (and are
+        # the sole auth when no key is set, e.g. the Cloudflare AI Gateway)
+        self._connect_headers = ({"Authorization": f"Token {api_key}"} if api_key else {}) | extra
 
         if not is_given(word_tokenizer):
             word_tokenizer = tokenize.basic.WordTokenizer(ignore_punctuation=False)
@@ -119,7 +118,7 @@ class TTS(tts.TTS):
     @staticmethod
     def with_cloudflare(
         *,
-        model: str = "@cf/deepgram/aura-1",
+        model: str = "aura-1",
         account_id: str | None = None,
         gateway_id: str = "default",
         cf_aig_token: str | None = None,
@@ -132,11 +131,12 @@ class TTS(tts.TTS):
         """Create a Deepgram TTS routed through the Cloudflare AI Gateway.
 
         Connects to the gateway's ``workers-ai`` WebSocket, which proxies Deepgram's
-        streaming protocol. Auth uses the ``cf-aig-authorization`` header (the raw
-        Cloudflare token); no Deepgram API key is required.
+        streaming protocol. Auth uses the ``cf-aig-authorization`` header; no Deepgram
+        API key is required.
 
         Args:
-            model: Cloudflare Deepgram TTS model, e.g. ``"@cf/deepgram/aura-1"``.
+            model: Deepgram model name (e.g. ``"aura-1"``); the ``@cf/deepgram/`` prefix is
+                added automatically. A value already prefixed with ``@cf/`` is used as-is.
             account_id: Cloudflare account ID. Falls back to ``CLOUDFLARE_ACCOUNT_ID``.
                 Required unless ``base_url`` is given.
             gateway_id: Gateway name. Defaults to ``"default"``.
@@ -163,6 +163,9 @@ class TTS(tts.TTS):
                 )
             base_url = f"https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/workers-ai"
 
+        if not model.startswith("@cf/"):
+            model = f"@cf/deepgram/{model}"
+
         return TTS(
             model=model,
             encoding=encoding,
@@ -170,7 +173,7 @@ class TTS(tts.TTS):
             base_url=base_url,
             word_tokenizer=word_tokenizer,
             http_session=http_session,
-            _connect_headers={"cf-aig-authorization": cf_aig_token},
+            extra_headers={"cf-aig-authorization": cf_aig_token},
         )
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:

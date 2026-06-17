@@ -102,7 +102,7 @@ class STT(stt.STT):
         numerals: bool = False,
         mip_opt_out: bool = False,
         vad_events: bool = True,
-        _connect_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
+        extra_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         # deprecated
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
@@ -136,10 +136,13 @@ class STT(stt.STT):
             mip_opt_out: Whether to take part in the model improvement program
             vad_events: Whether to enable VAD (Voice Activity Detection) events.
                        When enabled, SpeechStarted events are sent when speech is detected. Defaults to True.
+            extra_headers: Additional HTTP headers sent on every connection, merged over the
+                default ``Authorization: Token`` header. Useful for self-hosted Deepgram or
+                gateways with custom auth. When no API key is set, these become the sole auth.
 
         Raises:
             ValueError: If no API key is provided or found in environment variables
-                (unless ``_connect_headers`` is supplied).
+                (unless ``extra_headers`` is supplied).
 
         Note:
             The api_key must be set either through the constructor argument or by setting
@@ -156,16 +159,17 @@ class STT(stt.STT):
         )
 
         deepgram_api_key = api_key if is_given(api_key) else os.environ.get("DEEPGRAM_API_KEY")
-        if is_given(_connect_headers):
-            # alternate transport (e.g. Cloudflare AI Gateway) supplies its own auth header
-            self._connect_headers = dict(_connect_headers)
-        else:
-            if not deepgram_api_key:
-                raise ValueError(
-                    "Deepgram API key is required, either as argument or set"
-                    " DEEPGRAM_API_KEY environment variable"
-                )
-            self._connect_headers = {"Authorization": f"Token {deepgram_api_key}"}
+        extra = dict(extra_headers) if is_given(extra_headers) else {}
+        if not deepgram_api_key and not extra:
+            raise ValueError(
+                "Deepgram API key is required, either as argument or set"
+                " DEEPGRAM_API_KEY environment variable"
+            )
+        # default Token auth only when a key is present; extra_headers merge on top (and are
+        # the sole auth when no key is set, e.g. the Cloudflare AI Gateway)
+        self._connect_headers = (
+            {"Authorization": f"Token {deepgram_api_key}"} if deepgram_api_key else {}
+        ) | extra
 
         model = _validate_model(model, language)
         if is_given(keyterms):
@@ -212,7 +216,7 @@ class STT(stt.STT):
     @staticmethod
     def with_cloudflare(
         *,
-        model: str = "@cf/deepgram/nova-3",
+        model: DeepgramModels | str = "nova-3",
         account_id: str | None = None,
         gateway_id: str = "default",
         cf_aig_token: str | None = None,
@@ -225,12 +229,12 @@ class STT(stt.STT):
         """Create a Deepgram STT routed through the Cloudflare AI Gateway.
 
         Connects to the gateway's ``workers-ai`` WebSocket, which proxies Deepgram's
-        streaming protocol. Auth uses the ``cf-aig-authorization`` header (the raw
-        Cloudflare token); no Deepgram API key is required.
+        streaming protocol. Auth uses the ``cf-aig-authorization`` header; no Deepgram
+        API key is required.
 
         Args:
-            model: Cloudflare Deepgram STT model, e.g. ``"@cf/deepgram/nova-3"`` or
-                ``"@cf/deepgram/flux"``.
+            model: Deepgram model name (e.g. ``"nova-3"``); the ``@cf/deepgram/`` prefix is
+                added automatically. A value already prefixed with ``@cf/`` is used as-is.
             account_id: Cloudflare account ID. Falls back to ``CLOUDFLARE_ACCOUNT_ID``.
                 Required unless ``base_url`` is given.
             gateway_id: Gateway name. Defaults to ``"default"``.
@@ -257,6 +261,9 @@ class STT(stt.STT):
                 )
             base_url = f"https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/workers-ai"
 
+        if not model.startswith("@cf/"):
+            model = f"@cf/deepgram/{model}"
+
         return STT(
             model=model,
             language=language,
@@ -264,7 +271,7 @@ class STT(stt.STT):
             sample_rate=sample_rate,
             base_url=base_url,
             http_session=http_session,
-            _connect_headers={"cf-aig-authorization": cf_aig_token},
+            extra_headers={"cf-aig-authorization": cf_aig_token},
         )
 
     def _ensure_session(self) -> aiohttp.ClientSession:
