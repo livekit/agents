@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from google.genai import types
-from livekit.agents.types import APIConnectOptions
-from livekit.plugins.google.beta.gemini_tts import TTS
+
 from livekit.agents import tts
+from livekit.plugins.google.beta.gemini_tts import TTS
 
 pytestmark = pytest.mark.plugin("google")
+
 
 @pytest.mark.asyncio
 @patch("livekit.plugins.google.beta.gemini_tts.Client")
