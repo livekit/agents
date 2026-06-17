@@ -294,7 +294,7 @@ async def frontdesk_agent(ctx: JobContext):
         tts=inference.TTS(
             "inworld/inworld-tts-2", voice="Nadia", extra_kwargs={"delivery_mode": "CREATIVE"}
         ),
-        expressive=presets.CUSTOMER_SERVICE,
+        expressive={**presets.CUSTOMER_SERVICE, "backchannel": True},
         max_tool_steps=1,
     )
 

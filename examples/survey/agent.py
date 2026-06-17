@@ -355,7 +355,7 @@ async def entrypoint(ctx: JobContext):
         tts=inference.TTS(
             "inworld/inworld-tts-2", voice="Nate", extra_kwargs={"delivery_mode": "CREATIVE"}
         ),
-        expressive=presets.CONVERSATIONAL,
+        expressive={**presets.CONVERSATIONAL, "backchannel": True},
         preemptive_generation=True,
     )
 

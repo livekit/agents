@@ -486,9 +486,17 @@ async def drive_thru_agent(ctx: JobContext) -> None:
         ),
         llm=inference.LLM("google/gemma-4-31b-it"),
         tts=inference.TTS(
-            "inworld/inworld-tts-2", voice="Sarah", extra_kwargs={"delivery_mode": "CREATIVE"}
+            "inworld/inworld-tts-2",
+            voice="Sarah",
+            extra_kwargs={"delivery_mode": "CREATIVE", "speaking_rate": 1.1},
         ),
-        expressive=presets.CUSTOMER_SERVICE,
+        expressive={
+            **presets.CUSTOMER_SERVICE,
+            "backchannel": {
+                "frequency": 0.8,
+                "source": ["mm-hmm", "yep", "got it", "ok", "uh huh", "gotcha"],
+            },
+        },
         max_tool_steps=10,
     )
 
@@ -549,6 +557,13 @@ async def drive_thru_agent(ctx: JobContext) -> None:
 
     await session.start(agent=DriveThruAgent(userdata=userdata), room=ctx.room)
     await background_audio.start(room=ctx.room, agent_session=session)
+
+    session.generate_reply(
+        instructions=(
+            "Warmly greet the customer with something like "
+            "\"Hey, welcome to McDonald's! What can I get for you?\""
+        )
+    )
 
 
 if __name__ == "__main__":
