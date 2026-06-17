@@ -55,6 +55,7 @@ class TTS(tts.TTS):
         word_tokenizer: NotGivenOr[tokenize.WordTokenizer] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         mip_opt_out: bool = False,
+        _connect_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of Deepgram TTS.
@@ -76,8 +77,16 @@ class TTS(tts.TTS):
         )
 
         api_key = api_key or os.environ.get("DEEPGRAM_API_KEY")
-        if not api_key:
-            raise ValueError("Deepgram API key required. Set DEEPGRAM_API_KEY or provide api_key.")
+        if is_given(_connect_headers):
+            # alternate transport (e.g. Cloudflare AI Gateway) supplies its own auth header
+            self._connect_headers = dict(_connect_headers)
+            api_key = api_key or ""
+        else:
+            if not api_key:
+                raise ValueError(
+                    "Deepgram API key required. Set DEEPGRAM_API_KEY or provide api_key."
+                )
+            self._connect_headers = {"Authorization": f"Token {api_key}"}
 
         if not is_given(word_tokenizer):
             word_tokenizer = tokenize.basic.WordTokenizer(ignore_punctuation=False)
@@ -120,7 +129,7 @@ class TTS(tts.TTS):
         ws = await asyncio.wait_for(
             session.ws_connect(
                 _to_deepgram_url(config, self._opts.base_url, websocket=True),
-                headers={"Authorization": f"Token {self._opts.api_key}"},
+                headers=self._connect_headers,
             ),
             timeout,
         )
@@ -214,7 +223,7 @@ class ChunkedStream(tts.ChunkedStream):
                     websocket=False,
                 ),
                 headers={
-                    "Authorization": f"Token {self._opts.api_key}",
+                    **self._tts._connect_headers,
                     "Content-Type": "application/json",
                 },
                 json={"text": self._input_text},
