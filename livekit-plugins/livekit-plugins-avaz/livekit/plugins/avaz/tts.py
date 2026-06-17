@@ -207,6 +207,8 @@ def _normalize_text_for_chunk_notation(text: str, chunk_notation: str) -> str:
         return normalized
     primary = notation[0]
     if normalized[-1] in "?!" and primary == ".":
+        # Replace (not append) so the final char is a chunk boundary the server accepts.
+        # Appending "?. " still yields chunks_generated: 0 on some Avaz builds.
         return normalized[:-1] + primary
     return normalized + primary
 
@@ -500,7 +502,13 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._sent_text_cache: str | None = None
 
     async def _collect_text_parts(self) -> list[str]:
-        """Drain agent text before WS work so LiveKit retries replay _input_buffer."""
+        """Drain agent text before WebSocket work.
+
+        Batching is intentional: it preserves LiveKit retry replay of
+        ``_input_buffer`` and matches the validated single-utterance flow in
+        test_ws_avaz3. Avaz accepts incremental ``{"text": ...}`` frames; we
+        can forward tokens incrementally in a follow-up without protocol changes.
+        """
         parts: list[str] = []
         async for data in self._input_ch:
             if isinstance(data, self._FlushSentinel):
@@ -643,8 +651,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                 except (TypeError, json.JSONDecodeError):
                     logger.debug("[Avaz TTS] non-JSON frame ignored: %r", raw[:120])
                     continue
-                if isinstance(payload, dict):
-                    _log_server_payload(payload, phase="drain")
+                if not isinstance(payload, dict):
+                    logger.debug("[Avaz TTS] non-dict JSON frame ignored: %r", payload)
+                    continue
+                _log_server_payload(payload, phase="drain")
                 if "audio" in payload:
                     got_audio = True
                     await _handle_audio_payload(payload)
@@ -679,12 +689,14 @@ class SynthesizeStream(tts.SynthesizeStream):
                 payload = json.loads(flush_text)
                 if isinstance(payload, dict):
                     _log_server_payload(payload, phase="flush")
-                if "audio" in payload:
-                    await _handle_audio_payload(payload)
-                elif "error" in payload:
-                    raise APIConnectionError(f"Avaz TTS server error: {payload}")
-                elif "status" in payload:
-                    flush_status = payload
+                    if "audio" in payload:
+                        await _handle_audio_payload(payload)
+                    elif "error" in payload:
+                        raise APIConnectionError(f"Avaz TTS server error: {payload}")
+                    elif "status" in payload:
+                        flush_status = payload
+                else:
+                    logger.debug("[Avaz TTS] non-dict flush response ignored: %r", payload)
             except asyncio.TimeoutError:
                 pass
             except json.JSONDecodeError as exc:
