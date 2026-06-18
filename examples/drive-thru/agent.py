@@ -517,7 +517,7 @@ async def drive_thru_agent(ctx: JobContext) -> None:
                         volume=0.5,
                     ),
                     BackchannelConfig(
-                        "mm-hmm",
+                        "uh huh",
                         eot_range=(0.0, 1.0),
                         volume=0.5,
                     ),
