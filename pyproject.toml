@@ -27,6 +27,7 @@ livekit-plugins-gladia = { workspace = true }
 livekit-plugins-gnani = { workspace = true }
 livekit-plugins-google = { workspace = true }
 livekit-plugins-groq = { workspace = true }
+livekit-plugins-inception = { workspace = true }
 livekit-plugins-hedra = { workspace = true }
 livekit-plugins-hamming = { workspace = true }
 livekit-plugins-hume = { workspace = true }
