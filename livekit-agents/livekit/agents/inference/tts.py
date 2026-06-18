@@ -493,6 +493,9 @@ class TTS(tts.TTS):
                 timeout,
             )
         except aiohttp.ClientResponseError as e:
+            # aiohttp discards the failed-handshake body, so we can't pass the quota
+            # JSON to body=; a quota 429 stays a plain APIStatusError here. Without the
+            # body's `category` it can't be classified anyway. Typing it is future work.
             raise create_api_error_from_http(e.message, status=e.status) from e
         except asyncio.TimeoutError as e:
             raise APITimeoutError("LiveKit Inference TTS connection timed out.") from e

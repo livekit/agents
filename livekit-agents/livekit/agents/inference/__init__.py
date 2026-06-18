@@ -1,3 +1,4 @@
+from ._exceptions import InferenceQuotaExceededError
 from .eot import TurnDetector, TurnDetectorModels, TurnDetectorVersions
 from .interruption import (
     AdaptiveInterruptionDetector,
@@ -22,6 +23,7 @@ __all__ = [
     "VADModels",
     "AdaptiveInterruptionDetector",
     "InterruptionDetectionError",
+    "InferenceQuotaExceededError",
     "OverlappingSpeechEvent",
     "InterruptionDataFrameType",
     "TurnDetector",

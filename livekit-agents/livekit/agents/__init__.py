@@ -107,7 +107,8 @@ from .voice.amd import (
     AMDCategory,
     AMDPredictionEvent,
 )
-from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
+from .voice.audio_source import AudioSource, BuiltinAudioClip
+from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, PlayHandle
 from .voice.room_io import RoomInputOptions, RoomIO, RoomOutputOptions
 from .voice.run_result import (
     AgentHandoffEvent,
@@ -220,6 +221,7 @@ __all__ = [
     "DEFAULT_API_CONNECT_OPTIONS",
     "BackgroundAudioPlayer",
     "BuiltinAudioClip",
+    "AudioSource",
     "AudioConfig",
     "PlayHandle",
     "FlushSentinel",

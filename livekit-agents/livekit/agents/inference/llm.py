@@ -21,13 +21,18 @@ from openai.types.shared_params import Metadata
 from typing_extensions import TypedDict
 
 from .. import llm
-from .._exceptions import APIConnectionError, APIStatusError, APITimeoutError
+from .._exceptions import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+)
 from ..llm import ToolChoice, utils as llm_utils
 from ..llm.chat_context import ChatContext
 from ..llm.tool_context import Tool
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
+from ._exceptions import InferenceQuotaExceededError
 from ._utils import (
     HEADER_INFERENCE_PRIORITY,
     HEADER_INFERENCE_PROVIDER,
@@ -454,6 +459,26 @@ class LLMStream(llm.LLMStream):
         except openai.APITimeoutError:
             raise APITimeoutError(retryable=retryable) from None
         except openai.APIStatusError as e:
+            # a depleted project answers 429 with a structured `inference_quota_exceeded`
+            # JSON body. The openai SDK narrows a mapping body to its `error` value
+            # before raising — a bare string for gateway payloads — so re-parse the
+            # response to recover the full body.
+            body: object = e.body
+            if not isinstance(body, dict):
+                try:
+                    body = e.response.json()
+                except Exception:
+                    body = e.body
+
+            quota_error = InferenceQuotaExceededError.from_response(
+                e.message,
+                status_code=e.status_code,
+                request_id=e.request_id,
+                body=body,
+            )
+            if quota_error is not None:
+                raise quota_error from None
+
             raise APIStatusError(
                 e.message,
                 status_code=e.status_code,

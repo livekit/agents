@@ -1668,23 +1668,17 @@ class AgentActivity(RecognitionHooks):
         | inference.InterruptionDetectionError,
     ) -> None:
         if isinstance(error, llm.LLMError):
-            error_event = ErrorEvent(error=error, source=self.llm)
-            self._session.emit("error", error_event)
+            self._session.emit("error", ErrorEvent(error=error, source=self.llm))
         elif isinstance(error, llm.RealtimeModelError):
-            error_event = ErrorEvent(error=error, source=self.llm)
-            self._session.emit("error", error_event)
+            self._session.emit("error", ErrorEvent(error=error, source=self.llm))
         elif isinstance(error, stt.STTError):
-            error_event = ErrorEvent(error=error, source=self.stt)
-            self._session.emit("error", error_event)
+            self._session.emit("error", ErrorEvent(error=error, source=self.stt))
         elif isinstance(error, tts.TTSError):
-            error_event = ErrorEvent(error=error, source=self.tts)
-            self._session.emit("error", error_event)
+            self._session.emit("error", ErrorEvent(error=error, source=self.tts))
         elif isinstance(error, inference.InterruptionDetectionError):
             if not error.recoverable:
                 self._fallback_to_vad_interruption(error)
             return
-
-        self._session._on_error(error)
 
     def _on_overlap_speech_ended(self, ev: inference.OverlappingSpeechEvent) -> None:
         if ev.is_interruption:
