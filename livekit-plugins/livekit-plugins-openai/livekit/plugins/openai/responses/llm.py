@@ -188,6 +188,8 @@ class LLM(llm.LLM):
         if not is_given(reasoning) and _supports_reasoning_effort(model):
             if model in ["gpt-5.1", "gpt-5.2", "gpt-5.4"]:
                 reasoning = Reasoning(effort="none")
+            elif model in ["gpt-5.4-mini"]:
+                reasoning = Reasoning(effort="none")
             else:
                 reasoning = Reasoning(effort="minimal")
 
