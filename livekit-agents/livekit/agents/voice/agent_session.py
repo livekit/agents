@@ -355,7 +355,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             agent_false_interruption_timeout (NotGivenOr[float | None]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
         """
         super().__init__()
-        self.on("error", self._on_error)
         self._loop = loop or asyncio.get_event_loop()
         self._video_sampler = (
             video_sampler
@@ -1613,7 +1612,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 audio = message
 
             handle = self.say(text, audio=audio, allow_interruptions=False, add_to_chat_ctx=False)
-            await asyncio.wait_for(handle.wait_for_playout(), timeout=_ERROR_MESSAGE_PLAYOUT_TIMEOUT)
+            await asyncio.wait_for(
+                handle.wait_for_playout(), timeout=_ERROR_MESSAGE_PLAYOUT_TIMEOUT
+            )
         except Exception:
             logger.warning("failed to play the unrecoverable-error message", exc_info=True)
         finally:

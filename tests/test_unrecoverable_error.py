@@ -135,6 +135,23 @@ async def test_quota_error_closes_on_first_occurrence() -> None:
     await session.aclose()
 
 
+async def test_user_error_handler_runs_before_close_decision() -> None:
+    session = _make_session()
+    await session.start(_Agent())
+
+    @session.on("error")
+    def _keep_alive(ev: ErrorEvent) -> None:
+        ev.error.recoverable = True
+
+    activity = session._activity
+    assert activity is not None
+    activity._on_error(_llm_error(_quota_error()))  # terminal: would close without the flip
+
+    assert session._closing_task is None
+
+    await session.aclose()
+
+
 async def test_generic_unrecoverable_error_is_tolerated() -> None:
     # a non-terminal unrecoverable error is still absorbed up to max_unrecoverable_errors,
     # so a single blip does not close the session
@@ -468,23 +485,16 @@ async def test_error_message_non_path_string_falls_back_to_tts(
     await session.aclose()
 
 
-async def test_emit_error_event_drives_unrecoverable_close() -> None:
-    # the close teardown is driven by the "error" event itself: a single emit() with an
-    # unrecoverable error must spawn the close, independent of the activity's _on_error
+async def test_bare_emit_error_does_not_close() -> None:
+    # teardown is owned by the activity's _on_error, not by the "error" event itself, so
+    # a bare emit() (e.g. from user code) must not close the session.
     session = _make_session(unrecoverable_error_message=None)
     await session.start(_Agent())
-
-    close_events: list = []
-    session.on("close", close_events.append)
 
     activity = session._activity
     assert activity is not None
     session.emit("error", ErrorEvent(error=_llm_error(_quota_error()), source=activity.llm))
 
-    closing_task = session._closing_task
-    assert closing_task is not None, "emitting an unrecoverable error must drive the close"
-    await closing_task
-
-    assert close_events[0].reason == CloseReason.ERROR
+    assert session._closing_task is None
 
     await session.aclose()
