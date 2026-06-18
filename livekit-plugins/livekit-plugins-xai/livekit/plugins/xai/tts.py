@@ -20,7 +20,6 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
-from typing import Literal
 from urllib.parse import urlencode
 
 import aiohttp
@@ -52,7 +51,7 @@ class _TTSOptions:
     voice: GrokVoices | str
     language: TTSLanguages | str
     tokenizer: tokenize.WordTokenizer
-    optimize_streaming_latency: NotGivenOr[Literal[0, 1, 2]]
+    optimize_streaming_latency: NotGivenOr[int]
     speed: NotGivenOr[float]
     text_normalization: NotGivenOr[bool]
 
@@ -64,7 +63,7 @@ class TTS(tts.TTS):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         voice: GrokVoices | str = DEFAULT_VOICE,
         language: TTSLanguages | str = "auto",
-        optimize_streaming_latency: NotGivenOr[Literal[0, 1, 2]] = NOT_GIVEN,
+        optimize_streaming_latency: NotGivenOr[int] = NOT_GIVEN,
         speed: NotGivenOr[float] = NOT_GIVEN,
         text_normalization: NotGivenOr[bool] = NOT_GIVEN,
         tokenizer: tokenize.WordTokenizer | None = None,
@@ -78,7 +77,7 @@ class TTS(tts.TTS):
         Args:
             voice (str, optional): The voice ID for the desired voice. Defaults to "ara".
             language (TTSLanguages | str, optional): Language code for synthesis (e.g., "en", "fr", "ja"). Defaults to "auto".
-            optimize_streaming_latency (0 | 1 | 2, optional): Latency optimization level for the xAI TTS websocket.
+            optimize_streaming_latency (int, optional): Latency optimization level for the xAI TTS websocket.
             speed (float, optional): Speaking-rate multiplier for the generated audio.
             text_normalization (bool, optional): Whether to normalize text before synthesis.
             api_key (str | None, optional): The xAI API key. If not provided, it will be read from the xAI environment variable.
@@ -165,7 +164,7 @@ class TTS(tts.TTS):
         *,
         voice: str | None = None,
         language: TTSLanguages | str | None = None,
-        optimize_streaming_latency: NotGivenOr[Literal[0, 1, 2]] = NOT_GIVEN,
+        optimize_streaming_latency: NotGivenOr[int] = NOT_GIVEN,
         speed: NotGivenOr[float] = NOT_GIVEN,
         text_normalization: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
@@ -175,7 +174,7 @@ class TTS(tts.TTS):
         Args:
             voice (str, optional): The voice ID for the desired voice.
             language (TTSLanguages | str, optional): Language code for synthesis (e.g., "en", "fr", "ja").
-            optimize_streaming_latency (0 | 1 | 2, optional): Latency optimization level for the xAI TTS websocket.
+            optimize_streaming_latency (int, optional): Latency optimization level for the xAI TTS websocket.
             speed (float, optional): Speaking-rate multiplier for the generated audio.
             text_normalization (bool, optional): Whether to normalize text before synthesis.
         """  # noqa: E501
