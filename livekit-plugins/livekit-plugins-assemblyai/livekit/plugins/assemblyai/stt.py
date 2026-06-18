@@ -75,6 +75,7 @@ class STTOptions:
     domain: NotGivenOr[str] = NOT_GIVEN
     voice_focus: NotGivenOr[Literal["near-field", "far-field"]] = NOT_GIVEN
     voice_focus_threshold: NotGivenOr[float] = NOT_GIVEN
+    mode: NotGivenOr[Literal["min_latency", "balanced", "max_accuracy"]] = NOT_GIVEN
 
 
 # Speech models in the u3-rt-pro family, which share the same parameter support
@@ -116,6 +117,7 @@ class STT(stt.STT):
         domain: NotGivenOr[str] = NOT_GIVEN,
         voice_focus: NotGivenOr[Literal["near-field", "far-field"]] = NOT_GIVEN,
         voice_focus_threshold: NotGivenOr[float] = NOT_GIVEN,
+        mode: NotGivenOr[Literal["min_latency", "balanced", "max_accuracy"]] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         buffer_size_seconds: float = 0.05,
         base_url: str = "wss://streaming.assemblyai.com",
@@ -170,6 +172,14 @@ class STT(stt.STT):
                 alongside `voice_focus`. Only supported with the 'u3-rt-pro' /
                 'u3-rt-pro-beta-1' / 'universal-3-5-pro' models. Set at construction (connect)
                 time only.
+            mode: Accuracy/latency preset forwarded to the u3-pro model: 'min_latency'
+                (fastest time-to-text), 'balanced' (the server default, recommended for
+                voice agents), or 'max_accuracy' (highest accuracy, for scribes/post-call).
+                The model applies its own per-mode tuning; any silence, partials, or VAD
+                knobs you set explicitly still take precedence over the mode's defaults.
+                Leave unset to use the server default. Only supported with the 'u3-rt-pro' /
+                'u3-rt-pro-beta-1' / 'universal-3-5-pro' models. Set at construction (connect)
+                time only.
         """
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -194,6 +204,7 @@ class STT(stt.STT):
                 "interruption_delay": interruption_delay,
                 "voice_focus": voice_focus,
                 "voice_focus_threshold": voice_focus_threshold,
+                "mode": mode,
             }
             for _param_name, _param_value in _u3_pro_only_params.items():
                 if is_given(_param_value):
@@ -254,6 +265,7 @@ class STT(stt.STT):
             domain=domain,
             voice_focus=voice_focus,
             voice_focus_threshold=voice_focus_threshold,
+            mode=mode,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -669,6 +681,7 @@ class SpeechStream(stt.SpeechStream):
             "voice_focus_threshold": self._opts.voice_focus_threshold
             if is_given(self._opts.voice_focus_threshold)
             else None,
+            "mode": self._opts.mode if is_given(self._opts.mode) else None,
         }
 
         headers = {
