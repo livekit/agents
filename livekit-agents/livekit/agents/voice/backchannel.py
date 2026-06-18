@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
+import enum
+import hashlib
+import json
+import os
 import random
+import re
 from collections.abc import AsyncGenerator, AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, TypedDict, cast
+from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 from livekit import rtc
 
@@ -16,6 +22,7 @@ from ..utils.audio import audio_frames_from_file
 from .background_audio import AudioSource, BuiltinAudioClip, _apply_gain, _frame_gain
 
 if TYPE_CHECKING:
+    from ..tts import TTS
     from .agent_activity import AgentActivity
     from .events import _AgentBackchannelOpportunityEvent
 
@@ -24,6 +31,12 @@ _SYNTH_TTFF_TIMEOUT = 0.3
 # emit-count window over which a just-emitted clip's "heat" decays back to 0
 _HOTNESS_DECAY = 3
 _DEFAULT_FREQUENCY = 0.5
+
+# on-disk cache for synthesized text clips (reused across sessions)
+_CACHE_ENV = "LIVEKIT_BACKCHANNEL_CACHE_DIR"
+# _opts fields excluded from the cache fingerprint: credentials don't affect audio
+_OPTS_DENYLIST = frozenset({"api_key", "api_secret", "token", "auth_token"})
+_DROP = object()  # sentinel: an _opts value that can't/shouldn't enter the fingerprint
 
 
 @dataclass
@@ -42,7 +55,7 @@ class BackchannelConfig:
     """Relative weight when eligible (``random.choices`` normalizes across the pool)."""
     eot_range: tuple[float, float] = (0.0, 0.15)
     """Eligible band as fractions of the end-of-turn threshold."""
-    volume: float = 1.0
+    volume: float = 0.5
     """Gain applied to the rendered frames before playback."""
 
     def calculate_weight(self, *, eot_probability: float, eot_threshold: float) -> float:
@@ -61,6 +74,10 @@ class BackchannelOptions(TypedDict, total=False):
     """Independent pre-gate in ``[0, 1]``: chance of even attempting a backchannel
     on a given opportunity."""
     source: NotGivenOr[list[str | AudioSource | BackchannelConfig]]
+    cache: bool
+    """Persist synthesized text clips to disk (``LIVEKIT_BACKCHANNEL_CACHE_DIR``,
+    default ``~/.cache/livekit/backchannel``) and reuse them across sessions while
+    the voice + TTS are unchanged. Default ``True``."""
 
 
 # Two tiers: safe sounds near the threshold, risky words only at very low eot.
@@ -77,6 +94,7 @@ DEFAULT_BACKCHANNEL_SOURCE: list[str | AudioSource | BackchannelConfig] = [
 DEFAULT_BACKCHANNEL_OPTIONS: BackchannelOptions = {
     "frequency": _DEFAULT_FREQUENCY,
     "source": DEFAULT_BACKCHANNEL_SOURCE,
+    "cache": True,
 }
 
 
@@ -138,6 +156,80 @@ def _decode_source(source: AudioSource) -> AsyncIterator[rtc.AudioFrame]:
     return source  # already an AsyncIterator[rtc.AudioFrame]
 
 
+def _cache_dir() -> Path:
+    override = os.getenv(_CACHE_ENV)
+    if override:
+        return Path(override).expanduser()
+    return Path.home() / ".cache" / "livekit" / "backchannel"
+
+
+def _normalize_opt(value: Any) -> Any:
+    """Reduce an ``_opts`` value to a stable, JSON-safe form for the fingerprint.
+
+    Enums become their value, nested dataclasses recurse (minus the denylist), and
+    anything that isn't a JSON primitive/list/dict (http clients, tokenizers,
+    ``NotGiven`` sentinels, ...) returns ``_DROP`` so it's left out entirely.
+    """
+    if isinstance(value, enum.Enum):
+        value = value.value
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        out: dict[str, Any] = {}
+        for f in dataclasses.fields(value):
+            if f.name in _OPTS_DENYLIST:
+                continue
+            nv = _normalize_opt(getattr(value, f.name))
+            if nv is not _DROP:
+                out[f.name] = nv
+        return out
+    if isinstance(value, (list, tuple)):
+        items = [_normalize_opt(v) for v in value]
+        return _DROP if any(v is _DROP for v in items) else items
+    if isinstance(value, dict):
+        out = {}
+        for k, v in value.items():
+            if not isinstance(k, str):
+                return _DROP
+            nv = _normalize_opt(v)
+            if nv is not _DROP:
+                out[k] = nv
+        return out
+    return _DROP
+
+
+def _opts_fingerprint(tts: TTS) -> str | None:
+    """Stable digest of the TTS identity + voice/output config, or ``None`` when the
+    TTS exposes no dataclass ``_opts`` (then disk caching is skipped for it)."""
+    opts = getattr(tts, "_opts", None)
+    if not dataclasses.is_dataclass(opts) or isinstance(opts, type):
+        return None
+    try:
+        payload = {
+            "provider": tts.provider,
+            "model": tts.model,
+            "sample_rate": tts.sample_rate,
+            "num_channels": tts.num_channels,
+            "opts": _normalize_opt(opts),
+        }
+        blob = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    except Exception:
+        return None
+    return hashlib.sha256(blob.encode()).hexdigest()[:16]
+
+
+def _safe_prefix(text: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:32]
+    return f"{slug}_" if slug else ""
+
+
+def _atomic_write(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    tmp.write_bytes(data)
+    os.replace(tmp, path)
+
+
 class _BackchannelEmitter:
     """Per-activity backchannel player.
 
@@ -158,6 +250,7 @@ class _BackchannelEmitter:
         if not is_given(source) or source is None:
             source = DEFAULT_BACKCHANNEL_SOURCE
         self._configs = [_as_config(s) for s in source]
+        self._disk_cache_enabled = options.get("cache", True)
 
         self._cache: dict[str, list[rtc.AudioFrame]] = {}
         self._pending: set[str] = set()
@@ -268,7 +361,7 @@ class _BackchannelEmitter:
     async def _render(self, cfg: BackchannelConfig, key: str, activity: AgentActivity) -> None:
         try:
             if _is_text(cfg.source):
-                frames = await self._synthesize(str(cfg.source), activity)
+                frames = await self._render_text(str(cfg.source), activity)
             else:
                 frames = [f async for f in _decode_source(cfg.source)]
         except Exception:
@@ -282,6 +375,50 @@ class _BackchannelEmitter:
 
         self._cache[key] = frames
         self._play(cfg, key, frames, activity)  # play now that it's rendered
+
+    def _disk_path(self, text: str, tts: TTS | None) -> Path | None:
+        if not self._disk_cache_enabled or tts is None:
+            return None
+        fingerprint = _opts_fingerprint(tts)
+        if fingerprint is None:
+            return None
+        text_id = hashlib.sha256(text.encode()).hexdigest()[:16]
+        return _cache_dir() / fingerprint / f"{_safe_prefix(text)}{text_id}.wav"
+
+    async def _render_text(self, text: str, activity: AgentActivity) -> list[rtc.AudioFrame]:
+        tts = activity.tts
+        path = self._disk_path(text, tts)
+        if path is not None and tts is not None and path.exists():
+            try:
+                frames = [
+                    f
+                    async for f in audio_frames_from_file(
+                        str(path),
+                        sample_rate=tts.sample_rate,
+                        num_channels=tts.num_channels,
+                    )
+                ]
+            except Exception:
+                logger.warning(
+                    "backchannel: failed to read disk cache, re-synthesizing", exc_info=True
+                )
+            else:
+                if frames:
+                    logger.debug("backchannel loaded from disk cache", extra={"path": str(path)})
+                    return frames
+
+        frames = await self._synthesize(text, activity)
+        if frames and path is not None:
+            await self._write_disk(path, frames)
+        return frames
+
+    async def _write_disk(self, path: Path, frames: list[rtc.AudioFrame]) -> None:
+        try:
+            data = rtc.combine_audio_frames(frames).to_wav_bytes()
+            await asyncio.to_thread(_atomic_write, path, data)
+            logger.debug("backchannel wrote disk cache", extra={"path": str(path)})
+        except Exception:
+            logger.warning("backchannel: failed to write disk cache", exc_info=True)
 
     async def _synthesize(self, text: str, activity: AgentActivity) -> list[rtc.AudioFrame]:
         if activity.tts is None:

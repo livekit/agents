@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from types import SimpleNamespace
 
 import numpy as np
@@ -12,6 +13,7 @@ from livekit.agents.voice.backchannel import (
     DEFAULT_BACKCHANNEL_SOURCE,
     BackchannelConfig,
     _BackchannelEmitter,
+    _opts_fingerprint,
     resolve_backchannel_options,
 )
 from livekit.agents.voice.events import _AgentBackchannelOpportunityEvent
@@ -206,3 +208,84 @@ async def test_volume_gain_applied() -> None:
     frames = await _drain(activity.said[0].audio)
     data = np.frombuffer(frames[0].data, dtype=np.int16)
     assert np.allclose(data, 500, atol=1)  # 1000 * 0.5
+
+
+# --- cross-session disk cache -------------------------------------------------------------------
+
+
+@dataclass
+class _FakeOpts:
+    voice: str
+    model: str = "m"
+    api_key: str = "secret"  # denylisted — must not affect the fingerprint
+
+
+def _tts_with_opts(opts: _FakeOpts, **kwargs) -> FakeTTS:  # type: ignore[no-untyped-def]
+    tts = FakeTTS(**kwargs)
+    tts._opts = opts  # type: ignore[attr-defined]
+    return tts
+
+
+class _RaisingTTS(FakeTTS):
+    def synthesize(self, text, *args, **kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("synthesize must not be called on a disk-cache hit")
+
+
+def test_opts_fingerprint_stable_and_sensitive() -> None:
+    fa = _opts_fingerprint(_tts_with_opts(_FakeOpts(voice="v1")))
+    assert fa is not None
+    assert fa == _opts_fingerprint(_tts_with_opts(_FakeOpts(voice="v1")))  # stable
+    assert fa != _opts_fingerprint(_tts_with_opts(_FakeOpts(voice="v2")))  # voice matters
+    # api_key is denylisted, so rotating it does not change the key
+    assert fa == _opts_fingerprint(_tts_with_opts(_FakeOpts(voice="v1", api_key="rotated")))
+
+
+def test_opts_fingerprint_none_without_opts() -> None:
+    assert _opts_fingerprint(FakeTTS()) is None  # no dataclass _opts → disk cache disabled
+
+
+async def test_disk_cache_roundtrip(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("LIVEKIT_BACKCHANNEL_CACHE_DIR", str(tmp_path))
+    source = [BackchannelConfig("yeah", eot_range=(0.0, 1.0))]
+
+    # first session: synthesize and persist to disk (realistic clip length; a sub-100ms
+    # clip would decode back to zero frames in PyAV)
+    tts1 = _tts_with_opts(_FakeOpts(voice="v1"), fake_audio_duration=0.5)
+    emitter1 = _BackchannelEmitter({"frequency": 1.0, "source": source})
+    activity1 = _FakeActivity(tts1)
+    emitter1.maybe_emit(_ev(eot_probability=0.0), activity1)
+    for task in list(emitter1._tasks):
+        await task
+
+    assert len(activity1.said) == 1
+    assert len(list(tmp_path.rglob("*.wav"))) == 1  # written to disk
+
+    # second session: fresh emitter + a TTS that fails if synthesized → must load from disk
+    tts2 = _RaisingTTS()
+    tts2._opts = _FakeOpts(voice="v1")  # same fingerprint as tts1
+    emitter2 = _BackchannelEmitter({"frequency": 1.0, "source": source})
+    activity2 = _FakeActivity(tts2)
+    emitter2.maybe_emit(_ev(eot_probability=0.0), activity2)
+    for task in list(emitter2._tasks):
+        await task
+
+    assert len(activity2.said) == 1  # loaded from disk, no synthesis
+
+
+async def test_disk_cache_disabled(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("LIVEKIT_BACKCHANNEL_CACHE_DIR", str(tmp_path))
+    tts = _tts_with_opts(_FakeOpts(voice="v1"), fake_audio_duration=0.05)
+    emitter = _BackchannelEmitter(
+        {
+            "frequency": 1.0,
+            "cache": False,
+            "source": [BackchannelConfig("yeah", eot_range=(0.0, 1.0))],
+        }
+    )
+    activity = _FakeActivity(tts)
+    emitter.maybe_emit(_ev(eot_probability=0.0), activity)
+    for task in list(emitter._tasks):
+        await task
+
+    assert len(activity.said) == 1  # still emits (in-memory)
+    assert list(tmp_path.rglob("*.wav")) == []  # but nothing persisted
