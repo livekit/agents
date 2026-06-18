@@ -25,6 +25,7 @@ from livekit.agents import (
     AgentServer,
     AgentSession,
     AudioConfig,
+    BackchannelConfig,
     BackgroundAudioPlayer,
     FunctionTool,
     JobContext,
@@ -490,7 +491,39 @@ async def drive_thru_agent(ctx: JobContext) -> None:
             voice="Sarah",
             extra_kwargs={"delivery_mode": "CREATIVE", "speaking_rate": 1.1},
         ),
-        expressive=presets.CUSTOMER_SERVICE,
+        expressive={
+            **presets.CUSTOMER_SERVICE,
+            "backchannel": {
+                "frequency": 0.8,
+                "source": [
+                    BackchannelConfig(
+                        "mm-hmm",
+                        eot_range=(0.0, 1.0),
+                        volume=0.5,
+                    ),
+                    BackchannelConfig(
+                        "yep",
+                        eot_range=(0.0, 0.15),
+                        volume=0.5,
+                    ),
+                    BackchannelConfig(
+                        "got it",
+                        eot_range=(0.0, 0.15),
+                        volume=0.5,
+                    ),
+                    BackchannelConfig(
+                        "gotcha",
+                        eot_range=(0.0, 0.15),
+                        volume=0.5,
+                    ),
+                    BackchannelConfig(
+                        "uh huh",
+                        eot_range=(0.0, 1.0),
+                        volume=0.5,
+                    ),
+                ],
+            },
+        },
         max_tool_steps=10,
         # Flip user_state to "away" after 10s of mutual silence so we can
         # check whether they're still there (default is 15s).
@@ -576,6 +609,13 @@ async def drive_thru_agent(ctx: JobContext) -> None:
 
     await session.start(agent=DriveThruAgent(userdata=userdata), room=ctx.room)
     await background_audio.start(room=ctx.room, agent_session=session)
+
+    session.generate_reply(
+        instructions=(
+            "Warmly greet the customer with something like "
+            '"Hey, welcome to McDonald\'s! What can I get for you?"'
+        )
+    )
 
 
 if __name__ == "__main__":

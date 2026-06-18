@@ -7,6 +7,7 @@ from .agent_session import (
     VoiceActivityVideoSampler,
 )
 from .audio_recognition import AudioRecognition
+from .backchannel import BackchannelConfig, BackchannelOptions
 from .events import (
     AgentEvent,
     AgentFalseInterruptionEvent,
@@ -40,6 +41,8 @@ __all__ = [
     "Agent",
     "ModelSettings",
     "ExpressiveOptions",
+    "BackchannelConfig",
+    "BackchannelOptions",
     "presets",
     "AgentTask",
     "SpeechHandle",

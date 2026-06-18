@@ -1511,17 +1511,34 @@ class AudioRecognition:
                             if (
                                 backchannel_probability is not None
                                 and backchannel_threshold is not None
-                                and backchannel_probability >= backchannel_threshold
                             ):
-                                self._hooks.on_agent_backchannel_opportunity(
-                                    _AgentBackchannelOpportunityEvent(
-                                        probability=backchannel_probability,
-                                        threshold=backchannel_threshold,
-                                        end_of_turn_probability=end_of_turn_probability,
-                                        end_of_turn_threshold=unlikely_threshold,
-                                        language=self._last_language,
+                                if backchannel_probability >= backchannel_threshold:
+                                    logger.debug(
+                                        "backchannel opportunity",
+                                        extra={
+                                            "backchannel_probability": backchannel_probability,
+                                            "backchannel_threshold": backchannel_threshold,
+                                            "end_of_turn_probability": end_of_turn_probability,
+                                            "end_of_turn_threshold": unlikely_threshold,
+                                        },
                                     )
-                                )
+                                    self._hooks.on_agent_backchannel_opportunity(
+                                        _AgentBackchannelOpportunityEvent(
+                                            probability=backchannel_probability,
+                                            threshold=backchannel_threshold,
+                                            end_of_turn_probability=end_of_turn_probability,
+                                            end_of_turn_threshold=unlikely_threshold,
+                                            language=self._last_language,
+                                        )
+                                    )
+                                else:
+                                    logger.debug(
+                                        "backchannel skipped: below threshold",
+                                        extra={
+                                            "backchannel_probability": backchannel_probability,
+                                            "backchannel_threshold": backchannel_threshold,
+                                        },
+                                    )
                         if (
                             prediction_event is not None
                             and prediction_event.detection_delay is not None

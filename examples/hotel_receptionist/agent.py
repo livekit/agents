@@ -60,8 +60,6 @@ from livekit.agents.evals import (
     tool_use_judge,
 )
 from livekit.agents.voice import UserStateChangedEvent, presets
-from livekit.plugins import silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 load_dotenv()
 
@@ -674,9 +672,7 @@ async def hotel_receptionist_agent(ctx: JobContext) -> None:
             voice="Ashley",
             extra_kwargs={"delivery_mode": "CREATIVE", "speaking_rate": 1.1},
         ),
-        expressive=presets.CUSTOMER_SERVICE,
-        turn_detection=MultilingualModel(),
-        vad=silero.VAD.load(),
+        expressive={**presets.CUSTOMER_SERVICE, "backchannel": True},
         max_tool_steps=5,
         # Flip user_state to "away" after 10s of mutual silence so we can
         # check whether they're still there (default is 15s).

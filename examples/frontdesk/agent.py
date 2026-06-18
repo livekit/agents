@@ -297,7 +297,7 @@ async def frontdesk_agent(ctx: JobContext):
             voice="Nadia",
             extra_kwargs={"delivery_mode": "CREATIVE", "speaking_rate": 1.1},
         ),
-        expressive=presets.CUSTOMER_SERVICE,
+        expressive={**presets.CUSTOMER_SERVICE, "backchannel": True},
         max_tool_steps=1,
         # Flip user_state to "away" after 10s of mutual silence so we can
         # check whether they're still there (default is 15s).

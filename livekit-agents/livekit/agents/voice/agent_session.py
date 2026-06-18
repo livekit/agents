@@ -83,6 +83,8 @@ if TYPE_CHECKING:
     from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput
     from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
+    from .backchannel import BackchannelConfig, BackchannelOptions
+    from .background_audio import AudioSource
     from .presets import Preset
     from .transcription.text_transforms import TextTransforms
 
@@ -160,6 +162,11 @@ class ExpressiveOptions(TypedDict, total=False):
     tts_instructions_template: Instructions | str
     tts_instructions_append: str
     audio_recognition_instructions_template: Instructions | str
+    backchannel: NotGivenOr[bool | list[str | AudioSource | BackchannelConfig] | BackchannelOptions]
+    """Short acknowledgments ("mm-hmm", "yeah") emitted during the user's pauses.
+    ``NOT_GIVEN``/``True`` → default two-tier set; ``False`` → off; a list → custom
+    clips; a ``BackchannelOptions`` → full control. Requires the LiveKit cloud turn
+    detector (it supplies the backchannel signal)."""
 
 
 DEFAULT_EXPRESSIVE_OPTIONS: ExpressiveOptions = ExpressiveOptions(
