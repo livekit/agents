@@ -2651,15 +2651,11 @@ requires-dist = [
 name = "livekit-plugins-inception"
 source = { editable = "livekit-plugins/livekit-plugins-inception" }
 dependencies = [
-    { name = "livekit-agents" },
-    { name = "livekit-plugins-openai" },
+    { name = "livekit-agents", extra = ["openai"] },
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "livekit-agents", editable = "livekit-agents" },
-    { name = "livekit-plugins-openai", editable = "livekit-plugins/livekit-plugins-openai" },
-]
+requires-dist = [{ name = "livekit-agents", extras = ["openai"], editable = "livekit-agents" }]
 
 [[package]]
 name = "livekit-plugins-inworld"
