@@ -6,12 +6,15 @@ import os
 import urllib.error
 import urllib.request
 import warnings
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any
 
 from ._payload import CallIdResolver
 from ._plugin import (
+    SESSION_MODE_MONITORING,
     CaptureConfigInput,
+    ExternalLinkInput,
     HammingRuntime,
     LiveKitConfigInput,
     RecordingConfigInput,
@@ -122,6 +125,9 @@ def attach_session(
     participant_identity: str | None = None,
     participant_metadata: str | None = None,
     external_agent_id: str | None = None,
+    customer_metadata: Mapping[str, Any] | None = None,
+    external_links: Sequence[ExternalLinkInput] | None = None,
+    session_mode: str = SESSION_MODE_MONITORING,
     recording_context: RecordingContext | None = None,
 ) -> None:
     """Attach hamming monitoring to a specific AgentSession.
@@ -134,6 +140,9 @@ def attach_session(
         participant_identity=participant_identity,
         participant_metadata=participant_metadata,
         external_agent_id=external_agent_id,
+        customer_metadata=customer_metadata,
+        external_links=external_links,
+        session_mode=session_mode,
         recording_context=recording_context,
     )
 

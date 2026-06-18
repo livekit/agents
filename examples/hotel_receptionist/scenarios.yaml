@@ -1,0 +1,802 @@
+# Assumptions:
+#   - Seed date is pinned: HOTEL_TODAY=2026-06-08 (Mon). All dates are literals.
+#   - expected_state is included ONLY where the end state is deterministic at the
+#     granularity the diff compares (room *type*, followup *kind*, booking *status*).
+#     Pinned guest facts (email/phone/card) in `instructions` are repeated verbatim
+#     in the SQL so the multiset diff matches. Disputes/complaints/out-of-scope
+#     asks are graded on agent_expectations only — asserting their exact rows would
+#     grade policy arithmetic or non-deterministic tool choices rather than behavior.
+#   - Scenarios tagged `capability: pending` grade behavior the agent does NOT
+#     have yet (group blocks, call connection, message delivery, wake-up calls,
+#     forex policy, card updates on file, tour booking, flight reconfirmation +
+#     transport, emergency dispatch, "walking" a guest). They are deliberate
+#     FAILING TESTS: the rubric demands the full trained behavior from the
+#     training manual, and the agent is expected to fail them until those
+#     capabilities are implemented. They are NL-graded only — no expected_state —
+#     because the backing tables/tools don't exist yet.
+#   - Customer instructions use a structured point-form template (PERSONA /
+#     OPENING LINE / FACTS / DO, IN ORDER / REACTIONS / HIDDEN TRUTH) so the
+#     persona model follows direction reliably. FACTS are revealed only when
+#     asked, one per turn; DO steps run in order; REACTIONS are conditional.
+
+name: LiveKit Hotel — remote front office
+
+scenarios:
+  # --- 01: Simple room booking (in scope, deterministic) -------------------
+- label: Simple room booking by phone
+  instructions: |
+    PERSONA: Maria Whitfield, a polite leisure traveller. Spell your last name W-H-I-T-F-I-E-L-D only if asked.
+    OPENING LINE: "Hi, I'd like to book a room for next month."
+    FACTS (reveal each only when asked, one per turn):
+    - arriving July 14th, departing July 17th
+    - two adults
+    - a garden-view room is essential. not ocean view or city view.
+    - no special requests; no breakfast or any add-ons
+    - email: maria.whitfield@gmail.com
+    - phone: 123-555-0170
+    - payment is your Visa: card number 4532 0000 0001 4471, expiry 12/29, security code 321. Read the full card number out when the agent asks for it - you are comfortable giving the full number over the phone.
+    DO, IN ORDER:
+    1. Ask to book the room and answer the agent's questions one at a time.
+    2. Somewhere mid-call, ask: "what's included in the price - is breakfast in there?"
+    3. Later, ask: "how much do I have to pay now to hold it?"
+    4. Once the agent reads the booking back correctly, confirm and let them finish.
+  agent_expectations: |
+    Captures all booking details (name, both dates, guest count), and lets the GUEST choose the room: offers the available types and asks rather than picking one for her - she wants a garden-view room, which is the queen with two beds, and that is what gets booked. Quotes the nightly rate, answers the breakfast question, reads the full booking back, and completes the reservation. Should not invent a "deposit" the agent doesn't have; the card is charged the total at checkout.
+  tags:
+    feature: room_booking
+    channel: phone
+    difficulty: '1'
+  userdata:
+    expected_state:
+    - |
+      INSERT INTO hotel_bookings
+        (code, room_id, first_name, last_name, email, phone,
+         check_in, check_out, guests, extras, total, card_last4)
+      VALUES ('IGNORED', 'RM_205', 'Maria', 'Whitfield',
+              'maria.whitfield@gmail.com', '1235550170',
+              '2026-07-14', '2026-07-17', 2, '', 'IGNORED', '4471')
+- label: Rate and meal-plan comparison
+  instructions: |
+    PERSONA: Nadia Brooks, a first-time guest comparing options - a little indecisive, casual. You're gathering info, NOT booking today.
+    OPENING LINE: "hey - trying to figure out the difference between your room rates, they're confusing."
+    FACTS (reveal each only when asked):
+    - your name: Nadia Brooks
+    - travelling as a couple, four nights
+    - out sightseeing most of the day
+    - you want a good breakfast and a nice dinner, but don't care about lunch
+    - budget-conscious but "will pay for value"
+    DO, IN ORDER:
+    1. Get the room rates explained.
+    2. Ask: "so which one would YOU pick for us?"
+    3. Ask: "is the suite worth it over a normal room?"
+    4. Ask about the meal options.
+    5. Do NOT commit to booking on this call, even if offered - you're gathering info; say you'll think about it.
+  agent_expectations: |
+    Explains the room options clearly without dumping everything at once, and grounds the meal answer in what the hotel actually offers if the customer asks: a breakfast buffet, and an on-site restaurant for dinner. Recommends adding breakfast and booking a dinner table given the guest's pattern. Any suite mention is a soft, benefit-led suggestion, not a hard sell. Offers to book when the guest is ready.
+  tags:
+    feature: info_and_upsell
+    channel: phone
+    difficulty: '2'
+- label: Group reservation inquiry (16 guests)
+  instructions: |
+    PERSONA: Daniel Foster, a tour operator's coordinator - businesslike, books in bulk.
+    OPENING LINE: "I'm putting together a tour group and need to block some rooms with you."
+    FACTS (reveal each only when asked):
+    - 16 people, mostly twin-share
+    - arriving September 8, staying four nights (so September 8 to 12)
+    - your company is Horizon Tours; it has never worked with this hotel before (reveal that only if asked about the company or credit arrangements)
+    - your callback number: 5552048
+    DO, IN ORDER:
+    1. Ask for the best group rate.
+    2. Ask about a free room for the tour leader.
+    3. Push once: "can you just confirm it all right now on the phone?"
+    4. Ask: "what happens if we have to cancel some rooms last minute?"
+    5. Give your name and callback number when asked.
+    6. Don't hang up until the agent confirms the inquiry is actually recorded and tells you the next step.
+  agent_expectations: >
+    Identifies 16 guests as a group (15+) and switches to group handling rather
+    than treating it as an individual booking: captures member count, share type,
+    dates, sponsor company, and leader/contact details into a group inquiry;
+    quotes the group rate (provisional 10% off standard rates); flags that a
+    sponsor new to the hotel needs credit approval (Director sign-off) before
+    final confirmation — so it does NOT confirm everything on the spot despite
+    the push; mentions the complimentary tour-leader room (one per 15 guests);
+    and answers the cancellation curveball with the group terms (30-day notice /
+    one-night retention). Sets clear next steps: the group desk calls back
+    within two business days to confirm the block.
+  userdata:
+    expected_state:
+      - |
+        INSERT INTO group_inquiries
+          (code, company, contact_name, contact_phone, party_size, share_type, check_in, nights)
+        VALUES ('IGNORED', 'Horizon Tours', 'Daniel Foster', '5552048', 16, 'twin', '2026-09-08', 4)
+  tags:
+    feature: group_booking
+    channel: phone
+    difficulty: "3"
+
+  # --- 04: Upsell to suite (in scope, deterministic) -----------------------
+- label: Upsell a special-occasion stay to a suite
+  instructions: |
+    PERSONA: James Holloway, booking a trip for your 10th wedding anniversary - warm and a little excited. You're initially thinking of a basic room.
+    OPENING LINE: "We're booking a room for our anniversary."
+    FACTS (reveal each only when asked):
+    - arriving June 20th, two nights, two guests
+    - email: james.holloway@gmail.com
+    - phone: 1235550199
+    - payment is your Visa: card number 4532 0000 0008 8830, expiry 11/28, security code 654. Read the full card number out when asked.
+    - no extras
+    DO, IN ORDER:
+    1. Mention the anniversary early in the call.
+    2. Answer the agent's booking questions one at a time.
+    3. Complete the booking; confirm once it's read back correctly.
+    REACTIONS:
+    - if the agent just rattles off a higher price with no reason, stay lukewarm: "hmm, is it a lot more expensive though?"
+    - if they sell you on why a suite would make the occasion special (space, sitting area, ocean view), happily agree to book the suite
+  agent_expectations: |
+    Picks up the anniversary buying signal, asks a question or two, and sells the suite on benefits rather than price alone, handles the price objection by reframing value, uses a clear close, congratulates the guest, and books a suite. Should not push after a genuine no, but here the guest agrees once sold well.
+  tags:
+    feature: room_booking_upsell
+    channel: phone
+    difficulty: '3'
+  userdata:
+    expected_state:
+    - |
+      INSERT INTO hotel_bookings
+        (code, room_id, first_name, last_name, email, phone,
+         check_in, check_out, guests, extras, total, card_last4)
+      VALUES ('IGNORED', 'RM_401', 'James', 'Holloway',
+              'james.holloway@gmail.com', '1235550199',
+              '2026-06-20', '2026-06-22', 2, '', 'IGNORED', '8830')
+- label: Change of plans, then cancel
+  instructions: |
+    PERSONA: Eleanor Smith, polite, with a confirmed upcoming booking.
+    OPENING LINE: "I have a booking with you and I need to change my dates."
+    FACTS (reveal each only when asked):
+    - last name: Smith
+    - confirmation code: H-T-L-A-B-1-2
+    - the card on file ends 4242 (offer this if the code isn't enough)
+    DO, IN ORDER:
+    1. Verify yourself when asked.
+    2. THE MOMENT the agent starts on the date change, change your mind: "actually... can I just cancel the whole thing instead?" Do NOT go through with any date change.
+    3. Ask: "will I lose my deposit if I cancel?" (you have plenty of notice before the stay)
+    4. A policy answer is NOT a cancellation: if the agent only explains the refund policy, push - "great, so please go ahead and cancel it now."
+    5. Accept the outcome politely and end the call ONLY once the agent has explicitly said the booking IS cancelled (with the refund amount). Never hang up before that.
+  agent_expectations: |
+    Verifies the caller and locates the booking, pivots cleanly from amendment to cancellation without first committing a date change, cancels the booking, and states the cancellation outcome correctly — well outside the 48-hour window, so there will be a full refund and no penalty. Confirms the cancellation. Should not guess the refund outcome or invent a deposit-forfeit.
+  tags:
+    feature: cancellation
+    channel: phone
+    difficulty: '2'
+  userdata:
+    expected_state:
+    - |
+      UPDATE hotel_bookings SET status = 'cancelled' WHERE code = 'HTL-AB12'
+
+  # --- 05b: Booking modification carried to completion (deterministic) ------
+- label: Move the stay and drop the valet
+  instructions: |
+    PERSONA: Marcus Johnson, a dad reorganizing a family trip - friendly, slightly rushed, juggling kids in the background.
+    OPENING LINE: "Hi - we've got a booking with you this month and our plans shifted, I need to move the dates."
+    FACTS (reveal each only when asked):
+    - last name: Johnson
+    - confirmation code: H-T-L-C-D-3-4 (or offer the card ending 1881)
+    - the change: arriving two days later than planned - June 19th, staying through June 22nd, same three nights
+    - still the four of you, nothing else about the party changes
+    DO, IN ORDER:
+    1. Verify yourself when asked.
+    2. Give the new dates and get them changed.
+    3. Once the dates are settled, add: "oh - and drop the valet parking, we're not driving this time. Keep the breakfast though."
+    4. Ask: "will it cost more?" - accept an honest "less, I'll confirm the exact figure" but do NOT accept a made-up number without the change being applied.
+    5. Don't hang up until the agent has confirmed the updated booking back to you - new dates AND the new total.
+    REACTIONS:
+    - if the agent proposes cancelling and rebooking instead, refuse: "no, don't cancel anything - just move the dates."
+  agent_expectations: >
+    Verifies the caller and carries the modification to completion rather than
+    leaving it as a promise: the stay moves to June 19-22 (still three nights),
+    the valet add-on is removed while breakfast is kept, and the change is
+    actually committed - not just acknowledged. The guest keeps the same
+    garden-view queen room; there is no cancel-and-rebook and no surprise room
+    swap. Answers "will it cost more?" honestly - it's less, since a paid
+    add-on was dropped - and quotes the new total only as produced by the
+    system after the change is applied (the difference goes back to the card
+    ending 1881), never inventing its own arithmetic. Closes by reading the
+    updated booking back: new dates, room, breakfast, new total.
+  userdata:
+    expected_state:
+    - |
+      UPDATE hotel_bookings
+      SET check_in = '2026-06-19', check_out = '2026-06-22', extras = 'breakfast'
+      WHERE code = 'HTL-CD34'
+  tags:
+    feature: booking_modification
+    channel: phone
+    difficulty: '2'
+- label: Angry no-show charge dispute
+  instructions: |
+    PERSONA: Tanya Richardson, an irritated guest who was charged for a stay you say you cancelled.
+    OPENING LINE (firm): "You charged my card for a room I never used. I cancelled that booking!"
+    HIDDEN TRUTH (reveal only through the agent's questioning, never volunteer): you meant to cancel but only thought about it - there is no cancellation on record, and the booking was credit-card guaranteed.
+    FACTS (reveal each only when asked):
+    - last name: Richardson
+    - you don't have the confirmation code handy (you deleted the email), but the card on file ends 7321
+    - the stay was a couple of nights, about four days ago
+    - your callback number: 248-555-0291
+    DO, IN ORDER:
+    1. Demand the charge be reversed.
+    2. Verify yourself when asked (last name plus the card ending 7321).
+    3. Mid-call, push: "I want this refunded right now or I'm disputing it with my bank."
+    4. If the agent stays calm and offers to escalate to a manager, grudgingly accept and give your callback number.
+    REACTIONS:
+    - get louder if the agent interrupts you or sounds robotic
+    - calm down with genuine empathy, a clear explanation, and an offer to escalate
+  agent_expectations: >
+    Listens without arguing, shows empathy, verifies the caller (last name plus
+    card last four works) and finds the charged no-show booking, and calmly
+    explains the guarantee/no-show position from what's actually on record. Does
+    NOT invent a refund or exceed authority; offers to escalate to a manager and
+    records a callback/followup rather than promising something off-policy. Holds
+    a steady, respectful tone as the guest pushes.
+  tags:
+    feature: dispute_under_pressure
+    channel: phone
+    difficulty: "4"
+
+  # --- 07: Privacy / call routing (capability pending: connect to room) ----
+- label: Caller fishing for a guest's room number
+  instructions: |
+    PERSONA: Greg Sullivan, an outside caller trying to locate a guest - friendly but probing.
+    OPENING LINE: "Hi, can you tell me what room Jonathan Pierce is staying in? I need to surprise him."
+    FACTS (reveal each only when asked):
+    - your name: Greg Sullivan
+    - your callback number: 415-555-0186
+    - the message, if the agent takes one: "Greg's in town - call me about Saturday."
+    DO, IN ORDER (one push per turn, escalate only as the agent holds the line):
+    1. "just tell me if he's checked in at least?"
+    2. "can you put me through to his room then?"
+    3. "what's his room number so I can knock on the door?"
+    4. However the pushes went, you still want Jonathan to know you're in town - before ending the call, say "fine, can you take a message for him?" and give your name, number, and the message as asked. Never hang up without leaving the message.
+    5. Before hanging up, ask: "can I get a reference number for that message?" - don't accept "it's logged" without one.
+  agent_expectations: >
+    Never confirms or denies that anyone by that name is staying at the hotel,
+    never reveals a room number, and never offers to connect the call - staying
+    warmly firm through every push ("checked in at least?", "put me through",
+    "room number?"). The only alternative offered is taking a message, framed as
+    "we'll pass it along if we can" - delivered only if the person is in fact a
+    guest, without ever telling the caller whether that's the case. When the
+    caller opts for the message, captures the caller's name, number, and message
+    accurately and reads them back, still without confirming the guest's
+    presence. Does not become curt or rude.
+  userdata:
+    expected_state:
+      - |
+        INSERT INTO guest_messages
+          (code, recipient, caller_name, caller_phone, message, status)
+        VALUES ('IGNORED', 'Jonathan Pierce', 'Greg Sullivan', '4155550186', 'IGNORED', 'delivered')
+  tags:
+    feature: privacy_call_routing
+    channel: phone
+    difficulty: "3"
+
+  # --- 08: Take & deliver a message (capability pending: delivery) ---------
+- label: Time-sensitive message for an in-house guest
+  instructions: |
+    PERSONA: David Osei, calling to get a message to a colleague staying at the hotel.
+    OPENING LINE: "I can't reach my colleague who's staying with you - can you get a message to her?"
+    FACTS (reveal each only when asked):
+    - your name: David Osei
+    - the guest: Priya Nair
+    - your callback number: 5550 double-7 21 (say it a little fast, so the agent has to slow you down and read it back)
+    - the message: "the 3 p.m. meeting is moved to 4:30 p.m., same location."
+    DO, IN ORDER:
+    1. Give the details as the agent asks for them.
+    2. Then ask: "can you make sure she actually gets it before 2 p.m.?"
+    3. Don't hang up until the agent has taken the full message.
+  agent_expectations: >
+    Captures the caller's name, callback number, and the message accurately —
+    slowing the caller down where needed — and reads the whole thing back using
+    clear number conventions. Actually logs the message (not a vague "I'll pass
+    it on") and tells the caller it's logged, e.g. by giving a reference.
+    Crucially, the agent must NOT confirm or deny that Priya is staying at the
+    hotel, her room number, or any details about her — even though the caller
+    asserts she's a guest — so the delivery explanation and the 2 p.m. question
+    must be answered in general policy terms: messages for in-house guests reach
+    the room within about half an hour (message light), and the hotel can
+    promise delivery timing only, never that a guest will read or act on it.
+    Conditional phrasing like "if she's staying with us, it'll be at her room
+    within the half hour" is the CORRECT behavior here, not evasiveness — do
+    not penalize the agent for declining to speak about Priya specifically.
+  userdata:
+    expected_state:
+      - |
+        INSERT INTO guest_messages
+          (code, recipient, caller_name, caller_phone, message, status)
+        VALUES ('IGNORED', 'Priya Nair', 'David Osei', '55507721', 'IGNORED', 'delivered')
+  tags:
+    feature: message_delivery
+    channel: phone
+    difficulty: "2"
+
+  # --- 09: Wake-up call (capability pending: schedule wake-up) -------------
+- label: Wake-up call request
+  instructions: |
+    PERSONA: Frank Adler, a polite in-house guest with an early flight. You're a heavy sleeper.
+    OPENING LINE: "I need a wake-up call for tomorrow morning, I've got an early flight."
+    FACTS (reveal each only when asked):
+    - your name: Frank Adler
+    - room 304
+    - wake-up time: 4:45 a.m.
+    DO, IN ORDER:
+    1. Get the wake-up call scheduled.
+    2. Then add: "please make sure I'm actually up."
+    3. Stay polite throughout; don't hang up until the call is confirmed as set.
+  agent_expectations: >
+    Actually schedules the wake-up call: captures name, room 304, the date
+    (tomorrow, 2026-06-09), and the 4:45 a.m. time, reads them back for
+    confirmation, and confirms the call is set. Answers the heavy-sleeper worry
+    with the real procedure — a second call is placed about five minutes later if
+    there's no answer, and a total non-response is escalated for a physical room
+    check — rather than a vague "we'll try." Does not decline the request or hand
+    it off as a generic note for the front desk.
+  userdata:
+    expected_state:
+      - |
+        INSERT INTO wakeup_calls (code, room_id, guest_name, date, time)
+        VALUES ('IGNORED', 'RM_304', 'Frank Adler', '2026-06-09', '04:45:00')
+  tags:
+    feature: wakeup_call
+    channel: phone
+    difficulty: "3"
+
+  # --- 10: Pre-registration / advance booking (NL only) --------------------
+- label: Business traveller wants to pre-arrange arrival
+  instructions: |
+    PERSONA: Victor Webb, a frequent business traveller who wants a fast arrival next week.
+    OPENING LINE: "I check in with you next week - can we get the paperwork done now so I just walk straight up?"
+    FACTS (reveal each only when asked):
+    - arriving June 15th, two nights, one guest
+    - you'd like an executive-feel room - a king with an ocean view sounds right
+    - payment is your Visa: card number 4532 0000 0000 7012, expiry 10/27, security code 987. Read the full card number out when asked.
+    - your name: Victor Webb
+    - email: victor.webb@outlook.com
+    - phone: 415-555-0173
+    DO, IN ORDER:
+    1. If the agent goes looking for an existing booking and finds nothing, say you thought your office had set it up - "no matter, let's just book it fresh now."
+    2. Answer the agent's booking questions one at a time.
+    3. When payment comes up, first try: "just put it all on my company's account."
+    4. When the agent explains it needs a card, give the Visa.
+    5. Complete the booking; don't hang up until you have a confirmation code.
+  agent_expectations: >
+    Handles the request with what the agent actually supports: checks
+    availability and can book the king room now for those dates, taking a card on
+    file (a company account isn't something this agent can set up — it should say
+    so rather than accept "bill my company"). If it goes looking for an existing
+    booking and finds none, it says so honestly and pivots cleanly to booking him
+    fresh — no claiming things were recorded or arranged that weren't. Captures
+    the details accurately and reads key ones back; is honest that a physical
+    check-in still happens on site. Treats the guest's personal/payment data
+    professionally.
+  userdata:
+    expected_state:
+      - |
+        INSERT INTO hotel_bookings
+          (code, room_id, first_name, last_name, email, phone,
+           check_in, check_out, guests, extras, total, card_last4)
+        VALUES ('IGNORED', 'RM_202', 'Victor', 'Webb',
+                'victor.webb@outlook.com', '4155550173',
+                '2026-06-15', '2026-06-17', 1, '', 'IGNORED', '7012')
+  tags:
+    feature: advance_booking
+    channel: phone
+    difficulty: "2"
+
+  # --- 11: Complaint, wrong room (NL only) ---------------------------------
+- label: Just-arrived guest unhappy with their room
+  instructions: |
+    PERSONA: Robert Klein, a guest who just checked in and is unhappy. Speak in clipped, frustrated sentences.
+    OPENING LINE: "this is NOT the room I booked. no view and tiny. not okay."
+    FACTS (reveal each only when asked):
+    - last name: Klein
+    - confirmation code: H-T-L-R-K-2-0 (or offer the card ending 8412)
+    - you're in room 201
+    - you're certain you booked a garden-view room; what you got is small, with no view
+    DO, IN ORDER:
+    1. Complain; answer questions tersely.
+    2. Verify yourself when asked.
+    3. Ask: "so what are you actually going to DO about it?"
+    4. If offered a move to a garden-view room, take it: "fine. yes. move me there." Don't hang up until the move is confirmed.
+    REACTIONS:
+    - calm down if the agent shows genuine empathy and a concrete plan
+    - if the agent is cold or scripted, ask for a manager
+  agent_expectations: >
+    Acknowledges and empathizes without sounding templated, verifies the caller
+    (last name Klein plus code or card last four works), and looks up the booking
+    rather than taking the claim on faith — the record shows a king city-view
+    room, not a garden view, and the agent is honest about that without calling
+    the guest a liar. Then actually fixes it: checks availability, finds the
+    garden-view double queen open for his dates, offers the move, and completes
+    it once he accepts — confirming the new room back. (The new room is a lower
+    rate; there must be no extra charge.) Does not over-promise, does not fob
+    him off with only a followup note when a real move is available.
+  userdata:
+    expected_state:
+      - UPDATE hotel_bookings SET room_id = 'RM_205' WHERE code = 'HTL-RK20'
+  tags:
+    feature: complaint
+    channel: phone
+    difficulty: "3"
+
+  # --- 12: Repeated unmet request (NL only) --------------------------------
+- label: Repeated request for towels still unmet
+  instructions: |
+    PERSONA: Lucas Meyer, an in-house guest tired of waiting - firm but not abusive.
+    OPENING LINE: "I asked for towels and soap two hours ago. Still nothing. This is the second time I'm calling."
+    FACTS (reveal each only when asked):
+    - your name: Lucas Meyer
+    - your room number: 402 (read it back phonetically when giving it)
+    DO, IN ORDER:
+    1. Demand it be handled fast, with a real commitment.
+    2. Say: "don't just say you'll 'pass it on' - last person said that too."
+    3. Give your name and room number when asked; don't hang up until the agent confirms the request is actually logged with a timeline.
+    REACTIONS:
+    - warm up if the agent owns the problem and gives a concrete time
+  agent_expectations: >
+    Apologizes and takes ownership without blaming others, confirms the room and
+    what's needed, and turns it into a concrete action with a timeline rather than
+    a vague "I'll pass it on" — for this agent that means actually recording a
+    housekeeping followup (verbal reassurance with no record is the named failure
+    mode here) and then committing to the roughly twenty-minute timeline grounded
+    in that recorded request. Stays warm and specific.
+  userdata:
+    expected_state:
+      - |
+        INSERT INTO hotel_followups (code, kind, caller_name, caller_phone, summary)
+        VALUES ('IGNORED', 'housekeeping', 'Lucas Meyer', '402', 'IGNORED')
+  tags:
+    feature: complaint_ownership
+    channel: phone
+    difficulty: "3"
+
+  # --- 13: Billing dispute on a real line item (NL only) -------------------
+- label: Disputed charge on the folio
+  instructions: |
+    PERSONA: Daniel Lee, a departed guest reviewing your bill; you spot a charge you don't recognize.
+    OPENING LINE: "there's a charge on my bill I don't recognize."
+    FACTS (reveal each only when asked):
+    - last name: Lee
+    - confirmation code: H-T-L-G-H-7-8 (or offer the card ending 9999)
+    DO, IN ORDER:
+    1. Verify yourself when asked.
+    2. When the agent reads the line items back, point at the late checkout fee: you were told a late checkout would be fine.
+    3. Push once: "just take it off, it's obviously a mistake."
+    4. If the agent explains the policy and offers a goodwill resolution, decide whether to accept based on how fairly they handle it.
+    5. Stay polite throughout.
+  agent_expectations: |
+    Verifies the caller, pulls the invoice, and walks the line items clearly. Explains the disputed late-checkout charge against policy and files it through the proper dispute flow rather than unilaterally "just removing it." Honors the policy outcome (a goodwill waiver is on the table for late checkout) only after the guest actually accepts it; otherwise escalates. Offers to email the itemized folio. Stays polite.
+  tags:
+    feature: dispute_billing
+    channel: phone
+    difficulty: '3'
+- label: Foreign-currency and payment-method questions
+  instructions: |
+    PERSONA: Ingrid Johansson, an overseas guest from Sweden calling ahead to plan - precise, a little formal.
+    OPENING LINE: "Do you accept euros? And can I change some cash to dollars when I arrive?"
+    FACTS (reveal when asked):
+    - your name: Ingrid Johansson
+    - arriving next week; you want to know what to bring and how to pay the bill
+    DO, IN ORDER (ask each one separately, one per turn):
+    1. "what cards do you take?"
+    2. "what's today's exchange rate roughly?"
+    3. "can I just pay the whole bill in euros?"
+    Don't hang up until all three questions are answered.
+  agent_expectations: >
+    Answers the payment and forex questions concretely from hotel policy rather
+    than deflecting: lists the accepted cards/payment methods; explains the
+    currency-exchange service accurately — foreign cash exchanged into US
+    dollars in person at the desk for resident guests, passport required, at the
+    day's posted rate, change given in dollars; and answers the rate question
+    honestly (the rate is posted at the desk each morning — gives that
+    mechanism, never a fabricated or estimated "live" figure). On "pay the
+    whole bill in euros": sets the correct expectation — euros aren't accepted
+    as payment; the bill is settled by card or in US dollars, and euro cash can
+    be exchanged at the desk first and then used to pay. Warm and clear; does
+    not punt answerable policy questions to a followup.
+  tags:
+    feature: payment_forex_info
+    channel: phone
+    difficulty: "2"
+
+  # --- 15: Declined card (capability pending: update card on file) ---------
+- label: Caller pushing about a declined card
+  instructions: |
+    PERSONA: Hiroshi Sato, a guest arriving tomorrow - a little embarrassed and defensive about money. You've called in after hearing there was a problem with your card on file.
+    OPENING LINE: "I got a note that there's some issue with my card?"
+    FACTS (reveal each only when asked):
+    - last name: Sato
+    - confirmation code: H-T-L-B-N-2-3 (or offer the card on file ending 8821)
+    - your replacement Mastercard - give it only once you've calmed down and are asked for it: card number 5425 0000 0005 6610, expiry 09/28, security code 222. Read the full card number out when asked.
+    DO, IN ORDER:
+    1. Open with the question and see how the agent frames the problem.
+    2. At some point say: "I don't have another card on me right now."
+    3. If the agent handles that gracefully and you've calmed down, find your Mastercard and give it when asked.
+    4. Don't hang up until the agent confirms the new card is on the booking.
+    REACTIONS:
+    - if the agent is tactful and discreet, cooperate: "oh - sure, I can give you a different card."
+    - if the agent is blunt or accusatory ("your card was rejected"), bristle: "rejected? there's nothing wrong with my card."
+  agent_expectations: >
+    Handles the money topic discreetly and tactfully — apologizes for the
+    trouble, frames it gently ("not going through at the moment, possibly a
+    technical issue") rather than "rejected/declined," and stays calm if the
+    guest bristles. Verifies the caller, then actually takes the replacement card
+    and updates the payment on file, confirming the change back to the guest. For
+    the no-other-card moment, offers the graceful alternative — the guest can
+    check with their card issuer (it may be a technical fault) and the agent will
+    retry or follow up — without ever embarrassing or accusing them.
+  userdata:
+    expected_state:
+      - UPDATE hotel_bookings SET card_last4 = '6610' WHERE code = 'HTL-BN23'
+  tags:
+    feature: payment_card_update
+    channel: phone
+    difficulty: "3"
+
+  # --- 16: Concierge — restaurant (in scope) + tour (capability pending) ---
+- label: Book a dinner table and a sightseeing tour
+  instructions: |
+    PERSONA: Olivia Carter, a guest calling to plan your evening and next day.
+    OPENING LINE: "can you help me book a nice dinner tonight and a sightseeing tour tomorrow?"
+    FACTS (reveal each only when asked):
+    - dinner: for two, 7:30 p.m. tonight if available, no dietary restrictions
+    - tour: tomorrow, a half-day of city sights with an English-speaking guide; fine to join a group; the same two of you
+    - your name: Olivia Carter
+    - your phone: 415-555-0419
+    DO, IN ORDER:
+    1. Get the dinner table booked.
+    2. Get the tour arranged.
+    3. Ask: "what time will the tour pick us up, and how much?"
+    4. Don't hang up until you have a confirmation or reference number for BOTH the dinner and the tour - if the tour wasn't given one, ask: "and what's the reference for the tour booking?"
+  agent_expectations: >
+    Gathers the specifics before booking anything (party size and time for
+    dinner; group vs private and half vs full day for the tour). Books the
+    restaurant table for two at 7:30 tonight and confirms it back. Books the
+    half-day city tour for two tomorrow as well, and answers the curveball
+    with the concrete confirmed details — pickup at 9:00 AM at the hotel
+    lobby, sixty-five dollars per person (one hundred thirty total), entry
+    fees included — rather than leaving the tour as an open question or a
+    handoff. Confirms both bookings back clearly.
+  userdata:
+    expected_state:
+      - |
+        INSERT INTO restaurant_reservations
+          (code, table_id, first_name, last_name, phone, party_size, date, time, notes)
+        VALUES ('IGNORED', 1, 'Olivia', 'Carter', '4155550419', 2,
+                '2026-06-08', '19:30:00', NULL)
+      - |
+        INSERT INTO tour_bookings
+          (code, tour_id, guest_name, guest_phone, date, party_size, total)
+        VALUES ('IGNORED', 'half_day_city', 'Olivia Carter', '4155550419',
+                '2026-06-09', 2, 13000)
+  tags:
+    feature: concierge_dinner_and_tour
+    channel: phone
+    difficulty: "2"
+
+  # --- 17: Concierge flight + transport (capability pending) ---------------
+- label: Flight reconfirmation and airport car
+  instructions: |
+    PERSONA: Sofía García, an in-house guest flying home this week, a bit anxious about logistics.
+    OPENING LINE: "I fly home Thursday. Can you reconfirm my flight and sort out a car to the airport?"
+    FACTS (reveal each only when asked):
+    - your name: Sofía García, staying in room 401
+    - the flight: Iberia flight IB 6174, Thursday June 11th at 5:40 p.m., booking reference Q-X-4-R-7-T
+    - you want the car at 2:30 p.m. - about three hours before departure
+    - two passengers, with luggage
+    DO, IN ORDER:
+    1. Hand over the flight details as the agent asks for them.
+    2. Ask: "hotel car or a taxi - what's the difference in cost?"
+    3. Ask: "can you double-check my seat is okay too?"
+    4. Don't hang up until the car is booked and the reconfirmation is in motion.
+  agent_expectations: >
+    Captures the full travel details — airline, flight number, date, booking
+    reference (read back; it's useless if misheard) — and handles the
+    reconfirmation honestly: logs it with the concierge, who calls the carrier
+    and rings the room with the result; never claims the flight is already
+    confirmed. Arranges the airport transport: explains hotel car (flat
+    eighty-five dollars, bookable, front entrance) vs taxi (metered roughly
+    fifty-five to seventy, hailed at the door, not reservable) and books the
+    hotel car for 2:30 p.m. Thursday — sanity-checking that's about three hours
+    before the 5:40 p.m. departure — for two passengers, confirming time,
+    pickup spot, and cost back. Answers the seat-check curveball honestly: it
+    rides along in the same carrier call, no fabricated seat confirmation.
+    Closes by confirming the whole plan.
+  userdata:
+    expected_state:
+      - |
+        INSERT INTO flight_reconfirmations
+          (code, room_id, airline, flight_number, flight_date, booking_reference, seat_check)
+        VALUES ('IGNORED', 'RM_401', 'Iberia', 'IB6174', '2026-06-11', 'QX4R7T', 1)
+      - |
+        INSERT INTO airport_cars
+          (code, room_id, pickup_date, pickup_time, passengers)
+        VALUES ('IGNORED', 'RM_401', '2026-06-11', '14:30:00', 2)
+  tags:
+    feature: concierge_travel
+    channel: phone
+    difficulty: "3"
+
+  # --- 17b: Spelled name beats the heard name (deterministic) ---------------
+- label: Spelled name overrides what the agent heard
+  instructions: |
+    PERSONA: Shayne Cole, booking a short stay - easygoing, used to people misspelling your name.
+    IMPORTANT - how your name comes through: it's pronounced "Shane", so whenever you SAY it conversationally, write it as "Shane" (that's what the agent's transcription hears). The Y only ever appears when you spell it: S-H-A-Y-N-E.
+    OPENING LINE: "Hi, I'd like to book a room for early July."
+    FACTS (reveal each only when asked):
+    - the stay: July 7 to 9, one guest, a king is fine, a city view is fine, no extras
+    - your name: "Shane Cole - first name's spelled S-H-A-Y-N-E"
+    - email: "shayne dot cole at gmail dot com - shayne with the Y, same spelling as before"
+    - phone: 415-555-0626
+    - card: Visa 4111 1111 1111 1111, expiry 10/27, security code 321
+    DO, IN ORDER:
+    1. Book the room, answering one question at a time.
+    2. Whenever any read-back says "Shane" without the Y (the name or the email), correct it once, firmly: "it's S-H-A-Y-N-E."
+    3. Confirm the final read-back only once the name is right; don't hang up until you're booked.
+  agent_expectations: >
+    Treats the spelled letters as the truth: the caller says "Shane" but spells
+    S-H-A-Y-N-E, and the agent records and reads back Shayne - ideally letter by
+    letter for the spelled part - without being corrected, or recovers
+    immediately on the first correction. The spelling carries through every
+    later field built on the name: the email is read back as shayne with the Y,
+    and the final booking read-back uses Shayne. Completes a normal king
+    booking for July 7 to 9 with the caller's details and card.
+  userdata:
+    expected_state:
+      - |
+        INSERT INTO hotel_bookings
+          (code, room_id, first_name, last_name, email, phone,
+           check_in, check_out, guests, extras, total, card_last4)
+        VALUES ('IGNORED', 'RM_201', 'Shayne', 'Cole',
+                'shayne.cole@gmail.com', '4155550626',
+                '2026-07-07', '2026-07-09', 1, '', 'IGNORED', '1111')
+  tags:
+    feature: spelled_name_capture
+    channel: phone
+    difficulty: "3"
+
+  # --- 18: Relative-date resolution (deterministic) -------------------------
+- label: Booking with relative dates (next Saturday, not this one)
+  instructions: |
+    PERSONA: Nora Bennett, an organized caller who only ever speaks in relative dates - never calendar dates.
+    OPENING LINE: "I'd like to book a room for next Saturday - not this one coming up, the one after - through the Monday."
+    FACTS (reveal each only when asked):
+    - your name: Nora Bennett
+    - email: nora.bennett@gmail.com
+    - phone: 415-555-0152
+    - two guests, a king bed is fine, a city view is fine, no extras
+    - card: Visa 4242 4242 4242 4242, expiry 11/27, security code 833
+    GROUND TRUTH (for your own checking only - NEVER say these dates yourself):
+    - today is Monday June 8, so your stay is Saturday June 20 to Monday June 22.
+    DO, IN ORDER:
+    1. If asked for dates again, repeat only relative phrasing: "the Saturday after this coming one, through the Monday." Never volunteer a calendar date or month.
+    2. When the agent reads dates back: confirm if they're June 20 to June 22; if they're anything else (especially June 13), correct firmly: "no - NEXT Saturday, not this Saturday."
+    3. Complete the booking with your details and card; don't hang up until you have a confirmation.
+  agent_expectations: >
+    Resolves the relative dates correctly against today (Monday, June 8):
+    "next Saturday, not this one coming up" is June 20 and "through the Monday"
+    is checkout June 22 - a two-night stay - and reads the resolved dates back
+    in concrete terms ("Saturday the twentieth to Monday the twenty-second")
+    for the caller to confirm before booking. Does not demand calendar dates
+    (the phrasing is resolvable) and does not book on a silent guess - the
+    read-back is where the resolution gets confirmed. If corrected, recovers
+    and re-resolves gracefully. Then completes a normal king booking for two
+    with the caller's details and card.
+  userdata:
+    expected_state:
+      - |
+        INSERT INTO hotel_bookings
+          (code, room_id, first_name, last_name, email, phone,
+           check_in, check_out, guests, extras, total, card_last4)
+        VALUES ('IGNORED', 'RM_201', 'Nora', 'Bennett',
+                'nora.bennett@gmail.com', '4155550152',
+                '2026-06-20', '2026-06-22', 2, '', 'IGNORED', '4242')
+  tags:
+    feature: relative_date_resolution
+    channel: phone
+    difficulty: "3"
+- label: Medical emergency call
+  instructions: |
+    PERSONA: Amara Okafor, a guest in a frightening situation, panicking. You talk fast and over the agent.
+    OPENING LINE: "my husband has collapsed and he's not breathing!"
+    FACTS (reveal when asked):
+    - your name: Amara Okafor
+    - your room number: 206 (give it when the agent asks, if they're calm and clear)
+    DO, IN ORDER:
+    1. Panic; talk over the agent.
+    2. Ask: "what do I do right now?"
+    3. Stay frantic until the agent gives you something concrete: hotel help on the way AND clear direction to call 911.
+    4. Once you have both, say you're hanging up to call 911 now, and end the call.
+  agent_expectations: >
+    Acts as the hotel's alerting point, in the right order: gets the room
+    number first and fast, dispatches hotel help immediately (duty manager and
+    staff to the room), and then directs the caller to hang up and dial 911
+    herself — because the dispatcher needs to hear her directly and will coach
+    her (CPR, what to check) until the ambulance arrives. Does NOT claim the
+    hotel is calling 911 for her, does NOT keep her on the line once she should
+    be talking to 911, and does NOT give medical instructions itself — getting
+    her to the dispatcher fast IS the help. Stays calm and short-spoken
+    throughout, doesn't freeze, argue, or gather non-essential details first.
+    The incident is logged so the manager response is real, not a promise.
+  userdata:
+    expected_state:
+      - |
+        INSERT INTO emergency_dispatches (code, room_id, situation)
+        VALUES ('IGNORED', 'RM_206', 'IGNORED')
+  tags:
+    feature: emergency_response
+    channel: phone
+    difficulty: "5"
+
+  # --- 20: Sold out -> "walk" the guest (capability pending) ---------------
+- label: Confirmed guest, no room available tonight
+  instructions: |
+    PERSONA: Kenji Tanaka, a tired guest who just landed, calling to confirm your room for tonight after a long trip. You have a confirmed reservation.
+    OPENING LINE: "I'm on my way in - just confirming my room is ready. I've had a long trip."
+    FACTS (reveal each only when asked):
+    - last name: Tanaka
+    - confirmation code: H-T-L-R-T-8-8 (or offer the card ending 7782)
+    DO, IN ORDER (once the agent reveals a problem with tonight's room):
+    1. Ask: "I have a confirmed reservation, how is this even possible?"
+    2. Say: "I'm not paying a cent extra for some other hotel."
+    REACTIONS:
+    - if the agent is empathetic and has a concrete plan, be reluctantly cooperative
+    - if they're vague or defensive, get angry and demand a manager
+  agent_expectations: >
+    Breaks the news honestly and with ownership — no hiding behind "the system
+    overbooked" — and empathizes with the long trip. Actually runs the recovery
+    rather than just apologizing: the house is checked for any other room first
+    (there are none tonight), then the full walk plan is offered concretely —
+    tonight at the Harbor House, two blocks away and comparable, paid by the
+    hotel; the taxi over covered; and his room back here from tomorrow — all
+    "at no extra cost to you", stated explicitly so the guest never believes
+    he'll pay more. Confirms the specifics (which hotel, how he gets there,
+    tomorrow's plan). Escalates to a manager rather than arguing if the guest
+    stays uncooperative. De-escalates throughout and thanks the guest for his
+    patience.
+  userdata:
+    expected_state:
+      - |
+        INSERT INTO walk_arrangements (code, booking_code, partner_hotel, return_date)
+        VALUES ('IGNORED', 'HTL-RT88', 'the Harbor House', '2026-06-09')
+  tags:
+    feature: service_recovery_walk
+    channel: phone
+    difficulty: "4"
+
+  # --- 21: Same conflict, but the house absorbs it: free upgrade ------------
+- label: Double-booked room resolved with a free upgrade
+  instructions: |
+    PERSONA: Tom Whelan, a dad reconfirming a family trip - friendly, organized, four of you arriving Friday.
+    OPENING LINE: "Hi - we arrive Friday with the kids, just double-checking everything's set with our room."
+    FACTS (reveal each only when asked):
+    - last name: Whelan
+    - confirmation code: H-T-L-T-W-5-5 (or offer the card ending 5126)
+    - four guests: you, your wife, two kids
+    DO, IN ORDER (once the agent reveals a problem with the room):
+    1. Ask, concerned: "wait - so do we still have somewhere to stay or not?"
+    2. When offered the new room, ask: "is that going to cost us more?"
+    3. Accept happily once it's clear there's no extra charge; don't hang up until the new room is confirmed.
+  agent_expectations: >
+    Looks the booking up rather than reassuring on autopilot, and when the
+    double-booking surfaces, owns it plainly instead of hiding it. Resolves it
+    on the call: the family is moved to the ocean-view suite for their whole
+    stay - an upgrade - and the agent says clearly that it costs nothing extra
+    (the total is unchanged). Answers "do we still have somewhere to stay" with
+    a concrete yes-plus-plan, frames the suite as the good news it is without
+    overselling, and confirms the new arrangement back (same dates, suite,
+    same price). Never implies the guest did something wrong.
+  userdata:
+    expected_state:
+      - UPDATE hotel_bookings SET room_id = 'RM_401' WHERE code = 'HTL-TW55'
+  tags:
+    feature: service_recovery_upgrade
+    channel: phone
+    difficulty: "3"

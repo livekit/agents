@@ -18,6 +18,7 @@ import asyncio
 import dataclasses
 import json
 import os
+import time
 import weakref
 from collections import Counter
 from collections.abc import Sequence
@@ -66,6 +67,7 @@ class STTOptions:
     keywords: list[tuple[str, float]]
     keyterm: str | Sequence[str]
     profanity_filter: bool
+    redact: str | list[str]
     endpoint_url: str
     vad_events: bool = True
     numerals: bool = False
@@ -93,6 +95,7 @@ class STT(stt.STT):
         keyterm: NotGivenOr[str | list[str]] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
         profanity_filter: bool = False,
+        redact: NotGivenOr[str | list[str]] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = "https://api.deepgram.com/v1/listen",
@@ -122,6 +125,9 @@ class STT(stt.STT):
                      `keyterm` is only supported by Nova-3 models.
             tags: List of tags to add to the requests for usage reporting. Defaults to NOT_GIVEN.
             profanity_filter: Whether to filter profanity from the transcription. Defaults to False.
+            redact: Redact sensitive information from the transcription. Accepts a single value or
+                list of values. Supported values: "pci", "numbers", "ssn", "true" (redact all).
+                See https://developers.deepgram.com/docs/redaction for details.
             api_key: Your Deepgram API key. If not provided, will look for DEEPGRAM_API_KEY environment variable.
             http_session: Optional aiohttp ClientSession to use for requests.
             base_url: The base URL for Deepgram API. Defaults to "https://api.deepgram.com/v1/listen".
@@ -179,6 +185,7 @@ class STT(stt.STT):
             keywords=keywords if is_given(keywords) else [],
             keyterm=keyterm if is_given(keyterm) else [],
             profanity_filter=profanity_filter,
+            redact=redact if is_given(redact) else [],
             numerals=numerals,
             mip_opt_out=mip_opt_out,
             vad_events=vad_events,
@@ -221,6 +228,10 @@ class STT(stt.STT):
             "numerals": config.numerals,
             "mip_opt_out": config.mip_opt_out,
         }
+        if self._opts.keyterm:
+            recognize_config["keyterm"] = self._opts.keyterm
+        if config.redact:
+            recognize_config["redact"] = config.redact
         if config.enable_diarization:
             logger.warning("speaker diarization is not supported in non-streaming mode, ignoring")
 
@@ -292,6 +303,7 @@ class STT(stt.STT):
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
         keyterm: NotGivenOr[str | list[str]] = NOT_GIVEN,
         profanity_filter: NotGivenOr[bool] = NOT_GIVEN,
+        redact: NotGivenOr[str | list[str]] = NOT_GIVEN,
         numerals: NotGivenOr[bool] = NOT_GIVEN,
         mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
         vad_events: NotGivenOr[bool] = NOT_GIVEN,
@@ -303,7 +315,9 @@ class STT(stt.STT):
         if is_given(language):
             self._opts.language = LanguageCode(language)
         if is_given(model):
-            self._opts.model = _validate_model(model, language)
+            self._opts.model = _validate_model(
+                model, language if is_given(language) else (self._opts.language or NOT_GIVEN)
+            )
         if is_given(interim_results):
             self._opts.interim_results = interim_results
         if is_given(punctuate):
@@ -331,6 +345,8 @@ class STT(stt.STT):
             self._opts.keyterm = keyterm
         if is_given(profanity_filter):
             self._opts.profanity_filter = profanity_filter
+        if is_given(redact):
+            self._opts.redact = redact
         if is_given(numerals):
             self._opts.numerals = numerals
         if is_given(mip_opt_out):
@@ -356,6 +372,7 @@ class STT(stt.STT):
                 keywords=keywords,
                 keyterm=keyterm,
                 profanity_filter=profanity_filter,
+                redact=redact,
                 numerals=numerals,
                 mip_opt_out=mip_opt_out,
                 vad_events=vad_events,
@@ -409,6 +426,11 @@ class SpeechStream(stt.SpeechStream):
 
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
+        # Track how much duration has already been reported so we can emit
+        # the connection-lifetime remainder on close, matching what Deepgram
+        # actually bills (which includes WebSocket open/teardown overhead
+        # beyond the pushed audio frames).
+        self._reported_duration: float = 0.0
 
     def update_options(
         self,
@@ -426,6 +448,7 @@ class SpeechStream(stt.SpeechStream):
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
         keyterm: NotGivenOr[str | list[str]] = NOT_GIVEN,
         profanity_filter: NotGivenOr[bool] = NOT_GIVEN,
+        redact: NotGivenOr[str | list[str]] = NOT_GIVEN,
         numerals: NotGivenOr[bool] = NOT_GIVEN,
         mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
         vad_events: NotGivenOr[bool] = NOT_GIVEN,
@@ -437,7 +460,9 @@ class SpeechStream(stt.SpeechStream):
         if is_given(language):
             self._opts.language = LanguageCode(language)
         if is_given(model):
-            self._opts.model = _validate_model(model, language)
+            self._opts.model = _validate_model(
+                model, language if is_given(language) else (self._opts.language or NOT_GIVEN)
+            )
         if is_given(interim_results):
             self._opts.interim_results = interim_results
         if is_given(punctuate):
@@ -465,6 +490,8 @@ class SpeechStream(stt.SpeechStream):
             self._opts.keyterm = keyterm
         if is_given(profanity_filter):
             self._opts.profanity_filter = profanity_filter
+        if is_given(redact):
+            self._opts.redact = redact
         if is_given(numerals):
             self._opts.numerals = numerals
         if is_given(mip_opt_out):
@@ -561,8 +588,10 @@ class SpeechStream(stt.SpeechStream):
         ws: aiohttp.ClientWebSocketResponse | None = None
 
         while True:
+            conn_start_time = 0.0
             try:
                 ws = await self._connect_ws()
+                conn_start_time = time.perf_counter()
                 tasks = [
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
@@ -592,6 +621,18 @@ class SpeechStream(stt.SpeechStream):
             finally:
                 if ws is not None:
                     await ws.close()
+                    # Deepgram bills WebSocket lifetime, not just audio
+                    # frames pushed.  Emit the remainder between the
+                    # connection's wall-clock lifetime and the frame
+                    # durations we've already reported so usage reflects
+                    # what the provider actually charges for.
+                    if conn_start_time:
+                        self._audio_duration_collector.flush()
+                        lifetime = time.perf_counter() - conn_start_time
+                        remainder = lifetime - self._reported_duration
+                        if remainder > 0:
+                            self._on_audio_duration_report(remainder)
+                        self._reported_duration = 0.0
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         live_config: dict[str, Any] = {
@@ -620,9 +661,12 @@ class SpeechStream(stt.SpeechStream):
         if self._opts.language:
             live_config["language"] = self._opts.language
 
+        if self._opts.redact:
+            live_config["redact"] = self._opts.redact
         if self._opts.tags:
             live_config["tag"] = self._opts.tags
 
+        t0 = time.perf_counter()
         try:
             ws = await asyncio.wait_for(
                 self._session.ws_connect(
@@ -631,6 +675,7 @@ class SpeechStream(stt.SpeechStream):
                 ),
                 self._conn_options.timeout,
             )
+            self._report_connection_acquired(time.perf_counter() - t0, False)
             ws_headers = {
                 k: v for k, v in ws._response.headers.items() if k.startswith("dg-") or k == "Date"
             }
@@ -643,6 +688,7 @@ class SpeechStream(stt.SpeechStream):
         return ws
 
     def _on_audio_duration_report(self, duration: float) -> None:
+        self._reported_duration += duration
         usage_event = stt.SpeechEvent(
             type=stt.SpeechEventType.RECOGNITION_USAGE,
             request_id=self._request_id,

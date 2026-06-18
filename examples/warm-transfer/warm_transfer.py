@@ -13,8 +13,7 @@ from livekit.agents import (
 )
 from livekit.agents.beta.workflows import WarmTransferTask
 from livekit.agents.llm import ToolError, function_tool
-from livekit.plugins import noise_cancellation, silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
+from livekit.plugins import noise_cancellation
 
 logger = logging.getLogger("warm-transfer")
 
@@ -63,6 +62,11 @@ class SupportAgent(Agent):
                 sip_trunk_id=SIP_TRUNK_ID,
                 sip_number=SIP_NUMBER,
                 chat_ctx=self.chat_ctx,
+                # to reach an extension behind an IVR, pass DTMF tones to send once
+                # answered, e.g. dtmf="wwww1234#" (each `w` pauses ~0.5s):
+                # dtmf=SUPERVISOR_EXTENSION,
+                # give up if the supervisor doesn't pick up within 25s:
+                # ringing_timeout=25,
                 # add extra instructions for summarization
                 # you can also customize the entire instructions by overriding the `get_instructions` method
                 extra_instructions=SUMMARY_INSTRUCTIONS,
@@ -91,11 +95,9 @@ server = AgentServer()
 @server.rtc_session(agent_name="sip-inbound")
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
-        vad=silero.VAD.load(),
         llm="openai/gpt-4.1-mini",
         stt="deepgram/nova-3:en",
         tts="cartesia/sonic-3:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
-        turn_detection=MultilingualModel(),
     )
 
     support_agent = SupportAgent()

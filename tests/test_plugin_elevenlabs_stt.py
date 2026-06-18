@@ -1,0 +1,125 @@
+"""Unit tests for ElevenLabs STT plugin configuration."""
+
+from __future__ import annotations
+
+import pytest
+
+from livekit.agents import stt
+from livekit.agents.types import NOT_GIVEN
+from livekit.plugins.elevenlabs import stt as elevenlabs_stt
+
+pytestmark = pytest.mark.plugin("elevenlabs")
+
+
+class _EventSink:
+    def __init__(self) -> None:
+        self.events: list[stt.SpeechEvent] = []
+
+    def send_nowait(self, event: stt.SpeechEvent) -> None:
+        self.events.append(event)
+
+
+def _new_stream(*, server_vad=NOT_GIVEN) -> elevenlabs_stt.SpeechStream:
+    stream = object.__new__(elevenlabs_stt.SpeechStream)
+    stream._opts = elevenlabs_stt.STTOptions(
+        model_id="scribe_v2_realtime",
+        api_key="test-key",
+        base_url=elevenlabs_stt.API_BASE_URL_V1,
+        language_code=None,
+        tag_audio_events=True,
+        include_timestamps=False,
+        sample_rate=16000,
+        server_vad=server_vad,
+        keyterms=NOT_GIVEN,
+        no_verbatim=False,
+    )
+    stream._language = None
+    stream._event_ch = _EventSink()
+    stream._speaking = False
+    stream._start_time_offset = 0.0
+    return stream
+
+
+def _committed_transcript(text: str) -> dict:
+    return {
+        "message_type": "committed_transcript",
+        "text": text,
+        "words": [
+            {"text": text, "start": 0.1, "end": 0.4},
+        ]
+        if text
+        else [],
+    }
+
+
+def test_server_vad_commit_emits_end_of_speech() -> None:
+    stream = _new_stream(server_vad={"vad_silence_threshold_secs": 0.5})
+
+    stream._process_stream_event(_committed_transcript("hello"))
+
+    assert [event.type for event in stream._event_ch.events] == [
+        stt.SpeechEventType.START_OF_SPEECH,
+        stt.SpeechEventType.FINAL_TRANSCRIPT,
+        stt.SpeechEventType.END_OF_SPEECH,
+    ]
+    assert stream._event_ch.events[1].alternatives[0].text == "hello"
+    assert stream._speaking is False
+
+
+def test_manual_commit_still_waits_for_empty_commit() -> None:
+    stream = _new_stream(server_vad=None)
+
+    stream._process_stream_event(_committed_transcript("hello"))
+
+    assert [event.type for event in stream._event_ch.events] == [
+        stt.SpeechEventType.START_OF_SPEECH,
+        stt.SpeechEventType.FINAL_TRANSCRIPT,
+    ]
+    assert stream._speaking is True
+
+    stream._process_stream_event(_committed_transcript(""))
+
+    assert stream._event_ch.events[-1].type == stt.SpeechEventType.END_OF_SPEECH
+    assert stream._speaking is False
+
+
+def _stt(**kwargs: object) -> elevenlabs_stt.STT:
+    return elevenlabs_stt.STT(api_key="test-key", model_id="scribe_v2_realtime", **kwargs)
+
+
+def test_no_verbatim_defaults_to_false() -> None:
+    assert _stt()._opts.no_verbatim is False
+
+
+def test_no_verbatim_can_be_enabled() -> None:
+    assert _stt(no_verbatim=True)._opts.no_verbatim is True
+
+
+def test_update_options_sets_no_verbatim() -> None:
+    instance = _stt()
+    assert instance._opts.no_verbatim is False
+    instance.update_options(no_verbatim=True)
+    assert instance._opts.no_verbatim is True
+
+
+def test_update_options_leaves_no_verbatim_untouched_when_not_given() -> None:
+    instance = _stt(no_verbatim=True)
+    instance.update_options(tag_audio_events=False)
+    assert instance._opts.no_verbatim is True
+
+
+def test_update_options_forwards_no_verbatim_to_active_streams() -> None:
+    # no_verbatim is a WebSocket query param applied at connect time, so a live
+    # realtime stream must be told to reconnect. Verify STT.update_options
+    # forwards it to active streams (which trigger a reconnect).
+    instance = _stt()
+    captured: dict[str, object] = {}
+
+    class _FakeStream:
+        def update_options(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    fake = _FakeStream()
+    instance._streams.add(fake)
+    instance.update_options(no_verbatim=True)
+    assert captured.get("no_verbatim") is True

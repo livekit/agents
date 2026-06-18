@@ -7,6 +7,8 @@ from livekit.plugins.google.llm import (
     _requires_thought_signatures,
 )
 
+pytestmark = pytest.mark.unit
+
 
 class TestGoogleThoughtSignatureFormatting:
     def test_injects_existing_thought_signature_for_function_call(self):

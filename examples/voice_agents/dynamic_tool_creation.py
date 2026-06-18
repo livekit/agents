@@ -18,7 +18,6 @@ from livekit.agents import (
     function_tool,
     inference,
 )
-from livekit.plugins import silero
 
 logger = logging.getLogger("grok-agent")
 logger.setLevel(logging.INFO)
@@ -115,7 +114,6 @@ async def entrypoint(ctx: JobContext):
     )
 
     session = AgentSession(
-        vad=silero.VAD.load(),
         stt=inference.STT("deepgram/nova-3"),
         llm=inference.LLM("openai/gpt-4.1-mini"),
         tts=inference.TTS("cartesia/sonic-3"),

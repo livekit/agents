@@ -31,6 +31,7 @@ session = AgentSession(
 - [`raw_function_description.py`](./raw_function_description.py) - Using raw JSON schema definitions for tool descriptions
 - [`silent_function_call.py`](./silent_function_call.py) - Executing function calls without verbal responses to user
 - [`long_running_function.py`](./long_running_function.py) - Handling long running function calls with interruption support
+- [`filler_agent.py`](./filler_agent.py) - Using acoustic fillers and progress updates during long-running tool calls
 
 ### ⚡ Real-time Models
 

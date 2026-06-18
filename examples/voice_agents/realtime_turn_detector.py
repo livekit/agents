@@ -3,9 +3,9 @@ import logging
 from dotenv import load_dotenv
 from google.genai import types  # noqa: F401
 
-from livekit.agents import Agent, AgentServer, AgentSession, JobContext, JobProcess, cli
-from livekit.plugins import deepgram, google, openai, silero  # noqa: F401
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
+from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli
+from livekit.agents.inference import TurnDetector
+from livekit.plugins import deepgram, google, openai  # noqa: F401
 
 logger = logging.getLogger("realtime-turn-detector")
 logger.setLevel(logging.INFO)
@@ -24,8 +24,7 @@ server = AgentServer()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
         allow_interruptions=True,
-        turn_detection=MultilingualModel(),
-        vad=ctx.proc.userdata["vad"],
+        turn_detection=TurnDetector(),
         stt=deepgram.STT(),
         # To use OpenAI Realtime API
         llm=openai.realtime.RealtimeModel(
@@ -47,12 +46,6 @@ async def entrypoint(ctx: JobContext):
     )
     await session.start(agent=Agent(instructions="You are a helpful assistant."), room=ctx.room)
 
-
-def prewarm(proc: JobProcess):
-    proc.userdata["vad"] = silero.VAD.load()
-
-
-server.setup_fnc = prewarm
 
 if __name__ == "__main__":
     cli.run_app(server)

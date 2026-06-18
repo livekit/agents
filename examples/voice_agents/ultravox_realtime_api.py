@@ -11,7 +11,6 @@ from livekit.agents import (
     function_tool,
     room_io,
 )
-from livekit.plugins import silero
 from livekit.plugins.ultravox.realtime import RealtimeModel
 
 logger = logging.getLogger("ultravox-agent")
@@ -28,7 +27,6 @@ class MyAgent(Agent):
                 voice="Jessica",
                 language_hint="en",
             ),
-            vad=silero.VAD.load(),
         )
 
     async def on_enter(self):

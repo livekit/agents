@@ -71,7 +71,7 @@ class VAD(agents.vad.VAD):
         deactivation_threshold: NotGivenOr[float] = NOT_GIVEN,
         # deprecated
         padding_duration: NotGivenOr[float] = NOT_GIVEN,
-    ) -> VAD:
+    ) -> agents.vad.VAD:
         """
         Load and initialize the Silero VAD model.
 
@@ -127,6 +127,32 @@ class VAD(agents.vad.VAD):
 
         if is_given(deactivation_threshold) and deactivation_threshold <= 0:
             raise ValueError("deactivation_threshold must be greater than 0")
+
+        # When the requested settings are compatible with the native
+        # implementation in `livekit-local-inference`, delegate to the new
+        # `livekit.agents.inference.VAD(model="silero")` so users get the
+        # COW-shared / faster path without changing their call sites. The
+        # native lib only supports 16 kHz with the bundled model file, so
+        # custom sample rate or `onnx_file_path` falls back to the legacy
+        # onnxruntime path.
+        if sample_rate == 16000 and not is_given(onnx_file_path):
+            if not force_cpu:
+                logger.warning(
+                    "force_cpu=False is ignored when using the bundled native "
+                    "VAD; the model runs CPU-only. Pass `onnx_file_path=...` "
+                    "to keep the legacy onnxruntime path that honors force_cpu."
+                )
+            from livekit.agents import inference
+
+            return inference.VAD(
+                model="silero",
+                min_speech_duration=min_speech_duration,
+                min_silence_duration=min_silence_duration,
+                prefix_padding_duration=prefix_padding_duration,
+                max_buffered_speech=max_buffered_speech,
+                activation_threshold=activation_threshold,
+                deactivation_threshold=deactivation_threshold,
+            )
 
         session = onnx_model.new_inference_session(force_cpu, onnx_file_path=onnx_file_path or None)
         opts = _VADOptions(
@@ -221,6 +247,10 @@ class VAD(agents.vad.VAD):
                 deactivation_threshold=deactivation_threshold,
             )
 
+    @property
+    def min_silence_duration(self) -> float | None:
+        return self._opts.min_silence_duration
+
 
 class VADStream(agents.vad.VADStream):
     def __init__(self, vad: VAD, opts: _VADOptions, model: onnx_model.OnnxModel) -> None:
@@ -311,9 +341,51 @@ class VADStream(agents.vad.VADStream):
 
         extra_inference_time = 0.0
 
+        def _reset_state() -> None:
+            nonlocal speech_buffer_index
+            nonlocal pub_speaking, pub_speech_duration, pub_silence_duration
+            nonlocal pub_current_sample, pub_timestamp
+            nonlocal speech_threshold_duration, silence_threshold_duration
+            nonlocal input_frames, inference_frames, resampler
+            nonlocal input_copy_remaining_fract, extra_inference_time
+
+            self._model.reset()
+            self._exp_filter = utils.ExpFilter(alpha=0.35)
+
+            speech_buffer_index = 0
+            self._speech_buffer_max_reached = False
+            if self._speech_buffer is not None:
+                self._speech_buffer.fill(0)
+
+            pub_speaking = False
+            pub_speech_duration = 0.0
+            pub_silence_duration = 0.0
+            pub_current_sample = 0
+            pub_timestamp = 0.0
+            speech_threshold_duration = 0.0
+            silence_threshold_duration = 0.0
+
+            input_frames = []
+            inference_frames = []
+            input_copy_remaining_fract = 0.0
+            extra_inference_time = 0.0
+
+            if self._input_sample_rate and self._input_sample_rate != self._opts.sample_rate:
+                resampler = rtc.AudioResampler(
+                    input_rate=self._input_sample_rate,
+                    output_rate=self._opts.sample_rate,
+                    quality=rtc.AudioResamplerQuality.QUICK,
+                )
+            else:
+                resampler = None
+
         async for input_frame in self._input_ch:
+            if isinstance(input_frame, self._FlushSentinel):
+                _reset_state()
+                continue
+
             if not isinstance(input_frame, rtc.AudioFrame):
-                continue  # ignore flush sentinel for now
+                continue
 
             if not self._input_sample_rate:
                 self._input_sample_rate = input_frame.sample_rate

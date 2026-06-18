@@ -9,7 +9,6 @@ from livekit.agents import AgentServer, JobContext, cli, inference
 from livekit.agents.utils.audio import audio_frames_from_file
 from livekit.agents.voice import Agent, AgentSession
 from livekit.agents.voice.events import CloseEvent, ErrorEvent
-from livekit.plugins import silero
 from livekit.rtc import ParticipantKind
 
 logger = logging.getLogger("my-worker")
@@ -30,7 +29,6 @@ async def entrypoint(ctx: JobContext):
         stt=inference.STT("deepgram/nova-3"),
         llm=inference.LLM("openai/gpt-4.1-mini"),
         tts=inference.TTS("cartesia/sonic-3"),
-        vad=silero.VAD.load(),
     )
 
     custom_error_audio = os.path.join(pathlib.Path(__file__).parent.absolute(), "error_message.ogg")

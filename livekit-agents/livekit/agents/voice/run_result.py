@@ -79,7 +79,17 @@ class RunResult(Generic[Run_T]):
 
     @property
     def events(self) -> list[RunEvent]:
-        """List of all recorded events generated during the run."""
+        """
+        List of recorded run events in chronological order.
+
+        This surface is intended for assertions in tests. Events may include
+        `ChatMessageEvent`, `FunctionCallEvent`,
+        `FunctionCallOutputEvent`, and `AgentHandoffEvent`.
+
+        Use `RunResult.events` when validating what happened in a run instead
+        of depending on lower-level session internals, room state, or raw media
+        artifacts.
+        """
         return self._recorded_items
 
     @functools.cached_property
@@ -169,12 +179,16 @@ class RunResult(Generic[Run_T]):
 
         handle.add_done_callback(self._mark_done_if_needed)
 
-    def _unwatch_handle(self, handle: SpeechHandle | asyncio.Task) -> None:
+    def _unwatch_handle(self, handle: SpeechHandle | asyncio.Task) -> bool:
+        if handle not in self._handles:
+            return False
+
         self._handles.discard(handle)
         handle.remove_done_callback(self._mark_done_if_needed)
 
         if isinstance(handle, SpeechHandle):
             handle._remove_item_added_callback(self._item_added)
+        return True
 
     def _mark_done_if_needed(self, handle: SpeechHandle | asyncio.Task | None) -> None:
         if isinstance(handle, SpeechHandle):
@@ -188,6 +202,13 @@ class RunResult(Generic[Run_T]):
             if self.__last_speech_handle is None:
                 self._done_fut.set_result(None)
                 return
+
+            # propagate speech handle errors (e.g. LLM failures)
+            if self.__last_speech_handle._done_fut.done():
+                exc = self.__last_speech_handle._done_fut.exception()
+                if exc is not None:
+                    self._done_fut.set_exception(exc)
+                    return
 
             final_output = self.__last_speech_handle._maybe_run_final_output
             if not isinstance(final_output, BaseException):
@@ -1033,6 +1054,43 @@ def mock_tools(agent: type[Agent], mocks: dict[str, Callable]) -> Generator[None
         yield
     finally:
         _MockToolsContextVar.reset(token)
+
+
+async def _run_mock(mock: Callable, *fnc_args: Any, **fnc_kwargs: Any) -> Any:
+    """Invoke a mock tool, trimming args/kwargs to whatever subset of the real
+    tool's parameters the mock actually declares."""
+    import inspect
+
+    sig = inspect.signature(mock)
+
+    pos_param_names = [
+        name
+        for name, param in sig.parameters.items()
+        if param.kind
+        in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        )
+    ]
+    max_positional = len(pos_param_names)
+    trimmed_args = fnc_args[:max_positional]
+    kw_param_names = [
+        name
+        for name, param in sig.parameters.items()
+        if param.kind
+        in (
+            inspect.Parameter.KEYWORD_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        )
+    ]
+    trimmed_kwargs = {k: v for k, v in fnc_kwargs.items() if k in kw_param_names}
+
+    bound = sig.bind_partial(*trimmed_args, **trimmed_kwargs)
+    bound.apply_defaults()
+
+    if inspect.iscoroutinefunction(mock):
+        return await mock(*bound.args, **bound.kwargs)
+    return mock(*bound.args, **bound.kwargs)
 
 
 def _format_events(events: list[RunEvent], *, selected_index: int | None = None) -> list[str]:

@@ -1,6 +1,10 @@
 import asyncio
 
+import pytest
+
 from livekit.agents.utils import aio
+
+pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
 
 
 async def test_channel():

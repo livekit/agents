@@ -191,15 +191,34 @@ class STT(stt.STT):
         self._streams.add(stream)
         return stream
 
-    def update_options(self, *, language: NotGivenOr[list[str] | str] = NOT_GIVEN) -> None:
+    def update_options(
+        self,
+        *,
+        language: NotGivenOr[list[str] | str] = NOT_GIVEN,
+        segmentation_silence_timeout_ms: NotGivenOr[int] = NOT_GIVEN,
+        segmentation_max_time_ms: NotGivenOr[int] = NOT_GIVEN,
+        segmentation_strategy: NotGivenOr[str] = NOT_GIVEN,
+    ) -> None:
         if is_given(language):
             if isinstance(language, str):
                 language = [LanguageCode(language)]
             else:
                 language = [LanguageCode(lg) for lg in language]
             self._config.language = language
-            for stream in self._streams:
-                stream.update_options(language=language)
+        if is_given(segmentation_silence_timeout_ms):
+            self._config.segmentation_silence_timeout_ms = segmentation_silence_timeout_ms
+        if is_given(segmentation_max_time_ms):
+            self._config.segmentation_max_time_ms = segmentation_max_time_ms
+        if is_given(segmentation_strategy):
+            self._config.segmentation_strategy = segmentation_strategy
+
+        for stream in self._streams:
+            stream.update_options(
+                language=language,
+                segmentation_silence_timeout_ms=segmentation_silence_timeout_ms,
+                segmentation_max_time_ms=segmentation_max_time_ms,
+                segmentation_strategy=segmentation_strategy,
+            )
 
 
 class SpeechStream(stt.SpeechStream):
@@ -214,8 +233,22 @@ class SpeechStream(stt.SpeechStream):
         self._loop = asyncio.get_running_loop()
         self._reconnect_event = asyncio.Event()
 
-    def update_options(self, *, language: list[str]) -> None:
-        self._opts.language = language
+    def update_options(
+        self,
+        *,
+        language: NotGivenOr[list[str]] = NOT_GIVEN,
+        segmentation_silence_timeout_ms: NotGivenOr[int] = NOT_GIVEN,
+        segmentation_max_time_ms: NotGivenOr[int] = NOT_GIVEN,
+        segmentation_strategy: NotGivenOr[str] = NOT_GIVEN,
+    ) -> None:
+        if is_given(language):
+            self._opts.language = language
+        if is_given(segmentation_silence_timeout_ms):
+            self._opts.segmentation_silence_timeout_ms = segmentation_silence_timeout_ms
+        if is_given(segmentation_max_time_ms):
+            self._opts.segmentation_max_time_ms = segmentation_max_time_ms
+        if is_given(segmentation_strategy):
+            self._opts.segmentation_strategy = segmentation_strategy
         self._reconnect_event.set()
 
     async def _run(self) -> None:
@@ -253,6 +286,7 @@ class SpeechStream(stt.SpeechStream):
                 wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
                 wait_stopped_task = asyncio.create_task(self._session_stopped_event.wait())
 
+                input_ended = False
                 try:
                     done, _ = await asyncio.wait(
                         [process_input_task, wait_reconnect_task, wait_stopped_task],
@@ -265,14 +299,22 @@ class SpeechStream(stt.SpeechStream):
                     if wait_stopped_task in done:
                         raise APIConnectionError("SpeechRecognition session stopped")
 
-                    if wait_reconnect_task not in done:
-                        break
-                    self._reconnect_event.clear()
+                    # session-stopped is handled above, so the wait unblocked
+                    # either because input ended (process_input drained) or a
+                    # reconnect was requested; reset the event in the latter case
+                    input_ended = wait_reconnect_task not in done
+                    if not input_ended:
+                        self._reconnect_event.clear()
                 finally:
                     await utils.aio.gracefully_cancel(process_input_task, wait_reconnect_task)
 
+                # close the push stream to flush finals for buffered audio before
+                # teardown, otherwise ending input truncates the transcript
                 self._stream.close()
                 await self._session_stopped_event.wait()
+
+                if input_ended:
+                    break
             finally:
 
                 def _cleanup() -> None:

@@ -17,7 +17,7 @@ from livekit.agents import (
     room_io,
     utils,
 )
-from livekit.plugins import openai, silero
+from livekit.plugins import openai
 
 load_dotenv()
 
@@ -76,7 +76,6 @@ async def entrypoint(ctx: JobContext):
 
     session = AgentSession(
         # vad is only needed for non-streaming STT implementations
-        vad=silero.VAD.load(),
     )
 
     @session.on("metrics_collected")

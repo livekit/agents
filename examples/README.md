@@ -26,7 +26,7 @@ A comprehensive collection of voice-based agent examples, including basic voice 
 
 ### 🖼️ [Avatar Agents](./avatar_agents/)
 
-Examples showing how to integrate visual avatars with voice agents, including integrations with various avatar providers like Anam, Avatario, Bey, BitHuman, Hedra, Simli, and Tavus.
+Examples showing how to integrate visual avatars with voice agents, including integrations with various avatar providers like Anam, Avatario, Bey, BitHuman, Simli, and Tavus.
 
 ### 🔄 [Warm Transfer](./warm-transfer/)
 
@@ -54,7 +54,7 @@ To run the examples, you'll need:
 
 - A [LiveKit Cloud](https://cloud.livekit.io) account or a local [LiveKit server](https://github.com/livekit/livekit)
 - API keys for the model providers you want to use in a `.env` file
-- Python 3.9 or higher
+- Python 3.10 or higher
 - [uv](https://docs.astral.sh/uv/)
 
 ### Environment file

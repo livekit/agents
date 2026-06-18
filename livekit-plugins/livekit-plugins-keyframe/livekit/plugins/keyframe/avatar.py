@@ -12,7 +12,7 @@ from livekit.agents import (
     get_job_context,
     utils,
 )
-from livekit.agents.voice.avatar import DataStreamAudioOutput
+from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
 from .api import DEFAULT_API_URL, KeyframeAPI
@@ -26,7 +26,7 @@ _AVATAR_AGENT_IDENTITY = "keyframe-avatar-agent"
 _AVATAR_AGENT_NAME = "keyframe-avatar-agent"
 
 
-class AvatarSession:
+class AvatarSession(BaseAvatarSession):
     """A Keyframe avatar session for the LiveKit Agents framework."""
 
     def __init__(
@@ -40,7 +40,7 @@ class AvatarSession:
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
-        self._room: rtc.Room | None = None
+        super().__init__()
         self._conn_options = conn_options
         self._avatar_participant_identity = (
             avatar_participant_identity
@@ -80,6 +80,14 @@ class AvatarSession:
         self._api_url = api_url_val
         self._api_key = api_key_val
 
+    @property
+    def avatar_identity(self) -> str:
+        return self._avatar_participant_identity
+
+    @property
+    def provider(self) -> str:
+        return "keyframe"
+
     async def start(
         self,
         agent_session: AgentSession,
@@ -89,6 +97,8 @@ class AvatarSession:
         livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
         livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
+        await super().start(agent_session, room)
+
         livekit_url = livekit_url or (os.getenv("LIVEKIT_URL") or NOT_GIVEN)
         livekit_api_key = livekit_api_key or (os.getenv("LIVEKIT_API_KEY") or NOT_GIVEN)
         livekit_api_secret = livekit_api_secret or (os.getenv("LIVEKIT_API_SECRET") or NOT_GIVEN)
@@ -143,12 +153,14 @@ class AvatarSession:
 
         self._room = room
 
-        agent_session.output.audio = DataStreamAudioOutput(
-            room=room,
-            destination_identity=self._avatar_participant_identity,
-            sample_rate=SAMPLE_RATE,
-            wait_remote_track=rtc.TrackKind.KIND_VIDEO,
-            clear_buffer_timeout=None,
+        agent_session.output.replace_audio_tail(
+            DataStreamAudioOutput(
+                room=room,
+                destination_identity=self._avatar_participant_identity,
+                sample_rate=SAMPLE_RATE,
+                wait_remote_track=rtc.TrackKind.KIND_VIDEO,
+                clear_buffer_timeout=None,
+            ),
         )
 
     async def set_emotion(self, emotion: Emotion) -> None:

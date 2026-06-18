@@ -1,16 +1,25 @@
 from __future__ import annotations
 
+import time
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .evals import EvaluationResult
 
 
+@dataclass
+class _TagEntry:
+    metadata: dict[str, Any] | None = None
+    timestamp: float = field(default_factory=time.time)
+
+
 class Tagger:
     """Tag sessions with metadata for observability.
 
-    The Tagger allows adding string tags (key:value format) to sessions.
-    Tags are uploaded to LiveKit Cloud at session end.
+    The Tagger allows adding string tags (key:value format) with optional
+    structured metadata to sessions. Tags and metadata are uploaded to
+    LiveKit Cloud at session end.
 
     Example:
         ```python
@@ -24,13 +33,19 @@ class Tagger:
         ctx.tagger.add("voicemail:true")
         ctx.tagger.add("language:es")
 
+        # Add tags with structured metadata
+        ctx.tagger.add(
+            "appointment:booked",
+            metadata={"slot_id": "abc123", "calendar": "cal.com"},
+        )
+
         # Remove a tag
         ctx.tagger.remove("voicemail:true")
         ```
     """
 
     def __init__(self) -> None:
-        self._tags: set[str] = set()
+        self._tags: dict[str, _TagEntry] = {}
         self._evaluation_results: list[dict[str, Any]] = []
         self._outcome_reason: str | None = None
 
@@ -41,8 +56,8 @@ class Tagger:
             reason: Optional reason for the success (stored separately from the tag).
         """
         # Remove any existing outcome tag
-        self._tags.discard("lk.fail")
-        self._tags.add("lk.success")
+        self._tags.pop("lk.fail", None)
+        self._tags["lk.success"] = _TagEntry()
         self._outcome_reason = reason
 
     def fail(self, reason: str | None = None) -> None:
@@ -52,17 +67,18 @@ class Tagger:
             reason: Optional reason for the failure (stored separately from the tag).
         """
         # Remove any existing outcome tag
-        self._tags.discard("lk.success")
-        self._tags.add("lk.fail")
+        self._tags.pop("lk.success", None)
+        self._tags["lk.fail"] = _TagEntry()
         self._outcome_reason = reason
 
-    def add(self, tag: str) -> None:
-        """Add a tag to the session.
+    def add(self, tag: str, *, metadata: dict[str, Any] | None = None) -> None:
+        """Add a tag to the session with optional structured metadata.
 
         Args:
             tag: The tag string in "key:value" format (e.g., "voicemail:true", "language:es").
+            metadata: Optional dict of structured metadata associated with this tag.
         """
-        self._tags.add(tag)
+        self._tags[tag] = _TagEntry(metadata=metadata)
 
     def remove(self, tag: str) -> None:
         """Remove a tag from the session.
@@ -70,17 +86,26 @@ class Tagger:
         Args:
             tag: The tag string to remove.
         """
-        self._tags.discard(tag)
+        self._tags.pop(tag, None)
 
     @property
     def tags(self) -> set[str]:
-        """All current tags."""
-        return self._tags.copy()
+        """All current tag strings."""
+        return set(self._tags.keys())
 
     @property
     def evaluations(self) -> list[dict[str, Any]]:
         """All evaluation results."""
         return self._evaluation_results.copy()
+
+    @property
+    def outcome(self) -> str | None:
+        """The session outcome: 'success', 'fail', or None if not set."""
+        if "lk.success" in self._tags:
+            return "success"
+        elif "lk.fail" in self._tags:
+            return "fail"
+        return None
 
     @property
     def outcome_reason(self) -> str | None:
@@ -93,11 +118,14 @@ class Tagger:
         Called automatically by JudgeGroup.evaluate().
         """
         for name, judgment in result.judgments.items():
-            self._tags.add(f"lk.judge.{name}:{judgment.verdict}")
+            tag = f"lk.judge.{name}:{judgment.verdict}"
+            self._tags[tag] = _TagEntry()
             self._evaluation_results.append(
                 {
                     "name": name,
+                    "tag": tag,
                     "verdict": judgment.verdict,
                     "reasoning": judgment.reasoning,
+                    "instructions": judgment.instructions,
                 }
             )

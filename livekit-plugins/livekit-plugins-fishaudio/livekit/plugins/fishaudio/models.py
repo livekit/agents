@@ -1,5 +1,7 @@
 from typing import Literal
 
-OutputFormat = Literal["wav", "pcm", "mp3"]
+TTSModels = Literal["s1", "s2-pro"]
 
-LatencyMode = Literal["normal", "balanced"]
+OutputFormat = Literal["wav", "pcm", "mp3", "opus"]
+
+LatencyMode = Literal["normal", "balanced", "low"]

@@ -10,7 +10,6 @@ from livekit.agents import (
     AgentSession,
     ChatContext,
     JobContext,
-    JobProcess,
     RunContext,
     cli,
     metrics,
@@ -18,7 +17,7 @@ from livekit.agents import (
 from livekit.agents.job import get_job_context
 from livekit.agents.llm import function_tool
 from livekit.agents.voice import MetricsCollectedEvent
-from livekit.plugins import deepgram, openai, silero
+from livekit.plugins import deepgram, openai
 
 # uncomment to enable Krisp BVC noise cancellation, currently supported on Linux and MacOS
 # from livekit.plugins import noise_cancellation
@@ -132,17 +131,9 @@ class StoryAgent(Agent):
 server = AgentServer()
 
 
-def prewarm(proc: JobProcess):
-    proc.userdata["vad"] = silero.VAD.load()
-
-
-server.setup_fnc = prewarm
-
-
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession[StoryData](
-        vad=ctx.proc.userdata["vad"],
         # any combination of STT, LLM, TTS, or realtime API can be used
         llm=openai.LLM(model="gpt-4.1-mini"),
         stt=deepgram.STT(model="nova-3"),

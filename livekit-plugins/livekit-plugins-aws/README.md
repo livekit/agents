@@ -90,7 +90,6 @@ The `realtime_joke_teller.py` example demonstrates both realtime and pipeline mo
 1. **Install dependencies:**
    ```bash
    pip install livekit-plugins-aws[realtime] \
-               livekit-plugins-silero \
                jokeapi \
                duckduckgo-search \
                python-weather \
@@ -331,13 +330,14 @@ if __name__ == "__main__":
 For more control over individual components, use pipeline mode:
 
 ```python
-from livekit.plugins import aws, silero
+from livekit.agents import inference
+from livekit.plugins import aws
 
 session = AgentSession(
     stt=aws.STT(),                    # Amazon Transcribe
     llm=aws.LLM(),                    # Nova 2 Lite (default)
     tts=aws.TTS(),                    # Amazon Polly
-    vad=silero.VAD.load(),
+    vad=inference.VAD(),
 )
 ```
 

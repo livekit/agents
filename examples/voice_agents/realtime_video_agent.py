@@ -11,7 +11,7 @@ from livekit.agents import (
     room_io,
     voice,  # noqa: F401
 )
-from livekit.plugins import google, silero
+from livekit.plugins import google
 
 logger = logging.getLogger("realtime-video-agent")
 
@@ -23,7 +23,6 @@ server = AgentServer()
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
-        vad=silero.VAD.load(),
         # both Gemini and OpenAI Realtime API support streaming video input
         llm=google.realtime.RealtimeModel(),
         # customize how video frames are sampled

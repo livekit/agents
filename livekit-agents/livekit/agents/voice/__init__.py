@@ -16,7 +16,9 @@ from .events import (
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
+    UserTurnExceededEvent,
 )
+from .remote_session import RemoteSession
 from .room_io import (
     _ParticipantAudioOutput,
     _ParticipantStreamTranscriptionOutput,
@@ -47,6 +49,8 @@ __all__ = [
     "AgentStateChangedEvent",
     "FunctionToolsExecutedEvent",
     "AgentFalseInterruptionEvent",
+    "RemoteSession",
+    "UserTurnExceededEvent",
     "TranscriptSynchronizer",
     "io",
     "room_io",

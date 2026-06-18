@@ -7,7 +7,7 @@ from typing import Any
 
 from livekit.agents import llm
 
-from .utils import group_tool_calls
+from .utils import convert_mid_conversation_instructions, group_tool_calls
 
 
 @dataclass
@@ -18,6 +18,8 @@ class BedrockFormatData:
 def to_chat_ctx(
     chat_ctx: llm.ChatContext, *, inject_dummy_user_message: bool = True
 ) -> tuple[list[dict], BedrockFormatData]:
+    chat_ctx = convert_mid_conversation_instructions(chat_ctx)
+
     messages: list[dict] = []
     system_messages: list[str] = []
     current_role: str | None = None

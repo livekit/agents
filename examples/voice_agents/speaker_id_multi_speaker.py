@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 
 from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli
 from livekit.agents.stt import MultiSpeakerAdapter
-from livekit.plugins import deepgram, openai, silero, speechmatics  # noqa: F401
+from livekit.plugins import deepgram, openai, speechmatics  # noqa: F401
 
 # Load environment variables from .env file
 # Required: SPEECHMATICS_API_KEY, OPENAI_API_KEY
@@ -54,7 +54,6 @@ server = AgentServer()
 @server.rtc_session()
 async def entrypoint(ctx: JobContext) -> None:
     session = AgentSession(
-        vad=silero.VAD.load(),
         llm=openai.LLM(),
         tts=openai.TTS(),
         stt=MultiSpeakerAdapter(
