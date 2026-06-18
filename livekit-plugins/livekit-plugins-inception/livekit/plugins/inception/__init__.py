@@ -18,6 +18,7 @@ See https://docs.livekit.io/agents/integrations/inception/ for more information.
 """
 
 from .llm import LLM as LLM
+from .log import logger
 from .version import __version__ as __version__
 
 __all__ = ["LLM", "__version__"]
@@ -27,7 +28,7 @@ from livekit.agents import Plugin
 
 class InceptionPlugin(Plugin):
     def __init__(self) -> None:
-        super().__init__(__name__, __version__, __package__)
+        super().__init__(__name__, __version__, __package__, logger)
 
 
 Plugin.register_plugin(InceptionPlugin())
