@@ -51,6 +51,20 @@ def convert_break_to_fish(text: str) -> str:
     return _BREAK_TIME_RE.sub(_sub, text)
 
 
+_EMPHASIS_RE = re.compile(r"<emphasis(?:\s[^>]*)?>([^<]*)</emphasis>", re.IGNORECASE)
+
+
+def convert_emphasis_to_fish(text: str) -> str:
+    """Convert ``<emphasis>word</emphasis>`` wrappers to Fish Audio's ``[emphasis] word``.
+
+    Fish exposes ``[emphasis]`` as an inline marker that stresses the word that
+    immediately follows it. The framework wraps the emphasized word in XML so the
+    same syntax stays consistent with the other tags; this rewrites the pair into
+    Fish's prefix-marker form.
+    """
+    return _EMPHASIS_RE.sub(lambda m: f"[emphasis] {m.group(1).strip()}", text)
+
+
 def strip_bracket_tags(text: str) -> str:
     """Strip square bracket tags like ``[laughs]``, ``[whisper]`` from text."""
     return re.sub(r"\[[^\]]+\]", "", text)
