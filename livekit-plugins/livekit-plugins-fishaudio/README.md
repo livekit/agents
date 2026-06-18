@@ -1,6 +1,6 @@
 # Fish Audio plugin for LiveKit Agents
 
-Support for voice synthesis with [Fish Audio](https://fish.audio/).
+Support for speech-to-text and voice synthesis with [Fish Audio](https://fish.audio/).
 
 - Docs: `https://docs.fish.audio/`
 
@@ -22,11 +22,28 @@ FISH_API_KEY=<your_api_key>
 
 ## Usage
 
+### Speech-to-text
+
 ```python
 from livekit.agents import AgentSession
 from livekit.plugins import fishaudio
 
-# Basic usage with env-based credentials
+stt = fishaudio.STT(language="en")
+
+session = AgentSession(
+    stt=stt,
+    # ... llm, tts, etc.
+)
+```
+
+To let Fish Audio auto-detect the spoken language, omit `language` or pass `language=None`.
+
+### Text-to-speech
+
+```python
+from livekit.agents import AgentSession
+from livekit.plugins import fishaudio
+
 tts = fishaudio.TTS()
 
 session = AgentSession(
