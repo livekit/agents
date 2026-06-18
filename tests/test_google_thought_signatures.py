@@ -27,9 +27,7 @@ class TestGoogleThoughtSignatureFormatting:
         ctx.add_message(role="user", content="hello")
         ctx.insert(FunctionCall(call_id="call_from_openai", name="tool", arguments="{}"))
         ctx.insert(
-            FunctionCallOutput(
-                call_id="call_from_openai", name="tool", output="ok", is_error=False
-            )
+            FunctionCallOutput(call_id="call_from_openai", name="tool", output="ok", is_error=False)
         )
 
         turns, _ = ctx.to_provider_format(format="google", thought_signatures={})
@@ -43,7 +41,7 @@ class TestGoogleThoughtSignatureFormatting:
         ctx.insert(FunctionCall(call_id="call_1", name="tool", arguments="{}"))
         ctx.insert(FunctionCallOutput(call_id="call_1", name="tool", output="ok", is_error=False))
 
-        turns, _ = ctx.to_provider_format(format="google", thought_signatures=None)
+        turns, _ = ctx.to_provider_format(format="google")
 
         function_call_part = turns[1]["parts"][0]
         assert "thought_signature" not in function_call_part

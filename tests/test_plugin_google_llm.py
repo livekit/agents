@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -63,3 +64,16 @@ class TestParsePartFunctionCall:
         chunk = llm_stream._parse_part("test-id", part)
 
         assert chunk is None
+
+    def test_stores_thought_signature_when_cache_is_none(self, llm_stream: LLMStream):
+        llm_stream._model = "gemini-2.5-flash"
+        llm_stream._llm._thought_signatures = None
+        part = SimpleNamespace(
+            function_call=SimpleNamespace(id="call_1", name="get_weather", args={"city": "Paris"}),
+            thought_signature=b"real_signature",
+        )
+
+        chunk = llm_stream._parse_part("test-id", part)
+
+        assert chunk is not None
+        assert llm_stream._llm._thought_signatures == {"call_1": b"real_signature"}
