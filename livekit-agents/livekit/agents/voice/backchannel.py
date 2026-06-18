@@ -65,13 +65,13 @@ class BackchannelOptions(TypedDict, total=False):
 
 # Two tiers: safe sounds near the threshold, risky words only at very low eot.
 DEFAULT_BACKCHANNEL_SOURCE: list[str | AudioSource | BackchannelConfig] = [
-    BackchannelConfig("mm-hmm", eot_range=(0.15, 1.0)),
-    BackchannelConfig("uh-huh", eot_range=(0.15, 1.0)),
-    BackchannelConfig("hmm", eot_range=(0.15, 1.0)),
-    BackchannelConfig("okay", eot_range=(0.0, 0.15)),
-    BackchannelConfig("yeah", eot_range=(0.0, 0.15)),
-    BackchannelConfig("right", eot_range=(0.0, 0.15)),
-    BackchannelConfig("i see", eot_range=(0.0, 0.15)),
+    BackchannelConfig("mm-hmm", eot_range=(0.15, 1.0), volume=0.5),
+    BackchannelConfig("uh-huh", eot_range=(0.15, 1.0), volume=0.5),
+    BackchannelConfig("hmm", eot_range=(0.15, 1.0), volume=0.5),
+    BackchannelConfig("okay", eot_range=(0.0, 0.15), volume=0.5),
+    BackchannelConfig("yeah", eot_range=(0.0, 0.15), volume=0.5),
+    BackchannelConfig("right", eot_range=(0.0, 0.15), volume=0.5),
+    BackchannelConfig("i see", eot_range=(0.0, 0.15), volume=0.5),
 ]
 
 DEFAULT_BACKCHANNEL_OPTIONS: BackchannelOptions = {

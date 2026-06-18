@@ -25,6 +25,7 @@ from livekit.agents import (
     AgentServer,
     AgentSession,
     AudioConfig,
+    BackchannelConfig,
     BackgroundAudioPlayer,
     FunctionTool,
     JobContext,
@@ -494,7 +495,33 @@ async def drive_thru_agent(ctx: JobContext) -> None:
             **presets.CUSTOMER_SERVICE,
             "backchannel": {
                 "frequency": 0.8,
-                "source": ["mm-hmm", "yep", "got it", "uh huh", "gotcha"],
+                "source": [
+                    BackchannelConfig(
+                        "mm-hmm",
+                        eot_range=(0.0, 1.0),
+                        volume=0.5,
+                    ),
+                    BackchannelConfig(
+                        "yep",
+                        eot_range=(0.0, 0.15),
+                        volume=0.5,
+                    ),
+                    BackchannelConfig(
+                        "got it",
+                        eot_range=(0.0, 0.15),
+                        volume=0.5,
+                    ),
+                    BackchannelConfig(
+                        "gotcha",
+                        eot_range=(0.0, 0.15),
+                        volume=0.5,
+                    ),
+                    BackchannelConfig(
+                        "mm-hmm",
+                        eot_range=(0.0, 1.0),
+                        volume=0.5,
+                    ),
+                ],
             },
         },
         max_tool_steps=10,
@@ -586,7 +613,7 @@ async def drive_thru_agent(ctx: JobContext) -> None:
     session.generate_reply(
         instructions=(
             "Warmly greet the customer with something like "
-            "\"Hey, welcome to McDonald's! What can I get for you?\""
+            '"Hey, welcome to McDonald\'s! What can I get for you?"'
         )
     )
 
