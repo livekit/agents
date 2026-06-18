@@ -1,0 +1,55 @@
+name: test-realtime
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch or revision to test"
+        required: false
+        type: string
+        default: "main"
+  pull_request:
+    paths:
+      - "livekit-plugins/livekit-plugins-openai/livekit/plugins/openai/realtime/**"
+      - "livekit-plugins/livekit-plugins-xai/livekit/plugins/xai/realtime/**"
+      - "tests/test_realtime/**"
+      - ".github/workflows/test-realtime.yml"
+
+jobs:
+  test-realtime:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.branch != '' && github.event.inputs.branch || github.ref }}
+          lfs: true
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Run Realtime tests
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          AZURE_OPENAI_DEPLOYMENT: ${{ secrets.AZURE_OPENAI_DEPLOYMENT }}
+          AZURE_OPENAI_API_VERSION: ${{ secrets.AZURE_OPENAI_API_VERSION }}
+          # XAI_API_KEY not set — xAI rate-limits GitHub Actions IPs (429 on ws handshake)
+        run: |
+          uv run pytest -v tests/test_realtime/ --tb=long -p no:xdist

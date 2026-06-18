@@ -1,0 +1,83 @@
+name: evals
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  evals:
+    # don't run tests for PRs on forks
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
+    strategy:
+      fail-fast: false
+      matrix:
+        example: [frontdesk, drive-thru]
+
+    runs-on: ubuntu-latest
+    name: ${{ matrix.example }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the project
+        run: uv sync --all-extras --dev
+
+      - name: Setup Google credentials
+        if: matrix.example == 'google'
+        shell: bash
+        run: |
+          printf '%s' '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' > tests/google.json
+
+      - name: Run tests
+        shell: bash
+        env:
+          LIVEKIT_EVALS_VERBOSE: 1
+          PLUGIN: ${{ matrix.example }}
+          LIVEKIT_URL: ${{ secrets.LIVEKIT_URL }}
+          LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_API_KEY }}
+          LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_API_SECRET }}
+          DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ELEVEN_API_KEY: ${{ secrets.ELEVEN_API_KEY }}
+          CARTESIA_API_KEY: ${{ secrets.CARTESIA_API_KEY }}
+          AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
+          AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }} # nit: doesn't have to be secret
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          ASSEMBLYAI_API_KEY: ${{ secrets.ASSEMBLYAI_API_KEY }}
+          FAL_KEY: ${{ secrets.FAL_KEY }}
+          PLAYHT_API_KEY: ${{ secrets.PLAYHT_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          PLAYHT_USER_ID: ${{ secrets.PLAYHT_USER_ID }}
+          RIME_API_KEY: ${{ secrets.RIME_API_KEY }}
+          SPEECHMATICS_API_KEY: ${{ secrets.SPEECHMATICS_API_KEY }}
+          GOOGLE_APPLICATION_CREDENTIALS: tests/google.json
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          NEUPHONIC_API_KEY: ${{ secrets.NEUPHONIC_API_KEY }}
+          RESEMBLE_API_KEY: ${{ secrets.RESEMBLE_API_KEY }}
+          SPEECHIFY_API_KEY: ${{ secrets.SPEECHIFY_API_KEY }}
+          HUME_API_KEY: ${{ secrets.HUME_API_KEY }}
+          SPITCH_API_KEY: ${{ secrets.SPITCH_API_KEY }}
+          LMNT_API_KEY: ${{ secrets.LMNT_API_KEY }}
+          INWORLD_API_KEY: ${{ secrets.INWORLD_API_KEY }}
+        run: uv run pytest examples/${{matrix.example}}/test_agent.py -s

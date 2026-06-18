@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main, 0.x]
+    paths-ignore:
+      - '**/*.md'
+  pull_request:
+    paths-ignore:
+      - '**/*.md'
+  workflow_dispatch:
+
+jobs:
+  ruff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install the project
+        run: uv sync --all-extras --dev
+
+      - name: Ruff
+        run: uv run ruff check --output-format=github .
+        continue-on-error: true
+        id: ruff-check
+
+      - name: Check format
+        run: uv run ruff format --check .
+        continue-on-error: true
+        id: ruff-format
+
+      - name: Report ruff errors
+        if: steps.ruff-check.outcome == 'failure' || steps.ruff-format.outcome == 'failure'
+        run: |
+          echo "::error::Ruff checks failed. Please run 'make fix' locally to automatically fix formatting and linting issues."
+          exit 1
+
+  type-check:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.13"]
+        
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install the project
+        run: uv sync --all-extras --dev
+
+      - name: Install pip
+        # mypy --install-types requires pip
+        run: uv pip install pip
+
+      - name: Check Types
+        run: uv run python scripts/check_types.py
