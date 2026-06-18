@@ -36,24 +36,24 @@ The example consists of three parts:
 You need a LiveKit configured SIP trunk to allow the agents to receive inbound calls and make outbound calls. See the [LiveKit telephony integration guide](https://docs.livekit.io/agents/start/telephony/) for instructions on setting up SIP trunks.
 
 1.  **Verify the dataset**
-    Edit `examples/bank-ivr/data.json` if you want to customize the mock banking data.
+    Edit `examples/telephony/bank-ivr/data.json` if you want to customize the mock banking data.
 
 2.  **Start the Mock Bank (The Target)**
     ```bash
-    uv run python examples/bank-ivr/ivr_system_agent.py dev
+    uv run python examples/telephony/bank-ivr/ivr_system_agent.py dev
     ```
     This agent acts as the IVR system waiting for calls.
 
 3.  **Start the Navigator Agent (The Caller)**
     Open a new terminal. This agent will wait for a dispatch job to tell it to call.
     ```bash
-    uv run python examples/bank-ivr/ivr_navigator_agent.py dev
+    uv run python examples/telephony/bank-ivr/ivr_navigator_agent.py dev
     ```
 
 4.  **Trigger the Call**
     Open a third terminal. This script tells the Navigator to call the Bank with a specific goal.
     ```bash
-    uv run python examples/bank-ivr/dial_bank_agent.py --phone "+1234567890" --request "check balance for all accounts I have"
+    uv run python examples/telephony/bank-ivr/dial_bank_agent.py --phone "+1234567890" --request "check balance for all accounts I have"
     ```
     *Note: Replace the phone number with the number that routes to your `ivr_system_agent.py` via your SIP setup.*
 
