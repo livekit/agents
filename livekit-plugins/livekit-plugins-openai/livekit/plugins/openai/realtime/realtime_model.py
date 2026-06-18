@@ -1615,14 +1615,15 @@ class RealtimeSession(
         audio_transcript: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         if "audio" in modalities:
-            self.send_event(
-                ConversationItemTruncateEvent(
-                    type="conversation.item.truncate",
-                    content_index=0,
-                    item_id=message_id,
-                    audio_end_ms=audio_end_ms,
+            if audio_end_ms > 0:
+                self.send_event(
+                    ConversationItemTruncateEvent(
+                        type="conversation.item.truncate",
+                        content_index=0,
+                        item_id=message_id,
+                        audio_end_ms=audio_end_ms,
+                    )
                 )
-            )
         elif utils.is_given(audio_transcript):
             # sync the forwarded text to the remote chat ctx
             chat_ctx = self.chat_ctx.copy(
