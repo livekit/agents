@@ -328,13 +328,6 @@ class OpenRouterProviderPreferences(TypedDict, total=False):
     max_price: dict[str, float]
 
 
-class CloudflareCustomCost(TypedDict):
-    """Custom per-token cost reported to the Cloudflare AI Gateway dashboard."""
-
-    per_token_in: float
-    per_token_out: float
-
-
 class CloudflareGatewayOptions(TypedDict, total=False):
     """Per-request Cloudflare AI Gateway options, mapped to ``cf-aig-*`` request headers.
 
@@ -355,7 +348,5 @@ class CloudflareGatewayOptions(TypedDict, total=False):
     """Delay between retries in milliseconds (``cf-aig-retry-delay``)."""
     backoff: Literal["constant", "linear", "exponential"]
     """Retry backoff strategy (``cf-aig-backoff``)."""
-    metadata: dict[str, str | int | bool]
-    """Custom metadata attached to the request (``cf-aig-metadata``)."""
-    custom_cost: CloudflareCustomCost
-    """Custom per-token cost for this request (``cf-aig-custom-cost``)."""
+    metadata: dict[str, str | int | bool] | str
+    """Custom metadata attached to the request (``cf-aig-metadata``); a dict or a JSON string."""

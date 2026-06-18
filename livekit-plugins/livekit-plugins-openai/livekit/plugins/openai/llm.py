@@ -945,10 +945,9 @@ class LLM(llm.LLM):
         *,
         model: str,
         account_id: str | None = None,
-        gateway_id: str = "default",
-        base_url: str | None = None,
         api_key: str | None = None,
-        cf_aig_token: str | None = None,
+        gateway_id: str | None = None,
+        base_url: str | None = None,
         gateway_options: CloudflareGatewayOptions | None = None,
         client: openai.AsyncClient | None = None,
         user: NotGivenOr[str] = NOT_GIVEN,
@@ -964,32 +963,38 @@ class LLM(llm.LLM):
         """
         Create a new instance of an LLM backed by the Cloudflare AI Gateway.
 
-        The gateway exposes a unified OpenAI-compatible endpoint. The endpoint URL is built
-        from ``account_id`` and ``gateway_id`` unless an explicit ``base_url`` is given, and the
-        model is a ``provider/model`` string.
+        Uses the gateway's OpenAI-compatible REST API
+        (``https://api.cloudflare.com/client/v4/accounts/<account_id>/ai/v1``). The endpoint URL
+        is built from ``account_id`` unless an explicit ``base_url`` is given, and the model is a
+        ``provider/model`` string.
 
         Args:
             model (str): Model in ``provider/model`` form, e.g.
                 ``"workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast"`` or ``"openai/gpt-4o"``.
-            account_id (str | None, optional): Cloudflare account ID used to build the gateway
+            account_id (str | None, optional): Cloudflare account ID used to build the endpoint
                 URL. Falls back to ``CLOUDFLARE_ACCOUNT_ID``. Required unless ``base_url`` is set.
-            gateway_id (str): Gateway name used to build the URL. Defaults to ``"default"``, which
-                Cloudflare creates automatically on first request.
-            base_url (str | None, optional): Full gateway endpoint, e.g.
-                ``"https://gateway.ai.cloudflare.com/v1/<account_id>/<gateway_id>/compat"``.
-                Overrides ``account_id`` / ``gateway_id`` when provided.
-            api_key (str | None, optional): Downstream provider key for "bring your own key"
-                mode, sent as the ``Authorization`` header. Falls back to ``CLOUDFLARE_API_KEY``.
-            cf_aig_token (str | None, optional): Gateway token sent as the
-                ``cf-aig-authorization`` header, required for authenticated gateways. Falls
-                back to ``CLOUDFLARE_AI_GATEWAY_TOKEN``.
+            api_key (str | None, optional): Cloudflare API token with the ``AI Gateway``
+                permission, sent as the ``Authorization: Bearer`` header. Falls back to
+                ``CLOUDFLARE_API_KEY``.
+            gateway_id (str | None, optional): Route through a specific gateway via the
+                ``cf-aig-gateway-id`` header. Defaults to the account's default gateway.
+            base_url (str | None, optional): Full endpoint URL, e.g.
+                ``"https://api.cloudflare.com/client/v4/accounts/<account_id>/ai/v1"``.
+                Overrides ``account_id`` when provided.
             gateway_options (CloudflareGatewayOptions | None, optional): Per-request gateway
-                options (caching, retries, timeout, metadata, custom cost), translated into
-                ``cf-aig-*`` request headers.
+                options (caching, retries, timeout, metadata), translated into ``cf-aig-*``
+                request headers.
 
         Returns:
             LLM: A configured LLM instance routed through the Cloudflare AI Gateway.
         """
+
+        api_key = api_key or os.environ.get("CLOUDFLARE_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "Cloudflare API token is required, either as argument or set "
+                "CLOUDFLARE_API_KEY environment variable"
+            )
 
         if base_url is None:
             account_id = account_id or os.environ.get("CLOUDFLARE_ACCOUNT_ID")
@@ -998,7 +1003,7 @@ class LLM(llm.LLM):
                     "Cloudflare account_id is required, either as argument or set "
                     "CLOUDFLARE_ACCOUNT_ID environment variable (or pass base_url directly)"
                 )
-            base_url = f"https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/compat"
+            base_url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1"
 
         parsed = urlparse(base_url)
         if parsed.scheme not in {"http", "https"}:
@@ -1006,18 +1011,9 @@ class LLM(llm.LLM):
         if not parsed.netloc:
             raise ValueError(f"URL '{base_url}' is missing a network location (e.g., domain name).")
 
-        cf_aig_token = cf_aig_token or os.environ.get("CLOUDFLARE_AI_GATEWAY_TOKEN")
-        api_key = api_key or os.environ.get("CLOUDFLARE_API_KEY")
-        if cf_aig_token is None and api_key is None:
-            raise ValueError(
-                "Cloudflare authentication is required: set api_key/CLOUDFLARE_API_KEY "
-                "(bring your own provider key) and/or cf_aig_token/CLOUDFLARE_AI_GATEWAY_TOKEN "
-                "(gateway token)"
-            )
-
         default_headers: dict[str, str] = {}
-        if cf_aig_token:
-            default_headers["cf-aig-authorization"] = f"Bearer {cf_aig_token}"
+        if gateway_id:
+            default_headers["cf-aig-gateway-id"] = gateway_id
 
         if gateway_options:
             if "cache_ttl" in gateway_options:
@@ -1035,16 +1031,14 @@ class LLM(llm.LLM):
             if "backoff" in gateway_options:
                 default_headers["cf-aig-backoff"] = gateway_options["backoff"]
             if "metadata" in gateway_options:
-                default_headers["cf-aig-metadata"] = json.dumps(gateway_options["metadata"])
-            if "custom_cost" in gateway_options:
-                default_headers["cf-aig-custom-cost"] = json.dumps(gateway_options["custom_cost"])
+                metadata = gateway_options["metadata"]
+                default_headers["cf-aig-metadata"] = (
+                    metadata if isinstance(metadata, str) else json.dumps(metadata)
+                )
 
         return LLM(
             model=model,
-            # The OpenAI SDK requires a non-empty api_key for the Authorization header; in
-            # gateway-stored-keys mode the real auth rides on cf-aig-authorization, so a
-            # placeholder is used (matches the with_ollama precedent).
-            api_key=api_key or "cloudflare",
+            api_key=api_key,
             base_url=base_url,
             client=client,
             user=user,
