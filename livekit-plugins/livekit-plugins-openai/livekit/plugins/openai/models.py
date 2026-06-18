@@ -348,5 +348,7 @@ class CloudflareGatewayOptions(TypedDict, total=False):
     """Delay between retries in milliseconds (``cf-aig-retry-delay``)."""
     backoff: Literal["constant", "linear", "exponential"]
     """Retry backoff strategy (``cf-aig-backoff``)."""
+    collect_log: bool
+    """Enable or disable logging for this request (``cf-aig-collect-log``)."""
     metadata: dict[str, str | int | bool] | str
     """Custom metadata attached to the request (``cf-aig-metadata``); a dict or a JSON string."""

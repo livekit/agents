@@ -98,6 +98,24 @@ def test_metadata_accepts_json_string() -> None:
     assert llm._opts.extra_headers["cf-aig-metadata"] == '{"room":"r1"}'
 
 
+def test_collect_log_emitted_true_or_false() -> None:
+    on = openai.LLM.with_cloudflare(
+        model="openai/gpt-4o",
+        account_id="acct",
+        api_key="cf-tok",
+        gateway_options={"collect_log": True},
+    )
+    assert on._opts.extra_headers["cf-aig-collect-log"] == "true"
+
+    off = openai.LLM.with_cloudflare(
+        model="openai/gpt-4o",
+        account_id="acct",
+        api_key="cf-tok",
+        gateway_options={"collect_log": False},
+    )
+    assert off._opts.extra_headers["cf-aig-collect-log"] == "false"
+
+
 def test_skip_cache_header_only_emitted_when_true() -> None:
     enabled = openai.LLM.with_cloudflare(
         model="openai/gpt-4o",

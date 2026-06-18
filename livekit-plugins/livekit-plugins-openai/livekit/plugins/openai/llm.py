@@ -1030,6 +1030,10 @@ class LLM(llm.LLM):
                 default_headers["cf-aig-retry-delay"] = str(gateway_options["retry_delay"])
             if "backoff" in gateway_options:
                 default_headers["cf-aig-backoff"] = gateway_options["backoff"]
+            if "collect_log" in gateway_options:
+                default_headers["cf-aig-collect-log"] = (
+                    "true" if gateway_options["collect_log"] else "false"
+                )
             if "metadata" in gateway_options:
                 metadata = gateway_options["metadata"]
                 default_headers["cf-aig-metadata"] = (
