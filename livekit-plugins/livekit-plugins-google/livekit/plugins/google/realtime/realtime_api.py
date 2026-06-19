@@ -62,6 +62,10 @@ KNOWN_GEMINI_API_MODELS: frozenset[str] = frozenset(
 )
 
 
+def _is_gemini_31_live(model: str) -> bool:
+    return model.lower().startswith("gemini-3.1-") and "live" in model.lower()
+
+
 def _validate_model_api_match(model: str, use_vertexai: bool) -> None:
     """
     Validate that the model name matches the API being used.
@@ -498,6 +502,7 @@ class RealtimeSession(llm.RealtimeSession):
         self._in_user_activity = False
         self._session_lock = asyncio.Lock()
         self._num_retries = 0
+        self._logged_gemini_31_instruction_warning = False
 
     async def _close_active_session(self) -> None:
         async with self._session_lock:
@@ -573,6 +578,17 @@ class RealtimeSession(llm.RealtimeSession):
                 return
 
             # Active session exists — send mid-session system instruction update (no reconnect needed)
+            if (
+                _is_gemini_31_live(self._opts.model)
+                and not self._logged_gemini_31_instruction_warning
+            ):
+                logger.warning(
+                    "Gemini 3.1 Live does not reliably support mid-session instruction "
+                    "updates; prefer starting a new session with updated instructions or "
+                    "passing dynamic context as user-visible conversation content."
+                )
+                self._logged_gemini_31_instruction_warning = True
+
             logger.debug("Updating instructions mid-session")
             self._send_client_event(
                 types.LiveClientContent(

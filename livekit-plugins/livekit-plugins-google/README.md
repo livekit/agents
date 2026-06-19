@@ -33,6 +33,13 @@ And these on Vertex AI:
 
 - gemini-live-2.5-flash-native-audio
 
+### Gemini 3.1 Live compatibility
+
+`gemini-3.1-flash-live-preview` does not reliably apply mid-session system instruction
+updates sent with `AgentSession.update_instructions()`. When dynamic context changes during a
+session, prefer starting a new session with the updated instructions or pass the context as
+user-visible conversation content instead of relying on a system-instruction update.
+
 References:
 
 - [Gemini API Models](https://ai.google.dev/gemini-api/docs/models)
