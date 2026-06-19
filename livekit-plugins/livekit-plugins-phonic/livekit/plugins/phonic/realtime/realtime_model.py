@@ -418,7 +418,7 @@ class RealtimeSession(llm.RealtimeSession):
         if self._config_sent:
             logger.warning(
                 "update_tools called after config was already sent. "
-                "Use _update_session for mid-session tool updates."
+                "Phonic does not support updating tools mid-session."
             )
             return
 
