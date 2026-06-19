@@ -46,7 +46,7 @@ class MyAgent(Agent):
 server = AgentServer()
 
 
-@server.rtc_session()
+@server.rtc_session(agent_name="my-agent-june-18")
 async def entrypoint(ctx: JobContext):
     session = AgentSession()
     await session.start(agent=MyAgent(), room=ctx.room)

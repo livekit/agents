@@ -328,7 +328,8 @@ class RealtimeSession(llm.RealtimeSession):
         diff_ops = llm.utils.compute_chat_ctx_diff(self._chat_ctx, chat_ctx)
         sent_tool_call_output = False
         sent_system_message = False
-        sent_user_message = False
+        buffered_user_text = False
+        last_item_id = chat_ctx.items[-1].id if chat_ctx.items else None
 
         for _, item_id in diff_ops.to_create:
             item = chat_ctx.get_by_id(item_id)
@@ -360,16 +361,21 @@ class RealtimeSession(llm.RealtimeSession):
                         )
                         sent_system_message = True
 
-            if isinstance(item, llm.ChatMessage) and item.role == "user":
+            # Only treat a user message as text input when it's appended at the tail of the context.
+            if (
+                isinstance(item, llm.ChatMessage)
+                and item.role == "user"
+                and item_id == last_item_id
+            ):
                 text = item.text_content
                 if text:
                     logger.info(f"Received user text input: {text}")
                     self._pending_user_text = text
-                    sent_user_message = True
+                    buffered_user_text = True
 
         self._chat_ctx = chat_ctx.copy()
 
-        if not sent_tool_call_output and not sent_system_message and not sent_user_message:
+        if not sent_tool_call_output and not sent_system_message and not buffered_user_text:
             logger.warning(
                 "update_chat_ctx called but no new tool call outputs to send. "
                 "Phonic does not support general chat context updates."
@@ -514,6 +520,7 @@ class RealtimeSession(llm.RealtimeSession):
                 # external cancel: drop the queued send if it hasn't gone out yet
                 if not send_task.done():
                     send_task.cancel()
+                self._pending_user_text = None
 
         fut.add_done_callback(_on_fut_done)
         return fut
