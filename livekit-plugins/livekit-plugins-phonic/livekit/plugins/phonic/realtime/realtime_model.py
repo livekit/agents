@@ -449,6 +449,11 @@ class RealtimeSession(llm.RealtimeSession):
         if self._session_should_close.is_set():
             return
 
+        # Close any active generation before swapping in the new context so a partial
+        # response from the outgoing agent isn't appended to the new chat_ctx. A reset also
+        # starts a fresh turn on the (reused) connection.
+        self._close_current_generation(interrupted=True)
+
         if is_given(instructions):
             self._opts.instructions = instructions
         if is_given(tools):
@@ -462,9 +467,6 @@ class RealtimeSession(llm.RealtimeSession):
             turn_history = self._build_turn_history(chat_ctx)
             if turn_history:
                 system_prompt += CONVERSATION_HISTORY_PREFIX + turn_history
-
-        # A reset starts a fresh turn on the (reused) connection.
-        self._close_current_generation(interrupted=True)
 
         if self._socket:
             logger.info("Sending mid-session reset to Phonic")
