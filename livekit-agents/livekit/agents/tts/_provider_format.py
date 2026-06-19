@@ -342,7 +342,7 @@ _INWORLD_HEALTHCARE: ExpressiveOptions = {
     ),
 }
 
-_INWORLD_CONVERSATIONAL: ExpressiveOptions = {
+_INWORLD_CASUAL: ExpressiveOptions = {
     "tts_instructions_template": Instructions(
         "Speak like a real person mid-conversation with a friend — present, reactive, opinionated, "
         "never flat or scripted. Your delivery is punchy and lively: react first, support second. "
@@ -487,7 +487,7 @@ _FISHAUDIO_CUSTOMER_SERVICE: ExpressiveOptions = {
     ),
 }
 
-_FISHAUDIO_CONVERSATIONAL: ExpressiveOptions = {
+_FISHAUDIO_CASUAL: ExpressiveOptions = {
     "tts_instructions_template": Instructions(
         "Speak like a real person mid-conversation with a friend — present, reactive, opinionated, "
         "never flat or scripted. React first, support second. Your baseline is bright and cheery — "

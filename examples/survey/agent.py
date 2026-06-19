@@ -357,7 +357,7 @@ async def entrypoint(ctx: JobContext):
         tts=inference.TTS("inworld/inworld-tts-2", voice="Nate"),
         vad=silero.VAD.load(),
         turn_detection=MultilingualModel(),
-        expressive=presets.CONVERSATIONAL,
+        expressive=presets.CASUAL,
         preemptive_generation=True,
     )
 
