@@ -48,14 +48,14 @@ class APIError(Exception):
 
         self.message = message
         self.body = body
-        self.retryable = retryable
+        self.retryable = retryable and not terminal
         self.terminal = terminal
 
     def __str__(self) -> str:
         return self.message
 
     def __repr__(self) -> str:
-        return f"{self.__class__.__name__}({self.message!r}, body={self.body!r}, retryable={self.retryable!r})"
+        return f"{self.__class__.__name__}({self.message!r}, body={self.body!r}, retryable={self.retryable!r}, terminal={self.terminal!r})"
 
 
 class APIStatusError(APIError):
@@ -97,6 +97,7 @@ class APIStatusError(APIError):
             f"message={self.message!r}",
             f"status_code={self.status_code}",
             f"retryable={self.retryable}",
+            f"terminal={self.terminal}",
         ]
         if self.request_id:
             parts.append(f"request_id={self.request_id}")
@@ -110,7 +111,8 @@ class APIStatusError(APIError):
             f"status_code={self.status_code!r}, "
             f"request_id={self.request_id!r}, "
             f"body={self.body!r}, "
-            f"retryable={self.retryable!r})"
+            f"retryable={self.retryable!r}, "
+            f"terminal={self.terminal!r})"
         )
 
 

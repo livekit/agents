@@ -337,8 +337,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             unrecoverable_error_message (str | AudioSource | None, optional): Spoken just
                 before the session closes on an unrecoverable error, so the agent isn't
                 silent. A ``str`` is synthesized via TTS (or played as-is if it's a file
-                path); an :data:`~livekit.agents.AudioSource` is played directly (use this
-                when TTS is the failed resource). ``None`` disables spoken errors. The
+                path); any other :data:`~livekit.agents.AudioSource` is played directly
+                (use this when TTS is the failed resource). ``None`` disables spoken errors. The
                 default speaks :data:`DEFAULT_UNRECOVERABLE_ERROR_MESSAGE` (English) only on
                 terminal errors; set your own for non-English agents. ``error``/``close``
                 events fire regardless.

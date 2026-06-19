@@ -1667,7 +1667,7 @@ class AgentActivity(RecognitionHooks):
         | llm.RealtimeModelError
         | inference.InterruptionDetectionError,
     ) -> None:
-        source: llm.LLM | llm.RealtimeModel | stt.STT | tts.TTS | None
+        source: llm.LLM | llm.RealtimeModel | stt.STT | tts.TTS | None = None
         if isinstance(error, (llm.LLMError, llm.RealtimeModelError)):
             source = self.llm
         elif isinstance(error, stt.STTError):
@@ -1680,7 +1680,8 @@ class AgentActivity(RecognitionHooks):
             return
 
         ev = ErrorEvent(error=error, source=source)
-        # emit before deciding: a user "error" handler may set ev.error.recoverable
+        # emit first before calling _on_error so user hooks take priority
+        # for in-place recoverable field update
         self._session.emit("error", ev)
         self._session._on_error(ev)
 

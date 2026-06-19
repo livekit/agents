@@ -26,4 +26,8 @@ class BuiltinAudioClip(enum.Enum):
         return str(_resource_stack.enter_context(as_file(file_path)))
 
 
+# Note: consumers interpret the `str` arm differently. AgentSession (error-message
+# playout) treats a str as a file path only when os.path.isfile() is true, otherwise
+# as text to synthesize via TTS; BackgroundAudioPlayer always treats a str as a file
+# path (no TTS fallback). The contracts genuinely differ, so there is no shared resolver.
 AudioSource = AsyncIterator[rtc.AudioFrame] | str | BuiltinAudioClip

@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import os
 import pathlib
 
 from dotenv import load_dotenv
@@ -24,8 +23,6 @@ server = AgentServer()
 
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
-    custom_error_audio = os.path.join(pathlib.Path(__file__).parent.absolute(), "error_message.ogg")
-
     session = AgentSession(
         stt=inference.STT("deepgram/nova-3"),
         llm=inference.LLM("openai/gpt-4.1-mini"),
@@ -33,7 +30,7 @@ async def entrypoint(ctx: JobContext):
         # play a pre-recorded file (or any AudioSource) before the session closes on an
         # unrecoverable error; bypasses TTS, so it's still heard when TTS is the failed
         # resource. A non-file str is synthesized through TTS instead.
-        unrecoverable_error_message=custom_error_audio,
+        unrecoverable_error_message=str(pathlib.Path(__file__).parent / "error_message.ogg"),
     )
 
     # Advanced path: for full control (e.g. continuing the conversation on recoverable

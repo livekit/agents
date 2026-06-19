@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from dataclasses import dataclass
 from typing import Any, Literal, cast
@@ -459,24 +460,20 @@ class LLMStream(llm.LLMStream):
         except openai.APITimeoutError:
             raise APITimeoutError(retryable=retryable) from None
         except openai.APIStatusError as e:
-            # a depleted project answers 429 with a structured `inference_quota_exceeded`
-            # JSON body. The openai SDK narrows a mapping body to its `error` value
-            # before raising — a bare string for gateway payloads — so re-parse the
-            # response to recover the full body.
+            # OpenAI's SDK stores only body["error"] on the exception; for gateway quota
+            # payloads that's a bare string, dropping the `type`/`category` fields we need,
+            # so re-parse the raw response to recover the full JSON body.
             body: object = e.body
             if not isinstance(body, dict):
-                try:
+                with contextlib.suppress(Exception):
                     body = e.response.json()
-                except Exception:
-                    body = e.body
 
-            quota_error = InferenceQuotaExceededError.from_response(
+            if quota_error := InferenceQuotaExceededError.from_response(
                 e.message,
                 status_code=e.status_code,
                 request_id=e.request_id,
                 body=body,
-            )
-            if quota_error is not None:
+            ):
                 raise quota_error from None
 
             raise APIStatusError(
