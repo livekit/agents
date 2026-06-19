@@ -1624,6 +1624,16 @@ class RealtimeSession(
                         audio_end_ms=audio_end_ms,
                     )
                 )
+            else:
+                remote_ids = {item.id for item in self._remote_chat_ctx.to_chat_ctx().items}
+                if message_id in remote_ids:
+                    self.send_event(
+                        ConversationItemDeleteEvent(
+                            type="conversation.item.delete",
+                            item_id=message_id,
+                            event_id=utils.shortuuid("chat_ctx_delete_"),
+                        )
+                    )
         elif utils.is_given(audio_transcript):
             # sync the forwarded text to the remote chat ctx
             chat_ctx = self.chat_ctx.copy(
