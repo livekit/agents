@@ -146,7 +146,7 @@ class ExpressiveOptions(TypedDict, total=False):
     Controls how TTS markup instructions and speaker context are injected into the LLM
     when expressive is enabled. All keys are optional; common shapes:
 
-    - ``{"preset": Preset.CONVERSATIONAL}`` — a domain preset, resolved to the active
+    - ``{"preset": Preset.CASUAL}`` — a domain preset, resolved to the active
       TTS provider's tuned tags (see ``voice.presets``). Prefer the ``presets.*`` constants.
     - ``{"preset": ..., "tts_instructions_append": "..."}`` — a preset plus your own
       rules appended after it resolves.

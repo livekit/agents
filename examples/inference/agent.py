@@ -79,7 +79,7 @@ async def entrypoint(ctx: JobContext) -> None:
             voice="Sarah",
             extra_kwargs={"delivery_mode": "CREATIVE"},
         ),
-        expressive=presets.CONVERSATIONAL,
+        expressive=presets.CASUAL,
         # Flip user_state to "away" after 10s of mutual silence so we can
         # check whether they're still there (default is 15s).
         user_away_timeout=10.0,

@@ -763,7 +763,7 @@ async def entrypoint(ctx: JobContext):
             voice="Luna",
             extra_kwargs={"delivery_mode": "CREATIVE", "speaking_rate": 1.1},
         ),
-        expressive=presets.HEALTHCARE,
+        expressive=presets.CUSTOMER_SERVICE,
         preemptive_generation=True,
         # Flip user_state to "away" after 10s of mutual silence so we can
         # check whether they're still there (default is 15s).
