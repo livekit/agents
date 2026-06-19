@@ -67,6 +67,7 @@ class _RealtimeOptions:
     no_input_poke_sec: NotGivenOr[float]
     no_input_poke_text: NotGivenOr[str]
     no_input_end_conversation_sec: NotGivenOr[float]
+    forbid_speech_after_tool_call: NotGivenOr[list[str]]
     conn_options: APIConnectOptions
     instructions: NotGivenOr[str] = NOT_GIVEN
 
@@ -118,6 +119,7 @@ class RealtimeModel(llm.RealtimeModel):
         no_input_poke_sec: NotGivenOr[float] = NOT_GIVEN,
         no_input_poke_text: NotGivenOr[str] = NOT_GIVEN,
         no_input_end_conversation_sec: NotGivenOr[float] = NOT_GIVEN,
+        forbid_speech_after_tool_call: NotGivenOr[list[str]] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         """
@@ -150,6 +152,14 @@ class RealtimeModel(llm.RealtimeModel):
             no_input_poke_text: Custom poke message text. Ignored when
                 ``generate_no_input_poke_text`` is True.
             no_input_end_conversation_sec: Seconds of silence before ending the conversation.
+            forbid_speech_after_tool_call: Names of tools after which Phonic should NOT
+                auto-generate a spoken reply. Use for tools that always hand off / trigger an
+                agent switch (e.g. advancing a task in a workflow). After such a tool, the
+                outgoing agent would otherwise speak a reply that the handoff's session reset
+                immediately cancels, producing a race / double-speak; forbidding speech lets
+                only the incoming agent speak. Only list tools that ALWAYS hand off — a listed
+                tool that returns without handing off will leave the agent silent. Tools not
+                listed keep the default behavior (a reply is generated after the tool output).
             conn_options: Retry/backoff and connection settings.
         """
         super().__init__(
@@ -204,6 +214,7 @@ class RealtimeModel(llm.RealtimeModel):
             no_input_poke_sec=no_input_poke_sec,
             no_input_poke_text=no_input_poke_text,
             no_input_end_conversation_sec=no_input_end_conversation_sec,
+            forbid_speech_after_tool_call=forbid_speech_after_tool_call,
             conn_options=conn_options,
         )
 
@@ -269,6 +280,7 @@ class RealtimeSession(llm.RealtimeSession):
         self._config_sent = False
         self._pending_tool_call_ids: set[str] = set()
         self._tool_definitions: list[dict] = []
+        self._forbid_speech_after_tool_call: set[str] = set()
         self._system_prompt_postfix: str = ""
 
     async def _close_active_session(self) -> None:
@@ -327,6 +339,7 @@ class RealtimeSession(llm.RealtimeSession):
         diff_ops = llm.utils.compute_chat_ctx_diff(self._chat_ctx, chat_ctx)
         sent_tool_call_output = False
         sent_system_message = False
+        forbid_speech = False
 
         for _, item_id in diff_ops.to_create:
             item = chat_ctx.get_by_id(item_id)
@@ -347,6 +360,8 @@ class RealtimeSession(llm.RealtimeSession):
                         )
                     )
                     sent_tool_call_output = True
+                    if item.name in self._forbid_speech_after_tool_call:
+                        forbid_speech = True
 
             if isinstance(item, llm.ChatMessage) and item.role in ("system", "developer"):
                 text = item.text_content
@@ -365,7 +380,10 @@ class RealtimeSession(llm.RealtimeSession):
                 "update_chat_ctx called but no new tool call outputs to send. "
                 "Phonic does not support general chat context updates."
             )
-        if sent_tool_call_output:
+        # Skip opening a new assistant turn when the tool forbids speech after its call:
+        # Phonic will not speak, so the generation would otherwise dangle open (never
+        # receiving audio nor a finished-speaking event) until the handoff reset / aclose.
+        if sent_tool_call_output and not forbid_speech:
             self._start_new_assistant_turn()
 
     async def update_tools(self, tools: list[llm.Tool]) -> None:
@@ -377,6 +395,11 @@ class RealtimeSession(llm.RealtimeSession):
             return
 
         self._tools = llm.ToolContext(tools)
+        self._forbid_speech_after_tool_call = set(
+            self._opts.forbid_speech_after_tool_call
+            if is_given(self._opts.forbid_speech_after_tool_call)
+            else []
+        )
         self._tool_definitions = []
         for tool_schema in self._tools.parse_function_tools("openai", strict=True):
             # We disallow tool chaining and tool calls during agent speech to reduce complexity
@@ -388,6 +411,12 @@ class RealtimeSession(llm.RealtimeSession):
                     "tool_call_output_timeout_ms": TOOL_CALL_OUTPUT_TIMEOUT_MS,
                     "wait_for_speech_before_tool_call": True,
                     "allow_tool_chaining": False,
+                    # When True, Phonic does not auto-generate a spoken reply after this tool's
+                    # output. Used for tools that always hand off so the outgoing agent doesn't
+                    # speak a reply that the handoff's session reset would cancel.
+                    "forbid_speech_after_tool_call": (
+                        tool_schema["function"]["name"] in self._forbid_speech_after_tool_call
+                    ),
                 }
             )
 
