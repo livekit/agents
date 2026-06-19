@@ -498,6 +498,9 @@ class RealtimeSession(llm.RealtimeSession):
         self._in_user_activity = False
         self._session_lock = asyncio.Lock()
         self._num_retries = 0
+        # error recorded by the recv/send tasks so _main_task can bound retries
+        # and surface it through the "error" event
+        self._session_error: Exception | None = None
 
     async def _close_active_session(self) -> None:
         async with self._session_lock:
@@ -902,6 +905,14 @@ class RealtimeSession(llm.RealtimeSession):
                     for task in pending:
                         await utils.aio.cancel_and_wait(task)
 
+                    # the recv/send tasks signal restart by setting _session_should_close
+                    # rather than raising. propagate any error they recorded so the handler
+                    # below can bound retries and surface it through the "error" event.
+                    if self._session_error is not None:
+                        err = self._session_error
+                        self._session_error = None
+                        raise err
+
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -913,6 +924,22 @@ class RealtimeSession(llm.RealtimeSession):
                     logger.error(f"Gemini Realtime API error: {e}", exc_info=e)
 
                 if not self._msg_ch.closed:
+                    # Gemini Live closes with 1007 ("Request contains an invalid argument")
+                    # when the session context is exhausted. Reconnecting replays the same
+                    # oversized chat context and fails identically, producing a tight retry
+                    # loop, so treat it as fatal to the session instead of retrying.
+                    if getattr(e, "code", None) == 1007 or "1007" in str(e):
+                        logger.error(
+                            "Gemini Live closed the session: context exhausted (1007). "
+                            "Reconnecting would replay the same context and fail again; "
+                            "terminating the session.",
+                            exc_info=e,
+                        )
+                        self._emit_error(e, recoverable=False)
+                        raise APIConnectionError(
+                            message="Gemini Live session context exhausted (1007)"
+                        ) from e
+
                     # we shouldn't retry when it's not connected, usually this means incorrect
                     # parameters or setup
                     if not session or max_retries == 0:
@@ -929,6 +956,7 @@ class RealtimeSession(llm.RealtimeSession):
                             error_msg += hint
                         raise APIConnectionError(message=error_msg) from e
 
+                    self._emit_error(e, recoverable=True)
                     retry_interval = self._opts.conn_options._interval_for_retry(self._num_retries)
                     logger.warning(
                         f"Gemini Realtime API connection failed, retrying in {retry_interval}s",
@@ -988,6 +1016,7 @@ class RealtimeSession(llm.RealtimeSession):
         except Exception as e:
             if not self._session_should_close.is_set():
                 logger.error(f"error in send task: {e}", exc_info=e)
+                self._session_error = e
                 self._mark_restart_needed(on_error=True)
         finally:
             logger.debug("send task finished.")
@@ -1066,6 +1095,7 @@ class RealtimeSession(llm.RealtimeSession):
         except Exception as e:
             if not self._session_should_close.is_set():
                 logger.error(f"error in receive task: {e}", exc_info=e)
+                self._session_error = e
                 self._mark_restart_needed(on_error=True)
         finally:
             self._mark_current_generation_done()
