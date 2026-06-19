@@ -50,7 +50,6 @@ _REGISTRY: dict[str, dict[Preset, ExpressiveOptions]] = {
     },
     "fishaudio": {
         Preset.CUSTOMER_SERVICE: _pf._FISHAUDIO_CUSTOMER_SERVICE,
-        Preset.HEALTHCARE: _pf._FISHAUDIO_HEALTHCARE,
         Preset.CONVERSATIONAL: _pf._FISHAUDIO_CONVERSATIONAL,
     },
 }
