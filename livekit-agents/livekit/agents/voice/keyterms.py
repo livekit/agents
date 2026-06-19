@@ -28,8 +28,10 @@ class KeytermDetectionOptions(TypedDict, total=False):
 
     enabled: bool
     """Whether to run the background detector. Defaults to ``False``."""
-    llm: LLM | None
-    """LLM used for extraction. Defaults to the active agent activity's LLM."""
+    llm: LLM | str | None
+    """LLM used for extraction. An ``LLM`` instance, or a model string (e.g.
+    ``"google/gemini-3.5-flash"``) resolved via the inference gateway. Defaults to a
+    built-in detection model; the agent's own LLM is not used."""
     turn_interval: int
     """Run a pass once per N user turns. Defaults to ``1``."""
     max_keyterms: int | None
@@ -68,48 +70,66 @@ _KEYTERM_DETECTION_DEFAULTS: KeytermDetectionOptions = {
 _PENDING_TTL = 3  # a pending term not confirmed within this many passes is dropped
 _MAX_TRANSCRIPT_MESSAGES = 12
 
+# default model for keyterm extraction when ``detection.llm`` is not set
+_DEFAULT_DETECTION_MODEL = "google/gemini-3.5-flash"
+
 
 def _resolve_detection(config: KeytermDetectionOptions | None) -> KeytermDetectionOptions:
     """Return a fully-defaulted detection config (``enabled`` defaults to False)."""
     return KeytermDetectionOptions(**{**_KEYTERM_DETECTION_DEFAULTS, **(config or {})})
 
 
+def _resolve_detection_llm(configured: LLM | str | None) -> LLM | None:
+    """Resolve the configured detection ``llm``: an ``LLM`` instance is used directly; a
+    model string (or the default model when unset) is created via the inference gateway."""
+    if isinstance(configured, LLM):
+        return configured
+    model = configured if isinstance(configured, str) else _DEFAULT_DETECTION_MODEL
+    try:
+        from ..inference import LLM as InferenceLLM
+
+        return InferenceLLM.from_model_string(model)
+    except Exception:  # noqa: BLE001 — never let detection setup break the session
+        logger.warning("keyterm detection: could not create detection LLM %r; skipping", model)
+        return None
+
+
 _DEFAULT_INSTRUCTIONS = """\
-You maintain a small set of STT keyterms that bias a speech recognizer toward the correct \
-spelling of distinctive words — names, places, companies, products, technical terms. Each turn \
-you see the recent transcript and the current keyterms; adjust them by calling \
-`record_keyterms` once.
+You maintain STT keyterms that bias a recognizer toward the correct spelling of distinctive \
+words (names, places, companies, products, technical terms). Each turn, adjust them with one \
+`record_keyterms` call.
 
-Applying a WRONG spelling biases the recognizer toward it and makes recognition worse, with no \
-way for the user to recover. Precision beats coverage: record only spellings you are confident \
-are correct, and when unsure record nothing. Never record ordinary words or fillers (e.g. \
-"yes", "the meeting", "voice agent").
+A WRONG spelling biases the recognizer for the rest of the call with no recovery, so precision \
+beats coverage: apply only a spelling you can CORROBORATE, and when unsure change nothing.
 
-USER lines are raw speech-to-text: often wrong, and the recognizer repeats the same error, so \
-a recurring word is not proof it is correct. ASSISTANT lines are the agent's own writing, so \
-their spelling is correct (though it may echo a misheard word). Spell terms as the assistant \
-does.
+USER lines are raw STT — often wrong, and the same error recurs, so repetition is NOT proof a \
+spelling is right. ASSISTANT lines are the agent's own writing: trust the agent's confident use \
+of its OWN names (brands, staff, locations) and confirm those promptly — but an assistant merely \
+echoing the user's sounds, or hedging about a spelling, does NOT corroborate.
 
-Never record a misrecognition:
-- A USER-line word that sounds like a term already in the lists is that term misrecognized — \
-never record the variant or replace the applied spelling with it; only an explicit user \
-correction ("no, not X — it's Y") changes an applied term.
-- An odd phrase that appears only in USER lines and that the assistant never adopts (or \
-rephrases into ordinary words) is a mishearing of ordinary speech.
-- An ASSISTANT line cut off mid-word by an interruption leaves a truncated fragment, not a \
-term.
+CONFIRM a pending term only when corroborated by one of:
+  1. a letter-by-letter spell-out the assistant then accepts WITHOUT reservation — confirm \
+exactly those letters, appending nothing;
+  2. the assistant's own confident use of that exact distinctive spelling;
+  3. an explicit user correction ("no, not X — it's Y").
+Recurrence alone never confirms.
 
-Report only CHANGES: never re-list a term already applied, and only `remove` a term shown in \
-the current lists.
-- `pending`: a distinctive term not yet trusted — put a term here on its first mention (even a \
-confident spelling) and while the user is still correcting it.
-- `confirm`: a pending term once the transcript bears it out — the user repeated it, or moved \
-on after the agent used it. Confirm promptly once it has settled; don't keep waiting.
-- `remove`: only a spelling the USER just rejected and replaced ("no, not X — it's Y"); drop \
-X and track Y as a pending candidate — Y is still STT output, so it is confirmed like any \
-other term, not as part of the correction. Applied terms are otherwise sticky — never remove \
-one because the topic moved on or the assistant abbreviated it. If you have no replacement, \
-remove nothing."""
+HEDGE RULE: if after a spell-out or name read-back the assistant signals the letters may be off \
+("for now", "with that caveat", "may have that slightly off", "did I catch that?", "to be \
+confirmed", "I don't want to guess", "double-check"), the spelling is unreliable — keep the term \
+PENDING and never confirm it, EVEN IF the user replies "yes". Only a cleanly accepted spell-out \
+confirms.
+
+Never apply: a user-line word that sounds like a known term (it's that term misheard); a \
+distinctive name glued to an ordinary word ("Blue Haven Hotel" — keep the bare name pending); an \
+odd phrase only the user says and the assistant never adopts; a fragment left by an interruption; \
+ordinary words or fillers.
+
+Report only CHANGES; never re-list an applied term.
+  - `pending`: a distinctive term seen but not yet corroborated;
+  - `confirm`: a pending term that just met the bar above;
+  - `remove`: only a spelling the user just corrected away. Applied terms are otherwise sticky.
+If nothing meets the bar this turn, change nothing."""
 
 
 @function_tool(name="record_keyterms")
@@ -153,7 +173,7 @@ class KeytermDetector:
 
         # bound per agent activity (see start/stop)
         self._stt: STT | None = None
-        self._llm: LLM | None = options["llm"]
+        self._llm: LLM | None = options["llm"] if isinstance(options["llm"], LLM) else None
         self._session: AgentSession | None = None
         self._turn_count = 0
         self._detect_task: asyncio.Task[None] | None = None
@@ -177,7 +197,7 @@ class KeytermDetector:
         if self._stt is not None:
             self._stt._update_keyterms(self.keyterms)
 
-    def start(self, session: AgentSession, *, stt: STT | None, llm: LLM | None) -> None:
+    def start(self, session: AgentSession, *, stt: STT | None) -> None:
         """Bind this activity's STT (always) and start detection (if enabled)."""
         # user-defined keyterms must reach the recognizer even with detection disabled
         if stt is not self._stt:
@@ -197,12 +217,9 @@ class KeytermDetector:
             )
             return
 
-        detect_llm = self._options["llm"] or llm
+        detect_llm = _resolve_detection_llm(self._options["llm"])
         if detect_llm is None:
-            logger.warning(
-                "keyterm detection is enabled but no text LLM is available "
-                "(realtime models need an explicit `llm` in the detection config); skipping"
-            )
+            logger.warning("keyterm detection is enabled but no detection LLM is available; skipping")
             return
         self._llm = detect_llm
         self._session = session

@@ -854,11 +854,11 @@ class AgentActivity(RecognitionHooks):
         else:
             self._audio_recognition.start()
 
-        # bind the session's keyterm detector to this activity's STT and LLM
+        # bind the session's keyterm detector to this activity's STT (detection uses its
+        # own LLM, configured via keyterm_options, not the agent's)
         self._session._keyterm_detector.start(
             self._session,
             stt=self.stt if isinstance(self.stt, stt.STT) else None,
-            llm=self.llm if isinstance(self.llm, llm.LLM) else None,
         )
 
     @tracer.start_as_current_span("drain_agent_activity")
