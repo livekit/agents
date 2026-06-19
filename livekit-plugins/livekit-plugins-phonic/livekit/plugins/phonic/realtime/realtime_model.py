@@ -435,6 +435,11 @@ class RealtimeSession(llm.RealtimeSession):
             self._generate_reply_task.cancel()
         self._generate_reply_task = asyncio.create_task(self._send_say(text), name="phonic-say")
 
+        # say() drives speech directly and supersedes any buffered user text turn. Drop it
+        # here since _send_say won't consume it, otherwise it would leak into a later
+        # generate_reply.
+        self._pending_user_text = None
+
         self._close_current_generation(interrupted=False)
 
         if self._pending_generate_reply_fut and not self._pending_generate_reply_fut.done():
