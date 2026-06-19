@@ -280,6 +280,7 @@ class RealtimeSession(llm.RealtimeSession):
         self._config_sent = False
         self._pending_tool_call_ids: set[str] = set()
         self._tool_definitions: list[dict] = []
+        self._forbid_speech_after_tool_call: set[str] = set()
         self._system_prompt_postfix: str = ""
 
     async def _close_active_session(self) -> None:
@@ -338,6 +339,7 @@ class RealtimeSession(llm.RealtimeSession):
         diff_ops = llm.utils.compute_chat_ctx_diff(self._chat_ctx, chat_ctx)
         sent_tool_call_output = False
         sent_system_message = False
+        forbid_speech = False
 
         for _, item_id in diff_ops.to_create:
             item = chat_ctx.get_by_id(item_id)
@@ -358,6 +360,8 @@ class RealtimeSession(llm.RealtimeSession):
                         )
                     )
                     sent_tool_call_output = True
+                    if item.name in self._forbid_speech_after_tool_call:
+                        forbid_speech = True
 
             if isinstance(item, llm.ChatMessage) and item.role in ("system", "developer"):
                 text = item.text_content
@@ -376,7 +380,10 @@ class RealtimeSession(llm.RealtimeSession):
                 "update_chat_ctx called but no new tool call outputs to send. "
                 "Phonic does not support general chat context updates."
             )
-        if sent_tool_call_output:
+        # Skip opening a new assistant turn when the tool forbids speech after its call:
+        # Phonic will not speak, so the generation would otherwise dangle open (never
+        # receiving audio nor a finished-speaking event) until the handoff reset / aclose.
+        if sent_tool_call_output and not forbid_speech:
             self._start_new_assistant_turn()
 
     async def update_tools(self, tools: list[llm.Tool]) -> None:
@@ -388,7 +395,7 @@ class RealtimeSession(llm.RealtimeSession):
             return
 
         self._tools = llm.ToolContext(tools)
-        forbid_speech_after_tool_call = set(
+        self._forbid_speech_after_tool_call = set(
             self._opts.forbid_speech_after_tool_call
             if is_given(self._opts.forbid_speech_after_tool_call)
             else []
@@ -408,7 +415,7 @@ class RealtimeSession(llm.RealtimeSession):
                     # output. Used for tools that always hand off so the outgoing agent doesn't
                     # speak a reply that the handoff's session reset would cancel.
                     "forbid_speech_after_tool_call": (
-                        tool_schema["function"]["name"] in forbid_speech_after_tool_call
+                        tool_schema["function"]["name"] in self._forbid_speech_after_tool_call
                     ),
                 }
             )
