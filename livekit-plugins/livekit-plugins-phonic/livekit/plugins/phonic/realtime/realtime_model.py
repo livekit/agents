@@ -292,6 +292,7 @@ class RealtimeSession(llm.RealtimeSession):
         self._tool_definitions: list[dict] = []
         self._forbid_speech_after_tool_call: set[str] = set()
         self._system_prompt_postfix: str = ""
+        self._pending_user_text: str | None = None
 
     async def _close_active_session(self) -> None:
         async with self._session_lock:
@@ -346,6 +347,8 @@ class RealtimeSession(llm.RealtimeSession):
         sent_tool_call_output = False
         sent_system_message = False
         forbid_speech = False
+        buffered_user_text = False
+        last_item_id = chat_ctx.items[-1].id if chat_ctx.items else None
 
         for _, item_id in diff_ops.to_create:
             item = chat_ctx.get_by_id(item_id)
@@ -379,9 +382,21 @@ class RealtimeSession(llm.RealtimeSession):
                         )
                         sent_system_message = True
 
+            # Only treat a user message as text input when it's appended at the tail of the context.
+            if (
+                isinstance(item, llm.ChatMessage)
+                and item.role == "user"
+                and item_id == last_item_id
+            ):
+                text = item.text_content
+                if text:
+                    logger.info(f"Received user text input: {text}")
+                    self._pending_user_text = text
+                    buffered_user_text = True
+
         self._chat_ctx = chat_ctx.copy()
 
-        if not sent_tool_call_output and not sent_system_message:
+        if not sent_tool_call_output and not sent_system_message and not buffered_user_text:
             logger.warning(
                 "update_chat_ctx called but no new tool call outputs to send. "
                 "Phonic does not support general chat context updates."
@@ -451,8 +466,10 @@ class RealtimeSession(llm.RealtimeSession):
 
         # Close any active generation before swapping in the new context so a partial
         # response from the outgoing agent isn't appended to the new chat_ctx. A reset also
-        # starts a fresh turn on the (reused) connection.
+        # starts a fresh turn on the (reused) connection. Drop any buffered user text too so
+        # it doesn't leak into a generate_reply under the new agent's config.
         self._close_current_generation(interrupted=True)
+        self._pending_user_text = None
 
         if is_given(instructions):
             self._opts.instructions = instructions
@@ -547,6 +564,11 @@ class RealtimeSession(llm.RealtimeSession):
 
         self._close_current_generation(interrupted=False)
 
+        # say() speaks explicit text and never consumes buffered user text, so any
+        # text pending from update_chat_ctx is dropped here rather than left to leak
+        # into a later generate_reply.
+        self._pending_user_text = None
+
         if self._pending_generate_reply_fut and not self._pending_generate_reply_fut.done():
             self._pending_generate_reply_fut.cancel()
 
@@ -630,6 +652,7 @@ class RealtimeSession(llm.RealtimeSession):
                 # external cancel: drop the queued send if it hasn't gone out yet
                 if not send_task.done():
                     send_task.cancel()
+                self._pending_user_text = None
 
         fut.add_done_callback(_on_fut_done)
         return fut
@@ -638,8 +661,24 @@ class RealtimeSession(llm.RealtimeSession):
         await self._ready_to_start.wait()
         if self._session_should_close.is_set():
             return
+
+        system_message = payload.system_message
+        if self._pending_user_text:
+            user_text_instruction = (
+                f'The user sent the following text message: "{self._pending_user_text}". '
+                "Please respond to their message."
+            )
+            system_message = (
+                f"{system_message}\n\n{user_text_instruction}"
+                if system_message
+                else user_text_instruction
+            )
+            self._pending_user_text = None
+
         if self._socket:
-            await self._socket.send_generate_reply(payload)
+            await self._socket.send_generate_reply(
+                GenerateReplyPayload(system_message=system_message)
+            )
 
     def commit_audio(self) -> None:
         logger.warning("commit_audio is not supported by the Phonic realtime model.")
