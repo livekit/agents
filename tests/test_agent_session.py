@@ -106,6 +106,7 @@ def test_user_input_transcribed_event_item_id():
     ev_no_id = UserInputTranscribedEvent(transcript="hello", is_final=True)
     assert ev_no_id.item_id is None
 
+
 async def test_events_and_metrics() -> None:
     speed = 1
     actions = FakeActions()
