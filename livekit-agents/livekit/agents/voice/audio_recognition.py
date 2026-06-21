@@ -1293,9 +1293,8 @@ class AudioRecognition:
             if not self._turn_detector_late_prediction_warned:
                 self._turn_detector_late_prediction_warned = True
                 logger.warning(
-                    "eou detection ran after the audio eot turn was already flushed "
-                    "(likely a late stt final). consider raising `min_delay` in the "
-                    "endpointing options to accommodate slow stt. subsequent "
+                    "transcript arrives after turn has been committed. consider raising `min_delay` in the "
+                    "endpointing options to accommodate a slow stt. subsequent "
                     "occurrences will log at debug level.",
                 )
             else:
@@ -1355,7 +1354,8 @@ class AudioRecognition:
                         if isinstance(turn_detector, _StreamingTurnDetectorStream):
                             fut = self._turn_detector_prediction_fut
                             if fut is None:
-                                self._on_missing_eot_prediction()
+                                if trigger == "stt":
+                                    self._on_missing_eot_prediction()
                             else:
                                 from_cache = fut.done()
                                 done, _ = await asyncio.wait([fut], timeout=endpointing_delay)
