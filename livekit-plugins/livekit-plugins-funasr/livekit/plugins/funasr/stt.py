@@ -38,6 +38,9 @@ except ImportError as e:
 
 # Languages natively supported by SenseVoice; anything else falls back to auto-detect.
 _FUNASR_LANGUAGES = {"zh", "en", "ja", "ko", "yue", "nospeech"}
+# Spoken-language codes reported as the detected language (excludes "nospeech",
+# which is a SenseVoice classification label, not a language).
+_DETECTED_LANGUAGES = {"zh", "en", "ja", "ko", "yue"}
 _SAMPLE_RATE = 16000
 _LANG_TAG_RE = re.compile(r"<\|([a-z]+)\|>")
 
@@ -82,14 +85,18 @@ class FunASRSTT(stt.STT):
             use_itn: Apply inverse text normalization (e.g. "nine" -> "9").
         """
         super().__init__(capabilities=STTCapabilities(streaming=False, interim_results=False))
+        self._model_name = model
         self._opts = _STTOptions(language=_normalize_language(language), use_itn=use_itn)
+        # FunASR's model.generate is not guaranteed thread-safe; serialize access
+        # across concurrent _recognize_impl calls that share this instance.
+        self._lock = asyncio.Lock()
         logger.info(f"loading FunASR model {model} on {device}...")
         self._model = AutoModel(model=model, device=device, disable_update=True)
         logger.info("FunASR model loaded")
 
     @property
     def model(self) -> str:
-        return "SenseVoice"
+        return self._model_name
 
     @property
     def provider(self) -> str:
@@ -139,13 +146,14 @@ class FunASRSTT(stt.STT):
             return result[0]["text"] if result else ""
 
         try:
-            raw = await asyncio.to_thread(_run)
+            async with self._lock:
+                raw = await asyncio.to_thread(_run)
         except Exception as e:
             raise APIConnectionError("failed to run FunASR inference") from e
 
         text = rich_transcription_postprocess(raw).strip()
         m = _LANG_TAG_RE.match(raw)
-        detected = m.group(1) if m and m.group(1) in _FUNASR_LANGUAGES else ""
+        detected = m.group(1) if m and m.group(1) in _DETECTED_LANGUAGES else ""
 
         return stt.SpeechEvent(
             type=SpeechEventType.FINAL_TRANSCRIPT,
