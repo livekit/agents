@@ -21,7 +21,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from livekit import rtc
-from livekit.agents import APIConnectionError, APIConnectOptions, stt
+from livekit.agents import APIConnectionError, APIConnectOptions, LanguageCode, stt
 from livekit.agents.stt import SpeechEventType, STTCapabilities
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
@@ -29,8 +29,8 @@ from livekit.agents.utils import AudioBuffer, is_given
 from .log import logger
 
 try:
-    from funasr import AutoModel
-    from funasr.utils.postprocess_utils import rich_transcription_postprocess
+    from funasr import AutoModel  # type: ignore
+    from funasr.utils.postprocess_utils import rich_transcription_postprocess  # type: ignore
 except ImportError as e:
     raise ImportError(
         "funasr is required for the FunASR plugin. Install it with: pip install funasr"
@@ -81,9 +81,7 @@ class FunASRSTT(stt.STT):
                 auto-detected per utterance.
             use_itn: Apply inverse text normalization (e.g. "nine" -> "9").
         """
-        super().__init__(
-            capabilities=STTCapabilities(streaming=False, interim_results=False)
-        )
+        super().__init__(capabilities=STTCapabilities(streaming=False, interim_results=False))
         self._opts = _STTOptions(language=_normalize_language(language), use_itn=use_itn)
         logger.info(f"loading FunASR model {model} on {device}...")
         self._model = AutoModel(model=model, device=device, disable_update=True)
@@ -132,24 +130,24 @@ class FunASRSTT(stt.STT):
             samples = samples.reshape(-1, channels).mean(axis=1)
 
         def _run() -> str:
-            return self._model.generate(
+            result = self._model.generate(
                 input=samples,
                 cache={},
                 language=lang,
                 use_itn=self._opts.use_itn,
             )
+            return result[0]["text"] if result else ""
 
         try:
-            result = await asyncio.to_thread(_run)
+            raw = await asyncio.to_thread(_run)
         except Exception as e:
             raise APIConnectionError("failed to run FunASR inference") from e
 
-        raw = result[0]["text"] if result else ""
         text = rich_transcription_postprocess(raw).strip()
         m = _LANG_TAG_RE.match(raw)
         detected = m.group(1) if m and m.group(1) in _FUNASR_LANGUAGES else ""
 
         return stt.SpeechEvent(
             type=SpeechEventType.FINAL_TRANSCRIPT,
-            alternatives=[stt.SpeechData(text=text, language=detected)],
+            alternatives=[stt.SpeechData(text=text, language=LanguageCode(detected))],
         )
