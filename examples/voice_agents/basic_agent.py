@@ -19,7 +19,7 @@ from livekit.agents import (
 )
 from livekit.agents.beta import EndCallTool
 from livekit.agents.llm import function_tool
-from livekit.plugins import silero
+from livekit.plugins import silero, assemblyai
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 # uncomment to enable Krisp background voice/noise cancellation
@@ -87,7 +87,8 @@ async def entrypoint(ctx: JobContext) -> None:
     session: AgentSession = AgentSession(
         # Speech-to-text (STT) is your agent's ears, turning the user's speech into text that the LLM can understand
         # See all available models at https://docs.livekit.io/agents/models/stt/
-        stt=inference.STT("deepgram/nova-3", language="multi"),
+        # stt=inference.STT("deepgram/nova-3", language="multi"),
+        stt=assemblyai.STT(model="u3-rt-pro"),
         # A Large Language Model (LLM) is your agent's brain, processing user input and generating a response
         # See all available models at https://docs.livekit.io/agents/models/llm/
         llm=inference.LLM("openai/gpt-4.1-mini"),
@@ -117,9 +118,9 @@ async def entrypoint(ctx: JobContext) -> None:
             text_transforms.replace({"LiveKit": "<<ˈ|l|aɪ|v>> <<ˈ|k|ɪ|t>>"}),
         ],
         # automatically detect keyterms and apply them to the STT per user turn
-        keyterm_options={
-            "terms": ["LiveKit"],
-            "detection": {"enabled": True, "turn_interval": 1},
+        stt_context_options={
+            "keyterms": ["LiveKit"],
+            "keyterm_detection": {"enabled": True, "turn_interval": 1},
         },
     )
 

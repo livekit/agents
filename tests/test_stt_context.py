@@ -8,12 +8,9 @@ from typing import Any
 import pytest
 
 from livekit import rtc
-from livekit.agents.llm import LLM, ChatContext, CollectedResponse, FunctionToolCall
+from livekit.agents.llm import LLM, ChatContext, ChatMessage, CollectedResponse, FunctionToolCall
 from livekit.agents.stt import STT, RecognizeStream, SpeechEvent, STTCapabilities
-from livekit.agents.types import NOT_GIVEN, APIConnectOptions, NotGivenOr
-from livekit.agents.utils import AudioBuffer
-from livekit.agents.voice.events import ConversationItemAddedEvent
-from livekit.agents.voice.keyterms import (
+from livekit.agents.stt.recognition_context import (
     _PENDING_TTL,
     KeytermDetector,
     _detect_keyterms,
@@ -21,6 +18,9 @@ from livekit.agents.voice.keyterms import (
     _parse_tool_call,
     _resolve_detection,
 )
+from livekit.agents.types import NOT_GIVEN, APIConnectOptions, NotGivenOr
+from livekit.agents.utils import AudioBuffer
+from livekit.agents.voice.events import ConversationItemAddedEvent
 
 pytestmark = pytest.mark.unit
 
@@ -36,15 +36,21 @@ def _ctx(text: str = "hello") -> ChatContext:
 
 
 class _RecordingSTT(STT):
-    """STT that records every _update_keyterms() call."""
+    """STT that records every _update_keyterms() / _push_conversation_item() call."""
 
-    def __init__(self, *, supports_keyterms: bool = True) -> None:
+    def __init__(
+        self, *, supports_keyterms: bool = True, supports_chat_context: bool = False
+    ) -> None:
         super().__init__(
             capabilities=STTCapabilities(
-                streaming=True, interim_results=False, keyterms=supports_keyterms
+                streaming=True,
+                interim_results=False,
+                keyterms=supports_keyterms,
+                chat_context=supports_chat_context,
             )
         )
         self.pushed: list[list[str]] = []
+        self.chat_items: list[ChatMessage] = []
 
     async def _recognize_impl(
         self,
@@ -65,6 +71,10 @@ class _RecordingSTT(STT):
 
     def _update_keyterms(self, keyterms: list[str]) -> None:
         self.pushed.append(list(keyterms))
+
+    def _push_conversation_item(self, ev: ConversationItemAddedEvent) -> None:
+        if isinstance(ev.item, ChatMessage):
+            self.chat_items.append(ev.item)
 
 
 class _FakeStream:
@@ -263,7 +273,7 @@ async def test_push_only_on_applied_change() -> None:
         enabled=True,
         llm=_RecordingLLM((["Foo"], [], []), ([], ["Foo"], [])),
     )
-    d.start(session, stt=stt, llm=None)
+    d.start(session, stt=stt)
     assert stt.pushed == [["Acme"]]  # start pushes the current set
 
     session.add_user("u1")
@@ -280,11 +290,11 @@ async def test_start_same_stt_does_not_repush() -> None:
     stt = _RecordingSTT()
     session = _FakeSession()
     d = _detector(user_keyterms=["Acme"], enabled=True, llm=_RecordingLLM())
-    d.start(session, stt=stt, llm=None)
+    d.start(session, stt=stt)
     assert stt.pushed == [["Acme"]]
     await d.aclose()
     # re-binding the same instance on the next activity must not re-push (some STTs reconnect)
-    d.start(session, stt=stt, llm=None)
+    d.start(session, stt=stt)
     assert stt.pushed == [["Acme"]]
     await d.aclose()
 
@@ -293,7 +303,7 @@ async def test_user_terms_pushed_without_detection() -> None:
     stt = _RecordingSTT()
     session = _FakeSession()
     d = _detector(user_keyterms=["Acme"], enabled=False)
-    d.start(session, stt=stt, llm=None)  # detection off must still bind the STT and push
+    d.start(session, stt=stt)  # detection off must still bind the STT and push
     assert stt.pushed == [["Acme"]]
     d.set_user_keyterms(["New"])
     assert stt.pushed[-1] == ["New"]
@@ -304,7 +314,7 @@ async def test_start_without_terms_does_not_push() -> None:
     stt = _RecordingSTT()
     session = _FakeSession()
     d = _detector(enabled=False)
-    d.start(session, stt=stt, llm=None)  # nothing to apply -> no push, no capability warning
+    d.start(session, stt=stt)  # nothing to apply -> no push, no capability warning
     assert stt.pushed == []
     await d.aclose()
 
@@ -313,7 +323,7 @@ async def test_set_user_keyterms_pushes() -> None:
     stt = _RecordingSTT()
     session = _FakeSession()
     d = _detector(enabled=True, llm=_RecordingLLM())
-    d.start(session, stt=stt, llm=None)
+    d.start(session, stt=stt)
     d.set_user_keyterms(["New"])
     assert stt.pushed[-1] == ["New"]
     await d.aclose()
@@ -326,6 +336,28 @@ def test_unsupported_stt_warn_and_skip() -> None:
     assert stt.pushed == []
 
 
+# -- chat context sink (native carryover) --
+# forwarding (subscribe + push every turn) lives in AgentActivity; here we only cover the
+# STT sink contract: a supporting STT receives the pushed turns, an unsupported one warns.
+
+
+def test_push_conversation_item_forwards_to_supporting_stt() -> None:
+    stt = _RecordingSTT(supports_chat_context=True)
+    user = ConversationItemAddedEvent(item=ChatMessage(role="user", content=["hi"]))
+    agent = ConversationItemAddedEvent(item=ChatMessage(role="assistant", content=["Welcome"]))
+    stt._push_conversation_item(user)  # both user and agent turns are forwarded
+    stt._push_conversation_item(agent)
+    assert [m.text_content for m in stt.chat_items] == ["hi", "Welcome"]
+
+
+def test_unsupported_stt_chat_ctx_warn_and_skip() -> None:
+    stt = _RecordingSTT(supports_chat_context=False)
+    ev = ConversationItemAddedEvent(item=ChatMessage(role="assistant", content=["hi"]))
+    # exercise the base method (warn-and-skip), not the recorder override
+    STT._push_conversation_item(stt, ev)
+    assert stt.chat_items == []
+
+
 # -- triggering --
 
 
@@ -333,7 +365,7 @@ async def test_triggers_every_n_user_turns() -> None:
     session = _FakeSession()
     fake = _RecordingLLM(([], ["Acme"], []))
     d = _detector(enabled=True, turn_interval=2, llm=fake)
-    d.start(session, stt=_RecordingSTT(), llm=None)
+    d.start(session, stt=_RecordingSTT())
 
     session.add_user("first")  # below interval
     await _drain(d)
@@ -354,7 +386,7 @@ async def test_ignores_assistant_messages_for_counting() -> None:
     session = _FakeSession()
     fake = _RecordingLLM()
     d = _detector(enabled=True, llm=fake)
-    d.start(session, stt=_RecordingSTT(), llm=None)
+    d.start(session, stt=_RecordingSTT())
 
     session.add_assistant("hello")
     await _drain(d)
@@ -371,7 +403,7 @@ async def test_empty_user_turn_does_not_trigger() -> None:
     session = _FakeSession()
     fake = _RecordingLLM()
     d = _detector(enabled=True, llm=fake)
-    d.start(session, stt=_RecordingSTT(), llm=None)
+    d.start(session, stt=_RecordingSTT())
 
     session.add_user("")
     await _drain(d)
@@ -384,7 +416,7 @@ async def test_single_flight_skips_overlapping_pass() -> None:
     session = _FakeSession()
     fake = _BlockingLLM()
     d = _detector(enabled=True, llm=fake)
-    d.start(session, stt=_RecordingSTT(), llm=None)
+    d.start(session, stt=_RecordingSTT())
 
     session.add_user("first")
     await asyncio.sleep(0)
@@ -404,7 +436,7 @@ async def test_aclose_unsubscribes() -> None:
     session = _FakeSession()
     fake = _RecordingLLM()
     d = _detector(enabled=True, llm=fake)
-    d.start(session, stt=_RecordingSTT(), llm=None)
+    d.start(session, stt=_RecordingSTT())
     await d.aclose()
 
     session.add_user("hi")
@@ -416,7 +448,7 @@ async def test_disabled_detection_does_not_trigger() -> None:
     session = _FakeSession()
     fake = _RecordingLLM(([], ["Acme"], []))
     d = _detector(enabled=False, llm=fake)
-    d.start(session, stt=_RecordingSTT(), llm=None)
+    d.start(session, stt=_RecordingSTT())
 
     session.add_user("the Acme Grand")
     await _drain(d)
@@ -429,18 +461,7 @@ async def test_unsupported_stt_skips_detection() -> None:
     session = _FakeSession()
     fake = _RecordingLLM(([], ["Acme"], []))
     d = _detector(enabled=True, llm=fake)
-    d.start(session, stt=_RecordingSTT(supports_keyterms=False), llm=None)
-
-    session.add_user("the Acme Grand")
-    await _drain(d)
-    assert fake.calls == 0
-
-
-async def test_no_stt_skips_detection() -> None:
-    session = _FakeSession()
-    fake = _RecordingLLM(([], ["Acme"], []))
-    d = _detector(enabled=True, llm=fake)
-    d.start(session, stt=None, llm=None)
+    d.start(session, stt=_RecordingSTT(supports_keyterms=False))
 
     session.add_user("the Acme Grand")
     await _drain(d)

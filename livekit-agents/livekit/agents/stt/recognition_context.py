@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-from datetime import datetime
 from typing import TYPE_CHECKING
 
 from typing_extensions import TypedDict
@@ -11,18 +10,40 @@ from .. import llm as llm_module, utils
 from ..llm import LLM, ChatContext, FunctionToolCall, function_tool
 from ..llm.utils import parse_function_arguments
 from ..log import logger
-from ..stt import STT
 from ..utils import aio
-from .events import ConversationItemAddedEvent
+from .stt import STT
 
 if TYPE_CHECKING:
-    from .agent_session import AgentSession
+    from ..voice.agent_session import AgentSession
+    from ..voice.events import ConversationItemAddedEvent
+
+
+class STTContextOptions(TypedDict, total=False):
+    """Ways to make STT recognition conversation-aware.
+
+    Can be passed as a plain dict::
+
+        AgentSession(
+            stt_context_options={
+                "keyterms": ["LiveKit", "Acme Corp"],
+                "keyterm_detection": {"enabled": True, "turn_interval": 1},
+                "chat_context": {"enabled": True},
+            },
+        )
+    """
+
+    keyterms: list[str]
+    """Static keyterms applied wherever the STT accepts a term list; never touched by detection."""
+    keyterm_detection: KeytermDetectionOptions
+    """LLM-based keyterm extraction, for STTs that accept a term list."""
+    chat_context: ChatContextOptions
+    """Native conversation-context carryover, for STTs that support it."""
 
 
 class KeytermDetectionOptions(TypedDict, total=False):
     """Configuration for automatic keyterm detection.
 
-    Lives under the ``detection`` key of :class:`KeytermOptions`. Absent or
+    Lives under the ``keyterm_detection`` key of :class:`STTContextOptions`. Absent or
     ``{"enabled": False}`` keeps detection off.
     """
 
@@ -40,23 +61,16 @@ class KeytermDetectionOptions(TypedDict, total=False):
     """Override the built-in extraction prompt."""
 
 
-class KeytermOptions(TypedDict, total=False):
-    """Keyterm configuration for an :class:`AgentSession`.
+class ChatContextOptions(TypedDict, total=False):
+    """Configuration for native conversation-context carryover.
 
-    Can be passed as a plain dict::
-
-        AgentSession(
-            keyterm_options={
-                "terms": ["LiveKit", "Acme Corp"],
-                "detection": {"enabled": True, "turn_interval": 1},
-            },
-        )
+    Lives under the ``chat_context`` key of :class:`STTContextOptions`. Forwards the
+    conversation to STTs that consume context natively (no LLM). Absent or
+    ``{"enabled": False}`` keeps it off.
     """
 
-    terms: list[str]
-    """User-defined keyterms. Never modified by auto-detection."""
-    detection: KeytermDetectionOptions
-    """Automatic keyterm detection configuration."""
+    enabled: bool
+    """Whether to forward conversation context to the STT. Defaults to ``False``."""
 
 
 _KEYTERM_DETECTION_DEFAULTS: KeytermDetectionOptions = {
@@ -67,16 +81,38 @@ _KEYTERM_DETECTION_DEFAULTS: KeytermDetectionOptions = {
     "instructions": None,
 }
 
+_CHAT_CONTEXT_DEFAULTS: ChatContextOptions = {
+    "enabled": False,
+}
+
 _PENDING_TTL = 3  # a pending term not confirmed within this many passes is dropped
 _MAX_TRANSCRIPT_MESSAGES = 12
 
-# default model for keyterm extraction when ``detection.llm`` is not set
+# default model for keyterm extraction when ``keyterm_detection.llm`` is not set
 _DEFAULT_DETECTION_MODEL = "google/gemini-3.5-flash"
+
+# set LK_KEYTERMS_DEBUG=1 to log the input/output of every detection pass
+lk_keyterms_debug = int(os.getenv("LK_KEYTERMS_DEBUG", 0))
 
 
 def _resolve_detection(config: KeytermDetectionOptions | None) -> KeytermDetectionOptions:
-    """Return a fully-defaulted detection config (``enabled`` defaults to False)."""
+    """Return a fully-defaulted keyterm-detection config (``enabled`` defaults to False)."""
     return KeytermDetectionOptions(**{**_KEYTERM_DETECTION_DEFAULTS, **(config or {})})
+
+
+def _resolve_chat_context(config: ChatContextOptions | None) -> ChatContextOptions:
+    """Return a fully-defaulted chat-context config (``enabled`` defaults to False)."""
+    return ChatContextOptions(**{**_CHAT_CONTEXT_DEFAULTS, **(config or {})})
+
+
+def _resolve_stt_context(config: STTContextOptions | None) -> STTContextOptions:
+    """Return a fully-defaulted STT context config."""
+    config = config or {}
+    return STTContextOptions(
+        keyterms=list(config.get("keyterms", [])),
+        keyterm_detection=_resolve_detection(config.get("keyterm_detection")),
+        chat_context=_resolve_chat_context(config.get("chat_context")),
+    )
 
 
 def _resolve_detection_llm(configured: LLM | str | None) -> LLM | None:
@@ -94,7 +130,7 @@ def _resolve_detection_llm(configured: LLM | str | None) -> LLM | None:
         return None
 
 
-_DEFAULT_INSTRUCTIONS = """\
+_DEFAULT_KEYTERM_INSTRUCTIONS = """\
 You maintain STT keyterms that bias a recognizer toward the correct spelling of distinctive \
 words (names, places, companies, products, technical terms). Each turn, adjust them with one \
 `record_keyterms` call.
@@ -148,10 +184,11 @@ async def _record_keyterms(pending: list[str], confirm: list[str], remove: list[
 class KeytermDetector:
     """Maintains the STT keyterm set and, when enabled, auto-detects keyterms during a call.
 
-    Owned by the :class:`AgentSession`, so the keyterm state survives agent handoffs. Each agent
-    activity binds it to that activity's STT/LLM via :meth:`start` and releases it via
-    :meth:`stop`. Only confirmed terms are pushed to the STT; a pending term is tracked (and fed
-    back to the detector) but never biases recognition.
+    Owned by the :class:`AgentSession` so keyterm state survives agent handoffs. Each agent
+    activity binds it to that activity's STT via :meth:`start` and releases it via
+    :meth:`aclose`. When detection is on, an LLM extracts distinctive spellings from the
+    conversation; only confirmed terms are pushed to the STT, while pending terms are tracked
+    (and fed back to the detector) without biasing recognition.
     """
 
     def __init__(
@@ -161,17 +198,17 @@ class KeytermDetector:
         options: KeytermDetectionOptions | None = None,
     ) -> None:
         options = _resolve_detection(options)
-        self._options = options
+        self._detection = options
         self._max_keyterms = options["max_keyterms"]
         self._turn_interval = max(1, options["turn_interval"])
-        self._instructions = options["instructions"] or _DEFAULT_INSTRUCTIONS
+        self._instructions = options["instructions"] or _DEFAULT_KEYTERM_INSTRUCTIONS
 
         self._user_terms = list(dict.fromkeys(user_keyterms or []))
         self._auto_terms: list[str] = []  # confirmed terms, oldest first (for eviction)
         self._pending_terms: dict[str, int] = {}  # term -> pass it was added (for TTL)
         self._tick = 0  # detection-pass counter
 
-        # bound per agent activity (see start/stop)
+        # bound per agent activity (see start/aclose)
         self._stt: STT | None = None
         self._llm: LLM | None = options["llm"] if isinstance(options["llm"], LLM) else None
         self._session: AgentSession | None = None
@@ -197,19 +234,19 @@ class KeytermDetector:
         if self._stt is not None:
             self._stt._update_keyterms(self.keyterms)
 
-    def start(self, session: AgentSession, *, stt: STT | None) -> None:
+    def start(self, session: AgentSession, stt: STT) -> None:
         """Bind this activity's STT (always) and start detection (if enabled)."""
         # user-defined keyterms must reach the recognizer even with detection disabled
         if stt is not self._stt:
             self._stt = stt
-            if self._stt is not None and self.keyterms:
+            if self.keyterms:
                 self._stt._update_keyterms(self.keyterms)
 
-        if self._session is not None or not self._options["enabled"]:
+        if not self._detection["enabled"]:
             return
 
         # don't waste LLM detection passes when no STT can consume the keyterms
-        if stt is None or not stt.capabilities.keyterms:
+        if not stt.capabilities.keyterms:
             logger.warning(
                 "keyterm detection is enabled but the STT does not support keyterms; "
                 "skipping detection",
@@ -217,10 +254,13 @@ class KeytermDetector:
             )
             return
 
-        detect_llm = _resolve_detection_llm(self._options["llm"])
+        detect_llm = _resolve_detection_llm(self._detection["llm"])
         if detect_llm is None:
-            logger.warning("keyterm detection is enabled but no detection LLM is available; skipping")
+            logger.warning(
+                "keyterm detection is enabled but no detection LLM is available; skipping"
+            )
             return
+
         self._llm = detect_llm
         self._session = session
         self._turn_count = 0
@@ -239,8 +279,13 @@ class KeytermDetector:
         if (session := self._session) is None:
             return
 
-        # trigger on non-empty user turns
-        if ev.item.type != "message" or ev.item.role != "user" or not ev.item.text_content:
+        item = ev.item
+        # keyterm detection triggers on non-empty user turns
+        if (
+            not isinstance(item, llm_module.ChatMessage)
+            or item.role != "user"
+            or not item.text_content
+        ):
             return
 
         self._turn_count += 1
@@ -252,13 +297,16 @@ class KeytermDetector:
             return
 
         # snapshot the transcript now so the pass isn't affected by later turns
-        chat_ctx = session.history.copy(
+        self._detect_task = asyncio.create_task(self._run_once(self._snapshot(session)))
+
+    @staticmethod
+    def _snapshot(session: AgentSession) -> ChatContext:
+        return session.history.copy(
             exclude_config_update=True,
             exclude_function_call=True,
             exclude_handoff=True,
             exclude_empty_message=True,
         )
-        self._detect_task = asyncio.create_task(self._run_once(chat_ctx))
 
     @utils.log_exceptions(logger=logger)
     async def _run_once(self, chat_ctx: ChatContext) -> None:
@@ -307,7 +355,14 @@ class KeytermDetector:
         # update the STT if the keyterms changed
         if (new_keyterms := self.keyterms) != before and self._stt is not None:
             self._stt._update_keyterms(new_keyterms)
-            logger.debug("keyterms changed", extra={"added": confirm, "removed": remove})
+            before_set, new_set = set(before), set(new_keyterms)
+            logger.debug(
+                "keyterms changed",
+                extra={
+                    "added": [t for t in new_keyterms if t not in before_set],
+                    "removed": [t for t in before if t not in new_set],
+                },
+            )
 
 
 async def _detect_keyterms(
@@ -326,14 +381,15 @@ async def _detect_keyterms(
     if user_msg is None:  # no transcript yet — nothing to detect
         return [], [], []
     req_ctx = ChatContext.empty()
-    req_ctx.add_message(role="system", content=instructions or _DEFAULT_INSTRUCTIONS)
+    req_ctx.add_message(role="system", content=instructions or _DEFAULT_KEYTERM_INSTRUCTIONS)
     req_ctx.add_message(role="user", content=user_msg)
     response = await llm.chat(
         chat_ctx=req_ctx, tools=[_record_keyterms], tool_choice="required"
     ).collect()
     result = _parse_tool_call(response.tool_calls)
 
-    _debug_dump(current, user_msg, response.tool_calls, result)
+    if lk_keyterms_debug:
+        _debug_dump(user_msg, result)
     return result
 
 
@@ -389,35 +445,22 @@ def _parse_tool_call(
     return _terms("pending"), _terms("confirm"), _terms("remove")
 
 
-# Set LK_KEYTERMS_DEBUG_FILE to a path to append the LLM input/output of every detect pass
-# there (for live debugging). Unset -> no-op, no overhead beyond an env lookup.
-_DEBUG_FILE_ENV = "LK_KEYTERMS_DEBUG_FILE"
-
-
 def _debug_dump(
-    current_keyterms: list[tuple[str, bool]],
     user_msg: str,
-    tool_calls: list[FunctionToolCall],
     result: tuple[list[str], list[str], list[str]],
 ) -> None:
-    path = os.environ.get(_DEBUG_FILE_ENV)
-    if not path:
-        return
+    """Log the input/output of one detection pass (gated by ``LK_KEYTERMS_DEBUG``)."""
     pending, confirm, remove = result
-    current = ", ".join(f"{t} ({'confirmed' if ok else 'pending'})" for t, ok in current_keyterms)
-    raw = next(
-        (c.arguments for c in tool_calls if c.name == _record_keyterms.info.name), "<no call>"
+    logger.debug(
+        "\n".join(
+            [
+                "──────── keyterm detection ────────",
+                user_msg,
+                "──── output ────",
+                f"pending: {pending}",
+                f"confirm: {confirm}",
+                f"remove:  {remove}",
+                "───────────────────────────────────",
+            ]
+        )
     )
-    block = (
-        f"==== detect @ {datetime.now().isoformat(timespec='seconds')} ====\n"
-        f"--- current keyterms ---\n{current or '(none)'}\n"
-        f"--- input ---\n{user_msg}\n"
-        f"--- output ---\n"
-        f"pending: {pending}\nconfirm: {confirm}\nremove: {remove}\n"
-        f"raw: {raw}\n\n"
-    )
-    try:
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(block)
-    except Exception:
-        logger.exception("failed to write keyterm debug record")

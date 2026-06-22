@@ -40,6 +40,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import AudioBuffer, is_given
+from livekit.agents.voice.events import ConversationItemAddedEvent
 from livekit.agents.voice.io import TimedString
 
 from .log import logger
@@ -159,6 +160,9 @@ class STT(stt.STT):
                 offline_recognize=False,
                 diarization=is_given(speaker_labels) and speaker_labels is True,
                 keyterms=True,
+                # agent_context carryover is only available on the u3-rt-pro family
+                # ("u3-pro" is normalized to "u3-rt-pro" below)
+                chat_context=model in _U3_PRO_MODELS or model == "u3-pro",
             ),
         )
         if model == "u3-pro":
@@ -347,6 +351,14 @@ class STT(stt.STT):
 
     def _update_keyterms(self, keyterms: list[str]) -> None:
         self.update_options(keyterms_prompt=keyterms)
+
+    def _push_conversation_item(self, ev: ConversationItemAddedEvent) -> None:
+        if (
+            (chat_item := ev.item).type == "message"
+            and chat_item.role == "assistant"
+            and chat_item.text_content
+        ):
+            self.update_options(agent_context=chat_item.text_content)
 
 
 class SpeechStream(stt.SpeechStream):

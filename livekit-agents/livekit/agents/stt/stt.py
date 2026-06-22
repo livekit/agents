@@ -7,7 +7,7 @@ from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from types import TracebackType
-from typing import Any, Generic, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -27,6 +27,9 @@ from ..types import (
 )
 from ..utils import AudioBuffer, aio, is_given
 from ..utils.audio import calculate_audio_duration
+
+if TYPE_CHECKING:
+    from ..voice.events import ConversationItemAddedEvent
 
 
 @unique
@@ -130,6 +133,8 @@ class STTCapabilities:
     """Whether the STT supports batch recognition via recognize() method"""
     keyterms: bool = False
     """Whether the STT supports keyterm prompting (see STT._update_keyterms)"""
+    chat_context: bool = False
+    """Whether the STT can natively consume conversation context (see STT._push_conversation_item)"""
 
 
 class STTError(BaseModel):
@@ -155,6 +160,7 @@ class STT(
         self._label = f"{type(self).__module__}.{type(self).__name__}"
         self._recognize_metrics_needed = True
         self._keyterms_unsupported_warned = False
+        self._chat_context_unsupported_warned = False
 
     @property
     def label(self) -> str:
@@ -279,6 +285,21 @@ class STT(
                 self._keyterms_unsupported_warned = True
                 logger.warning(
                     "keyterms are not supported by this STT, ignoring keyterms update",
+                    extra={"stt": self._label},
+                )
+            return
+
+    def _push_conversation_item(self, ev: ConversationItemAddedEvent) -> None:
+        """Feed a new conversation turn to the STT to bias recognition (context carryover).
+
+        Plugins with native context support set ``STTCapabilities.chat_context`` and override
+        this to forward the item to their provider's carryover field.
+        """
+        if not self._capabilities.chat_context:
+            if not self._chat_context_unsupported_warned:
+                self._chat_context_unsupported_warned = True
+                logger.warning(
+                    "chat context is not supported by this STT, ignoring chat context update",
                     extra={"stt": self._label},
                 )
             return

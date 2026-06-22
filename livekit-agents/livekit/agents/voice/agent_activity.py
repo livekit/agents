@@ -854,12 +854,23 @@ class AgentActivity(RecognitionHooks):
         else:
             self._audio_recognition.start()
 
-        # bind the session's keyterm detector to this activity's STT (detection uses its
-        # own LLM, configured via keyterm_options, not the agent's)
-        self._session._keyterm_detector.start(
-            self._session,
-            stt=self.stt if isinstance(self.stt, stt.STT) else None,
-        )
+        if isinstance(self.stt, stt.STT):
+            stt_context_options = self._session._opts.stt_context
+
+            # bind the session's keyterm detector to this activity's STT (detection uses its
+            # own LLM, configured via stt_context_options, not the agent's)
+            self._session._keyterm_detector.start(self._session, stt=self.stt)
+
+            # forward conversation turns to STTs that consume context natively (chat_context).
+            # stateless and activity-scoped, so it lives here rather than in the detector.
+            if stt_context_options["chat_context"]["enabled"]:
+                if self.stt.capabilities.chat_context:
+                    self._session.on("conversation_item_added", self.stt._push_conversation_item)
+                else:
+                    logger.warning(
+                        "chat context is enabled but the STT does not support it; skipping",
+                        extra={"stt": self.stt.label},
+                    )
 
     @tracer.start_as_current_span("drain_agent_activity")
     async def drain(
@@ -1021,6 +1032,7 @@ class AgentActivity(RecognitionHooks):
         if isinstance(self.stt, stt.STT):
             self.stt.off("metrics_collected", self._on_metrics_collected)
             self.stt.off("error", self._on_error)
+            self._session.off("conversation_item_added", self.stt._push_conversation_item)
 
         if isinstance(self.tts, tts.TTS):
             self.tts.off("metrics_collected", self._on_metrics_collected)

@@ -6,7 +6,7 @@ import dataclasses
 import time
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from livekit import rtc
 
@@ -18,6 +18,9 @@ from ..utils import aio
 from ..utils.audio import AudioBuffer
 from ..vad import VAD
 from .stt import STT, RecognizeStream, SpeechEvent, SpeechEventType, STTCapabilities
+
+if TYPE_CHECKING:
+    from ..voice.events import ConversationItemAddedEvent
 
 # don't retry when using the fallback adapter
 DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
@@ -85,6 +88,7 @@ class FallbackAdapter(
                 diarization=all(t.capabilities.diarization for t in stt),
                 aligned_transcript=aligned_transcript,
                 keyterms=any(t.capabilities.keyterms for t in stt),
+                chat_context=any(t.capabilities.chat_context for t in stt),
             )
         )
 
@@ -118,6 +122,11 @@ class FallbackAdapter(
         # forward to every underlying STT; unsupported ones warn-and-skip internally
         for stt_instance in self._stt_instances:
             stt_instance._update_keyterms(keyterms)
+
+    def _push_conversation_item(self, ev: ConversationItemAddedEvent) -> None:
+        # forward to every underlying STT; unsupported ones warn-and-skip internally
+        for stt_instance in self._stt_instances:
+            stt_instance._push_conversation_item(ev)
 
     async def _try_recognize(
         self,

@@ -1,3 +1,4 @@
+from ..stt.recognition_context import ChatContextOptions, KeytermDetectionOptions, STTContextOptions
 from . import io, run_result
 from .agent import Agent, AgentTask, ModelSettings
 from .agent_session import AgentSession, RecordingOptions, VoiceActivityVideoSampler
@@ -18,7 +19,6 @@ from .events import (
     UserStateChangedEvent,
     UserTurnExceededEvent,
 )
-from .keyterms import KeytermDetectionOptions, KeytermOptions
 from .remote_session import RemoteSession
 from .room_io import (
     _ParticipantAudioOutput,
@@ -52,8 +52,9 @@ __all__ = [
     "AgentFalseInterruptionEvent",
     "RemoteSession",
     "UserTurnExceededEvent",
-    "KeytermOptions",
+    "STTContextOptions",
     "KeytermDetectionOptions",
+    "ChatContextOptions",
     "TranscriptSynchronizer",
     "io",
     "room_io",

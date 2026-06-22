@@ -34,6 +34,7 @@ from ..llm import AgentHandoff, ChatContext, MetricsReport
 from ..llm.chat_context import Instructions
 from ..log import logger
 from ..metrics import AgentSessionUsage, ModelUsageCollector
+from ..stt.recognition_context import KeytermDetector, STTContextOptions, _resolve_stt_context
 from ..telemetry import trace_types, tracer
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -61,7 +62,6 @@ from .events import (
     UserStateChangedEvent,
 )
 from .ivr import IVRActivity
-from .keyterms import KeytermDetectionOptions, KeytermDetector, KeytermOptions, _resolve_detection
 from .recorder_io import RecorderIO
 from .remote_session import RoomSessionTransport, SessionHost, SessionTransport
 from .run_result import RunResult
@@ -143,7 +143,7 @@ class SessionConnectOptions:
 @dataclass
 class AgentSessionOptions:
     turn_handling: TurnHandlingOptions
-    keyterm_detection: KeytermDetectionOptions
+    stt_context: STTContextOptions
     max_tool_steps: int
     user_away_timeout: float | None
     min_consecutive_speech_delay: float
@@ -231,7 +231,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str] = NOT_GIVEN,
         turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
-        keyterm_options: NotGivenOr[KeytermOptions] = NOT_GIVEN,
+        stt_context_options: NotGivenOr[STTContextOptions] = NOT_GIVEN,
         # Tool settings
         tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
         tool_handling: NotGivenOr[ToolHandlingOptions] = NOT_GIVEN,
@@ -289,9 +289,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 providing external tools for the agent to use.
             userdata (Userdata_T, optional): Arbitrary per-session user data.
             turn_handling (TurnHandlingOptions, optional): Configuration for turn handling.
-            keyterm_options (KeytermOptions, optional): Keyterm prompting for the STT. Holds
-                user-defined ``terms`` and optional automatic ``detection`` config. Applies to
-                supported STTs; unsupported ones warn and ignore it.
+            stt_context_options (STTContextOptions, optional): Context configuration for the
+                STT. Holds static ``keyterms`` plus two independent, composable mechanisms:
+                ``keyterm_detection`` (LLM extraction) and ``chat_context`` (native carryover).
+                Applies to supported STTs; unsupported mechanisms warn and are ignored.
             max_endpointing_delay (float): Maximum time-in-seconds the agent
                 will wait before terminating the turn. Default ``3.0`` s.
             max_tool_steps (int): Maximum consecutive tool calls per LLM turn.
@@ -374,8 +375,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         user_turn_limit = _resolve_user_turn_limit(turn_handling.get("user_turn_limit"))
         raw_turn_detection = turn_handling.get("turn_detection", None)
 
-        keyterm_opts: KeytermOptions = keyterm_options if is_given(keyterm_options) else {}
-
         # This is the "global" chat_context, it holds the entire conversation history
         self._chat_ctx = ChatContext.empty()
         self._opts = AgentSessionOptions(
@@ -386,7 +385,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 preemptive_generation=preemptive_gen,
                 user_turn_limit=user_turn_limit,
             ),
-            keyterm_detection=_resolve_detection(keyterm_opts.get("detection")),
+            stt_context=_resolve_stt_context(stt_context_options or None),
             max_tool_steps=max_tool_steps,
             user_away_timeout=user_away_timeout,
             min_consecutive_speech_delay=min_consecutive_speech_delay,
@@ -420,8 +419,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._tts = tts or None
 
         self._keyterm_detector = KeytermDetector(
-            user_keyterms=keyterm_opts.get("terms"),
-            options=self._opts.keyterm_detection,
+            user_keyterms=self._opts.stt_context["keyterms"],
+            options=self._opts.stt_context["keyterm_detection"],
         )
 
         self._turn_detection = raw_turn_detection
