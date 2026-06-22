@@ -35,8 +35,6 @@ import asyncio
 import json
 import re
 import time
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 
 import httpx
 import websockets
@@ -62,42 +60,47 @@ from .log import logger
 # between short clauses under higher-latency environments.
 _SENTENCE_END_RE = re.compile(r"(?:\n\n+|\n|[.!?;:。！？；：](?:\s|$))")
 
+_WS_PING_INTERVAL = 20
+_WS_PING_TIMEOUT = 20
 
-@asynccontextmanager
-async def _asyncio_timeout(timeout_s: float) -> AsyncIterator[None]:
-    """Compatibility timeout context for Python 3.10+.
 
-    Uses ``asyncio.timeout`` when available (3.11+). On older versions,
-    emulates timeout by cancelling the current task and remapping only the
-    internally-triggered cancellation to ``TimeoutError``.
+class _WSStreamGuard:
+    """Per-recv idle timeout with an absolute session deadline.
+
+    A single speech-start/speech-end session can run for a long turn while text
+    and audio are actively exchanged. Idle timeout detects hung connections;
+    the session deadline caps total turn duration without failing healthy turns
+    that keep making progress.
     """
-    timeout_cm = getattr(asyncio, "timeout", None)
-    if timeout_cm is not None:
-        async with timeout_cm(timeout_s):
-            yield
-        return
 
-    loop = asyncio.get_running_loop()
-    task = asyncio.current_task()
-    if task is None:
-        raise RuntimeError("timeout context requires a running asyncio task")
+    def __init__(
+        self,
+        *,
+        idle_timeout: float,
+        session_deadline: float,
+        request_id: str,
+    ) -> None:
+        self._idle_timeout = idle_timeout
+        self._session_deadline = session_deadline
+        self._request_id = request_id
 
-    timed_out = False
+    def _next_recv_timeout(self) -> float:
+        remaining = self._session_deadline - time.monotonic()
+        if remaining <= 0:
+            raise APITimeoutError(
+                f"[{self._request_id}] TTS stream exceeded max session duration"
+            )
+        return min(self._idle_timeout, remaining)
 
-    def _cancel_task() -> None:
-        nonlocal timed_out
-        timed_out = True
-        task.cancel()
-
-    cancel_handle = loop.call_later(timeout_s, _cancel_task)
-    try:
-        yield
-    except asyncio.CancelledError as e:
-        if timed_out:
-            raise TimeoutError() from e
-        raise
-    finally:
-        cancel_handle.cancel()
+    async def recv(self, ws: websockets.ClientConnection):
+        timeout = self._next_recv_timeout()
+        try:
+            return await asyncio.wait_for(ws.recv(), timeout=timeout)
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError(
+                f"[{self._request_id}] TTS stream idle timeout after "
+                f"{self._idle_timeout:.1f}s"
+            ) from e
 
 
 # ---------------------------------------------------------------------------
@@ -543,11 +546,16 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
             params["audio_quality"] = self._blaze_tts._audio_quality
         return params
 
-    async def _ws_connect_and_auth(self, ws: websockets.ClientConnection, request_id: str) -> None:
+    async def _ws_connect_and_auth(
+        self,
+        ws: websockets.ClientConnection,
+        request_id: str,
+        ws_guard: _WSStreamGuard,
+    ) -> None:
         """Perform the initial WS handshake: connection ack + authentication."""
         auth_start = time.monotonic()
 
-        msg = json.loads(await ws.recv())
+        msg = json.loads(await ws_guard.recv(ws))
         if msg.get("type") != "successful-connection":
             raise APIConnectionError(f"Unexpected WS message on connect: {msg}")
         logger.debug("[%s] TTS WS connected: %s", request_id, msg)
@@ -560,7 +568,7 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
                 }
             )
         )
-        msg = json.loads(await ws.recv())
+        msg = json.loads(await ws_guard.recv(ws))
         if msg.get("type") != "successful-authentication":
             raise APIStatusError(
                 f"WS authentication failed: {msg}",
@@ -589,10 +597,20 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
         gateway only extracts 'first N words' once, reducing external TTS API
         calls from ~2×batches to ~batches+1.  Audio reading runs concurrently
         with text sending for optimal pipelining.
+
+        Timeouts use per-recv idle detection (``_timeout``) plus an absolute
+        session cap (``_stream_timeout``) instead of a single timer around the
+        whole turn.  If the WebSocket drops before any audio is emitted, the
+        session is retried and already-queued batches are resent on a fresh
+        connection; after audio starts, retry would duplicate playback so the
+        error is surfaced to the caller.
         """
         request_id = shortuuid()
         turn_start = time.monotonic()
         tts_cfg = self._blaze_tts
+        idle_timeout = self._conn_options.timeout or tts_cfg._timeout
+        session_deadline = turn_start + tts_cfg._stream_timeout
+        max_ws_attempts = max(1, self._conn_options.max_retry + 1)
         configured_mime_type = {
             "pcm": "audio/pcm",
             "mp3": "audio/mpeg",
@@ -646,254 +664,292 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
 
         batch_count = 0
         seg_count = 0
+        sent_batches: list[str] = []
+        text_buf = ""
+        input_done = False
 
         try:
-            async with _asyncio_timeout(tts_cfg._stream_timeout):
-                async with websockets.connect(tts_cfg._ws_url) as ws:
-                    await self._ws_connect_and_auth(ws, request_id)
+            for ws_attempt in range(1, max_ws_attempts + 1):
+                ws_guard = _WSStreamGuard(
+                    idle_timeout=idle_timeout,
+                    session_deadline=session_deadline,
+                    request_id=request_id,
+                )
+                try:
+                    async with websockets.connect(
+                        tts_cfg._ws_url,
+                        ping_interval=_WS_PING_INTERVAL,
+                        ping_timeout=_WS_PING_TIMEOUT,
+                        close_timeout=5,
+                    ) as ws:
+                        await self._ws_connect_and_auth(ws, request_id, ws_guard)
 
-                    # ---------- single speech-start for the whole turn ----------
-                    speech_start_msg = self._speech_start_params()
-                    logger.info(
-                        "[%s] TTS speech-start (single session): %s",
-                        request_id,
-                        json.dumps(speech_start_msg, ensure_ascii=False),
-                    )
-                    await ws.send(json.dumps(speech_start_msg))
-                    ack = await ws.recv()
-                    logger.debug("[%s] TTS speech-start ack: %s", request_id, ack)
-
-                    # ---------- concurrent audio reader ----------
-                    async def _read_audio() -> tuple[int, int]:
-                        """Read all WS responses until speech-end.
-
-                        Returns (tts_segment_count, total_audio_bytes).
-                        """
-                        _seg_count = 0
-                        total_bytes = 0
-                        pending_tail = b""
-                        first_audio = True
-                        first_audio_t: float | None = None
-                        has_prev_segment = False
-                        fade_samples = max(1, int(tts_cfg._sample_rate * 0.008))
-                        tail_bytes = fade_samples * 2
-                        silence_pcm = _generate_silence(
-                            tts_cfg._sample_rate,
-                            tts_cfg._inter_sentence_silence_ms,
-                        )
-
-                        while True:
-                            frame = await ws.recv()
-
-                            if isinstance(frame, bytes):
-                                if not frame:
-                                    continue
-                                _ensure_output_initialized()
-                                if first_audio_t is None:
-                                    first_audio_t = time.monotonic()
-                                    logger.info(
-                                        "[%s] TTS first audio: %.3fs after turn start",
-                                        request_id,
-                                        first_audio_t - turn_start,
-                                    )
-                                total_bytes += len(frame)
-
-                                if not runtime_is_pcm:
-                                    output_emitter.push(frame)
-                                    first_audio = False
-                                    continue
-
-                                pcm = pending_tail + frame
-                                if first_audio:
-                                    pcm = _apply_pcm16_fade(
-                                        pcm,
-                                        fade_samples=fade_samples,
-                                        fade_in=True,
-                                    )
-                                first_audio = False
-
-                                if len(pcm) <= tail_bytes:
-                                    pending_tail = pcm
-                                    continue
-                                output_emitter.push(pcm[:-tail_bytes])
-                                pending_tail = pcm[-tail_bytes:]
-                            else:
-                                msg = json.loads(frame)
-                                st = msg.get("status") or msg.get("type", "")
-
-                                if st == "speech-end":
-                                    # Final flush with fade-out
-                                    if runtime_is_pcm and pending_tail:
-                                        output_emitter.push(
-                                            _apply_pcm16_fade(
-                                                pending_tail,
-                                                fade_samples=fade_samples,
-                                                fade_out=True,
-                                            )
-                                        )
-                                    break
-
-                                elif st == "started-byte-stream":
-                                    # Initialize output emitter on first segment.
-                                    _ensure_output_initialized(msg.get("contentType"))
-                                    # Insert inter-segment silence and reset fade-in
-                                    # flag so each new segment begins with a fade-in.
-                                    if has_prev_segment:
-                                        if runtime_is_pcm and silence_pcm:
-                                            output_emitter.push(silence_pcm)
-                                        first_audio = True  # reset for this segment's fade-in
-
-                                elif st == "finished-byte-stream":
-                                    _seg_count += 1
-                                    # Fade-out tail of this TTS segment
-                                    if runtime_is_pcm and pending_tail:
-                                        output_emitter.push(
-                                            _apply_pcm16_fade(
-                                                pending_tail,
-                                                fade_samples=fade_samples,
-                                                fade_out=True,
-                                            )
-                                        )
-                                        pending_tail = b""
-                                    has_prev_segment = True
-                                    logger.debug(
-                                        "[%s] TTS segment %d done",
-                                        request_id,
-                                        _seg_count,
-                                    )
-
-                                elif st in ("failed-request", "error"):
-                                    raise APIStatusError(
-                                        f"TTS failed: {msg.get('message', '')} "
-                                        f"{msg.get('details', '')}",
-                                        status_code=500,
-                                        request_id=request_id,
-                                        body=json.dumps(msg),
-                                    )
-                                # processing-request, speech-start → skip
-
-                        return _seg_count, total_bytes
-
-                    reader_task = asyncio.create_task(_read_audio())
-
-                    # ---------- batch text sender ----------
-                    async def _send_query(text: str) -> None:
-                        nonlocal batch_count
-                        normalized = apply_normalization_rules(
-                            text,
-                            tts_cfg._normalization_rules,
-                        )
-                        normalized = _normalize_batch_text(normalized)
-                        if not normalized.strip():
-                            return
-                        batch_count += 1
-                        has_img_tag = (
-                            "<img>" in normalized.lower() or "</img>" in normalized.lower()
-                        )
-                        preview = normalized[:80] + ("..." if len(normalized) > 80 else "")
+                        # ---------- single speech-start for the whole turn ----------
+                        speech_start_msg = self._speech_start_params()
                         logger.info(
-                            "[%s] TTS batch %d — %d chars has_img_tag=%s: '%s'",
+                            "[%s] TTS speech-start (single session): %s",
                             request_id,
-                            batch_count,
-                            len(normalized),
-                            has_img_tag,
-                            preview,
+                            json.dumps(speech_start_msg, ensure_ascii=False),
                         )
-                        logger.debug(
-                            "[%s] TTS batch %d full_text=%r",
-                            request_id,
-                            batch_count,
-                            normalized,
-                        )
-                        await ws.send(json.dumps({"query": normalized}))
-                        if batch_count == 1:
-                            self._mark_started()
+                        await ws.send(json.dumps(speech_start_msg))
+                        ack = await ws_guard.recv(ws)
+                        logger.debug("[%s] TTS speech-start ack: %s", request_id, ack)
 
-                    text_buf = ""
-                    input_done = False
-
-                    async def _drain_batches(force: bool) -> None:
-                        nonlocal text_buf
-                        while True:
-                            idx = _find_batch_split(
-                                text_buf,
-                                min_chars=tts_cfg._batch_min_chars,
-                                target_chars=tts_cfg._batch_target_chars,
-                                max_chars=tts_cfg._batch_max_chars,
-                                force=force,
-                                is_first_batch=(batch_count == 0),
+                        if sent_batches and ws_attempt > 1:
+                            logger.warning(
+                                "[%s] TTS WS reconnect attempt %d/%d — resending %d batch(es)",
+                                request_id,
+                                ws_attempt,
+                                max_ws_attempts,
+                                len(sent_batches),
                             )
-                            if idx is None:
-                                break
-                            chunk = text_buf[:idx]
-                            text_buf = text_buf[idx:]
-                            if not chunk:
-                                continue
-                            if len(chunk.strip()) < 8 and not force:
-                                text_buf = chunk + text_buf
-                                break
-                            await _send_query(chunk)
+                            for batch in sent_batches:
+                                await ws.send(json.dumps({"query": batch}))
 
-                    try:
-                        # Main input loop — read tokens with a timeout so we
-                        # can flush accumulated text while waiting for more.
-                        while not input_done:
-                            try:
-                                data = await asyncio.wait_for(
-                                    self._input_ch.recv(),
-                                    timeout=tts_cfg._batch_max_wait_s,
-                                )
-                            except asyncio.TimeoutError:
-                                await _drain_batches(force=False)
-                                continue
-                            except (ChanClosed, StopAsyncIteration):
-                                input_done = True
-                                await _drain_batches(force=True)
-                                break
+                        # ---------- concurrent audio reader ----------
+                        async def _read_audio() -> tuple[int, int]:
+                            """Read all WS responses until speech-end.
 
-                            if isinstance(data, self._FlushSentinel):
-                                input_done = True
-                                await _drain_batches(force=True)
-                                break
+                            Returns (tts_segment_count, total_audio_bytes).
+                            """
+                            _seg_count = 0
+                            total_bytes = 0
+                            pending_tail = b""
+                            first_audio = True
+                            first_audio_t: float | None = None
+                            has_prev_segment = False
+                            fade_samples = max(1, int(tts_cfg._sample_rate * 0.008))
+                            tail_bytes = fade_samples * 2
+                            silence_pcm = _generate_silence(
+                                tts_cfg._sample_rate,
+                                tts_cfg._inter_sentence_silence_ms,
+                            )
 
-                            text_buf += data
-
-                            # Read-ahead: drain pending tokens so short
-                            # sentences get merged before we split again.
                             while True:
-                                try:
-                                    extra = self._input_ch.recv_nowait()
-                                except (ChanEmpty, ChanClosed):
+                                frame = await ws_guard.recv(ws)
+
+                                if isinstance(frame, bytes):
+                                    if not frame:
+                                        continue
+                                    _ensure_output_initialized()
+                                    if first_audio_t is None:
+                                        first_audio_t = time.monotonic()
+                                        logger.info(
+                                            "[%s] TTS first audio: %.3fs after turn start",
+                                            request_id,
+                                            first_audio_t - turn_start,
+                                        )
+                                    total_bytes += len(frame)
+
+                                    if not runtime_is_pcm:
+                                        output_emitter.push(frame)
+                                        first_audio = False
+                                        continue
+
+                                    pcm = pending_tail + frame
+                                    if first_audio:
+                                        pcm = _apply_pcm16_fade(
+                                            pcm,
+                                            fade_samples=fade_samples,
+                                            fade_in=True,
+                                        )
+                                    first_audio = False
+
+                                    if len(pcm) <= tail_bytes:
+                                        pending_tail = pcm
+                                        continue
+                                    output_emitter.push(pcm[:-tail_bytes])
+                                    pending_tail = pcm[-tail_bytes:]
+                                else:
+                                    msg = json.loads(frame)
+                                    st = msg.get("status") or msg.get("type", "")
+
+                                    if st == "speech-end":
+                                        # Final flush with fade-out
+                                        if runtime_is_pcm and pending_tail:
+                                            output_emitter.push(
+                                                _apply_pcm16_fade(
+                                                    pending_tail,
+                                                    fade_samples=fade_samples,
+                                                    fade_out=True,
+                                                )
+                                            )
+                                        break
+
+                                    elif st == "started-byte-stream":
+                                        # Initialize output emitter on first segment.
+                                        _ensure_output_initialized(msg.get("contentType"))
+                                        # Insert inter-segment silence and reset fade-in
+                                        # flag so each new segment begins with a fade-in.
+                                        if has_prev_segment:
+                                            if runtime_is_pcm and silence_pcm:
+                                                output_emitter.push(silence_pcm)
+                                            first_audio = True  # reset for this segment's fade-in
+
+                                    elif st == "finished-byte-stream":
+                                        _seg_count += 1
+                                        # Fade-out tail of this TTS segment
+                                        if runtime_is_pcm and pending_tail:
+                                            output_emitter.push(
+                                                _apply_pcm16_fade(
+                                                    pending_tail,
+                                                    fade_samples=fade_samples,
+                                                    fade_out=True,
+                                                )
+                                            )
+                                            pending_tail = b""
+                                        has_prev_segment = True
+                                        logger.debug(
+                                            "[%s] TTS segment %d done",
+                                            request_id,
+                                            _seg_count,
+                                        )
+
+                                    elif st in ("failed-request", "error"):
+                                        raise APIStatusError(
+                                            f"TTS failed: {msg.get('message', '')} "
+                                            f"{msg.get('details', '')}",
+                                            status_code=500,
+                                            request_id=request_id,
+                                            body=json.dumps(msg),
+                                        )
+                                    # processing-request, speech-start → skip
+
+                            return _seg_count, total_bytes
+
+                        reader_task = asyncio.create_task(_read_audio())
+
+                        # ---------- batch text sender ----------
+                        async def _send_query(text: str, *, resend: bool = False) -> None:
+                            nonlocal batch_count
+                            normalized = apply_normalization_rules(
+                                text,
+                                tts_cfg._normalization_rules,
+                            )
+                            normalized = _normalize_batch_text(normalized)
+                            if not normalized.strip():
+                                return
+                            if not resend:
+                                batch_count += 1
+                                has_img_tag = (
+                                    "<img>" in normalized.lower()
+                                    or "</img>" in normalized.lower()
+                                )
+                                preview = normalized[:80] + (
+                                    "..." if len(normalized) > 80 else ""
+                                )
+                                logger.info(
+                                    "[%s] TTS batch %d — %d chars has_img_tag=%s: '%s'",
+                                    request_id,
+                                    batch_count,
+                                    len(normalized),
+                                    has_img_tag,
+                                    preview,
+                                )
+                                logger.debug(
+                                    "[%s] TTS batch %d full_text=%r",
+                                    request_id,
+                                    batch_count,
+                                    normalized,
+                                )
+                                sent_batches.append(normalized)
+                            await ws.send(json.dumps({"query": normalized}))
+                            if batch_count == 1 and not resend:
+                                self._mark_started()
+
+                        async def _drain_batches(force: bool) -> None:
+                            nonlocal text_buf
+                            while True:
+                                idx = _find_batch_split(
+                                    text_buf,
+                                    min_chars=tts_cfg._batch_min_chars,
+                                    target_chars=tts_cfg._batch_target_chars,
+                                    max_chars=tts_cfg._batch_max_chars,
+                                    force=force,
+                                    is_first_batch=(batch_count == 0),
+                                )
+                                if idx is None:
                                     break
-                                if isinstance(extra, self._FlushSentinel):
-                                    input_done = True
+                                chunk = text_buf[:idx]
+                                text_buf = text_buf[idx:]
+                                if not chunk:
+                                    continue
+                                if len(chunk.strip()) < 8 and not force:
+                                    text_buf = chunk + text_buf
                                     break
-                                text_buf += extra
+                                await _send_query(chunk)
 
-                            await _drain_batches(force=input_done)
+                        try:
+                            if not input_done:
+                                # Main input loop — read tokens with a timeout so we
+                                # can flush accumulated text while waiting for more.
+                                while not input_done:
+                                    try:
+                                        data = await asyncio.wait_for(
+                                            self._input_ch.recv(),
+                                            timeout=tts_cfg._batch_max_wait_s,
+                                        )
+                                    except asyncio.TimeoutError:
+                                        await _drain_batches(force=False)
+                                        continue
+                                    except (ChanClosed, StopAsyncIteration):
+                                        input_done = True
+                                        await _drain_batches(force=True)
+                                        break
 
-                        # Flush any remaining text
-                        if text_buf:
-                            await _send_query(text_buf)
+                                    if isinstance(data, self._FlushSentinel):
+                                        input_done = True
+                                        await _drain_batches(force=True)
+                                        break
 
-                        # Close the single speech session
-                        await ws.send(json.dumps({"event": "speech-end"}))
+                                    text_buf += data
 
-                        # Wait for all audio to arrive
-                        seg_count, _ = await reader_task
-                    finally:
-                        # Always cancel and await reader_task to prevent
-                        # "Task destroyed but pending" / exception-not-retrieved warnings.
-                        await utils.aio.gracefully_cancel(reader_task)
+                                    # Read-ahead: drain pending tokens so short
+                                    # sentences get merged before we split again.
+                                    while True:
+                                        try:
+                                            extra = self._input_ch.recv_nowait()
+                                        except (ChanEmpty, ChanClosed):
+                                            break
+                                        if isinstance(extra, self._FlushSentinel):
+                                            input_done = True
+                                            break
+                                        text_buf += extra
 
-                    if not stream_initialized:
-                        # No audio arrived, but keep emitter lifecycle consistent.
-                        _ensure_output_initialized()
+                                    await _drain_batches(force=input_done)
 
-        except TimeoutError as e:
-            raise APITimeoutError(f"TTS stream timed out: {e}") from e
-        except websockets.exceptions.ConnectionClosed as e:
-            raise APIConnectionError(f"TTS WebSocket closed: {e}") from e
+                            # Flush any remaining text
+                            if text_buf:
+                                await _send_query(text_buf)
+                                text_buf = ""
+
+                            # Close the single speech session
+                            await ws.send(json.dumps({"event": "speech-end"}))
+
+                            # Wait for all audio to arrive
+                            seg_count, _ = await reader_task
+                        finally:
+                            # Always cancel and await reader_task to prevent
+                            # "Task destroyed but pending" / exception-not-retrieved warnings.
+                            await utils.aio.gracefully_cancel(reader_task)
+
+                        if not stream_initialized:
+                            # No audio arrived, but keep emitter lifecycle consistent.
+                            _ensure_output_initialized()
+                        break
+                except websockets.exceptions.ConnectionClosed as e:
+                    if stream_initialized or ws_attempt >= max_ws_attempts:
+                        raise APIConnectionError(f"TTS WebSocket closed: {e}") from e
+                    retry_interval = self._conn_options._interval_for_retry(ws_attempt - 1)
+                    logger.warning(
+                        "[%s] TTS WebSocket closed before first audio (attempt %d/%d), "
+                        "retrying in %.1fs",
+                        request_id,
+                        ws_attempt,
+                        max_ws_attempts,
+                        retry_interval,
+                    )
+                    await asyncio.sleep(retry_interval)
         except (APIStatusError, APITimeoutError, APIConnectionError):
             raise
         except Exception as e:
