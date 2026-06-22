@@ -741,7 +741,14 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 )
 
             if self._mp_ctx_str == "forkserver":
-                plugin_packages = [p.package for p in Plugin.registered_plugins] + ["av"]
+                # `livekit.agents.inference._warmup` is a side-effect module:
+                # importing it from the forkserver process calls `init_vad()` and
+                # `init_eot()`, paging the native model weights into the
+                # forkserver. Forked job processes inherit those pages via COW.
+                plugin_packages = [p.package for p in Plugin.registered_plugins] + [
+                    "av",
+                    "livekit.agents.inference._warmup",
+                ]
                 logger.info("preloading plugins", extra={"packages": plugin_packages})
                 self._mp_ctx.set_forkserver_preload(plugin_packages)
 
@@ -844,9 +851,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         job_memory_limit_mb: NotGivenOr[float] = NOT_GIVEN,
         drain_timeout: NotGivenOr[int] = NOT_GIVEN,
         num_idle_processes: NotGivenOr[int] = NOT_GIVEN,
-        shutdown_process_timeout: float = 10.0,
-        session_end_timeout: float = 300.0,
-        initialize_process_timeout: float = 10.0,
+        shutdown_process_timeout: NotGivenOr[float] = NOT_GIVEN,
+        session_end_timeout: NotGivenOr[float] = NOT_GIVEN,
+        initialize_process_timeout: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if not self._closed:
             raise RuntimeError("cannot update options after starting the server")
@@ -886,6 +893,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
         if is_given(session_end_timeout):
             self._session_end_timeout = session_end_timeout
+
+        if is_given(initialize_process_timeout):
+            self._initialize_process_timeout = initialize_process_timeout
 
     @property
     def id(self) -> str:

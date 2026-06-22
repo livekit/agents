@@ -618,7 +618,11 @@ async def _execute_tools_task(
                     make_tool_output(
                         fnc_call=fnc_call,
                         output=None,
-                        exception=ToolError(f"Unknown function: {fnc_call.name}"),
+                        # Name the available tools so the model can self-correct
+                        exception=ToolError(
+                            f"Unknown function: {fnc_call.name} - available tools: "
+                            f"{', '.join(tool_ctx.function_tools.keys())}"
+                        ),
                     )
                 )
                 continue

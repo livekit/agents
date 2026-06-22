@@ -54,7 +54,7 @@ To run the examples, you'll need:
 
 - A [LiveKit Cloud](https://cloud.livekit.io) account or a local [LiveKit server](https://github.com/livekit/livekit)
 - API keys for the model providers you want to use in a `.env` file
-- Python 3.9 or higher
+- Python 3.10 or higher
 - [uv](https://docs.astral.sh/uv/)
 
 ### Environment file

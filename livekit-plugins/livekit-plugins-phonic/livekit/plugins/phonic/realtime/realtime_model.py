@@ -32,6 +32,7 @@ from phonic.types import (
     ConfigPayload,
     GenerateReplyPayload,
     InputTextPayload,
+    ResetPayload,
     SayPayload,
     ToolCallInterruptedPayload,
     ToolCallOutputPayload,
@@ -43,6 +44,12 @@ from ..log import logger
 PHONIC_INPUT_SAMPLE_RATE = 44100
 PHONIC_OUTPUT_SAMPLE_RATE = 44100
 PHONIC_NUM_CHANNELS = 1
+
+CONVERSATION_HISTORY_PREFIX = (
+    "\n\nThis conversation is being continued from an existing conversation. "
+    "You are the assistant speaking to the user. "
+    "The following is the conversation history:\n"
+)
 PHONIC_INPUT_FRAME_MS = 20
 WS_CLOSE_NORMAL = 1000
 TOOL_CALL_OUTPUT_TIMEOUT_MS = 60000
@@ -67,6 +74,7 @@ class _RealtimeOptions:
     no_input_poke_sec: NotGivenOr[float]
     no_input_poke_text: NotGivenOr[str]
     no_input_end_conversation_sec: NotGivenOr[float]
+    forbid_speech_after_tool_call: NotGivenOr[list[str]]
     conn_options: APIConnectOptions
     instructions: NotGivenOr[str] = NOT_GIVEN
 
@@ -118,6 +126,7 @@ class RealtimeModel(llm.RealtimeModel):
         no_input_poke_sec: NotGivenOr[float] = NOT_GIVEN,
         no_input_poke_text: NotGivenOr[str] = NOT_GIVEN,
         no_input_end_conversation_sec: NotGivenOr[float] = NOT_GIVEN,
+        forbid_speech_after_tool_call: NotGivenOr[list[str]] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         """
@@ -150,6 +159,14 @@ class RealtimeModel(llm.RealtimeModel):
             no_input_poke_text: Custom poke message text. Ignored when
                 ``generate_no_input_poke_text`` is True.
             no_input_end_conversation_sec: Seconds of silence before ending the conversation.
+            forbid_speech_after_tool_call: Names of tools after which Phonic should NOT
+                auto-generate a spoken reply. Use for tools that always hand off / trigger an
+                agent switch (e.g. advancing a task in a workflow). After such a tool, the
+                outgoing agent would otherwise speak a reply that the handoff's session reset
+                immediately cancels, producing a race / double-speak; forbidding speech lets
+                only the incoming agent speak. Only list tools that ALWAYS hand off — a listed
+                tool that returns without handing off will leave the agent silent. Tools not
+                listed keep the default behavior (a reply is generated after the tool output).
             conn_options: Retry/backoff and connection settings.
         """
         super().__init__(
@@ -160,6 +177,9 @@ class RealtimeModel(llm.RealtimeModel):
                 auto_tool_reply_generation=True,
                 audio_output=True,
                 manual_function_calls=False,
+                mutable_chat_context=True,
+                mutable_instructions=True,
+                mutable_tools=True,
                 per_response_tool_choice=False,
                 supports_say=True,
             )
@@ -204,6 +224,7 @@ class RealtimeModel(llm.RealtimeModel):
             no_input_poke_sec=no_input_poke_sec,
             no_input_poke_text=no_input_poke_text,
             no_input_end_conversation_sec=no_input_end_conversation_sec,
+            forbid_speech_after_tool_call=forbid_speech_after_tool_call,
             conn_options=conn_options,
         )
 
@@ -269,7 +290,9 @@ class RealtimeSession(llm.RealtimeSession):
         self._config_sent = False
         self._pending_tool_call_ids: set[str] = set()
         self._tool_definitions: list[dict] = []
+        self._forbid_speech_after_tool_call: set[str] = set()
         self._system_prompt_postfix: str = ""
+        self._pending_user_text: str | None = None
 
     async def _close_active_session(self) -> None:
         async with self._session_lock:
@@ -310,23 +333,22 @@ class RealtimeSession(llm.RealtimeSession):
                 and item.text_content.strip()
             ]
             if messages:
-                turn_history = "\n".join(f"{m.role}: {m.text_content}" for m in messages)
-                if turn_history.strip():
+                turn_history = self._build_turn_history(chat_ctx)
+                if turn_history:
                     logger.debug(
                         "update_chat_ctx called with messages prior to config being sent to "
                         "Phonic. Including conversation state in system instructions."
                     )
-                    self._system_prompt_postfix = (
-                        "\n\nThis conversation is being continued from an existing "
-                        "conversation. You are the assistant speaking to the user. "
-                        "The following is the conversation history:\n" + turn_history
-                    )
+                    self._system_prompt_postfix = CONVERSATION_HISTORY_PREFIX + turn_history
                 self._chat_ctx = chat_ctx.copy()
             return
 
         diff_ops = llm.utils.compute_chat_ctx_diff(self._chat_ctx, chat_ctx)
         sent_tool_call_output = False
         sent_system_message = False
+        forbid_speech = False
+        buffered_user_text = False
+        last_item_id = chat_ctx.items[-1].id if chat_ctx.items else None
 
         for _, item_id in diff_ops.to_create:
             item = chat_ctx.get_by_id(item_id)
@@ -347,6 +369,8 @@ class RealtimeSession(llm.RealtimeSession):
                         )
                     )
                     sent_tool_call_output = True
+                    if item.name in self._forbid_speech_after_tool_call:
+                        forbid_speech = True
 
             if isinstance(item, llm.ChatMessage) and item.role in ("system", "developer"):
                 text = item.text_content
@@ -358,15 +382,52 @@ class RealtimeSession(llm.RealtimeSession):
                         )
                         sent_system_message = True
 
+            # Only treat a user message as text input when it's appended at the tail of the context.
+            if (
+                isinstance(item, llm.ChatMessage)
+                and item.role == "user"
+                and item_id == last_item_id
+            ):
+                text = item.text_content
+                if text:
+                    logger.info(f"Received user text input: {text}")
+                    self._pending_user_text = text
+                    buffered_user_text = True
+
         self._chat_ctx = chat_ctx.copy()
 
-        if not sent_tool_call_output and not sent_system_message:
+        if not sent_tool_call_output and not sent_system_message and not buffered_user_text:
             logger.warning(
                 "update_chat_ctx called but no new tool call outputs to send. "
                 "Phonic does not support general chat context updates."
             )
-        if sent_tool_call_output:
+        # Skip opening a new assistant turn when the tool forbids speech after its call:
+        # Phonic will not speak, so the generation would otherwise dangle open (never
+        # receiving audio nor a finished-speaking event) until the handoff reset / aclose.
+        if sent_tool_call_output and not forbid_speech:
             self._start_new_assistant_turn()
+
+    def _serialize_tools(self, tools: list[llm.Tool]) -> list[dict]:
+        tool_definitions: list[dict] = []
+        for tool_schema in llm.ToolContext(tools).parse_function_tools("openai", strict=True):
+            # We disallow tool chaining and tool calls during agent speech to reduce complexity
+            # of managing state while operating within the LiveKit Realtime generations framework
+            tool_definitions.append(
+                {
+                    "type": "custom_websocket",
+                    "tool_schema": tool_schema,
+                    "tool_call_output_timeout_ms": TOOL_CALL_OUTPUT_TIMEOUT_MS,
+                    "wait_for_speech_before_tool_call": True,
+                    "allow_tool_chaining": False,
+                    # When True, Phonic does not auto-generate a spoken reply after this tool's
+                    # output. Used for tools that always hand off so the outgoing agent doesn't
+                    # speak a reply that the handoff's session reset would cancel.
+                    "forbid_speech_after_tool_call": (
+                        tool_schema["function"]["name"] in self._forbid_speech_after_tool_call
+                    ),
+                }
+            )
+        return tool_definitions
 
     async def update_tools(self, tools: list[llm.Tool]) -> None:
         if self._config_sent:
@@ -377,21 +438,102 @@ class RealtimeSession(llm.RealtimeSession):
             return
 
         self._tools = llm.ToolContext(tools)
-        self._tool_definitions = []
-        for tool_schema in self._tools.parse_function_tools("openai", strict=True):
-            # We disallow tool chaining and tool calls during agent speech to reduce complexity
-            # of managing state while operating within the LiveKit Realtime generations framework
-            self._tool_definitions.append(
-                {
-                    "type": "custom_websocket",
-                    "tool_schema": tool_schema,
-                    "tool_call_output_timeout_ms": TOOL_CALL_OUTPUT_TIMEOUT_MS,
-                    "wait_for_speech_before_tool_call": True,
-                    "allow_tool_chaining": False,
-                }
-            )
-
+        self._forbid_speech_after_tool_call = set(
+            self._opts.forbid_speech_after_tool_call
+            if is_given(self._opts.forbid_speech_after_tool_call)
+            else []
+        )
+        self._tool_definitions = self._serialize_tools(tools)
         self._tools_ready.set()
+
+    async def _update_session(
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
+    ) -> None:
+        # Before the initial config is sent, fall back to the default per-field
+        # dispatch (update_instructions / update_chat_ctx / update_tools) so the
+        # first config is assembled the usual way.
+        if not self._config_sent:
+            await super()._update_session(instructions=instructions, chat_ctx=chat_ctx, tools=tools)
+            return
+
+        await self._ready_to_start.wait()
+        if self._session_should_close.is_set():
+            return
+
+        # Close any active generation before swapping in the new context so a partial
+        # response from the outgoing agent isn't appended to the new chat_ctx. A reset also
+        # starts a fresh turn on the (reused) connection. Drop any buffered user text too so
+        # it doesn't leak into a generate_reply under the new agent's config.
+        self._close_current_generation(interrupted=True)
+        self._pending_user_text = None
+
+        if is_given(instructions):
+            self._opts.instructions = instructions
+        if is_given(tools):
+            self._tools = llm.ToolContext(tools)
+            self._tool_definitions = self._serialize_tools(tools)
+        if is_given(chat_ctx):
+            self._chat_ctx = chat_ctx.copy()
+
+        system_prompt = self._opts.instructions if is_given(self._opts.instructions) else ""
+        if is_given(chat_ctx):
+            turn_history = self._build_turn_history(chat_ctx)
+            if turn_history:
+                system_prompt += CONVERSATION_HISTORY_PREFIX + turn_history
+
+        if self._socket:
+            logger.info("Sending mid-session reset to Phonic")
+            config_options = self._build_config_options(
+                system_prompt=system_prompt,
+                tools_payload=self._build_tools_payload(),
+            )
+            await self._socket.send_reset(ResetPayload(config=config_options))
+
+    def _build_tools_payload(self) -> list[dict | str]:
+        tools_payload: list[dict | str] = []
+        if is_given(self._opts.phonic_tools) and self._opts.phonic_tools:
+            tools_payload.extend(self._opts.phonic_tools)
+        tools_payload.extend(self._tool_definitions)
+        return tools_payload
+
+    def _build_turn_history(self, chat_ctx: llm.ChatContext) -> str:
+        messages = [
+            item
+            for item in chat_ctx.items
+            if isinstance(item, llm.ChatMessage) and item.text_content and item.text_content.strip()
+        ]
+        return "\n".join(f"{m.role}: {m.text_content}" for m in messages)
+
+    def _build_config_options(
+        self, *, system_prompt: str, tools_payload: list[dict | str]
+    ) -> dict[str, typing.Any]:
+        options = {
+            "agent": self._opts.phonic_agent,
+            "project": self._opts.project,
+            "welcome_message": self._opts.welcome_message,
+            "generate_welcome_message": self._opts.generate_welcome_message,
+            "system_prompt": system_prompt,
+            "voice_id": self._opts.voice,
+            "input_format": "pcm_44100",
+            "output_format": "pcm_44100",
+            "default_language": self._opts.default_language,
+            "additional_languages": self._opts.additional_languages,
+            "multilingual_mode": self._opts.multilingual_mode,
+            "audio_speed": self._opts.audio_speed,
+            "tools": tools_payload if len(tools_payload) > 0 else NOT_GIVEN,
+            "boosted_keywords": self._opts.boosted_keywords,
+            "min_words_to_interrupt": self._opts.min_words_to_interrupt,
+            "generate_no_input_poke_text": self._opts.generate_no_input_poke_text,
+            "no_input_poke_sec": self._opts.no_input_poke_sec,
+            "no_input_poke_text": self._opts.no_input_poke_text,
+            "no_input_end_conversation_sec": self._opts.no_input_end_conversation_sec,
+        }
+        # Filter out NOT_GIVEN values
+        return {k: v for k, v in options.items() if v is not NOT_GIVEN}
 
     def update_options(self, *, tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN) -> None:
         logger.warning("update_options is not supported by the Phonic realtime model.")
@@ -421,6 +563,11 @@ class RealtimeSession(llm.RealtimeSession):
         self._generate_reply_task = asyncio.create_task(self._send_say(text), name="phonic-say")
 
         self._close_current_generation(interrupted=False)
+
+        # say() speaks explicit text and never consumes buffered user text, so any
+        # text pending from update_chat_ctx is dropped here rather than left to leak
+        # into a later generate_reply.
+        self._pending_user_text = None
 
         if self._pending_generate_reply_fut and not self._pending_generate_reply_fut.done():
             self._pending_generate_reply_fut.cancel()
@@ -505,6 +652,7 @@ class RealtimeSession(llm.RealtimeSession):
                 # external cancel: drop the queued send if it hasn't gone out yet
                 if not send_task.done():
                     send_task.cancel()
+                self._pending_user_text = None
 
         fut.add_done_callback(_on_fut_done)
         return fut
@@ -513,8 +661,24 @@ class RealtimeSession(llm.RealtimeSession):
         await self._ready_to_start.wait()
         if self._session_should_close.is_set():
             return
+
+        system_message = payload.system_message
+        if self._pending_user_text:
+            user_text_instruction = (
+                f'The user sent the following text message: "{self._pending_user_text}". '
+                "Please respond to their message."
+            )
+            system_message = (
+                f"{system_message}\n\n{user_text_instruction}"
+                if system_message
+                else user_text_instruction
+            )
+            self._pending_user_text = None
+
         if self._socket:
-            await self._socket.send_generate_reply(payload)
+            await self._socket.send_generate_reply(
+                GenerateReplyPayload(system_message=system_message)
+            )
 
     def commit_audio(self) -> None:
         logger.warning("commit_audio is not supported by the Phonic realtime model.")
@@ -586,43 +750,15 @@ class RealtimeSession(llm.RealtimeSession):
 
             self._config_sent = True
 
-            tools_payload: list[dict | str] = []
-            if self._opts.phonic_tools is not NOT_GIVEN and self._opts.phonic_tools:
-                tools_payload.extend(self._opts.phonic_tools)
-            tools_payload.extend(self._tool_definitions)
-
             if not is_given(self._opts.instructions):
                 logger.warning("Instructions are not set. Phonic will not start a conversation.")
                 return
 
-            config = {
-                "type": "config",
-                "agent": self._opts.phonic_agent,
-                "project": self._opts.project,
-                "welcome_message": self._opts.welcome_message,
-                "generate_welcome_message": self._opts.generate_welcome_message,
-                "system_prompt": self._opts.instructions + self._system_prompt_postfix,
-                "voice_id": self._opts.voice,
-                "input_format": "pcm_44100",
-                "output_format": "pcm_44100",
-                "default_language": self._opts.default_language,
-                "additional_languages": self._opts.additional_languages,
-                "multilingual_mode": self._opts.multilingual_mode,
-                "audio_speed": self._opts.audio_speed,
-                "tools": tools_payload if len(tools_payload) > 0 else NOT_GIVEN,
-                "boosted_keywords": self._opts.boosted_keywords,
-                "min_words_to_interrupt": self._opts.min_words_to_interrupt,
-                "generate_no_input_poke_text": self._opts.generate_no_input_poke_text,
-                "no_input_poke_sec": self._opts.no_input_poke_sec,
-                "no_input_poke_text": self._opts.no_input_poke_text,
-                "no_input_end_conversation_sec": self._opts.no_input_end_conversation_sec,
-            }
-            # Filter out NOT_GIVEN values
-            config_filtered = typing.cast(
-                dict[str, typing.Any],
-                {k: v for k, v in config.items() if v is not NOT_GIVEN},
+            config_options = self._build_config_options(
+                system_prompt=self._opts.instructions + self._system_prompt_postfix,
+                tools_payload=self._build_tools_payload(),
             )
-            await self._socket.send_config(ConfigPayload(**config_filtered))
+            await self._socket.send_config(ConfigPayload(type="config", **config_options))
 
             recv_task = asyncio.create_task(self._recv_task(self._socket), name="phonic-recv")
             send_task = asyncio.create_task(self._send_task(self._socket), name="phonic-send")

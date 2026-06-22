@@ -559,7 +559,7 @@ class TranscriptSynchronizer:
         # always create a new impl even if aclose() failed, to avoid leaving
         # self._impl pointing to a closed impl which causes the agent to get stuck
         self._impl = _SegmentSynchronizerImpl(
-            options=self._opts, next_in_chain=self._text_output._next_in_chain
+            options=self._opts, next_in_chain=self._text_output.next_in_chain
         )
 
         # apply the current pause state to the new impl
@@ -597,19 +597,24 @@ class _SyncedAudioOutput(io.AudioOutput):
         super().__init__(
             label="TranscriptSynchronizer",
             next_in_chain=next_in_chain,
-            sample_rate=next_in_chain.sample_rate,
             capabilities=io.AudioOutputCapabilities(pause=True),
         )
-        self._next_in_chain: io.AudioOutput = next_in_chain  # redefined for better typing
         self._synchronizer = synchronizer
         self._pushed_duration: float = 0.0
+
+    @property
+    def sample_rate(self) -> int | None:
+        if self._sample_rate is not None:
+            return self._sample_rate
+        return self.next_in_chain.sample_rate if self.next_in_chain else None
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         # using barrier() on capture should be sufficient, flush() must not be called if
         # capture_frame isn't completed
         await self._synchronizer.barrier()
 
-        await self._next_in_chain.capture_frame(frame)  # passthrough audio
+        if self.next_in_chain:
+            await self.next_in_chain.capture_frame(frame)  # passthrough audio
         await super().capture_frame(frame)
         self._pushed_duration += frame.duration
 
@@ -640,7 +645,8 @@ class _SyncedAudioOutput(io.AudioOutput):
 
     def flush(self) -> None:
         super().flush()
-        self._next_in_chain.flush()
+        if self.next_in_chain:
+            self.next_in_chain.flush()
 
         if not self._synchronizer.enabled:
             return
@@ -653,7 +659,8 @@ class _SyncedAudioOutput(io.AudioOutput):
         self._synchronizer._impl.end_audio_input()
 
     def clear_buffer(self) -> None:
-        self._next_in_chain.clear_buffer()
+        if self.next_in_chain:
+            self.next_in_chain.clear_buffer()
 
     # this is going to be automatically called by the next_in_chain
     def on_playback_started(self, *, created_at: float) -> None:
@@ -716,7 +723,6 @@ class _SyncedTextOutput(io.TextOutput):
         self, synchronizer: TranscriptSynchronizer, *, next_in_chain: io.TextOutput | None
     ) -> None:
         super().__init__(label="TranscriptSynchronizer", next_in_chain=next_in_chain)
-        self._next_in_chain: io.TextOutput | None = next_in_chain
         self._synchronizer = synchronizer
         self._capturing = False
 
@@ -735,8 +741,8 @@ class _SyncedTextOutput(io.TextOutput):
                     "still active; transcription sync is disabled. This usually means "
                     "session.output.audio was replaced after AgentSession.start()."
                 )
-            if self._next_in_chain:
-                await self._next_in_chain.capture_text(text)
+            if self.next_in_chain:
+                await self.next_in_chain.capture_text(text)
             return
 
         self._capturing = True
@@ -753,8 +759,8 @@ class _SyncedTextOutput(io.TextOutput):
 
     def flush(self) -> None:
         if not self._synchronizer.enabled:  # passthrough text if the synchronizer is disabled
-            if self._next_in_chain:
-                self._next_in_chain.flush()
+            if self.next_in_chain:
+                self.next_in_chain.flush()
             return
 
         if not self._capturing:

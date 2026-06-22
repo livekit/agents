@@ -27,6 +27,7 @@ from ..llm import (
 from ..log import logger
 from ..metrics import (
     AgentSessionUsage,
+    EOTModelUsage,
     InterruptionModelUsage,
     LLMModelUsage,
     STTModelUsage,
@@ -38,6 +39,7 @@ from .events import (
     AgentState,
     AgentStateChangedEvent,
     ConversationItemAddedEvent,
+    EotPredictionEvent,
     ErrorEvent,
     FunctionToolsExecutedEvent,
     SessionUsageUpdatedEvent,
@@ -619,7 +621,23 @@ class SessionHost:
             )
         )
 
-    # TODO: @chenghao-mou add EOT prediction event
+    def _on_eot_prediction(self, event: EotPredictionEvent) -> None:
+        inference_duration = Duration()
+        inference_duration.FromNanoseconds(int(event.inference_duration * 1e9))
+
+        delay = Duration()
+        delay.FromNanoseconds(int(event.delay * 1e9))
+
+        self._send_event(
+            agent_pb.AgentSessionEvent(
+                eot_prediction=agent_pb.AgentSessionEvent.EotPrediction(
+                    probability=event.probability,
+                    threshold=event.threshold,
+                    inference_duration=inference_duration,
+                    delay=delay,
+                )
+            )
+        )
 
     def _on_session_usage_updated(self, event: SessionUsageUpdatedEvent) -> None:
         self._send_event(
@@ -956,6 +974,16 @@ def _session_usage_to_proto(usage: AgentSessionUsage) -> agent_pb.AgentSessionUs
             model_usages.append(
                 agent_pb.ModelUsage(
                     interruption=agent_pb.InterruptionModelUsage(
+                        provider=mu.provider,
+                        model=mu.model,
+                        total_requests=mu.total_requests,
+                    )
+                )
+            )
+        elif isinstance(mu, EOTModelUsage):
+            model_usages.append(
+                agent_pb.ModelUsage(
+                    eot=agent_pb.EotModelUsage(
                         provider=mu.provider,
                         model=mu.model,
                         total_requests=mu.total_requests,
