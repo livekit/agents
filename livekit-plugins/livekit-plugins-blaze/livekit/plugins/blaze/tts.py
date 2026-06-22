@@ -87,19 +87,16 @@ class _WSStreamGuard:
     def _next_recv_timeout(self) -> float:
         remaining = self._session_deadline - time.monotonic()
         if remaining <= 0:
-            raise APITimeoutError(
-                f"[{self._request_id}] TTS stream exceeded max session duration"
-            )
+            raise APITimeoutError(f"[{self._request_id}] TTS stream exceeded max session duration")
         return min(self._idle_timeout, remaining)
 
-    async def recv(self, ws: websockets.ClientConnection):
+    async def recv(self, ws: websockets.ClientConnection) -> str | bytes:
         timeout = self._next_recv_timeout()
         try:
             return await asyncio.wait_for(ws.recv(), timeout=timeout)
         except asyncio.TimeoutError as e:
             raise APITimeoutError(
-                f"[{self._request_id}] TTS stream idle timeout after "
-                f"{self._idle_timeout:.1f}s"
+                f"[{self._request_id}] TTS stream idle timeout after {self._idle_timeout:.1f}s"
             ) from e
 
 
@@ -707,7 +704,10 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
                                 await ws.send(json.dumps({"query": batch}))
 
                         # ---------- concurrent audio reader ----------
-                        async def _read_audio() -> tuple[int, int]:
+                        async def _read_audio(
+                            guard: _WSStreamGuard = ws_guard,
+                            connection: websockets.ClientConnection = ws,
+                        ) -> tuple[int, int]:
                             """Read all WS responses until speech-end.
 
                             Returns (tts_segment_count, total_audio_bytes).
@@ -726,7 +726,7 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
                             )
 
                             while True:
-                                frame = await ws_guard.recv(ws)
+                                frame = await guard.recv(connection)
 
                                 if isinstance(frame, bytes):
                                     if not frame:
@@ -832,12 +832,9 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
                             if not resend:
                                 batch_count += 1
                                 has_img_tag = (
-                                    "<img>" in normalized.lower()
-                                    or "</img>" in normalized.lower()
+                                    "<img>" in normalized.lower() or "</img>" in normalized.lower()
                                 )
-                                preview = normalized[:80] + (
-                                    "..." if len(normalized) > 80 else ""
-                                )
+                                preview = normalized[:80] + ("..." if len(normalized) > 80 else "")
                                 logger.info(
                                     "[%s] TTS batch %d — %d chars has_img_tag=%s: '%s'",
                                     request_id,
