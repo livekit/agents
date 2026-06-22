@@ -96,7 +96,7 @@ class _STTOptions:
     encoding: STTEncoding | str
     word_timestamps: bool
     diarize: bool
-    eou_timeout_ms: int  # end-of-utterance silence timeout (100–10 000 ms)
+    eou_timeout_ms: int  # end-of-utterance silence timeout in ms; valid range 100–10000ms
     base_url: str
 
 
@@ -110,7 +110,7 @@ class STT(stt.STT):
         encoding: STTEncoding | str = "linear16",
         word_timestamps: bool = True,
         diarize: bool = False,
-        eou_timeout_ms: int = 0,
+        eou_timeout_ms: int = 100,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = SMALLEST_STT_BASE_URL,
@@ -137,11 +137,12 @@ class STT(stt.STT):
                 speaker ID (integer during streaming, string label in batch).
                 Defaults to False.
             eou_timeout_ms: Milliseconds of silence before the server considers an
-                utterance complete and emits a final transcript. Defaults to 0 (disabled).
-                The server's native default when this parameter is omitted is 800ms —
-                the plugin sends 0 explicitly to disable it, since LiveKit's VAD handles
-                turn detection. Set to a value between 100 and 10000 to enable
-                server-side end-of-utterance detection alongside LiveKit's own logic.
+                utterance complete and emits a final transcript. Must be between 100 and
+                10000ms. Defaults to 100ms (the minimum) so that server-side EOU adds
+                minimal latency alongside LiveKit's own end-of-turn detection. If omitted,
+                the server applies an 800ms default. Note: the Smallest AI API will soon
+                support disabling server-side EOU entirely, which will allow LiveKit's
+                end-of-turn detection to be used exclusively.
             api_key: Smallest AI API key. Falls back to the SMALLEST_API_KEY
                 environment variable if not provided.
             http_session: An existing aiohttp ClientSession to reuse.
@@ -452,9 +453,6 @@ class SpeechStream(stt.SpeechStream):
             "word_timestamps": str(self._opts.word_timestamps).lower(),
             "diarize": str(self._opts.diarize).lower(),
         }
-        # Always send eou_timeout_ms. Default is 0 (disabled) so LiveKit's own
-        # VAD controls turn detection. The server's native default when this
-        # parameter is omitted is 800ms, which would conflict with LiveKit VAD.
         params["eou_timeout_ms"] = self._opts.eou_timeout_ms
         ws_url = (
             self._opts.base_url.replace("https://", "wss://", 1).replace("http://", "ws://", 1)
