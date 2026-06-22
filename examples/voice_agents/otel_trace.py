@@ -42,7 +42,7 @@ load_dotenv()
 #   auth = base64.b64encode(f"{public_key}:{secret_key}".encode()).decode()
 #   setup_otel(
 #       endpoint=f"{host.rstrip('/')}/api/public/otel",
-#       headers={"Authorization": f"Basic {auth},x-langfuse-ingestion-version=4"},
+#       headers={"Authorization": f"Basic {auth}", "x-langfuse-ingestion-version": "4"},
 #   )
 # Refer to their docs for latest instructions: https://langfuse.com/integrations/native/opentelemetry#opentelemetry-endpoint
 
