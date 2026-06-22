@@ -7,7 +7,7 @@ import pytest
 from google.genai import types
 
 from livekit.agents import llm
-from livekit.agents.llm import ChatContext, function_tool
+from livekit.agents.llm import ChatContext, FunctionCall, FunctionCallOutput, function_tool
 from livekit.agents.types import APIConnectOptions
 from livekit.plugins.google.llm import LLM, LLMStream
 from livekit.plugins.google.realtime.realtime_api import RealtimeModel, RealtimeSession
@@ -285,6 +285,54 @@ class TestCachedContentRequestSuppression:
         assert "livekit-agents/" in config.http_options.headers["x-goog-api-client"]
         assert caller_http_options.timeout is None
         assert caller_http_options.headers == {"X-Vertex-Test": "1"}
+
+    @pytest.mark.asyncio
+    async def test_gemini_25_uses_sentinel_when_thought_signature_cache_is_none(self) -> None:
+        llm = LLM(model="gemini-2.5-flash", api_key="test")
+        llm._thought_signatures = None
+
+        chat_ctx = ChatContext.empty()
+        chat_ctx.add_message(role="user", content="hello")
+        chat_ctx.insert(FunctionCall(call_id="call_from_openai", name="tool", arguments="{}"))
+        chat_ctx.insert(
+            FunctionCallOutput(call_id="call_from_openai", name="tool", output="ok", is_error=False)
+        )
+
+        fake, captured = self._patched_stream_capture()
+        with patch.object(llm._client.aio.models, "generate_content_stream", fake):
+            stream = llm.chat(chat_ctx=chat_ctx)
+            try:
+                async for _ in stream:
+                    pass
+            finally:
+                await stream.aclose()
+
+        function_call_part = captured["contents"][1].parts[0]
+        assert function_call_part.thought_signature == b"skip_thought_signature_validator"
+
+    @pytest.mark.asyncio
+    async def test_pre_gemini_25_omits_thought_signature_even_with_cached_signature(self) -> None:
+        llm = LLM(model="gemini-2.0-flash", api_key="test")
+        llm._thought_signatures = {"call_1": b"real_signature"}
+
+        chat_ctx = ChatContext.empty()
+        chat_ctx.add_message(role="user", content="hello")
+        chat_ctx.insert(FunctionCall(call_id="call_1", name="tool", arguments="{}"))
+        chat_ctx.insert(
+            FunctionCallOutput(call_id="call_1", name="tool", output="ok", is_error=False)
+        )
+
+        fake, captured = self._patched_stream_capture()
+        with patch.object(llm._client.aio.models, "generate_content_stream", fake):
+            stream = llm.chat(chat_ctx=chat_ctx)
+            try:
+                async for _ in stream:
+                    pass
+            finally:
+                await stream.aclose()
+
+        function_call_part = captured["contents"][1].parts[0]
+        assert function_call_part.thought_signature is None
 
 
 class TestMediaResolution:
