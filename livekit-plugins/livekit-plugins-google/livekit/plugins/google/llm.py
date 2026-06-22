@@ -39,27 +39,32 @@ from .models import ChatModels
 from .utils import create_tools_config, to_response_format
 from .version import __version__
 
+# Version-less aliases that resolve to the latest (Gemini 3.x) flash models
+# server-side. They can't be introspected client-side, so treat them as Gemini 3
+# flash for thinking-config and thought-signature handling.
+_GEMINI_3_FLASH_ALIASES = ("gemini-flash-latest", "gemini-flash-lite-latest")
+
 
 def _is_gemini_3_model(model: str) -> bool:
-    """Check if model is Gemini 3 series"""
-    return "gemini-3" in model.lower() or model.lower().startswith("gemini-3")
+    """Check if model is Gemini 3 series (including version-less aliases)."""
+    m = model.lower()
+    return "gemini-3" in m or m in _GEMINI_3_FLASH_ALIASES
 
 
 def _is_gemini_3_flash_model(model: str) -> bool:
-    """Check if model is Gemini 3 Flash"""
-    return "gemini-3-flash" in model.lower() or model.lower().startswith("gemini-3-flash")
+    """Check if model is a Gemini 3 Flash model (any 3.x flash + version-less aliases)."""
+    m = model.lower()
+    return (_is_gemini_3_model(m) and "flash" in m) or m in _GEMINI_3_FLASH_ALIASES
 
 
 def _requires_thought_signatures(model: str) -> bool:
-    """Check if model requires thought_signature handling for multi-turn function calling.
+    """Whether the model needs thought_signature handling for multi-turn function calling.
 
-    Gemini 2.5+ models require thought signatures to be stored from responses and
-    passed back in subsequent requests for proper multi-turn function calling.
+    Gemini 2.5+/3.x (incl. version-less aliases) require it. NOTE: the runtime path
+    is now response-driven (see _parse_part / _run); this is retained for tests.
     """
-    if _is_gemini_3_model(model):
-        return True
-    model_lower = model.lower()
-    return "gemini-2.5" in model_lower or model_lower.startswith("gemini-2.5")
+    m = model.lower()
+    return _is_gemini_3_model(m) or "gemini-2.5" in m
 
 
 @dataclass
@@ -440,10 +445,14 @@ class LLMStream(llm.LLMStream):
         request_id = utils.shortuuid()
 
         try:
-            # Pass thought_signatures for Gemini 2.5+ multi-turn function calling
-            thought_sigs = (
-                self._llm._thought_signatures if _requires_thought_signatures(self._model) else None
-            )
+            # Resend any stored thought_signatures: Gemini requires them echoed
+            # back on subsequent turns of multi-turn function calling. They are
+            # stored only when the API returns one (see _parse_part), so passing
+            # them whenever present is correct for every model that needs them --
+            # including version-less aliases like "gemini-flash-latest" /
+            # "gemini-flash-lite-latest" that resolve to Gemini 3 server-side.
+            # Empty -> None (no-op for models that never emit signatures).
+            thought_sigs = self._llm._thought_signatures or None
             turns_dict, extra_data = self._chat_ctx.to_provider_format(
                 format="google", thought_signatures=thought_sigs
             )
@@ -607,12 +616,11 @@ class LLMStream(llm.LLMStream):
                 call_id=part.function_call.id or utils.shortuuid("function_call_"),
             )
 
-            # Store thought_signature for Gemini 2.5+ multi-turn function calling
-            if (
-                _requires_thought_signatures(self._model)
-                and hasattr(part, "thought_signature")
-                and part.thought_signature
-            ):
+            # Store the thought_signature whenever the API returns one so it can
+            # be echoed back on the next turn (required by Gemini for multi-turn
+            # function calling). Driven by the response rather than a model-name
+            # guess, so it works for every signature-emitting model and alias.
+            if hasattr(part, "thought_signature") and part.thought_signature:
                 self._llm._thought_signatures[tool_call.call_id] = part.thought_signature
 
             chat_chunk = llm.ChatChunk(

@@ -21,10 +21,17 @@ class TestGeminiModelDetection:
             ("gemini-3-flash", True),
             ("gemini-3-pro", True),
             ("GEMINI-3-FLASH", True),  # case insensitive
+            # Latest Gemini 3 point releases - should return True (matched by gemini-3)
+            ("gemini-3.5-flash", True),
+            ("gemini-3.1-flash-lite", True),
+            # Version-less Gemini aliases - should return True (resolve to Gemini 3 server-side)
+            ("gemini-flash-latest", True),
+            ("gemini-flash-lite-latest", True),
             # Gemini 2.5 models - should return False
             ("gemini-2.5-flash", False),
             ("gemini-2.5-pro-preview-05-06", False),
             # Gemini 2.0 models - should return False
+            ("gemini-2.0-flash", False),
             ("gemini-2.0-flash-001", False),
             # Gemini 1.5 models - should return False
             ("gemini-1.5-pro", False),
@@ -43,6 +50,12 @@ class TestGeminiModelDetection:
             ("gemini-3-flash-preview", True),
             ("gemini-3-flash", True),
             ("GEMINI-3-FLASH", True),  # case insensitive
+            # Latest Gemini 3 flash point releases - should return True
+            ("gemini-3.5-flash", True),
+            ("gemini-3.1-flash-lite", True),
+            # Version-less Gemini aliases - should return True (resolve to Gemini 3 flash server-side)
+            ("gemini-flash-latest", True),
+            ("gemini-flash-lite-latest", True),
             # Gemini 3 Pro models - should return False
             ("gemini-3-pro-preview", False),
             ("gemini-3-pro", False),
@@ -63,6 +76,12 @@ class TestGeminiModelDetection:
             ("gemini-3-flash", True),
             ("gemini-3-pro", True),
             ("GEMINI-3-FLASH", True),  # case insensitive
+            # Latest Gemini 3 point releases - should return True (matched by gemini-3)
+            ("gemini-3.5-flash", True),
+            ("gemini-3.1-flash-lite", True),
+            # Version-less Gemini aliases - should return True (resolve to Gemini 3 server-side)
+            ("gemini-flash-latest", True),
+            ("gemini-flash-lite-latest", True),
             # Gemini 2.5 models - should return True (requires thought signatures)
             ("gemini-2.5-flash", True),
             ("gemini-2.5-pro-preview-05-06", True),
@@ -70,10 +89,12 @@ class TestGeminiModelDetection:
             ("gemini-2.5-flash-preview-05-20", True),
             ("GEMINI-2.5-FLASH", True),  # case insensitive
             # Gemini 2.0 models - should return False (does not require thought signatures)
+            ("gemini-2.0-flash", False),
             ("gemini-2.0-flash-001", False),
             ("gemini-2.0-flash-lite-preview-02-05", False),
             ("gemini-2.0-pro-exp-02-05", False),
             # Gemini 1.5 models - should return False
+            ("gemini-1.5-flash", False),
             ("gemini-1.5-pro", False),
             # Other models - should return False
             ("gpt-4", False),
