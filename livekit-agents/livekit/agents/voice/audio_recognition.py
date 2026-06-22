@@ -1358,7 +1358,8 @@ class AudioRecognition:
                                 self._on_missing_eot_prediction()
                             else:
                                 from_cache = fut.done()
-                                done, _ = await asyncio.wait([fut], timeout=endpointing_delay)
+                                prediction_timeout = turn_detector.prediction_timeout
+                                done, _ = await asyncio.wait([fut], timeout=prediction_timeout)
                                 if fut in done and not fut.cancelled():
                                     prediction_event = fut.result()
                                     end_of_turn_probability = (
@@ -1375,7 +1376,7 @@ class AudioRecognition:
                                 else:
                                     logger.warning(
                                         "eot prediction timed out, committing without a prediction",
-                                        extra={"timeout": endpointing_delay},
+                                        extra={"timeout": prediction_timeout},
                                     )
                                     turn_detector.cancel_inference(timed_out=True)
                                     self._turn_detector_prediction_fut = None
@@ -1383,7 +1384,6 @@ class AudioRecognition:
                             try:
                                 end_of_turn_probability = await turn_detector.predict_end_of_turn(
                                     chat_ctx,
-                                    timeout=endpointing_delay,
                                 )
                                 unlikely_threshold = await turn_detector.unlikely_threshold(
                                     self._last_language
