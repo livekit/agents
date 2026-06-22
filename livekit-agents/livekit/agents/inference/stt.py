@@ -48,12 +48,12 @@ DeepgramFluxModels = Literal[
 CartesiaModels = Literal[
     "cartesia/ink-whisper",
     "cartesia/ink-2",
-    "cartesia/ink-2-latest",
 ]
 AssemblyAIModels = Literal[
     "assemblyai/universal-streaming",
     "assemblyai/universal-streaming-multilingual",
     "assemblyai/u3-rt-pro",
+    "assemblyai/universal-3-5-pro",
 ]
 ElevenlabsModels = Literal["elevenlabs/scribe_v2_realtime",]
 XaiModels = Literal["xai/stt-1",]
@@ -254,14 +254,9 @@ def _resolve_vad_for_model(
         )
         return None
     if is_speechmatics and vad_instance is None:
-        try:
-            from livekit.plugins.silero import VAD as SileroVAD
-        except ImportError as e:
-            raise ImportError(
-                "livekit-plugins-silero is required: model "
-                f"{model!r} does not handle endpointing server-side."
-            ) from e
-        vad_instance = SileroVAD.load()
+        from .vad import VAD
+
+        vad_instance = VAD()
     return vad_instance
 
 

@@ -144,6 +144,8 @@ class SessionConnectOptions:
 class AgentSessionOptions:
     turn_handling: TurnHandlingOptions
     stt_context: STTContextOptions
+    endpointing_overrides: EndpointingOptions
+    """sparse endpointing keys the user provided explicitly"""
     max_tool_steps: int
     user_away_timeout: float | None
     min_consecutive_speech_delay: float
@@ -227,7 +229,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self,
         *,
         stt: NotGivenOr[stt.STT | STTModels | str] = NOT_GIVEN,
-        vad: NotGivenOr[vad.VAD] = NOT_GIVEN,
+        vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str] = NOT_GIVEN,
         turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
@@ -276,7 +278,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         Args:
             stt (stt.STT | str, optional): Speech-to-text backend.
-            vad (vad.VAD, optional): Voice-activity detector
+            vad (vad.VAD, optional): Voice-activity detector. Defaults to the
+                bundled silero VAD (``inference.VAD(model="silero")``) when
+                omitted. Pass ``vad=None`` to opt out, or pass an explicit
+                instance to customise options.
             llm (llm.LLM | llm.RealtimeModel | str, optional): LLM or RealtimeModel
             tts (tts.TTS | str, optional): Text-to-speech engine.
             tools (list[llm.FunctionTool | llm.RawFunctionTool], optional): List of
@@ -348,13 +353,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         turn_handling = (
             _migrate_turn_handling(
-                # backward compatibility for deprecated parameters that had default values
-                min_endpointing_delay=(
-                    min_endpointing_delay if is_given(min_endpointing_delay) else 0.5
-                ),
-                max_endpointing_delay=(
-                    max_endpointing_delay if is_given(max_endpointing_delay) else 3.0
-                ),
+                min_endpointing_delay=min_endpointing_delay,
+                max_endpointing_delay=max_endpointing_delay,
                 false_interruption_timeout=false_interruption_timeout,
                 turn_detection=turn_detection,
                 discard_audio_if_uninterruptible=discard_audio_if_uninterruptible,
@@ -369,11 +369,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             else turn_handling
         )
 
-        endpointing = _resolve_endpointing(turn_handling.get("endpointing"))
+        raw_turn_detection: TurnDetectionMode | None = turn_handling.get(
+            "turn_detection", inference.TurnDetector()
+        )
+        endpointing_overrides = turn_handling.get("endpointing") or EndpointingOptions()
+        endpointing = _resolve_endpointing(endpointing_overrides, turn_detection=raw_turn_detection)
         interruption = _resolve_interruption(turn_handling.get("interruption"))
         preemptive_gen = _resolve_preemptive_generation(turn_handling.get("preemptive_generation"))
         user_turn_limit = _resolve_user_turn_limit(turn_handling.get("user_turn_limit"))
-        raw_turn_detection = turn_handling.get("turn_detection", None)
 
         # This is the "global" chat_context, it holds the entire conversation history
         self._chat_ctx = ChatContext.empty()
@@ -386,6 +389,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 user_turn_limit=user_turn_limit,
             ),
             stt_context=_resolve_stt_context(stt_context_options or None),
+            endpointing_overrides=endpointing_overrides,
             max_tool_steps=max_tool_steps,
             user_away_timeout=user_away_timeout,
             min_consecutive_speech_delay=min_consecutive_speech_delay,
@@ -414,6 +418,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             tts = inference.TTS.from_model_string(tts)
 
         self._stt = stt or None
+        self._using_default_vad = not is_given(vad)
+        if not is_given(vad):
+            vad = inference.VAD(model="silero")
         self._vad = vad or None
         self._llm = llm or None
         self._tts = tts or None
@@ -1123,29 +1130,25 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 "min_endpointing_delay and max_endpointing_delay are deprecated, "
                 "use endpointing_opts instead"
             )
-            endpointing_opts = EndpointingOptions(
-                mode=self._opts.endpointing["mode"],
-                min_delay=(
-                    min_endpointing_delay
-                    if is_given(min_endpointing_delay)
-                    else self._opts.endpointing["min_delay"]
-                ),
-                max_delay=(
-                    max_endpointing_delay
-                    if is_given(max_endpointing_delay)
-                    else self._opts.endpointing["max_delay"]
-                ),
-            )
+            endpointing_opts = EndpointingOptions()
+            if is_given(min_endpointing_delay):
+                endpointing_opts["min_delay"] = min_endpointing_delay
+            if is_given(max_endpointing_delay):
+                endpointing_opts["max_delay"] = max_endpointing_delay
 
         if is_given(endpointing_opts):
             if (mode := endpointing_opts.get("mode")) is not None:
                 self._opts.endpointing["mode"] = mode
+                self._opts.endpointing_overrides["mode"] = mode
             if (min_delay := endpointing_opts.get("min_delay")) is not None:
                 self._opts.endpointing["min_delay"] = min_delay
+                self._opts.endpointing_overrides["min_delay"] = min_delay
             if (max_delay := endpointing_opts.get("max_delay")) is not None:
                 self._opts.endpointing["max_delay"] = max_delay
+                self._opts.endpointing_overrides["max_delay"] = max_delay
             if (alpha := endpointing_opts.get("alpha")) is not None:
                 self._opts.endpointing["alpha"] = alpha
+                self._opts.endpointing_overrides["alpha"] = alpha
 
         if is_given(turn_detection):
             self._turn_detection = turn_detection

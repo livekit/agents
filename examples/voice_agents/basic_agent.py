@@ -7,7 +7,6 @@ from livekit.agents import (
     AgentServer,
     AgentSession,
     JobContext,
-    JobProcess,
     MetricsCollectedEvent,
     RunContext,
     TurnHandlingOptions,
@@ -19,8 +18,6 @@ from livekit.agents import (
 )
 from livekit.agents.beta import EndCallTool
 from livekit.agents.llm import function_tool
-from livekit.plugins import silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 # uncomment to enable Krisp background voice/noise cancellation
 # from livekit.plugins import noise_cancellation
@@ -71,13 +68,6 @@ class MyAgent(Agent):
 server = AgentServer()
 
 
-def prewarm(proc: JobProcess) -> None:
-    proc.userdata["vad"] = silero.VAD.load()
-
-
-server.setup_fnc = prewarm
-
-
 @server.rtc_session()
 async def entrypoint(ctx: JobContext) -> None:
     # each log entry will include these fields
@@ -94,11 +84,7 @@ async def entrypoint(ctx: JobContext) -> None:
         # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
         # See all available models as well as voice selections at https://docs.livekit.io/agents/models/tts/
         tts=inference.TTS("cartesia/sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"),
-        vad=ctx.proc.userdata["vad"],
         turn_handling=TurnHandlingOptions(
-            # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
-            # See more at https://docs.livekit.io/agents/build/turns
-            turn_detection=MultilingualModel(),
             interruption={
                 # sometimes background noise could interrupt the agent session, these are considered false positive interruptions
                 # when it's detected, you may resume the agent's speech
@@ -114,7 +100,7 @@ async def entrypoint(ctx: JobContext) -> None:
         tts_text_transforms=[
             "filter_emoji",
             "filter_markdown",
-            text_transforms.replace({"LiveKit": "<<ˈ|l|aɪ|v>> <<ˈ|k|ɪ|t>>"}),
+            text_transforms.replace({"LiveKit": "<<ˈ|l|aɪ|v|k|ɪ|t>>"}),
         ],
         # automatically detect keyterms and apply them to the STT per user turn
         stt_context_options={

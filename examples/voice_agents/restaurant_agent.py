@@ -8,9 +8,6 @@ from pydantic import Field
 
 from livekit.agents import Agent, AgentServer, AgentSession, JobContext, RunContext, cli, inference
 from livekit.agents.llm import function_tool
-from livekit.plugins import silero
-
-# from livekit.plugins import noise_cancellation
 
 # This example demonstrates a multi-agent system where tasks are delegated to sub-agents
 # based on the user's request.
@@ -330,7 +327,6 @@ async def entrypoint(ctx: JobContext):
         stt=inference.STT(model="deepgram/nova-3"),
         llm=inference.LLM(model="openai/gpt-4.1-mini"),
         tts=inference.TTS(model="cartesia/sonic-3"),
-        vad=silero.VAD.load(),
         max_tool_steps=5,
         # to use realtime model, replace the stt, llm, tts and vad with the following
         # llm=openai.realtime.RealtimeModel(voice="alloy"),

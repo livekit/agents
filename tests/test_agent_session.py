@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 
 from livekit.agents import (
+    NOT_GIVEN,
     Agent,
     AgentFalseInterruptionEvent,
     AgentStateChangedEvent,
@@ -17,6 +18,8 @@ from livekit.agents import (
     LanguageCode,
     MetricsCollectedEvent,
     ModelSettings,
+    NotGivenOr,
+    TurnHandlingOptions,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
     function_tool,
@@ -47,9 +50,11 @@ class MyAgent(Agent):
         generate_reply_on_enter: bool = False,
         say_on_user_turn_completed: bool = False,
         on_user_turn_completed_delay: float = 0.0,
+        turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
     ) -> None:
         super().__init__(
             instructions=("You are a helpful assistant."),
+            turn_handling=turn_handling,
         )
         self.generate_reply_on_enter = generate_reply_on_enter
         self.say_on_user_turn_completed = say_on_user_turn_completed
@@ -732,6 +737,7 @@ async def test_backchannel_boundary_suppresses_start_boundary_backchannel() -> N
         endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
         stt=None,
         vad=None,
+        using_default_vad=False,
         interruption_detection=None,
         turn_detection="vad",
     )
@@ -763,6 +769,7 @@ async def _make_stt_eos_recognition() -> AudioRecognition:
         endpointing=BaseEndpointing(min_delay=0.0, max_delay=0.0),
         stt=None,
         vad=None,
+        using_default_vad=False,
         interruption_detection=None,
         turn_detection="stt",
     )
@@ -819,6 +826,7 @@ async def test_backchannel_boundary_releases_end_boundary_transcript() -> None:
         endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
         stt=None,
         vad=None,
+        using_default_vad=False,
         interruption_detection=None,
         turn_detection="vad",
     )
@@ -957,6 +965,7 @@ async def test_force_flush_held_transcripts_emits_buffered_events() -> None:
         endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
         stt=None,
         vad=None,
+        using_default_vad=False,
         interruption_detection=None,
         turn_detection="manual",
     )
@@ -1023,6 +1032,50 @@ async def test_preemptive_generation(preemptive_generation: dict, expected_laten
         max_abs_diff=0.2,
     )
     assert agent_state_events[3].new_state == "listening"
+
+
+@pytest.mark.parametrize(
+    "session_preemptive, agent_preemptive, expected_latency",
+    [
+        # agent disables what the session enabled -> no preemptive generation (1.1s)
+        ({"preemptive_tts": True}, {"enabled": False}, 1.1),
+        # agent enables (with TTS) what the session disabled -> fully preemptive (0.7s)
+        ({"enabled": False}, {"enabled": True, "preemptive_tts": True}, 0.7),
+    ],
+)
+async def test_preemptive_generation_on_agent(
+    session_preemptive: dict, agent_preemptive: dict, expected_latency: float
+) -> None:
+    # preemptive generation set on the agent must override the session value
+    speed = 1
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.0, "Hello, how are you?", stt_delay=0.1)
+    actions.add_llm("I'm doing great, thank you!", ttft=0.1, duration=0.3)
+    actions.add_tts(3.0, ttfb=0.3)
+    # preemptive_generation with TTS enabled: e2e latency is 0.1+0.3+0.3=0.7s
+    # preemptive_generation disabled: e2e latency is 0.5+0.3+0.3=1.1s
+
+    session = create_session(
+        actions,
+        speed_factor=speed,
+        turn_handling={"preemptive_generation": session_preemptive},
+    )
+    agent = MyAgent(turn_handling={"preemptive_generation": agent_preemptive})
+
+    agent_state_events: list[AgentStateChangedEvent] = []
+    user_state_events: list[UserStateChangedEvent] = []
+    session.on("agent_state_changed", agent_state_events.append)
+    session.on("user_state_changed", user_state_events.append)
+
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+    t_user_stop_speaking = user_state_events[1].created_at
+    t_agent_start_speaking = agent_state_events[2].created_at
+    check_timestamp(
+        t_agent_start_speaking - t_user_stop_speaking,
+        t_target=expected_latency,
+        speed_factor=speed,
+        max_abs_diff=0.2,
+    )
 
 
 @pytest.mark.parametrize(
@@ -1396,6 +1449,185 @@ async def test_silent_tool_call_pause_state_does_not_leak_into_tool_reply() -> N
     assert transitions[silent_step_finished + 1] == ("listening", "speaking")
     assert false_interruption_events
     assert false_interruption_events[-1].resumed is True
+
+
+async def test_default_vad_is_auto_provisioned() -> None:
+    from livekit.agents.voice.agent_session import AgentSession
+
+    session = AgentSession()
+    try:
+        assert session.vad is not None
+        assert session._using_default_vad is True
+    finally:
+        await session.aclose()
+
+
+async def test_explicit_vad_none_opts_out() -> None:
+    from livekit.agents.voice.agent_session import AgentSession
+
+    session = AgentSession(vad=None)
+    try:
+        assert session.vad is None
+        assert session._using_default_vad is False
+    finally:
+        await session.aclose()
+
+
+async def test_user_supplied_vad_clears_default_flag() -> None:
+    from livekit.agents.voice.agent_session import AgentSession
+
+    from .fake_vad import FakeVAD
+
+    user_vad = FakeVAD(fake_user_speeches=[])
+
+    session = AgentSession(vad=user_vad)
+    try:
+        assert session.vad is user_vad
+        assert session._using_default_vad is False
+    finally:
+        await session.aclose()
+
+
+async def test_default_turn_detection_builds_default_eot() -> None:
+    """No turn_detection given → session auto-provisions a default TurnDetector."""
+    from livekit.agents.voice.agent_session import AgentSession
+    from livekit.agents.voice.turn import _StreamingTurnDetector
+
+    session = AgentSession()
+    try:
+        assert isinstance(session.turn_detection, _StreamingTurnDetector)
+    finally:
+        await session.aclose()
+
+
+async def test_turn_detection_none_opts_out() -> None:
+    """Explicit None opts out of turn detection (no default detector built)."""
+    from livekit.agents.voice.agent_session import AgentSession
+
+    session = AgentSession(turn_handling={"turn_detection": None})
+    try:
+        assert session.turn_detection is None
+    finally:
+        await session.aclose()
+
+
+async def test_user_supplied_turn_detector_passes_through() -> None:
+    from livekit.agents import inference
+    from livekit.agents.voice.agent_session import AgentSession
+
+    user_detector = inference.TurnDetector(version="v1-mini")
+    session = AgentSession(turn_handling={"turn_detection": user_detector})
+    try:
+        assert session.turn_detection is user_detector
+    finally:
+        await session.aclose()
+
+
+async def test_streaming_detector_uses_streaming_endpointing_defaults() -> None:
+    """Default session → streaming detector → tighter 0.3/2.5 endpointing defaults."""
+    from livekit.agents.voice.agent_session import AgentSession
+
+    session = AgentSession()
+    try:
+        assert session._opts.endpointing["min_delay"] == 0.3
+        assert session._opts.endpointing["max_delay"] == 2.5
+        assert session._opts.endpointing_overrides == {}
+    finally:
+        await session.aclose()
+
+
+async def test_non_streaming_detector_uses_legacy_endpointing_defaults() -> None:
+    """A non-streaming mode keeps the legacy 0.5/3.0 defaults."""
+    from livekit.agents.voice.agent_session import AgentSession
+
+    session = AgentSession(turn_handling={"turn_detection": "vad"})
+    try:
+        assert session._opts.endpointing["min_delay"] == 0.5
+        assert session._opts.endpointing["max_delay"] == 3.0
+    finally:
+        await session.aclose()
+
+
+async def test_explicit_endpointing_overrides_streaming_default_per_key() -> None:
+    """An explicit delay is honored; the unset one still gets the streaming default."""
+    from livekit.agents.voice.agent_session import AgentSession
+
+    session = AgentSession(turn_handling={"endpointing": {"min_delay": 0.4}})
+    try:
+        assert session._opts.endpointing["min_delay"] == 0.4
+        assert session._opts.endpointing["max_delay"] == 2.5
+        assert session._opts.endpointing_overrides == {"min_delay": 0.4}
+    finally:
+        await session.aclose()
+
+
+async def test_user_streaming_detector_uses_streaming_defaults() -> None:
+    """A user-constructed streaming detector also triggers the streaming defaults."""
+    from livekit.agents import inference
+    from livekit.agents.voice.agent_session import AgentSession
+
+    session = AgentSession(
+        turn_handling={"turn_detection": inference.TurnDetector(version="v1-mini")}
+    )
+    try:
+        assert session._opts.endpointing["min_delay"] == 0.3
+        assert session._opts.endpointing["max_delay"] == 2.5
+    finally:
+        await session.aclose()
+
+
+async def test_deprecated_turn_detection_vad_uses_legacy_defaults() -> None:
+    """Deprecated turn_detection arg + no delays → legacy defaults (non-streaming)."""
+    from livekit.agents.voice.agent_session import AgentSession
+
+    session = AgentSession(turn_detection="vad")
+    try:
+        assert session._opts.endpointing["min_delay"] == 0.5
+        assert session._opts.endpointing["max_delay"] == 3.0
+    finally:
+        await session.aclose()
+
+
+async def test_agent_turn_detection_override_resolves_endpointing_per_activity() -> None:
+    """endpointing_opts uses the activity's resolved detector, not just the session's."""
+    from livekit.agents.voice.agent_session import AgentSession
+
+    from .fake_vad import FakeVAD
+
+    # session default → streaming detector; provide VAD so it validates
+    session = AgentSession(vad=FakeVAD(fake_user_speeches=[]))
+    try:
+        streaming_activity = AgentActivity(Agent(instructions="test"), session)
+        assert streaming_activity.endpointing_opts["min_delay"] == 0.3
+        assert streaming_activity.endpointing_opts["max_delay"] == 2.5
+
+        # an agent overriding to VAD falls back to legacy defaults for this activity
+        vad_activity = AgentActivity(Agent(instructions="test", turn_detection="vad"), session)
+        assert vad_activity.endpointing_opts["min_delay"] == 0.5
+        assert vad_activity.endpointing_opts["max_delay"] == 3.0
+    finally:
+        await session.aclose()
+
+
+async def test_runtime_endpointing_opts_survive_handoff() -> None:
+    """update_options changes are recorded as overrides, so a new activity keeps them."""
+    from livekit.agents.voice.agent_session import AgentSession
+
+    from .fake_vad import FakeVAD
+
+    session = AgentSession(vad=FakeVAD(fake_user_speeches=[]))
+    try:
+        session.update_options(endpointing_opts={"mode": "dynamic", "alpha": 0.5, "min_delay": 0.4})
+
+        # a fresh activity (as built on agent handoff) re-resolves from overrides
+        activity = AgentActivity(Agent(instructions="test"), session)
+        assert activity.endpointing_opts["mode"] == "dynamic"
+        assert activity.endpointing_opts["alpha"] == 0.5
+        assert activity.endpointing_opts["min_delay"] == 0.4
+        # untouched key still gets the streaming default
+        assert activity.endpointing_opts["max_delay"] == 2.5
+    finally:
+        await session.aclose()
 
 
 class FlushMultiSegmentAgent(Agent):

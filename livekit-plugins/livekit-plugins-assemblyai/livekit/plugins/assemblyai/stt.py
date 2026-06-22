@@ -57,7 +57,8 @@ class STTOptions:
         "u3-rt-pro",
         "u3-rt-pro-beta-1",
         "u3-pro",
-    ] = "universal-streaming-english"
+        "universal-3-5-pro",
+    ] = "universal-3-5-pro"
     language_detection: NotGivenOr[bool] = NOT_GIVEN
     end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN
     min_turn_silence: NotGivenOr[int] = NOT_GIVEN
@@ -73,12 +74,16 @@ class STTOptions:
     speaker_labels: NotGivenOr[bool] = NOT_GIVEN
     max_speakers: NotGivenOr[int] = NOT_GIVEN
     domain: NotGivenOr[str] = NOT_GIVEN
+    voice_focus: NotGivenOr[Literal["near-field", "far-field"]] = NOT_GIVEN
+    voice_focus_threshold: NotGivenOr[float] = NOT_GIVEN
+    mode: NotGivenOr[Literal["min_latency", "balanced", "max_accuracy"]] = NOT_GIVEN
 
 
 # Speech models in the u3-rt-pro family, which share the same parameter support
 # (prompt, agent_context, previous_context_n_turns, continuous_partials,
-# interruption_delay). Mirrors the server-side `SpeechModel.is_u3_pro`.
-_U3_PRO_MODELS = ("u3-rt-pro", "u3-rt-pro-beta-1")
+# interruption_delay, voice_focus, voice_focus_threshold) and connect-time
+# defaults. Mirrors the server-side `SpeechModel.is_u3_pro`.
+_U3_PRO_MODELS = ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro")
 
 
 class STT(stt.STT):
@@ -94,7 +99,8 @@ class STT(stt.STT):
             "u3-rt-pro",
             "u3-rt-pro-beta-1",
             "u3-pro",
-        ] = "universal-streaming-english",
+            "universal-3-5-pro",
+        ] = "universal-3-5-pro",
         language_detection: NotGivenOr[bool] = NOT_GIVEN,
         end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
         min_turn_silence: NotGivenOr[int] = NOT_GIVEN,
@@ -110,6 +116,9 @@ class STT(stt.STT):
         speaker_labels: NotGivenOr[bool] = NOT_GIVEN,
         max_speakers: NotGivenOr[int] = NOT_GIVEN,
         domain: NotGivenOr[str] = NOT_GIVEN,
+        voice_focus: NotGivenOr[Literal["near-field", "far-field"]] = NOT_GIVEN,
+        voice_focus_threshold: NotGivenOr[float] = NOT_GIVEN,
+        mode: NotGivenOr[Literal["min_latency", "balanced", "max_accuracy"]] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         buffer_size_seconds: float = 0.05,
         base_url: str = "wss://streaming.assemblyai.com",
@@ -149,8 +158,29 @@ class STT(stt.STT):
                 transcripts and any `agent_context` values) carried forward as context for
                 each transcription. Set to 0 to disable automatic context carryover
                 entirely; leave unset to use the server default (recommended). Range 0–100.
-                Only supported with the 'u3-rt-pro' / 'u3-rt-pro-beta-1' models. Set at
-                construction (connect) time only; it cannot be changed via `update_options`.
+                Only supported with the 'u3-rt-pro' / 'u3-rt-pro-beta-1' / 'universal-3-5-pro'
+                models. Set at construction (connect) time only; it cannot be changed via
+                `update_options`.
+            voice_focus: Voice Focus isolates the primary voice and suppresses background
+                noise (chatter, keyboard clicks, fan hum, room echo) before the audio reaches
+                the model. Use 'near-field' for headsets, handsets, and close-talking
+                microphones; use 'far-field' for conference rooms, laptop mics, and other
+                distant-mic setups. Only supported with the 'u3-rt-pro' / 'u3-rt-pro-beta-1' /
+                'universal-3-5-pro' models. Set at construction (connect) time only.
+                See https://www.assemblyai.com/docs/streaming/voice-focus.
+            voice_focus_threshold: Controls how aggressively background audio is suppressed,
+                a float between 0.0 and 1.0 (higher is more aggressive). Only takes effect
+                alongside `voice_focus`. Only supported with the 'u3-rt-pro' /
+                'u3-rt-pro-beta-1' / 'universal-3-5-pro' models. Set at construction (connect)
+                time only.
+            mode: Accuracy/latency preset forwarded to the u3-pro model: 'min_latency'
+                (fastest time-to-text), 'balanced' (the server default, recommended for
+                voice agents), or 'max_accuracy' (highest accuracy, for scribes/post-call).
+                The model applies its own per-mode tuning; any silence, partials, or VAD
+                knobs you set explicitly still take precedence over the mode's defaults.
+                Leave unset to use the server default. Only supported with the 'u3-rt-pro' /
+                'u3-rt-pro-beta-1' / 'universal-3-5-pro' models. Set at construction (connect)
+                time only.
         """
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -169,31 +199,24 @@ class STT(stt.STT):
             logger.warning("'u3-pro' is deprecated, use 'u3-rt-pro' instead.")
             model = "u3-rt-pro"
 
-        if is_given(prompt) and model not in _U3_PRO_MODELS:
-            raise ValueError(
-                "The 'prompt' parameter is only supported with the 'u3-rt-pro' models."
-            )
-
-        if is_given(agent_context) and model not in _U3_PRO_MODELS:
-            raise ValueError(
-                "The 'agent_context' parameter is only supported with the 'u3-rt-pro' models."
-            )
-
-        if is_given(previous_context_n_turns) and model not in _U3_PRO_MODELS:
-            raise ValueError(
-                "The 'previous_context_n_turns' parameter is only supported with the "
-                "'u3-rt-pro' models."
-            )
-
-        if is_given(continuous_partials) and model not in _U3_PRO_MODELS:
-            raise ValueError(
-                "The 'continuous_partials' parameter is only supported with the 'u3-rt-pro' models."
-            )
-
-        if is_given(interruption_delay) and model not in _U3_PRO_MODELS:
-            raise ValueError(
-                "The 'interruption_delay' parameter is only supported with the 'u3-rt-pro' models."
-            )
+        # These parameters are only supported by the u3-rt-pro family of models.
+        if model not in _U3_PRO_MODELS:
+            _u3_pro_only_params = {
+                "prompt": prompt,
+                "agent_context": agent_context,
+                "previous_context_n_turns": previous_context_n_turns,
+                "continuous_partials": continuous_partials,
+                "interruption_delay": interruption_delay,
+                "voice_focus": voice_focus,
+                "voice_focus_threshold": voice_focus_threshold,
+                "mode": mode,
+            }
+            for _param_name, _param_value in _u3_pro_only_params.items():
+                if is_given(_param_value):
+                    raise ValueError(
+                        f"The {_param_name!r} parameter is only supported with the "
+                        f"{', '.join(_U3_PRO_MODELS)} models."
+                    )
 
         # LiveKit defaults continuous_partials to True (vs. AssemblyAI's server default of
         # False) for steady-cadence partials. This parameter is only supported for
@@ -245,6 +268,9 @@ class STT(stt.STT):
             speaker_labels=speaker_labels,
             max_speakers=max_speakers,
             domain=domain,
+            voice_focus=voice_focus,
+            voice_focus_threshold=voice_focus_threshold,
+            mode=mode,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -667,6 +693,11 @@ class SpeechStream(stt.SpeechStream):
             else None,
             "max_speakers": self._opts.max_speakers if is_given(self._opts.max_speakers) else None,
             "domain": self._opts.domain if is_given(self._opts.domain) else None,
+            "voice_focus": self._opts.voice_focus if is_given(self._opts.voice_focus) else None,
+            "voice_focus_threshold": self._opts.voice_focus_threshold
+            if is_given(self._opts.voice_focus_threshold)
+            else None,
+            "mode": self._opts.mode if is_given(self._opts.mode) else None,
         }
 
         headers = {

@@ -24,7 +24,6 @@ from livekit.agents import (
     inference,
     llm,
 )
-from livekit.plugins import silero
 
 logger = logging.getLogger("async-travel-helper")
 
@@ -219,7 +218,6 @@ async def entrypoint(ctx: JobContext):
         llm=inference.LLM("google/gemini-3.1-flash-lite"),
         tts=inference.TTS("cartesia/sonic-3", voice="e07c00bc-4134-4eae-9ea4-1a55fb45746b"),
         # llm=google.realtime.RealtimeModel(),
-        vad=silero.VAD.load(),
         turn_handling={"interruption": {"mode": "vad"}},
     )
 
