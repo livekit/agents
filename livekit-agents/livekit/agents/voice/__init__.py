@@ -16,6 +16,7 @@ from .events import (
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
+    UserTranscriptionTimeoutEvent,
     UserTurnExceededEvent,
 )
 from .remote_session import RemoteSession
@@ -46,6 +47,7 @@ __all__ = [
     "CloseEvent",
     "CloseReason",
     "UserStateChangedEvent",
+    "UserTranscriptionTimeoutEvent",
     "AgentStateChangedEvent",
     "FunctionToolsExecutedEvent",
     "AgentFalseInterruptionEvent",
