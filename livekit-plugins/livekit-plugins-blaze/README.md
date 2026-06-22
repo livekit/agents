@@ -28,3 +28,5 @@ llm = blaze.LLM(bot_id="my-chatbot")
 |---|---|---|
 | `BLAZE_API_URL` | Base URL for Blaze API gateway | `https://api.blaze.vn` |
 | `BLAZE_API_TOKEN` | Bearer token for authentication | |
+| `BLAZE_TTS_TIMEOUT` | TTS idle timeout per WebSocket recv (seconds) | `60` |
+| `BLAZE_TTS_STREAM_TIMEOUT` | Max duration for one streaming TTS turn (seconds) | `300` |
