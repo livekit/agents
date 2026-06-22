@@ -35,6 +35,10 @@ TRANSACTIONAL_TABLES: tuple[str, ...] = (
     "spa_bookings",
     "business_center_bookings",
     "florist_orders",
+    "emails_sent",
+    "transfer_calls",
+    "waitlist",
+    "do_not_disturb",
     "flight_reconfirmations",
     "airport_cars",
     "emergency_dispatches",
@@ -49,10 +53,6 @@ DENY_COLUMNS = frozenset(
         "code",
         "case_number",
         "booking_code",
-        # booking math: tool-computed by compute_invoice from type + dates +
-        # extras, which are all already compared — so asserting it would grade the
-        # mock's arithmetic, not the agent. (It also varies with which room of a
-        # type book_room picks, since seed rates differ within a type.)
         "total",
         "subtotal",
         "taxes",

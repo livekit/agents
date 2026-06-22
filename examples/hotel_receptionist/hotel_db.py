@@ -78,6 +78,7 @@ DisputeCategory = Literal[
     "damage_cleaning",
     "late_checkout_fee",
     "cancellation_fee",
+    "no_show",
     "double_charge_billing_error",
     "other",
 ]
@@ -138,6 +139,16 @@ DISPUTE_POLICIES: dict[DisputeCategory, DisputePolicy] = {
             f"Our policy is free cancellation up to {PRICING.cancellation_window_hours} "
             f"hours before check-in. Inside that window it's one night. "
             "If you're a returning guest I can waive it once."
+        ),
+    ),
+    "no_show": DisputePolicy(
+        action="explain_no_refund",
+        escalation="manager",
+        explanation=(
+            "This room was guaranteed to your card and there's no cancellation on record, "
+            "so it was held for you and charged as a no-show under the guarantee policy. "
+            "I can't reverse a guaranteed charge myself, but I can have the manager review "
+            "it and follow up by email."
         ),
     ),
     "double_charge_billing_error": DisputePolicy(
@@ -254,7 +265,26 @@ FollowupKind = Literal[
     "verification_help",  # verification failed; route to a human
     "early_checkout",  # in-house guest wants to leave early; front desk handles
     "abandoned_booking",  # caller dropped mid-booking; a human can call back
+    "lost_and_found",  # guest reports an item left behind; route to housekeeping/lost-and-found
     "other",
+]
+
+EmailKind = Literal[
+    "booking_confirmation",  # the room booking details + code, re-sent to the address on file
+    "folio",  # itemized bill / invoice, re-sent to the address on file
+]
+
+# Emergency classification (manual P1§13/P3§8): health -> ambulance, fire -> fire
+# brigade, safety/theft/assault/threat -> police; every kind also alerts the duty
+# manager and sends hotel staff to the room.
+EmergencyKind = Literal["medical", "fire", "security"]
+
+# Hotel departments a caller can be transferred to. NOT a guest room - the
+# operator never connects a caller to a guest (see guest-privacy policy).
+TransferDestination = Literal[
+    "restaurant",
+    "duty_manager",
+    "housekeeping",
 ]
 
 
@@ -778,6 +808,82 @@ class HotelDB:
         if self.on_change:
             await self.on_change()
 
+    async def lookup_guest_history(self, *, last_name: str) -> str | None:
+        """Return a returning guest's remembered preferences from past stays, or None
+        if there's no history on file for that name."""
+        row = self.connection.execute(
+            "SELECT preferences FROM guest_history WHERE LOWER(last_name) = LOWER(?)",
+            (last_name,),
+        ).fetchone()
+        return row[0] if row else None
+
+    async def set_do_not_disturb(self, *, room: str) -> str:
+        """Record a Do-Not-Disturb hold on a room and return a reference. The switchboard
+        holds the room's calls and messages until it's lifted; emergencies override it."""
+        code = shortuuid("DND-")
+        with self.connection as conn:
+            _insert(conn, "do_not_disturb", {"code": code, "room": room})
+        if self.on_change:
+            await self.on_change()
+        return code
+
+    async def add_to_waitlist(
+        self,
+        *,
+        first_name: str,
+        last_name: str,
+        phone: str,
+        check_in: date,
+        check_out: date,
+        guests: int,
+    ) -> str:
+        """Record a waitlist entry for dates the hotel is sold out on, and return a
+        reference. No room is held - the desk calls back only if something frees up."""
+        code = shortuuid("WL-")
+        with self.connection as conn:
+            _insert(
+                conn,
+                "waitlist",
+                {
+                    "code": code,
+                    "first_name": first_name,
+                    "last_name": last_name,
+                    "phone": "".join(c for c in phone if c.isdigit()) or phone,
+                    "check_in": check_in.isoformat(),
+                    "check_out": check_out.isoformat(),
+                    "guests": guests,
+                },
+            )
+        if self.on_change:
+            await self.on_change()
+        return code
+
+    async def reinstate_booking(self, booking_code: str) -> None:
+        """Reactivate a previously cancelled booking, but only if its original room is
+        still free for its dates. Raises NotFound if the code is unknown, Unavailable if
+        the room has since been taken. A no-op if the booking is already confirmed."""
+        conn = self.connection
+        row = conn.execute(
+            "SELECT room_id, check_in, check_out, status FROM hotel_bookings WHERE code = ?",
+            (booking_code,),
+        ).fetchone()
+        if row is None:
+            raise NotFound(f"booking not found: {booking_code}")
+        room_id, check_in, check_out, status = row
+        if status == "confirmed":
+            return
+        clash = conn.execute(
+            "SELECT 1 FROM hotel_bookings WHERE room_id = ? AND status = 'confirmed' "
+            "AND code != ? AND NOT (check_out <= ? OR check_in >= ?) LIMIT 1",
+            (room_id, booking_code, check_in, check_out),
+        ).fetchone()
+        if clash:
+            raise Unavailable("that room is no longer free for those dates")
+        with conn:
+            _update(conn, "hotel_bookings", {"status": "confirmed"}, {"code": booking_code})
+        if self.on_change:
+            await self.on_change()
+
     async def book_restaurant(
         self,
         *,
@@ -1139,6 +1245,49 @@ class HotelDB:
             await self.on_change()
         return code, arrangement, total
 
+    async def send_email(self, *, recipient: str, kind: str) -> str:
+        """Stub email send: records that a document of `kind` was sent to `recipient`
+        and returns a reference. No real mail goes out; the row is the gradable signal
+        that the agent actually sent rather than just claiming to."""
+        if kind not in get_args(EmailKind):
+            raise NotFound(f"unknown email kind: {kind} - options: {', '.join(get_args(EmailKind))}")
+        code = shortuuid("EML-")
+        with self.connection as conn:
+            _insert(
+                conn,
+                "emails_sent",
+                {
+                    "code": code,
+                    "recipient": recipient.strip().lower(),
+                    "kind": kind,
+                },
+            )
+        if self.on_change:
+            await self.on_change()
+        return code
+
+    async def transfer_call(self, *, destination: str, summary: str) -> str:
+        """Stub call transfer: records that the caller was transferred to a hotel
+        department with a one-line summary, and returns a reference."""
+        if destination not in get_args(TransferDestination):
+            raise NotFound(
+                f"unknown destination: {destination} - options: {', '.join(get_args(TransferDestination))}"
+            )
+        code = shortuuid("XFR-")
+        with self.connection as conn:
+            _insert(
+                conn,
+                "transfer_calls",
+                {
+                    "code": code,
+                    "destination": destination,
+                    "summary": summary,
+                },
+            )
+        if self.on_change:
+            await self.on_change()
+        return code
+
     async def request_flight_reconfirmation(
         self,
         *,
@@ -1200,14 +1349,16 @@ class HotelDB:
             await self.on_change()
         return code
 
-    async def dispatch_emergency(self, *, room: str, situation: str) -> str:
+    async def dispatch_emergency(self, *, room: str, kind: str, situation: str) -> str:
+        if kind not in get_args(EmergencyKind):
+            raise NotFound(f"unknown emergency kind: {kind} - options: {', '.join(get_args(EmergencyKind))}")
         room_id = self._require_room(room)
         code = shortuuid("EMG-")
         with self.connection as conn:
             _insert(
                 conn,
                 "emergency_dispatches",
-                {"code": code, "room_id": room_id, "situation": situation},
+                {"code": code, "room_id": room_id, "kind": kind, "situation": situation},
             )
         if self.on_change:
             await self.on_change()
@@ -1548,7 +1699,7 @@ CREATE TABLE IF NOT EXISTS hotel_disputes (
     booking_code  TEXT    NOT NULL REFERENCES hotel_bookings(code),
     line_item     TEXT    NOT NULL,
     amount        INTEGER NOT NULL,
-    category      TEXT    NOT NULL CHECK (category IN ('minibar','room_service_restaurant','damage_cleaning','late_checkout_fee','cancellation_fee','double_charge_billing_error','other')),
+    category      TEXT    NOT NULL CHECK (category IN ('minibar','room_service_restaurant','damage_cleaning','late_checkout_fee','cancellation_fee','no_show','double_charge_billing_error','other')),
     caller_note   TEXT    NOT NULL,
     outcome       TEXT    NOT NULL CHECK (outcome IN ('auto_refunded','credit_offered','explained_no_action','goodwill_waived','escalated_to_manager','accounting_ticket_opened','open')),
     refund_amount INTEGER NOT NULL DEFAULT 0,
@@ -1558,7 +1709,7 @@ CREATE TABLE IF NOT EXISTS hotel_disputes (
 CREATE TABLE IF NOT EXISTS hotel_followups (
     id           INTEGER PRIMARY KEY,
     code         TEXT    NOT NULL UNIQUE,
-    kind         TEXT    NOT NULL CHECK (kind IN ('housekeeping','sales_lead','identity_change','callback','verification_help','early_checkout','abandoned_booking','other')),
+    kind         TEXT    NOT NULL CHECK (kind IN ('housekeeping','sales_lead','identity_change','callback','verification_help','early_checkout','abandoned_booking','lost_and_found','other')),
     caller_name  TEXT    NOT NULL,
     caller_phone TEXT    NOT NULL,
     summary      TEXT    NOT NULL,
@@ -1616,6 +1767,49 @@ CREATE TABLE IF NOT EXISTS florist_orders (
     status         TEXT    NOT NULL DEFAULT 'confirmed' CHECK (status IN ('confirmed','cancelled'))
 );
 
+CREATE TABLE IF NOT EXISTS emails_sent (
+    id         INTEGER PRIMARY KEY,
+    code       TEXT    NOT NULL UNIQUE,
+    recipient  TEXT    NOT NULL,
+    kind       TEXT    NOT NULL CHECK (kind IN ('booking_confirmation','folio')),
+    status     TEXT    NOT NULL DEFAULT 'sent'
+);
+
+CREATE TABLE IF NOT EXISTS transfer_calls (
+    id           INTEGER PRIMARY KEY,
+    code         TEXT    NOT NULL UNIQUE,
+    destination  TEXT    NOT NULL CHECK (destination IN ('restaurant','duty_manager','housekeeping')),
+    summary      TEXT    NOT NULL DEFAULT '',
+    status       TEXT    NOT NULL DEFAULT 'transferred'
+);
+
+CREATE TABLE IF NOT EXISTS waitlist (
+    id          INTEGER PRIMARY KEY,
+    code        TEXT    NOT NULL UNIQUE,
+    first_name  TEXT    NOT NULL,
+    last_name   TEXT    NOT NULL,
+    phone       TEXT    NOT NULL,
+    check_in    TEXT    NOT NULL,
+    check_out   TEXT    NOT NULL,
+    guests      INTEGER NOT NULL,
+    status      TEXT    NOT NULL DEFAULT 'waiting'
+);
+
+CREATE TABLE IF NOT EXISTS do_not_disturb (
+    id      INTEGER PRIMARY KEY,
+    code    TEXT    NOT NULL UNIQUE,
+    room    TEXT    NOT NULL,
+    status  TEXT    NOT NULL DEFAULT 'active'
+);
+
+-- Reference data (read-only): preferences remembered from a returning guest's past
+-- stays. The agent reads this to personalize; it never writes here.
+CREATE TABLE IF NOT EXISTS guest_history (
+    id          INTEGER PRIMARY KEY,
+    last_name   TEXT    NOT NULL,
+    preferences TEXT    NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS flight_reconfirmations (
     id                INTEGER PRIMARY KEY,
     code              TEXT    NOT NULL UNIQUE,
@@ -1643,6 +1837,7 @@ CREATE TABLE IF NOT EXISTS emergency_dispatches (
     id        INTEGER PRIMARY KEY,
     code      TEXT    NOT NULL UNIQUE,
     room_id   TEXT    NOT NULL REFERENCES hotel_rooms(id),
+    kind      TEXT    NOT NULL DEFAULT 'medical' CHECK (kind IN ('medical','fire','security')),
     situation TEXT    NOT NULL,
     status    TEXT    NOT NULL DEFAULT 'dispatched' CHECK (status IN ('dispatched','resolved'))
 );
