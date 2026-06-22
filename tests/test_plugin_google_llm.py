@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from google.genai import types
@@ -10,65 +10,398 @@ from livekit.agents.llm import ChatContext, function_tool
 from livekit.agents.types import APIConnectOptions
 from livekit.plugins.google.llm import LLM, LLMStream
 from livekit.plugins.google.realtime.realtime_api import RealtimeModel, RealtimeSession
+from livekit.plugins.google.tools import GoogleSearch
 
 pytestmark = pytest.mark.plugin("google")
 
 
-@pytest.fixture
-def llm_stream():
-    mock_llm = MagicMock()
-    mock_llm._thought_signatures = {}
-
-    with patch.object(LLMStream, "__init__", lambda self, *a, **kw: None):
-        stream = LLMStream.__new__(LLMStream)
-        stream._llm = mock_llm
-        stream._model = "gemini-2.0-flash"
-    return stream
+@function_tool
+async def get_weather(city: str) -> str:
+    """Get the current weather for a city."""
+    return city
 
 
-class TestParsePartFunctionCall:
-    def test_function_call_with_text_returns_none_content(self, llm_stream: LLMStream):
-        part = types.Part(
-            function_call=types.FunctionCall(name="get_weather", args={"city": "Paris"}),
-            text="get_weather",
+def _search_parts() -> list[types.Part]:
+    return [
+        types.Part(
+            thought_signature=b"search-signature",
+            tool_call=types.ToolCall(
+                id="search-1",
+                tool_type=types.ToolType.GOOGLE_SEARCH_WEB,
+                args={"queries": ["northernmost city in the United States"]},
+            ),
+        ),
+        types.Part(
+            thought_signature=b"search-signature",
+            tool_response=types.ToolResponse(
+                id="search-1",
+                tool_type=types.ToolType.GOOGLE_SEARCH_WEB,
+                response={"search_suggestions": "Utqiagvik"},
+            ),
+        ),
+    ]
+
+
+def _mixed_google_content() -> types.Content:
+    return types.Content(
+        role="model",
+        parts=[
+            *_search_parts(),
+            types.Part(
+                thought_signature=b"function-signature",
+                function_call=types.FunctionCall(
+                    id="weather-1", name="get_weather", args={"city": "Utqiagvik, Alaska"}
+                ),
+            ),
+            types.Part(text="Reasoning that should not be surfaced as output.", thought=True),
+        ],
+    )
+
+
+def _content_dict(content: types.Content) -> dict:
+    return content.model_dump(mode="json", exclude_none=True)
+
+
+def _google_content_extra(content: types.Content) -> dict:
+    return {"google": {"content": _content_dict(content)}}
+
+
+def _response(content: types.Content) -> types.GenerateContentResponse:
+    return types.GenerateContentResponse(
+        candidates=[
+            types.Candidate(
+                content=content,
+                finish_reason=types.FinishReason.STOP,
+            )
+        ],
+    )
+
+
+async def _capture_request(model: LLM, **chat_kwargs) -> types.GenerateContentConfig:
+    captured: dict = {}
+
+    async def stream(**kwargs):
+        captured["config"] = kwargs["config"]
+        yield _response(types.Content(role="model", parts=[types.Part(text="ok")]))
+
+    chat_kwargs.setdefault("chat_ctx", ChatContext.empty())
+    with patch.object(
+        model._client.aio.models, "generate_content_stream", AsyncMock(side_effect=stream)
+    ):
+        await model.chat(**chat_kwargs).collect()
+
+    return captured["config"]
+
+
+async def _collect_response(model: LLM, content: types.Content, **chat_kwargs):
+    chat_kwargs.setdefault("chat_ctx", ChatContext.empty())
+
+    async def stream(**kwargs):
+        yield _response(content)
+
+    with patch.object(
+        model._client.aio.models, "generate_content_stream", AsyncMock(side_effect=stream)
+    ):
+        return await model.chat(**chat_kwargs).collect()
+
+
+class TestResponseParsing:
+    @pytest.mark.asyncio
+    async def test_function_call_surfaced_as_tool_call(self) -> None:
+        content = types.Content(
+            role="model",
+            parts=[
+                types.Part(
+                    function_call=types.FunctionCall(name="get_weather", args={"city": "Paris"})
+                )
+            ],
         )
+        model = LLM(model="gemini-2.0-flash", api_key="test")
+        response = await _collect_response(model, content, tools=[get_weather])
 
-        chunk = llm_stream._parse_part("test-id", part)
-
-        assert chunk is not None
-        assert chunk.delta.content is None
-        assert chunk.delta.tool_calls is not None
-        assert len(chunk.delta.tool_calls) == 1
-        tool_call = chunk.delta.tool_calls[0]
+        assert response.text == ""
+        [tool_call] = response.tool_calls
         assert tool_call.name == "get_weather"
         assert '"city": "Paris"' in tool_call.arguments
+        assert not tool_call.extra
 
-    def test_function_call_without_text_returns_none_content(self, llm_stream: LLMStream):
-        part = types.Part(
-            function_call=types.FunctionCall(name="get_weather", args={"city": "Paris"}),
+    @pytest.mark.asyncio
+    async def test_text_surfaced_as_content(self) -> None:
+        content = types.Content(role="model", parts=[types.Part(text="Hello world")])
+        model = LLM(model="gemini-2.0-flash", api_key="test")
+        response = await _collect_response(model, content)
+
+        assert response.text == "Hello world"
+        assert not response.tool_calls
+
+    @pytest.mark.asyncio
+    async def test_empty_text_part_counts_as_a_response(self) -> None:
+        content = types.Content(role="model", parts=[types.Part(text="")])
+        model = LLM(model="gemini-2.0-flash", api_key="test")
+        response = await _collect_response(model, content)
+
+        assert response.text == ""
+        assert not response.tool_calls
+
+
+class TestServerSideToolInvocations:
+    @pytest.mark.asyncio
+    async def test_mixed_response_preserves_content_on_function_call(self) -> None:
+        content = _mixed_google_content()
+        model = LLM(model="gemini-3.5-flash", api_key="test")
+        response = await _collect_response(model, content, tools=[get_weather, GoogleSearch()])
+
+        assert response.text == ""
+        [tool_call] = response.tool_calls
+        assert tool_call.call_id == "weather-1"
+        assert tool_call.extra == _google_content_extra(content)
+
+    def test_formatter_replays_function_call_content_then_response(self) -> None:
+        content = _mixed_google_content()
+        chat_ctx = ChatContext.empty()
+        chat_ctx.items.append(
+            llm.FunctionCall(
+                call_id="weather-1",
+                name="get_weather",
+                arguments="{}",
+                extra=_google_content_extra(content),
+            )
+        )
+        chat_ctx.items.append(
+            llm.FunctionCallOutput(
+                call_id="weather-1", name="get_weather", output="22F", is_error=False
+            )
         )
 
-        chunk = llm_stream._parse_part("test-id", part)
+        turns, _ = chat_ctx.to_provider_format("google")
 
-        assert chunk is not None
-        assert chunk.delta.content is None
-        assert len(chunk.delta.tool_calls) == 1
+        assert turns == [
+            _content_dict(content),
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "function_response": {
+                            "id": "weather-1",
+                            "name": "get_weather",
+                            "response": {"output": "22F"},
+                        }
+                    }
+                ],
+            },
+        ]
 
-    def test_text_only_part_returns_text_content(self, llm_stream: LLMStream):
-        part = types.Part(text="Hello world")
+    def test_formatter_replays_message_content_as_model_turn(self) -> None:
+        content = types.Content(
+            role="model",
+            parts=[
+                *_search_parts(),
+                types.Part(text="The northernmost city is Utqiagvik, Alaska."),
+            ],
+        )
+        chat_ctx = ChatContext.empty()
+        chat_ctx.add_message(
+            role="assistant",
+            content="The northernmost city is Utqiagvik, Alaska.",
+            extra=_google_content_extra(content),
+        )
+        chat_ctx.add_message(role="user", content="thanks")
 
-        chunk = llm_stream._parse_part("test-id", part)
+        turns, _ = chat_ctx.to_provider_format("google")
 
-        assert chunk is not None
-        assert chunk.delta.content == "Hello world"
-        assert not chunk.delta.tool_calls
+        assert turns == [
+            _content_dict(content),
+            {"role": "user", "parts": [{"text": "thanks"}]},
+        ]
 
-    def test_empty_text_part_returns_none(self, llm_stream: LLMStream):
-        part = types.Part(text="")
+    @pytest.mark.asyncio
+    async def test_mixed_tools_run_server_side(self) -> None:
+        model = LLM(model="gemini-3.5-flash", api_key="test")
 
-        chunk = llm_stream._parse_part("test-id", part)
+        config = await _capture_request(model, tools=[get_weather, GoogleSearch()])
 
-        assert chunk is None
+        assert config.tool_config.include_server_side_tool_invocations is True
+        assert config.tool_config.function_calling_config is None
+        assert any(tool.function_declarations for tool in config.tools)
+        assert any(tool.google_search for tool in config.tools)
+
+    @pytest.mark.asyncio
+    async def test_required_tool_choice_preserved_with_provider_tools(self) -> None:
+        model = LLM(model="gemini-3.5-flash", api_key="test")
+
+        config = await _capture_request(
+            model, tools=[get_weather, GoogleSearch()], tool_choice="required"
+        )
+
+        assert config.tool_config.include_server_side_tool_invocations is True
+        assert (
+            config.tool_config.function_calling_config.mode == types.FunctionCallingConfigMode.ANY
+        )
+        assert config.tool_config.function_calling_config.allowed_function_names == ["get_weather"]
+
+    @pytest.mark.asyncio
+    async def test_specific_function_tool_choice_preserved_with_provider_tools(self) -> None:
+        model = LLM(model="gemini-3.5-flash", api_key="test")
+
+        config = await _capture_request(
+            model,
+            tools=[get_weather, GoogleSearch()],
+            tool_choice={"type": "function", "function": {"name": "get_weather"}},
+        )
+
+        assert config.tool_config.include_server_side_tool_invocations is True
+        assert (
+            config.tool_config.function_calling_config.mode == types.FunctionCallingConfigMode.ANY
+        )
+        assert config.tool_config.function_calling_config.allowed_function_names == ["get_weather"]
+
+    @pytest.mark.asyncio
+    async def test_provider_tools_alone_still_circulate(self) -> None:
+        model = LLM(model="gemini-3.5-flash", api_key="test")
+
+        config = await _capture_request(model, tools=[GoogleSearch()])
+
+        assert config.tool_config.include_server_side_tool_invocations is True
+        assert config.tool_config.function_calling_config is None
+        assert any(tool.google_search for tool in config.tools)
+        assert not any(tool.function_declarations for tool in config.tools)
+
+    @pytest.mark.asyncio
+    async def test_provider_tools_alone_below_gemini_3_skip_circulation(self) -> None:
+        model = LLM(model="gemini-2.5-flash", api_key="test")
+
+        config = await _capture_request(model, tools=[GoogleSearch()])
+
+        assert config.tool_config is None
+        assert any(tool.google_search for tool in config.tools)
+
+    @pytest.mark.asyncio
+    async def test_mixed_tools_keep_retrieval_config(self) -> None:
+        model = LLM(
+            model="gemini-3.5-flash",
+            api_key="test",
+            retrieval_config=types.RetrievalConfig(language_code="en"),
+        )
+
+        config = await _capture_request(model, tools=[get_weather, GoogleSearch()])
+
+        assert config.tool_config.include_server_side_tool_invocations is True
+        assert config.tool_config.function_calling_config is None
+        assert config.tool_config.retrieval_config.language_code == "en"
+
+    @pytest.mark.asyncio
+    async def test_tool_choice_none_drops_provider(self) -> None:
+        model = LLM(model="gemini-3.5-flash", api_key="test")
+
+        config = await _capture_request(
+            model, tools=[get_weather, GoogleSearch()], tool_choice="none"
+        )
+
+        assert (
+            config.tool_config.function_calling_config.mode == types.FunctionCallingConfigMode.NONE
+        )
+        assert any(tool.function_declarations for tool in config.tools)
+        assert not any(tool.google_search for tool in config.tools)
+
+    @pytest.mark.asyncio
+    async def test_tool_choice_none_sends_no_provider_tools(self) -> None:
+        model = LLM(model="gemini-3.5-flash", api_key="test")
+
+        config = await _capture_request(model, tools=[GoogleSearch()], tool_choice="none")
+
+        assert config.tools is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "llm_kwargs",
+        [
+            {"model": "gemini-2.5-flash", "api_key": "test"},
+            {"model": "gemini-3.5-flash", "vertexai": True, "project": "p", "location": "us-east1"},
+        ],
+        ids=["older-model", "vertex"],
+    )
+    async def test_drops_provider_tools_when_combination_unsupported(
+        self, llm_kwargs: dict, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        model = LLM(**llm_kwargs)
+
+        config = await _capture_request(model, tools=[get_weather, GoogleSearch()])
+
+        assert config.tool_config is None
+        assert any(tool.function_declarations for tool in config.tools)
+        assert not any(tool.google_search for tool in config.tools)
+        assert "dropping provider tools" in caplog.text
+
+    def test_formatter_replays_parallel_function_calls(self) -> None:
+        content = types.Content(
+            role="model",
+            parts=[
+                *_search_parts(),
+                types.Part(
+                    thought_signature=b"weather-signature",
+                    function_call=types.FunctionCall(
+                        id="weather-1", name="get_weather", args={"city": "Utqiagvik, Alaska"}
+                    ),
+                ),
+                types.Part(
+                    thought_signature=b"time-signature",
+                    function_call=types.FunctionCall(
+                        id="time-1", name="get_time", args={"city": "Utqiagvik, Alaska"}
+                    ),
+                ),
+            ],
+        )
+        chat_ctx = ChatContext.empty()
+        chat_ctx.items.append(
+            llm.FunctionCall(
+                call_id="weather-1",
+                name="get_weather",
+                arguments="{}",
+                group_id="g1",
+                extra=_google_content_extra(content),
+            )
+        )
+        chat_ctx.items.append(
+            llm.FunctionCall(
+                call_id="time-1",
+                name="get_time",
+                arguments="{}",
+                group_id="g1",
+            )
+        )
+        chat_ctx.items.append(
+            llm.FunctionCallOutput(
+                call_id="weather-1", name="get_weather", output="22F", is_error=False
+            )
+        )
+        chat_ctx.items.append(
+            llm.FunctionCallOutput(call_id="time-1", name="get_time", output="3am", is_error=False)
+        )
+
+        turns, _ = chat_ctx.to_provider_format("google")
+
+        assert turns == [
+            _content_dict(content),
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "function_response": {
+                            "id": "weather-1",
+                            "name": "get_weather",
+                            "response": {"output": "22F"},
+                        }
+                    },
+                    {
+                        "function_response": {
+                            "id": "time-1",
+                            "name": "get_time",
+                            "response": {"output": "3am"},
+                        }
+                    },
+                ],
+            },
+        ]
 
 
 class TestCachedContentOption:
@@ -213,6 +546,21 @@ class TestCachedContentRequestSuppression:
         assert config.tools is None
         assert config.tool_config is None
         assert config.cached_content == "cachedContents/abc123"
+
+    @pytest.mark.asyncio
+    async def test_cached_content_drops_mixed_tools(self, caplog: pytest.LogCaptureFixture) -> None:
+        model = LLM(
+            model="gemini-3.5-flash",
+            api_key="test",
+            cached_content="cachedContents/abc123",
+        )
+
+        config = await _capture_request(model, tools=[get_weather, GoogleSearch()])
+
+        assert config.tools is None
+        assert config.tool_config is None
+        assert config.cached_content == "cachedContents/abc123"
+        assert "CachedContent resource" in caplog.text
 
     @pytest.mark.asyncio
     async def test_request_includes_system_instruction_and_tools_when_no_cache(self) -> None:

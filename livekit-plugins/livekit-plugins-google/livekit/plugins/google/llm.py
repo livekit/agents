@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -42,24 +43,32 @@ from .version import __version__
 
 def _is_gemini_3_model(model: str) -> bool:
     """Check if model is Gemini 3 series"""
-    return "gemini-3" in model.lower() or model.lower().startswith("gemini-3")
+    return "gemini-3" in model.lower()
 
 
 def _is_gemini_3_flash_model(model: str) -> bool:
     """Check if model is Gemini 3 Flash"""
-    return "gemini-3-flash" in model.lower() or model.lower().startswith("gemini-3-flash")
+    return "gemini-3-flash" in model.lower()
 
 
-def _requires_thought_signatures(model: str) -> bool:
-    """Check if model requires thought_signature handling for multi-turn function calling.
-
-    Gemini 2.5+ models require thought signatures to be stored from responses and
-    passed back in subsequent requests for proper multi-turn function calling.
-    """
-    if _is_gemini_3_model(model):
-        return True
-    model_lower = model.lower()
-    return "gemini-2.5" in model_lower or model_lower.startswith("gemini-2.5")
+def _function_calling_config(
+    tool_choice: NotGivenOr[ToolChoice], function_tools: Iterable[str]
+) -> types.FunctionCallingConfig | None:
+    if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
+        return types.FunctionCallingConfig(
+            mode=types.FunctionCallingConfigMode.ANY,
+            allowed_function_names=[tool_choice["function"]["name"]],
+        )
+    if tool_choice == "required":
+        return types.FunctionCallingConfig(
+            mode=types.FunctionCallingConfigMode.ANY,
+            allowed_function_names=list(function_tools) or None,
+        )
+    if tool_choice == "auto":
+        return types.FunctionCallingConfig(mode=types.FunctionCallingConfigMode.AUTO)
+    if tool_choice == "none":
+        return types.FunctionCallingConfig(mode=types.FunctionCallingConfigMode.NONE)
+    return None
 
 
 @dataclass
@@ -240,8 +249,6 @@ class LLM(llm.LLM):
             location=gcp_location,
             credentials=credentials,
         )
-        # Store thought_signatures for Gemini 2.5+ multi-turn function calling
-        self._thought_signatures: dict[str, bytes] = {}
 
     @property
     def model(self) -> str:
@@ -273,57 +280,53 @@ class LLM(llm.LLM):
             extra.update(extra_kwargs)
 
         tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
-        retrieval_config = (
-            self._opts.retrieval_config if is_given(self._opts.retrieval_config) else None
-        )
-        if isinstance(retrieval_config, dict):
-            retrieval_config = types.RetrievalConfig.model_validate(retrieval_config)
+        tool_ctx = llm.ToolContext(tools or [])
+        is_gemini_3_api = _is_gemini_3_model(self._opts.model) and not self._client.vertexai
 
-        if is_given(tool_choice):
-            gemini_tool_choice: types.ToolConfig
-            if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
-                gemini_tool_choice = types.ToolConfig(
-                    function_calling_config=types.FunctionCallingConfig(
-                        mode=types.FunctionCallingConfigMode.ANY,
-                        allowed_function_names=[tool_choice["function"]["name"]],
-                    ),
-                    retrieval_config=retrieval_config,
+        if is_given(self._opts.cached_content):
+            extra["cached_content"] = self._opts.cached_content
+            if tool_ctx.function_tools or tool_ctx.provider_tools:
+                logger.warning(
+                    "gemini llm: ignoring tools; bake them into the CachedContent resource",
+                    extra={"model": self._opts.model},
                 )
-                extra["tool_config"] = gemini_tool_choice
-            elif tool_choice == "required":
-                tool_names = []
-                for tool in tools or []:
-                    if isinstance(tool, (llm.FunctionTool, llm.RawFunctionTool)):
-                        tool_names.append(tool.info.name)
-
-                gemini_tool_choice = types.ToolConfig(
-                    function_calling_config=types.FunctionCallingConfig(
-                        mode=types.FunctionCallingConfigMode.ANY,
-                        allowed_function_names=tool_names or None,
-                    ),
-                    retrieval_config=retrieval_config,
-                )
-                extra["tool_config"] = gemini_tool_choice
-            elif tool_choice == "auto":
-                gemini_tool_choice = types.ToolConfig(
-                    function_calling_config=types.FunctionCallingConfig(
-                        mode=types.FunctionCallingConfigMode.AUTO,
-                    ),
-                    retrieval_config=retrieval_config,
-                )
-                extra["tool_config"] = gemini_tool_choice
-            elif tool_choice == "none":
-                gemini_tool_choice = types.ToolConfig(
-                    function_calling_config=types.FunctionCallingConfig(
-                        mode=types.FunctionCallingConfigMode.NONE,
-                    ),
-                    retrieval_config=retrieval_config,
-                )
-                extra["tool_config"] = gemini_tool_choice
-        elif retrieval_config:
-            extra["tool_config"] = types.ToolConfig(
-                retrieval_config=retrieval_config,
+        else:
+            drop_provider_tools = (
+                bool(tool_ctx.function_tools and tool_ctx.provider_tools) and not is_gemini_3_api
             )
+            if drop_provider_tools:
+                logger.warning(
+                    "gemini llm: dropping provider tools; mixing them with function tools "
+                    "requires the Gemini 3 Developer API",
+                    extra={"model": self._opts.model, "vertexai": self._client.vertexai},
+                )
+
+            include_server_side_tool_invocations = (
+                tool_choice != "none" and bool(tool_ctx.provider_tools) and is_gemini_3_api
+            )
+            function_calling_config = _function_calling_config(tool_choice, tool_ctx.function_tools)
+
+            retrieval_config: types.RetrievalConfig | None = None
+            if is_given(self._opts.retrieval_config):
+                retrieval_config = (
+                    types.RetrievalConfig.model_validate(self._opts.retrieval_config)
+                    if isinstance(self._opts.retrieval_config, dict)
+                    else cast(types.RetrievalConfig, self._opts.retrieval_config)
+                )
+
+            if function_calling_config or retrieval_config or include_server_side_tool_invocations:
+                extra["tool_config"] = types.ToolConfig(
+                    function_calling_config=function_calling_config,
+                    retrieval_config=retrieval_config,
+                    include_server_side_tool_invocations=include_server_side_tool_invocations
+                    or None,
+                )
+
+            if tools_config := create_tools_config(
+                tool_ctx,
+                _only_single_type=drop_provider_tools or tool_choice == "none",
+            ):
+                extra["tools"] = tools_config
 
         if is_given(response_format):
             extra["response_schema"] = to_response_format(response_format)
@@ -399,9 +402,6 @@ class LLM(llm.LLM):
         if is_given(self._opts.service_tier):
             extra["service_tier"] = self._opts.service_tier
 
-        if is_given(self._opts.cached_content):
-            extra["cached_content"] = self._opts.cached_content
-
         if is_given(self._opts.media_resolution):
             extra["media_resolution"] = self._opts.media_resolution
 
@@ -433,49 +433,14 @@ class LLMStream(llm.LLMStream):
         self._model = model
         self._llm: LLM = llm_v
         self._extra_kwargs = extra_kwargs
-        self._tool_ctx = llm.ToolContext(tools)
 
     async def _run(self) -> None:
         retryable = True
         request_id = utils.shortuuid()
 
         try:
-            # Pass thought_signatures for Gemini 2.5+ multi-turn function calling
-            thought_sigs = (
-                self._llm._thought_signatures if _requires_thought_signatures(self._model) else None
-            )
-            turns_dict, extra_data = self._chat_ctx.to_provider_format(
-                format="google", thought_signatures=thought_sigs
-            )
-
+            turns_dict, extra_data = self._chat_ctx.to_provider_format(format="google")
             turns = [types.Content.model_validate(turn) for turn in turns_dict]
-            tool_context = llm.ToolContext(self._tools)
-            tools_config = create_tools_config(tool_context, _only_single_type=True)
-            # Gemini's API rejects `generateContent` requests that pass
-            # `cached_content` together with `system_instruction`, `tools`,
-            # or `tool_config` — those fields must live INSIDE the
-            # CachedContent resource, not on the request. The application
-            # bakes them into the cache via `client.caches.create(...)`;
-            # here we just suppress the duplicates on the outgoing request
-            # whenever a cache is attached.
-            using_cache = "cached_content" in self._extra_kwargs
-            if tools_config and not using_cache:
-                self._extra_kwargs["tools"] = tools_config
-            elif using_cache:
-                dropped = [k for k in ("tools", "tool_config") if k in self._extra_kwargs]
-                if tools_config and "tools" not in dropped:
-                    dropped.append("tools")
-                if extra_data.system_messages:
-                    dropped.append("system_instruction")
-                if dropped:
-                    logger.warning(
-                        "dropping %s from Gemini request because cached_content=%r is set; "
-                        "these fields must be baked into the CachedContent resource",
-                        dropped,
-                        self._extra_kwargs.get("cached_content"),
-                    )
-                self._extra_kwargs.pop("tools", None)
-                self._extra_kwargs.pop("tool_config", None)
             if is_given(self._llm._opts.http_options):
                 http_options = self._llm._opts.http_options.model_copy()
                 if http_options.timeout is None:
@@ -489,7 +454,7 @@ class LLMStream(llm.LLMStream):
             config = types.GenerateContentConfig(
                 system_instruction=(
                     None
-                    if using_cache
+                    if "cached_content" in self._extra_kwargs
                     else (
                         [types.Part(text=content) for content in extra_data.system_messages]
                         if extra_data.system_messages
@@ -506,8 +471,9 @@ class LLMStream(llm.LLMStream):
                 config=config,
             )
 
-            response_generated = False
+            model_parts: list[types.Part] = []
             finish_reason: types.FinishReason | None = None
+
             async for response in stream:
                 if response.prompt_feedback:
                     raise APIStatusError(
@@ -553,18 +519,59 @@ class LLMStream(llm.LLMStream):
                     continue
 
                 for part in candidate.content.parts:
-                    chat_chunk = self._parse_part(request_id, part)
-                    response_generated = True
-                    if chat_chunk is not None:
+                    model_parts.append(part)
+                    if part.text and not part.thought:
                         retryable = False
-                        self._event_ch.send_nowait(chat_chunk)
+                        self._event_ch.send_nowait(
+                            llm.ChatChunk(
+                                id=request_id,
+                                delta=llm.ChoiceDelta(role="assistant", content=part.text),
+                            )
+                        )
 
-            if not response_generated:
+            if not model_parts:
                 raise APIStatusError(
                     "no response generated",
                     retryable=retryable,
                     request_id=request_id,
                     body=f"finish reason: {finish_reason}",
+                )
+
+            function_calls = [part.function_call for part in model_parts if part.function_call]
+
+            preserved: dict[str, Any] | None = None
+            if any(part.thought_signature for part in model_parts) and (
+                function_calls or any(part.tool_call for part in model_parts)
+            ):
+                model_turn = types.Content(role="model", parts=model_parts)
+                preserved = {
+                    "google": {"content": model_turn.model_dump(mode="json", exclude_none=True)}
+                }
+
+            for i, call in enumerate(function_calls):
+                self._event_ch.send_nowait(
+                    llm.ChatChunk(
+                        id=request_id,
+                        delta=llm.ChoiceDelta(
+                            role="assistant",
+                            tool_calls=[
+                                llm.FunctionToolCall(
+                                    call_id=call.id or utils.shortuuid("function_call_"),
+                                    name=call.name,
+                                    arguments=json.dumps(call.args),
+                                    extra=preserved if i == 0 else None,
+                                )
+                            ],
+                        ),
+                    )
+                )
+
+            if preserved and not function_calls:
+                self._event_ch.send_nowait(
+                    llm.ChatChunk(
+                        id=request_id,
+                        delta=llm.ChoiceDelta(role="assistant", extra=preserved),
+                    )
                 )
 
         except ClientError as e:
@@ -598,37 +605,3 @@ class LLMStream(llm.LLMStream):
                 f"gemini llm: error generating content {str(e)}",
                 retryable=retryable,
             ) from e
-
-    def _parse_part(self, id: str, part: types.Part) -> llm.ChatChunk | None:
-        if part.function_call:
-            tool_call = llm.FunctionToolCall(
-                arguments=json.dumps(part.function_call.args),
-                name=part.function_call.name,
-                call_id=part.function_call.id or utils.shortuuid("function_call_"),
-            )
-
-            # Store thought_signature for Gemini 2.5+ multi-turn function calling
-            if (
-                _requires_thought_signatures(self._model)
-                and hasattr(part, "thought_signature")
-                and part.thought_signature
-            ):
-                self._llm._thought_signatures[tool_call.call_id] = part.thought_signature
-
-            chat_chunk = llm.ChatChunk(
-                id=id,
-                delta=llm.ChoiceDelta(
-                    role="assistant",
-                    tool_calls=[tool_call],
-                    content=None,
-                ),
-            )
-            return chat_chunk
-
-        if not part.text:
-            return None
-
-        return llm.ChatChunk(
-            id=id,
-            delta=llm.ChoiceDelta(content=part.text, role="assistant"),
-        )

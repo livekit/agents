@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import itertools
 import json
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -20,7 +19,6 @@ def to_chat_ctx(
     chat_ctx: llm.ChatContext,
     *,
     inject_dummy_user_message: bool = True,
-    thought_signatures: dict[str, bytes] | None = None,
 ) -> tuple[list[dict], GoogleFormatData]:
     chat_ctx = convert_mid_conversation_instructions(chat_ctx)
 
@@ -29,60 +27,74 @@ def to_chat_ctx(
     current_role: str | None = None
     parts: list[dict] = []
 
-    for msg in itertools.chain(*(group.flatten() for group in group_tool_calls(chat_ctx))):
-        if msg.type == "message" and msg.role == "system" and (text := msg.text_content):
-            system_messages.append(text)
+    def flush() -> None:
+        nonlocal parts
+        if current_role is not None and parts:
+            turns.append({"role": current_role, "parts": parts})
+        parts = []
+
+    for group in group_tool_calls(chat_ctx):
+        preserved = next(
+            (
+                content
+                for item in (*group.tool_calls, group.message)
+                if item is not None
+                and isinstance(content := (item.extra.get("google") or {}).get("content"), dict)
+            ),
+            None,
+        )
+        if preserved is not None:
+            flush()
+            turns.append(preserved)
+            if group.tool_outputs:
+                turns.append(
+                    {
+                        "role": "user",
+                        "parts": [_function_response_part(out) for out in group.tool_outputs],
+                    }
+                )
+            current_role = "user" if group.tool_outputs else "model"
             continue
 
-        if msg.type == "message":
-            role = "model" if msg.role == "assistant" else "user"
-        elif msg.type == "function_call":
-            role = "model"
-        elif msg.type == "function_call_output":
-            # tool output shouldn't be mixed with other messages
-            role = "tool"
+        for msg in group.flatten():
+            if msg.type == "message" and msg.role == "system" and (text := msg.text_content):
+                system_messages.append(text)
+                continue
 
-        # if the effective role changed, finalize the previous turn.
-        if role != current_role:
-            if current_role is not None and parts:
-                turns.append({"role": current_role, "parts": parts})
-            parts = []
-            current_role = role
+            if msg.type == "message":
+                role = "model" if msg.role == "assistant" else "user"
+            elif msg.type == "function_call":
+                role = "model"
+            elif msg.type == "function_call_output":
+                # tool output shouldn't be mixed with other messages
+                role = "tool"
 
-        if msg.type == "message":
-            for content in msg.content:
-                if content and isinstance(content, str):
-                    parts.append({"text": content})
-                elif content and isinstance(content, dict):
-                    parts.append({"text": json.dumps(content)})
-                elif isinstance(content, llm.ImageContent):
-                    parts.append(_to_image_part(content))
-        elif msg.type == "function_call":
-            fc_part: dict[str, Any] = {
-                "function_call": {
-                    "id": msg.call_id,
-                    "name": msg.name,
-                    "args": json.loads(msg.arguments or "{}"),
-                }
-            }
-            # Inject thought_signature if available (Gemini 3 multi-turn function calling)
-            if thought_signatures and (sig := thought_signatures.get(msg.call_id)):
-                fc_part["thought_signature"] = sig
-            parts.append(fc_part)
-        elif msg.type == "function_call_output":
-            response = {"output": msg.output} if not msg.is_error else {"error": msg.output}
-            parts.append(
-                {
-                    "function_response": {
-                        "id": msg.call_id,
-                        "name": msg.name,
-                        "response": response,
+            if role != current_role:
+                flush()
+                current_role = role
+
+            if msg.type == "message":
+                for content in msg.content:
+                    if content and isinstance(content, str):
+                        parts.append({"text": content})
+                    elif content and isinstance(content, dict):
+                        parts.append({"text": json.dumps(content)})
+                    elif isinstance(content, llm.ImageContent):
+                        parts.append(_to_image_part(content))
+            elif msg.type == "function_call":
+                parts.append(
+                    {
+                        "function_call": {
+                            "id": msg.call_id,
+                            "name": msg.name,
+                            "args": json.loads(msg.arguments or "{}"),
+                        }
                     }
-                }
-            )
+                )
+            elif msg.type == "function_call_output":
+                parts.append(_function_response_part(msg))
 
-    if current_role is not None and parts:
-        turns.append({"role": current_role, "parts": parts})
+    flush()
 
     # convert role tool to user for gemini
     for turn in turns:
@@ -112,6 +124,17 @@ def _to_image_part(image: llm.ImageContent) -> dict[str, Any]:
         return {"file_data": {"file_uri": img.external_url, "mime_type": mime_type}}
 
     return {"inline_data": {"data": img.data_bytes, "mime_type": img.mime_type}}
+
+
+def _function_response_part(msg: llm.FunctionCallOutput) -> dict[str, Any]:
+    response = {"output": msg.output} if not msg.is_error else {"error": msg.output}
+    return {
+        "function_response": {
+            "id": msg.call_id,
+            "name": msg.name,
+            "response": response,
+        }
+    }
 
 
 TOOL_BEHAVIOR = Literal["UNSPECIFIED", "BLOCKING", "NON_BLOCKING"]
