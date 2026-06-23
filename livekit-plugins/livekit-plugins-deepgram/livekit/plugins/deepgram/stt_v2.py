@@ -282,7 +282,11 @@ class STTv2(stt.STT):
         merged = list(dict.fromkeys([*self._user_keyterm, *keyterms]))
         self._opts.keyterm = merged
         for stream in self._streams:
-            stream.update_options(keyterm=merged)
+            if stream._speaking:
+                # defer the reconnect to the end of the utterance so we don't cut it off
+                stream._pending_keyterm = merged
+            else:
+                stream.update_options(keyterm=merged)
 
 
 class SpeechStreamv2(stt.SpeechStream):
@@ -313,6 +317,8 @@ class SpeechStreamv2(stt.SpeechStream):
 
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
+        # keyterms set while the user is speaking; applied at END_OF_SPEECH (latest wins)
+        self._pending_keyterm: list[str] | None = None
 
     def update_options(
         self,
@@ -357,6 +363,11 @@ class SpeechStreamv2(stt.SpeechStream):
             self._opts.eager_eot_threshold = eager_eot_threshold
 
         self._reconnect_event.set()
+
+    def _on_end_of_speech(self) -> None:
+        if self._pending_keyterm is not None:
+            self.update_options(keyterm=self._pending_keyterm)
+            self._pending_keyterm = None
 
     async def _run(self) -> None:
         closing_ws = False
@@ -584,6 +595,7 @@ class SpeechStreamv2(stt.SpeechStream):
 
                 end_event = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                 self._event_ch.send_nowait(end_event)
+                self._on_end_of_speech()
 
         elif data["type"] == "Error":
             logger.warning("deepgram sent an error", extra={"data": data})
