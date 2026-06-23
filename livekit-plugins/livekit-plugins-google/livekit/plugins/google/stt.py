@@ -577,7 +577,11 @@ class STT(stt.STT):
         ]
         self._config.keywords = merged
         for stream in self._streams:
-            stream.update_options(keywords=merged)
+            if stream._speaking:
+                # defer the reconnect to the end of the utterance so we don't cut it off
+                stream._pending_keywords = merged
+            else:
+                stream.update_options(keywords=merged)
 
     async def aclose(self) -> None:
         await self._pool.aclose()
@@ -617,6 +621,9 @@ class SpeechStream(stt.SpeechStream):
         self._config = config
         self._reconnect_event = asyncio.Event()
         self._session_connected_at: float = 0
+        self._speaking = False
+        # keywords set while the user is speaking; applied at END_OF_SPEECH (latest wins)
+        self._pending_keywords: list[tuple[str, float]] | None = None
 
     def update_options(
         self,
@@ -674,6 +681,11 @@ class SpeechStream(stt.SpeechStream):
             self._config.endpointing_sensitivity = endpointing_sensitivity
 
         self._reconnect_event.set()
+
+    def _on_end_of_speech(self) -> None:
+        if self._pending_keywords is not None:
+            self.update_options(keywords=self._pending_keywords)
+            self._pending_keywords = None
 
     def _build_streaming_config(
         self,
@@ -825,7 +837,7 @@ class SpeechStream(stt.SpeechStream):
                 | cloud_speech_v1.StreamingRecognizeResponse
             ],
         ) -> None:
-            has_started = False
+            self._speaking = False
             last_usage_event_time: float = 0.0
             async for resp in stream:
                 if resp.speech_event_type == (
@@ -836,7 +848,7 @@ class SpeechStream(stt.SpeechStream):
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
                     )
-                    has_started = True
+                    self._speaking = True
 
                 if (
                     resp.speech_event_type
@@ -875,11 +887,12 @@ class SpeechStream(stt.SpeechStream):
                                 "Google STT maximum connection time reached. Reconnecting..."
                             )
                             self._pool.remove(client)
-                            if has_started:
+                            if self._speaking:
                                 self._event_ch.send_nowait(
                                     stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                                 )
-                                has_started = False
+                                self._speaking = False
+                                self._on_end_of_speech()
                             self._reconnect_event.set()
                             return
 
@@ -891,7 +904,8 @@ class SpeechStream(stt.SpeechStream):
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                     )
-                    has_started = False
+                    self._speaking = False
+                    self._on_end_of_speech()
 
                 if (audio_duration := _get_audio_duration(resp, last_usage_event_time)) > 0:
                     self._event_ch.send_nowait(

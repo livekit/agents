@@ -698,9 +698,13 @@ class STT(stt.STT):
             return
 
         self._session_keyterms = list(keyterms)
-        # inference applies extra live via session.update (no reconnect)
+        # inference applies extra live via session.update; defer to END_OF_SPEECH since the
+        # gateway may reconnect upstream when the keyterms change
         for stream in self._streams:
-            stream.update_options(extra=keyterm_extra)
+            if stream._speaking:
+                stream._pending_extra = keyterm_extra
+            else:
+                stream.update_options(extra=keyterm_extra)
 
     def _sanitize_options(
         self, *, language: NotGivenOr[STTLanguages | str] = NOT_GIVEN
@@ -730,6 +734,9 @@ class SpeechStream(stt.SpeechStream):
         self._request_id = str(utils.shortuuid("stt_request_"))
 
         self._speaking = False
+        # keyterm extra set while the user is speaking; applied at END_OF_SPEECH (latest wins).
+        # inference applies live, but the gateway may reconnect upstream, so defer to a calm moment.
+        self._pending_extra: dict[str, Any] | None = None
         self._speech_duration: float = 0
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._vad: vad.VAD | None = vad_instance
@@ -768,6 +775,11 @@ class SpeechStream(stt.SpeechStream):
                 "settings": settings,
             }
             asyncio.ensure_future(self._send_session_update(update_msg))
+
+    def _on_end_of_speech(self) -> None:
+        if self._pending_extra is not None:
+            self.update_options(extra=self._pending_extra)
+            self._pending_extra = None
 
     async def _send_session_update(self, msg: dict[str, Any]) -> None:
         try:
@@ -1041,6 +1053,7 @@ class SpeechStream(stt.SpeechStream):
                 self._speaking = False
                 end_event = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                 self._event_ch.send_nowait(end_event)
+                self._on_end_of_speech()
         else:
             event = stt.SpeechEvent(
                 type=stt.SpeechEventType.INTERIM_TRANSCRIPT,

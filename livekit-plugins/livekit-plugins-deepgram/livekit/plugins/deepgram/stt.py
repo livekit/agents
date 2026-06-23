@@ -394,7 +394,11 @@ class STT(stt.STT):
         merged = list(dict.fromkeys([*self._user_keyterm, *keyterms]))
         self._opts.keyterm = merged
         for stream in self._streams:
-            stream.update_options(keyterm=merged)
+            if stream._speaking:
+                # defer the reconnect to the end of the utterance so we don't cut it off
+                stream._pending_keyterm = merged
+            else:
+                stream.update_options(keyterm=merged)
 
     def _sanitize_options(
         self, *, language: NotGivenOr[DeepgramLanguages | str] = NOT_GIVEN
@@ -443,6 +447,9 @@ class SpeechStream(stt.SpeechStream):
 
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
+        # keyterms set while the user is speaking; applied at END_OF_SPEECH (latest wins)
+        self._pending_keyterm: list[str] | None = None
+
         # Track how much duration has already been reported so we can emit
         # the connection-lifetime remainder on close, matching what Deepgram
         # actually bills (which includes WebSocket open/teardown overhead
@@ -521,6 +528,11 @@ class SpeechStream(stt.SpeechStream):
             self._opts.endpoint_url = endpoint_url
 
         self._reconnect_event.set()
+
+    def _on_end_of_speech(self) -> None:
+        if self._pending_keyterm is not None:
+            self.update_options(keyterm=self._pending_keyterm)
+            self._pending_keyterm = None
 
     async def _run(self) -> None:
         closing_ws = False
@@ -775,6 +787,7 @@ class SpeechStream(stt.SpeechStream):
             if is_endpoint and self._speaking:
                 self._speaking = False
                 self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+                self._on_end_of_speech()
 
         elif data["type"] == "Metadata":
             pass  # metadata is too noisy
