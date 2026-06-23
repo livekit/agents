@@ -82,7 +82,6 @@ class GnaniTTSOptions:
     sample_width: int = 2
     bitrate: str | None = None
     base_url: str = GNANI_TTS_BASE_URL
-    language: str = "hi"
     synthesize_method: str = "rest"
 
 
@@ -100,7 +99,6 @@ class TTS(tts.TTS):
         container: Audio container format (raw, mp3, wav, mulaw, ogg).
         api_key: Gnani API key (falls back to GNANI_API_KEY env var).
         base_url: Vachana API base URL.
-        language: Language code for TTS (default: hi).
         synthesize_method: Synthesis mode — "rest", "sse", or "websocket".
     """
 
@@ -116,7 +114,6 @@ class TTS(tts.TTS):
         bitrate: GnaniTTSBitrates | str | None = None,
         api_key: str | None = None,
         base_url: str = GNANI_TTS_BASE_URL,
-        language: str = "hi",
         synthesize_method: GnaniTTSSynthesizeMethod = "rest",
     ) -> None:
         if sample_rate not in SUPPORTED_SAMPLE_RATES:
@@ -153,7 +150,6 @@ class TTS(tts.TTS):
             num_channels=num_channels,
             bitrate=bitrate,
             base_url=base_url,
-            language=language,
             synthesize_method=synthesize_method,
         )
         self._session: aiohttp.ClientSession | None = None
@@ -190,7 +186,6 @@ class TTS(tts.TTS):
         *,
         voice: str | None = None,
         model: str | None = None,
-        language: str | None = None,
     ) -> None:
         if voice is not None:
             if voice not in SUPPORTED_VOICES:
@@ -201,8 +196,6 @@ class TTS(tts.TTS):
             self._opts.voice = voice
         if model is not None:
             self._opts.model = model
-        if language is not None:
-            self._opts.language = language
 
     async def aclose(self) -> None:
         pass
@@ -227,7 +220,6 @@ def _build_payload(opts: GnaniTTSOptions, text: str) -> dict:
         "text": text,
         "voice": opts.voice,
         "model": opts.model,
-        "language": opts.language,
         "audio_config": audio_config,
     }
 

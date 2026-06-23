@@ -15,7 +15,7 @@
 """Speech-to-Text implementation for Gnani Vachana
 
 This module provides an STT implementation that uses the Gnani Vachana API,
-supporting both batch recognition (REST) and real-time streaming (WebSocket).
+supporting both REST recognition and real-time streaming (WebSocket).
 """
 
 from __future__ import annotations
@@ -117,7 +117,7 @@ class STT(stt.STT):
     """Gnani Vachana Speech-to-Text implementation.
 
     Provides speech-to-text functionality using Gnani's Vachana platform.
-    Supports batch recognition via REST API and real-time streaming via WebSocket.
+    Supports REST recognition and real-time streaming via WebSocket.
 
     Args:
         language: BCP-47 language code (e.g. "hi-IN", "en-IN").
