@@ -265,6 +265,7 @@ class _CloudTransport:
                     f"{msg.error.message}",
                     status_code=msg.error.code,
                     request_id=msg.request_id,
+                    retryable=False,
                 )
             case _:
                 logger.warning("unexpected turn detector message: %s", msg.WhichOneof("message"))
