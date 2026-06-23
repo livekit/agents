@@ -144,7 +144,7 @@ class TTS(tts.TTS):
             enable_logging (bool): Enable logging of the request. When set to false, zero retention mode will be used. Defaults to True.
             chunk_length_schedule (NotGivenOr[list[int]]): Schedule for chunk lengths, ranging from 50 to 500. Defaults are [120, 160, 250, 290].
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
-            language (NotGivenOr[str]): Language code for the TTS model, as of 10/24/24 only valid for "eleven_turbo_v2_5".
+            language (NotGivenOr[str]): Language code used to enforce a language for the model and text normalization. If the model does not support language overrides, it will be ignored.
             sync_alignment (bool): Enable sync alignment for the TTS model. Defaults to True.
             preferred_alignment (Literal["normalized", "original"]): Use normalized or original alignment. Defaults to "normalized", or "original" for CJK (ja, ko, zh) languages.
             pronunciation_dictionary_locators (NotGivenOr[list[PronunciationDictionaryLocator]]): List of pronunciation dictionary locators to use for pronunciation control.
