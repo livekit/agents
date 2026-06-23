@@ -118,10 +118,10 @@ class FallbackAdapter(
     def provider(self) -> str:
         return "livekit"
 
-    def _update_keyterms(self, keyterms: list[str]) -> None:
+    def _update_session_keyterms(self, keyterms: list[str]) -> None:
         # forward to every underlying STT; unsupported ones warn-and-skip internally
         for stt_instance in self._stt_instances:
-            stt_instance._update_keyterms(keyterms)
+            stt_instance._update_session_keyterms(keyterms)
 
     def _push_conversation_item(self, ev: ConversationItemAddedEvent) -> None:
         # forward to every underlying STT; unsupported ones warn-and-skip internally

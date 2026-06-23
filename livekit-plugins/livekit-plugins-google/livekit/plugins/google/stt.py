@@ -68,7 +68,7 @@ _max_session_duration = 240
 # Google is very sensitive to background noise, so we'll ignore results with low confidence
 _default_min_confidence = 0.65
 
-# Default boost applied to keyterms set via the provider-agnostic _update_keyterms() hook.
+# Default boost applied to keyterms set via the provider-agnostic keyterm hook.
 # Google accepts boosts in roughly 0-20; a moderate value biases toward the terms without
 # over-triggering false positives.
 _DEFAULT_KEYTERM_BOOST = 10.0
@@ -277,6 +277,7 @@ class STT(stt.STT):
         )
         # user-tuned (phrase, boost) pairs, kept separate so keyterm updates can't clobber them
         self._user_keywords: list[tuple[str, float]] = list(keywords) if is_given(keywords) else []
+        self._session_keyterms: list[str] = []  # framework-managed; merged with user keywords
         self._streams = weakref.WeakSet[SpeechStream]()
         self._pool = utils.ConnectionPool[SpeechAsyncClientV2 | SpeechAsyncClientV1](
             max_session_duration=_max_session_duration,
@@ -553,17 +554,25 @@ class STT(stt.STT):
                 endpointing_sensitivity=endpointing_sensitivity,
             )
 
-    def _update_keyterms(self, keyterms: list[str]) -> None:
+    def _update_session_keyterms(self, keyterms: list[str]) -> None:
         if is_given(self._config.adaptation):
             logger.warning("'adaptation' is set; ignoring keyterms update")
             return
+        if keyterms == self._session_keyterms:
+            return
+        self._session_keyterms = list(keyterms)
 
-        # Google biases recognition via (phrase, boost) pairs. Merge with the user-tuned
-        # keywords (their boosts win) and apply a moderate default boost to the rest,
-        # since the provider-agnostic hook carries no per-term weight.
+        # Google biases via (phrase, boost) pairs; the hook carries no per-term weight, so keep
+        # the user keyword boosts and bias session terms no stronger than the weakest user term
+        # (or a moderate default when the user gave none).
         user_phrases = {phrase for phrase, _ in self._user_keywords}
+        session_boost = (
+            min(boost for _, boost in self._user_keywords)
+            if self._user_keywords
+            else _DEFAULT_KEYTERM_BOOST
+        )
         merged = self._user_keywords + [
-            (term, _DEFAULT_KEYTERM_BOOST) for term in keyterms if term not in user_phrases
+            (term, session_boost) for term in keyterms if term not in user_phrases
         ]
         self._config.keywords = merged
         for stream in self._streams:

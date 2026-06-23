@@ -47,8 +47,8 @@ class StreamAdapter(STT):
     def provider(self) -> str:
         return self._stt.provider
 
-    def _update_keyterms(self, keyterms: list[str]) -> None:
-        self._stt._update_keyterms(keyterms)
+    def _update_session_keyterms(self, keyterms: list[str]) -> None:
+        self._stt._update_session_keyterms(keyterms)
 
     def _push_conversation_item(self, item: ConversationItemAddedEvent) -> None:
         self._stt._push_conversation_item(item)

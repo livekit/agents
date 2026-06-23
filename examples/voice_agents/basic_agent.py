@@ -105,7 +105,10 @@ async def entrypoint(ctx: JobContext) -> None:
         # automatically detect keyterms and apply them to the STT per user turn
         stt_context_options={
             "keyterms": ["LiveKit"],
-            "keyterm_detection": {"enabled": True, "turn_interval": 1},
+            "keyterm_detection": {
+                "enabled": True,
+                "turn_interval": 1,  # increase to reduce LLM API calls
+            },
         },
     )
 

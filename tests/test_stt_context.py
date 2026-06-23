@@ -25,8 +25,13 @@ from livekit.agents.voice.events import ConversationItemAddedEvent
 pytestmark = pytest.mark.unit
 
 
-def _detector(*, user_keyterms: list[str] | None = None, **options: Any) -> KeytermDetector:
-    return KeytermDetector(user_keyterms=user_keyterms, options=options)
+def _detector(*, static_keyterms: list[str] | None = None, **options: Any) -> KeytermDetector:
+    return KeytermDetector(static_keyterms=static_keyterms, options=options)
+
+
+def _entries(d: KeytermDetector) -> list[tuple[str, bool]]:
+    """Detected terms with their confirmed flag (confirmed first, then pending)."""
+    return [(t, True) for t in d._detected_terms] + [(t, False) for t in d._pending_terms]
 
 
 def _ctx(text: str = "hello") -> ChatContext:
@@ -36,7 +41,7 @@ def _ctx(text: str = "hello") -> ChatContext:
 
 
 class _RecordingSTT(STT):
-    """STT that records every _update_keyterms() / _push_conversation_item() call."""
+    """STT that records every _update_session_keyterms() / _push_conversation_item() call."""
 
     def __init__(
         self, *, supports_keyterms: bool = True, supports_chat_context: bool = False
@@ -69,7 +74,7 @@ class _RecordingSTT(STT):
     ) -> RecognizeStream:
         raise NotImplementedError
 
-    def _update_keyterms(self, keyterms: list[str]) -> None:
+    def _update_session_keyterms(self, keyterms: list[str]) -> None:
         self.pushed.append(list(keyterms))
 
     def _push_conversation_item(self, ev: ConversationItemAddedEvent) -> None:
@@ -154,10 +159,10 @@ async def _drain(detector: KeytermDetector) -> None:
 
 
 async def test_only_confirmed_terms_are_applied() -> None:
-    d = _detector(user_keyterms=["Acme"], llm=_RecordingLLM((["Niamh"], ["Foo"], [])))
+    d = _detector(static_keyterms=["Acme"], llm=_RecordingLLM((["Niamh"], ["Foo"], [])))
     await d._run_once(_ctx())
-    # pending terms are tracked but not applied (auto_entries: confirmed then pending)
-    assert d.auto_entries == [("Foo", True), ("Niamh", False)]
+    # pending terms are tracked but not applied (entries: confirmed then pending)
+    assert _entries(d) == [("Foo", True), ("Niamh", False)]
     assert d.keyterms == ["Acme", "Foo"]
 
 
@@ -166,13 +171,13 @@ async def test_pending_then_confirmed() -> None:
     await d._run_once(_ctx())
     assert d.keyterms == []
     await d._run_once(_ctx())
-    assert d.auto_entries == [("Kubernetes", True)]
+    assert _entries(d) == [("Kubernetes", True)]
     assert d.keyterms == ["Kubernetes"]
 
 
-async def test_user_terms_shown_to_llm_as_applied() -> None:
+async def test_static_terms_shown_to_llm_as_applied() -> None:
     fake = _RecordingLLM()
-    d = _detector(user_keyterms=["Acme Corp"], llm=fake)
+    d = _detector(static_keyterms=["Acme Corp"], llm=fake)
     await d._run_once(_ctx())
     # user terms must appear in the applied list, or the LLM keeps re-proposing them
     assert fake.last_chat_ctx is not None
@@ -183,12 +188,12 @@ async def test_user_terms_shown_to_llm_as_applied() -> None:
 
 async def test_user_precedence_and_dedup() -> None:
     d = _detector(
-        user_keyterms=["Acme", "Acme", "LiveKit"],
+        static_keyterms=["Acme", "Acme", "LiveKit"],
         llm=_RecordingLLM(([], ["LiveKit", "Foo"], [])),
     )
-    assert d.user_keyterms == ["Acme", "LiveKit"]
+    assert d.static_keyterms == ["Acme", "LiveKit"]
     await d._run_once(_ctx())  # an auto term equal to a user term is dropped
-    assert [t for t, _ in d.auto_entries] == ["Foo"]
+    assert [t for t, _ in _entries(d)] == ["Foo"]
     assert d.keyterms == ["Acme", "LiveKit", "Foo"]
 
 
@@ -197,15 +202,15 @@ async def test_confirmed_cannot_revert_to_pending() -> None:
     await d._run_once(_ctx())
     assert d.keyterms == ["Niamh"]
     await d._run_once(_ctx())  # a stray `pending` must not reset a confirmed term
-    assert d.auto_entries == [("Niamh", True)]
+    assert _entries(d) == [("Niamh", True)]
 
 
 async def test_correction_removes_and_replaces() -> None:
     d = _detector(llm=_RecordingLLM((["Jon"], [], []), (["John"], [], ["Jon"]), ([], ["John"], [])))
     await d._run_once(_ctx())
-    assert d.auto_entries == [("Jon", False)]
+    assert _entries(d) == [("Jon", False)]
     await d._run_once(_ctx())  # misheard spelling removed, corrected one added as pending
-    assert d.auto_entries == [("John", False)]
+    assert _entries(d) == [("John", False)]
     await d._run_once(_ctx())
     assert d.keyterms == ["John"]
 
@@ -228,7 +233,7 @@ async def test_remove_unknown_is_noop() -> None:
 async def test_cap_evicts_oldest_confirmed() -> None:
     d = _detector(max_keyterms=3, llm=_RecordingLLM(([], ["a", "b", "c", "d", "e"], [])))
     await d._run_once(_ctx())
-    assert [t for t, _ in d.auto_entries] == ["c", "d", "e"]
+    assert [t for t, _ in _entries(d)] == ["c", "d", "e"]
 
 
 async def test_pending_evicted_when_not_confirmed() -> None:
@@ -237,9 +242,9 @@ async def test_pending_evicted_when_not_confirmed() -> None:
     await d._run_once(_ctx())
     for _ in range(_PENDING_TTL - 1):
         await d._run_once(_ctx())
-    assert "Tmp" in dict(d.auto_entries)
+    assert "Tmp" in dict(_entries(d))
     await d._run_once(_ctx())  # TTL exceeded
-    assert "Tmp" not in dict(d.auto_entries)
+    assert "Tmp" not in dict(_entries(d))
 
 
 async def test_confirmed_not_evicted_by_staleness() -> None:
@@ -269,7 +274,7 @@ async def test_push_only_on_applied_change() -> None:
     stt = _RecordingSTT()
     session = _FakeSession()
     d = _detector(
-        user_keyterms=["Acme"],
+        static_keyterms=["Acme"],
         enabled=True,
         llm=_RecordingLLM((["Foo"], [], []), ([], ["Foo"], [])),
     )
@@ -289,7 +294,7 @@ async def test_push_only_on_applied_change() -> None:
 async def test_start_same_stt_does_not_repush() -> None:
     stt = _RecordingSTT()
     session = _FakeSession()
-    d = _detector(user_keyterms=["Acme"], enabled=True, llm=_RecordingLLM())
+    d = _detector(static_keyterms=["Acme"], enabled=True, llm=_RecordingLLM())
     d.start(session, stt=stt)
     assert stt.pushed == [["Acme"]]
     await d.aclose()
@@ -299,13 +304,13 @@ async def test_start_same_stt_does_not_repush() -> None:
     await d.aclose()
 
 
-async def test_user_terms_pushed_without_detection() -> None:
+async def test_static_terms_pushed_without_detection() -> None:
     stt = _RecordingSTT()
     session = _FakeSession()
-    d = _detector(user_keyterms=["Acme"], enabled=False)
+    d = _detector(static_keyterms=["Acme"], enabled=False)
     d.start(session, stt=stt)  # detection off must still bind the STT and push
     assert stt.pushed == [["Acme"]]
-    d.set_user_keyterms(["New"])
+    d.set_static_keyterms(["New"])
     assert stt.pushed[-1] == ["New"]
     await d.aclose()
 
@@ -319,12 +324,12 @@ async def test_start_without_terms_does_not_push() -> None:
     await d.aclose()
 
 
-async def test_set_user_keyterms_pushes() -> None:
+async def test_set_static_keyterms_pushes() -> None:
     stt = _RecordingSTT()
     session = _FakeSession()
     d = _detector(enabled=True, llm=_RecordingLLM())
     d.start(session, stt=stt)
-    d.set_user_keyterms(["New"])
+    d.set_static_keyterms(["New"])
     assert stt.pushed[-1] == ["New"]
     await d.aclose()
 
@@ -332,7 +337,7 @@ async def test_set_user_keyterms_pushes() -> None:
 def test_unsupported_stt_warn_and_skip() -> None:
     stt = _RecordingSTT(supports_keyterms=False)
     # exercise the base method (warn-and-skip), not the recorder override
-    STT._update_keyterms(stt, ["a", "b"])
+    STT._update_session_keyterms(stt, ["a", "b"])
     assert stt.pushed == []
 
 

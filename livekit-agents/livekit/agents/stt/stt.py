@@ -132,7 +132,7 @@ class STTCapabilities:
     offline_recognize: bool = True
     """Whether the STT supports batch recognition via recognize() method"""
     keyterms: bool = False
-    """Whether the STT supports keyterm prompting (see STT._update_keyterms)"""
+    """Whether the STT supports keyterm prompting"""
     chat_context: bool = False
     """Whether the STT can natively consume conversation context (see STT._push_conversation_item)"""
 
@@ -273,12 +273,12 @@ class STT(
             ),
         )
 
-    def _update_keyterms(self, keyterms: list[str]) -> None:
-        """Set the keyterms used to bias recognition toward specific words/phrases.
+    def _update_session_keyterms(self, keyterms: list[str]) -> None:
+        """Set the framework-managed keyterms (session config + auto-detection).
 
-        Internal hook called by the framework (e.g. keyterm detection). Plugins that
-        support keyterm prompting set ``STTCapabilities.keyterms`` and override this
-        to forward the terms to their provider-specific ``update_options()``.
+        Internal hook called by the framework, kept separate from the user's own keyterms
+        (constructor / ``update_options``). Plugins that support keyterms override this to
+        store the session set and apply it merged with the user keyterms.
         """
         if not self._capabilities.keyterms:
             if not self._keyterms_unsupported_warned:

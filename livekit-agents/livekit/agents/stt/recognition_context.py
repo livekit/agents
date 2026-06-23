@@ -56,7 +56,7 @@ class KeytermDetectionOptions(TypedDict, total=False):
     turn_interval: int
     """Run a pass once per N user turns. Defaults to ``1``."""
     max_keyterms: int | None
-    """Cap on the confirmed (applied) auto keyterms if provided. Defaults to ``None``."""
+    """Cap on the confirmed (applied) detected keyterms if provided. Defaults to ``None``."""
     instructions: str | None
     """Override the built-in extraction prompt."""
 
@@ -194,7 +194,7 @@ class KeytermDetector:
     def __init__(
         self,
         *,
-        user_keyterms: list[str] | None = None,
+        static_keyterms: list[str] | None = None,
         options: KeytermDetectionOptions | None = None,
     ) -> None:
         options = _resolve_detection(options)
@@ -203,8 +203,8 @@ class KeytermDetector:
         self._turn_interval = max(1, options["turn_interval"])
         self._instructions = options["instructions"] or _DEFAULT_KEYTERM_INSTRUCTIONS
 
-        self._user_terms = list(dict.fromkeys(user_keyterms or []))
-        self._auto_terms: list[str] = []  # confirmed terms, oldest first (for eviction)
+        self._static_terms = list(dict.fromkeys(static_keyterms or []))
+        self._detected_terms: list[str] = []  # confirmed terms, oldest first (for eviction)
         self._pending_terms: dict[str, int] = {}  # term -> pass it was added (for TTL)
         self._tick = 0  # detection-pass counter
 
@@ -217,30 +217,25 @@ class KeytermDetector:
 
     @property
     def keyterms(self) -> list[str]:
-        """The effective list applied to the STT: user terms + confirmed auto terms."""
-        return list(dict.fromkeys([*self._user_terms, *self._auto_terms]))
+        """The effective list applied to the STT: static terms + confirmed detected terms."""
+        return list(dict.fromkeys([*self._static_terms, *self._detected_terms]))
 
     @property
-    def user_keyterms(self) -> list[str]:
-        return list(self._user_terms)
+    def static_keyterms(self) -> list[str]:
+        return list(self._static_terms)
 
-    @property
-    def auto_entries(self) -> list[tuple[str, bool]]:
-        """All auto-detected terms with their confirmed flag (confirmed first, then pending)."""
-        return [(t, True) for t in self._auto_terms] + [(t, False) for t in self._pending_terms]
-
-    def set_user_keyterms(self, terms: list[str]) -> None:
-        self._user_terms = list(dict.fromkeys(terms))
+    def set_static_keyterms(self, terms: list[str]) -> None:
+        self._static_terms = list(dict.fromkeys(terms))
         if self._stt is not None:
-            self._stt._update_keyterms(self.keyterms)
+            self._stt._update_session_keyterms(self.keyterms)
 
     def start(self, session: AgentSession, stt: STT) -> None:
         """Bind this activity's STT (always) and start detection (if enabled)."""
-        # user-defined keyterms must reach the recognizer even with detection disabled
+        # static keyterms must reach the recognizer even with detection disabled
         if stt is not self._stt:
             self._stt = stt
             if self.keyterms:
-                self._stt._update_keyterms(self.keyterms)
+                self._stt._update_session_keyterms(self.keyterms)
 
         if not self._detection["enabled"]:
             return
@@ -313,8 +308,12 @@ class KeytermDetector:
         if not isinstance(self._llm, LLM):
             return
 
-        # show user-defined terms as applied too, or the LLM keeps re-proposing them
-        current = [(t, True) for t in self._user_terms] + self.auto_entries
+        # show static terms as applied too, or the LLM keeps re-proposing them
+        current = (
+            [(t, True) for t in self._static_terms]
+            + [(t, True) for t in self._detected_terms]
+            + [(t, False) for t in self._pending_terms]
+        )
         pending, confirm, remove = await _detect_keyterms(
             llm=self._llm,
             chat_ctx=chat_ctx,
@@ -328,20 +327,20 @@ class KeytermDetector:
         # update the keyterm state
         for term in remove:
             self._pending_terms.pop(term, None)
-            if term in self._auto_terms:
-                self._auto_terms.remove(term)
+            if term in self._detected_terms:
+                self._detected_terms.remove(term)
 
         for term in pending:
-            # track a new candidate; ignore user terms and ones already known
-            if term and term not in self._user_terms:
-                if term not in self._auto_terms and term not in self._pending_terms:
+            # track a new candidate; ignore static terms and ones already known
+            if term and term not in self._static_terms:
+                if term not in self._detected_terms and term not in self._pending_terms:
                     self._pending_terms[term] = self._tick
 
         for term in confirm:
-            if term and term not in self._user_terms:
+            if term and term not in self._static_terms:
                 self._pending_terms.pop(term, None)  # promote out of pending
-                if term not in self._auto_terms:
-                    self._auto_terms.append(term)
+                if term not in self._detected_terms:
+                    self._detected_terms.append(term)
 
         # drop pending terms that were never confirmed in time
         for term in [t for t, s in self._pending_terms.items() if self._tick - s >= _PENDING_TTL]:
@@ -349,12 +348,12 @@ class KeytermDetector:
 
         # evict oldest confirmed terms if over the cap
         if self._max_keyterms is not None:
-            while len(self._auto_terms) > self._max_keyterms:
-                self._auto_terms.pop(0)
+            while len(self._detected_terms) > self._max_keyterms:
+                self._detected_terms.pop(0)
 
         # update the STT if the keyterms changed
         if (new_keyterms := self.keyterms) != before and self._stt is not None:
-            self._stt._update_keyterms(new_keyterms)
+            self._stt._update_session_keyterms(new_keyterms)
             before_set, new_set = set(before), set(new_keyterms)
             logger.debug(
                 "keyterms changed",

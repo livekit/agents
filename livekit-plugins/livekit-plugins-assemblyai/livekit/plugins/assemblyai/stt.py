@@ -273,6 +273,9 @@ class STT(stt.STT):
             mode=mode,
         )
         self._session = http_session
+        # user keyterms; _opts.keyterms_prompt holds the effective set (user + session)
+        self._user_keyterms: list[str] = list(keyterms_prompt or [])
+        self._session_keyterms: list[str] = []
         self._streams = weakref.WeakSet[SpeechStream]()
 
     @property
@@ -353,7 +356,9 @@ class STT(stt.STT):
         if is_given(agent_context):
             self._opts.agent_context = agent_context
         if is_given(keyterms_prompt):
-            self._opts.keyterms_prompt = keyterms_prompt
+            self._user_keyterms = list(keyterms_prompt)
+            merged = list(dict.fromkeys([*self._user_keyterms, *self._session_keyterms]))
+            self._opts.keyterms_prompt = merged
         if is_given(vad_threshold):
             self._opts.vad_threshold = vad_threshold
         if is_given(continuous_partials):
@@ -375,8 +380,15 @@ class STT(stt.STT):
                 interruption_delay=interruption_delay,
             )
 
-    def _update_keyterms(self, keyterms: list[str]) -> None:
-        self.update_options(keyterms_prompt=keyterms)
+    def _update_session_keyterms(self, keyterms: list[str]) -> None:
+        if keyterms == self._session_keyterms:
+            return
+        self._session_keyterms = list(keyterms)
+        merged = list(dict.fromkeys([*self._user_keyterms, *keyterms]))
+        self._opts.keyterms_prompt = merged
+        # applied live via the stream's UpdateConfiguration (no reconnect)
+        for stream in self._streams:
+            stream.update_options(keyterms_prompt=merged)
 
     def _push_conversation_item(self, ev: ConversationItemAddedEvent) -> None:
         if (
@@ -670,7 +682,7 @@ class SpeechStream(stt.SpeechStream):
             "min_turn_silence": min_silence,
             "max_turn_silence": max_silence,
             "keyterms_prompt": json.dumps(self._opts.keyterms_prompt)
-            if is_given(self._opts.keyterms_prompt)
+            if self._opts.keyterms_prompt
             else None,
             "language_detection": self._opts.language_detection
             if is_given(self._opts.language_detection)

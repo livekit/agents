@@ -192,22 +192,40 @@ def _diarization_enabled(extra_kwargs: dict[str, Any] | None) -> bool:
     return False
 
 
-def _keyterms_extra_for_model(model: NotGivenOr[str], keyterms: list[str]) -> dict[str, Any] | None:
-    """Map a provider-agnostic keyterms list onto the active provider's extra_kwargs key.
+def _keyterms_extra_for_model(
+    model: NotGivenOr[str],
+    *,
+    extra_kwargs: dict[str, Any] | None = None,
+    session_keyterms: list[str] | None = None,
+) -> dict[str, Any] | None:
+    """Return the provider's keyterm ``extra`` entry: user keyterms (from ``extra_kwargs``)
+    merged with the framework ``session_keyterms``.
 
-    Returns None when the model does not support keyterm prompting. Called with an empty
-    list, it doubles as a capability check (non-None ⇒ supported). Keep every provider's
-    keyterm key here so capability inference and _update_keyterms can't diverge.
+    None if the model has no keyterm prompting, so ``_keyterms_extra_for_model(model) is not
+    None`` is also the capability check.
     """
     if not (is_given(model) and isinstance(model, str)):
         return None
-    if model.startswith("deepgram/"):
-        return {"keyterm": list(keyterms)}
-    if model.startswith("assemblyai/"):
-        return {"keyterms_prompt": list(keyterms)}
+
+    extra_kwargs = extra_kwargs or {}
+    session_keyterms = session_keyterms or []
+
     if model.startswith("speechmatics/"):
-        return {"additional_vocab": [{"content": term} for term in keyterms]}
-    return None
+        # keep existing entries as-is (they may carry sounds_like etc.); append new session terms
+        existing = list(extra_kwargs.get("additional_vocab", []))
+        seen = {v["content"] for v in existing}
+        additions = set(session_keyterms) - seen
+        return {"additional_vocab": existing + [{"content": term} for term in additions]}
+
+    key: str | None = None
+    if model.startswith("deepgram/"):
+        key = "keyterm"
+    elif model.startswith("assemblyai/"):
+        key = "keyterms_prompt"
+
+    if key is None:
+        return None
+    return {key: list(dict.fromkeys([*extra_kwargs.get(key, []), *session_keyterms]))}
 
 
 STTLanguages = Literal["multi", "en", "de", "es", "fr", "ja", "pt", "zh", "hi"]
@@ -530,7 +548,7 @@ class STT(stt.STT):
                 diarization=diarization_enabled,
                 aligned_transcript="word",
                 offline_recognize=False,
-                keyterms=_keyterms_extra_for_model(model, []) is not None,
+                keyterms=_keyterms_extra_for_model(model) is not None,
             ),
         )
 
@@ -574,6 +592,7 @@ class STT(stt.STT):
 
         self._session = http_session
         self._vad = vad
+        self._session_keyterms: list[str] = []  # framework-managed; merged into extra_kwargs
         self._streams = weakref.WeakSet[SpeechStream]()
 
     @classmethod
@@ -650,7 +669,7 @@ class STT(stt.STT):
             self._vad = _resolve_vad_for_model(model, self._vad)
             self._capabilities = replace(
                 self._capabilities,
-                keyterms=_keyterms_extra_for_model(self._opts.model, []) is not None,
+                keyterms=_keyterms_extra_for_model(self._opts.model) is not None,
             )
         if is_given(language):
             self._opts.language = LanguageCode(language)
@@ -664,12 +683,20 @@ class STT(stt.STT):
         for stream in self._streams:
             stream.update_options(model=model, language=language, extra=extra)
 
-    def _update_keyterms(self, keyterms: list[str]) -> None:
-        extra = _keyterms_extra_for_model(self._opts.model, keyterms)
-        if extra is None:
-            super()._update_keyterms(keyterms)  # warn-and-skip for unsupported models
+    def _update_session_keyterms(self, keyterms: list[str]) -> None:
+        if keyterms == self._session_keyterms:
             return
-        self.update_options(extra=extra)
+        keyterm_extra = _keyterms_extra_for_model(
+            self._opts.model, extra_kwargs=self._opts.extra_kwargs, session_keyterms=keyterms
+        )
+        if keyterm_extra is None:
+            super()._update_session_keyterms(keyterms)  # warn-and-skip for unsupported models
+            return
+
+        self._session_keyterms = list(keyterms)
+        # inference applies extra live via session.update (no reconnect)
+        for stream in self._streams:
+            stream.update_options(extra=keyterm_extra)
 
     def _sanitize_options(
         self, *, language: NotGivenOr[STTLanguages | str] = NOT_GIVEN
@@ -872,7 +899,18 @@ class SpeechStream(stt.SpeechStream):
             "settings": {
                 "sample_rate": str(self._opts.sample_rate),
                 "encoding": self._opts.encoding,
-                "extra": self._opts.extra_kwargs,
+                # merge the framework session keyterms into the user's extra_kwargs keyterm key
+                "extra": {
+                    **self._opts.extra_kwargs,
+                    **(
+                        _keyterms_extra_for_model(
+                            self._opts.model,
+                            extra_kwargs=self._opts.extra_kwargs,
+                            session_keyterms=self._stt._session_keyterms,
+                        )
+                        or {}
+                    ),
+                },
             },
         }
 

@@ -426,7 +426,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._tts = tts or None
 
         self._keyterm_detector = KeytermDetector(
-            user_keyterms=self._opts.stt_context["keyterms"],
+            static_keyterms=self._opts.stt_context["keyterms"],
             options=self._opts.stt_context["keyterm_detection"],
         )
 
@@ -1124,7 +1124,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             max_endpointing_delay: Deprecated, use ``endpointing_opts`` instead.
         """
         if is_given(keyterms):
-            self._keyterm_detector.set_user_keyterms(keyterms)
+            self._keyterm_detector.set_static_keyterms(keyterms)
         if is_given(min_endpointing_delay) or is_given(max_endpointing_delay):
             logger.warning(
                 "min_endpointing_delay and max_endpointing_delay are deprecated, "
