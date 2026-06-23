@@ -203,6 +203,11 @@ class AvatarSession(BaseAvatarSession):
             self._avatar_image = avatar_image
         elif isinstance(avatar_image, str):
             if os.path.exists(avatar_image):
+                if Image is None:
+                    raise BitHumanException(
+                        "Pillow is required to load an avatar image from a file path. "
+                        "Install it with: pip install Pillow"
+                    )
                 self._avatar_image = Image.open(avatar_image)
             elif avatar_image.startswith(("http://", "https://")):
                 self._avatar_image = avatar_image
