@@ -31,7 +31,7 @@ import base64
 import json
 import os
 from dataclasses import dataclass, replace
-from typing import Literal
+from typing import Any, Literal
 
 import aiohttp
 
@@ -85,6 +85,22 @@ class GnaniTTSOptions:
     synthesize_method: str = "rest"
 
 
+_DEPRECATED_TTS_KWARGS = frozenset(("language", "http_session"))
+
+
+def _check_deprecated_tts_args(kwargs: dict[str, Any]) -> None:
+    """Warn about deprecated kwargs and raise on truly unknown ones."""
+    for name in _DEPRECATED_TTS_KWARGS:
+        if name in kwargs:
+            logger.warning(f"`{name}` is deprecated and no longer used")
+
+    unknown = set(kwargs) - _DEPRECATED_TTS_KWARGS
+    if unknown:
+        raise TypeError(
+            f"TTS.__init__() got unexpected keyword argument(s): {', '.join(sorted(unknown))}"
+        )
+
+
 class TTS(tts.TTS):
     """Gnani Vachana Text-to-Speech implementation.
 
@@ -115,7 +131,10 @@ class TTS(tts.TTS):
         api_key: str | None = None,
         base_url: str = GNANI_TTS_BASE_URL,
         synthesize_method: GnaniTTSSynthesizeMethod = "rest",
+        **kwargs: Any,
     ) -> None:
+        _check_deprecated_tts_args(kwargs)
+
         if sample_rate not in SUPPORTED_SAMPLE_RATES:
             raise ValueError(
                 f"sample_rate must be one of {SUPPORTED_SAMPLE_RATES}, got {sample_rate}"
