@@ -67,12 +67,15 @@ class RealtimeModel(openai.realtime.RealtimeModel):
             )
 
         resolved_voice = voice if is_given(voice) else "Ara"
+        resolved_modalities: list[Literal["text", "audio"]] = (
+            modalities if is_given(modalities) else ["audio"]
+        )
         super().__init__(
             base_url=base_url if is_given(base_url) else XAI_BASE_URL,
             model=model if is_given(model) else XAI_DEFAULT_MODEL,
             voice=resolved_voice,  # type: ignore[arg-type]
             api_key=api_key,
-            modalities=modalities if is_given(modalities) else ["audio"],
+            modalities=resolved_modalities,
             input_audio_transcription=XAI_DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
             turn_detection=turn_detection
             if is_given(turn_detection)
