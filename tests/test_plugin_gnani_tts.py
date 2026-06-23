@@ -159,14 +159,6 @@ def test_tts_custom_audio_config():
     assert tts._opts.container == "ogg"
 
 
-def test_tts_default_language():
-    """TTS defaults to 'hi' language."""
-    from livekit.plugins.gnani import TTS
-
-    tts = TTS(api_key="test-key")
-    assert tts._opts.language == "hi"
-
-
 def test_tts_update_options_voice():
     """update_options can change voice."""
     from livekit.plugins.gnani import TTS
@@ -202,15 +194,6 @@ def test_tts_update_options_model():
     tts = TTS(api_key="test-key")
     tts.update_options(model="custom-model")
     assert tts._opts.model == "custom-model"
-
-
-def test_tts_update_options_language():
-    """update_options can change language."""
-    from livekit.plugins.gnani import TTS
-
-    tts = TTS(api_key="test-key")
-    tts.update_options(language="hi-IN")
-    assert tts._opts.language == "hi-IN"
 
 
 def test_tts_default_synthesize_method():
@@ -414,11 +397,11 @@ def test_tts_update_options_preserves_other_fields():
     """update_options only changes specified fields."""
     from livekit.plugins.gnani import TTS
 
-    tts = TTS(api_key="test-key", voice="Karan", language="hi")
+    tts = TTS(api_key="test-key", voice="Karan")
     tts.update_options(voice="Raju")
     assert tts._opts.voice == "Raju"
-    assert tts._opts.language == "hi"
     assert tts._opts.model == "vachana-voice-v3"
+    assert tts._opts.encoding == "linear_pcm"
 
 
 def test_tts_websocket_chunked_stream_ws_url():
