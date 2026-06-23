@@ -142,8 +142,10 @@ async def _llm_inference_task(
 
     # store any updated tools, to ensure subsequent tool calls in the same turn (nested calls)
     # are using the newer tools.
-    # tool_ctx here is ephemeral for this turn, and we allow manipulations
-    tool_ctx.update_tools(tools)
+    # tool_ctx here is ephemeral for this turn, and we allow manipulations.
+    # _sync_flattened writes back flat edits while preserving Toolset grouping
+    # (e.g. tool_ctx.toolsets stays intact for executor routing on handoff).
+    tool_ctx._sync_flattened(tools)
     tools_snapshot = tools.copy()
 
     if isinstance(llm_node, str):
@@ -184,7 +186,7 @@ async def _llm_inference_task(
                             tool_ctx.get_function_tool(tool.name) is None
                             and tools != tools_snapshot
                         ):
-                            tool_ctx.update_tools(tools)
+                            tool_ctx._sync_flattened(tools)
                             tools_snapshot = tools.copy()
 
                         fnc_call = llm.FunctionCall(
@@ -642,8 +644,8 @@ async def _execute_tools_task(
         )
         return
 
-    # AsyncToolset members route to their own executor for per-toolset
-    # update/reply coalescing; the rest fall back to the activity executor
+    # Route AsyncToolset members to their own executor so session-scoped async
+    # tools survive handoff; everything else falls back to the activity executor.
     executor_by_name = _build_executor_map(
         toolsets=tool_ctx.toolsets, default=activity._tool_executor
     )
@@ -675,7 +677,11 @@ async def _execute_tools_task(
                     make_tool_output(
                         fnc_call=fnc_call,
                         output=None,
-                        exception=ToolError(f"Unknown function: {fnc_call.name}"),
+                        # Name the available tools so the model can self-correct
+                        exception=ToolError(
+                            f"Unknown function: {fnc_call.name} - available tools: "
+                            f"{', '.join(tool_ctx.function_tools.keys())}"
+                        ),
                     )
                 )
                 continue

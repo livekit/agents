@@ -29,6 +29,7 @@ def _make_recognition() -> AudioRecognition:
     ar._vad_ch = MagicMock()  # type: ignore[attr-defined]
     ar._interruption_ch = MagicMock()  # type: ignore[attr-defined]
     ar._session = MagicMock()  # type: ignore[attr-defined]
+    ar._turn_detector_stream = None  # type: ignore[attr-defined]
     return ar
 
 

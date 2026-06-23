@@ -1,6 +1,6 @@
 """Public expressive presets.
 
-A preset is a *use-case* (customer service, healthcare, casual) that is
+A preset is a *use-case* (customer service, casual) that is
 provider-agnostic at the call site:
 
     from livekit.agents.voice import presets
@@ -37,7 +37,6 @@ class Preset(enum.Enum):
     """The domain a preset is tuned for. Used to key the per-provider registry."""
 
     CUSTOMER_SERVICE = "customer_service"
-    HEALTHCARE = "healthcare"
     CASUAL = "casual"
 
 
@@ -45,12 +44,15 @@ class Preset(enum.Enum):
 _REGISTRY: dict[str, dict[Preset, ExpressiveOptions]] = {
     "inworld": {
         Preset.CUSTOMER_SERVICE: _pf._INWORLD_CUSTOMER_SERVICE,
-        Preset.HEALTHCARE: _pf._INWORLD_HEALTHCARE,
         Preset.CASUAL: _pf._INWORLD_CASUAL,
     },
     "fishaudio": {
         Preset.CUSTOMER_SERVICE: _pf._FISHAUDIO_CUSTOMER_SERVICE,
         Preset.CASUAL: _pf._FISHAUDIO_CASUAL,
+    },
+    "cartesia": {
+        Preset.CUSTOMER_SERVICE: _pf._CARTESIA_CUSTOMER_SERVICE,
+        Preset.CASUAL: _pf._CARTESIA_CASUAL,
     },
 }
 
@@ -98,7 +100,6 @@ def resolve_options(
 
 
 CUSTOMER_SERVICE: ExpressiveOptions = {"preset": Preset.CUSTOMER_SERVICE}
-HEALTHCARE: ExpressiveOptions = {"preset": Preset.HEALTHCARE}
 CASUAL: ExpressiveOptions = {"preset": Preset.CASUAL}
 
-__all__ = ["Preset", "CUSTOMER_SERVICE", "HEALTHCARE", "CASUAL"]
+__all__ = ["Preset", "CUSTOMER_SERVICE", "CASUAL"]

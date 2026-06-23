@@ -16,7 +16,6 @@ import aiohttp
 import pytest
 
 from livekit.agents.inference.interruption import (
-    THRESHOLD,
     AdaptiveInterruptionDetector,
     InterruptionWebSocketStream,
     InterruptionWSSessionCreatedMessage,
@@ -113,7 +112,7 @@ class TestSessionCreatedDefaultThreshold:
 
 
 class TestResolveEffectiveThreshold:
-    """Observability-only resolution: user override > server default > THRESHOLD backup."""
+    """Observability-only resolution: user override > server default > None."""
 
     @pytest.mark.asyncio
     async def test_user_override_wins(self) -> None:
@@ -132,9 +131,9 @@ class TestResolveEffectiveThreshold:
             await stream.aclose()
 
     @pytest.mark.asyncio
-    async def test_falls_back_to_constant_when_server_silent(self) -> None:
+    async def test_returns_none_when_server_silent(self) -> None:
         stream = await _make_idle_stream(_make_detector())
         try:
-            assert stream._resolve_effective_threshold(None) == THRESHOLD
+            assert stream._resolve_effective_threshold(None) is None
         finally:
             await stream.aclose()

@@ -50,8 +50,6 @@ from ._utils import (
 )
 
 SAMPLE_RATE = 16000
-# local fallback when server/model side threshold is not available
-THRESHOLD = 0.656
 MIN_INTERRUPTION_DURATION = 0.025 * 2  # 25ms per frame, 2 consecutive frames
 MAX_AUDIO_DURATION = 3  # 3 seconds
 DETECTION_INTERVAL = 0.1  # 0.1 second
@@ -281,7 +279,7 @@ class AdaptiveInterruptionDetector(
         Initialize a AdaptiveInterruptionDetector instance.
 
         Args:
-            threshold (float, optional): The threshold for the interruption detection. When not set, the server-recommended default (returned in session.created) is used, falling back to THRESHOLD if the server does not provide one.
+            threshold (float, optional): The threshold for the interruption detection. When not set, the server-recommended default (returned in session.created) is used.
             min_interruption_duration (float, optional): The minimum duration, in seconds, of the interruption event, defaults to 50ms.
             max_audio_duration (float, optional): The maximum audio duration, including the audio prefix, in seconds, for the interruption detection, defaults to 3s.
             audio_prefix_duration (float, optional): The audio prefix duration, in seconds, for the interruption detection, defaults to 0.5s.
@@ -771,13 +769,16 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
         # opts are shared with the detector (self._opts is model._opts), no need to update them here
         self._reconnect_event.set()
 
-    def _resolve_effective_threshold(self, default_threshold: float | None) -> float:
-        """Return the effective threshold."""
+    def _resolve_effective_threshold(self, default_threshold: float | None) -> float | None:
+        """Return the effective threshold for observability only.
+
+        Precedence: user override, then server default; None when neither is known.
+        """
         if is_given(self._opts.threshold):
             return self._opts.threshold
         if default_threshold is not None:
             return default_threshold
-        return THRESHOLD
+        return None
 
     async def _run(self) -> None:
         closing_ws = False
@@ -846,6 +847,16 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
 
                 match msg:
                     case InterruptionWSSessionCreatedMessage():
+                        if not is_given(self._opts.threshold) and msg.default_threshold is None:
+                            raise APIStatusError(
+                                message=(
+                                    "adaptive interruption session created without a threshold: "
+                                    "no user override and the server did not report a "
+                                    "default_threshold"
+                                ),
+                                status_code=500,
+                                retryable=False,
+                            )
                         # Observability only — the server makes the actual decision;
                         logger.debug(
                             "adaptive interruption session created",

@@ -12,12 +12,10 @@ from livekit.agents import (
     AgentServer,
     AgentSession,
     JobContext,
-    JobProcess,
     cli,
     inference,
 )
-from livekit.plugins import langchain, silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
+from livekit.plugins import langchain
 
 logger = logging.getLogger("basic-agent")
 
@@ -30,16 +28,9 @@ load_dotenv()
 # In order to run this example, you need the following dependencies
 # - langchain[openai]
 # - langgraph
-# - livekit-agents[openai,silero,langchain,deepgram,turn_detector]
+# - livekit-agents[openai,silero,langchain,deepgram]
 
 server = AgentServer()
-
-
-def prewarm(proc: JobProcess):
-    proc.userdata["vad"] = silero.VAD.load()
-
-
-server.setup_fnc = prewarm
 
 
 class State(TypedDict):
@@ -71,12 +62,9 @@ async def entrypoint(ctx: JobContext):
     )
 
     session = AgentSession(
-        vad=ctx.proc.userdata["vad"],
         # any combination of STT, LLM, TTS, or realtime API can be used
         stt=inference.STT("deepgram/nova-3", language="multi"),
         tts=inference.TTS("cartesia/sonic-3"),
-        # use LiveKit's turn detection model
-        turn_detection=MultilingualModel(),
     )
 
     await session.start(

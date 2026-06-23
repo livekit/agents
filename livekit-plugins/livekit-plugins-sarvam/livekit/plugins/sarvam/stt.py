@@ -919,11 +919,7 @@ class SpeechStream(stt.SpeechStream):
         )
         self._should_flush = False  # Flag to trigger flush
 
-        self._audio_position = 0.0
-        self._utterance_start_audio_pos = 0.0
-        self._utterance_speech_end_audio_pos: float | None = None
         self._utterance_speech_start_wall: float | None = None
-        self._utterance_speech_end_wall: float | None = None
         self._pending_final_data: dict[str, Any] | None = None
         self._pending_eos = False
         self._eos_fallback_task: asyncio.Task[None] | None = None
@@ -984,22 +980,20 @@ class SpeechStream(stt.SpeechStream):
         if request_id:
             self._server_request_id = str(request_id)
 
-    @staticmethod
-    def _positive_time(value: object) -> float | None:
+    def _positive_time(self, value: object) -> float | None:
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             return None
         if value <= 0:
             return None
-        return float(value)
+        # Shift into the stream timeline so the value survives reconnects: the base
+        # class advances start_time_offset by the session start -> audio start delay.
+        return float(value) + self.start_time_offset
 
     def _reset_utterance_state(self) -> None:
         self._cancel_eos_fallback()
         self._pending_final_data = None
         self._pending_eos = False
-        self._utterance_start_audio_pos = self._audio_position
-        self._utterance_speech_end_audio_pos = None
         self._utterance_speech_start_wall = time.time()
-        self._utterance_speech_end_wall = None
         self._final_received_for_utterance = False
         self._eos_emitted_for_utterance = False
 
@@ -1012,33 +1006,21 @@ class SpeechStream(stt.SpeechStream):
             return fallback_task
         return None
 
-    def _send_final_transcript(
-        self, transcript_data: dict[str, Any], *, require_end_time: bool = False
-    ) -> bool:
+    def _send_final_transcript(self, transcript_data: dict[str, Any]) -> bool:
         transcript_text = transcript_data.get("transcript", "")
         if not transcript_text:
             return False
 
         language = LanguageCode(transcript_data.get("language_code", ""))
         request_id = transcript_data.get("request_id") or self._server_request_id or ""
-        start_time = (
-            self._positive_time(transcript_data.get("speech_start"))
-            or self._utterance_start_audio_pos
-        )
-        end_time = (
-            self._positive_time(transcript_data.get("speech_end"))
-            or self._utterance_speech_end_audio_pos
-        )
-        if end_time is None:
-            if require_end_time:
-                return False
-            end_time = 0.0
-
+        # Streaming reports timing via speech_start/speech_end (the batch
+        # `timestamps` array is not sent over the socket). When absent, end_time
+        # is 0.0 and the pipeline falls back to wall-clock for EOU timing.
         speech_data = stt.SpeechData(
             language=language,
             text=transcript_text,
-            start_time=start_time,
-            end_time=end_time,
+            start_time=self._positive_time(transcript_data.get("speech_start")) or 0.0,
+            end_time=self._positive_time(transcript_data.get("speech_end")) or 0.0,
             confidence=_extract_confidence(transcript_data, self._logger),
         )
         self._event_ch.send_nowait(
@@ -1051,23 +1033,13 @@ class SpeechStream(stt.SpeechStream):
         return True
 
     def _try_commit_utterance(self) -> None:
-        if (
-            self._pending_final_data is None
-            or self._utterance_speech_end_audio_pos is None
-            or self._eos_emitted_for_utterance
-        ):
+        # Flush in order: FINAL_TRANSCRIPT first, then END_OF_SPEECH.
+        if self._pending_final_data is None or self._eos_emitted_for_utterance:
             return
 
         committed_data = self._pending_final_data
-        if self._send_final_transcript(committed_data, require_end_time=True):
-            self._logger.debug(
-                "Sarvam STT utterance committed",
-                extra={
-                    **self._build_log_context(),
-                    "end_time": self._utterance_speech_end_audio_pos,
-                    "speech_end_wall_time": self._utterance_speech_end_wall,
-                },
-            )
+        if self._send_final_transcript(committed_data):
+            self._logger.debug("Sarvam STT utterance committed", extra=self._build_log_context())
             self._emit_end_of_speech()
             self._pending_final_data = None
 
@@ -1077,29 +1049,12 @@ class SpeechStream(stt.SpeechStream):
 
         self._cancel_eos_fallback()
 
-        alternatives: list[stt.SpeechData] = []
-        if self._utterance_speech_end_audio_pos is not None:
-            # The empty SpeechData alternative is metadata-only. Sarvam's internal VAD
-            # provides the authoritative speech-end time separately from the transcript, and
-            # AudioRecognition uses this end_time to compute EOU latency metrics when using
-            # STT-based turn detection without an external VAD.
-            metadata: dict[str, Any] = {}
-            if self._utterance_speech_end_wall is not None:
-                metadata["speech_end_wall_time"] = self._utterance_speech_end_wall
-            alternatives.append(
-                stt.SpeechData(
-                    language=LanguageCode(self._opts.language),
-                    text="",
-                    end_time=self._utterance_speech_end_audio_pos,
-                    metadata=metadata or None,
-                )
-            )
-
+        # Bare END_OF_SPEECH (no alternatives), like other plugins' EOS events. The
+        # speech-end timing lives on the FINAL_TRANSCRIPT's end_time, not here.
         self._event_ch.send_nowait(
             stt.SpeechEvent(
                 type=stt.SpeechEventType.END_OF_SPEECH,
                 request_id=self._server_request_id or "",
-                alternatives=alternatives,
             )
         )
         self._eos_emitted_for_utterance = True
@@ -1414,7 +1369,6 @@ class SpeechStream(stt.SpeechStream):
 
                             await ws.send_str(json.dumps(audio_message))
                             chunks_sent += 1
-                            self._audio_position += chunk_size / self._opts.sample_rate
 
                             # Remove sent data from buffer
                             audio_buffer = audio_buffer[chunk_size:]
@@ -1649,11 +1603,6 @@ class SpeechStream(stt.SpeechStream):
             )
             self._event_ch.send_nowait(usage_event)
 
-            transcript_end_time = self._positive_time(transcript_data.get("speech_end"))
-            if transcript_end_time is not None and self._utterance_speech_end_audio_pos is None:
-                self._utterance_speech_end_audio_pos = transcript_end_time
-                self._utterance_speech_end_wall = time.time()
-
             if self._pending_eos:
                 self._pending_final_data = transcript_data
                 self._final_received_for_utterance = True
@@ -1716,8 +1665,6 @@ class SpeechStream(stt.SpeechStream):
             elif signal_type == "END_SPEECH":
                 if self._speaking:
                     self._speaking = False
-                    self._utterance_speech_end_audio_pos = self._audio_position
-                    self._utterance_speech_end_wall = time.time()
                     self._pending_eos = True
                     self._try_commit_utterance()
                     if not self._eos_emitted_for_utterance and self._pending_final_data is None:

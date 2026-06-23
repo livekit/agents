@@ -9,16 +9,20 @@ from livekit import rtc
 from livekit.agents import Agent
 from livekit.agents.voice.agent import ModelSettings
 from livekit.agents.voice.agent_activity import AgentActivity
+from livekit.agents.voice.turn import _StreamingTurnDetector
 
 pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
 
 
-def _make_activity(agent: Agent, stt: object) -> MagicMock:
+def _make_activity(agent: Agent, stt: object, turn_detection: object = None) -> MagicMock:
     act = MagicMock(spec=AgentActivity)
     act.agent = agent
     act._audio_recognition = MagicMock()
     act._audio_recognition._detach_stt = AsyncMock(return_value=MagicMock())
+    act._audio_recognition._detach_turn_detector = MagicMock(return_value=MagicMock())
     type(act).stt = PropertyMock(return_value=stt)
+    # turn detector reuse checks read this; None disables the reuse branch
+    act._turn_detection = turn_detection
     # rt session reuse checks need these
     act._rt_session = None
     type(act).llm = PropertyMock(return_value=None)
@@ -149,3 +153,50 @@ async def test_not_reusable_no_audio_recognition() -> None:
 
     result = await _detach_stt_if_reusable(old, new)
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Turn detector stream reuse via _detach_reusable_resources
+# ---------------------------------------------------------------------------
+
+
+async def _detach_turn_detector_if_reusable(old: MagicMock, new: MagicMock) -> object | None:
+    """Call the real _detach_reusable_resources, return turn_detector_stream."""
+    resources = await AgentActivity._detach_reusable_resources(old, new)
+    return resources.turn_detector_stream
+
+
+async def test_turn_detector_reusable_same_instance() -> None:
+    """Same TurnDetector instance carries over → live stream is detached for reuse."""
+    shared_detector = MagicMock(spec=_StreamingTurnDetector)
+    old = _make_activity(Agent(instructions="a"), MagicMock(), turn_detection=shared_detector)
+    new = _make_activity(Agent(instructions="b"), MagicMock(), turn_detection=shared_detector)
+
+    result = await _detach_turn_detector_if_reusable(old, new)
+    assert result is not None
+    old._audio_recognition._detach_turn_detector.assert_called_once()
+
+
+async def test_turn_detector_not_reusable_different_instance() -> None:
+    """Different detector instances → not reusable (old stream torn down normally)."""
+    old = _make_activity(
+        Agent(instructions="a"), MagicMock(), turn_detection=MagicMock(spec=_StreamingTurnDetector)
+    )
+    new = _make_activity(
+        Agent(instructions="b"), MagicMock(), turn_detection=MagicMock(spec=_StreamingTurnDetector)
+    )
+
+    result = await _detach_turn_detector_if_reusable(old, new)
+    assert result is None
+    old._audio_recognition._detach_turn_detector.assert_not_called()
+
+
+async def test_turn_detector_not_reusable_when_new_opts_out() -> None:
+    """New agent resolves to no turn detection (e.g. realtime server-side) → not reusable."""
+    shared_detector = MagicMock(spec=_StreamingTurnDetector)
+    old = _make_activity(Agent(instructions="a"), MagicMock(), turn_detection=shared_detector)
+    new = _make_activity(Agent(instructions="b"), MagicMock(), turn_detection=None)
+
+    result = await _detach_turn_detector_if_reusable(old, new)
+    assert result is None
+    old._audio_recognition._detach_turn_detector.assert_not_called()

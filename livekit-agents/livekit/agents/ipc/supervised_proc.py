@@ -128,6 +128,7 @@ class SupervisedProc(ABC):
         self._last_memory_warn_time: float = 0.0
         self._last_memory_warn_mb: float = 0.0
 
+        self._start_atask: asyncio.Task[None] | None = None
         self._supervise_atask: asyncio.Task[None] | None = None
         self._closing = False
         self._kill_sent = False
@@ -181,7 +182,9 @@ class SupervisedProc(ABC):
         if self._closing:
             raise RuntimeError("process is closed")
 
-        await asyncio.shield(self._start())
+        # keep a handle so aclose() can await an abandoned (cancelled) start()
+        self._start_atask = asyncio.create_task(self._start())
+        await asyncio.shield(self._start_atask)
 
     async def _start(self) -> None:
         def _add_proc_ctx_log(record: logging.LogRecord) -> None:
@@ -304,7 +307,16 @@ class SupervisedProc(ABC):
 
     async def aclose(self) -> None:
         """attempt to gracefully close the supervised process"""
+        if self._start_atask is not None and not self._start_atask.done():
+            # start() may have been cancelled mid-shield; wait so the started check can't race
+            await asyncio.wait([self._start_atask])
+
         if not self.started:
+            return
+
+        if not self._initialize_fut.done():
+            # never initialized: the child can't ack a graceful shutdown yet, kill it instead
+            await self.kill()
             return
 
         self._closing = True
@@ -347,6 +359,11 @@ class SupervisedProc(ABC):
             raise RuntimeError("process not started")
 
         self._closing = True
+        if not self._initialize_fut.done():
+            # unblock the supervise task waiting on this future
+            self._initialize_fut.set_exception(
+                RuntimeError("process killed before initialization completed")
+            )
         await self._send_dump_signal()
         await self._send_kill_signal()
 

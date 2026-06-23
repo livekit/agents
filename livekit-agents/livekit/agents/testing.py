@@ -36,10 +36,9 @@ def fake_job_context(
     agent in-process (tests/dev) — no worker, no AgentServer.
 
     The context is a real ``fake_job`` :class:`JobContext` (so ``get_job_context()``
-    and its access points behave normally). ``job_metadata`` is placed on the job —
-    e.g. a protojson ``SimulationDispatch``, which ``JobContext.simulation_context()``
-    reads. The :class:`JobContext` is yielded so callers can tweak it (set
-    ``_simulation_end_fnc``, etc.). Wrap ``session.start(room=room)`` with it::
+    and its access points behave normally). The :class:`JobContext` is yielded so
+    callers can tweak it (set ``_simulation_end_fnc``, etc.). Wrap
+    ``session.start(room=room)`` with it::
 
         async with rtc.Room() as room:
             await room.connect(url, token)

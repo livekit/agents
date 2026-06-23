@@ -46,6 +46,10 @@ class TestUserTurnStartPersistence:
         # _speaking is a property backed by this event (set == silent/not speaking)
         audio_recognition._user_silence_ev = asyncio.Event()
         audio_recognition._speaking = False
+        # set on SOS / cleared on EOS by _on_vad_event
+        audio_recognition._user_speaking_event = asyncio.Event()
+        audio_recognition._agent_speaking = False
+        audio_recognition._turn_detector_stream = None
         audio_recognition._end_of_turn_task = None
         audio_recognition._user_turn_span = None
         audio_recognition._user_turn_start = None

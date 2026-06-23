@@ -239,6 +239,24 @@ class Agent:
 
         await self._activity.update_instructions(instructions)
 
+    def update_expressive(
+        self, expressive: bool | ExpressiveOptions | NotGivenOr[bool | ExpressiveOptions]
+    ) -> None:
+        """Change the agent's expressive setting at runtime.
+
+        The new value is picked up on the next reply: ``AgentActivity`` re-resolves the
+        active expressive options (against the current TTS provider) for every generation,
+        so switching a preset — e.g. ``update_expressive(presets.CASUAL)`` — takes effect
+        from the agent's next turn. Pass ``False`` to disable expressive, ``True`` for the
+        provider default, or ``NOT_GIVEN`` to fall back to the session's setting.
+
+        Args:
+            expressive: ``True``/``False`` to toggle, an :class:`ExpressiveOptions`
+                (e.g. a ``presets.*`` constant) to select a preset, or ``NOT_GIVEN`` to
+                inherit the :class:`AgentSession` setting.
+        """
+        self._expressive = expressive
+
     async def update_tools(self, tools: list[llm.Tool | llm.Toolset]) -> None:
         """
         Updates the agent's available function tools.
@@ -941,6 +959,10 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         ):
             blocked_tasks.append(old_activity._on_enter_task)
 
+        # register before any await so a concurrent drain (e.g. session close)
+        # won't wait for tasks blocked on this handoff
+        old_activity._add_drain_blocked_tasks(blocked_tasks)
+
         if (
             task_info.function_call
             and isinstance(old_activity.llm, RealtimeModel)
@@ -1020,7 +1042,11 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 except BaseException:
                     logger.exception("error in on_enter task of agent %s", self.id)
 
-            if session.current_agent != self:
+            if session._closing and self._activity is None:
+                # the activity never started (session closing), skip the handoff;
+                # the close path owns the previous activity
+                pass
+            elif session.current_agent != self:
                 logger.warning(
                     f"{self.__class__.__name__} completed, but the agent has changed in the meantime. "
                     "Ignoring handoff to the previous agent, likely due to `AgentSession.update_agent` being invoked."

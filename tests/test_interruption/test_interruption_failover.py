@@ -7,6 +7,7 @@ Covers:
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from unittest.mock import AsyncMock, MagicMock
 
@@ -15,7 +16,7 @@ import numpy as np
 import pytest
 
 from livekit import rtc
-from livekit.agents._exceptions import APIError
+from livekit.agents._exceptions import APIError, APIStatusError
 from livekit.agents.inference.interruption import (
     AdaptiveInterruptionDetector,
     InterruptionDetectionError,
@@ -197,6 +198,55 @@ class TestWsCacheTimeout:
         assert exc is not None
         assert isinstance(exc, APIError)
 
+        recoverable_errors = [e for e in errors if e.recoverable]
+        unrecoverable_errors = [e for e in errors if not e.recoverable]
+        assert len(recoverable_errors) == 0
+        assert len(unrecoverable_errors) == 1
+
+
+class TestWsSessionCreatedMissingThreshold:
+    @pytest.mark.asyncio
+    async def test_immediate_unrecoverable_when_server_omits_threshold(self) -> None:
+        mock_session = AsyncMock(spec=aiohttp.ClientSession)
+
+        def _make_mock_ws() -> MagicMock:
+            mock_ws = MagicMock(spec=aiohttp.ClientWebSocketResponse)
+            mock_ws.send_str = AsyncMock()
+            mock_ws.send_bytes = AsyncMock()
+            mock_ws.closed = False
+            mock_ws.close_code = None
+
+            sent_created = False
+
+            async def _receive() -> aiohttp.WSMessage:
+                nonlocal sent_created
+                if not sent_created:
+                    sent_created = True
+                    return aiohttp.WSMessage(
+                        type=aiohttp.WSMsgType.TEXT,
+                        data=json.dumps({"type": "session.created"}),
+                        extra=None,
+                    )
+                await asyncio.sleep(3600)
+                return aiohttp.WSMessage(type=aiohttp.WSMsgType.CLOSED, data=None, extra=None)
+
+            mock_ws.receive = _receive
+            mock_ws.close = AsyncMock(return_value=True)
+            return mock_ws
+
+        mock_session.ws_connect = AsyncMock(side_effect=lambda *a, **kw: _make_mock_ws())
+
+        detector = _create_detector(mock_session)
+        errors = _collect_errors(detector)
+        stream = detector.stream(conn_options=CONN_OPTIONS)
+
+        exc = await _wait_for_stream_failure(stream)
+
+        assert isinstance(exc, APIStatusError)
+        assert exc.status_code == 500
+        assert exc.retryable is False
+
+        # retryable=False -> no retries, immediate unrecoverable
         recoverable_errors = [e for e in errors if e.recoverable]
         unrecoverable_errors = [e for e in errors if not e.recoverable]
         assert len(recoverable_errors) == 0

@@ -24,6 +24,7 @@ from phonic import AsyncPhonic
 from phonic.conversations.socket_client import (
     AsyncConversationsSocketClient,
 )
+from phonic.core import RequestOptions
 from phonic.types import (
     AddSystemMessagePayload,
     AudioChunkPayload,
@@ -568,7 +569,11 @@ class RealtimeSession(llm.RealtimeSession):
             logger.debug("Connecting to Phonic Realtime API...")
             # The Phonic Python SDK uses an async context manager for connect()
             t0 = time.perf_counter()
-            self._socket_ctx = self._client.conversations.connect()
+            self._socket_ctx = self._client.conversations.connect(
+                request_options=RequestOptions(
+                    additional_headers={"x-phonic-client": "livekit-agents-py"}
+                )
+            )
             self._socket = await self._socket_ctx.__aenter__()
             self._report_connection_acquired(time.perf_counter() - t0)
 

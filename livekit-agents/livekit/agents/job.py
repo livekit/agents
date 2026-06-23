@@ -40,7 +40,7 @@ from .log import logger
 from .observability import Tagger
 from .telemetry import _upload_session_report, otel_metrics
 from .telemetry.traces import _BufferingHandler, _setup_cloud_tracer, _shutdown_telemetry
-from .types import ATTRIBUTE_SIMULATOR, NotGivenOr
+from .types import ATTRIBUTE_SIMULATOR, ATTRIBUTE_SIMULATOR_DISPATCH, NotGivenOr
 from .utils import http_context, is_given, wait_for_participant
 from .utils.deprecation import deprecate_params
 from .utils.misc import is_cloud
@@ -446,19 +446,29 @@ class JobContext:
         Resolved once and cached. The framework hands it to ``on_simulation_end``
         automatically, so you never need to call this to "prime" anything. Call it only
         when you want the scenario in your entrypoint (e.g. to seed scenario-specific
-        mocks). Resolves synchronously from the simulation room's metadata (a protojson
-        ``SimulationDispatch``); a production room has none and returns ``None``.
+        mocks). Resolves synchronously from the simulator participant's
+        ``lk.simulator.dispatch`` attribute (a protojson ``SimulationDispatch``); a
+        production room has none and returns ``None``.
         """
         if self._simulation_resolved:
             return self._simulation_ctx
 
-        self._simulation_resolved = True
-
-        # The simulation dispatch travels in the agent's dispatch metadata
-        # (RoomAgentDispatch.Metadata -> job.metadata); fall back to room metadata.
-        metadata = self._info.job.metadata or self._room.metadata
+        metadata = ""
+        for participant in self._room.remote_participants.values():
+            if ATTRIBUTE_SIMULATOR not in participant.attributes:
+                continue
+            if dispatch_json := participant.attributes.get(ATTRIBUTE_SIMULATOR_DISPATCH):
+                metadata = dispatch_json
+                break
         if not metadata:
+            # The simulator joins before the agent, so a miss is only final
+            # once the room is connected and a remote participant is visible.
+            self._simulation_resolved = (
+                self._room.isconnected() and len(self._room.remote_participants) > 0
+            )
             return None
+
+        self._simulation_resolved = True
 
         from google.protobuf import json_format
 
@@ -467,7 +477,10 @@ class JobContext:
         from .simulation import SimulationContext
 
         try:
-            dispatch = json_format.Parse(metadata, sim_pb.SimulationDispatch())
+            # ignore unknown fields so dispatches from newer servers still parse
+            dispatch = json_format.Parse(
+                metadata, sim_pb.SimulationDispatch(), ignore_unknown_fields=True
+            )
         except json_format.ParseError:
             return None
 
@@ -581,8 +594,10 @@ class JobContext:
             await self._room.connect(self._info.url, self._info.token, options=room_options)
             self._on_connect()
 
-            if self.simulation_context() is not None:
-                self._room.on("participant_disconnected", self._on_simulator_disconnected)
+            # Always registered: the callback ignores participants without the
+            # simulator attribute, and gating on simulation_context() here would
+            # race the participant-list sync.
+            self._room.on("participant_disconnected", self._on_simulator_disconnected)
 
             for p in self._room.remote_participants.values():
                 self._participant_available(p)

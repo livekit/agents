@@ -17,6 +17,9 @@ class CliArgs:
     reload_addr: str | None = None
     log_format: str = "json"
     dev: bool = False
+    # set by `lk simulate` when launching the agent under test; disables the
+    # worker load limit so simulation runs can saturate the agent
+    simulation: bool = False
 
 
 def running_job_to_proto(info: RunningJobInfo) -> agent_dev.RunningAgentJobInfo:

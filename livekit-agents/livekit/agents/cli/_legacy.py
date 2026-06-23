@@ -1709,6 +1709,14 @@ def _build_cli(server: AgentServer) -> typer.Typer:
                 help="Time in seconds to wait for jobs to finish before shutting down.",
             ),
         ] = None,
+        simulation: Annotated[
+            bool,
+            typer.Option(
+                hidden=True,
+                help="Run under an agent simulation: the worker load limit is disabled "
+                "so runs can saturate the agent. Set by `lk simulate`.",
+            ),
+        ] = False,
     ) -> None:
         if drain_timeout is not None:
             server.update_options(drain_timeout=drain_timeout)
@@ -1720,6 +1728,7 @@ def _build_cli(server: AgentServer) -> typer.Typer:
                 url=url,
                 api_key=api_key,
                 api_secret=api_secret,
+                simulation=simulation,
             ),
         )
 

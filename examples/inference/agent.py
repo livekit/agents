@@ -14,7 +14,6 @@ from livekit.agents import (
     inference,
 )
 from livekit.agents.voice import UserStateChangedEvent, presets
-from livekit.plugins import silero
 from livekit.rtc import RpcInvocationData
 
 logger = logging.getLogger("inference")
@@ -80,7 +79,6 @@ async def entrypoint(ctx: JobContext) -> None:
             voice="Sarah",
             extra_kwargs={"delivery_mode": "CREATIVE"},
         ),
-        vad=silero.VAD.load(),
         expressive=presets.CASUAL,
         # Flip user_state to "away" after 10s of mutual silence so we can
         # check whether they're still there (default is 15s).
