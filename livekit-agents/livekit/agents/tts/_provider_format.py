@@ -166,63 +166,40 @@ Examples:
 _FISHAUDIO_TAGS = ["expression", "sound", "break", "emphasis"]
 
 _FISHAUDIO_LLM_INSTRUCTIONS = """\
-This text gets spoken aloud so write the way people speak. Realistic as if the person is making up what they'll say as they go \
-Use contractions naturally (I'm, you're, it's, can't, we'll). Skip markdown, emojis, and special \
-characters — only what gets vocalized belongs here. Expand numbers, symbols, and \
-abbreviations into spoken form (e.g. $42.50 → "forty-two dollars and fifty cents", \
-Dr. → "Doctor", 3:45 PM → "three forty-five PM"). Pacing comes from punctuation \
-and the <break/> tag: commas for short breaths, short sentences for emphasis, \
-longer ones for calm, and <break time="500ms"/> or <break time="1s"/> for real \
-silences — prefer the tag over written ellipses (...) since the tag produces an \
-actual pause in the synthesized audio. Light fillers (um, uh, oh, hmm), \
-hedges (kind of, a little), and self-repairs (I, I think) are part of how real \
-speech sounds — use them when they make the line land more naturally.
+This text gets spoken aloud, so write the way people actually talk: contractions \
+(I'm, you're, can't), light fillers (um, uh, oh, hmm), hedges (kind of, a little), \
+and self-repairs (I, I think) where they help a line land naturally. No markdown, \
+emojis, or special characters — only what gets vocalized. Expand numbers and \
+abbreviations into spoken form ($42.50 → "forty-two dollars and fifty cents", \
+Dr. → "Doctor"). Pace with punctuation and the <break/> tag (commas for short \
+breaths; <break time="500ms"/> or <break time="1s"/> for real silences) — prefer \
+the tag over written ellipses, since it makes an actual pause in the audio.
 
-You have three self-closing XML tags. All end with />.
+Four XML tags shape delivery:
 
-1. <expression value="EMOTION"/> — shapes how a sentence sounds. Place at the START \
-of a sentence; add another when the feeling shifts mid-sentence. Up to three can \
-stack on one clause.
-   Emotions: happy, sad, angry, excited, calm, nervous, confident, surprised, \
-satisfied, delighted, scared, worried, upset, frustrated, depressed, empathetic, \
-embarrassed, disgusted, moved, proud, relaxed, grateful, curious, sarcastic, \
-disdainful, unhappy, anxious, hysterical, indifferent, uncertain, doubtful, \
-confused, disappointed, regretful, guilty, ashamed, jealous, envious, hopeful, \
-optimistic, pessimistic, nostalgic, lonely, bored, contemptuous, sympathetic, \
-compassionate, determined, resigned.
-   Tone markers (same tag, anywhere in the sentence): in a hurry tone, shouting, \
-screaming, whispering, soft tone.
-   Intensity modifiers: prefix any emotion with a modifier to dial it up or down — \
-<expression value="slightly sad"/>, <expression value="very excited"/>, <expression \
-value="extremely angry"/>.
-   You're not limited to this list — a short plain-English description also works \
-(e.g. "speak gently", "warm and reassuring").
+1. <expression value="EMOTION"/> — how a sentence sounds; place at the START of a \
+sentence and add another when the feeling shifts (up to three may stack). Reach for \
+the SPECIFIC feeling, not the broadest one. Common values: happy, excited, \
+delighted, calm, curious, surprised, sad, regretful, frustrated, anxious, nervous, \
+hopeful, nostalgic, empathetic, confident, determined, sarcastic. Tone markers \
+(same tag): whispering, soft tone, shouting, in a hurry tone. Dial intensity with a \
+modifier (<expression value="very excited"/>, <expression value="slightly sad"/>). \
+You're not limited to these — a short plain-English description also works \
+("warm and reassuring", "speak gently").
 
-2. <sound value="SOUND"/> — produces a non-verbal sound. Follow each sound with the \
-suggested companion text so the model has something to vocalize.
-   Sounds (with the suggested text in parens): laughing ("ha ha"), chuckling \
-("heh heh"), sobbing, crying loudly, sighing ("sigh"), groaning ("ugh"), \
-panting ("huff puff"), gasping ("gasp"), yawning ("yawn"), snoring ("zzz").
+2. <sound value="SOUND"/> — a non-verbal sound; follow it with the suggested text so \
+there's something to vocalize: laughing ("ha ha"), chuckling ("heh heh"), sighing \
+("sigh"), groaning ("ugh"), gasping ("gasp"), yawning ("yawn"), sobbing, \
+panting ("huff puff").
 
-3. <break time="500ms"/> or <break time="1s"/> — insert silence when appropriate.
+3. <break time="500ms"/> — insert a silence.
 
-4. <emphasis>WORD</emphasis> — stress a single word. Wrap just the word that \
-should land harder (e.g. <emphasis>really</emphasis>, <emphasis>knew</emphasis>); \
-the marker reads on the synthesized audio, not the transcript.
-
-Tag an <expression> before every sentence and another whenever the feeling shifts; \
-don't stack conflicting ones. Reach for the specific emotion or tone that fits the \
-moment — `regretful` over `sad`, `determined` over `confident`, `nostalgic` over \
-`happy` for memories, `whispering` for quiet moments — rather than defaulting to \
-the broadest basic.
+4. <emphasis>WORD</emphasis> — stress a single word (<emphasis>really</emphasis>); \
+reads on the audio, not the transcript.
 
 Examples:
-  <expression value="excited"/> I can't wait to tell you! <expression value="happy"/> This is going to be great!
-  <expression value="whispering"/> Don't tell anyone. <expression value="curious"/> But did you hear what happened?
   <expression value="very nervous"/> Okay, here goes... <break time="500ms"/> <expression value="determined"/> I'm just gonna say it.
-  <expression value="in a hurry tone"/> Quick, they're about to start! <expression value="excited"/> Come on, come on!
   <expression value="regretful"/> I really wish I'd called sooner. <expression value="hopeful"/> But I'm here now if you want to talk.
-  <expression value="proud"/> I <emphasis>knew</emphasis> you'd pull it off — that was <emphasis>incredible</emphasis>.
   That's hilarious! <sound value="laughing"/> Ha ha! <expression value="happy"/> You always make me laugh."""
 
 
