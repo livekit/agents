@@ -231,7 +231,8 @@ class STT(stt.STT):
                 streaming=use_streaming,
                 interim_results=True,
                 aligned_transcript="word" if enable_word_time_offsets and use_streaming else False,
-                keyterms=True,
+                # adaptation shadows keywords (see build_adaptation), so keyterms can't be applied
+                keyterms=not is_given(adaptation),
             )
         )
 
