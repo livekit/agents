@@ -225,7 +225,11 @@ def _keyterms_extra_for_model(
 
     if key is None:
         return None
-    return {key: list(dict.fromkeys([*extra_kwargs.get(key, []), *session_keyterms]))}
+    # deepgram's keyterm may be a bare string; wrap it so it isn't splat char-by-char
+    existing = extra_kwargs.get(key, [])
+    if isinstance(existing, str):
+        existing = [existing]
+    return {key: list(dict.fromkeys([*existing, *session_keyterms]))}
 
 
 STTLanguages = Literal["multi", "en", "de", "es", "fr", "ja", "pt", "zh", "hi"]
