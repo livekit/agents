@@ -343,6 +343,8 @@ class SpeechStream(stt.RecognizeStream):
         }
         if self._opts.format != "verbatim":
             headers["x-format"] = self._opts.format
+        if self._opts.preferred_language is not None:
+            headers["preferred_language"] = self._opts.preferred_language
         if self._opts.itn_native_numerals:
             headers["itn_native_numerals"] = "true"
 
