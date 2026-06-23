@@ -327,10 +327,15 @@ class SpeechStream(stt.RecognizeStream):
         import websockets
 
         ws_url = self._build_ws_url()
-        headers = {
+        headers: dict[str, str] = {
             "x-api-key-id": self._opts.api_key,
             "lang_code": self._opts.language,
+            "x-sample-rate": str(self._opts.sample_rate),
         }
+        if self._opts.format != "verbatim":
+            headers["x-format"] = self._opts.format
+        if self._opts.itn_native_numerals:
+            headers["itn_native_numerals"] = "true"
 
         try:
             async with websockets.connect(
