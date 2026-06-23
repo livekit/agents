@@ -74,42 +74,42 @@ The `synthesize_method` controls which transport `synthesize()` uses
 (REST, SSE, or WebSocket). The `stream()` method always uses WebSocket
 regardless of this setting.
 
-## Access Methods (STT and TTS)
+## Full Constructor Reference
 
-In this plugin, STT is exposed as the `STT` class and supports two methods:
-- REST (batch)
-- ASR (real-time streaming over WebSocket)
-
-### STT access methods — Prisma (REST + ASR)
+### STT — All parameters
 
 ```python
 from livekit.plugins.gnani import STT
 
-stt = STT(language="en-IN")
-
-# REST STT (batch)
-speech_event = await stt.recognize(audio_buffer)
-
-# ASR STT (real-time)
-speech_stream = stt.stream()
+stt = STT(
+    language="en-IN",           # Default: "en-IN"
+    sample_rate=16000,          # Default: 16000 (also: 8000)
+    format="verbatim",          # Default: "verbatim" (also: "transcribe")
+    preferred_language=None,    # Default: None
+    itn_native_numerals=False,  # Default: False
+    api_key=None,               # Default: None (reads GNANI_API_KEY env var)
+    base_url="https://api.vachana.ai",  # Default
+)
 ```
 
-### TTS access methods — Timbre
+### TTS — All parameters
 
 ```python
 from livekit.plugins.gnani import TTS
 
-tts_rest = TTS(voice="Karan", synthesize_method="rest")
-tts_sse = TTS(voice="Karan", synthesize_method="sse")
-tts_ws = TTS(voice="Karan", synthesize_method="websocket")
-
-# Method stays the same; transport depends on synthesize_method
-rest_audio = tts_rest.synthesize("Hello from Gnani")
-sse_audio = tts_sse.synthesize("Hello from Gnani")
-ws_audio = tts_ws.synthesize("Hello from Gnani")
-
-# For incremental text streaming, use stream() (always WebSocket)
-tts_stream = tts_ws.stream()
+tts = TTS(
+    voice="Karan",                    # Default: "Karan" (also: Simran, Nara, Riya, Viraj, Raju)
+    model="vachana-voice-v3",         # Default: "vachana-voice-v3"
+    language="hi",                    # Default: "hi"
+    sample_rate=16000,                # Default: 16000 (also: 8000, 22050, 44100)
+    encoding="linear_pcm",           # Default: "linear_pcm" (also: "oggopus")
+    container="wav",                  # Default: "wav" (also: "raw", "mp3", "mulaw", "ogg")
+    num_channels=1,                   # Default: 1
+    bitrate=None,                     # Default: None (also: "96k", "128k", "192k")
+    synthesize_method="rest",         # Default: "rest" (also: "sse", "websocket")
+    api_key=None,                     # Default: None (reads GNANI_API_KEY env var)
+    base_url="https://api.vachana.ai",  # Default
+)
 ```
 
 ## Features
@@ -121,6 +121,7 @@ tts_stream = tts_ws.stream()
 - **10+ Indian languages** — see [supported language codes](https://docs.gnani.ai/api/STT/stt-websocket#supported-languages)
 - **Code-switching** — supports multilingual and code-mixed audio
 - **Sample rates** — 8 kHz and 16 kHz
+- **ITN support** — Inverse Text Normalization via `format="transcribe"`
 
 ### TTS (Timbre)
 
@@ -129,12 +130,13 @@ tts_stream = tts_ws.stream()
 - **WebSocket synthesis** — lowest-latency synthesis via `synthesize_method="websocket"` or the `stream()` method
 - **6 voices** — Karan, Simran, Nara, Riya, Viraj, Raju
 - **Configurable output** — sample rate (8000–44100), encoding (linear_pcm, oggopus), container (raw, mp3, wav, mulaw, ogg)
+- **Runtime updates** — change voice, model, or language via `update_options()`
 
 ## Supported Languages
 
 ### STT Languages (Prisma)
 
-Prisma uses BCP-47 locale codes (e.g. `hi-IN`). For the full list of supported languages, see:
+Prisma uses BCP-47 locale codes (e.g. `hi-IN`). Supported:
 
 - **[STT REST — Supported Languages](https://docs.gnani.ai/api/STT/speech-to-text#supported-languages)**
 - **[STT Realtime — Supported Languages](https://docs.gnani.ai/api/STT/stt-websocket#supported-languages)**
@@ -166,6 +168,8 @@ This plugin directly implements the Gnani REST and WebSocket APIs using `aiohttp
 
 - [Gnani API Docs](https://docs.gnani.ai/)
 - [LiveKit Agents Docs](https://docs.livekit.io/agents/)
+- [Gnani STT Plugin Guide](https://docs.livekit.io/agents/integrations/stt/gnani/)
+- [Gnani TTS Plugin Guide](https://docs.livekit.io/agents/integrations/tts/gnani/)
 
 ## License
 

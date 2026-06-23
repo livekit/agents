@@ -340,3 +340,101 @@ def test_tts_ws_url_from_http():
         stream = SynthesizeStream(tts=tts, conn_options=DEFAULT_API_CONNECT_OPTIONS)
 
     assert stream._build_ws_url() == "ws://localhost:9090/api/v1/tts"
+
+
+def test_tts_default_num_channels():
+    """TTS defaults to 1 channel."""
+    from livekit.plugins.gnani import TTS
+
+    tts = TTS(api_key="test-key")
+    assert tts._opts.num_channels == 1
+    assert tts.num_channels == 1
+
+
+def test_tts_custom_num_channels():
+    """TTS accepts custom num_channels."""
+    from livekit.plugins.gnani import TTS
+
+    tts = TTS(api_key="test-key", num_channels=2)
+    assert tts._opts.num_channels == 2
+
+
+def test_tts_default_bitrate():
+    """TTS defaults bitrate to None."""
+    from livekit.plugins.gnani import TTS
+
+    tts = TTS(api_key="test-key")
+    assert tts._opts.bitrate is None
+
+
+def test_tts_custom_bitrate():
+    """TTS accepts custom bitrate."""
+    from livekit.plugins.gnani import TTS
+
+    tts = TTS(api_key="test-key", bitrate="128k")
+    assert tts._opts.bitrate == "128k"
+
+
+def test_tts_rejects_invalid_sample_rate():
+    """TTS rejects unsupported sample rates."""
+    from livekit.plugins.gnani import TTS
+
+    with pytest.raises(ValueError, match="sample_rate"):
+        TTS(api_key="test-key", sample_rate=48000)
+
+
+def test_tts_all_sample_rates_accepted():
+    """TTS accepts all documented sample rates."""
+    from livekit.plugins.gnani import TTS
+
+    for rate in (8000, 16000, 22050, 44100):
+        tts = TTS(api_key="test-key", sample_rate=rate)
+        assert tts.sample_rate == rate
+
+
+def test_tts_stream_returns_synthesize_stream():
+    """TTS.stream() returns a SynthesizeStream instance."""
+    from unittest.mock import MagicMock, patch
+
+    from livekit.plugins.gnani import TTS
+    from livekit.plugins.gnani.tts import SynthesizeStream
+
+    tts = TTS(api_key="test-key")
+
+    def _fake_create_task(coro, *args, **kwargs):
+        coro.close()
+        return MagicMock()
+
+    with patch("livekit.agents.tts.tts.asyncio.create_task", side_effect=_fake_create_task):
+        stream = tts.stream()
+    assert isinstance(stream, SynthesizeStream)
+
+
+def test_tts_update_options_preserves_other_fields():
+    """update_options only changes specified fields."""
+    from livekit.plugins.gnani import TTS
+
+    tts = TTS(api_key="test-key", voice="Karan", language="hi")
+    tts.update_options(voice="Raju")
+    assert tts._opts.voice == "Raju"
+    assert tts._opts.language == "hi"
+    assert tts._opts.model == "vachana-voice-v3"
+
+
+def test_tts_websocket_chunked_stream_ws_url():
+    """WebSocketChunkedStream builds correct WS URL."""
+    from unittest.mock import MagicMock, patch
+
+    from livekit.plugins.gnani import TTS
+    from livekit.plugins.gnani.tts import WebSocketChunkedStream
+
+    tts = TTS(api_key="test-key", synthesize_method="websocket")
+
+    def _fake_create_task(coro, *args, **kwargs):
+        coro.close()
+        return MagicMock()
+
+    with patch("livekit.agents.tts.tts.asyncio.create_task", side_effect=_fake_create_task):
+        stream = tts.synthesize("hello")
+    assert isinstance(stream, WebSocketChunkedStream)
+    assert stream._build_ws_url() == "wss://api.vachana.ai/api/v1/tts"

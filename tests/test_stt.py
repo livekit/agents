@@ -23,6 +23,7 @@ from livekit.plugins import (
     fal,
     fireworksai,
     gladia,
+    gnani,
     google,
     gradium,
     mistralai,
@@ -73,6 +74,7 @@ STTs: list[Callable[[], stt.STT]] = [
         # spitch,
     ]
 ] + [
+    pytest.param(lambda: gnani.STT(language="en-IN"), id="livekit.plugins.gnani"),
     pytest.param(lambda: cartesia.STT(model="ink-whisper"), id="livekit.plugins.cartesia._legacy"),
     pytest.param(lambda: deepgram.STTv2(), id="livekit.plugins.deepgram.STTv2"),
     pytest.param(

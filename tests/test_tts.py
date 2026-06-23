@@ -25,6 +25,7 @@ from livekit.plugins import (
     cartesia,
     deepgram,
     elevenlabs,
+    gnani,
     google,
     groq,
     hume,
@@ -255,6 +256,13 @@ SYNTHESIZE_TTS = [
         },
         id="mistralai",
     ),
+    pytest.param(
+        lambda: {
+            "tts": gnani.TTS(voice="Karan", synthesize_method="rest"),
+            "proxy-upstream": "api.vachana.ai:443",
+        },
+        id="gnani",
+    ),
 ]
 
 PLUGIN = os.getenv("PLUGIN", "").strip()
@@ -460,6 +468,13 @@ STREAM_TTS = [
             "proxy-upstream": "agent-gateway.livekit.cloud:443",
         },
         id="inference-rime",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": gnani.TTS(voice="Karan", synthesize_method="websocket"),
+            "proxy-upstream": "api.vachana.ai:443",
+        },
+        id="gnani",
     ),
 ]
 

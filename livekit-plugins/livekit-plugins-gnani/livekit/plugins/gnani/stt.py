@@ -1,3 +1,17 @@
+# Copyright 2025 LiveKit, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Speech-to-Text implementation for Gnani Vachana
 
 This module provides an STT implementation that uses the Gnani Vachana API,
@@ -11,6 +25,8 @@ import json
 import os
 from dataclasses import dataclass
 from typing import Any, Literal
+
+GnaniSTTFormat = Literal["verbatim", "transcribe"]
 
 import aiohttp
 
@@ -85,6 +101,9 @@ class GnaniSTTOptions:
     language: str
     sample_rate: int = SAMPLE_RATE_16K
     base_url: str = GNANI_STT_BASE_URL
+    preferred_language: str | None = None
+    format: str = "verbatim"
+    itn_native_numerals: bool = False
 
 
 def _check_deprecated_args(kwargs: dict[str, Any]) -> None:
@@ -105,6 +124,9 @@ class STT(stt.STT):
         api_key: Gnani API key (falls back to GNANI_API_KEY env var).
         sample_rate: Audio sample rate for streaming (8000 or 16000).
         base_url: Vachana API base URL.
+        preferred_language: Force single-language model for this code.
+        format: "verbatim" (default) or "transcribe" (enables ITN).
+        itn_native_numerals: Render digits in native script when format="transcribe".
     """
 
     def __init__(
@@ -114,6 +136,9 @@ class STT(stt.STT):
         api_key: str | None = None,
         sample_rate: int = SAMPLE_RATE_16K,
         base_url: str = GNANI_STT_BASE_URL,
+        preferred_language: str | None = None,
+        format: GnaniSTTFormat = "verbatim",
+        itn_native_numerals: bool = False,
         **kwargs: Any,
     ) -> None:
         super().__init__(
@@ -141,6 +166,9 @@ class STT(stt.STT):
             language=language,
             sample_rate=sample_rate,
             base_url=base_url,
+            preferred_language=preferred_language,
+            format=format,
+            itn_native_numerals=itn_native_numerals,
         )
         self._session: aiohttp.ClientSession | None = None
 
@@ -192,6 +220,12 @@ class STT(stt.STT):
         form_data = aiohttp.FormData()
         form_data.add_field("audio_file", wav_bytes, filename="audio.wav", content_type="audio/wav")
         form_data.add_field("language_code", lang)
+        form_data.add_field("format", self._opts.format)
+
+        if self._opts.preferred_language is not None:
+            form_data.add_field("preferred_language", self._opts.preferred_language)
+        if self._opts.itn_native_numerals:
+            form_data.add_field("itn_native_numerals", "true")
 
         headers: dict[str, str] = {
             "X-API-Key-ID": self._opts.api_key,

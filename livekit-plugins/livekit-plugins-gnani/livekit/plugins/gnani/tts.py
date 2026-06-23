@@ -1,3 +1,17 @@
+# Copyright 2025 LiveKit, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Text-to-Speech implementation for Gnani Vachana
 
 This module provides a TTS implementation that uses the Gnani Vachana API,
@@ -48,6 +62,7 @@ SUPPORTED_VOICES: set[str] = {"Karan", "Simran", "Nara", "Riya", "Viraj", "Raju"
 
 GnaniTTSEncodings = Literal["linear_pcm", "oggopus"]
 GnaniTTSContainers = Literal["raw", "mp3", "wav", "mulaw", "ogg"]
+GnaniTTSBitrates = Literal["96k", "128k", "192k"]
 GnaniTTSSynthesizeMethod = Literal["rest", "sse", "websocket"]
 
 SUPPORTED_SAMPLE_RATES = (8000, 16000, 22050, 44100)
@@ -65,6 +80,7 @@ class GnaniTTSOptions:
     container: str = "wav"
     num_channels: int = 1
     sample_width: int = 2
+    bitrate: str | None = None
     base_url: str = GNANI_TTS_BASE_URL
     language: str = "hi"
     synthesize_method: str = "rest"
@@ -97,6 +113,7 @@ class TTS(tts.TTS):
         num_channels: int = 1,
         encoding: GnaniTTSEncodings | str = "linear_pcm",
         container: GnaniTTSContainers | str = "wav",
+        bitrate: GnaniTTSBitrates | str | None = None,
         api_key: str | None = None,
         base_url: str = GNANI_TTS_BASE_URL,
         language: str = "hi",
@@ -134,6 +151,7 @@ class TTS(tts.TTS):
             encoding=encoding,
             container=container,
             num_channels=num_channels,
+            bitrate=bitrate,
             base_url=base_url,
             language=language,
             synthesize_method=synthesize_method,
@@ -196,17 +214,20 @@ class TTS(tts.TTS):
 
 
 def _build_payload(opts: GnaniTTSOptions, text: str) -> dict:
+    audio_config: dict = {
+        "sample_rate": opts.sample_rate,
+        "encoding": opts.encoding,
+        "num_channels": opts.num_channels,
+        "sample_width": opts.sample_width,
+        "container": opts.container,
+    }
+    if opts.bitrate is not None:
+        audio_config["bitrate"] = opts.bitrate
     return {
         "text": text,
         "voice": opts.voice,
         "model": opts.model,
-        "audio_config": {
-            "sample_rate": opts.sample_rate,
-            "encoding": opts.encoding,
-            "num_channels": opts.num_channels,
-            "sample_width": opts.sample_width,
-            "container": opts.container,
-        },
+        "audio_config": audio_config,
     }
 
 
