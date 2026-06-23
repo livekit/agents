@@ -88,7 +88,7 @@ class GnaniTTSOptions:
 _DEPRECATED_TTS_KWARGS = frozenset(("language", "http_session"))
 
 
-def _check_deprecated_tts_args(kwargs: dict[str, Any]) -> None:
+def _check_deprecated_tts_args(kwargs: dict[str, Any], *, caller: str = "TTS.__init__") -> None:
     """Warn about deprecated kwargs and raise on truly unknown ones."""
     for name in _DEPRECATED_TTS_KWARGS:
         if name in kwargs:
@@ -97,7 +97,7 @@ def _check_deprecated_tts_args(kwargs: dict[str, Any]) -> None:
     unknown = set(kwargs) - _DEPRECATED_TTS_KWARGS
     if unknown:
         raise TypeError(
-            f"TTS.__init__() got unexpected keyword argument(s): {', '.join(sorted(unknown))}"
+            f"{caller}() got unexpected keyword argument(s): {', '.join(sorted(unknown))}"
         )
 
 
@@ -207,7 +207,7 @@ class TTS(tts.TTS):
         model: str | None = None,
         **kwargs: Any,
     ) -> None:
-        _check_deprecated_tts_args(kwargs)
+        _check_deprecated_tts_args(kwargs, caller="TTS.update_options")
 
         if voice is not None:
             if voice not in SUPPORTED_VOICES:

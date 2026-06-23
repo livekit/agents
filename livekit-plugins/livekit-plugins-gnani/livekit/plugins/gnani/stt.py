@@ -109,7 +109,7 @@ class GnaniSTTOptions:
 _DEPRECATED_STT_KWARGS = frozenset(("organization_id", "user_id", "http_session"))
 
 
-def _check_deprecated_args(kwargs: dict[str, Any]) -> None:
+def _check_deprecated_args(kwargs: dict[str, Any], *, caller: str = "STT.__init__") -> None:
     """Warn about deprecated kwargs and raise on truly unknown ones."""
     for name in _DEPRECATED_STT_KWARGS:
         if name in kwargs:
@@ -118,7 +118,7 @@ def _check_deprecated_args(kwargs: dict[str, Any]) -> None:
     unknown = set(kwargs) - _DEPRECATED_STT_KWARGS
     if unknown:
         raise TypeError(
-            f"STT.__init__() got unexpected keyword argument(s): {', '.join(sorted(unknown))}"
+            f"{caller}() got unexpected keyword argument(s): {', '.join(sorted(unknown))}"
         )
 
 
