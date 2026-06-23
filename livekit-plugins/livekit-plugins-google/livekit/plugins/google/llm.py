@@ -50,17 +50,6 @@ def _is_gemini_3_flash_model(model: str) -> bool:
     return "gemini-3-flash" in model.lower() or model.lower().startswith("gemini-3-flash")
 
 
-def _is_gemma_thinking_model(model: str) -> bool:
-    """Check if model is a Gemma 4 (or later) thinking model.
-
-    Unlike Gemini 2.5 (thinking_budget), Gemma 4 controls reasoning via thinking_level,
-    and only ``"minimal"`` (off) and ``"high"`` (on) are valid — ``thinking_budget`` and
-    other levels return 400. Default to ``"minimal"`` so it behaves as a fast,
-    non-reasoning model unless thinking is explicitly requested.
-    """
-    return "gemma-4" in model.lower() or model.lower().startswith("gemma-4")
-
-
 def _requires_thought_signatures(model: str) -> bool:
     """Check if model requires thought_signature handling for multi-turn function calling.
 
@@ -371,19 +360,16 @@ class LLM(llm.LLM):
                 _budget = thinking_cfg.thinking_budget
                 _level = getattr(thinking_cfg, "thinking_level", None)
 
-            is_gemma_thinking = _is_gemma_thinking_model(self._opts.model)
-
-            if is_gemini_3 or is_gemma_thinking:
-                # Gemini 3 and Gemma 4: control reasoning via thinking_level, not budget.
+            if is_gemini_3:
+                # Gemini 3: only support thinking_level
                 if _budget is not None and _level is None:
                     logger.warning(
-                        f"Model {self._opts.model} does not support thinking_budget. "
-                        "Please use thinking_level instead. Ignoring thinking_budget."
+                        f"Model {self._opts.model} is Gemini 3 which does not support thinking_budget. "
+                        "Please use thinking_level ('low' or 'high') instead. Ignoring thinking_budget."
                     )
                 if _level is None:
-                    # Default to the fastest level. Gemma 4 only accepts "minimal"/"high"
-                    # (no "low"), so use "minimal" there; Gemini 3 non-flash uses "low".
-                    if is_gemma_thinking or is_gemini_3_flash:
+                    # If no thinking_level is provided, use the fastest thinking level
+                    if is_gemini_3_flash:
                         _level = "minimal"
                     else:
                         _level = "low"
