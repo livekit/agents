@@ -145,6 +145,56 @@ async def test_google_stt_stream_cancel_does_not_leak_chanclosed_task():
     assert unhandled_chanclosed == []
 
 
+async def test_google_stt_stream_cancel_waits_for_cleanup_if_cancelled_twice(monkeypatch):
+    from livekit.plugins.google import stt as google_stt
+
+    client = _FakeSpeechClient()
+    stream = SpeechStream(
+        stt=_FakeSTT(),
+        conn_options=APIConnectOptions(max_retry=0, timeout=0.1),
+        pool=_FakeConnectionPool(client),
+        recognizer_cb=lambda _client: "",
+        config=_default_stt_options(),
+    )
+    cleanup_started = asyncio.Event()
+    cleanup_release = asyncio.Event()
+    cleanup_done = asyncio.Event()
+    original_gracefully_cancel = google_stt.utils.aio.gracefully_cancel
+
+    async def delayed_input_cleanup(*tasks):
+        if any(
+            isinstance(task, asyncio.Task) and task.get_coro().__qualname__ == "Chan.recv"
+            for task in tasks
+        ):
+            cleanup_started.set()
+            try:
+                await cleanup_release.wait()
+                await original_gracefully_cancel(*tasks)
+            finally:
+                cleanup_done.set()
+            return
+
+        await original_gracefully_cancel(*tasks)
+
+    monkeypatch.setattr(google_stt.utils.aio, "gracefully_cancel", delayed_input_cleanup)
+
+    try:
+        await asyncio.wait_for(client.call_ready.wait(), timeout=1)
+        assert client.call is not None
+        await asyncio.wait_for(client.call.awaiting_audio.wait(), timeout=1)
+        await asyncio.wait_for(cleanup_started.wait(), timeout=1)
+
+        client.call.cancel()
+        await asyncio.sleep(0)
+
+        cleanup_release.set()
+        await asyncio.wait_for(cleanup_done.wait(), timeout=1)
+        await asyncio.wait_for(client.call.consumer_done.wait(), timeout=1)
+    finally:
+        cleanup_release.set()
+        await stream.aclose()
+
+
 async def test_streaming_recognize_response_to_speech_data_01():
     srr = cloud_speech_v2.StreamingRecognizeResponse(
         results=[cloud_speech_v2.StreamingRecognitionResult()]

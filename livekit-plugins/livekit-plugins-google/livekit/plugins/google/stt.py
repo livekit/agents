@@ -786,7 +786,12 @@ class SpeechStream(stt.SpeechStream):
                 tasks: list[asyncio.Task[object]] = [stop_task]
                 if frame_task is not None:
                     tasks.append(frame_task)
-                await utils.aio.gracefully_cancel(*tasks)
+                cleanup_task = asyncio.create_task(utils.aio.gracefully_cancel(*tasks))
+                try:
+                    await asyncio.shield(cleanup_task)
+                except asyncio.CancelledError:
+                    await cleanup_task
+                    raise
 
         async def process_stream(
             client: SpeechAsyncClientV2 | SpeechAsyncClientV1,
