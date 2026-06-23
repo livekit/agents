@@ -205,7 +205,10 @@ class TTS(tts.TTS):
         *,
         voice: str | None = None,
         model: str | None = None,
+        **kwargs: Any,
     ) -> None:
+        _check_deprecated_tts_args(kwargs)
+
         if voice is not None:
             if voice not in SUPPORTED_VOICES:
                 raise ValueError(
