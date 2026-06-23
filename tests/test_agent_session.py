@@ -24,6 +24,7 @@ from livekit.agents import (
     UserStateChangedEvent,
     function_tool,
     inference,
+    llm,
     vad,
 )
 from livekit.agents.llm import (
@@ -1705,3 +1706,53 @@ async def test_pipeline_multi_segment_interrupted() -> None:
     assert len(assistant_msgs) == 1
     assert assistant_msgs[0].interrupted is True
     assert "How are you?" not in (assistant_msgs[0].text_content or "")
+
+
+def _make_activity() -> MagicMock:
+    act = MagicMock(spec=AgentActivity)
+    act._session = MagicMock()
+    # the is_final branch upserts a chat message onto the agent's chat_ctx
+    act._agent = MagicMock()
+    return act
+
+
+def _emitted_event(act: MagicMock) -> UserInputTranscribedEvent:
+    act._session._user_input_transcribed.assert_called_once()
+    (event,) = act._session._user_input_transcribed.call_args.args
+    return event
+
+
+def test_item_id_forwarded_from_realtime_transcription() -> None:
+    """Realtime input transcription must propagate item_id onto the high-level event."""
+    act = _make_activity()
+    ev = llm.InputTranscriptionCompleted(item_id="item_123", transcript="hello", is_final=False)
+
+    AgentActivity._on_input_audio_transcription_completed(act, ev)
+
+    event = _emitted_event(act)
+    assert event.item_id == "item_123"
+    assert event.transcript == "hello"
+    assert event.is_final is False
+
+
+def test_item_id_shared_across_interim_and_final() -> None:
+    """All transcripts of one utterance share the same item_id, enabling per-utterance dedup."""
+    act = _make_activity()
+
+    AgentActivity._on_input_audio_transcription_completed(
+        act, llm.InputTranscriptionCompleted(item_id="item_abc", transcript="hel", is_final=False)
+    )
+    AgentActivity._on_input_audio_transcription_completed(
+        act,
+        llm.InputTranscriptionCompleted(item_id="item_abc", transcript="hello", is_final=True),
+    )
+
+    item_ids = {
+        call.args[0].item_id for call in act._session._user_input_transcribed.call_args_list
+    }
+    assert item_ids == {"item_abc"}
+
+
+def test_item_id_defaults_to_none() -> None:
+    """Paths without an upstream item id (STT, end-of-speech placeholder) keep item_id=None."""
+    assert UserInputTranscribedEvent(transcript="", is_final=False).item_id is None

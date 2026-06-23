@@ -317,6 +317,14 @@ class UserInputTranscribedEvent(BaseModel):
     is_final: bool
     speaker_id: str | None = None
     language: LanguageCode | None = None
+    item_id: str | None = None
+    """Stable id of the transcribed input item this transcript belongs to.
+
+    For realtime models, every interim and final ``UserInputTranscribedEvent`` of a single
+    user utterance shares the same ``item_id``, allowing consumers to correlate the partial
+    transcripts and react exactly once per utterance (e.g. render a placeholder once) without
+    dropping down to provider-specific events. ``None`` when no upstream item id is available
+    (e.g. the STT pipeline or the empty end-of-speech placeholder)."""
     created_at: float = Field(default_factory=time.time)
 
 

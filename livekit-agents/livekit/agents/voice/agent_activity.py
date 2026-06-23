@@ -1727,8 +1727,13 @@ class AgentActivity(RecognitionHooks):
             )
 
     def _on_input_audio_transcription_completed(self, ev: llm.InputTranscriptionCompleted) -> None:
+        # forward item_id so every interim/final transcript of the same utterance shares a
+        # stable id, letting consumers correlate them and dedup per-utterance on the
+        # provider-agnostic event surface (see UserInputTranscribedEvent.item_id)
         self._session._user_input_transcribed(
-            UserInputTranscribedEvent(transcript=ev.transcript, is_final=ev.is_final)
+            UserInputTranscribedEvent(
+                transcript=ev.transcript, is_final=ev.is_final, item_id=ev.item_id
+            )
         )
 
         if ev.is_final:
