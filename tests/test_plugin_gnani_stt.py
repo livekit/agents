@@ -258,7 +258,6 @@ def test_stt_stream_returns_speech_stream():
 def test_stt_stream_inherits_language():
     """STT.stream() uses the configured language."""
     from livekit.plugins.gnani import STT
-    from livekit.plugins.gnani.stt import SpeechStream
 
     stt = STT(api_key="test-key", language="hi-IN")
 

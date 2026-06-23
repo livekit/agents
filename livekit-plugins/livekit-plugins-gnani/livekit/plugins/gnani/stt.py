@@ -23,10 +23,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal
-
-GnaniSTTFormat = Literal["verbatim", "transcribe"]
 
 import aiohttp
 
@@ -46,6 +44,8 @@ from livekit.agents.utils import AudioBuffer
 from livekit.agents.utils.misc import is_given
 
 from .log import logger
+
+GnaniSTTFormat = Literal["verbatim", "transcribe"]
 
 GNANI_STT_BASE_URL = "https://api.vachana.ai"
 
@@ -279,15 +279,12 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
-        lang = language if is_given(language) else self._opts.language
+        opts = replace(self._opts)
+        if is_given(language):
+            opts.language = language
         return SpeechStream(
             stt=self,
-            opts=GnaniSTTOptions(
-                api_key=self._opts.api_key,
-                language=lang,
-                sample_rate=self._opts.sample_rate,
-                base_url=self._opts.base_url,
-            ),
+            opts=opts,
             conn_options=self._single_attempt(conn_options),
         )
 

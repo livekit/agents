@@ -227,6 +227,7 @@ def _build_payload(opts: GnaniTTSOptions, text: str) -> dict:
         "text": text,
         "voice": opts.voice,
         "model": opts.model,
+        "language": opts.language,
         "audio_config": audio_config,
     }
 
@@ -447,7 +448,6 @@ class WebSocketChunkedStream(tts.ChunkedStream):
                 close_timeout=10,
             ) as ws:
                 request_body = _build_payload(self._opts, self._input_text)
-                request_body["language"] = self._opts.language
                 await ws.send(json.dumps(request_body))
 
                 output_emitter.initialize(
@@ -559,7 +559,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                 close_timeout=10,
             ) as ws:
                 request_body = _build_payload(self._opts, full_text)
-                request_body["language"] = self._opts.language
                 await ws.send(json.dumps(request_body))
 
                 self._mark_started()
