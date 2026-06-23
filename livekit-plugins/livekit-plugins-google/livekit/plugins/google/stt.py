@@ -524,7 +524,8 @@ class STT(stt.STT):
                     "Both 'adaptation' and 'keywords' are set; 'keywords' will be ignored."
                 )
             self._user_keywords = list(keywords)
-            self._config.keywords = keywords
+            # re-merge with the active session keyterms so a user update doesn't drop them
+            self._config.keywords = self._get_merged_keywords()
         if is_given(speech_start_timeout):
             self._config.speech_start_timeout = speech_start_timeout
         if is_given(speech_end_timeout):
@@ -555,6 +556,20 @@ class STT(stt.STT):
                 endpointing_sensitivity=endpointing_sensitivity,
             )
 
+    def _get_merged_keywords(self) -> list[tuple[str, float]]:
+        # Google biases via (phrase, boost) pairs; the session hook carries no per-term weight,
+        # so keep the user keyword boosts and bias session terms no stronger than the weakest
+        # user term (or a moderate default when the user gave none).
+        user_phrases = {phrase for phrase, _ in self._user_keywords}
+        session_boost = (
+            min(boost for _, boost in self._user_keywords)
+            if self._user_keywords
+            else _DEFAULT_KEYTERM_BOOST
+        )
+        return self._user_keywords + [
+            (term, session_boost) for term in self._session_keyterms if term not in user_phrases
+        ]
+
     def _update_session_keyterms(self, keyterms: list[str]) -> None:
         if is_given(self._config.adaptation):
             logger.warning("'adaptation' is set; ignoring keyterms update")
@@ -562,19 +577,7 @@ class STT(stt.STT):
         if keyterms == self._session_keyterms:
             return
         self._session_keyterms = list(keyterms)
-
-        # Google biases via (phrase, boost) pairs; the hook carries no per-term weight, so keep
-        # the user keyword boosts and bias session terms no stronger than the weakest user term
-        # (or a moderate default when the user gave none).
-        user_phrases = {phrase for phrase, _ in self._user_keywords}
-        session_boost = (
-            min(boost for _, boost in self._user_keywords)
-            if self._user_keywords
-            else _DEFAULT_KEYTERM_BOOST
-        )
-        merged = self._user_keywords + [
-            (term, session_boost) for term in keyterms if term not in user_phrases
-        ]
+        merged = self._get_merged_keywords()
         self._config.keywords = merged
         for stream in self._streams:
             if stream._speaking:
