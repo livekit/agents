@@ -683,6 +683,14 @@ class STT(stt.STT):
                 self._capabilities,
                 diarization=_diarization_enabled(self._opts.extra_kwargs),
             )
+            # re-merge the active session keyterms so a user extra update doesn't drop them
+            keyterm_extra = _keyterms_extra_for_model(
+                self._opts.model,
+                extra_kwargs=self._opts.extra_kwargs,
+                session_keyterms=self._session_keyterms,
+            )
+            if keyterm_extra is not None:
+                extra = {**extra, **keyterm_extra}
 
         for stream in self._streams:
             stream.update_options(model=model, language=language, extra=extra)
