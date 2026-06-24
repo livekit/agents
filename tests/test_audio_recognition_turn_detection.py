@@ -2,8 +2,9 @@
 
 Recognition owns all streaming turn-detection policy: it holds the in-flight
 inference request's future (``_turn_detector_prediction_fut``), starts
-requests on VAD events only, awaits the future with the endpointing
-``min_delay`` in the eou bounce, and flushes the stream on turn commits.
+requests on VAD events only, awaits the future with the model-specific
+``prediction_timeout`` in the eou bounce, and flushes the stream on turn
+commits.
 Covered here:
 
 1. The speaking-guard race in ``_run_eou_detection``: setting
@@ -78,6 +79,7 @@ def _make_full_recognition_for_eou() -> AudioRecognition:
     stream_mock.predict = MagicMock(side_effect=asyncio.Future)
     stream_mock.flush = MagicMock()
     stream_mock.cancel_inference = MagicMock()
+    stream_mock.prediction_timeout = 0.01
     ar._turn_detector_stream = stream_mock
     ar._turn_detector_prediction_fut = None
     ar._turn_detector_flushed = False
@@ -592,10 +594,10 @@ class TestPredictionFutureLifecycle:
         assert len(flush_warnings) == 1
 
     async def test_predict_timeout_signals_fallback_and_drops_future(self) -> None:
-        """A pending future timing out at ``min_delay`` commits without a
-        prediction — no synthetic emission, no threshold lookup — and reports
-        the timeout to the stream (first one promotes the cloud→local
-        fallback)."""
+        """A pending future timing out at the model-specific
+        ``prediction_timeout`` commits without a prediction — no synthetic
+        emission, no threshold lookup — and reports the timeout to the stream
+        (first one promotes the cloud→local fallback)."""
         ar = _make_full_recognition_for_eou()
         ar._turn_detector_prediction_fut = asyncio.Future()
         chat_ctx = _make_chat_ctx_stub()
