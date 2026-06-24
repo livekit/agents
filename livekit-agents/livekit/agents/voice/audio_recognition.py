@@ -154,10 +154,7 @@ class _STTPipeline:
         self._event_ch = aio.Chan[stt.SpeechEvent]()
         self._pump_task = asyncio.create_task(self._stt_pump())
         self._pump_task.add_done_callback(lambda _: self._event_ch.close())
-        # wall-clock anchor for this stream's `end_time=0`; lives on the pipeline so it
-        # survives agent handoff together with the stream it describes. Resetting it on a
-        # reused pipeline would desync STT `end_time` (relative to the original stream
-        # start) from wall clock, pushing the derived speaking time far into the future.
+        # wall-clock anchor for this stream, used in STT driven timestamps and barge-in
         self.input_started_at: float | None = None
 
     @property
@@ -333,7 +330,6 @@ class AudioRecognition:
 
     @property
     def _input_started_at(self) -> float | None:
-        # anchored on the STT pipeline so it survives handoff alongside its stream
         return self._stt_pipeline.input_started_at if self._stt_pipeline is not None else None
 
     @_input_started_at.setter
@@ -727,9 +723,7 @@ class AudioRecognition:
                 )
             )
             self._stt_pipeline = pipeline
-            # reset interruption handling related state. the input anchor lives on the
-            # pipeline (None on a fresh one, carried over on a reused one), so it is not
-            # reset here.
+            # reset interruption handling related state
             self._transcript_buffer.clear()
             self._ignore_user_transcript_until = NOT_GIVEN
         else:
