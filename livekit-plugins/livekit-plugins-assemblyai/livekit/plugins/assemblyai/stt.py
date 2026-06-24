@@ -190,8 +190,8 @@ class STT(stt.STT):
             ),
         )
         if model == "u3-pro":
-            logger.warning("'u3-pro' is deprecated, use 'u3-rt-pro' instead.")
-            model = "u3-rt-pro"
+            logger.warning("'u3-pro' is deprecated, use 'universal-3-5-pro' instead.")
+            model = "universal-3-5-pro"
 
         # These parameters are only supported by the Universal-3 Pro family of models.
         if model not in _U3_PRO_MODELS:

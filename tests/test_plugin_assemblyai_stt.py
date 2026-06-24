@@ -221,12 +221,26 @@ async def test_continuous_partials_requires_u3_rt_pro():
 
 
 async def test_continuous_partials_with_u3_pro_alias():
-    """Test continuous_partials works with the deprecated 'u3-pro' alias (rewritten to u3-rt-pro)."""
+    """continuous_partials works with the deprecated 'u3-pro' alias (rewritten to
+    universal-3-5-pro)."""
     from livekit.plugins.assemblyai import STT
 
     stt = STT(api_key="test-key", model="u3-pro", continuous_partials=True)
     assert stt._opts.continuous_partials is True
-    assert stt._opts.speech_model == "u3-rt-pro"
+    assert stt._opts.speech_model == "universal-3-5-pro"
+
+
+async def test_u3_pro_deprecated_rewrites_to_universal_3_5_pro():
+    """The deprecated 'u3-pro' alias warns and is rewritten to the recommended
+    default model 'universal-3-5-pro'."""
+    from livekit.plugins.assemblyai import STT
+
+    with patch("livekit.plugins.assemblyai.stt.logger") as mock_logger:
+        stt = STT(api_key="test-key", model="u3-pro")
+
+    assert stt._opts.speech_model == "universal-3-5-pro"
+    mock_logger.warning.assert_called_once()
+    assert "universal-3-5-pro" in mock_logger.warning.call_args.args[0]
 
 
 async def test_continuous_partials_update():
