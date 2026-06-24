@@ -83,6 +83,7 @@ session = AgentSession(
 - [`background_audio.py`](./background_audio.py) - Playing background audio or ambient sounds during conversations
 - [`push_to_talk.py`](./push_to_talk.py) - Push-to-talk interaction
 - [`tts_text_pacing.py`](./tts_text_pacing.py) - Pacing control for TTS requests
+- [`google_gemini_tts.py`](./google_gemini_tts.py) - Gemini native TTS with streaming audio synthesis
 - [`speaker_id_multi_speaker.py`](./speaker_id_multi_speaker.py) - Multi-speaker identification
 
 ### 📊 Tracing & Error Handling

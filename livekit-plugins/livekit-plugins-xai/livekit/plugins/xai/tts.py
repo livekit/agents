@@ -51,6 +51,9 @@ class _TTSOptions:
     voice: GrokVoices | str
     language: TTSLanguages | str
     tokenizer: tokenize.WordTokenizer
+    optimize_streaming_latency: NotGivenOr[int]
+    speed: NotGivenOr[float]
+    text_normalization: NotGivenOr[bool]
 
 
 class TTS(tts.TTS):
@@ -60,6 +63,9 @@ class TTS(tts.TTS):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         voice: GrokVoices | str = DEFAULT_VOICE,
         language: TTSLanguages | str = "auto",
+        optimize_streaming_latency: NotGivenOr[int] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
+        text_normalization: NotGivenOr[bool] = NOT_GIVEN,
         tokenizer: tokenize.WordTokenizer | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
@@ -71,6 +77,9 @@ class TTS(tts.TTS):
         Args:
             voice (str, optional): The voice ID for the desired voice. Defaults to "ara".
             language (TTSLanguages | str, optional): Language code for synthesis (e.g., "en", "fr", "ja"). Defaults to "auto".
+            optimize_streaming_latency (int, optional): Latency optimization level for the xAI TTS websocket.
+            speed (float, optional): Speaking-rate multiplier for the generated audio.
+            text_normalization (bool, optional): Whether to normalize text before synthesis.
             api_key (str | None, optional): The xAI API key. If not provided, it will be read from the xAI environment variable.
             http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
         """  # noqa: E501
@@ -93,6 +102,9 @@ class TTS(tts.TTS):
             voice=voice,
             language=language,
             tokenizer=tokenizer,
+            optimize_streaming_latency=optimize_streaming_latency,
+            speed=speed,
+            text_normalization=text_normalization,
         )
 
         self._session = http_session
@@ -106,13 +118,22 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "xAI"
 
-    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
-        params = {
-            "voice": self._opts.voice,
-            "language": self._opts.language,
+    async def _connect_ws(
+        self, timeout: float, opts: _TTSOptions
+    ) -> aiohttp.ClientWebSocketResponse:
+        params: dict[str, str | int | float] = {
+            "voice": opts.voice,
+            "language": opts.language,
             "codec": "pcm",
             "sample_rate": SAMPLE_RATE,
         }
+        if is_given(opts.optimize_streaming_latency):
+            params["optimize_streaming_latency"] = opts.optimize_streaming_latency
+        if is_given(opts.speed):
+            params["speed"] = opts.speed
+        if is_given(opts.text_normalization):
+            params["text_normalization"] = str(opts.text_normalization).lower()
+
         url = f"{XAI_WEBSOCKET_URL}?{urlencode(params)}"
         try:
             ws = await asyncio.wait_for(
@@ -143,6 +164,9 @@ class TTS(tts.TTS):
         *,
         voice: str | None = None,
         language: TTSLanguages | str | None = None,
+        optimize_streaming_latency: NotGivenOr[int] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
+        text_normalization: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         """
         Update the Text-to-Speech (TTS) configuration options.
@@ -150,9 +174,18 @@ class TTS(tts.TTS):
         Args:
             voice (str, optional): The voice ID for the desired voice.
             language (TTSLanguages | str, optional): Language code for synthesis (e.g., "en", "fr", "ja").
+            optimize_streaming_latency (int, optional): Latency optimization level for the xAI TTS websocket.
+            speed (float, optional): Speaking-rate multiplier for the generated audio.
+            text_normalization (bool, optional): Whether to normalize text before synthesis.
         """  # noqa: E501
         self._opts.voice = voice or self._opts.voice
         self._opts.language = language or self._opts.language
+        if is_given(optimize_streaming_latency):
+            self._opts.optimize_streaming_latency = optimize_streaming_latency
+        if is_given(speed):
+            self._opts.speed = speed
+        if is_given(text_normalization):
+            self._opts.text_normalization = text_normalization
 
     def synthesize(
         self,
@@ -290,7 +323,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 else:
                     logger.warning("Unexpected xAI message %s", data)
 
-        ws = await self._tts._connect_ws(self._conn_options.timeout)
+        ws = await self._tts._connect_ws(self._conn_options.timeout, self._opts)
         tasks = [
             asyncio.create_task(_send_task(ws)),
             asyncio.create_task(_recv_task(ws)),

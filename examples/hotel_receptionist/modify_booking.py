@@ -11,6 +11,7 @@ from hotel_db import (
     RoomExtra,
     RoomType,
     Unavailable,
+    speak_usd,
 )
 from persona import COMMON_INSTRUCTIONS
 from pydantic import Field
@@ -21,7 +22,7 @@ from livekit.agents.llm.tool_context import ToolError, ToolFlag, function_tool
 from livekit.agents.voice.agent import AgentTask
 
 _MODIFY_INSTRUCTIONS = """\
-You're modifying an existing room booking. The caller has been verified and the booking is loaded - dates, room, extras, and party size are pre-filled with the current values. Your job is to apply ONLY the changes the caller asks for, then call confirm().
+You're modifying an existing room booking. The caller has been verified and the booking is loaded - dates, room, extras, and party size are pre-filled with the current values. Your job is to apply ONLY the changes the caller asks for, then call confirm_changes().
 
 Identity fields (name, email, phone, card) cannot be changed here. If the caller wants to change any of those, say so plainly and steer back to what this flow handles.
 
@@ -29,15 +30,15 @@ Run set_stay before choose_room when changing dates - new dates may make the cur
 
 For extras (breakfast, valet, late_checkout, pets) the caller adds and removes additively in conversation - merge their request with the current extras list and pass the full new list to choose_room.
 
-Each tool returns a short status with what's pending. When the status says all set, call confirm() - the call IS the next action, no filler turn.
+Each tool returns a short status with what's pending. When the status says all set, call confirm_changes() - the call IS the next action, no filler turn.
 
-If the caller decides they don't want to change anything after all, call give_up with a short reason and the booking stays as it was.
+If the caller decides they don't want to change anything after all - or needs anything this flow can't do (cancel the booking, a manager callback, a followup, a new booking) - call give_up with a short reason; the booking stays as it was and the right tools for their request become available again outside this flow. Your only tools here are set_stay, choose_room, confirm_changes, and give_up: a call to anything else returns an error and does NOTHING - never tell the caller something was logged, promised, or arranged after an error.
 """
 
 
 class ModifyBookingTask(AgentTask[RoomBooking]):
     """Modify a confirmed booking. Pre-fills draft state from the existing
-    booking; `set_stay` / `choose_room` mutate the draft; `confirm()` writes
+    booking; `set_stay` / `choose_room` mutate the draft; `confirm_changes()` writes
     the changes back via `HotelDB.update_booking()`. Identity fields (name,
     email, phone, card) are NOT touched."""
 
@@ -58,11 +59,23 @@ class ModifyBookingTask(AgentTask[RoomBooking]):
         self._extras: list[RoomExtra] = list(existing.extras)
         self._smoking: bool = existing.smoking
         # Set of slot names that diverge from `existing` after a tool call.
-        # `confirm()` consults this both to decide if there's anything to do
+        # `confirm_changes()` consults this both to decide if there's anything to do
         # and to produce a faithful summary of what changed.
         self._changed: set[str] = set()
+        # The model is asked to read the booking back - so the booking's actual
+        # facts must be IN its context, or it will invent dates and amounts.
+        extras = ", ".join(existing.extras) if existing.extras else "none"
+        booking_facts = (
+            f"\nThe loaded booking: {existing.first_name} {existing.last_name}, "
+            f"{existing.room_type.replace('_', ' ')}, "
+            f"check-in {existing.check_in.strftime('%A, %B %-d')}, "
+            f"check-out {existing.check_out.strftime('%A, %B %-d')}, "
+            f"{existing.guests} guest{'s' if existing.guests != 1 else ''}, "
+            f"extras: {extras}, total {speak_usd(existing.total)}. "
+            "These are the ONLY facts to read back - never invent dates or amounts."
+        )
         super().__init__(
-            instructions=f"{COMMON_INSTRUCTIONS}\n\n{_MODIFY_INSTRUCTIONS}",
+            instructions=f"{COMMON_INSTRUCTIONS}\n\n{_MODIFY_INSTRUCTIONS}{booking_facts}",
             chat_ctx=chat_ctx,
         )
 
@@ -80,7 +93,7 @@ class ModifyBookingTask(AgentTask[RoomBooking]):
         if not self._changed:
             return "draft unchanged so far - ask the caller what to update"
         parts = sorted(self._changed)
-        return f"pending changes: {', '.join(parts)} | call confirm() when the caller has nothing else to change"
+        return f"pending changes: {', '.join(parts)} | call confirm_changes() when the caller has nothing else to change"
 
     @function_tool()
     async def set_stay(
@@ -178,7 +191,7 @@ class ModifyBookingTask(AgentTask[RoomBooking]):
         return f"room updated: {room_type.replace('_', ' ')}{extras_part} | {self._status()}"
 
     @function_tool()
-    async def confirm(self) -> str | None:
+    async def confirm_changes(self) -> str | None:
         """Write the pending changes back to the booking. Call this once the
         caller has nothing more to change."""
         if not self._changed:
@@ -208,10 +221,10 @@ class ModifyBookingTask(AgentTask[RoomBooking]):
 
     @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
     async def give_up(self, reason: str) -> None:
-        """Caller no longer wants to modify the booking. Leaves the booking unchanged.
+        """End the modification flow, leaving the booking unchanged: the caller no longer wants changes, OR they need something this flow can't do (cancellation, manager callback, followup, anything else). The right tools for their request become available once this returns.
 
         Args:
-            reason: short explanation.
+            reason: short explanation (e.g. "guest wants a manager callback instead").
         """
         if not self.done():
             self.complete(self._existing)

@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import time
 import weakref
 from copy import deepcopy
 from dataclasses import dataclass
@@ -232,6 +233,8 @@ class SpeechStream(stt.SpeechStream):
 
         self._loop = asyncio.get_running_loop()
         self._reconnect_event = asyncio.Event()
+        self._audio_duration = 0.0
+        self._last_audio_duration_report_time = time.monotonic()
 
     def update_options(
         self,
@@ -280,7 +283,12 @@ class SpeechStream(stt.SpeechStream):
                 async def process_input() -> None:
                     async for input in self._input_ch:
                         if isinstance(input, rtc.AudioFrame):
+                            self._audio_duration += input.duration
+                            self._maybe_emit_recognition_usage()
                             self._stream.write(input.data.tobytes())
+                        elif isinstance(input, self._FlushSentinel):
+                            self._emit_recognition_usage()
+                    self._emit_recognition_usage()
 
                 process_input_task = asyncio.create_task(process_input())
                 wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
@@ -348,6 +356,25 @@ class SpeechStream(stt.SpeechStream):
                 stt.SpeechEvent(
                     type=stt.SpeechEventType.FINAL_TRANSCRIPT, alternatives=[final_data]
                 ),
+            )
+
+    def _maybe_emit_recognition_usage(self) -> None:
+        if time.monotonic() - self._last_audio_duration_report_time >= 5.0:
+            self._emit_recognition_usage()
+
+    def _emit_recognition_usage(self) -> None:
+        if self._audio_duration <= 0.0:
+            return
+
+        audio_duration = self._audio_duration
+        self._audio_duration = 0.0
+        self._last_audio_duration_report_time = time.monotonic()
+        with contextlib.suppress(RuntimeError):
+            self._event_ch.send_nowait(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.RECOGNITION_USAGE,
+                    recognition_usage=stt.RecognitionUsage(audio_duration=audio_duration),
+                )
             )
 
     def _on_recognizing(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
