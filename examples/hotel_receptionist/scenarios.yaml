@@ -2542,7 +2542,7 @@ scenarios:
   userdata:
     expected_state:
     - |
-      INSERT INTO do_not_disturb (code, room) VALUES ('IGNORED', '304')
+      INSERT INTO do_not_disturb (code, room_id) VALUES ('IGNORED', 'RM_304')
 
   # --- 69: Returning guest, remembered preferences (capability H1; NL)
 - label: Returning regular booking another stay

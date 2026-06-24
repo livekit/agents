@@ -52,7 +52,6 @@ class RestaurantToolsMixin:
         reservation = await BookRestaurantTask(
             db=ctx.userdata.db, chat_ctx=speech_only(self.chat_ctx)
         )
-        ctx.userdata.booked_restaurant_codes.append(reservation.code)
         return (
             f"You're set for {speak_time(reservation.time)} on "
             f"{reservation.date.strftime('%A, %B %-d')} for "
@@ -109,7 +108,6 @@ class RestaurantToolsMixin:
         if not reservation or reservation.status != "confirmed":
             raise ToolError("Couldn't find a matching confirmed reservation.")
         await ctx.userdata.db.cancel_restaurant_reservation(reservation.code)
-        ctx.userdata.cancelled_codes.append(reservation.code)
         return (
             f"Reservation for {speak_time(reservation.time)} on "
             f"{reservation.date.strftime('%A, %B %-d')} cancelled."
@@ -161,7 +159,6 @@ class RestaurantToolsMixin:
                 f"No table for a party of {new_party_size or reservation.party_size} "
                 f"at {speak_time(at_time)} on {new_date.strftime('%A, %B %-d')}."
             ) from None
-        ctx.userdata.booked_restaurant_codes.append(updated.code)
         return (
             f"Done - your reservation is now {speak_time(updated.time)} on "
             f"{updated.date.strftime('%A, %B %-d')} for "

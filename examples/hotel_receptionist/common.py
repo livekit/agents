@@ -14,9 +14,6 @@ from livekit.agents import llm
 @dataclass
 class Userdata:
     db: HotelDB
-    booked_room_codes: list[str] = field(default_factory=list)
-    booked_restaurant_codes: list[str] = field(default_factory=list)
-    cancelled_codes: list[str] = field(default_factory=list)
     # Departments already transferred to this call - guards against a duplicate transfer
     # row when the agent re-calls transfer_call after the caller's reaction.
     transferred_to: set[str] = field(default_factory=set)

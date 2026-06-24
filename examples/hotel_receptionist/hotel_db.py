@@ -820,10 +820,12 @@ class HotelDB:
     async def set_do_not_disturb(self, *, room: str) -> str:
         """Record a Do-Not-Disturb hold on a room and return a reference. The switchboard
         holds the room's calls and messages until it's lifted; emergencies override it."""
-        self._require_room(room)  # reject a mis-heard room rather than holding a phantom one
+        # Normalize to the canonical room id (and reject a mis-heard room) so storage
+        # matches every other room-referencing table regardless of how it was spoken.
+        room_id = self._require_room(room)
         code = shortuuid("DND-")
         with self.connection as conn:
-            _insert(conn, "do_not_disturb", {"code": code, "room": room})
+            _insert(conn, "do_not_disturb", {"code": code, "room_id": room_id})
         if self.on_change:
             await self.on_change()
         return code
@@ -1801,7 +1803,7 @@ CREATE TABLE IF NOT EXISTS waitlist (
 CREATE TABLE IF NOT EXISTS do_not_disturb (
     id      INTEGER PRIMARY KEY,
     code    TEXT    NOT NULL UNIQUE,
-    room    TEXT    NOT NULL,
+    room_id TEXT    NOT NULL REFERENCES hotel_rooms(id),
     status  TEXT    NOT NULL DEFAULT 'active'
 );
 

@@ -197,7 +197,6 @@ class RoomToolsMixin:
         booking = await BookRoomTask(db=ctx.userdata.db, chat_ctx=speech_only(self.chat_ctx))
         ctx.userdata.last_room_booking = booking
         ctx.userdata.caller_turns_at_last_booking = _count_caller_turns(self.session.history)
-        ctx.userdata.booked_room_codes.append(booking.code)
         logger.info("[stub] would email confirmation to %s for %s", booking.email, booking.code)
         return (
             f"You're booked. Your confirmation code is {_speak_code(booking.code)}. "
@@ -320,7 +319,6 @@ class RoomToolsMixin:
         within = (booking.check_in - TODAY).days * 24 < PRICING.cancellation_window_hours
         forfeit = booking.nightly_rate if within else 0
         await ctx.userdata.db.cancel_room_booking(booking.code)
-        ctx.userdata.cancelled_codes.append(booking.code)
         # Booking is no longer confirmed; the next tool needing a verified
         # booking should re-prompt the caller (a different reservation, or
         # they're done).
