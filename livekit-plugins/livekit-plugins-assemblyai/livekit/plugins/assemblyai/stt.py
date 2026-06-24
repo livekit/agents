@@ -175,8 +175,10 @@ class STT(stt.STT):
             mode: Accuracy/latency preset forwarded to the u3-pro model: 'min_latency'
                 (fastest time-to-text), 'balanced' (the server default, recommended for
                 voice agents), or 'max_accuracy' (highest accuracy, for scribes/post-call).
-                The model applies its own per-mode tuning; any silence, partials, or VAD
-                knobs you set explicitly still take precedence over the mode's defaults.
+                The model applies its own per-mode silence tuning. To let that tuning take
+                effect, the plugin suppresses its default 100ms min/max turn-silence windows
+                when a mode is set; values you pass explicitly for `min_turn_silence` /
+                `max_turn_silence` still take precedence over the mode's defaults.
                 Leave unset to use the server default. Only supported with the 'u3-rt-pro' /
                 'u3-rt-pro-beta-1' / 'universal-3-5-pro' models. Set at construction (connect)
                 time only.
@@ -239,8 +241,10 @@ class STT(stt.STT):
                 min_turn_silence = min_end_of_turn_silence_when_confident
 
         # we want to minimize latency as much as possible, it's ok if the phrase arrives in multiple final transcripts
-        # designed to work with LK's end of turn models
-        if not is_given(min_turn_silence):
+        # designed to work with LK's end of turn models.
+        # Skip this default when a `mode` preset is selected so the server's
+        # per-mode silence tuning governs instead of being overridden by 100.
+        if not is_given(min_turn_silence) and not is_given(mode):
             min_turn_silence = 100
 
         self._opts = STTOptions(
@@ -617,12 +621,18 @@ class SpeechStream(stt.SpeechStream):
                 await ws.close()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        # u3-rt-pro defaults: min=100, max=min (so both 100 unless overridden)
+        # u3-rt-pro defaults: min=100, max=min (so both 100 unless overridden).
+        # When a `mode` preset is selected, leave them unset (None) unless the
+        # caller set them explicitly, so the server's per-mode silence tuning is
+        # not overridden by the latency-optimized 100ms default.
         min_silence: int | None
         max_silence: int | None
         if self._opts.speech_model in _U3_PRO_MODELS:
+            default_min = None if is_given(self._opts.mode) else 100
             min_silence = (
-                self._opts.min_turn_silence if is_given(self._opts.min_turn_silence) else 100
+                self._opts.min_turn_silence
+                if is_given(self._opts.min_turn_silence)
+                else default_min
             )
             max_silence = (
                 self._opts.max_turn_silence
