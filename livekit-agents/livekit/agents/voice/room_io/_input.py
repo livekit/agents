@@ -284,7 +284,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
             num_channels=self._num_channels,
             frame_size_ms=self._frame_size_ms,
             noise_cancellation=noise_cancellation,
-            noise_cancellation_leave_open=True,
+            auto_close_noise_cancellation=False,
         )
 
     @override
