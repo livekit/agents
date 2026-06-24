@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from livekit.agents import NotGivenOr, utils
 from livekit.agents.voice import room_io
@@ -33,16 +34,12 @@ class JoinMeetingResult:
 def meeting_room_options(
     *,
     audio_output: NotGivenOr[bool] = False,
-    **kwargs: object,
+    **kwargs: Any,
 ) -> room_io.RoomOptions:
     """RoomOptions for ``AgentSession.start`` after :meth:`AvatarSession.join_meeting`.
 
     Disables LiveKit room audio I/O — meeting audio is fed via :class:`MeetingAudioInput`.
     """
-    opts: dict[str, object] = {
-        "audio_input": False,
-        **kwargs,
-    }
     if utils.is_given(audio_output):
-        opts["audio_output"] = audio_output
-    return room_io.RoomOptions(**opts)
+        return room_io.RoomOptions(audio_input=False, audio_output=audio_output, **kwargs)
+    return room_io.RoomOptions(audio_input=False, **kwargs)

@@ -99,7 +99,7 @@ async def stream_meeting_relay(
             ):
                 audio_frames = 0
                 chat_messages = 0
-                logger.info("connected to meeting relay url=%s", websocket_url)
+                logger.info("connected to meeting relay")
                 async for msg in ws:
                     if stop.is_set():
                         break
@@ -107,18 +107,12 @@ async def stream_meeting_relay(
                         audio_sink(msg.data)
                         audio_frames += 1
                         if audio_frames == 1:
-                            logger.info(
-                                "meeting relay: received first pcm audio frame url=%s",
-                                websocket_url,
-                            )
+                            logger.info("meeting relay: received first pcm audio frame")
                     elif msg.type == aiohttp.WSMsgType.TEXT and chat_sink is not None:
                         chat_sink(msg.data)
                         chat_messages += 1
                         if chat_messages == 1:
-                            logger.info(
-                                "meeting relay: received first chat message url=%s",
-                                websocket_url,
-                            )
+                            logger.info("meeting relay: received first chat message")
                     elif msg.type in (
                         aiohttp.WSMsgType.CLOSE,
                         aiohttp.WSMsgType.CLOSED,

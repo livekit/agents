@@ -203,6 +203,8 @@ class AvatarSession(BaseAvatarSession):
         """
         if not self._session_id or self._agent_session is None or not self._livekit_url:
             raise LemonSliceException("call start() before join_meeting()")
+        if self._meeting_bot_id is not None:
+            raise LemonSliceException("already joined a meeting; call leave_meeting() first")
 
         broadcast_token = self._mint_broadcast_token()
 
@@ -244,8 +246,10 @@ class AvatarSession(BaseAvatarSession):
         return result
 
     async def aclose(self) -> None:
-        await self.leave_meeting()
-        await super().aclose()
+        try:
+            await self.leave_meeting()
+        finally:
+            await super().aclose()
 
     async def leave_meeting(self) -> None:
         """Leave the external meeting and stop the audio/chat relay."""
@@ -254,8 +258,6 @@ class AvatarSession(BaseAvatarSession):
         if not meeting_bot_id or not session_id:
             return
 
-        self._meeting_bot_id = None
-
         async with LemonSliceAPI(
             api_url=self._api_url,
             api_key=self._api_key,
@@ -263,6 +265,8 @@ class AvatarSession(BaseAvatarSession):
             session=self._http_session,
         ) as lemonslice_api:
             await lemonslice_api.leave_meeting(session_id, meeting_bot_id=meeting_bot_id)
+
+        self._meeting_bot_id = None
 
         if self._meeting_relay_stop is not None:
             self._meeting_relay_stop.set()

@@ -64,7 +64,7 @@ class MeetingChatRelay:
                 logger.warning("meeting chat relay: generate_reply failed", exc_info=True)
 
     async def _wait_for_session_started(self) -> None:
-        while not self._session._started:
+        while self._session.agent_state == "initializing":
             await asyncio.sleep(0.05)
 
     def start(self) -> None:
