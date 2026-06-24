@@ -17,6 +17,7 @@ from livekit.agents import (
 )
 
 from .log import logger
+from .meeting import JoinMeetingResult
 
 
 class LemonSliceException(Exception):
@@ -126,7 +127,51 @@ class LemonSliceAPI:
         logger.debug(f"LemonSlice Session ID = {session_id}")
         return session_id  # type: ignore
 
-    async def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
+    async def join_meeting(
+        self,
+        session_id: str,
+        *,
+        meeting_url: str,
+        livekit_url: str,
+        broadcast_token: str,
+        bot_name: NotGivenOr[str] = NOT_GIVEN,
+    ) -> JoinMeetingResult:
+        """Add an active avatar session to an external video meeting platform.
+
+        Supports Zoom, Google Meet, and Microsoft Teams via ``meeting_url``.
+
+        After this returns, pass :meth:`AvatarSession.room_options` to ``AgentSession.start``.
+        """
+        payload: dict[str, Any] = {
+            "session_id": session_id,
+            "meeting_url": meeting_url,
+            "livekit_url": livekit_url,
+            "broadcast_token": broadcast_token,
+        }
+        if utils.is_given(bot_name) and bot_name:
+            payload["bot_name"] = bot_name
+
+        url = f"{self._api_url.rstrip('/')}/{session_id}/join-meeting"
+        data = await self._post(payload, url=url)
+        return JoinMeetingResult(
+            agent_audio_websocket_url=str(data["agent_audio"]["websocket_url"]),
+            meeting_bot_id=str(data["meeting_bot_id"]),
+        )
+
+    async def leave_meeting(
+        self,
+        session_id: str,
+        *,
+        meeting_bot_id: str,
+    ) -> None:
+        """Remove avatar from the external meeting."""
+        url = f"{self._api_url.rstrip('/')}/{session_id}/leave-meeting"
+        await self._post(
+            {"session_id": session_id, "meeting_bot_id": meeting_bot_id},
+            url=url,
+        )
+
+    async def _post(self, payload: dict[str, Any], *, url: str | None = None) -> dict[str, Any]:
         """
         Make a POST request to the LemonSlice API with retry logic.
 
@@ -144,7 +189,7 @@ class LemonSliceAPI:
             for i in range(self._conn_options.max_retry + 1):
                 try:
                     async with session.post(
-                        self._api_url,
+                        url or self._api_url,
                         headers={
                             "Content-Type": "application/json",
                             "X-API-Key": self._api_key,

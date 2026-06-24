@@ -22,3 +22,7 @@ export LIVEKIT_URL="..."
 ```bash
 python examples/avatar_agents/lemonslice/agent_worker.py dev
 ```
+
+## External meetings
+
+The provided worker script also demonstrates how to send your LemonSlice avatar into a third-party video meeting platform like Zoom, Google Meet, or Microsoft Teams.

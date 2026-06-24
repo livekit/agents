@@ -19,11 +19,14 @@ See https://docs.livekit.io/agents/models/avatar/plugins/lemonslice/ for more in
 
 from .api import LemonSliceException
 from .avatar import AvatarSession
+from .meeting import JoinMeetingResult, meeting_room_options
 from .version import __version__
 
 __all__ = [
     "LemonSliceException",
     "AvatarSession",
+    "JoinMeetingResult",
+    "meeting_room_options",
     "__version__",
 ]
 
