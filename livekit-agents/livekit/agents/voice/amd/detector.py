@@ -1,27 +1,28 @@
 from __future__ import annotations
 
 import asyncio
-import os
+from collections.abc import Callable
 from types import TracebackType
-from typing import TYPE_CHECKING, Literal, TypedDict
+from typing import TYPE_CHECKING, Literal, TypedDict, cast
 
 from opentelemetry import trace
 
 from livekit import rtc
 
+from ..._exceptions import APIError
 from ...inference import LLM as _InferenceLLM, STT as _InferenceSTT, LLMModels
 from ...job import get_job_context
-from ...llm import LLM as _LLM
+from ...llm import LLM as _LLM, RealtimeModel as _RealtimeModel
 from ...log import logger
 from ...stt import STT as _STT
 from ...telemetry import trace_types, tracer
 from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import EventEmitter, aio, is_given
-from ...utils.misc import is_cloud
 from ...utils.participant import (
     wait_for_participant_attribute,
     wait_for_track_publication,
 )
+from ..speech_handle import SpeechHandle
 from .classifier import (
     AMD_PROMPT,
     HUMAN_SILENCE_THRESHOLD,
@@ -65,6 +66,14 @@ EVALUATED_STT_MODELS: set[str] = {
 _SIP_CALL_STATUS_ATTR = "sip.callStatus"
 _SIP_CALL_STATUS_ACTIVE = "active"
 
+# A predefined AMD response: a literal string spoken via ``session.say``, or a callable
+# invoked with the triggering prediction that returns a string (spoken), a SpeechHandle
+# (the caller drove its own say/generate_reply), or None to skip playout. Mirrors the
+# ``with_filler`` source shape.
+_AMDMessage = str | Callable[[AMDPredictionEvent], SpeechHandle | str | None]
+
+_MessagePlayback = Literal["played", "interrupted", "not_played"]
+
 
 class DetectionOptions(TypedDict, total=False):
     human_speech_threshold: float
@@ -95,6 +104,8 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
 
     - ``human``: a real person answered.
     - ``machine-ivr``: an IVR / DTMF menu prompt was detected.
+    - ``machine-screening``: a call-screening prompt asking the caller to identify
+      themselves before being connected.
     - ``machine-vm``: a voicemail greeting where leaving a message is possible.
     - ``machine-unavailable``: the mailbox is full or not set up; leaving a message is not possible.
     - ``uncertain``: the transcript is ambiguous and could not be classified.
@@ -109,9 +120,17 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
     "active"`` so pre-answer audio (ringback, carrier early media, dialtone)
     does not poison the classifier or burn the no-speech budget.
 
+    Call screening is handled internally: when a ``machine-screening`` prompt is detected
+    AMD auto-plays ``screening_message`` and keeps listening for the next greeting; when a
+    voicemail is detected it auto-plays ``voicemail_message``. If no ``screening_message``
+    was provided, ``machine-screening`` is returned as the terminal verdict (AMD can't
+    advance the prompt). Otherwise only the terminal verdict (``human`` / ``machine-vm`` /
+    ``machine-unavailable`` / ``uncertain``) is surfaced — ``execute()`` returns it once,
+    carrying ``screening_detected`` and ``message_playback``.
+
     The recommended pattern is the async context manager::
 
-        async with AMD(session, llm="openai/gpt-4.1-mini") as detector:
+        async with AMD(session, stt="cartesia/ink-whisper") as detector:
             await ctx.api.sip.create_sip_participant(...)
             await ctx.wait_for_participant(identity=participant_identity)
             result = await detector.execute()
@@ -119,12 +138,8 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
     Args:
         session: The :class:`AgentSession` to wire AMD to.
         llm: LLM used for greeting classification. Accepts an :class:`LLM`
-            instance or an inference model string (e.g.
-            ``"openai/gpt-4.1-mini"``). When omitted, AMD auto-selects:
-            if LiveKit inference credentials are available in the environment
-            it uses ``"google/gemini-3.1-flash-lite"`` via the
-            inference gateway; otherwise it falls back to the session's own
-            LLM.
+            instance or an inference model string (e.g. ``"openai/gpt-4.1-mini"``).
+            When omitted, AMD reuses the session's own LLM (``session.llm``).
         interrupt_on_machine: If ``True`` (default), interrupt any pending
             agent speech immediately when a machine is detected.
         ivr_detection: If ``True`` (default), automatically start IVR
@@ -133,11 +148,17 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             audio track. If omitted, the first remote audio track wins and
             the publisher is resolved from the track sid.
         stt: STT used for transcript generation. Accepts an :class:`STT`
-            instance or an inference model string (e.g.
-            ``"cartesia/ink-whisper"``). When omitted, AMD auto-selects:
-            if LiveKit inference credentials are available it uses
-            ``"cartesia/ink-whisper"`` via the inference gateway; otherwise
-            it reuses the session's existing STT transcripts.
+            instance or an inference model string (e.g. ``"cartesia/ink-whisper"``).
+            When omitted, AMD reuses the session's existing STT transcripts (no
+            dedicated stream). Pass ``"cartesia/ink-whisper"`` for the dedicated,
+            AMD-tuned model.
+        screening_message: Response played when a ``machine-screening`` prompt is
+            detected. A literal string (spoken via ``session.say``) or a callable
+            ``(prediction) -> SpeechHandle | str | None`` (return ``None`` to skip).
+            When omitted, a ``machine-screening`` prompt is returned as the terminal
+            verdict instead of being responded to.
+        voicemail_message: Message played when a voicemail is detected. Same shape as
+            ``screening_message``.
         suppress_compatibility_warning: If ``True``, do not log a warning when
             the resolved STT or LLM is not among the bundled AMD-tested model
             strings. Has no effect on classification behavior.
@@ -154,9 +175,6 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             Defaults to ``False``.
     """
 
-    _DEFAULT_LLM_MODEL: str = "google/gemini-3.1-flash-lite"
-    _DEFAULT_STT_MODEL: str = "cartesia/ink-whisper"
-
     def __init__(
         self,
         session: AgentSession,
@@ -166,24 +184,13 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         interrupt_on_machine: bool = True,
         ivr_detection: bool = True,
         participant_identity: NotGivenOr[str] = NOT_GIVEN,
+        screening_message: NotGivenOr[_AMDMessage] = NOT_GIVEN,
+        voicemail_message: NotGivenOr[_AMDMessage] = NOT_GIVEN,
         suppress_compatibility_warning: bool = False,
         detection_options: NotGivenOr[DetectionOptions] = NOT_GIVEN,
         wait_until_finished: bool = False,
     ) -> None:
         super().__init__()
-
-        if not is_given(llm) or not is_given(stt):
-            api_key = os.getenv("LIVEKIT_INFERENCE_API_KEY") or os.getenv("LIVEKIT_API_KEY")
-            api_secret = os.getenv("LIVEKIT_INFERENCE_API_SECRET") or os.getenv(
-                "LIVEKIT_API_SECRET"
-            )
-            auto_select = (
-                is_cloud(os.getenv("LIVEKIT_URL", "")) and bool(api_key) and bool(api_secret)
-            )
-            if not is_given(llm):
-                llm = self._DEFAULT_LLM_MODEL if auto_select else NOT_GIVEN
-            if not is_given(stt):
-                stt = self._DEFAULT_STT_MODEL if auto_select else NOT_GIVEN
 
         self._llm_config: NotGivenOr[LLM | LLMModels | str] = llm
         self._session: AgentSession = session
@@ -192,10 +199,15 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         self._wait_until_finished = wait_until_finished
         self._suppress_compatibility_warning = suppress_compatibility_warning
         self._participant_identity: NotGivenOr[str] = participant_identity
+        self._screening_message = screening_message
+        self._voicemail_message = voicemail_message
         self._stt: NotGivenOr[_STT] = _InferenceSTT(stt) if isinstance(stt, str) else stt
 
         self._classifier: _AMDClassifier | None = None
         self._result: AMDPredictionEvent | None = None
+        self._screening_detected = False
+        self._last_playback: _MessagePlayback = "not_played"
+        self._terminal_ready = asyncio.Event()
         self._closed = False
         self._span: trace.Span | None = None
 
@@ -205,16 +217,12 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             else _DEFAULT_DETECTION_OPTIONS
         )
 
-        if not self._suppress_compatibility_warning:
-            if is_given(self._stt):
-                _warn_if_not_evaluated(
-                    self._stt.model,
-                    EVALUATED_STT_MODELS,
-                    model_kind="stt",
-                )
+        if not self._suppress_compatibility_warning and is_given(self._stt):
+            _warn_if_not_evaluated(self._stt.model, EVALUATED_STT_MODELS, model_kind="stt")
 
         self._setup_task: asyncio.Task[None] | None = None
         self._sip_answer_task: asyncio.Task[None] | None = None
+        self._loop_task: asyncio.Task[None] | None = None
         self._audio_ch: aio.Chan[rtc.AudioFrame] | None = None
 
     @property
@@ -230,58 +238,46 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         return self._classifier is not None and self._classifier.listening
 
     async def execute(self) -> AMDPredictionEvent:
-        """Run AMD and return the result.
+        """Run AMD and return the terminal result.
 
-        While executing, speech playout authorization is locked. Once the
-        result is available, authorization is resumed and automatic actions
-        (interrupt on machine, ivr detection) are applied based on the
-        configured options.
+        While executing, speech playout authorization is locked (except while AMD plays a
+        screening / voicemail message). Screening and IVR turns are driven internally; this
+        returns once a terminal verdict (``human`` / ``machine-vm`` / ``machine-unavailable``
+        / ``uncertain``) is reached, then resumes authorization so the agent can speak.
         """
-        if self._classifier:
-            await self._classifier._verdict_ready.wait()
+        await self._terminal_ready.wait()
 
         if not self._result:
             raise RuntimeError("amd closed before a result was available")
 
-        result = self._result
-
-        if result.is_machine and self._interrupt_on_machine:
-            await self._session.interrupt(force=True)
-
-        if result.category == AMDCategory.MACHINE_IVR and self._ivr_detection:
-            await self._session._start_ivr_detection(
-                transcript=result.transcript,
-            )
-
-        # eagerly resume so agent can speak immediately to a human
+        # eagerly resume so the agent can speak immediately to a human
         if self._session._activity:
             self._session._activity._resume_authorization()
 
-        return result
+        return self._result
 
     def _on_end_of_turn(self, info: _EndOfTurnInfo) -> bool:
-        """Forward EOT to the classifier and signal whether AMD is consuming
-        this turn so the agent activity should skip the normal reply pipeline.
+        """Forward EOT to the classifier and signal whether AMD is taking over this turn.
 
-        Returns ``True`` when AMD has decided this is a machine and the caller
-        asked us to take over via ``interrupt_on_machine``; the caller is
-        expected to drive its own ``generate_reply`` (e.g. leaving a voicemail)
-        and the auto-reply triggered by user-turn completion would otherwise
-        race with it.
+        Returns ``True`` only when AMD is handling the turn itself — a machine verdict
+        (screening / ivr / voicemail / unavailable) under ``interrupt_on_machine`` — so the
+        agent's auto-reply does not race AMD's interrupt or message playout. Human and
+        uncertain turns are left to the session's normal behavior; whether the agent replies
+        (or the caller drives a reply after ``execute()``) is the caller's decision, not ours.
+
+        Reads the *current* per-turn verdict (``_verdict_result``), not the terminal
+        ``self._result`` — during an internal screening turn the terminal result isn't set
+        yet, but the screening verdict is, which is exactly the turn we must consume.
         """
         if self._closed or not self._classifier:
             return False
         self._classifier.on_end_of_turn()
-        if not (
-            self._interrupt_on_machine and self._result is not None and self._result.is_machine
-        ):
+        verdict = self._classifier._verdict_result
+        if not (self._interrupt_on_machine and verdict is not None and verdict.is_machine):
             return False
         logger.debug(
-            "skipping auto reply: AMD already returned a machine verdict",
-            extra={
-                "category": self._result.category.value,
-                "transcript": info.new_transcript,
-            },
+            "skipping auto reply: AMD is handling a machine turn",
+            extra={"category": verdict.category.value, "transcript": info.new_transcript},
         )
         return True
 
@@ -322,17 +318,22 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             return
         self._closed = True
 
-        pending = [t for t in (self._sip_answer_task, self._setup_task) if t is not None]
+        # unblock execute() if we're torn down before reaching a terminal verdict
+        self._terminal_ready.set()
+
+        pending = [
+            t for t in (self._sip_answer_task, self._setup_task, self._loop_task) if t is not None
+        ]
         if pending:
             await aio.cancel_and_wait(*pending)
         self._sip_answer_task = None
         self._setup_task = None
+        self._loop_task = None
 
         if self._audio_ch and not self._audio_ch.closed:
             self._audio_ch.close()
 
         if self._classifier:
-            self._classifier.off("amd_prediction", self._on_amd_prediction)
             await self._classifier.close()
             self._classifier = None
 
@@ -358,9 +359,11 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             raise ValueError(
                 "AMD classifier could not be resolved, please provide a compatible model"
             )
-        self._classifier.on("amd_prediction", self._on_amd_prediction)
         self._closed = False
         self._result = None
+        self._screening_detected = False
+        self._last_playback = "not_played"
+        self._terminal_ready.clear()
 
         if session.options.ivr_detection:
             logger.warning("session level ivr_detection will be disabled when AMD is used")
@@ -383,6 +386,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             session._activity._pause_authorization()
 
         self._setup_task = asyncio.create_task(self._setup(session), name="amd_setup")
+        self._loop_task = asyncio.create_task(self._detection_loop(), name="amd_detection_loop")
 
     async def _setup(self, session: AgentSession) -> None:
         if self._closed:
@@ -491,10 +495,131 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             ]
             try:
                 await asyncio.gather(*tasks)
+            except APIError as e:
+                # dedicated STT died silently (the push_text race already covers the case
+                # where the session STT simply beats it). Fall back one-way to the session's
+                # transcripts so detection can still proceed.
+                logger.warning(
+                    "amd: dedicated STT failed, falling back to session transcripts",
+                    extra={"error": str(e)},
+                )
+                if self._classifier:
+                    self._classifier.switch_source("stt")
             finally:
                 await aio.cancel_and_wait(*tasks)
 
-    def _on_amd_prediction(self, result: AMDPredictionEvent) -> None:
+    async def _detection_loop(self) -> None:
+        """Drive screening turns internally and surface a single terminal verdict.
+
+        ``machine-screening`` plays ``screening_message`` and keeps listening (but is
+        terminal when no ``screening_message`` was supplied — there's no way to advance the
+        prompt); ``machine-ivr`` starts IVR navigation and keeps listening. Every other
+        category (``human`` / ``machine-vm`` / ``machine-unavailable`` / ``uncertain``) is
+        terminal — a voicemail additionally plays ``voicemail_message`` before finishing.
+        Only the continue paths need an active prompt/menu to recur, so the loop terminates
+        without a turn cap.
+        """
+        classifier = self._classifier
+        if classifier is None:
+            return
+        try:
+            while not self._closed:
+                await classifier._verdict_ready.wait()
+                if self._closed:
+                    return
+                verdict = classifier._verdict_result
+                if verdict is None:
+                    return
+
+                if verdict.category == AMDCategory.MACHINE_SCREENING:
+                    self._screening_detected = True
+                    if self._interrupt_on_machine:
+                        await self._session.interrupt(force=True)
+                    if not is_given(self._screening_message):
+                        # no way to respond to the prompt, so the screening system won't
+                        # advance — surface the screening verdict instead of looping into a
+                        # no-speech timeout.
+                        self._finish(verdict, "not_played")
+                        return
+                    # remember the screening playback so a later human verdict reports it
+                    self._last_playback = await self._play(self._screening_message, verdict)
+                    await classifier.reset()
+                    continue
+
+                if verdict.category == AMDCategory.MACHINE_IVR:
+                    if self._interrupt_on_machine:
+                        await self._session.interrupt(force=True)
+                    if self._ivr_detection:
+                        await self._session._start_ivr_detection(transcript=verdict.transcript)
+                    await classifier.reset()
+                    continue
+
+                # terminal verdict
+                if verdict.is_machine and self._interrupt_on_machine:
+                    await self._session.interrupt(force=True)
+                if verdict.category == AMDCategory.MACHINE_VM:
+                    # voicemail message is the terminal-relevant one
+                    playback = await self._play(self._voicemail_message, verdict)
+                else:
+                    # human/unavailable/uncertain: reflect the screening message if any
+                    playback = self._last_playback
+                self._finish(verdict, playback)
+                return
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("amd detection loop failed")
+            # always release execute(): a hang is worse than surfacing an error verdict.
+            if not self._terminal_ready.is_set():
+                verdict = classifier._verdict_result or AMDPredictionEvent(
+                    speech_duration=0.0,
+                    category=AMDCategory.UNCERTAIN,
+                    reason="detection_error",
+                    transcript="",
+                    delay=0.0,
+                )
+                self._finish(verdict, self._last_playback)
+
+    def _resolve_message_handle(
+        self, message: NotGivenOr[_AMDMessage], prediction: AMDPredictionEvent
+    ) -> SpeechHandle | None:
+        if not is_given(message):
+            return None
+        msg = cast(_AMDMessage, message)
+        source = msg(prediction) if callable(msg) else msg
+        if source is None:
+            return None
+        if isinstance(source, SpeechHandle):
+            return source
+        return self._session.say(source)
+
+    async def _play(
+        self, message: NotGivenOr[_AMDMessage], prediction: AMDPredictionEvent
+    ) -> _MessagePlayback:
+        """Play a predefined message, taking the floor (auth is paused during detection).
+
+        Returns ``interrupted`` if the callee barged in before playout finished.
+        """
+        if not is_given(message):
+            return "not_played"
+
+        activity = self._session._activity
+        if activity is not None:
+            activity._resume_authorization()
+        try:
+            handle = self._resolve_message_handle(message, prediction)
+            if handle is None:
+                return "not_played"
+            await handle.wait_for_playout()
+            return "interrupted" if handle.interrupted else "played"
+        finally:
+            # keep the agent quiet while AMD keeps classifying the next turn
+            if activity is not None and not self._closed:
+                activity._pause_authorization()
+
+    def _finish(self, result: AMDPredictionEvent, playback: _MessagePlayback) -> None:
+        result.screening_detected = self._screening_detected
+        result.message_playback = playback
         self._result = result
         logger.info(
             "amd prediction",
@@ -504,6 +629,8 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
                 "speech_duration": result.speech_duration,
                 "delay": result.delay,
                 "transcript": result.transcript,
+                "screening_detected": result.screening_detected,
+                "message_playback": result.message_playback,
             },
         )
         if self._classifier:
@@ -543,6 +670,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             host._on_amd_prediction(result)
 
         self.emit("amd_prediction", result)
+        self._terminal_ready.set()
 
     def _start_span(self) -> None:
         if self._span:
@@ -567,12 +695,35 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         elif (candidate := session.llm) and isinstance(candidate, _LLM):
             _llm = candidate
 
+        if (
+            _llm is None
+            and not is_given(self._llm_config)
+            and isinstance(session.llm, _RealtimeModel)
+        ):
+            raise ValueError(
+                "AMD needs a chat LLM, but the session uses a realtime model. "
+                "Pass an explicit `llm` to AMD()."
+            )
+
         if not self._suppress_compatibility_warning:
             _warn_if_not_evaluated(
                 _llm.model if _llm else None,
                 EVALUATED_LLM_MODELS,
                 model_kind="llm",
             )
+            # when reusing the session STT (no dedicated stream), warn on the active model
+            if not is_given(self._stt):
+                active_stt = (
+                    session._activity.stt
+                    if session._activity and session._activity.stt
+                    else session.stt
+                )
+                if active_stt is not None:
+                    _warn_if_not_evaluated(active_stt.model, EVALUATED_STT_MODELS, model_kind="stt")
+                else:
+                    logger.warning(
+                        "amd: no session STT to reuse; pass `stt` or configure a session STT"
+                    )
 
         if _llm:
             max_endpointing_delay = (
