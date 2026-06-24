@@ -1355,8 +1355,10 @@ class HotelDB:
         return code
 
     async def dispatch_emergency(self, *, room: str, kind: str, situation: str) -> str:
+        # A bad kind is an invalid argument, not a missing entity - keep it distinct
+        # from the room's NotFound so the tool can't misreport it as a bad room number.
         if kind not in get_args(EmergencyKind):
-            raise NotFound(f"unknown emergency kind: {kind} - options: {', '.join(get_args(EmergencyKind))}")
+            raise ValueError(f"unknown emergency kind: {kind} - options: {', '.join(get_args(EmergencyKind))}")
         room_id = self._require_room(room)
         code = shortuuid("EMG-")
         with self.connection as conn:
