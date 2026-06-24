@@ -113,6 +113,9 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
     - ``machine-unavailable``: the mailbox is full or not set up; leaving a message is not possible.
     - ``uncertain``: the transcript is ambiguous and could not be classified.
 
+    A VAD is required on the session or agent. AMD uses VAD speech events for timing.
+    ``execute()`` raises an error if the session has no VAD.
+
     Start AMD before creating the SIP participant so no audio is missed. Its
     detection timeout begins only after listening starts; SIP settings bound
     the pre-answer phase. If the call ends before audio arrives, AMD settles
@@ -364,6 +367,16 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             return
 
         self._session = session
+
+        # AMD's timing is VAD-driven (speech start/end gate the silence + endpointing
+        # budgets), and the transcript-without-VAD path assumes a VAD false-negative on a
+        # short utterance — both only hold when a VAD is present.
+        effective_vad = (session._activity.vad if session._activity else None) or session.vad
+        if effective_vad is None:
+            raise ValueError(
+                "AMD requires a VAD; configure one on the AgentSession (or the Agent)."
+            )
+
         self._classifier = self._resolve_classifier(session)
         if not self._classifier:
             raise ValueError(
