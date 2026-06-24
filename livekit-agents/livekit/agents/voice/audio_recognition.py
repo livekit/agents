@@ -154,6 +154,11 @@ class _STTPipeline:
         self._event_ch = aio.Chan[stt.SpeechEvent]()
         self._pump_task = asyncio.create_task(self._stt_pump())
         self._pump_task.add_done_callback(lambda _: self._event_ch.close())
+        # wall-clock anchor for this stream's `end_time=0`; lives on the pipeline so it
+        # survives agent handoff together with the stream it describes. Resetting it on a
+        # reused pipeline would desync STT `end_time` (relative to the original stream
+        # start) from wall clock, pushing the derived speaking time far into the future.
+        self.input_started_at: float | None = None
 
     @property
     def audio_ch(self) -> aio.Chan[rtc.AudioFrame]:
@@ -253,7 +258,6 @@ class AudioRecognition:
         self._interruption_atask: asyncio.Task[None] | None = None
         self._interruption_detection = interruption_detection
         self._interruption_ch: aio.Chan[inference.InterruptionDataFrameType] | None = None
-        self._input_started_at: float | None = None
         self._ignore_user_transcript_until: NotGivenOr[float] = NOT_GIVEN
         self._transcript_buffer: deque[SpeechEvent] = deque()
         self._interruption_enabled: bool = interruption_detection is not None and vad is not None
@@ -326,6 +330,16 @@ class AudioRecognition:
                     if self._turn_detector_stream is not None:
                         self._turn_detector_stream.cancel_inference()
                     self._turn_detector_prediction_fut = None
+
+    @property
+    def _input_started_at(self) -> float | None:
+        # anchored on the STT pipeline so it survives handoff alongside its stream
+        return self._stt_pipeline.input_started_at if self._stt_pipeline is not None else None
+
+    @_input_started_at.setter
+    def _input_started_at(self, value: float | None) -> None:
+        if self._stt_pipeline is not None:
+            self._stt_pipeline.input_started_at = value
 
     def start(
         self,
@@ -713,10 +727,11 @@ class AudioRecognition:
                 )
             )
             self._stt_pipeline = pipeline
-            # reset interruption handling related state
+            # reset interruption handling related state. the input anchor lives on the
+            # pipeline (None on a fresh one, carried over on a reused one), so it is not
+            # reset here.
             self._transcript_buffer.clear()
             self._ignore_user_transcript_until = NOT_GIVEN
-            self._input_started_at = None
         else:
             if self._stt_consumer_atask is not None:
                 task = asyncio.create_task(aio.cancel_and_wait(self._stt_consumer_atask))
@@ -798,7 +813,6 @@ class AudioRecognition:
             )
             self._transcript_buffer.clear()
             self._ignore_user_transcript_until = NOT_GIVEN
-            self._input_started_at = None
         elif self._interruption_atask is not None:
             task = asyncio.create_task(aio.cancel_and_wait(self._interruption_atask))
             task.add_done_callback(lambda _: self._tasks.discard(task))
