@@ -196,10 +196,16 @@ class AvatarSession(BaseAvatarSession):
         meeting_url: str,
         *,
         bot_name: NotGivenOr[str] = NOT_GIVEN,
+        listen_to_meeting_chat: bool = True,
     ) -> JoinMeetingResult:
         """Send this avatar into an external video meeting (Zoom, Meet, or Teams).
 
         Call after :meth:`start` and before :meth:`room_options` / ``session.start``.
+
+        Args:
+            meeting_url: URL of the external meeting to join.
+            bot_name: Display name for the bot in the meeting.
+            listen_to_meeting_chat: When ``True`` (default), relay meeting chat messages into the agent session.
         """
         if not self._session_id or self._agent_session is None or not self._livekit_url:
             raise LemonSliceException("call start() before join_meeting()")
@@ -227,21 +233,24 @@ class AvatarSession(BaseAvatarSession):
         relay_stop = asyncio.Event()
         self._meeting_relay_stop = relay_stop
 
-        chat_relay = MeetingChatRelay(
-            self._agent_session,
-            bot_name=bot_name,
-        )
-        chat_relay.start()
+        chat_sink = None
+        if listen_to_meeting_chat:
+            chat_relay = MeetingChatRelay(
+                self._agent_session,
+                bot_name=bot_name,
+            )
+            chat_relay.start()
+            self._meeting_chat = chat_relay
+            chat_sink = chat_relay.submit_json
 
         self._meeting_relay_task = asyncio.create_task(
             stream_meeting_relay(
                 result.agent_audio_websocket_url,
                 meeting_audio.submit,
-                chat_sink=chat_relay.submit_json,
+                chat_sink=chat_sink,
                 stop=relay_stop,
             )
         )
-        self._meeting_chat = chat_relay
         self._meeting_bot_id = result.meeting_bot_id
         return result
 
