@@ -95,9 +95,16 @@ class ToolConfiguration(BaseModel):
     tools: list[Tool]
 
 
+class TurnDetectionConfiguration(BaseModel):
+    endpointingSensitivity: TURN_DETECTION
+
+
 class SessionStart(BaseModel):
     inferenceConfiguration: InferenceConfiguration
-    endpointingSensitivity: TURN_DETECTION | None = "MEDIUM"
+    # Nova Sonic 1 used a flat field; Nova Sonic 2 requires it nested under
+    # turnDetectionConfiguration. Exactly one is populated per model.
+    endpointingSensitivity: TURN_DETECTION | None = None
+    turnDetectionConfiguration: TurnDetectionConfiguration | None = None
 
 
 class InputTextContentStart(BaseModel):
@@ -227,9 +234,12 @@ class Event(BaseModel):
 
 
 class SonicEventBuilder:
-    def __init__(self, prompt_name: str, audio_content_name: str):
+    def __init__(
+        self, prompt_name: str, audio_content_name: str, model: str = "amazon.nova-2-sonic-v1:0"
+    ):
         self.prompt_name = prompt_name
         self.audio_content_name = audio_content_name
+        self._nova_sonic_2 = "nova-2-sonic" in model
 
     @classmethod
     def get_event_type(cls, json_data: dict) -> str:
@@ -366,19 +376,23 @@ class SonicEventBuilder:
         temperature: float = 0.7,
         endpointing_sensitivity: TURN_DETECTION | None = "MEDIUM",
     ) -> str:
-        event = Event(
-            event=SessionStartEvent(
-                sessionStart=SessionStart(
-                    inferenceConfiguration=InferenceConfiguration(
-                        maxTokens=max_tokens,
-                        topP=top_p,
-                        temperature=temperature,
-                    ),
-                    endpointingSensitivity=endpointing_sensitivity,
-                )
-            )
+        inference = InferenceConfiguration(
+            maxTokens=max_tokens, topP=top_p, temperature=temperature
         )
-        return event.model_dump_json(exclude_none=False)
+        if self._nova_sonic_2 and endpointing_sensitivity is not None:
+            session_start = SessionStart(
+                inferenceConfiguration=inference,
+                turnDetectionConfiguration=TurnDetectionConfiguration(
+                    endpointingSensitivity=endpointing_sensitivity
+                ),
+            )
+        else:
+            session_start = SessionStart(
+                inferenceConfiguration=inference,
+                endpointingSensitivity=endpointing_sensitivity,
+            )
+        event = Event(event=SessionStartEvent(sessionStart=session_start))
+        return event.model_dump_json(exclude_none=True)  # was exclude_none=False
 
     def create_audio_content_start_event(
         self,
