@@ -985,6 +985,9 @@ class LLM(llm.LLM):
         if is_given(self._opts.metadata):
             extra["metadata"] = self._opts.metadata
 
+        if is_given(self._opts.store):
+            extra["store"] = self._opts.store
+
         if is_given(self._opts.user):
             extra["user"] = self._opts.user
 

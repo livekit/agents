@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import pytest
 
+from livekit.agents.llm import ChatContext
 from livekit.agents.types import NOT_GIVEN
 from livekit.plugins import openai
 
@@ -65,3 +66,25 @@ def test_with_azure_request_params_default_to_not_given() -> None:
     assert opts.extra_body is NOT_GIVEN
     assert opts.extra_headers is NOT_GIVEN
     assert opts.extra_query is NOT_GIVEN
+
+
+@pytest.mark.concurrent
+async def test_store_is_forwarded_to_chat_request() -> None:
+    """``store`` set on the LLM must actually reach the chat-completions request kwargs."""
+    azure_llm = openai.LLM(api_key="test-key", store=True)
+    stream = azure_llm.chat(chat_ctx=ChatContext.empty())
+    try:
+        assert stream._extra_kwargs.get("store") is True
+    finally:
+        await stream.aclose()
+
+
+@pytest.mark.concurrent
+async def test_store_absent_from_chat_request_when_unset() -> None:
+    """When ``store`` is not set, it must not be injected into the request kwargs."""
+    azure_llm = openai.LLM(api_key="test-key")
+    stream = azure_llm.chat(chat_ctx=ChatContext.empty())
+    try:
+        assert "store" not in stream._extra_kwargs
+    finally:
+        await stream.aclose()
