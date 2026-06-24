@@ -78,7 +78,7 @@ class STTOptions:
     mode: NotGivenOr[Literal["min_latency", "balanced", "max_accuracy"]] = NOT_GIVEN
 
 
-# Speech models in the u3-rt-pro family, which share the same parameter support
+# Speech models in the Universal-3 Pro family, which share the same parameter support
 # (prompt, agent_context, previous_context_n_turns, continuous_partials,
 # interruption_delay, voice_focus, voice_focus_threshold) and connect-time
 # defaults. Mirrors the server-side `SpeechModel.is_u3_pro`.
@@ -144,44 +144,41 @@ class STT(stt.STT):
                 LiveKit; AssemblyAI server defaults to False), additional partials covering
                 the full turn transcript are emitted approximately every 3 seconds while
                 speech continues, on top of those baseline partials. Only supported with
-                the 'u3-rt-pro' / 'u3-rt-pro-beta-1' models.
+                the Universal-3 Pro family models.
             interruption_delay: How soon the first early partial is emitted, in ms.
                 Range 0–1000, default 500. Lower values produce faster time-to-first-token
                 for barge-in; higher values produce more confident first partials. Only
-                supported with the 'u3-rt-pro' / 'u3-rt-pro-beta-1' models.
+                supported with the Universal-3 Pro family models.
             agent_context: Free-text context describing what the agent said, used to bias
                 transcription of the user's reply. Set at construction or updated per-turn
                 via `update_options(agent_context=...)`. Only supported with the
-                'u3-rt-pro' / 'u3-rt-pro-beta-1' models (max 1500 characters).
+                Universal-3 Pro family models (max 1500 characters).
             previous_context_n_turns: Maximum number of prior conversation entries (user
                 transcripts and any `agent_context` values) carried forward as context for
                 each transcription. Set to 0 to disable automatic context carryover
                 entirely; leave unset to use the server default (recommended). Range 0–100.
-                Only supported with the 'u3-rt-pro' / 'u3-rt-pro-beta-1' / 'universal-3-5-pro'
-                models. Set at construction (connect) time only; it cannot be changed via
-                `update_options`.
+                Only supported with the Universal-3 Pro family models. Set at construction
+                (connect) time only; it cannot be changed via `update_options`.
             voice_focus: Voice Focus isolates the primary voice and suppresses background
                 noise (chatter, keyboard clicks, fan hum, room echo) before the audio reaches
                 the model. Use 'near-field' for headsets, handsets, and close-talking
                 microphones; use 'far-field' for conference rooms, laptop mics, and other
-                distant-mic setups. Only supported with the 'u3-rt-pro' / 'u3-rt-pro-beta-1' /
-                'universal-3-5-pro' models. Set at construction (connect) time only.
+                distant-mic setups. Only supported with the Universal-3 Pro family models.
+                Set at construction (connect) time only.
                 See https://www.assemblyai.com/docs/streaming/voice-focus.
             voice_focus_threshold: Controls how aggressively background audio is suppressed,
                 a float between 0.0 and 1.0 (higher is more aggressive). Only takes effect
-                alongside `voice_focus`. Only supported with the 'u3-rt-pro' /
-                'u3-rt-pro-beta-1' / 'universal-3-5-pro' models. Set at construction (connect)
-                time only.
-            mode: Accuracy/latency preset forwarded to the u3-pro model: 'min_latency'
+                alongside `voice_focus`. Only supported with the Universal-3 Pro family
+                models. Set at construction (connect) time only.
+            mode: Accuracy/latency preset for the Universal-3 Pro family: 'min_latency'
                 (fastest time-to-text), 'balanced' (the server default, recommended for
                 voice agents), or 'max_accuracy' (highest accuracy, for scribes/post-call).
                 The model applies its own per-mode silence tuning. To let that tuning take
                 effect, the plugin suppresses its default 100ms min/max turn-silence windows
                 when a mode is set; values you pass explicitly for `min_turn_silence` /
                 `max_turn_silence` still take precedence over the mode's defaults.
-                Leave unset to use the server default. Only supported with the 'u3-rt-pro' /
-                'u3-rt-pro-beta-1' / 'universal-3-5-pro' models. Set at construction (connect)
-                time only.
+                Leave unset to use the server default. Only supported with the Universal-3 Pro
+                family models. Set at construction (connect) time only.
         """
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -196,7 +193,7 @@ class STT(stt.STT):
             logger.warning("'u3-pro' is deprecated, use 'u3-rt-pro' instead.")
             model = "u3-rt-pro"
 
-        # These parameters are only supported by the u3-rt-pro family of models.
+        # These parameters are only supported by the Universal-3 Pro family of models.
         if model not in _U3_PRO_MODELS:
             _u3_pro_only_params = {
                 "prompt": prompt,
@@ -217,7 +214,7 @@ class STT(stt.STT):
 
         # LiveKit defaults continuous_partials to True (vs. AssemblyAI's server default of
         # False) for steady-cadence partials. This parameter is only supported for
-        # the u3-rt-pro family, enforced by the validation above.
+        # the Universal-3 Pro family, enforced by the validation above.
         if not is_given(continuous_partials) and model in _U3_PRO_MODELS:
             continuous_partials = True
 
@@ -621,7 +618,7 @@ class SpeechStream(stt.SpeechStream):
                 await ws.close()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        # u3-rt-pro defaults: min=100, max=min (so both 100 unless overridden).
+        # Universal-3 Pro family defaults: min=100, max=min (so both 100 unless overridden).
         # When a `mode` preset is selected, leave them unset (None) unless the
         # caller set them explicitly, so the server's per-mode silence tuning is
         # not overridden by the latency-optimized 100ms default.
