@@ -174,13 +174,13 @@ class _CloudTransport:
             session_create_msg.created_at.CopyFrom(created_at)
             await ws.send_bytes(session_create_msg.SerializeToString())
         except aiohttp.ClientResponseError as e:
-            raise create_api_error_from_http(e.message, status=e.status) from e
+            exc = create_api_error_from_http(e.message, status=e.status)
+            exc.retryable = False
+            raise exc from e
         except asyncio.TimeoutError as e:
-            raise APITimeoutError("turn detector connection timed out") from e
-        except aiohttp.ClientConnectorError as e:
-            raise APIConnectionError("failed to connect to turn detector") from e
+            raise APITimeoutError("turn detector connection timed out", retryable=False) from e
         except Exception as e:
-            raise APIConnectionError("failed to connect to turn detector") from e
+            raise APIConnectionError("failed to connect to turn detector", retryable=False) from e
         return ws
 
     def _warn_transport_latency(self, msg: ServerMessage) -> None:
@@ -265,6 +265,7 @@ class _CloudTransport:
                     f"{msg.error.message}",
                     status_code=msg.error.code,
                     request_id=msg.request_id,
+                    retryable=False,
                 )
             case _:
                 logger.warning("unexpected turn detector message: %s", msg.WhichOneof("message"))

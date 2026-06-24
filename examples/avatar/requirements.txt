@@ -1,4 +1,4 @@
-livekit-agents[evals]>=1.5.7
+livekit-agents[evals]>=1.6
 livekit-plugins-lemonslice>=1.5.7
 livekit-plugins-silero>=1.5.7
 livekit-plugins-turn-detector>=1.5.7

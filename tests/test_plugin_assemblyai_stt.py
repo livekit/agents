@@ -710,3 +710,102 @@ async def test_default_model_defaults_continuous_partials_true():
 
     stt = STT(api_key="test-key")
     assert stt._opts.continuous_partials is True
+
+
+# ---------------------------------------------------------------------------
+# mode (latency/accuracy preset)
+#
+# `mode` selects the u3-pro accuracy/latency tradeoff: "min_latency",
+# "balanced" (server default), or "max_accuracy". It is forwarded to the
+# u3-pro ASR server, which applies its own per-mode tuning, so it is
+# u3-rt-pro-family-only and connect-time only (not exposed via update_options,
+# matching the official AssemblyAI SDK, where `mode` lives on the connect-time
+# parameters and not on UpdateConfiguration).
+# ---------------------------------------------------------------------------
+
+
+async def test_mode_default():
+    """mode is unset by default (server default of 'balanced' applies)."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key")
+    assert stt._opts.mode is NOT_GIVEN
+
+
+async def test_mode_set():
+    """mode accepts each documented value."""
+    from livekit.plugins.assemblyai import STT
+
+    for value in ("min_latency", "balanced", "max_accuracy"):
+        stt = STT(api_key="test-key", model="u3-rt-pro", mode=value)
+        assert stt._opts.mode == value
+
+
+async def test_mode_requires_u3_pro_family():
+    """mode raises ValueError when used with a non-u3-rt-pro-family model."""
+    from livekit.plugins.assemblyai import STT
+
+    with pytest.raises(ValueError, match="mode"):
+        STT(api_key="test-key", model="universal-streaming-english", mode="max_accuracy")
+
+
+async def test_mode_allowed_for_all_u3_pro_family_models():
+    """mode is accepted for every u3-rt-pro-family model, not just the default."""
+    from livekit.plugins.assemblyai import STT
+
+    for model in ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro"):
+        stt = STT(api_key="test-key", model=model, mode="min_latency")
+        assert stt._opts.mode == "min_latency"
+
+
+async def test_mode_in_connect_config():
+    """mode is sent in the connect config query."""
+    from urllib.parse import parse_qs, urlparse
+
+    from livekit.plugins.assemblyai import STT
+
+    captured: dict = {}
+
+    async def _fake_ws_connect(url, **kwargs):
+        captured["url"] = url
+        return MagicMock()
+
+    stt = STT(api_key="test-key", model="universal-3-5-pro", mode="max_accuracy")
+    stream = _make_stream_for_unit_test(stt)
+    stream._session.ws_connect = _fake_ws_connect
+    await stream._connect_ws()
+
+    query = parse_qs(urlparse(captured["url"]).query)
+    assert query["mode"] == ["max_accuracy"]
+
+
+async def test_mode_absent_from_connect_config_when_unset():
+    """mode key is omitted from the connect config when not set."""
+    from urllib.parse import parse_qs, urlparse
+
+    from livekit.plugins.assemblyai import STT
+
+    captured: dict = {}
+
+    async def _fake_ws_connect(url, **kwargs):
+        captured["url"] = url
+        return MagicMock()
+
+    stt = STT(api_key="test-key", model="universal-3-5-pro")
+    stream = _make_stream_for_unit_test(stt)
+    stream._session.ws_connect = _fake_ws_connect
+    await stream._connect_ws()
+
+    query = parse_qs(urlparse(captured["url"]).query)
+    assert "mode" not in query
+
+
+async def test_mode_connect_time_only():
+    """mode is connect-time only — not exposed via update_options."""
+    import inspect
+
+    from livekit.plugins.assemblyai import STT
+    from livekit.plugins.assemblyai.stt import SpeechStream
+
+    assert "mode" not in inspect.signature(STT.update_options).parameters
+    assert "mode" not in inspect.signature(SpeechStream.update_options).parameters
