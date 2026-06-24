@@ -50,7 +50,7 @@ async def entrypoint(ctx: JobContext):
     )
     await avatar.start(session, room=ctx.room)
 
-    # Provide `meeting_url` as job metadatafor the avatar to join a 3rd party meeting platform (Zoom, Meet, Teams)
+    # Provide `meeting_url` in job metadata for the avatar to join a 3rd party meeting platform (Zoom, Meet, Teams)
     # If not provided, the avatar will run as a standard LiveKit room avatar
     meta = json.loads(ctx.job.metadata) if ctx.job.metadata else {}
     meeting_url = meta.get("meeting_url")
