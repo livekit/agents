@@ -240,15 +240,13 @@ async def test_input_anchor_preserved_when_pipeline_reused() -> None:
         await ar._stt_consumer_atask
 
 
-def test_input_anchor_delegates_to_pipeline() -> None:
+def test_input_anchor_reads_through_to_pipeline() -> None:
     """The anchor lives on the pipeline so it travels with the stream across handoff."""
     ar = _stub_recognition()
     assert ar._input_started_at is None  # no pipeline attached yet
 
     pipeline = object.__new__(_STTPipeline)
-    pipeline.input_started_at = None
+    pipeline.input_started_at = 1234.5
     ar._stt_pipeline = pipeline  # type: ignore[attr-defined]
 
-    ar._input_started_at = 1234.5
-    assert pipeline.input_started_at == 1234.5
-    assert ar._input_started_at == 1234.5
+    assert ar._input_started_at == 1234.5  # read-only view of the pipeline's anchor

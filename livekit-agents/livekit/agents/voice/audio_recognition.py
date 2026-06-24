@@ -332,11 +332,6 @@ class AudioRecognition:
     def _input_started_at(self) -> float | None:
         return self._stt_pipeline.input_started_at if self._stt_pipeline is not None else None
 
-    @_input_started_at.setter
-    def _input_started_at(self, value: float | None) -> None:
-        if self._stt_pipeline is not None:
-            self._stt_pipeline.input_started_at = value
-
     def start(
         self,
         *,
@@ -657,11 +652,11 @@ class AudioRecognition:
         ``frame`` (e.g. a silence substitute during AEC warmup or uninterruptible
         speech). VAD, AMD and the interruption channel always receive ``frame``.
         """
-        if self._input_started_at is None:
-            self._input_started_at = time.time() - frame.duration
-
         self._sample_rate = frame.sample_rate
         if self._stt_pipeline is not None:
+            # stamp the wall-clock anchor on the first frame to reach the pipeline
+            if self._stt_pipeline.input_started_at is None:
+                self._stt_pipeline.input_started_at = time.time() - frame.duration
             self._stt_pipeline.audio_ch.send_nowait(stt_frame if stt_frame is not None else frame)
 
         if self._vad_ch is not None:
