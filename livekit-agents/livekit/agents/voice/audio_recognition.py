@@ -575,6 +575,7 @@ class AudioRecognition:
             else []
         )
         _ignore_user_transcript_until = self._ignore_user_transcript_until
+        _input_started_at = self._input_started_at
         # reset before emitting to avoid recursive calls
         self._reset_interruption_detection()
 
@@ -585,7 +586,7 @@ class AudioRecognition:
                     0,
                     (
                         ev.alternatives[0].end_time
-                        + self._input_started_at
+                        + _input_started_at
                         - _ignore_user_transcript_until
                     )
                     + (cooldown or 0.0),
