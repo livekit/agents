@@ -218,28 +218,28 @@ async def test_record_not_given_without_job_ctx() -> None:
     await _cleanup(session)
 
 
-async def test_update_recording_options_bool() -> None:
-    """update_recording_options(bool) toggles every feature on/off."""
+async def test_update_options_record_bool() -> None:
+    """update_options(record=bool) toggles every feature on/off."""
     session = _create_simple_session()
     await session.start(SimpleAgent(), record=False)
     assert session._recording_options == _RECORDING_ALL_OFF
 
-    session.update_recording_options(True)
+    session.update_options(record=True)
     assert session._recording_options == _RECORDING_ALL_ON
     assert session.recording_options == _RECORDING_ALL_ON
 
-    session.update_recording_options(False)
+    session.update_options(record=False)
     assert session._recording_options == _RECORDING_ALL_OFF
     await _cleanup(session)
 
 
-async def test_update_recording_options_partial_merge() -> None:
+async def test_update_options_record_partial_merge() -> None:
     """A partial mapping updates only the given keys, leaving the rest unchanged."""
     session = _create_simple_session()
     await session.start(SimpleAgent(), record=True)
     assert session._recording_options == _RECORDING_ALL_ON
 
-    session.update_recording_options({"audio": False})
+    session.update_options(record={"audio": False})
     assert session._recording_options == {
         "audio": False,
         "traces": True,
@@ -247,7 +247,7 @@ async def test_update_recording_options_partial_merge() -> None:
         "transcript": True,
     }
 
-    session.update_recording_options({"transcript": False})
+    session.update_options(record={"transcript": False})
     assert session._recording_options == {
         "audio": False,
         "traces": True,

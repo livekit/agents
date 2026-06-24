@@ -549,36 +549,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def recording_options(self) -> RecordingOptions:
         """The recording options currently in effect for this session.
 
-        Returns a copy; use :meth:`update_recording_options` to change them.
+        Returns a copy; use :meth:`update_options` with ``record=`` to change them.
         """
         return self._recording_options.copy()
-
-    def update_recording_options(self, record: bool | RecordingOptions) -> None:
-        """Update which recording features (audio, traces, logs, transcript) are active.
-
-        Useful for toggling recording mid-session, for example after obtaining
-        recording consent from the user.
-
-        Args:
-            record: ``True`` to enable every feature, ``False`` to disable every
-                feature, or a :class:`RecordingOptions` mapping to update individual
-                features. Keys omitted from the mapping are left unchanged.
-
-        Note:
-            Session audio is only captured when audio recording was enabled at
-            :meth:`start`; enabling ``audio`` afterwards does not retroactively start
-            the audio recorder. Disabling features always takes effect.
-        """
-        if isinstance(record, bool):
-            options = _resolve_recording_options(record)
-        else:
-            options = self._recording_options.copy()
-            options.update(record)
-
-        if self._text_only:
-            options["audio"] = False
-
-        self._recording_options = options
 
     @property
     def input(self) -> io.AgentInput:
@@ -1123,6 +1096,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         *,
         endpointing_opts: NotGivenOr[EndpointingOptions] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
+        record: NotGivenOr[bool | RecordingOptions] = NOT_GIVEN,
         # deprecated
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
@@ -1134,6 +1108,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             endpointing_opts (NotGivenOr[EndpointingOptions], optional): Endpointing options.
             turn_detection (NotGivenOr[TurnDetectionMode | None], optional): Strategy for deciding
                 when the user has finished speaking. ``None`` reverts to automatic selection.
+            record (NotGivenOr[bool | RecordingOptions], optional): Which recording features
+                (audio, traces, logs, transcript) are active. Useful for toggling recording
+                mid-session, for example after obtaining recording consent from the user.
+                ``True`` enables every feature, ``False`` disables every feature, and a
+                :class:`RecordingOptions` mapping updates only the given keys, leaving the rest
+                unchanged. Session audio is only captured when audio recording was enabled at
+                :meth:`start`; enabling ``audio`` afterwards does not retroactively start the
+                audio recorder, while disabling always takes effect.
             min_endpointing_delay: Deprecated, use ``endpointing_opts`` instead.
             max_endpointing_delay: Deprecated, use ``endpointing_opts`` instead.
         """
@@ -1164,6 +1146,18 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         if is_given(turn_detection):
             self._turn_detection = turn_detection
+
+        if is_given(record):
+            if isinstance(record, bool):
+                options = _resolve_recording_options(record)
+            else:
+                options = self._recording_options.copy()
+                options.update(record)
+
+            if self._text_only:
+                options["audio"] = False
+
+            self._recording_options = options
 
         if self._activity is not None:
             self._activity.update_options(
