@@ -167,6 +167,7 @@ async def on_session_end(ctx: JobContext) -> None:
         "lookup_restaurant_reservation",
         "check_room_availability",
         "check_restaurant_availability",
+        "lookup_guest_history",
     }
     call_names = {
         item.call_id: item.name

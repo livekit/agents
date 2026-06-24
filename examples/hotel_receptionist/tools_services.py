@@ -519,7 +519,10 @@ class ServicesToolsMixin:
         Args:
             room: The guest's room number.
         """
-        code = await ctx.userdata.db.set_do_not_disturb(room=room)
+        try:
+            code = await ctx.userdata.db.set_do_not_disturb(room=room)
+        except NotFound:
+            raise ToolError(f"no room {room} exists - re-confirm the room number") from None
         return (
             f"Do-Not-Disturb set on room {room}; reference {_speak_code(code)} | confirm it holds "
             "their calls and messages until they ask to lift it, and that a genuine emergency "

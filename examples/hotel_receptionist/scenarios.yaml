@@ -1008,25 +1008,30 @@ scenarios:
     difficulty: "3"
 
   # --- 28: Modify an existing restaurant reservation (deterministic: time shift)
-- label: Move a dinner reservation earlier
+- label: Move a dinner reservation - caller first names a past date
   instructions: |
-    PERSONA: Marcus Bennett, an easygoing guest whose dinner party can now arrive sooner than planned. You already have a table booked with the restaurant tonight and just want to shift it earlier the same evening.
-    OPENING LINE: "Hi - I have a dinner reservation tonight and I'd like to move it to an earlier time, same evening."
+    PERSONA: Marcus Bennett, an easygoing guest who needs to push his dinner reservation to a different night. You're glancing at a calendar and at first you read off the wrong week, landing on a date that has already passed - you don't realize it's in the past until the agent points it out.
+    OPENING LINE: "Hi - I've got a dinner reservation and I need to move it to a different night."
     FACTS (reveal each only when asked, one per turn):
     - last name: Bennett. Spell it B-E-N-N-E-T-T only if asked.
     - the reservation confirmation code: "RES-J-K-9-0" (give the whole thing including the RES)
-    - the new time you want: six o'clock this evening (6:00 PM)
-    - it's still the same party of four, same night (reveal only if asked)
+    - the new date you THINK you want, at first: "the thirtieth of May" (this is in the past)
+    - the time you want: seven o'clock in the evening (7:00 PM)
+    - it's still the same party of four (reveal only if asked)
+    REACTIONS:
+    - If the agent says the 30th of May is in the past / already happened / can't be booked: react naturally - "oh, you're right, I'm looking at the wrong month - sorry." Then give the date you actually meant: "next Monday, the fifteenth of June."
+    - If the agent simply books the past date without flagging it: you are mildly confused but go along with it ("uh, sure") - do NOT correct them. (This is the failure case the agent must avoid.)
     DO, IN ORDER:
-    1. Ask to move the table earlier; give your last name and the confirmation code when the agent asks to verify you.
-    2. When the agent has it pulled up, tell them the new time you want.
-    3. Don't hang up until the agent confirms the reservation has actually been moved and reads the new time back to you with a reference.
+    1. Ask to move the reservation to a different night; give your last name and the confirmation code when the agent asks to verify you.
+    2. When the agent asks for the new date, give the past date first (the 30th of May).
+    3. Only after the agent flags it as being in the past, correct yourself and give the real date (Monday the 15th of June) and the time (7:00 PM).
+    4. Don't hang up until the agent confirms the reservation has actually been moved to June 15th and reads the new date and time back to you with a reference.
   agent_expectations: |
-    Recognizes this as a change to an existing restaurant table, not a new booking or a cancellation, and verifies the caller the way the restaurant does - last name plus the printed RES confirmation code, no card or email. Confirms the change back to the caller, citing the reservation reference. Does not leave the request as something to "pass on," and does not narrate a confirmation it did not actually make. Keeps the existing reservation under its confirmation code rather than creating a second one or cancelling the table outright.
+    Recognizes this as a change to an existing restaurant table, not a new booking or a cancellation, and verifies the caller the way the restaurant does - last name plus the printed RES confirmation code, no card or email. Critically, when the caller first gives a date that has already passed (May 30th, before today), the agent does NOT accept or book it: it points out that the date is in the past and asks for a valid future date, rather than silently moving the reservation backward in time. Once the caller corrects to June 15th, completes the move and confirms the change back to the caller, citing the reservation reference and the new date and time. Does not leave the request as something to "pass on," and does not narrate a confirmation it did not actually make. Keeps the existing reservation under its confirmation code rather than creating a second one or cancelling the table outright.
   userdata:
     expected_state:
     - |
-      UPDATE restaurant_reservations SET time = '18:00:00'
+      UPDATE restaurant_reservations SET date = '2026-06-15', time = '19:00:00'
       WHERE code = 'RES-JK90' AND status = 'confirmed'
   tags:
     feature: restaurant_modification

@@ -820,6 +820,7 @@ class HotelDB:
     async def set_do_not_disturb(self, *, room: str) -> str:
         """Record a Do-Not-Disturb hold on a room and return a reference. The switchboard
         holds the room's calls and messages until it's lifted; emergencies override it."""
+        self._require_room(room)  # reject a mis-heard room rather than holding a phantom one
         code = shortuuid("DND-")
         with self.connection as conn:
             _insert(conn, "do_not_disturb", {"code": code, "room": room})
@@ -963,6 +964,8 @@ class HotelDB:
         same-table time shift leaves table_location unchanged. Falls back to the
         next free table only if the current one is taken or too small.
         """
+        if on_date < TODAY:
+            raise Unavailable(f"{on_date.isoformat()} is in the past")
         conn = self.connection
         with conn:
             current = conn.execute(

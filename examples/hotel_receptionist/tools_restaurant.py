@@ -13,6 +13,7 @@ from common import Userdata, _speak_code
 from context import speech_only
 from hotel_db import (
     MAX_PARTY_SIZE,
+    TODAY,
     Unavailable,
     speak_time,
 )
@@ -136,6 +137,8 @@ class RestaurantToolsMixin:
             new_time: the new time, in 24-hour HH:MM format (e.g. "18:00").
             new_party_size: new number of guests; omit to keep the current party size.
         """
+        if new_date < TODAY:
+            raise ToolError("the new date can't be in the past")
         code = confirmation_code.replace(" ", "").upper()
         reservation = await ctx.userdata.db.find_restaurant_reservation(
             last_name=last_name, confirmation_code=code
