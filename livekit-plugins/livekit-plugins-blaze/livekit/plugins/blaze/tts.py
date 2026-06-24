@@ -62,6 +62,8 @@ _SENTENCE_END_RE = re.compile(r"(?:\n\n+|\n|[.!?;:。！？；：](?:\s|$))")
 
 _WS_PING_INTERVAL = 20
 _WS_PING_TIMEOUT = 20
+# Fast in-turn WS reconnects before first audio; broader retries use SynthesizeStream._main_task.
+_WS_FAST_RECONNECT_ATTEMPTS = 2
 
 
 class _WSStreamGuard:
@@ -597,17 +599,17 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
 
         Timeouts use per-recv idle detection (``_timeout``) plus an absolute
         session cap (``_stream_timeout``) instead of a single timer around the
-        whole turn.  If the WebSocket drops before any audio is emitted, the
-        session is retried and already-queued batches are resent on a fresh
-        connection; after audio starts, retry would duplicate playback so the
-        error is surfaced to the caller.
+        whole turn.  If the WebSocket drops before any audio is emitted, up to
+        ``_WS_FAST_RECONNECT_ATTEMPTS`` fast reconnects resend queued batches;
+        further retries are handled by ``SynthesizeStream._main_task`` so retry
+        count stays linear rather than ``(max_retry+1)²``.
         """
         request_id = shortuuid()
         turn_start = time.monotonic()
         tts_cfg = self._blaze_tts
         idle_timeout = self._conn_options.timeout or tts_cfg._timeout
         session_deadline = turn_start + tts_cfg._stream_timeout
-        max_ws_attempts = max(1, self._conn_options.max_retry + 1)
+        max_ws_attempts = _WS_FAST_RECONNECT_ATTEMPTS
         configured_mime_type = {
             "pcm": "audio/pcm",
             "mp3": "audio/mpeg",
@@ -936,7 +938,10 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
                         break
                 except websockets.exceptions.ConnectionClosed as e:
                     if stream_initialized or ws_attempt >= max_ws_attempts:
-                        raise APIConnectionError(f"TTS WebSocket closed: {e}") from e
+                        raise APIConnectionError(
+                            f"TTS WebSocket closed: {e}",
+                            retryable=not stream_initialized,
+                        ) from e
                     retry_interval = self._conn_options._interval_for_retry(ws_attempt - 1)
                     logger.warning(
                         "[%s] TTS WebSocket closed before first audio (attempt %d/%d), "

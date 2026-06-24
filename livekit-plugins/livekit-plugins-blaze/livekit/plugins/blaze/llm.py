@@ -116,6 +116,10 @@ class LLM(llm.LLM):
         return "Blaze"
 
     @property
+    def model(self) -> str:
+        return self._bot_id
+
+    @property
     def bot_id(self) -> str:
         return self._bot_id
 
