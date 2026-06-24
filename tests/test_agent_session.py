@@ -4,6 +4,7 @@ import asyncio
 import logging
 import time
 from collections.abc import AsyncIterable
+from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
@@ -833,7 +834,8 @@ async def test_backchannel_boundary_releases_end_boundary_transcript() -> None:
     recognition._interruption_enabled = True
     recognition._interruption_ch = aio.Chan[inference.InterruptionDataFrameType]()
     input_started_at = time.time() - 10.0
-    recognition._input_started_at = input_started_at
+    # the input anchor lives on the STT pipeline (see _STTPipeline.input_started_at)
+    recognition._stt_pipeline = SimpleNamespace(input_started_at=input_started_at)  # type: ignore[assignment]
 
     try:
         recognition.on_start_of_agent_speech(started_at=time.time())
