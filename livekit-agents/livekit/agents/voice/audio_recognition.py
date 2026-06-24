@@ -1286,7 +1286,7 @@ class AudioRecognition:
             self._user_speaking_event.clear()
             self._last_speaking_time = time.time() - ev.silence_duration - ev.inference_duration
 
-            if self._stt is not None:
+            if self._stt_pipeline is not None:
                 self._arm_transcription_timeout(ev.speech_duration)
 
             if self._vad_base_turn_detection or (
