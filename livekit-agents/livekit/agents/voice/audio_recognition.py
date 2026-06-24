@@ -1037,10 +1037,11 @@ class AudioRecognition:
             and ev.alternatives[0].end_time > 0
             and self._input_started_at is not None
         )
+        now = time.time()
         stt_last_speaking_time = (
-            ev.alternatives[0].end_time + self._input_started_at
+            min(ev.alternatives[0].end_time + self._input_started_at, now)
             if has_stt_end_time and self._input_started_at is not None
-            else time.time()
+            else now
         )
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
             transcript = ev.alternatives[0].text
