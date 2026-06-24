@@ -546,6 +546,41 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return self._mcp_servers
 
     @property
+    def recording_options(self) -> RecordingOptions:
+        """The recording options currently in effect for this session.
+
+        Returns a copy; use :meth:`update_recording_options` to change them.
+        """
+        return self._recording_options.copy()
+
+    def update_recording_options(self, record: bool | RecordingOptions) -> None:
+        """Update which recording features (audio, traces, logs, transcript) are active.
+
+        Useful for toggling recording mid-session, for example after obtaining
+        recording consent from the user.
+
+        Args:
+            record: ``True`` to enable every feature, ``False`` to disable every
+                feature, or a :class:`RecordingOptions` mapping to update individual
+                features. Keys omitted from the mapping are left unchanged.
+
+        Note:
+            Session audio is only captured when audio recording was enabled at
+            :meth:`start`; enabling ``audio`` afterwards does not retroactively start
+            the audio recorder. Disabling features always takes effect.
+        """
+        if isinstance(record, bool):
+            options = _resolve_recording_options(record)
+        else:
+            options = self._recording_options.copy()
+            options.update(record)
+
+        if self._text_only:
+            options["audio"] = False
+
+        self._recording_options = options
+
+    @property
     def input(self) -> io.AgentInput:
         return self._input
 

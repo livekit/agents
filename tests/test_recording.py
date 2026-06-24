@@ -218,6 +218,56 @@ async def test_record_not_given_without_job_ctx() -> None:
     await _cleanup(session)
 
 
+async def test_update_recording_options_bool() -> None:
+    """update_recording_options(bool) toggles every feature on/off."""
+    session = _create_simple_session()
+    await session.start(SimpleAgent(), record=False)
+    assert session._recording_options == _RECORDING_ALL_OFF
+
+    session.update_recording_options(True)
+    assert session._recording_options == _RECORDING_ALL_ON
+    assert session.recording_options == _RECORDING_ALL_ON
+
+    session.update_recording_options(False)
+    assert session._recording_options == _RECORDING_ALL_OFF
+    await _cleanup(session)
+
+
+async def test_update_recording_options_partial_merge() -> None:
+    """A partial mapping updates only the given keys, leaving the rest unchanged."""
+    session = _create_simple_session()
+    await session.start(SimpleAgent(), record=True)
+    assert session._recording_options == _RECORDING_ALL_ON
+
+    session.update_recording_options({"audio": False})
+    assert session._recording_options == {
+        "audio": False,
+        "traces": True,
+        "logs": True,
+        "transcript": True,
+    }
+
+    session.update_recording_options({"transcript": False})
+    assert session._recording_options == {
+        "audio": False,
+        "traces": True,
+        "logs": True,
+        "transcript": False,
+    }
+    await _cleanup(session)
+
+
+async def test_recording_options_property_returns_copy() -> None:
+    """The recording_options property returns a copy that cannot mutate session state."""
+    session = _create_simple_session()
+    await session.start(SimpleAgent(), record=True)
+
+    opts = session.recording_options
+    opts["audio"] = False
+    assert session._recording_options["audio"] is True
+    await _cleanup(session)
+
+
 # ---------------------------------------------------------------------------
 # Group 2: init_recording() interaction with mock JobContext
 # ---------------------------------------------------------------------------
