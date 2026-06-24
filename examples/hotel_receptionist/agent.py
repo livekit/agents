@@ -215,9 +215,14 @@ async def hotel_receptionist_agent(ctx: JobContext) -> None:
     userdata = Userdata(db=db)
     session = AgentSession[Userdata](
         userdata=userdata,
+        # An explicit VAD is required (not the bundled default): without it the
+        # speaking anchor falls back to the STT stream clock, which drifts into the
+        # future across a long call / nested-task switch and makes the turn-commit
+        # logic sleep for that offset (~the elapsed call time) before replying.
+        vad=inference.VAD(model="silero"),
         stt=inference.STT("deepgram/nova-3"),
         llm=inference.LLM("google/gemma-4-31b-it"),
-        tts=inference.TTS("cartesia/sonic-3", voice="39b376fc-488e-4d0c-8b37-e00b72059fdd"),
+        tts=inference.TTS("inworld/inworld-tts-2"),
         max_tool_steps=5,
     )
 
