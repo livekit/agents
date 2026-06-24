@@ -807,6 +807,9 @@ class AgentActivity(RecognitionHooks):
         if isinstance(self._turn_detection, inference.TurnDetector):
             self._turn_detection.on("metrics_collected", self._on_metrics_collected)
 
+        # keyterm detection runs its own LLM, surface its usage
+        self._session._keyterm_detector.on("metrics_collected", self._on_metrics_collected)
+
         if isinstance(self.llm, llm.RealtimeModel):
             rt_reused = reuse_resources is not None and reuse_resources.rt_session is not None
             if rt_reused:
@@ -1109,6 +1112,8 @@ class AgentActivity(RecognitionHooks):
 
         if isinstance(self._turn_detection, inference.TurnDetector):
             self._turn_detection.off("metrics_collected", self._on_metrics_collected)
+
+        self._session._keyterm_detector.off("metrics_collected", self._on_metrics_collected)
 
         if self._rt_session is not None:
             await self._rt_session.aclose()

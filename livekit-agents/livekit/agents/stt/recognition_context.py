@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from typing_extensions import TypedDict
+
+from livekit import rtc
 
 from .. import llm as llm_module, utils
 from ..llm import LLM, ChatContext, FunctionToolCall, function_tool
@@ -14,6 +16,7 @@ from ..utils import aio
 from .stt import STT
 
 if TYPE_CHECKING:
+    from ..metrics import LLMMetrics
     from ..voice.agent_session import AgentSession
     from ..voice.events import ConversationItemAddedEvent
 
@@ -181,7 +184,7 @@ async def _record_keyterms(pending: list[str], confirm: list[str], remove: list[
     ...
 
 
-class KeytermDetector:
+class KeytermDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
     """Maintains the STT keyterm set and, when enabled, auto-detects keyterms during a call.
 
     Owned by the :class:`AgentSession` so keyterm state survives agent handoffs. Each agent
@@ -197,6 +200,7 @@ class KeytermDetector:
         static_keyterms: list[str] | None = None,
         options: KeytermDetectionOptions | None = None,
     ) -> None:
+        super().__init__()
         options = _resolve_detection(options)
         self._detection = options
         self._max_keyterms = options["max_keyterms"]
@@ -257,18 +261,24 @@ class KeytermDetector:
             return
 
         self._llm = detect_llm
+        detect_llm.on("metrics_collected", self._forward_metrics)
         self._session = session
         self._turn_count = 0
         session.on("conversation_item_added", self._on_conversation_item_added)
 
     async def aclose(self) -> None:
         """Stop detection for the current activity; keyterm state is kept."""
+        if self._llm is not None:
+            self._llm.off("metrics_collected", self._forward_metrics)
         if self._session is not None:
             self._session.off("conversation_item_added", self._on_conversation_item_added)
             self._session = None
         if self._detect_task is not None:
             await aio.cancel_and_wait(self._detect_task)
             self._detect_task = None
+
+    def _forward_metrics(self, ev: LLMMetrics) -> None:
+        self.emit("metrics_collected", ev)
 
     def _on_conversation_item_added(self, ev: ConversationItemAddedEvent) -> None:
         if (session := self._session) is None:

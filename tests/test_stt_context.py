@@ -291,6 +291,37 @@ async def test_push_only_on_applied_change() -> None:
     await d.aclose()
 
 
+async def test_detection_llm_metrics_forwarded() -> None:
+    # the detector re-emits its detection LLM's usage, so it reaches the session metrics pipeline
+    from livekit.agents.metrics import LLMMetrics
+
+    received: list[LLMMetrics] = []
+    fake = _RecordingLLM()
+    d = _detector(enabled=True, llm=fake)
+    d.on("metrics_collected", received.append)
+    d.start(_FakeSession(), stt=_RecordingSTT())
+
+    metrics = LLMMetrics(
+        label=fake.label,
+        request_id="r1",
+        timestamp=0.0,
+        duration=0.0,
+        ttft=0.0,
+        cancelled=False,
+        completion_tokens=1,
+        prompt_tokens=2,
+        prompt_cached_tokens=0,
+        total_tokens=3,
+        tokens_per_second=0.0,
+    )
+    fake.emit("metrics_collected", metrics)
+    assert received == [metrics]
+
+    await d.aclose()  # detaches from the detection LLM so a later emit is dropped
+    fake.emit("metrics_collected", metrics)
+    assert received == [metrics]
+
+
 async def test_start_same_stt_does_not_repush() -> None:
     stt = _RecordingSTT()
     session = _FakeSession()
