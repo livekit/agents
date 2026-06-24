@@ -34,13 +34,13 @@ from livekit.agents import (
 from livekit.agents.evals import (
     JudgeGroup,
     accuracy_judge,
+    coherence_judge,
+    conciseness_judge,
     handoff_judge,
+    relevancy_judge,
     safety_judge,
     task_completion_judge,
     tool_use_judge,
-    relevancy_judge,
-    coherence_judge,
-    conciseness_judge,
 )
 
 load_dotenv(".env.local")
@@ -48,9 +48,7 @@ load_dotenv(".env.local")
 logger = logging.getLogger("hotel-receptionist")
 
 
-class HotelReceptionistAgent(
-    RoomToolsMixin, RestaurantToolsMixin, ServicesToolsMixin, Agent
-):
+class HotelReceptionistAgent(RoomToolsMixin, RestaurantToolsMixin, ServicesToolsMixin, Agent):
     def __init__(self) -> None:
         super().__init__(instructions=build_instructions(), tools=[build_lookup_policy_tool()])
 

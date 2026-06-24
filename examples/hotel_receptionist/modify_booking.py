@@ -211,13 +211,11 @@ class ModifyBookingTask(AgentTask[RoomBooking]):
                 raise ToolError(
                     f"no {view}-view {room_type.replace('_', ' ')} for those dates, but the "
                     f"{view} view IS open as a {rec} - that is the real fix here. Offer it warmly "
-                    f"as \"the {view}-view room available for your dates\" (don't dwell on the type "
+                    f'as "the {view}-view room available for your dates" (don\'t dwell on the type '
                     f"as a downgrade), then call choose_room again with that type and view to "
                     f"complete the move. Do NOT give up to a manager callback - this flow can do it."
                 )
-            where = ", ".join(
-                f"{a.type.replace('_', ' ')} ({' or '.join(a.views)})" for a in avail
-            )
+            where = ", ".join(f"{a.type.replace('_', ' ')} ({' or '.join(a.views)})" for a in avail)
             raise ToolError(
                 f"no {view}-view room of any type for those dates - the views by room type are: "
                 f"{where}. Be honest that the exact view isn't open, and offer the closest option."

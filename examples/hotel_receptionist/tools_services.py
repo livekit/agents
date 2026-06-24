@@ -156,7 +156,9 @@ class ServicesToolsMixin:
             situation: One short sentence: what's happening to whom.
         """
         try:
-            code = await ctx.userdata.db.dispatch_emergency(room=room, kind=kind, situation=situation)
+            code = await ctx.userdata.db.dispatch_emergency(
+                room=room, kind=kind, situation=situation
+            )
         except NotFound:
             raise ToolError(
                 f"no room {room} exists - re-confirm the room number, calmly, right now"
@@ -248,8 +250,12 @@ class ServicesToolsMixin:
         """
         try:
             code, s, total = await ctx.userdata.db.book_spa_appointment(
-                service_id=service, guest_name=guest_name, guest_phone=guest_phone,
-                on_date=on_date, at_time=at_time, party_size=party_size,
+                service_id=service,
+                guest_name=guest_name,
+                guest_phone=guest_phone,
+                on_date=on_date,
+                at_time=at_time,
+                party_size=party_size,
             )
         except (NotFound, Unavailable) as e:
             raise ToolError(str(e)) from None
@@ -283,8 +289,12 @@ class ServicesToolsMixin:
         """
         try:
             code, s, total = await ctx.userdata.db.book_business_center(
-                service_id=service, guest_name=guest_name, guest_phone=guest_phone,
-                on_date=on_date, at_time=at_time, duration_hours=duration_hours,
+                service_id=service,
+                guest_name=guest_name,
+                guest_phone=guest_phone,
+                on_date=on_date,
+                at_time=at_time,
+                duration_hours=duration_hours,
             )
         except (NotFound, Unavailable) as e:
             raise ToolError(str(e)) from None
@@ -318,8 +328,12 @@ class ServicesToolsMixin:
         """
         try:
             code, a, total = await ctx.userdata.db.order_flowers(
-                arrangement_id=arrangement, guest_name=guest_name, guest_phone=guest_phone,
-                deliver_to=deliver_to, on_date=on_date, card_message=card_message,
+                arrangement_id=arrangement,
+                guest_name=guest_name,
+                guest_phone=guest_phone,
+                deliver_to=deliver_to,
+                on_date=on_date,
+                card_message=card_message,
             )
         except (NotFound, Unavailable) as e:
             raise ToolError(str(e)) from None
@@ -377,8 +391,8 @@ class ServicesToolsMixin:
         # when we drop off). Close out briefly instead so the call can wrap up naturally.
         return (
             f"Transferred to the {destination.replace('_', ' ')} - your part of the call is done. "
-            "Give ONE short closing hand-off (\"You're all set - connecting you now\"), NOT "
-            "\"anything else?\", so the call can wrap up. Do NOT transfer again or take the request "
+            'Give ONE short closing hand-off ("You\'re all set - connecting you now"), NOT '
+            '"anything else?", so the call can wrap up. Do NOT transfer again or take the request '
             "down as a followup; if the caller reacts, keep it to a brief acknowledgement and "
             "don't reopen the conversation."
         )

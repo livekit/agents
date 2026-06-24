@@ -32,6 +32,7 @@ from livekit.agents import RunContext, ToolError, function_tool
 
 logger = logging.getLogger("hotel-receptionist")
 
+
 def _resolve_dispute_outcome(
     *,
     policy: DisputePolicy,
@@ -61,6 +62,7 @@ def _resolve_dispute_outcome(
             return ("auto_refunded", amount_cents)
         return ("accounting_ticket_opened", 0)
     return ("open", 0)
+
 
 def _say_dispute_outcome(
     *,
@@ -100,6 +102,7 @@ def _say_dispute_outcome(
         )
     return f"Logged. Case number {_speak_code(case_number)}."
 
+
 class RoomToolsMixin:
     @function_tool
     async def resolve_room_conflict(self, ctx: RunContext[Userdata]) -> str:
@@ -126,7 +129,7 @@ class RoomToolsMixin:
             "policy: own the overbooking and explain plainly why it happened, then the plan above, "
             "all at no extra cost to them. The guest is angry and will interrupt - give it in short "
             "pieces and make sure every piece lands before the call ends, resuming any that got "
-            'talked over. If still upset after the full plan, record a manager callback '
+            "talked over. If still upset after the full plan, record a manager callback "
             '(record_followup, kind="callback") before wrapping up.'
         )
 
@@ -186,7 +189,9 @@ class RoomToolsMixin:
             and _count_caller_turns(self.session.history)
             <= ctx.userdata.caller_turns_at_last_booking
         ):
-            logger.info("suppressed duplicate room-booking re-entry (no caller turn since %s)", prev.code)
+            logger.info(
+                "suppressed duplicate room-booking re-entry (no caller turn since %s)", prev.code
+            )
             return (
                 f"This booking is already complete - confirmation {_speak_code(prev.code)} was "
                 "issued moments ago and you've already given the caller the code and total. Do NOT "
@@ -306,7 +311,8 @@ class RoomToolsMixin:
         # A genuine second cancellation (a different booking) always has a caller turn first.
         if (
             ctx.userdata.caller_turns_at_last_cancel >= 0
-            and _count_caller_turns(self.session.history) <= ctx.userdata.caller_turns_at_last_cancel
+            and _count_caller_turns(self.session.history)
+            <= ctx.userdata.caller_turns_at_last_cancel
         ):
             return (
                 "you already cancelled this booking moments ago - do NOT cancel again or "

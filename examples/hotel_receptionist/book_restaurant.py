@@ -68,9 +68,7 @@ class BookRestaurantTask(AgentTask[RestaurantReservation]):
         return "all required details captured - call confirm_reservation() now to finalize the reservation"
 
     @function_tool()
-    async def set_party(
-        self, on_date: date, party_size: Annotated[int, Field(ge=1)]
-    ) -> str:
+    async def set_party(self, on_date: date, party_size: Annotated[int, Field(ge=1)]) -> str:
         """Record the date + party size. The return lists the open time slots - offer them to the caller and let them pick; don't choose a slot yourself.
 
         Args:

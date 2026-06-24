@@ -1255,7 +1255,9 @@ class HotelDB:
         and returns a reference. No real mail goes out; the row is the gradable signal
         that the agent actually sent rather than just claiming to."""
         if kind not in get_args(EmailKind):
-            raise NotFound(f"unknown email kind: {kind} - options: {', '.join(get_args(EmailKind))}")
+            raise NotFound(
+                f"unknown email kind: {kind} - options: {', '.join(get_args(EmailKind))}"
+            )
         code = shortuuid("EML-")
         with self.connection as conn:
             _insert(
@@ -1358,7 +1360,9 @@ class HotelDB:
         # A bad kind is an invalid argument, not a missing entity - keep it distinct
         # from the room's NotFound so the tool can't misreport it as a bad room number.
         if kind not in get_args(EmergencyKind):
-            raise ValueError(f"unknown emergency kind: {kind} - options: {', '.join(get_args(EmergencyKind))}")
+            raise ValueError(
+                f"unknown emergency kind: {kind} - options: {', '.join(get_args(EmergencyKind))}"
+            )
         room_id = self._require_room(room)
         code = shortuuid("EMG-")
         with self.connection as conn:
