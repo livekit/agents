@@ -59,6 +59,7 @@ class STTOptions:
         "universal-3-5-pro",
     ] = "universal-3-5-pro"
     language_detection: NotGivenOr[bool] = NOT_GIVEN
+    language_code: NotGivenOr[str] = NOT_GIVEN
     end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN
     min_turn_silence: NotGivenOr[int] = NOT_GIVEN
     max_turn_silence: NotGivenOr[int] = NOT_GIVEN
@@ -101,6 +102,7 @@ class STT(stt.STT):
             "universal-3-5-pro",
         ] = "universal-3-5-pro",
         language_detection: NotGivenOr[bool] = NOT_GIVEN,
+        language_code: NotGivenOr[str] = NOT_GIVEN,
         end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
         min_turn_silence: NotGivenOr[int] = NOT_GIVEN,
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
@@ -134,6 +136,12 @@ class STT(stt.STT):
                 0 and 1 that determines how sensitive the VAD is. Lower values make the VAD
                 more sensitive (detects quieter speech). Higher values make it less sensitive.
                 Defaults to 0.4.
+            language_code: Steer transcription toward a specific language (e.g. 'en', 'es',
+                'fr'). When set, the model is biased toward this language instead of
+                automatically detecting/code-switching across the supported languages.
+                Leave unset to use the model's default multilingual behavior. Only
+                supported with the 'u3-rt-pro' / 'u3-rt-pro-beta-1' / 'universal-3-5-pro'
+                models. Set at construction (connect) time only.
             min_turn_silence: Minimum silence in ms before a confident end-of-turn is finalized.
             min_end_of_turn_silence_when_confident: Deprecated. Use min_turn_silence instead.
             continuous_partials: Whether to emit additional partial transcripts during long
@@ -204,6 +212,7 @@ class STT(stt.STT):
                 "voice_focus": voice_focus,
                 "voice_focus_threshold": voice_focus_threshold,
                 "mode": mode,
+                "language_code": language_code,
             }
             for _param_name, _param_value in _u3_pro_only_params.items():
                 if is_given(_param_value):
@@ -250,6 +259,7 @@ class STT(stt.STT):
             encoding=encoding,
             speech_model=model,
             language_detection=language_detection,
+            language_code=language_code,
             end_of_turn_confidence_threshold=end_of_turn_confidence_threshold,
             min_turn_silence=min_turn_silence,
             max_turn_silence=max_turn_silence,
@@ -669,6 +679,9 @@ class SpeechStream(stt.SpeechStream):
             if "multilingual" in self._opts.speech_model
             or self._opts.speech_model in _U3_PRO_MODELS
             else False,
+            "language_code": self._opts.language_code
+            if is_given(self._opts.language_code)
+            else None,
             "prompt": self._opts.prompt if is_given(self._opts.prompt) else None,
             "agent_context": self._opts.agent_context
             if is_given(self._opts.agent_context)
