@@ -726,6 +726,8 @@ class AudioRecognition:
             self._ignore_user_transcript_until = NOT_GIVEN
             self._input_started_at = None
         else:
+            self._cancel_transcription_timeout()
+
             if self._stt_consumer_atask is not None:
                 task = asyncio.create_task(aio.cancel_and_wait(self._stt_consumer_atask))
                 task.add_done_callback(lambda _: self._tasks.discard(task))
@@ -1284,7 +1286,8 @@ class AudioRecognition:
             self._user_speaking_event.clear()
             self._last_speaking_time = time.time() - ev.silence_duration - ev.inference_duration
 
-            self._arm_transcription_timeout(ev.speech_duration)
+            if self._stt is not None:
+                self._arm_transcription_timeout(ev.speech_duration)
 
             if self._vad_base_turn_detection or (
                 self._turn_detection_mode == "stt" and self._user_turn_committed

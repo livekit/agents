@@ -78,6 +78,28 @@ async def test_disabled() -> None:
     assert events == []
 
 
+async def test_no_event_without_stt() -> None:
+    # VAD-only session (no STT): there is no transcript to wait for, so the timeout
+    # must never arm or fire
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "")
+
+    session = create_session(
+        actions,
+        extra_kwargs={"transcription_timeout": TIMEOUT},
+        with_stt=False,
+        turn_handling={"turn_detection": "manual"},
+    )
+    events: list[UserTranscriptionTimeoutEvent] = []
+    session.on("user_transcription_timeout", events.append)
+
+    await asyncio.wait_for(
+        run_session(session, _agent(), drain_delay=10), timeout=SESSION_TIMEOUT
+    )
+
+    assert events == []
+
+
 async def test_accumulates_across_bursts() -> None:
     # two bursts within the timeout window => a single event, durations summed
     actions = FakeActions()
