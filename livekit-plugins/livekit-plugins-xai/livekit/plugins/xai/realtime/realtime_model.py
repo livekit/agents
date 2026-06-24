@@ -1,6 +1,6 @@
 import os
 import time
-from typing import Any, Literal
+from typing import Any
 
 import aiohttp
 from openai.types.beta.realtime.session import TurnDetection
@@ -51,7 +51,6 @@ class RealtimeModel(openai.realtime.RealtimeModel):
         *,
         model: NotGivenOr[GrokRealtimeModels | str] = NOT_GIVEN,
         voice: NotGivenOr[GrokVoices | str | None] = "Ara",
-        modalities: NotGivenOr[list[Literal["text", "audio"]]] = NOT_GIVEN,
         api_key: str | None = None,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
@@ -67,15 +66,12 @@ class RealtimeModel(openai.realtime.RealtimeModel):
             )
 
         resolved_voice = voice if is_given(voice) else "Ara"
-        resolved_modalities: list[Literal["text", "audio"]] = (
-            modalities if is_given(modalities) else ["audio"]
-        )
         super().__init__(
             base_url=base_url if is_given(base_url) else XAI_BASE_URL,
             model=model if is_given(model) else XAI_DEFAULT_MODEL,
             voice=resolved_voice,  # type: ignore[arg-type]
             api_key=api_key,
-            modalities=resolved_modalities,
+            modalities=["audio", "text"],
             input_audio_transcription=XAI_DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
             turn_detection=turn_detection
             if is_given(turn_detection)
