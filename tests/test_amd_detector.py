@@ -103,7 +103,9 @@ def _make_detector(
     return detector
 
 
-async def _drive(detector: AMD, clf: _FakeClassifier, verdicts: list[AMDPredictionEvent]) -> AMDPredictionEvent:
+async def _drive(
+    detector: AMD, clf: _FakeClassifier, verdicts: list[AMDPredictionEvent]
+) -> AMDPredictionEvent:
     detector._classifier = clf  # type: ignore[assignment]
     emitted: list[AMDPredictionEvent] = []
     detector.on("amd_prediction", emitted.append)
