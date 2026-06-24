@@ -783,15 +783,9 @@ class SpeechStream(stt.SpeechStream):
             except Exception:
                 logger.exception("an error occurred while streaming input to google STT")
             finally:
-                tasks: list[asyncio.Task[object]] = [stop_task]
-                if frame_task is not None:
-                    tasks.append(frame_task)
-                cleanup_task = asyncio.create_task(utils.aio.gracefully_cancel(*tasks))
-                try:
-                    await asyncio.shield(cleanup_task)
-                except asyncio.CancelledError:
-                    await cleanup_task
-                    raise
+                await utils.aio.gracefully_cancel(
+                    stop_task, *([frame_task] if frame_task is not None else [])
+                )
 
         async def process_stream(
             client: SpeechAsyncClientV2 | SpeechAsyncClientV1,
