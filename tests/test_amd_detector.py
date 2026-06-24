@@ -258,3 +258,15 @@ async def test_omitted_messages_not_played() -> None:
 
     assert session.said == []
     assert result.message_playback == "not_played"
+
+
+class _NoVadSession:
+    _activity = None
+    vad = None
+
+
+async def test_requires_vad() -> None:
+    """AMD's timing is VAD-driven, so setup must reject a session with no VAD."""
+    detector = AMD(_NoVadSession(), suppress_compatibility_warning=True)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="requires a VAD"):
+        await detector._run(_NoVadSession())  # type: ignore[arg-type]
