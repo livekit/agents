@@ -35,6 +35,7 @@ def create_session(
     turn_handling: TurnHandlingOptions | None = None,
     extra_kwargs: dict[str, Any] | None = None,
     can_pause_audio: bool = False,
+    with_stt: bool = True,
 ) -> AgentSession:
     user_speeches = actions.get_user_speeches(speed_factor=speed_factor)
     llm_responses = actions.get_llm_responses(speed_factor=speed_factor)
@@ -63,7 +64,7 @@ def create_session(
         **{**default_interruption, **turn_handling.get("interruption", {})}
     )
 
-    stt = FakeSTT(fake_user_speeches=user_speeches)
+    stt = FakeSTT(fake_user_speeches=user_speeches) if with_stt else None
 
     if "aec_warmup_duration" not in extra:
         extra["aec_warmup_duration"] = None  # disable aec warmup by default
@@ -101,7 +102,6 @@ def create_session(
 async def run_session(session: AgentSession, agent: Agent, *, drain_delay: float = 5) -> float:
     stt = session.stt
     audio_input = session.input.audio
-    assert isinstance(stt, FakeSTT)
     assert isinstance(audio_input, FakeAudioInput)
 
     transcription_sync: TranscriptSynchronizer | None = None
@@ -114,8 +114,10 @@ async def run_session(session: AgentSession, agent: Agent, *, drain_delay: float
     t_origin = time.time()
     audio_input.push(0.1)
 
-    # wait for the user speeches to be processed
-    await stt.fake_user_speeches_done
+    # wait for the user speeches to be processed (no STT: rely on drain_delay for the
+    # VAD timeline to play out)
+    if isinstance(stt, FakeSTT):
+        await stt.fake_user_speeches_done
 
     await asyncio.sleep(drain_delay)
     with contextlib.suppress(RuntimeError):
