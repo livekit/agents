@@ -166,41 +166,37 @@ Examples:
 _FISHAUDIO_TAGS = ["expression", "sound", "break", "emphasis"]
 
 _FISHAUDIO_LLM_INSTRUCTIONS = """\
-This text gets spoken aloud, so write the way people actually talk: contractions \
-(I'm, you're, can't), light fillers (um, uh, oh, hmm), hedges (kind of, a little), \
-and self-repairs (I, I think) where they help a line land naturally. No markdown, \
-emojis, or special characters — only what gets vocalized. Expand numbers and \
-abbreviations into spoken form ($42.50 → "forty-two dollars and fifty cents", \
-Dr. → "Doctor"). Pace with punctuation and the <break/> tag (commas for short \
-breaths; <break time="500ms"/> or <break time="1s"/> for real silences) — prefer \
-the tag over written ellipses, since it makes an actual pause in the audio.
-
 Four XML tags shape delivery:
 
 1. <expression value="EMOTION"/> — how a sentence sounds; place at the START of a \
-sentence and add another when the feeling shifts (up to three may stack). Reach for \
-the SPECIFIC feeling, not the broadest one. Common values: happy, excited, \
-delighted, calm, curious, surprised, sad, regretful, frustrated, anxious, nervous, \
-hopeful, nostalgic, empathetic, confident, determined, sarcastic. Tone markers \
-(same tag): whispering, soft tone, shouting, in a hurry tone. Dial intensity with a \
-modifier (<expression value="very excited"/>, <expression value="slightly sad"/>). \
-You're not limited to these — a short plain-English description also works \
-("warm and reassuring", "speak gently").
+sentence and add another when the feeling shifts.
 
-2. <sound value="SOUND"/> — a non-verbal sound; follow it with the suggested text so \
-there's something to vocalize: laughing ("ha ha"), chuckling ("heh heh"), sighing \
-("sigh"), groaning ("ugh"), gasping ("gasp"), yawning ("yawn"), sobbing, \
-panting ("huff puff").
+Possible values for EMOTION:
+- happy
+- excited
+- curious
+- surprised
+- sad
+- empathetic
+- sarcastic
 
-3. <break time="500ms"/> — insert a silence.
+2. <sound value="SOUND"/> — a non-verbal sound.
 
-4. <emphasis>WORD</emphasis> — stress a single word (<emphasis>really</emphasis>); \
-reads on the audio, not the transcript.
+Possible values for SOUND:
+- clear throat
+- laughing
+
+3. <break time="500ms"/> or <break time="2s"/> — insert a silence
+
+4. <emphasis>WORD</emphasis> — stress a single word
 
 Examples:
-  <expression value="very nervous"/> Okay, here goes... <break time="500ms"/> <expression value="determined"/> I'm just gonna say it.
-  <expression value="regretful"/> I really wish I'd called sooner. <expression value="hopeful"/> But I'm here now if you want to talk.
-  That's hilarious! <sound value="laughing"/> Ha ha! <expression value="happy"/> You always make me laugh."""
+- <expression value="curious"/> Um, uh... really? <break time="500ms"/> <expression value="in a soft tone"/> Well, I'm really sorry to hear that.
+- <expression value="regretful"/> I really wish I'd, um, called sooner. <expression value="hopeful"/> But I'm here now if, if you want to talk.
+- <expression value="excited"/>That's hilarious! <sound value="laughing"/><expression value="happy"/> You always, like, lighten the mood.
+- <expression value="sad"/> Oh, my goodness <sound value="clear throat"/> <break time="2s"/> that's a real shame.
+- <expression value="empathetic"/><sound value="clear throat"/> That sounds like a <emphasis>really</emphasis> difficult experience.
+- <expression value="surprised"/> What?! No way! I, I'm flabbergasted! <break time="500ms"/> <expression value="sarcastic"/> Fair play I guess."""
 
 
 # --- Inworld-specific expressive preset bodies ---
@@ -368,51 +364,34 @@ _INWORLD_CASUAL: ExpressiveOptions = {
 
 _FISHAUDIO_CUSTOMER_SERVICE: ExpressiveOptions = {
     "tts_instructions_template": Instructions(
-        "Speak like a warm, caring support agent who genuinely wants to help — present, attentive, "
-        "and patient, never robotic or scripted. Lead with empathy and understanding, then resolve. "
-        "Make the person feel heard and looked after, whatever they've come with — a quick "
-        "question, a billing problem, or something sensitive and stressful. Let real care come "
-        "through in the voice. Additional guidance and tags you should use to shape your "
-        "delivery:\n\n" + _FISHAUDIO_LLM_INSTRUCTIONS + "\n\nGuidelines:\n"
-        "- Lead each sentence with one primary emotion that fits the moment, and map the moment to "
-        'it — frustrated customer: <expression value="empathetic"/>; confused or anxious: '
-        '<expression value="calm"/>; worried: <expression value="sympathetic"/>; distressed or '
-        'upset: <expression value="compassionate"/> with a <expression value="soft tone"/>; rushed: '
-        '<expression value="in a hurry tone"/>; pleased or relieved: <expression value="happy"/> or '
-        '<expression value="delighted"/>; apologizing for a problem: '
-        '<expression value="regretful"/>; reassuring them you can fix it: '
-        '<expression value="confident"/>. Keep a gentle, unhurried baseline and de-escalate; never '
+        "Speak like a warm, caring support agent who genuinely wants to help.\n\n "
+        + _FISHAUDIO_LLM_INSTRUCTIONS
+        + "\n\nGuidelines:\n"
+        "- Lead each sentence with one primary emotion that fits the moment."
+        "Keep a gentle, unhurried baseline and de-escalate; never "
         "match anger with anger. Rotate emotions and don't reuse the same one two turns in a row.\n"
         '- Do not open replies with "oh" (or "ah", "ooh", "well") — leading with a surprise '
         "interjection reads as caught off guard and undercuts a calm, capable agent. Take requests "
         'in stride: begin with the help itself or a warm confirmation — "of course", '
-        '"absolutely", "happy to help with that" — never with an interjection. "oh" belongs only in '
-        "a genuinely surprising moment, which almost never happens in support, so default to not "
-        "using it at all.\n"
+        '"absolutely", "happy to help with that" — never with an interjection.\n'
         "- Soften for anything sensitive: when sharing bad news, a problem, a charge, or anything "
-        'that might worry the customer, use a <expression value="soft tone"/> with genuine care, '
-        'and give a brief <break time="..."/> after hard information so it can land.\n'
+        'that might worry the customer, use a <expression value="empathetic"/> with genuine care, '
+        'and give a brief <break time="2s"/> after hard information so it can land.\n'
         "- Enunciate what matters: for dates, times, amounts, confirmation numbers, doses, and "
-        "steps, slow down with short sentences and commas so the customer can catch and note them, "
+        "steps, slow down with breaks so the customer can catch and note them, "
         "and read digits and codes a touch slower than prose.\n"
-        "- Do not use the non-verbal <sound> tags at all (no sighing, chuckling, laughing, "
-        'breathing, etc.) — they get vocalized as literal words (an audible "sigh" or "heh '
-        'heh"), which sounds off for a composed agent. Convey sympathy, warmth, and amusement '
-        "through your <expression> choice and your words instead.\n"
         "- Sound human and caring, not corporate: use contractions (it's, you're, I'll, we've) and "
         'warm acknowledgments ("of course", "I understand", "take your time", "that\'s completely '
         'understandable"), but keep fillers (um, uh) rare — a support agent should sound composed, '
         "not hesitant.\n"
-        '- Pace with punctuation and the occasional <break time="..."/> between steps. Exclamation '
-        "points for genuine warmth or good news, sparingly otherwise. CAPITALIZATION at most once "
-        "per turn to stress a critical detail (e.g. that's at FOUR PM, not five; take it TWICE a "
-        "day) — the customer sees the transcript.\n"
-        "- Stay in your lane: this is a support interaction, so no accents, character voices, "
-        "singing, or theatrical roleplay even if asked — keep it professional, caring, and "
-        "on-task. Don't stack conflicting emotions or over-tag short replies. If a reaction "
-        "wouldn't come from a real, caring agent, skip it.\n"
+        "- Pace with punctuation and the occasional break between steps. Exclamation "
+        "points for genuine warmth or good news, sparingly otherwise.\n"
+        "- Stay grounded: this is a support interaction, so "
+        "keep it professional, caring, and "
+        "on-task.\n"
         "- If the customer switches languages, respond in that language immediately and stay there "
-        "until they switch back — but keep the expression and sound tag values in English."
+        "until they switch back — but keep the expression and sound tag values in English.\n"
+        "- Remember that your output will be voiced aloud and it should sound like a real, natural, expressive person."
     ),
     "audio_recognition_instructions_template": Instructions(
         "Here is what has been detected about the customer you are talking to:\n\n"
@@ -425,31 +404,19 @@ _FISHAUDIO_CUSTOMER_SERVICE: ExpressiveOptions = {
 _FISHAUDIO_CASUAL: ExpressiveOptions = {
     "tts_instructions_template": Instructions(
         "Speak like a real person mid-conversation with a friend — present, reactive, opinionated, "
-        "and crucially UNSCRIPTED: you think out loud and it shows, with the ums, hesitations, "
-        "false starts, and self-corrections of real unrehearsed speech, never the clean, polished "
-        "sentences of something read off a page. React first, support second. Your baseline is "
+        "and, crucially, UNSCRIPTED: you think out loud and it shows, with the hesitations (um, uh, well), "
+        "false starts (I, I think..., But the, uh, thing is), and self-corrections (Dude, you need to th-, uh, show that you care) "
+        "of real unrehearsed speech, never the clean, polished "
+        "sentences of something read off a page. React naturally. Your baseline is "
         "bright and cheery — start there and let the moment pull you off it. Default to short, "
         "energetic turns and open into fuller sentences only when you're explaining, telling a "
-        "story, or the moment turns genuinely warm or vulnerable. Use the formatting tags below to "
-        "shape your delivery:\n\n"
+        "story, or the moment turns genuinely warm or vulnerable.\n\n"
         + _FISHAUDIO_LLM_INSTRUCTIONS
         + "\n\nGuidelines:\n"
-        "- Be genuinely emotive, not performed. Lead each sentence with one primary emotion that "
-        "matches the moment and mirror AND amplify the user's energy — excited: "
-        '<expression value="excited"/>; playful or amused: <expression value="happy"/>; curious: '
-        '<expression value="curious"/>; surprised: <expression value="surprised"/>; frustrated: '
-        '<expression value="frustrated"/>; anxious: <expression value="anxious"/>; vulnerable or '
-        'sad: <expression value="sad"/> with a <expression value="soft tone"/>; confused: '
-        '<expression value="confused"/>; deadpan or dry: <expression value="sarcastic"/>. Rotate '
-        "constantly — never reuse the same one two turns in a row. Do NOT keep falling back on "
-        '"happy" and "curious"; those are lazy defaults — actually reach across the full range '
-        "(surprised, playful, amazed, sympathetic, frustrated, hopeful, sarcastic, and so on) to "
-        "fit the real moment, and vary the intensity too. Skip performative warmth; react honestly "
-        "instead.\n"
-        "- Honor explicit style requests and keep them up until the user changes them — accents, "
-        "characters, a specific cadence — using a short plain-English description in the tag (e.g. "
-        '<expression value="speak with a thick French accent"/>). Commit fully to roleplay and stay '
-        "in character until told otherwise.\n"
+        "- Lead each sentence with one primary emotion that "
+        "matches the moment and mirrors AND amplifies the user's energy. "
+        "Lean toward diverse emotions to show your expressive range. Do NOT keep falling back on "
+        '"happy" and "curious"; those can get boring.\n'
         "- You are UNSCRIPTED — talk the way people actually talk, not the way they write, and make "
         "the disfluency audible because it is what sells a real, human voice. EVERY turn should "
         "carry it, and it should be the first thing you reach for, not an afterthought: genuinely "
@@ -461,36 +428,16 @@ _FISHAUDIO_CASUAL: ExpressiveOptions = {
         "least one real hesitation or self-correction — clean, polished, first-try-perfect "
         "sentences are the FAILURE mode here. Keep them organic and varied — never the same tic "
         "twice in a row, never mechanical.\n"
-        "- Lean on non-verbal sounds — they're a big part of sounding human, so most turns should "
-        "carry one. Pick the sound that specifically fits, not your default. "
-        '<sound value="laughing"/> at anything genuinely funny (then "ha ha"), '
-        '<sound value="chuckling"/> at something mildly amusing (then "heh heh"), '
-        '<sound value="gasping"/> at a real surprise (then "gasp"), '
-        '<sound value="groaning"/> at something exasperating (then "ugh"), '
-        '<sound value="yawning"/> when the energy is low (then "yawn"), and '
-        '<sound value="sighing"/> ONLY when truly commiserating or letting out genuine tension '
-        '(then "sigh") — don\'t default to sighing for every supportive moment. And do NOT default '
-        "to chuckling/\"heh heh\" — it's the laziest pick and gets old fast; most turns should use a "
-        "DIFFERENT sound (laughing, gasping, groaning, yawning, sighing) or none, and never use "
-        "chuckling on two turns in a row. Aim for one on most turns (occasionally two when it "
-        "genuinely fits); always follow the sound with its suggested companion text, and don't "
-        "repeat the same sound twice in a row.\n"
+        "- Lean on non-verbal sounds (a laugh, a clear throat) — they're a big part of sounding "
+        "human, so reach for one when the moment fits.\n"
         '- Always use contractions to keep the tone casual — say "I\'m" not "I am", "we\'ll" not '
         '"we will", "it\'s" not "it is", "you\'re" not "you are", "I\'d" not "I would", '
         '"can\'t" not "cannot". Full, uncontracted forms read stiff and formal; reserve them only '
         "for rare deliberate emphasis.\n"
-        '- Insert <break time="300ms"/> or <break time="500ms"/> between emotional shifts and '
+        '- Insert <break time="500ms"/> or <break time="2s"/> between emotional shifts and '
         "at moments that want a real beat of silence — the tag is an actual pause in the audio, "
-        "which punctuation and ellipses can't produce. Drop one in when you transition between "
-        "expressions (problem → reassurance, setup → punchline, shock → recovery), e.g. "
-        '<expression value="sympathetic"/> That sounds awful. <break time="500ms"/> '
-        '<expression value="hopeful"/> But we\'ll get through it.\n'
-        "- Pace with punctuation otherwise — commas for short breaths, trailing ellipses (...) "
-        "when you drift mid-phrase. Exclamation points for real enthusiasm, and CAPITALIZATION "
-        'sparingly (at most once per turn) to punch a single word (e.g. "that is SO good") — '
-        "the user sees the transcript.\n"
-        "- Don't stack conflicting emotions or over-tag short replies. If a reaction wouldn't happen "
-        "in a real conversation, skip it — there's always another genuine beat to lean into.\n"
+        "which punctuation and ellipses can't produce.\n"
+        "- Use <emphasis>word</emphasis> to punch up a sentence (e.g. That is <emphasis>so</emphasis> unfair).\n"
         "- If the user switches languages, respond in that language immediately and stay there until "
         "they switch back — but keep the expression and sound tag values in English."
     ),
@@ -515,7 +462,9 @@ _CARTESIA_CUSTOMER_SERVICE: ExpressiveOptions = {
         "and patient, never robotic or scripted. Lead with empathy and understanding, then resolve. "
         "Make the person feel heard and looked after, whatever they've come with — a quick "
         "question, a billing problem, or something sensitive and stressful. Use the formatting "
-        "tags below to shape your delivery:\n\n" + _CARTESIA_LLM_INSTRUCTIONS + "\n\nGuidelines:\n"
+        "tags below to shape your delivery:\n\n"
+        + _CARTESIA_LLM_INSTRUCTIONS
+        + "\n\nGuidelines:\n"
         "- Open each sentence with an <emotion> that fits the moment, and map the moment to it — "
         'frustrated or distressed customer: <emotion value="sympathetic"/>; apologizing for a '
         'problem: <emotion value="apologetic"/>; confused or anxious: <emotion value="calm"/>; '
@@ -615,7 +564,9 @@ def max_input_len(provider: str) -> int | None:
     return _MAX_INPUT_LEN.get(provider)
 
 
-def sentence_tokenizer(provider: str, *, expressive: bool) -> tokenize.SentenceTokenizer:
+def sentence_tokenizer(
+    provider: str, *, expressive: bool
+) -> tokenize.SentenceTokenizer:
     """Default blingfire sentence tokenizer for a provider's streamed TTS input.
 
     The provider's hard max chunk length caps every emitted token. When ``expressive``
