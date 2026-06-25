@@ -1,3 +1,5 @@
+"""Meeting chat relay for external video meetings."""
+
 from __future__ import annotations
 
 import asyncio
@@ -13,11 +15,20 @@ _DEFAULT_BOT_NAME = "LemonSlice Avatar"
 
 
 def format_chat_user_input(*, sender: str, text: str) -> str:
+    """Format a meeting chat message as agent user input.
+
+    Args:
+        sender: Display name of the message sender.
+        text: Chat message body.
+
+    Returns:
+        Formatted user input string for generate_reply.
+    """
     return f"[{sender}]: {text}"
 
 
 class MeetingChatRelay:
-    """Queue meeting chat until the agent session is running, then generate replies."""
+    """Relay external meeting chat messages into an AgentSession."""
 
     def __init__(
         self,
@@ -25,6 +36,12 @@ class MeetingChatRelay:
         *,
         bot_name: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
+        """Initialize the meeting chat relay.
+
+        Args:
+            session: Agent session that receives chat-driven replies.
+            bot_name: Bot display name used to ignore self-sent chat messages.
+        """
         self._session = session
         if utils.is_given(bot_name) and (name := str(bot_name).strip()):
             self._bot_name = name.lower()
@@ -35,6 +52,7 @@ class MeetingChatRelay:
         self._drain_task: asyncio.Task[None] | None = None
 
     def submit_json(self, payload: str) -> None:
+        """Queue a raw chat JSON payload from the meeting relay WebSocket."""
         try:
             self._loop.call_soon_threadsafe(self._enqueue_json, payload)
         except RuntimeError:
@@ -68,10 +86,12 @@ class MeetingChatRelay:
             await asyncio.sleep(0.05)
 
     def start(self) -> None:
+        """Start draining queued chat messages into the agent session."""
         if self._drain_task is None:
             self._drain_task = asyncio.create_task(self._drain())
 
     async def aclose(self) -> None:
+        """Stop the chat relay and cancel the drain task."""
         if self._drain_task is not None:
             self._drain_task.cancel()
             await asyncio.gather(self._drain_task, return_exceptions=True)

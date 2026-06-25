@@ -1,3 +1,5 @@
+"""Meeting audio ingestion and relay streaming for external video meetings."""
+
 from __future__ import annotations
 
 import asyncio
@@ -14,6 +16,8 @@ logger = logging.getLogger(__name__)
 
 _HEADER = struct.Struct("<IB")
 _DEFAULT_STT_RATE = 16000
+_INITIAL_RECONNECT_DELAY_S = 1.0
+_MAX_RECONNECT_DELAY_S = 30.0
 
 
 def _deserialize_frame(payload: bytes) -> rtc.AudioFrame | None:
@@ -34,9 +38,15 @@ def _deserialize_frame(payload: bytes) -> rtc.AudioFrame | None:
 
 
 class MeetingAudioInput(AudioInput):
-    """Mixed meeting audio → AgentSession STT."""
+    """AudioInput that feeds mixed external meeting audio into AgentSession STT."""
 
     def __init__(self, *, rate_out: int = _DEFAULT_STT_RATE, queue_size: int = 100) -> None:
+        """Initialize the meeting audio input.
+
+        Args:
+            rate_out: Output sample rate in Hz for frames consumed by STT.
+            queue_size: Maximum number of audio frames to buffer.
+        """
         super().__init__(label="lemonslice-meeting-audio")
         self._loop = asyncio.get_running_loop()
         self._rate_out = rate_out
@@ -45,6 +55,7 @@ class MeetingAudioInput(AudioInput):
         self._resampler_in_rate: int | None = None
 
     def submit(self, payload: bytes) -> None:
+        """Enqueue a serialized PCM frame from the meeting relay WebSocket."""
         try:
             self._loop.call_soon_threadsafe(self._push, payload)
         except RuntimeError:
@@ -59,7 +70,7 @@ class MeetingAudioInput(AudioInput):
         try:
             self._queue.put_nowait(frame)
         except asyncio.QueueFull:
-            pass
+            logger.warning("meeting audio queue full; dropping frame")
 
     def _push(self, payload: bytes) -> None:
         frame = _deserialize_frame(payload)
@@ -79,6 +90,7 @@ class MeetingAudioInput(AudioInput):
         return self._resampler.push(frame)
 
     async def __anext__(self) -> rtc.AudioFrame:
+        """Return the next resampled audio frame for STT consumption."""
         return await self._queue.get()
 
 
@@ -88,18 +100,32 @@ async def stream_meeting_relay(
     *,
     stop: asyncio.Event,
     chat_sink: Callable[[str], None] | None = None,
-    reconnect_delay_s: float = 1.0,
+    reconnect_delay_s: float = _INITIAL_RECONNECT_DELAY_S,
+    max_reconnect_delay_s: float = _MAX_RECONNECT_DELAY_S,
 ) -> None:
-    """Pull meeting audio (binary) and chat (text JSON) from the meeting relay."""
+    """Stream meeting audio and chat from the LemonSlice meeting relay.
+
+    Reconnects with exponential backoff until ``stop`` is set.
+
+    Args:
+        websocket_url: WebSocket URL returned by join_meeting.
+        audio_sink: Callback invoked with each binary PCM payload.
+        stop: Event that signals the relay loop to exit.
+        chat_sink: Optional callback invoked with each text chat JSON payload.
+        reconnect_delay_s: Initial reconnect delay in seconds.
+        max_reconnect_delay_s: Maximum reconnect delay in seconds.
+    """
+    backoff_time = reconnect_delay_s
     while not stop.is_set():
         try:
             async with (
                 aiohttp.ClientSession() as http,
                 http.ws_connect(websocket_url, heartbeat=20.0) as ws,
             ):
+                backoff_time = reconnect_delay_s
                 audio_frames = 0
                 chat_messages = 0
-                logger.info("connected to meeting relay")
+                logger.debug("connected to meeting relay")
                 async for msg in ws:
                     if stop.is_set():
                         break
@@ -107,12 +133,12 @@ async def stream_meeting_relay(
                         audio_sink(msg.data)
                         audio_frames += 1
                         if audio_frames == 1:
-                            logger.info("meeting relay: received first pcm audio frame")
+                            logger.debug("received first pcm audio frame in meeting relay")
                     elif msg.type == aiohttp.WSMsgType.TEXT and chat_sink is not None:
                         chat_sink(msg.data)
                         chat_messages += 1
                         if chat_messages == 1:
-                            logger.info("meeting relay: received first chat message")
+                            logger.debug("received first chat message in meeting relay")
                     elif msg.type in (
                         aiohttp.WSMsgType.CLOSE,
                         aiohttp.WSMsgType.CLOSED,
@@ -122,9 +148,14 @@ async def stream_meeting_relay(
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.warning("meeting relay disconnected; retrying", exc_info=True)
+            logger.warning(
+                "meeting relay disconnected; retrying in %ss",
+                backoff_time,
+                exc_info=True,
+            )
         if not stop.is_set():
-            await asyncio.sleep(reconnect_delay_s)
+            await asyncio.sleep(backoff_time)
+            backoff_time = min(backoff_time * 2, max_reconnect_delay_s)
 
 
 async def stream_meeting_audio(
@@ -132,12 +163,22 @@ async def stream_meeting_audio(
     sink: Callable[[bytes], None],
     *,
     stop: asyncio.Event,
-    reconnect_delay_s: float = 1.0,
+    reconnect_delay_s: float = _INITIAL_RECONNECT_DELAY_S,
+    max_reconnect_delay_s: float = _MAX_RECONNECT_DELAY_S,
 ) -> None:
-    """Pull PCM from the meeting relay until ``stop`` is set (audio only)."""
+    """Stream meeting audio from the LemonSlice meeting relay.
+
+    Args:
+        websocket_url: WebSocket URL returned by join_meeting.
+        sink: Callback invoked with each binary PCM payload.
+        stop: Event that signals the relay loop to exit.
+        reconnect_delay_s: Initial reconnect delay in seconds.
+        max_reconnect_delay_s: Maximum reconnect delay in seconds.
+    """
     await stream_meeting_relay(
         websocket_url,
         sink,
         stop=stop,
         reconnect_delay_s=reconnect_delay_s,
+        max_reconnect_delay_s=max_reconnect_delay_s,
     )

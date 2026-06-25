@@ -21,13 +21,10 @@ from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, Data
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
 from .api import LemonSliceAPI, LemonSliceException
-from .meeting import (
-    JoinMeetingResult,
-    MeetingAudioInput,
-    MeetingChatRelay,
-    meeting_room_options,
-    stream_meeting_relay,
-)
+from .log import logger
+from .meeting.audio import MeetingAudioInput, stream_meeting_relay
+from .meeting.chat import MeetingChatRelay
+from .meeting.room import JoinMeetingResult
 
 SAMPLE_RATE = 16000
 _MEETING_BROADCAST_IDENTITY = "lemonslice-meeting-broadcast"
@@ -77,7 +74,7 @@ class AvatarSession(BaseAvatarSession):
         self._livekit_api_secret: str | None = None
         self._livekit_room: str | None = None
 
-        # External meeting state (Zoom, Meet, Teams); set by join_meeting().
+        # External meeting state (Zoom, Meet, Teams, Webex); set by join_meeting().
         self._meeting_bot_id: str | None = None
         self._meeting_chat: MeetingChatRelay | None = None
         self._meeting_relay_stop: asyncio.Event | None = None
@@ -119,6 +116,7 @@ class AvatarSession(BaseAvatarSession):
 
         job_ctx = get_job_context()
         local_participant_identity = job_ctx.local_participant_identity
+        livekit_session_id = job_ctx.job.room.sid or await room.sid
         livekit_token = (
             api.AccessToken(api_key=livekit_api_key, api_secret=livekit_api_secret)
             .with_kind("agent")
@@ -161,6 +159,7 @@ class AvatarSession(BaseAvatarSession):
                 idle_timeout=self._idle_timeout,
                 livekit_url=livekit_url,
                 livekit_token=livekit_token,
+                livekit_session_id=livekit_session_id,
                 extra_payload=self._extra_payload,
             )
 
@@ -198,14 +197,19 @@ class AvatarSession(BaseAvatarSession):
         bot_name: NotGivenOr[str] = NOT_GIVEN,
         listen_to_meeting_chat: bool = True,
     ) -> JoinMeetingResult:
-        """Send this avatar into an external video meeting (Zoom, Meet, or Teams).
+        """Send this avatar into an external video meeting.
 
-        Call after :meth:`start` and before :meth:`room_options` / ``session.start``.
+        Supports Zoom, Google Meet, Microsoft Teams, and Webex. Call after start() and
+        before room_options() / AgentSession.start().
 
         Args:
             meeting_url: URL of the external meeting to join.
             bot_name: Display name for the bot in the meeting.
-            listen_to_meeting_chat: When ``True`` (default), relay meeting chat messages into the agent session.
+            listen_to_meeting_chat: When True, relay meeting chat into the agent
+                session.
+
+        Returns:
+            JoinMeetingResult with relay WebSocket URL and meeting bot ID.
         """
         if not self._session_id or self._agent_session is None or not self._livekit_url:
             raise LemonSliceException("call start() before join_meeting()")
@@ -261,42 +265,51 @@ class AvatarSession(BaseAvatarSession):
             await super().aclose()
 
     async def leave_meeting(self) -> None:
-        """Leave the external meeting and stop the audio/chat relay."""
+        """Leave the external meeting and stop the audio and chat relay."""
         meeting_bot_id = self._meeting_bot_id
         session_id = self._session_id
         if not meeting_bot_id or not session_id:
             return
 
-        async with LemonSliceAPI(
-            api_url=self._api_url,
-            api_key=self._api_key,
-            conn_options=self._conn_options,
-            session=self._http_session,
-        ) as lemonslice_api:
-            await lemonslice_api.leave_meeting(session_id, meeting_bot_id=meeting_bot_id)
+        try:
+            async with LemonSliceAPI(
+                api_url=self._api_url,
+                api_key=self._api_key,
+                conn_options=self._conn_options,
+                session=self._http_session,
+            ) as lemonslice_api:
+                await lemonslice_api.leave_meeting(session_id, meeting_bot_id=meeting_bot_id)
+        except Exception:
+            logger.warning("failed to leave meeting via LemonSlice API", exc_info=True)
+        finally:
+            self._meeting_bot_id = None
 
-        self._meeting_bot_id = None
+            if self._meeting_relay_stop is not None:
+                self._meeting_relay_stop.set()
+            relay_task = self._meeting_relay_task
+            if relay_task is not None:
+                relay_task.cancel()
+                await asyncio.gather(relay_task, return_exceptions=True)
+                self._meeting_relay_task = None
 
-        if self._meeting_relay_stop is not None:
-            self._meeting_relay_stop.set()
-        relay_task = self._meeting_relay_task
-        if relay_task is not None:
-            relay_task.cancel()
-            await asyncio.gather(relay_task, return_exceptions=True)
-            self._meeting_relay_task = None
+            if self._meeting_chat is not None:
+                await self._meeting_chat.aclose()
+                self._meeting_chat = None
 
-        if self._meeting_chat is not None:
-            await self._meeting_chat.aclose()
-            self._meeting_chat = None
-
-        self._meeting_relay_stop = None
+            self._meeting_relay_stop = None
 
     def room_options(self, **kwargs: Any) -> room_io.RoomOptions:
-        """Room I/O options for ``AgentSession.start``.
+        """Return room I/O options for AgentSession.start.
 
-        When :meth:`join_meeting` has been called, disables LiveKit room audio I/O
-        (meeting audio is fed directly into STT).
+        When join_meeting() has been called, disables LiveKit room audio input.
+        Meeting audio is fed directly into STT instead.
+
+        Args:
+            **kwargs: Additional arguments forwarded to RoomOptions.
+
+        Returns:
+            RoomOptions appropriate for the current avatar mode.
         """
         if self._meeting_bot_id is not None:
-            return meeting_room_options(**kwargs)
+            return room_io.RoomOptions(audio_input=False, audio_output=False, **kwargs)
         return room_io.RoomOptions(**kwargs)
