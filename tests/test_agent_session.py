@@ -1954,3 +1954,129 @@ async def test_update_options_stt_unchanged_when_not_provided() -> None:
         assert update_stt_calls == []
     finally:
         await session.aclose()
+
+
+async def test_update_options_directly_on_activity_swaps_state() -> None:
+    """Calling update_options on the activity directly must mirror the swap onto
+    session._stt / agent._stt, not just rewire the audio_recognition pipeline.
+
+    Regression test for the asymmetry flagged by Devin Review on PR #6235:
+    if a caller bypasses AgentSession.update_options and goes straight to the
+    activity, activity.stt must still resolve to the new STT instance on the
+    next read. Otherwise the live STT pipeline restarts but the per-call
+    lookup inside stt_node keeps using the OLD STT — so no actual swap
+    happens for callers that take this path.
+    """
+    from livekit.agents.voice.agent_session import AgentSession
+    from livekit.agents.voice.audio_recognition import AudioRecognition
+
+    from .fake_stt import FakeSTT
+    from .fake_tts import FakeTTS
+
+    old_stt = FakeSTT()
+    old_tts = FakeTTS()
+    new_stt = FakeSTT()
+    new_tts = FakeTTS()
+    session = AgentSession(stt=old_stt, tts=old_tts)
+    try:
+        agent = MyAgent()
+        activity = AgentActivity(agent, session)
+
+        audio_recognition = AudioRecognition(
+            session,
+            hooks=activity,
+            stt=None,
+            vad=None,
+            using_default_vad=False,
+            interruption_detection=None,
+            endpointing=create_endpointing(activity.endpointing_opts),
+            turn_detection=None,
+            stt_model=None,
+            stt_provider=None,
+        )
+        activity._audio_recognition = audio_recognition
+        session._activity = activity
+        session._agent = agent
+
+        # spy on update_stt without invoking the original — running it would spin
+        # up an _STTPipeline consumer task that, without a real agent activity
+        # context, raises and leaks (see Agent.default.stt_node)
+        def spy_update_stt(stt_node, **kwargs):  # type: ignore[no-untyped-def]
+            pass
+
+        audio_recognition.update_stt = spy_update_stt  # type: ignore[method-assign]
+
+        # sanity: before the swap, all three reads agree on the OLD instances
+        assert session._stt is old_stt
+        assert session._tts is old_tts
+        assert activity.stt is old_stt
+        assert activity.tts is old_tts
+
+        # call update_options on the ACTIVITY directly — bypass the session
+        activity.update_options(stt=new_stt, tts=new_tts)
+
+        # every read must reflect the new instances, even though we never went
+        # through AgentSession.update_options
+        assert session._stt is new_stt
+        assert session._tts is new_tts
+        assert activity.stt is new_stt
+        assert activity.tts is new_tts
+        # and the agent-level mirror held (or didn't) depending on whether the
+        # agent was constructed with its own STT — here it wasn't, so the
+        # branch is a no-op
+        assert agent._stt is new_stt or agent._stt is NOT_GIVEN
+    finally:
+        await session.aclose()
+
+
+async def test_update_options_directly_on_activity_with_agent_bound_stt() -> None:
+    """When the agent has its own STT, calling activity.update_options directly
+    must still mirror the swap onto agent._stt.
+    """
+    from livekit.agents.voice.agent_session import AgentSession
+    from livekit.agents.voice.audio_recognition import AudioRecognition
+
+    from .fake_stt import FakeSTT
+
+    agent_stt = FakeSTT()
+    new_stt = FakeSTT()
+    session = AgentSession()
+    try:
+        agent = MyAgent()
+        agent._stt = agent_stt  # bypass the constructor's NotGivenOr normalization
+        activity = AgentActivity(agent, session)
+
+        audio_recognition = AudioRecognition(
+            session,
+            hooks=activity,
+            stt=None,
+            vad=None,
+            using_default_vad=False,
+            interruption_detection=None,
+            endpointing=create_endpointing(activity.endpointing_opts),
+            turn_detection=None,
+            stt_model=None,
+            stt_provider=None,
+        )
+        activity._audio_recognition = audio_recognition
+        session._activity = activity
+        session._agent = agent
+
+        # spy on update_stt without invoking the original — see comment above
+        def spy_update_stt(stt_node, **kwargs):  # type: ignore[no-untyped-def]
+            pass
+
+        audio_recognition.update_stt = spy_update_stt  # type: ignore[method-assign]
+
+        # activity prefers agent.stt over session.stt
+        assert activity.stt is agent_stt
+
+        # direct call on the activity
+        activity.update_options(stt=new_stt)
+
+        # session, agent, and activity all see the new STT
+        assert session._stt is new_stt
+        assert agent._stt is new_stt
+        assert activity.stt is new_stt
+    finally:
+        await session.aclose()
