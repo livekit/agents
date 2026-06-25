@@ -514,7 +514,7 @@ class AgentActivity(RecognitionHooks):
         *,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
-        tts: NotGivenOr[object] = NOT_GIVEN,
+        tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         endpointing_opts: NotGivenOr[EndpointingOptions] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         # deprecated
@@ -567,12 +567,25 @@ class AgentActivity(RecognitionHooks):
                 self._audio_recognition.update_stt(
                     self._agent.stt_node if stt is not None else None
                 )
+            # Also mirror the swap onto session._stt / agent._stt so activity.stt
+            # resolves to the new instance on the next read. AgentSession.update_options
+            # already does this before calling here, so this branch is normally a no-op
+            # — but it makes the contract symmetric for callers that invoke
+            # update_options on the activity directly (e.g. custom plugins or tests).
+            resolved_stt = stt if stt is not None else None
+            self._session._stt = resolved_stt
+            if is_given(self._agent.stt):
+                self._agent._stt = resolved_stt
 
         if is_given(tts):
             # No pipeline to restart: tts_node reads activity.tts fresh on every synthesis
-            # call, and activity.tts already resolves to the new TTS because session._tts
-            # and (if applicable) agent._tts were updated upstream in AgentSession.update_options.
-            pass
+            # call. Mirror the swap onto session._tts / agent._tts so activity.tts
+            # resolves to the new instance on the next read — see the stt branch above
+            # for the rationale.
+            resolved_tts = tts if tts is not None else None
+            self._session._tts = resolved_tts
+            if is_given(self._agent.tts):
+                self._agent._tts = resolved_tts
 
         if self._audio_recognition:
             self._audio_recognition.update_options(
