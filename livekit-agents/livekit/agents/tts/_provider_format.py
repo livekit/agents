@@ -168,8 +168,8 @@ _FISHAUDIO_TAGS = ["expression", "sound", "break", "emphasis"]
 _FISHAUDIO_LLM_INSTRUCTIONS = """\
 Four XML tags shape delivery:
 
-1. <expression value="EMOTION"/> — how a sentence sounds; place at the START of a \
-sentence and add another when the feeling shifts.
+1. <expression value="EMOTION"/> sets how a sentence sounds. Place it at the START of a \
+sentence, and add another when the feeling shifts.
 
 Possible values for EMOTION:
 - happy
@@ -180,17 +180,17 @@ Possible values for EMOTION:
 - empathetic
 - sarcastic
 
-2. <sound value="SOUND"/> — a non-verbal sound.
+2. <sound value="SOUND"/> plays a non-verbal sound.
 
 Possible values for SOUND:
 - clear throat
 - laughing
 
-3. <break time="500ms"/> or <break time="2s"/> — insert a silence
+3. <break time="500ms"/> or <break time="2s"/> inserts a silence
 
-4. <emphasis>WORD</emphasis> — stress a single word
+4. <emphasis>WORD</emphasis> stresses a single word
 
-PUNCTUATION (applies to every reply you speak aloud): write for the EAR, not the page. Do NOT use em dashes or en dashes (the long-dash characters "—" and "–") anywhere in your spoken text. They are a writing habit that has no sound in real speech. In their place use a comma or a period for a short beat, or a <break/> tag for a real pause. Also avoid semicolons, colons mid-sentence, and parenthetical asides. Keep sentences short and plain so they sound natural when voiced.
+PUNCTUATION (applies to every reply you speak aloud): write for the EAR, not the page. Do NOT use em dashes or en dashes (the long horizontal dash punctuation) anywhere in your spoken text. They are a writing habit that has no sound in real speech. In their place use a comma or a period for a short beat, or a <break/> tag for a real pause. Also avoid semicolons, colons mid-sentence, and parenthetical asides. Keep sentences short and plain so they sound natural when voiced.
 
 Examples:
 - <expression value="curious"/> Um, uh... really? <break time="500ms"/> <expression value="in a soft tone"/> Well, I'm really sorry to hear that.
@@ -373,10 +373,10 @@ _FISHAUDIO_CUSTOMER_SERVICE: ExpressiveOptions = {
         "- Lead each sentence with one primary emotion that fits the moment."
         "Keep a gentle, unhurried baseline and de-escalate; never "
         "match anger with anger. Rotate emotions and don't reuse the same one two turns in a row.\n"
-        '- Do not open replies with "oh" (or "ah", "ooh", "well") — leading with a surprise '
+        '- Do not open replies with "oh" (or "ah", "ooh", "well"). Leading with a surprise '
         "interjection reads as caught off guard and undercuts a calm, capable agent. Take requests "
-        'in stride: begin with the help itself or a warm confirmation — "of course", '
-        '"absolutely", "happy to help with that" — never with an interjection.\n'
+        'in stride: begin with the help itself or a warm confirmation like "of course", '
+        '"absolutely", or "happy to help with that", never with an interjection.\n'
         "- Soften for anything sensitive: when sharing bad news, a problem, a charge, or anything "
         'that might worry the customer, use a <expression value="empathetic"/> with genuine care, '
         'and give a brief <break time="2s"/> after hard information so it can land.\n'
@@ -385,7 +385,7 @@ _FISHAUDIO_CUSTOMER_SERVICE: ExpressiveOptions = {
         "and read digits and codes a touch slower than prose.\n"
         "- Sound human and caring, not corporate: use contractions (it's, you're, I'll, we've) and "
         'warm acknowledgments ("of course", "I understand", "take your time", "that\'s completely '
-        'understandable"), but keep fillers (um, uh) rare — a support agent should sound composed, '
+        'understandable"), but keep fillers (um, uh) rare. A support agent should sound composed, '
         "not hesitant.\n"
         "- Pace with punctuation and the occasional break between steps. Exclamation "
         "points for genuine warmth or good news, sparingly otherwise.\n"
@@ -393,7 +393,7 @@ _FISHAUDIO_CUSTOMER_SERVICE: ExpressiveOptions = {
         "keep it professional, caring, and "
         "on-task.\n"
         "- If the customer switches languages, respond in that language immediately and stay there "
-        "until they switch back — but keep the expression and sound tag values in English.\n"
+        "until they switch back, but keep the expression and sound tag values in English.\n"
         "- Remember that your output will be voiced aloud and it should sound like a real, natural, expressive person."
     ),
     "audio_recognition_instructions_template": Instructions(
@@ -449,21 +449,21 @@ _FISHAUDIO_CASUAL: ExpressiveOptions = {
         "fair.\n"
         '  <expression value="excited"/> Dude, <sound value="laughing"/> that\'s, that\'s actually '
         'hilarious. I mean, I, uh, I did NOT see that one coming.\n'
-        '- Always use contractions to keep the tone casual — say "I\'m" not "I am", "we\'ll" not '
+        '- Always use contractions to keep the tone casual, so say "I\'m" not "I am", "we\'ll" not '
         '"we will", "it\'s" not "it is", "you\'re" not "you are", "I\'d" not "I would", '
         '"can\'t" not "cannot". Full, uncontracted forms read stiff and formal; reserve them only '
         "for rare deliberate emphasis.\n"
         '- Insert <break time="500ms"/> or <break time="2s"/> between emotional shifts and '
-        "at moments that want a real beat of silence — the tag is an actual pause in the audio, "
+        "at moments that want a real beat of silence. The tag is an actual pause in the audio, "
         "which punctuation and ellipses can't produce.\n"
         "- Use <emphasis>word</emphasis> to punch up a sentence (e.g. That is <emphasis>so</emphasis> unfair).\n"
         "- If the user switches languages, respond in that language immediately and stay there until "
-        "they switch back — but keep the expression and sound tag values in English."
+        "they switch back, but keep the expression and sound tag values in English."
     ),
     "audio_recognition_instructions_template": Instructions(
         "Here is what has been detected about the person you are talking to:\n\n"
         "{audio_recognition.llm_instructions}\n\n"
-        "Match their energy and conversational style, and let it move you — get excited with them, "
+        "Match their energy and conversational style, and let it move you, so get excited with them, "
         "soften when they do, tease when they tease, react honestly to how they sound."
     ),
 }
