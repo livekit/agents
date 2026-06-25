@@ -207,13 +207,6 @@ class SpeechHandle:
             with contextlib.suppress(asyncio.CancelledError):
                 gather_fut.cancel()
                 await gather_fut
-        else:
-            # Check if any of the awaited futures raised an exception
-            # (return_exceptions=True in gather suppresses them)
-            results = gather_fut.result() if gather_fut.done() else []
-            for result in results:
-                if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError):
-                    raise result
 
     def _cancel(self) -> SpeechHandle:
         if self.done():
