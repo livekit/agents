@@ -93,9 +93,7 @@ async def test_no_event_without_stt() -> None:
     events: list[UserTranscriptionTimeoutEvent] = []
     session.on("user_transcription_timeout", events.append)
 
-    await asyncio.wait_for(
-        run_session(session, _agent(), drain_delay=10), timeout=SESSION_TIMEOUT
-    )
+    await asyncio.wait_for(run_session(session, _agent(), drain_delay=10), timeout=SESSION_TIMEOUT)
 
     assert events == []
 
