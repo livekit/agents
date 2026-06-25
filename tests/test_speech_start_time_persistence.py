@@ -58,6 +58,7 @@ class TestUserTurnStartPersistence:
         audio_recognition._vad_base_turn_detection = False
         audio_recognition._turn_detection_mode = None
         audio_recognition._stt = None
+        audio_recognition._stt_pipeline = None
         audio_recognition._stt_model = None
         audio_recognition._stt_provider = None
         audio_recognition._audio_transcript = ""
