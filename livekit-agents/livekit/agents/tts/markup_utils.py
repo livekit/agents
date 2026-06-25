@@ -46,6 +46,33 @@ def convert_expression_tags(text: str) -> str:
     return text
 
 
+def convert_expression_to_fish(text: str) -> str:
+    """Fish-specific variant of `convert_expression_tags`.
+
+    Same shape handling, but each ``<expression>`` value is intensified with a leading
+    "very" so the emotion lands harder in Fish's audio, e.g.
+    ``<expression value="regretful"/>foo`` → ``[very regretful]foo``. ``<sound>`` values
+    pass through unchanged (``[laughing]``), and an already-"very" value isn't doubled.
+    """
+
+    def _expr(m: re.Match[str]) -> str:
+        value = m.group(1).strip()
+        if value and not value.lower().startswith("very "):
+            value = f"very {value}"
+        content = m.group(2)
+        return f"[{value}]{content}" if content is not None else f"[{value}]"
+
+    def _sound(m: re.Match[str]) -> str:
+        value = m.group(1)
+        content = m.group(2)
+        return f"[{value}]{content}" if content is not None else f"[{value}]"
+
+    text = _EXPRESSION_RE.sub(_expr, text)
+    text = _SOUND_RE.sub(_sound, text)
+    text = _ORPHAN_CLOSE_RE.sub("", text)
+    return text
+
+
 def convert_break_to_ellipsis(text: str) -> str:
     """Replace ``<break time="..."/>`` tags with an ellipsis (``...``).
 
