@@ -16,14 +16,12 @@ _ContextVar = contextvars.ContextVar[_ClientFactory | None]("agent_http_session"
 
 
 def _create_ssl_context() -> ssl.SSLContext:
-    """Build the TLS context used by the shared http session.
+    """TLS context for the shared http session.
 
-    Honors the ``SSL_CERT_FILE`` / ``SSL_CERT_DIR`` environment overrides, then
-    prefers the host's system trust store. When that store is missing or
-    unresolvable (e.g. minimal containers without a ca-certificates package),
-    certifi's CA bundle is loaded as a fallback so TLS still verifies. This
-    mirrors the certifi-backed behavior of the httpx client used by the
-    inference LLM, giving consistent TLS trust roots across LLM, STT, and TTS.
+    Honors ``SSL_CERT_FILE`` / ``SSL_CERT_DIR``, otherwise prefers the system
+    trust store and falls back to certifi when no system store is resolvable
+    (e.g. minimal containers without ca-certificates), matching the httpx
+    client used by the inference LLM.
     """
     cafile = os.environ.get("SSL_CERT_FILE")
     capath = os.environ.get("SSL_CERT_DIR")
@@ -32,10 +30,8 @@ def _create_ssl_context() -> ssl.SSLContext:
 
     ctx = ssl.create_default_context()
 
-    # `create_default_context()` configures the system trust store (eagerly for
-    # a cafile, lazily for a hashed capath dir), so cert_store_stats() can't be
-    # trusted cross-platform. Check whether the default verify paths actually
-    # resolve on disk; if not, the host has no usable system store.
+    # cert_store_stats() can't tell us this: a hashed capath dir loads lazily and
+    # reports 0 even when present. Check whether the verify paths exist on disk.
     paths = ssl.get_default_verify_paths()
     has_system_store = bool(
         (paths.cafile and os.path.exists(paths.cafile))

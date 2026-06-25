@@ -108,7 +108,6 @@ def test_ssl_context_falls_back_to_certifi_without_system_store(
     )
 
     ctx = http_context._create_ssl_context()
-    # certifi roots are eagerly loaded so verification still works
     assert ctx.cert_store_stats()["x509"] >= _certifi_cert_count()
 
 
@@ -127,7 +126,6 @@ def test_ssl_context_uses_system_store_when_present(
     if not has_system_store:
         pytest.skip("host has no system trust store to exercise this path")
 
-    # should not raise and should return a usable verifying context
     ctx = http_context._create_ssl_context()
     assert ctx.verify_mode == ssl.CERT_REQUIRED
 
