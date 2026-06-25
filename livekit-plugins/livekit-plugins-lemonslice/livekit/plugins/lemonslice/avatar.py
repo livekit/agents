@@ -249,7 +249,7 @@ class AvatarSession(BaseAvatarSession):
 
         self._meeting_relay_task = asyncio.create_task(
             stream_meeting_relay(
-                result.agent_audio_websocket_url,
+                result.websocket_url,
                 meeting_audio.submit,
                 chat_sink=chat_sink,
                 stop=relay_stop,

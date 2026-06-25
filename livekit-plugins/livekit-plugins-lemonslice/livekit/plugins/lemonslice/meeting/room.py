@@ -10,9 +10,9 @@ class JoinMeetingResult:
     """Result of adding an active LemonSlice session to an external meeting.
 
     Attributes:
-        agent_audio_websocket_url: WebSocket URL for mixed meeting audio and chat.
+        websocket_url: WebSocket URL for mixed meeting audio and chat.
         meeting_bot_id: Identifier for the bot instance in the external meeting.
     """
 
-    agent_audio_websocket_url: str
+    websocket_url: str
     meeting_bot_id: str

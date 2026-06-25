@@ -165,7 +165,7 @@ class LemonSliceAPI:
         url = f"{self._api_url.rstrip('/')}/{session_id}/join-meeting"
         data = await self._post(payload, url=url)
         return JoinMeetingResult(
-            agent_audio_websocket_url=str(data["agent_audio"]["websocket_url"]),
+            websocket_url=str(data["websocket_url"]),
             meeting_bot_id=str(data["meeting_bot_id"]),
         )
 
