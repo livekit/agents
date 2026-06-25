@@ -41,8 +41,8 @@ from phonic.types import (
 
 from ..log import logger
 
-PHONIC_INPUT_SAMPLE_RATE = 44100
-PHONIC_OUTPUT_SAMPLE_RATE = 44100
+PHONIC_INPUT_SAMPLE_RATE = 24000
+PHONIC_OUTPUT_SAMPLE_RATE = 24000
 PHONIC_NUM_CHANNELS = 1
 
 CONVERSATION_HISTORY_PREFIX = (
@@ -518,8 +518,9 @@ class RealtimeSession(llm.RealtimeSession):
             "generate_welcome_message": self._opts.generate_welcome_message,
             "system_prompt": system_prompt,
             "voice_id": self._opts.voice,
-            "input_format": "pcm_44100",
-            "output_format": "pcm_44100",
+            "input_format": "pcm_24000",
+            "output_format": "pcm_24000",
+            "stream_ahead_of_real_time": True,
             "default_language": self._opts.default_language,
             "additional_languages": self._opts.additional_languages,
             "multilingual_mode": self._opts.multilingual_mode,
