@@ -5,8 +5,11 @@ inference STT error surface when called outside a job context.
 from __future__ import annotations
 
 import asyncio
+import os
+import ssl
 
 import aiohttp
+import certifi
 import pytest
 
 from livekit.agents import inference
@@ -69,6 +72,64 @@ async def test_http_session_error_message_points_to_helper() -> None:
         http_context.http_session()
     msg = str(exc_info.value)
     assert "http_context.open()" in msg
+
+
+def _certifi_cert_count() -> int:
+    ctx = ssl.create_default_context(cafile=certifi.where())
+    return ctx.cert_store_stats()["x509"]
+
+
+def test_ssl_context_honors_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SSL_CERT_FILE / SSL_CERT_DIR take precedence over the system store."""
+    monkeypatch.setenv("SSL_CERT_FILE", certifi.where())
+    monkeypatch.delenv("SSL_CERT_DIR", raising=False)
+
+    ctx = http_context._create_ssl_context()
+    assert ctx.cert_store_stats()["x509"] == _certifi_cert_count()
+
+
+def test_ssl_context_falls_back_to_certifi_without_system_store(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the host has no resolvable system trust store, certifi is loaded."""
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    monkeypatch.delenv("SSL_CERT_DIR", raising=False)
+    monkeypatch.setattr(
+        ssl,
+        "get_default_verify_paths",
+        lambda: ssl.DefaultVerifyPaths(
+            cafile="/nonexistent/cert.pem",
+            capath="/nonexistent/certs",
+            openssl_cafile_env="SSL_CERT_FILE",
+            openssl_cafile="/nonexistent/cert.pem",
+            openssl_capath_env="SSL_CERT_DIR",
+            openssl_capath="/nonexistent/certs",
+        ),
+    )
+
+    ctx = http_context._create_ssl_context()
+    # certifi roots are eagerly loaded so verification still works
+    assert ctx.cert_store_stats()["x509"] >= _certifi_cert_count()
+
+
+def test_ssl_context_uses_system_store_when_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A resolvable system store is used as-is, without forcing certifi in."""
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    monkeypatch.delenv("SSL_CERT_DIR", raising=False)
+
+    paths = ssl.get_default_verify_paths()
+    has_system_store = bool(
+        (paths.cafile and os.path.exists(paths.cafile))
+        or (paths.capath and os.path.isdir(paths.capath))
+    )
+    if not has_system_store:
+        pytest.skip("host has no system trust store to exercise this path")
+
+    # should not raise and should return a usable verifying context
+    ctx = http_context._create_ssl_context()
+    assert ctx.verify_mode == ssl.CERT_REQUIRED
 
 
 async def test_inference_stt_surfaces_real_error_outside_ctx(
