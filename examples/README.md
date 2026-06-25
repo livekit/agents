@@ -26,6 +26,10 @@ session = AgentSession(
 
 A collection of voice-based agent examples, including basic voice interactions, tool integrations, RAG implementations, real-time models, and tracing.
 
+### 🖼️ [Avatar Agents](./avatar_agents/)
+
+Examples showing how to integrate visual avatars with voice agents, including integrations with various avatar providers like Anam, Avatario, Bey, BitHuman, Protoface, Simli, and Tavus.
+
 ### 🔄 [Warm Transfer](./warm-transfer/)
 
 Demonstrates supervisor escalation workflows for call centers, showing how to implement warm transfers where agents can brief supervisors before connecting them to customers.
