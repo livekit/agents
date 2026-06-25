@@ -1736,6 +1736,7 @@ async def test_generate_reply_timeout_raises_realtime_error() -> None:
         @property
         def tools(self):
             from livekit.agents.llm import ToolContext
+
             return ToolContext([])
 
         async def update_instructions(self, instructions: str) -> None:
