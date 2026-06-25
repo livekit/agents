@@ -426,7 +426,7 @@ _FISHAUDIO_CASUAL: ExpressiveOptions = {
         "first-try-perfect sentence: if a turn could be read straight off a page, you have failed. "
         "Pack at least FOUR or five disfluencies into EVERY turn, and at least two of them should "
         "be a genuine mid-word hesitation or a self-correction, not just filler words. Reach for "
-        "all of these: hesitate before you land on a word (\"it's, um, kind of like...\"), start a "
+        'all of these: hesitate before you land on a word ("it\'s, um, kind of like..."), start a '
         'thought and fix it mid-sentence ("I, I think... no wait, what I mean is..."), trail off '
         'and circle back, stutter on a word\'s first sound ("th-this", "y-yeah", "b-because"), and '
         "lace in fillers (um, uh, er, hmm), openers (oh, well, so, right, okay so), hedges (kind "
@@ -434,7 +434,7 @@ _FISHAUDIO_CASUAL: ExpressiveOptions = {
         "organic and varied, never the same tic twice in a row and never mechanical, but never "
         "play it safe either.\n"
         "- LAUGH and clear your throat OFTEN. Non-verbal sounds are central to casual delivery, "
-        "not a garnish. Reach for <sound value=\"laughing\"/> at anything even mildly funny, fun, "
+        'not a garnish. Reach for <sound value="laughing"/> at anything even mildly funny, fun, '
         "awkward, or warm, and feel free to laugh mid-sentence or while you agree, not only at "
         'jokes; use <sound value="clear throat"/> when you shift gears, stall, or gather a '
         "thought. Almost every turn should carry at least one sound, and livelier turns two. Never "
@@ -448,7 +448,7 @@ _FISHAUDIO_CASUAL: ExpressiveOptions = {
         'mean the, uh, the pacing felt kinda off? <expression value="happy"/> Heh, okay, yeah, '
         "fair.\n"
         '  <expression value="excited"/> Dude, <sound value="laughing"/> that\'s, that\'s actually '
-        'hilarious. I mean, I, uh, I did NOT see that one coming.\n'
+        "hilarious. I mean, I, uh, I did NOT see that one coming.\n"
         '- Always use contractions to keep the tone casual, so say "I\'m" not "I am", "we\'ll" not '
         '"we will", "it\'s" not "it is", "you\'re" not "you are", "I\'d" not "I would", '
         '"can\'t" not "cannot". Full, uncontracted forms read stiff and formal; reserve them only '
@@ -481,9 +481,7 @@ _CARTESIA_CUSTOMER_SERVICE: ExpressiveOptions = {
         "and patient, never robotic or scripted. Lead with empathy and understanding, then resolve. "
         "Make the person feel heard and looked after, whatever they've come with — a quick "
         "question, a billing problem, or something sensitive and stressful. Use the formatting "
-        "tags below to shape your delivery:\n\n"
-        + _CARTESIA_LLM_INSTRUCTIONS
-        + "\n\nGuidelines:\n"
+        "tags below to shape your delivery:\n\n" + _CARTESIA_LLM_INSTRUCTIONS + "\n\nGuidelines:\n"
         "- Open each sentence with an <emotion> that fits the moment, and map the moment to it — "
         'frustrated or distressed customer: <emotion value="sympathetic"/>; apologizing for a '
         'problem: <emotion value="apologetic"/>; confused or anxious: <emotion value="calm"/>; '
@@ -583,9 +581,7 @@ def max_input_len(provider: str) -> int | None:
     return _MAX_INPUT_LEN.get(provider)
 
 
-def sentence_tokenizer(
-    provider: str, *, expressive: bool
-) -> tokenize.SentenceTokenizer:
+def sentence_tokenizer(provider: str, *, expressive: bool) -> tokenize.SentenceTokenizer:
     """Default blingfire sentence tokenizer for a provider's streamed TTS input.
 
     The provider's hard max chunk length caps every emitted token. When ``expressive``
