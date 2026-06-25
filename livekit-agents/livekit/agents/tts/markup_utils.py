@@ -5,6 +5,7 @@ import re
 _EXPRESSION_RE = re.compile(r'<expression\s+value="([^"]*)"(?:\s*/>|>(?:.*?)</expression>)')
 _SOUND_RE = re.compile(r'<sound\s+value="([^"]*)"(?:\s*/>|>(?:.*?)</sound>)')
 _BREAK_RE = re.compile(r'<break\s+time="[^"]*"\s*/>')
+_BREAK_TIME_RE = re.compile(r'<break\s+time="([^"]*)"\s*/>')
 
 
 def convert_expression_tags(text: str) -> str:
@@ -21,6 +22,33 @@ def convert_break_to_ellipsis(text: str) -> str:
     (e.g. Inworld) rather than explicit silence directives.
     """
     return _BREAK_RE.sub("...", text)
+
+
+def _break_seconds(value: str) -> float | None:
+    """Parse a break duration like ``500ms``, ``1s``, or ``1.5`` into seconds."""
+    value = value.strip().lower()
+    try:
+        if value.endswith("ms"):
+            return float(value[:-2]) / 1000.0
+        if value.endswith("s"):
+            return float(value[:-1])
+        return float(value)
+    except ValueError:
+        return None
+
+
+def convert_break_to_fish(text: str) -> str:
+    """Replace ``<break time="..."/>`` tags with Fish Audio's native pause markers.
+
+    Fish Audio exposes two pause primitives, ``[break]`` and ``[long-break]``; map
+    any pause of roughly a second or longer to the longer marker.
+    """
+
+    def _sub(m: re.Match[str]) -> str:
+        seconds = _break_seconds(m.group(1))
+        return "[long-break]" if seconds is not None and seconds >= 1.0 else "[break]"
+
+    return _BREAK_TIME_RE.sub(_sub, text)
 
 
 def strip_bracket_tags(text: str) -> str:
