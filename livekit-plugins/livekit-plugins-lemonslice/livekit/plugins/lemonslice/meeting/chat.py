@@ -48,7 +48,7 @@ class MeetingChatRelay:
         else:
             self._bot_name = _DEFAULT_BOT_NAME.lower()
         self._loop = asyncio.get_running_loop()
-        self._queue: asyncio.Queue[str] = asyncio.Queue()
+        self._queue: asyncio.Queue[str] = asyncio.Queue(maxsize=100)
         self._drain_task: asyncio.Task[None] | None = None
 
     def submit_json(self, payload: str) -> None:
