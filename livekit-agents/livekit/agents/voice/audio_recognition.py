@@ -154,6 +154,8 @@ class _STTPipeline:
         self._event_ch = aio.Chan[stt.SpeechEvent]()
         self._pump_task = asyncio.create_task(self._stt_pump())
         self._pump_task.add_done_callback(lambda _: self._event_ch.close())
+        # wall-clock anchor for this stream, used in STT driven timestamps and barge-in
+        self.input_started_at: float | None = None
 
     @property
     def audio_ch(self) -> aio.Chan[rtc.AudioFrame]:
@@ -253,7 +255,6 @@ class AudioRecognition:
         self._interruption_atask: asyncio.Task[None] | None = None
         self._interruption_detection = interruption_detection
         self._interruption_ch: aio.Chan[inference.InterruptionDataFrameType] | None = None
-        self._input_started_at: float | None = None
         self._ignore_user_transcript_until: NotGivenOr[float] = NOT_GIVEN
         self._transcript_buffer: deque[SpeechEvent] = deque()
         self._interruption_enabled: bool = interruption_detection is not None and vad is not None
@@ -326,6 +327,10 @@ class AudioRecognition:
                     if self._turn_detector_stream is not None:
                         self._turn_detector_stream.cancel_inference()
                     self._turn_detector_prediction_fut = None
+
+    @property
+    def _input_started_at(self) -> float | None:
+        return self._stt_pipeline.input_started_at if self._stt_pipeline is not None else None
 
     def start(
         self,
@@ -570,6 +575,7 @@ class AudioRecognition:
             else []
         )
         _ignore_user_transcript_until = self._ignore_user_transcript_until
+        _input_started_at = self._input_started_at
         # reset before emitting to avoid recursive calls
         self._reset_interruption_detection()
 
@@ -580,7 +586,7 @@ class AudioRecognition:
                     0,
                     (
                         ev.alternatives[0].end_time
-                        + self._input_started_at
+                        + _input_started_at
                         - _ignore_user_transcript_until
                     )
                     + (cooldown or 0.0),
@@ -647,11 +653,11 @@ class AudioRecognition:
         ``frame`` (e.g. a silence substitute during AEC warmup or uninterruptible
         speech). VAD, AMD and the interruption channel always receive ``frame``.
         """
-        if self._input_started_at is None:
-            self._input_started_at = time.time() - frame.duration
-
         self._sample_rate = frame.sample_rate
         if self._stt_pipeline is not None:
+            # stamp the wall-clock anchor on the first frame to reach the pipeline
+            if self._stt_pipeline.input_started_at is None:
+                self._stt_pipeline.input_started_at = time.time() - frame.duration
             self._stt_pipeline.audio_ch.send_nowait(stt_frame if stt_frame is not None else frame)
 
         if self._vad_ch is not None:
@@ -716,7 +722,6 @@ class AudioRecognition:
             # reset interruption handling related state
             self._transcript_buffer.clear()
             self._ignore_user_transcript_until = NOT_GIVEN
-            self._input_started_at = None
         else:
             if self._stt_consumer_atask is not None:
                 task = asyncio.create_task(aio.cancel_and_wait(self._stt_consumer_atask))
@@ -798,7 +803,6 @@ class AudioRecognition:
             )
             self._transcript_buffer.clear()
             self._ignore_user_transcript_until = NOT_GIVEN
-            self._input_started_at = None
         elif self._interruption_atask is not None:
             task = asyncio.create_task(aio.cancel_and_wait(self._interruption_atask))
             task.add_done_callback(lambda _: self._tasks.discard(task))
@@ -1033,10 +1037,11 @@ class AudioRecognition:
             and ev.alternatives[0].end_time > 0
             and self._input_started_at is not None
         )
+        now = time.time()
         stt_last_speaking_time = (
-            ev.alternatives[0].end_time + self._input_started_at
+            min(ev.alternatives[0].end_time + self._input_started_at, now)
             if has_stt_end_time and self._input_started_at is not None
-            else time.time()
+            else now
         )
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
             transcript = ev.alternatives[0].text
