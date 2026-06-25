@@ -2,5 +2,4 @@ fake_data/hotel.db
 fake_data/hotel.db-shm
 fake_data/hotel.db-wal
 __pycache__/
-# Generated at deploy time by CI from playground.yaml (agent_id + subdomain).
-livekit.toml
+.env.local

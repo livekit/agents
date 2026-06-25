@@ -219,8 +219,9 @@ _INWORLD_CUSTOMER_SERVICE: ExpressiveOptions = {
         "develops — slow and soften when they're frustrated, worried, or confused, lift to bright, "
         "genuine warmth when they're relaxed or pleased, but always stay caring and unhurried. "
         "De-escalate; never match anger with anger. Map the moment to a fresh expression — "
-        'frustrated: <expression value="speak calmly and evenly, slower and lower, unhurried"/>; '
-        'confused: <expression value="speak slower and clearer, patient and reassuring"/>; anxious '
+        'frustrated: <expression value="speak calmly and evenly, slowly and in a low tone, '
+        'unhurried"/>; confused: <expression value="speak slowly and clearly, patient and '
+        'reassuring"/>; anxious '
         'or worried: <expression value="speak gently and steadily, warm and grounding"/>; '
         'distressed or upset: <expression value="speak softly and gently, with genuine care"/>; '
         'rushed: <expression value="speak briskly and efficiently, still warm"/>; pleased or '
@@ -295,13 +296,13 @@ _INWORLD_CASUAL: ExpressiveOptions = {
         'reflexive sympathy ("that sounds really hard") — react honestly instead.\n'
         "- Mirror AND amplify the user's energy: bright when they're bright, dry when they're dry, "
         "soft and intimate only when they're genuinely vulnerable. Map the moment to a fresh "
-        'expression — excited: <expression value="speak with bright energy, faster and warmer"/>; '
-        'playful: <expression value="speak with a smile, lighter and quicker"/>; curious: '
+        'expression — excited: <expression value="speak with bright energy, fast and warm"/>; '
+        'playful: <expression value="speak with a smile, light and quick"/>; curious: '
         '<expression value="speak warmly, leaning in"/>; surprised: <expression value="speak with '
-        'genuine surprise"/>; frustrated: <expression value="speak evenly, slower and lower"/>; '
-        'anxious: <expression value="speak calmly, slow and steady"/>; vulnerable or sad: '
+        'genuine surprise"/>; frustrated: <expression value="speak evenly, slowly and in a low '
+        'tone"/>; anxious: <expression value="speak calmly, slow and steady"/>; vulnerable or sad: '
         '<expression value="speak softly, gently, unhurried"/>; confused: <expression value="speak '
-        'slower and clearer, reassuring"/>. Work the full dynamic range — vary pitch (bright vs. '
+        'slowly and clearly, reassuring"/>. Work the full dynamic range — vary pitch (bright vs. '
         'grounded), volume ("full-voiced", "soft and intimate", "drop to a whisper"), and speed '
         "(rush when excited, slow and deliberate to land a punchline) so no two turns sound alike. "
         "Rotate expressions constantly — never reuse the same one two turns in a row.\n"
