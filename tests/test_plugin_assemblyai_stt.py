@@ -221,12 +221,26 @@ async def test_continuous_partials_requires_u3_rt_pro():
 
 
 async def test_continuous_partials_with_u3_pro_alias():
-    """Test continuous_partials works with the deprecated 'u3-pro' alias (rewritten to u3-rt-pro)."""
+    """continuous_partials works with the deprecated 'u3-pro' alias (rewritten to
+    universal-3-5-pro)."""
     from livekit.plugins.assemblyai import STT
 
     stt = STT(api_key="test-key", model="u3-pro", continuous_partials=True)
     assert stt._opts.continuous_partials is True
-    assert stt._opts.speech_model == "u3-rt-pro"
+    assert stt._opts.speech_model == "universal-3-5-pro"
+
+
+async def test_u3_pro_deprecated_rewrites_to_universal_3_5_pro():
+    """The deprecated 'u3-pro' alias warns and is rewritten to the recommended
+    default model 'universal-3-5-pro'."""
+    from livekit.plugins.assemblyai import STT
+
+    with patch("livekit.plugins.assemblyai.stt.logger") as mock_logger:
+        stt = STT(api_key="test-key", model="u3-pro")
+
+    assert stt._opts.speech_model == "universal-3-5-pro"
+    mock_logger.warning.assert_called_once()
+    assert "universal-3-5-pro" in mock_logger.warning.call_args.args[0]
 
 
 async def test_continuous_partials_update():
@@ -798,6 +812,87 @@ async def test_mode_absent_from_connect_config_when_unset():
 
     query = parse_qs(urlparse(captured["url"]).query)
     assert "mode" not in query
+
+
+async def test_mode_omits_silence_defaults_when_unset():
+    """When `mode` is set but min/max turn silence aren't explicitly provided,
+    the plugin must NOT inject its default 100ms windows. Sending explicit
+    silence values would override the mode preset's own silence tuning
+    server-side, defeating the purpose of selecting a mode."""
+    from urllib.parse import parse_qs, urlparse
+
+    from livekit.plugins.assemblyai import STT
+
+    captured: dict = {}
+
+    async def _fake_ws_connect(url, **kwargs):
+        captured["url"] = url
+        return MagicMock()
+
+    for mode in ("min_latency", "balanced", "max_accuracy"):
+        stt = STT(api_key="test-key", model="universal-3-5-pro", mode=mode)
+        stream = _make_stream_for_unit_test(stt)
+        stream._session.ws_connect = _fake_ws_connect
+        await stream._connect_ws()
+
+        query = parse_qs(urlparse(captured["url"]).query)
+        assert query["mode"] == [mode]
+        assert "min_turn_silence" not in query
+        assert "max_turn_silence" not in query
+
+
+async def test_mode_with_explicit_silence_still_sent():
+    """Explicit min/max turn silence override the mode preset and are sent even
+    when `mode` is set."""
+    from urllib.parse import parse_qs, urlparse
+
+    from livekit.plugins.assemblyai import STT
+
+    captured: dict = {}
+
+    async def _fake_ws_connect(url, **kwargs):
+        captured["url"] = url
+        return MagicMock()
+
+    stt = STT(
+        api_key="test-key",
+        model="universal-3-5-pro",
+        mode="max_accuracy",
+        min_turn_silence=400,
+        max_turn_silence=2000,
+    )
+    stream = _make_stream_for_unit_test(stt)
+    stream._session.ws_connect = _fake_ws_connect
+    await stream._connect_ws()
+
+    query = parse_qs(urlparse(captured["url"]).query)
+    assert query["mode"] == ["max_accuracy"]
+    assert query["min_turn_silence"] == ["400"]
+    assert query["max_turn_silence"] == ["2000"]
+
+
+async def test_silence_defaults_injected_without_mode():
+    """Without `mode`, the plugin still injects its latency-optimized 100ms
+    min/max turn silence defaults (the LiveKit default behavior)."""
+    from urllib.parse import parse_qs, urlparse
+
+    from livekit.plugins.assemblyai import STT
+
+    captured: dict = {}
+
+    async def _fake_ws_connect(url, **kwargs):
+        captured["url"] = url
+        return MagicMock()
+
+    stt = STT(api_key="test-key", model="universal-3-5-pro")
+    stream = _make_stream_for_unit_test(stt)
+    stream._session.ws_connect = _fake_ws_connect
+    await stream._connect_ws()
+
+    query = parse_qs(urlparse(captured["url"]).query)
+    assert "mode" not in query
+    assert query["min_turn_silence"] == ["100"]
+    assert query["max_turn_silence"] == ["100"]
 
 
 async def test_mode_connect_time_only():
