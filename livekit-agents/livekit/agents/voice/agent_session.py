@@ -1086,6 +1086,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def update_options(
         self,
         *,
+        stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
+        tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         endpointing_opts: NotGivenOr[EndpointingOptions] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         # deprecated
@@ -1096,11 +1098,21 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         Update the options for the agent session.
 
         Args:
+            stt (NotGivenOr[stt.STT | None], optional): Replace the speech-to-text component.
+                The live recognition pipeline is rewired immediately; the new language/model
+                takes effect from the next speech segment.
+            tts (NotGivenOr[tts.TTS | None], optional): Replace the text-to-speech component.
+                Takes effect from the next synthesis call — no pipeline restart required.
             endpointing_opts (NotGivenOr[EndpointingOptions], optional): Endpointing options.
             turn_detection (NotGivenOr[TurnDetectionMode | None], optional): Strategy for deciding
                 when the user has finished speaking. ``None`` reverts to automatic selection.
             min_endpointing_delay: Deprecated, use ``endpointing_opts`` instead.
             max_endpointing_delay: Deprecated, use ``endpointing_opts`` instead.
+
+        Note:
+            ``stt`` and ``tts`` are also module names imported at the top of this file. Inside
+            this method they are rebound to the parameter values; the module references are
+            not used in the method body, so no aliasing is required.
         """
         if is_given(min_endpointing_delay) or is_given(max_endpointing_delay):
             logger.warning(
@@ -1130,8 +1142,25 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if is_given(turn_detection):
             self._turn_detection = turn_detection
 
+        if is_given(stt):
+            self._stt = stt
+            # activity.stt prefers agent._stt when the agent was initialized with its own
+            # STT instance, so mirror the swap there too. Otherwise the activity would keep
+            # reading the old agent-bound STT and ignore the new session-level one.
+            if self._agent is not None and is_given(self._agent.stt):
+                self._agent._stt = stt
+
+        if is_given(tts):
+            self._tts = tts
+            # Same rationale as stt above: if the current agent was given its own TTS at
+            # construction, the activity resolves tts via agent._tts first.
+            if self._agent is not None and is_given(self._agent.tts):
+                self._agent._tts = tts
+
         if self._activity is not None:
             self._activity.update_options(
+                stt=stt,
+                tts=tts,
                 endpointing_opts=(
                     self._opts.endpointing if is_given(endpointing_opts) else NOT_GIVEN
                 ),

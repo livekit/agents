@@ -513,6 +513,8 @@ class AgentActivity(RecognitionHooks):
         self,
         *,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
+        stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
+        tts: NotGivenOr[object] = NOT_GIVEN,
         endpointing_opts: NotGivenOr[EndpointingOptions] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         # deprecated
@@ -554,6 +556,23 @@ class AgentActivity(RecognitionHooks):
                 "manual",
                 "realtime_llm",
             )
+
+        if is_given(stt):
+            # Rewire the live STT pipeline. We pass the agent's stt_node (the bound method),
+            # which the agent_activity wired in during __init__ — passing it here mirrors that
+            # initial wiring, but the STT instance it pulls from inside the node now reads
+            # activity.stt per call (which has been updated on the session and agent).
+            # Passing None disables STT.
+            if self._audio_recognition is not None:
+                self._audio_recognition.update_stt(
+                    self._agent.stt_node if stt is not None else None
+                )
+
+        if is_given(tts):
+            # No pipeline to restart: tts_node reads activity.tts fresh on every synthesis
+            # call, and activity.tts already resolves to the new TTS because session._tts
+            # and (if applicable) agent._tts were updated upstream in AgentSession.update_options.
+            pass
 
         if self._audio_recognition:
             self._audio_recognition.update_options(
