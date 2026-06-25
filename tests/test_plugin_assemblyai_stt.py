@@ -934,6 +934,22 @@ async def test_language_code_set():
     assert stt._opts.language_code == "es"
 
 
+async def test_language_code_normalized_to_iso_639_1():
+    """language_code is normalized to a bare ISO 639-1 code regardless of input format."""
+    from livekit.plugins.assemblyai import STT
+
+    for raw, expected in (
+        ("es", "es"),
+        ("es-ES", "es"),
+        ("Spanish", "es"),
+        ("en-US", "en"),
+        ("english", "en"),
+        ("pt-BR", "pt"),
+    ):
+        stt = STT(api_key="test-key", model="u3-rt-pro", language_code=raw)
+        assert stt._opts.language_code == expected
+
+
 async def test_language_code_requires_u3_pro_family():
     """language_code raises ValueError when used with a non-u3-rt-pro-family model."""
     from livekit.plugins.assemblyai import STT
