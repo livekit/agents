@@ -1728,7 +1728,7 @@ class AgentActivity(RecognitionHooks):
 
     def _on_input_audio_transcription_completed(self, ev: llm.InputTranscriptionCompleted) -> None:
         self._session._user_input_transcribed(
-            UserInputTranscribedEvent(transcript=ev.transcript, is_final=ev.is_final)
+            UserInputTranscribedEvent(transcript=ev.transcript, is_final=ev.is_final, item_id=ev.item_id)
         )
 
         if ev.is_final:
@@ -1964,6 +1964,7 @@ class AgentActivity(RecognitionHooks):
                 language=ev.alternatives[0].language,
                 transcript=ev.alternatives[0].text,
                 is_final=False,
+                item_id=ev.request_id or None,
                 speaker_id=ev.alternatives[0].speaker_id,
             ),
         )
@@ -1993,6 +1994,7 @@ class AgentActivity(RecognitionHooks):
                 language=ev.alternatives[0].language,
                 transcript=ev.alternatives[0].text,
                 is_final=True,
+                item_id=ev.request_id or None,
                 speaker_id=ev.alternatives[0].speaker_id,
             ),
         )
