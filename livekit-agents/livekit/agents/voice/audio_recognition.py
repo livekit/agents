@@ -259,6 +259,7 @@ class AudioRecognition:
         self._transcript_buffer: deque[SpeechEvent] = deque()
         self._interruption_enabled: bool = interruption_detection is not None and vad is not None
         self._agent_speaking: bool = False
+        self._agent_speech_started_at: float | None = None
 
         _backchannel_boundary: float | tuple[float, float] | None = (
             session.options.interruption.get("backchannel_boundary")
@@ -383,6 +384,7 @@ class AudioRecognition:
 
     def on_start_of_agent_speech(self, started_at: float) -> None:
         self._agent_speaking = True
+        self._agent_speech_started_at = started_at
         self._endpointing.on_start_of_agent_speech(started_at=started_at)
 
         # reset user turn tracker when agent starts speaking
@@ -556,10 +558,8 @@ class AudioRecognition:
                 self._reset_interruption_detection()
                 return
 
-            if (
-                ev.alternatives[0].end_time > 0
-                and ev.alternatives[0].end_time + self._input_started_at
-                < self._ignore_user_transcript_until
+            if ev.alternatives[0].end_time > 0 and self._within_ignore_window(
+                ev.alternatives[0].end_time + self._input_started_at
             ):
                 # reset the index to emit from the next valid event
                 emit_from_index = None
@@ -605,6 +605,26 @@ class AudioRecognition:
         """Reset relevant states for adaptive interruption detection."""
         self._transcript_buffer.clear()
         self._ignore_user_transcript_until = NOT_GIVEN
+        self._agent_speech_started_at = None
+
+    def _within_ignore_window(self, event_time: float) -> bool:
+        """Whether a wall-clock event time falls inside the active ignore-user-transcript window.
+
+        ``_ignore_user_transcript_until`` marks how long user transcripts are ignored
+        while the interruption detector adjudicates overlapping speech. The window is
+        bounded so a mis-anchored STT timestamp cannot be mistaken for a transcript
+        inside it: the event must land after the agent started speaking (lower bound)
+        and before both ``now`` and the ignore cutoff (upper bound). A timestamp computed
+        into the past (e.g. a fallback STT leg that reset its timeline) or into the future
+        therefore falls outside and is not held. The agent speech start is used as the
+        lower bound rather than the overlap start, since a turn may contain several
+        overlap episodes and each is still within the same ignore window.
+        """
+        if not is_given(self._ignore_user_transcript_until):
+            return False
+        lower = self._agent_speech_started_at or 0.0
+        upper = min(time.time(), self._ignore_user_transcript_until)
+        return lower < event_time < upper
 
     def _should_hold_stt_event(self, ev: stt.SpeechEvent) -> bool:
         """Test if the event should be held until the ignore_user_transcript_until timestamp."""
@@ -635,12 +655,11 @@ class AudioRecognition:
             # check if the event should be held if
             # 1. the stt input stream has started
             # 2. the current event has a valid start and end time, relative to the input stream start time
-            # 3. the event is for audio sent before the ignore_user_transcript_until timestamp
+            # 3. the event's wall-clock time falls inside the bounded ignore-user-transcript window
             and self._input_started_at is not None
             and not (ev.alternatives[0].start_time == ev.alternatives[0].end_time == 0)
             and ev.alternatives[0].start_time > 0
-            and ev.alternatives[0].start_time + self._input_started_at
-            < self._ignore_user_transcript_until
+            and self._within_ignore_window(ev.alternatives[0].start_time + self._input_started_at)
         ):
             return True
 

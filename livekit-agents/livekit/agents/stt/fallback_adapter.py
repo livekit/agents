@@ -342,6 +342,10 @@ class FallbackRecognizeStream(RecognizeStream):
                             retry_interval=self._fallback_adapter._retry_interval,
                         ),
                     )
+                    # update main_stream start time offset so transcript timestamps are properly adjusted
+                    main_stream.start_time_offset = self.start_time_offset + (
+                        time.time() - self._start_time
+                    )
 
                     if forward_input_task is None or forward_input_task.done():
                         forward_input_task = asyncio.create_task(_forward_input_task())
