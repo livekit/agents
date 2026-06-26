@@ -93,6 +93,21 @@ class MyAgent(Agent):
 SESSION_TIMEOUT = 60.0
 
 
+def test_user_input_transcribed_event_item_id():
+    """UserInputTranscribedEvent should accept and expose item_id (#6110).
+
+    item_id is the stable correlation key from llm.InputTranscriptionCompleted,
+    forwarded by AgentActivity._on_input_audio_transcription_completed so realtime
+    consumers can dedup repeated interim transcripts belonging to the same utterance.
+    """
+    ev = UserInputTranscribedEvent(transcript="hello", is_final=False, item_id="item_abc123")
+    assert ev.item_id == "item_abc123"
+
+    # item_id remains optional for non-realtime (STT-pipeline) transcripts
+    ev_no_id = UserInputTranscribedEvent(transcript="hello", is_final=True)
+    assert ev_no_id.item_id is None
+
+
 async def test_events_and_metrics() -> None:
     speed = 1
     actions = FakeActions()
