@@ -59,7 +59,7 @@ class STTOptions:
         "universal-3-5-pro",
     ] = "universal-3-5-pro"
     language_detection: NotGivenOr[bool] = NOT_GIVEN
-    language_code: NotGivenOr[LanguageCode] = NOT_GIVEN
+    language_code: NotGivenOr[str] = NOT_GIVEN
     end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN
     min_turn_silence: NotGivenOr[int] = NOT_GIVEN
     max_turn_silence: NotGivenOr[int] = NOT_GIVEN
@@ -102,7 +102,7 @@ class STT(stt.STT):
             "universal-3-5-pro",
         ] = "universal-3-5-pro",
         language_detection: NotGivenOr[bool] = NOT_GIVEN,
-        language_code: NotGivenOr[LanguageCode | str] = NOT_GIVEN,
+        language_code: NotGivenOr[str] = NOT_GIVEN,
         end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
         min_turn_silence: NotGivenOr[int] = NOT_GIVEN,
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
@@ -256,9 +256,9 @@ class STT(stt.STT):
 
         # Normalize to a bare ISO 639-1 code (e.g. "es-ES" / "Spanish" -> "es"),
         # the form AssemblyAI's language steering expects.
-        normalized_language_code: NotGivenOr[LanguageCode] = NOT_GIVEN
+        normalized_language_code: NotGivenOr[str] = NOT_GIVEN
         if is_given(language_code):
-            normalized_language_code = LanguageCode(LanguageCode(language_code).language)
+            normalized_language_code = LanguageCode(language_code).language
 
         self._opts = STTOptions(
             sample_rate=sample_rate,
