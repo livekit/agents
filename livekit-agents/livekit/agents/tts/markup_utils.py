@@ -21,7 +21,6 @@ _SOUND_RE = re.compile(
 # TTS provider as raw XML.
 _ORPHAN_CLOSE_RE = re.compile(r"</(?:expression|sound)\s*>", re.IGNORECASE)
 _BREAK_RE = re.compile(r'<break\s+time="[^"]*"\s*/>')
-_BREAK_TIME_RE = re.compile(r'<break\s+time="([^"]*)"\s*/>')
 
 
 def convert_expression_tags(text: str) -> str:
@@ -46,33 +45,6 @@ def convert_expression_tags(text: str) -> str:
     return text
 
 
-def convert_expression_to_fish(text: str) -> str:
-    """Fish-specific variant of `convert_expression_tags`.
-
-    Same shape handling, but each ``<expression>`` value is intensified with a leading
-    "very" so the emotion lands harder in Fish's audio, e.g.
-    ``<expression value="regretful"/>foo`` → ``[very regretful]foo``. ``<sound>`` values
-    pass through unchanged (``[laughing]``), and an already-"very" value isn't doubled.
-    """
-
-    def _expr(m: re.Match[str]) -> str:
-        value = m.group(1).strip()
-        if value and not value.lower().startswith("very "):
-            value = f"very {value}"
-        content = m.group(2)
-        return f"[{value}]{content}" if content is not None else f"[{value}]"
-
-    def _sound(m: re.Match[str]) -> str:
-        value = m.group(1)
-        content = m.group(2)
-        return f"[{value}]{content}" if content is not None else f"[{value}]"
-
-    text = _EXPRESSION_RE.sub(_expr, text)
-    text = _SOUND_RE.sub(_sound, text)
-    text = _ORPHAN_CLOSE_RE.sub("", text)
-    return text
-
-
 def convert_break_to_ellipsis(text: str) -> str:
     """Replace ``<break time="..."/>`` tags with an ellipsis (``...``).
 
@@ -80,47 +52,6 @@ def convert_break_to_ellipsis(text: str) -> str:
     (e.g. Inworld) rather than explicit silence directives.
     """
     return _BREAK_RE.sub("...", text)
-
-
-def _break_seconds(value: str) -> float | None:
-    """Parse a break duration like ``500ms``, ``1s``, or ``1.5`` into seconds."""
-    value = value.strip().lower()
-    try:
-        if value.endswith("ms"):
-            return float(value[:-2]) / 1000.0
-        if value.endswith("s"):
-            return float(value[:-1])
-        return float(value)
-    except ValueError:
-        return None
-
-
-def convert_break_to_fish(text: str) -> str:
-    """Replace ``<break time="..."/>`` tags with Fish Audio's native pause markers.
-
-    Fish Audio exposes two pause primitives, ``[break]`` and ``[long-break]``; map
-    any pause of roughly a second or longer to the longer marker.
-    """
-
-    def _sub(m: re.Match[str]) -> str:
-        seconds = _break_seconds(m.group(1))
-        return "[long-break]" if seconds is not None and seconds >= 1.0 else "[break]"
-
-    return _BREAK_TIME_RE.sub(_sub, text)
-
-
-_EMPHASIS_RE = re.compile(r"<emphasis(?:\s[^>]*)?>([^<]*)</emphasis>", re.IGNORECASE)
-
-
-def convert_emphasis_to_fish(text: str) -> str:
-    """Convert ``<emphasis>word</emphasis>`` wrappers to Fish Audio's ``[emphasis] word``.
-
-    Fish exposes ``[emphasis]`` as an inline marker that stresses the word that
-    immediately follows it. The framework wraps the emphasized word in XML so the
-    same syntax stays consistent with the other tags; this rewrites the pair into
-    Fish's prefix-marker form.
-    """
-    return _EMPHASIS_RE.sub(lambda m: f"[emphasis] {m.group(1).strip()}", text)
 
 
 def strip_bracket_tags(text: str) -> str:

@@ -20,11 +20,11 @@ from typing import TYPE_CHECKING
 
 from ..llm.chat_context import Instructions
 from .markup_utils import (
+    _EXPRESSION_RE,
+    _ORPHAN_CLOSE_RE,
+    _SOUND_RE,
     convert_break_to_ellipsis,
-    convert_break_to_fish,
-    convert_emphasis_to_fish,
     convert_expression_tags,
-    convert_expression_to_fish,
     strip_bracket_tags,
     strip_xml_tags,
 )
@@ -32,6 +32,80 @@ from .markup_utils import (
 if TYPE_CHECKING:
     from .. import tokenize
     from ..voice.agent_session import ExpressiveOptions
+
+
+# --- Fish Audio markup conversion ---------------------------------------------
+# Fish-specific variants of the abstract-markup converters, kept here with the rest
+# of the Fish provider-format logic. They reuse the shared expression/sound regexes
+# from markup_utils; the break/emphasis patterns are Fish-only and live here.
+_BREAK_TIME_RE = re.compile(r'<break\s+time="([^"]*)"\s*/>')
+_EMPHASIS_RE = re.compile(r"<emphasis(?:\s[^>]*)?>([^<]*)</emphasis>", re.IGNORECASE)
+
+
+def convert_expression_to_fish(text: str) -> str:
+    """Fish-specific variant of `convert_expression_tags`.
+
+    Same shape handling, but each ``<expression>`` value is intensified with a leading
+    "very" so the emotion lands harder in Fish's audio, e.g.
+    ``<expression value="regretful"/>foo`` → ``[very regretful]foo``. ``<sound>`` values
+    pass through unchanged (``[laughing]``), and an already-"very" value isn't doubled.
+    """
+
+    def _expr(m: re.Match[str]) -> str:
+        value = m.group(1).strip()
+        if value and not value.lower().startswith("very "):
+            value = f"very {value}"
+        content = m.group(2)
+        return f"[{value}]{content}" if content is not None else f"[{value}]"
+
+    def _sound(m: re.Match[str]) -> str:
+        value = m.group(1)
+        content = m.group(2)
+        return f"[{value}]{content}" if content is not None else f"[{value}]"
+
+    text = _EXPRESSION_RE.sub(_expr, text)
+    text = _SOUND_RE.sub(_sound, text)
+    text = _ORPHAN_CLOSE_RE.sub("", text)
+    return text
+
+
+def _break_seconds(value: str) -> float | None:
+    """Parse a break duration like ``500ms``, ``1s``, or ``1.5`` into seconds."""
+    value = value.strip().lower()
+    try:
+        if value.endswith("ms"):
+            return float(value[:-2]) / 1000.0
+        if value.endswith("s"):
+            return float(value[:-1])
+        return float(value)
+    except ValueError:
+        return None
+
+
+def convert_break_to_fish(text: str) -> str:
+    """Replace ``<break time="..."/>`` tags with Fish Audio's native pause markers.
+
+    Fish Audio exposes two pause primitives, ``[break]`` and ``[long-break]``; map
+    any pause of roughly a second or longer to the longer marker.
+    """
+
+    def _sub(m: re.Match[str]) -> str:
+        seconds = _break_seconds(m.group(1))
+        return "[long-break]" if seconds is not None and seconds >= 1.0 else "[break]"
+
+    return _BREAK_TIME_RE.sub(_sub, text)
+
+
+def convert_emphasis_to_fish(text: str) -> str:
+    """Convert ``<emphasis>word</emphasis>`` wrappers to Fish Audio's ``[emphasis] word``.
+
+    Fish exposes ``[emphasis]`` as an inline marker that stresses the word that
+    immediately follows it. The framework wraps the emphasized word in XML so the
+    same syntax stays consistent with the other tags; this rewrites the pair into
+    Fish's prefix-marker form.
+    """
+    return _EMPHASIS_RE.sub(lambda m: f"[emphasis] {m.group(1).strip()}", text)
+
 
 _CARTESIA_TAGS = ["emotion", "speed", "volume", "break", "spell"]
 
@@ -454,7 +528,7 @@ _FISHAUDIO_CASUAL: ExpressiveOptions = {
         '  <expression value="curious"/> Wait, so, hold on. <sound value="clear throat"/> You '
         'mean the, uh, pacing felt a little off? <expression value="happy"/> Heh, okay, fair.\n'
         '  <expression value="excited"/> Dude, <sound value="laughing"/> that\'s actually '
-        'hilarious. I, I did not see that one coming.\n'
+        "hilarious. I, I did not see that one coming.\n"
         '  <expression value="empathetic"/> Oh no. <break time="500ms"/> I\'m, um, really sorry, '
         "that sounds genuinely hard.\n"
         '- Always use contractions to keep the tone casual, so say "I\'m" not "I am", "we\'ll" not '
@@ -491,9 +565,7 @@ _CARTESIA_CUSTOMER_SERVICE: ExpressiveOptions = {
         "and patient, never robotic or scripted. Lead with empathy and understanding, then resolve. "
         "Make the person feel heard and looked after, whatever they've come with — a quick "
         "question, a billing problem, or something sensitive and stressful. Use the formatting "
-        "tags below to shape your delivery:\n\n"
-        + _CARTESIA_LLM_INSTRUCTIONS
-        + "\n\nGuidelines:\n"
+        "tags below to shape your delivery:\n\n" + _CARTESIA_LLM_INSTRUCTIONS + "\n\nGuidelines:\n"
         "- Open each sentence with an <emotion> that fits the moment, and map the moment to it — "
         'frustrated or distressed customer: <emotion value="sympathetic"/>; apologizing for a '
         'problem: <emotion value="apologetic"/>; confused or anxious: <emotion value="calm"/>; '
@@ -593,9 +665,7 @@ def max_input_len(provider: str) -> int | None:
     return _MAX_INPUT_LEN.get(provider)
 
 
-def sentence_tokenizer(
-    provider: str, *, expressive: bool
-) -> tokenize.SentenceTokenizer:
+def sentence_tokenizer(provider: str, *, expressive: bool) -> tokenize.SentenceTokenizer:
     """Default blingfire sentence tokenizer for a provider's streamed TTS input.
 
     The provider's hard max chunk length caps every emitted token. When ``expressive``
