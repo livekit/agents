@@ -838,7 +838,9 @@ async def test_backchannel_boundary_releases_end_boundary_transcript() -> None:
     recognition._stt_pipeline = SimpleNamespace(input_started_at=input_started_at)  # type: ignore[assignment]
 
     try:
-        recognition.on_start_of_agent_speech(started_at=time.time())
+        # the agent speaks for a couple of seconds so the held transcript still lands
+        # after the agent-speech start (the lower bound of the ignore window)
+        recognition.on_start_of_agent_speech(started_at=time.time() - 2.0)
         speech_ended_at = time.time()
         recognition.on_end_of_agent_speech(ignore_user_transcript_until=speech_ended_at)
 
