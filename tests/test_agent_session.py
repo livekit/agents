@@ -815,6 +815,97 @@ async def test_stt_eos_falls_back_to_update_vad_when_no_active_stream() -> None:
         await _close_test_session(recognition._session)
 
 
+def _vad_sos() -> vad.VADEvent:
+    return vad.VADEvent(
+        type=vad.VADEventType.START_OF_SPEECH,
+        samples_index=0,
+        timestamp=0.0,
+        speech_duration=0.5,
+        silence_duration=0.0,
+    )
+
+
+async def _make_stt_mode_recognition() -> AudioRecognition:
+    recognition = AudioRecognition(
+        create_session(FakeActions()),
+        hooks=_TestRecognitionHooks(),
+        endpointing=BaseEndpointing(min_delay=0.0, max_delay=0.0),
+        stt=None,
+        vad=None,
+        using_default_vad=False,
+        interruption_detection=None,
+        turn_detection="stt",
+    )
+    # a truthy STT node + a VAD, without spinning real pipelines
+    recognition._stt = lambda *a, **k: None  # type: ignore[assignment]
+    recognition._vad = MagicMock()
+    return recognition
+
+
+async def test_late_stt_final_commits_turn_when_vad_redetects_speech() -> None:
+    """A non-streaming STT (via stt.StreamAdapter) emits END_OF_SPEECH before
+    recognize() returns, so the final transcript can arrive late. If VAD
+    re-detects speech during that recognize() latency, ``_speaking`` is True
+    again when the final lands; the turn must still commit instead of stalling
+    (AGT-3051)."""
+    recognition = await _make_stt_mode_recognition()
+    committed: list[_EndOfTurnInfo] = []
+    recognition._hooks.on_end_of_turn = lambda info: (committed.append(info), True)[1]  # type: ignore[method-assign]
+
+    try:
+        # StreamAdapter ordering: SOS, END_OF_SPEECH (transcript not ready yet)
+        await recognition._on_stt_event(SpeechEvent(type=SpeechEventType.START_OF_SPEECH))
+        await recognition._on_stt_event(SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
+        if recognition._end_of_turn_task is not None:
+            await recognition._end_of_turn_task
+        assert committed == []  # nothing to commit yet — no transcript
+        assert recognition._user_turn_committed
+
+        # recognize() is slow; VAD re-detects speech before the final lands
+        await recognition._on_vad_event(_vad_sos())
+        assert recognition._speaking
+
+        # the late final transcript for the segment that already ended
+        await recognition._on_stt_event(
+            _final_transcript_event(text="hello there", start_time=0.0, end_time=1.0)
+        )
+        if recognition._end_of_turn_task is not None:
+            await recognition._end_of_turn_task
+
+        assert len(committed) == 1
+        assert committed[0].new_transcript == "hello there"
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
+async def test_stt_final_while_speaking_does_not_commit_without_end_of_speech() -> None:
+    """While the user is still speaking and the STT has not signalled end of
+    turn, a final transcript must NOT commit (regression guard: the late-final
+    commit above is gated on an already-committed segment)."""
+    recognition = await _make_stt_mode_recognition()
+    committed: list[_EndOfTurnInfo] = []
+    recognition._hooks.on_end_of_turn = lambda info: (committed.append(info), True)[1]  # type: ignore[method-assign]
+
+    try:
+        await recognition._on_stt_event(SpeechEvent(type=SpeechEventType.START_OF_SPEECH))
+        assert recognition._speaking
+        assert not recognition._user_turn_committed
+
+        await recognition._on_stt_event(
+            _final_transcript_event(text="hello there", start_time=0.0, end_time=1.0)
+        )
+        if recognition._end_of_turn_task is not None:
+            await recognition._end_of_turn_task
+
+        assert committed == []
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
 async def test_backchannel_boundary_releases_end_boundary_transcript() -> None:
     actions = FakeActions()
     session = create_session(

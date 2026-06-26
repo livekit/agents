@@ -1102,7 +1102,15 @@ class AudioRecognition:
                         )
                     )
 
-                if not self._speaking:
+                # A non-streaming STT (e.g. via stt.StreamAdapter) emits its
+                # END_OF_SPEECH *before* recognize() returns, so this final
+                # transcript can arrive after end-of-turn was already signalled.
+                # If VAD re-detected speech during that recognize() latency,
+                # `_speaking` is True again and the turn would otherwise never
+                # commit (AGT-3051). When end-of-turn was already committed for
+                # this segment, run the detection regardless of `_speaking` —
+                # the transcript belongs to the segment that just ended.
+                if not self._speaking or self._user_turn_committed:
                     chat_ctx = self._hooks.retrieve_chat_ctx().copy()
                     self._run_eou_detection(
                         chat_ctx,
