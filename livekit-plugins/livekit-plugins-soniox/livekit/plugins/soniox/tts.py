@@ -46,7 +46,12 @@ DEFAULT_VOICE = "Maya"
 DEFAULT_AUDIO_FORMAT = "pcm_s16le"
 DEFAULT_SAMPLE_RATE = 24000
 KEEPALIVE_INTERVAL = 10  # seconds
+# Connection-level keepalive keeps the WebSocket alive between streams.
 KEEPALIVE_MESSAGE = json.dumps({"keep_alive": True})
+# Stream-level keepalive resets the per-stream idle timeout on the Soniox server.
+# Without this, a stream waiting for the next LLM token chunk will receive a 408
+# after ~30 s of inactivity and tear down the agent's TTS turn mid-utterance.
+_STREAM_KEEPALIVE_INTERVAL = 15  # seconds — well under Soniox's ~30 s idle limit
 
 
 def _audio_format_to_mime_type(audio_format: str) -> str:
@@ -334,7 +339,14 @@ class _CancelStream:
     stream_id: str
 
 
-_OutboundMsg = _StartConfig | _SendText | _CancelStream
+@dataclass
+class _KeepAliveStream:
+    """Per-stream keepalive to reset the server-side idle timeout for an active stream."""
+
+    stream_id: str
+
+
+_OutboundMsg = _StartConfig | _SendText | _CancelStream | _KeepAliveStream
 
 
 @dataclass
@@ -502,6 +514,10 @@ class _Connection:
                     await self._ws.send_str(
                         json.dumps({"stream_id": msg.stream_id, "cancel": True})
                     )
+                elif isinstance(msg, _KeepAliveStream):
+                    await self._ws.send_str(
+                        json.dumps({"stream_id": msg.stream_id, "keep_alive": True})
+                    )
         except Exception as e:
             logger.warning("Soniox TTS send loop error", exc_info=e)
             self._fail_all(APIConnectionError("Soniox TTS send loop error"))
@@ -613,10 +629,31 @@ class _Connection:
 
     async def _keepalive_loop(self) -> None:
         try:
+            elapsed = 0.0
+            tick = 5.0  # resolution for checking both intervals
             while not self._closed and self._ws is not None and not self._ws.closed:
-                await asyncio.sleep(KEEPALIVE_INTERVAL)
-                if self._ws is not None and not self._ws.closed:
+                await asyncio.sleep(tick)
+                elapsed += tick
+                if self._ws is None or self._ws.closed:
+                    break
+
+                # Connection-level keepalive: prevent the WebSocket from being torn down
+                # by an intermediate proxy/load balancer between streams.
+                if elapsed % KEEPALIVE_INTERVAL < tick:
                     await self._ws.send_str(KEEPALIVE_MESSAGE)
+
+                # Stream-level keepalive: reset the per-stream idle timeout on the
+                # Soniox server.  In 1.6.x the agent feeds one long-lived TTS stream
+                # incrementally as the LLM produces tokens; the stream can sit idle
+                # for many seconds between chunks (especially mid-tool-call).  Without
+                # this the server fires a 408 Request Timeout which tears down the
+                # stream and crashes the agent's TTS turn.
+                if elapsed % _STREAM_KEEPALIVE_INTERVAL < tick:
+                    for stream_id, stream in list(self._streams.items()):
+                        if stream.config_sent and not stream.audio_ended:
+                            self._input_queue.send_nowait(
+                                _KeepAliveStream(stream_id=stream_id)
+                            )
         except Exception as e:
             logger.warning(f"Soniox TTS keepalive error: {e}")
 
