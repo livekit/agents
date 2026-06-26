@@ -1,4 +1,9 @@
 import warnings
+
+import pytest
+
+pytestmark = pytest.mark.unit
+
 from unittest.mock import AsyncMock, patch
 
 import pytest
