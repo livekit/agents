@@ -18,6 +18,7 @@ from livekit.agents.types import (
     NOT_GIVEN,
     APIConnectOptions,
     NotGivenOr,
+    TimedString,
 )
 from livekit.agents.utils import audio as audio_utils, is_given
 from phonic import AsyncPhonic
@@ -91,6 +92,10 @@ class _ResponseGeneration:
 
     input_transcription: str = ""
     output_text: str = ""
+
+    # Running offset (seconds) into the assistant audio stream, used to stamp each
+    # text chunk with the time span of the audio it was delivered alongside.
+    audio_cursor_sec: float = 0.0
 
     _created_timestamp: float = field(default_factory=time.time)
     _done: bool = False
@@ -922,9 +927,10 @@ class RealtimeSession(llm.RealtimeSession):
         if gen is None:
             return
 
-        if message.text:
-            gen.push_text(message.text)
-
+        # Phonic delivers the text and the audio it belongs to in the same chunk, so
+        # decode the audio first to stamp the text with its exact playback span.
+        frame: rtc.AudioFrame | None = None
+        audio_duration_sec = 0.0
         if message.audio:
             try:
                 audio_bytes = base64.b64decode(message.audio)
@@ -936,9 +942,22 @@ class RealtimeSession(llm.RealtimeSession):
                         num_channels=PHONIC_NUM_CHANNELS,
                         samples_per_channel=sample_count // PHONIC_NUM_CHANNELS,
                     )
-                    gen.audio_ch.send_nowait(frame)
+                    audio_duration_sec = frame.samples_per_channel / PHONIC_OUTPUT_SAMPLE_RATE
             except Exception as e:
                 logger.error(f"Failed to decode Phonic audio chunk: {e}")
+
+        if message.text:
+            gen.push_text(
+                TimedString(
+                    message.text,
+                    start_time=gen.audio_cursor_sec,
+                    end_time=gen.audio_cursor_sec + audio_duration_sec,
+                )
+            )
+
+        if frame is not None:
+            gen.audio_ch.send_nowait(frame)
+            gen.audio_cursor_sec += audio_duration_sec
 
     def _handle_input_text(self, message: InputTextPayload) -> None:
         item_id = utils.shortuuid("PI_")
