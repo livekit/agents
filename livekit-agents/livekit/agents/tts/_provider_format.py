@@ -381,7 +381,7 @@ _FISHAUDIO_CUSTOMER_SERVICE: ExpressiveOptions = {
         "Speak like a warm, caring support agent who genuinely wants to help.\n\n "
         + _FISHAUDIO_LLM_INSTRUCTIONS
         + "\n\nGuidelines:\n"
-        "- Lead each sentence with one primary emotion that fits the moment."
+        "- Lead each sentence with one primary emotion that fits the moment. "
         "Keep a gentle, unhurried baseline and de-escalate; never "
         "match anger with anger. Rotate emotions and don't reuse the same one two turns in a row.\n"
         '- Do not open replies with "oh" (or "ah", "ooh", "well"). Leading with a surprise '
@@ -467,7 +467,7 @@ _FISHAUDIO_CASUAL: ExpressiveOptions = {
         "which punctuation and ellipses can't produce.\n"
         "- Use <emphasis>word</emphasis> to punch up a sentence (e.g. That is <emphasis>so</emphasis> unfair).\n"
         "- If the user switches languages, respond in that language immediately and stay there until "
-        "they switch back, but keep the expression and sound tag values in English."
+        "they switch back, but keep the expression and sound tag values in English.\n"
         "- If the user switches tones to a sad topic, immediately mirror them and do not laugh, "
         'but instead be sad and use breaks and <sound value="clear throat"/>.'
     ),
