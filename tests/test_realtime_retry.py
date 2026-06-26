@@ -1,23 +1,18 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterable
-from typing import Literal
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from livekit.agents.llm.realtime import (
-    DEFAULT_MAX_RETRIES,
-    DEFAULT_RETRY_BASE_DELAY,
-    DEFAULT_RETRY_MAX_DELAY,
     GenerationCreatedEvent,
     RealtimeError,
     RealtimeModel,
     RealtimeSession,
 )
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.llm.tool_context import Tool, ToolChoice
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 
 pytestmark = pytest.mark.unit
 
@@ -52,9 +47,7 @@ class MockRealtimeSession(RealtimeSession):
         self._error_type = "recoverable"
         self._generation_event = None
 
-    def set_failure_mode(
-        self, fail_until_attempt: int, error_type: str = "recoverable"
-    ) -> None:
+    def set_failure_mode(self, fail_until_attempt: int, error_type: str = "recoverable") -> None:
         self._fail_until_attempt = fail_until_attempt
         self._error_type = error_type
 
@@ -70,13 +63,9 @@ class MockRealtimeSession(RealtimeSession):
 
         if self._call_count <= self._fail_until_attempt:
             if self._error_type == "recoverable":
-                fut.set_exception(
-                    RealtimeError("recoverable error", recoverable=True)
-                )
+                fut.set_exception(RealtimeError("recoverable error", recoverable=True))
             elif self._error_type == "non_recoverable":
-                fut.set_exception(
-                    RealtimeError("non-recoverable error", recoverable=False)
-                )
+                fut.set_exception(RealtimeError("non-recoverable error", recoverable=False))
             else:
                 fut.set_exception(RuntimeError("unexpected error"))
         else:
@@ -89,11 +78,13 @@ class MockRealtimeSession(RealtimeSession):
     @property
     def chat_ctx(self):
         from livekit.agents.llm.chat_context import ChatContext
+
         return ChatContext()
 
     @property
     def tools(self):
         from livekit.agents.llm.tool_context import ToolContext
+
         return ToolContext.empty()
 
     async def update_instructions(self, instructions: str) -> None:
@@ -170,9 +161,11 @@ async def test_generate_reply_success_no_retry(session):
 async def test_generate_reply_retries_on_recoverable_error(session):
     session.set_failure_mode(fail_until_attempt=2, error_type="recoverable")
 
-    with patch("livekit.agents.llm.realtime.DEFAULT_MAX_RETRIES", 3), \
-         patch("livekit.agents.llm.realtime.DEFAULT_RETRY_BASE_DELAY", 0.01), \
-         patch("livekit.agents.llm.realtime.DEFAULT_RETRY_MAX_DELAY", 0.1):
+    with (
+        patch("livekit.agents.llm.realtime.DEFAULT_MAX_RETRIES", 3),
+        patch("livekit.agents.llm.realtime.DEFAULT_RETRY_BASE_DELAY", 0.01),
+        patch("livekit.agents.llm.realtime.DEFAULT_RETRY_MAX_DELAY", 0.1),
+    ):
         fut = session.generate_reply()
         result = await asyncio.wait_for(fut, timeout=5.0)
 
@@ -184,9 +177,11 @@ async def test_generate_reply_retries_on_recoverable_error(session):
 async def test_generate_reply_no_retry_on_non_recoverable_error(session):
     session.set_failure_mode(fail_until_attempt=1, error_type="non_recoverable")
 
-    with patch("livekit.agents.llm.realtime.DEFAULT_MAX_RETRIES", 3), \
-         patch("livekit.agents.llm.realtime.DEFAULT_RETRY_BASE_DELAY", 0.01), \
-         patch("livekit.agents.llm.realtime.DEFAULT_RETRY_MAX_DELAY", 0.1):
+    with (
+        patch("livekit.agents.llm.realtime.DEFAULT_MAX_RETRIES", 3),
+        patch("livekit.agents.llm.realtime.DEFAULT_RETRY_BASE_DELAY", 0.01),
+        patch("livekit.agents.llm.realtime.DEFAULT_RETRY_MAX_DELAY", 0.1),
+    ):
         fut = session.generate_reply()
         with pytest.raises(RealtimeError, match="non-recoverable error"):
             await asyncio.wait_for(fut, timeout=5.0)
@@ -198,9 +193,11 @@ async def test_generate_reply_no_retry_on_non_recoverable_error(session):
 async def test_generate_retry_exhaustion(session):
     session.set_failure_mode(fail_until_attempt=10, error_type="recoverable")
 
-    with patch("livekit.agents.llm.realtime.DEFAULT_MAX_RETRIES", 2), \
-         patch("livekit.agents.llm.realtime.DEFAULT_RETRY_BASE_DELAY", 0.01), \
-         patch("livekit.agents.llm.realtime.DEFAULT_RETRY_MAX_DELAY", 0.1):
+    with (
+        patch("livekit.agents.llm.realtime.DEFAULT_MAX_RETRIES", 2),
+        patch("livekit.agents.llm.realtime.DEFAULT_RETRY_BASE_DELAY", 0.01),
+        patch("livekit.agents.llm.realtime.DEFAULT_RETRY_MAX_DELAY", 0.1),
+    ):
         fut = session.generate_reply()
         with pytest.raises(RealtimeError, match="failed after 2 retries"):
             await asyncio.wait_for(fut, timeout=5.0)
@@ -212,9 +209,11 @@ async def test_generate_retry_exhaustion(session):
 async def test_generate_reply_unexpected_error_no_retry(session):
     session.set_failure_mode(fail_until_attempt=1, error_type="unexpected")
 
-    with patch("livekit.agents.llm.realtime.DEFAULT_MAX_RETRIES", 3), \
-         patch("livekit.agents.llm.realtime.DEFAULT_RETRY_BASE_DELAY", 0.01), \
-         patch("livekit.agents.llm.realtime.DEFAULT_RETRY_MAX_DELAY", 0.1):
+    with (
+        patch("livekit.agents.llm.realtime.DEFAULT_MAX_RETRIES", 3),
+        patch("livekit.agents.llm.realtime.DEFAULT_RETRY_BASE_DELAY", 0.01),
+        patch("livekit.agents.llm.realtime.DEFAULT_RETRY_MAX_DELAY", 0.1),
+    ):
         fut = session.generate_reply()
         with pytest.raises(RuntimeError, match="unexpected error"):
             await asyncio.wait_for(fut, timeout=5.0)
@@ -225,13 +224,19 @@ async def test_generate_reply_unexpected_error_no_retry(session):
 @pytest.mark.asyncio
 async def test_generate_reply_env_config():
     import os
-    with patch.dict(os.environ, {
-        "LIVEKIT_REALTIME_MAX_RETRIES": "5",
-        "LIVEKIT_REALTIME_RETRY_BASE_DELAY": "0.5",
-        "LIVEKIT_REALTIME_RETRY_MAX_DELAY": "15.0",
-    }):
+
+    with patch.dict(
+        os.environ,
+        {
+            "LIVEKIT_REALTIME_MAX_RETRIES": "5",
+            "LIVEKIT_REALTIME_RETRY_BASE_DELAY": "0.5",
+            "LIVEKIT_REALTIME_RETRY_MAX_DELAY": "15.0",
+        },
+    ):
         import importlib
+
         import livekit.agents.llm.realtime as rt_module
+
         importlib.reload(rt_module)
         assert rt_module.DEFAULT_MAX_RETRIES == 5
         assert rt_module.DEFAULT_RETRY_BASE_DELAY == 0.5
