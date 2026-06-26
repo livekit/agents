@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from livekit.agents.utils import http_context
-from livekit.plugins.tavus.api import TavusAPI, TavusException
+from livekit.plugins.tavus.api import DEFAULT_FACE_ID, TavusAPI
 from livekit.plugins.tavus.avatar import AvatarSession
 
 
@@ -105,11 +105,14 @@ async def test_pal_id_only_skips_pal_creation_and_omits_face():
     assert "face_id" not in payload
 
 
-async def test_missing_face_and_pal_raises():
+async def test_defaults_face_when_neither_given():
     api = _api()
-    with patch.object(api, "_post", new=_mock_post()):
-        with pytest.raises(TavusException, match="face_id .* or pal_id"):
-            await api.create_conversation()
+    post = AsyncMock(side_effect=[{"pal_id": "pal_new"}, {"conversation_id": "conv1"}])
+    with patch.object(api, "_post", new=post):
+        await api.create_conversation()
+    pal_endpoint, pal_payload = post.call_args_list[0].args
+    assert pal_endpoint == "pals"
+    assert pal_payload["default_face_id"] == DEFAULT_FACE_ID
 
 
 async def test_avatar_session_resolves_new_and_deprecated_args():
