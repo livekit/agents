@@ -68,6 +68,8 @@ from .generation import (
     ToolExecutionOutput,
     _AudioOutput,
     _ForwardOutput,
+    _inject_running_tool_calls,
+    _strip_running_tool_calls,
     _TextOutput,
     _TTSGenerationData,
     apply_instructions_modality,
@@ -81,7 +83,7 @@ from .generation import (
     update_instructions,
 )
 from .speech_handle import DEFAULT_INPUT_DETAILS, InputDetails, SpeechHandle
-from .tool_executor import _resolve_async_tool_options, _ToolExecutor
+from .tool_executor import _resolve_async_tool_options, _RunningTasks, _ToolExecutor
 from .turn import (
     EndpointingOptions,
     PreemptiveGenerationOptions,
@@ -2699,6 +2701,15 @@ class AgentActivity(RecognitionHooks):
         # TODO(theomonnom): since pause is closing STT/LLM/TTS, we have issues for SpeechHandle still in queue  # noqa: E501
         # I should implement a retry mechanism?
 
+        # a tool still running from a previous turn isn't in this turn's ctx, so the model
+        # re-issues it and duplicates side effects. inject an in-progress placeholder so it
+        # leaves the call alone. mutating chat_ctx directly (not a copy) keeps a custom
+        # llm_node's edits; the placeholder is stripped again before chat_ctx is forwarded.
+        _inject_running_tool_calls(
+            chat_ctx,
+            [task.ctx.function_call for task in _RunningTasks.get(self._session, {}).values()],
+        )
+
         tasks: list[asyncio.Task[Any]] = []
         llm_task, llm_gen_data = perform_llm_inference(
             node=self._agent.llm_node,
@@ -3117,7 +3128,11 @@ class AgentActivity(RecognitionHooks):
                 draining = True
 
             tool_messages = new_calls + new_fnc_outputs
-            if fnc_executed_ev._reply_required:
+            if fnc_executed_ev._reply_required and not speech_handle.interrupted:
+                # forwarding chat_ctx to the tool reply: drop the in-progress placeholders
+                # (the next turn re-injects from the live running set)
+                _strip_running_tool_calls(chat_ctx)
+
                 # refresh conversation items added during tool execution: a tool that
                 # awaits an inline AgentTask runs a whole sub-conversation, merged into
                 # the agent's chat_ctx at handoff-return - this turn's snapshot predates
