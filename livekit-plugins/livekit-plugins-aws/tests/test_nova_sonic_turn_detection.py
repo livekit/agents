@@ -16,6 +16,10 @@ import sys
 from typing import Literal
 from unittest.mock import MagicMock
 
+import pytest
+
+pytestmark = pytest.mark.unit
+
 # ---------------------------------------------------------------------------
 # Stub out the optional AWS Smithy/Bedrock SDK not installed in the base venv.
 # Importing the realtime package pulls in realtime_model, which imports the SDK.

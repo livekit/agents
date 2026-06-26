@@ -314,7 +314,7 @@ class SonicEventBuilder:
         max_tokens: int = 1024,
         top_p: float = 0.9,
         temperature: float = 0.7,
-        endpointing_sensitivity: TURN_DETECTION | None = "MEDIUM",
+        endpointing_sensitivity: TURN_DETECTION = "MEDIUM",
     ) -> tuple[list[str], list[str]]:
         """Build session init events and history events separately.
 
@@ -374,12 +374,12 @@ class SonicEventBuilder:
         max_tokens: int = 1024,
         top_p: float = 0.9,
         temperature: float = 0.7,
-        endpointing_sensitivity: TURN_DETECTION | None = "MEDIUM",
+        endpointing_sensitivity: TURN_DETECTION = "MEDIUM",
     ) -> str:
         inference = InferenceConfiguration(
             maxTokens=max_tokens, topP=top_p, temperature=temperature
         )
-        if self._nova_sonic_2 and endpointing_sensitivity is not None:
+        if self._nova_sonic_2:
             session_start = SessionStart(
                 inferenceConfiguration=inference,
                 turnDetectionConfiguration=TurnDetectionConfiguration(
