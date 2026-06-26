@@ -1584,6 +1584,9 @@ class RealtimeSession(
             self._response_created_futures.pop(event_id, None)
             if fut and not fut.done():
                 fut.set_exception(llm.RealtimeError("generate_reply timed out."))
+                # The response.create was already sent; ask the server to cancel it so
+                # that any audio it produces does not arrive and play back unexpectedly.
+                self.send_event(ResponseCancelEvent(type="response.cancel"))
 
         handle = asyncio.get_event_loop().call_later(10.0, _on_timeout)
 
@@ -1722,6 +1725,7 @@ class RealtimeSession(
             response_id=event.response.id,
         )
 
+        timed_out = False
         if (
             isinstance(event.response.metadata, dict)
             and (client_event_id := event.response.metadata.get("client_event_id"))
@@ -1731,9 +1735,22 @@ class RealtimeSession(
                 generation_ev.user_initiated = True
                 fut.set_result(generation_ev)
             else:
-                logger.warning("response of generate_reply received after it's timed out.")
+                # The generate_reply caller already received a timeout error.  The
+                # server kept running and delivered response.created anyway.  Cancel it
+                # so no audio frames are queued for playback.  We keep
+                # _current_generation alive so that the subsequent response.output_item.*
+                # and response.done events (which may arrive before the server honours
+                # the cancel) do not trip their assertions; response.done will close the
+                # generation normally.
+                logger.warning(
+                    "response of generate_reply received after it's timed out; "
+                    "cancelling to prevent unexpected playback."
+                )
+                self.send_event(ResponseCancelEvent(type="response.cancel"))
+                timed_out = True
 
-        self.emit("generation_created", generation_ev)
+        if not timed_out:
+            self.emit("generation_created", generation_ev)
 
     def _handle_response_output_item_added(self, event: ResponseOutputItemAddedEvent) -> None:
         assert self._current_generation is not None, "current_generation is None"
