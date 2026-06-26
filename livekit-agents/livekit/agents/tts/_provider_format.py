@@ -196,7 +196,7 @@ Possible values for SOUND:
 PUNCTUATION (applies to every reply you speak aloud):
 - write for the EAR, not the page.
 - Do NOT use em dashes or en dashes (the long horizontal dash punctuation) anywhere in your spoken text.
-- In their place use a comma or a period for a short beat, or a <break/> tag for a real pause.
+- In their place use a comma or a period for a short beat, or a <break time="500ms"/> tag for a real pause.
 - Also avoid semicolons, colons mid-sentence, and parenthetical asides.
 
 Examples:
