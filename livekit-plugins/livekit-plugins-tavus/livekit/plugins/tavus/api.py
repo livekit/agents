@@ -96,25 +96,26 @@ class TavusAPI:
             or _deprecated_env("TAVUS_REPLICA_ID", "TAVUS_FACE_ID")
             or NOT_GIVEN
         )
-        if not face_id:
-            raise TavusException("TAVUS_FACE_ID must be set")
-
         pal_id = (
             pal_id
             or os.getenv("TAVUS_PAL_ID")
             or _deprecated_env("TAVUS_PERSONA_ID", "TAVUS_PAL_ID")
             or NOT_GIVEN
         )
+
         if not pal_id:
-            # create a pal (requires a face) if not provided
+            # no pal to reuse, so create one — which requires a face
+            if not face_id:
+                raise TavusException(
+                    "either face_id (TAVUS_FACE_ID) or pal_id (TAVUS_PAL_ID) must be set"
+                )
             pal_id = await self.create_pal(default_face_id=face_id)
 
         properties = properties or {}
-        payload = {
-            "face_id": face_id,
-            "pal_id": pal_id,
-            "properties": properties,
-        }
+        payload: dict[str, Any] = {"pal_id": pal_id, "properties": properties}
+        # send face_id only when given; otherwise the pal's default_face_id is used
+        if face_id:
+            payload["face_id"] = face_id
         if utils.is_given(extra_payload):
             payload.update(extra_payload)
 

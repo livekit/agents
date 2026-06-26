@@ -94,11 +94,22 @@ async def test_auto_creates_pal_when_none_given():
     assert conv_payload["pal_id"] == "pal_new"
 
 
-async def test_missing_face_id_raises():
+async def test_pal_id_only_skips_pal_creation_and_omits_face():
+    api = _api()
+    with patch.object(api, "_post", new=_mock_post()) as m:
+        await api.create_conversation(pal_id="p1")
+    endpoints = [c.args[0] for c in m.call_args_list]
+    assert "pals" not in endpoints  # an existing pal carries its own default face
+    payload = m.call_args.args[1]
+    assert payload["pal_id"] == "p1"
+    assert "face_id" not in payload
+
+
+async def test_missing_face_and_pal_raises():
     api = _api()
     with patch.object(api, "_post", new=_mock_post()):
-        with pytest.raises(TavusException, match="TAVUS_FACE_ID must be set"):
-            await api.create_conversation(pal_id="p1")
+        with pytest.raises(TavusException, match="face_id .* or pal_id"):
+            await api.create_conversation()
 
 
 async def test_avatar_session_resolves_new_and_deprecated_args():
