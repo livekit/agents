@@ -2,16 +2,46 @@ from __future__ import annotations
 
 import re
 
-_EXPRESSION_RE = re.compile(r'<expression\s+value="([^"]*)"(?:\s*/>|>(?:.*?)</expression>)')
-_SOUND_RE = re.compile(r'<sound\s+value="([^"]*)"(?:\s*/>|>(?:.*?)</sound>)')
+# Permissive regex: allows extra trailing attributes between `value="..."` and the
+# tag close (e.g. `<expression value="X" extra/>`), and captures inner content for
+# the wrapping form `<expression value="X">content</expression>`. Smaller LLMs
+# occasionally emit both malformations; the looser pattern keeps them from leaking
+# raw XML to the TTS provider.
+_EXPRESSION_RE = re.compile(
+    r'<expression\s+value="([^"]*)"[^>]*?(?:/>|>(.*?)</expression\s*>)',
+    re.DOTALL,
+)
+_SOUND_RE = re.compile(
+    r'<sound\s+value="([^"]*)"[^>]*?(?:/>|>(.*?)</sound\s*>)',
+    re.DOTALL,
+)
+# Orphan closing tags left behind when `normalize_markup` rewrites a wrapping
+# opener (`<expression value="X" >…`) to self-closing — the trailing
+# `</expression>` no longer pairs with anything and would otherwise reach the
+# TTS provider as raw XML.
+_ORPHAN_CLOSE_RE = re.compile(r"</(?:expression|sound)\s*>", re.IGNORECASE)
 _BREAK_RE = re.compile(r'<break\s+time="[^"]*"\s*/>')
-_BREAK_TIME_RE = re.compile(r'<break\s+time="([^"]*)"\s*/>')
 
 
 def convert_expression_tags(text: str) -> str:
-    """Convert ``<expression>`` and ``<sound>`` XML tags to ``[...]`` bracket format."""
-    text = _EXPRESSION_RE.sub(lambda m: f"[{m.group(1)}]", text)
-    text = _SOUND_RE.sub(lambda m: f"[{m.group(1)}]", text)
+    """Convert ``<expression>`` and ``<sound>`` XML tags to ``[...]`` bracket format.
+
+    Tolerates malformed shapes smaller LLMs occasionally emit:
+      - Extra trailing attributes (``<expression value="X" extra/>``) are ignored.
+      - Wrapping form (``<expression value="X">content</expression>``) preserves
+        the inner content, replacing the wrapper with ``[X]``.
+      - Orphan closing tags left by ``normalize_markup`` rewriting a wrapping
+        opener to self-closing are stripped.
+    """
+
+    def _sub(m: re.Match[str]) -> str:
+        value = m.group(1)
+        content = m.group(2)
+        return f"[{value}]{content}" if content is not None else f"[{value}]"
+
+    text = _EXPRESSION_RE.sub(_sub, text)
+    text = _SOUND_RE.sub(_sub, text)
+    text = _ORPHAN_CLOSE_RE.sub("", text)
     return text
 
 
@@ -22,33 +52,6 @@ def convert_break_to_ellipsis(text: str) -> str:
     (e.g. Inworld) rather than explicit silence directives.
     """
     return _BREAK_RE.sub("...", text)
-
-
-def _break_seconds(value: str) -> float | None:
-    """Parse a break duration like ``500ms``, ``1s``, or ``1.5`` into seconds."""
-    value = value.strip().lower()
-    try:
-        if value.endswith("ms"):
-            return float(value[:-2]) / 1000.0
-        if value.endswith("s"):
-            return float(value[:-1])
-        return float(value)
-    except ValueError:
-        return None
-
-
-def convert_break_to_fish(text: str) -> str:
-    """Replace ``<break time="..."/>`` tags with Fish Audio's native pause markers.
-
-    Fish Audio exposes two pause primitives, ``[break]`` and ``[long-break]``; map
-    any pause of roughly a second or longer to the longer marker.
-    """
-
-    def _sub(m: re.Match[str]) -> str:
-        seconds = _break_seconds(m.group(1))
-        return "[long-break]" if seconds is not None and seconds >= 1.0 else "[break]"
-
-    return _BREAK_TIME_RE.sub(_sub, text)
 
 
 def strip_bracket_tags(text: str) -> str:

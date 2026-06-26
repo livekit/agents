@@ -5,7 +5,7 @@ provider-agnostic at the call site:
 
     from livekit.agents.voice import presets
 
-    session = AgentSession(tts=inference.TTS("inworld/inworld-tts-2"), expressive=presets.CASUAL)
+    session = AgentSession(tts=fishaudio.TTS(model="s2-pro"), expressive=presets.CASUAL)
 
 Each ``presets.*`` constant is just an :class:`~livekit.agents.voice.ExpressiveOptions`
 carrying a ``preset``. At session start the framework resolves it against the active TTS
@@ -46,13 +46,13 @@ _REGISTRY: dict[str, dict[Preset, ExpressiveOptions]] = {
         Preset.CUSTOMER_SERVICE: _pf._INWORLD_CUSTOMER_SERVICE,
         Preset.CASUAL: _pf._INWORLD_CASUAL,
     },
-    "cartesia": {
-        Preset.CUSTOMER_SERVICE: _pf._CARTESIA_CUSTOMER_SERVICE,
-        Preset.CASUAL: _pf._CARTESIA_CASUAL,
-    },
     "fishaudio": {
         Preset.CUSTOMER_SERVICE: _pf._FISHAUDIO_CUSTOMER_SERVICE,
         Preset.CASUAL: _pf._FISHAUDIO_CASUAL,
+    },
+    "cartesia": {
+        Preset.CUSTOMER_SERVICE: _pf._CARTESIA_CUSTOMER_SERVICE,
+        Preset.CASUAL: _pf._CARTESIA_CASUAL,
     },
 }
 
