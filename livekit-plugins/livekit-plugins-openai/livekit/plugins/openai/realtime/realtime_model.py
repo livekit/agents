@@ -1414,11 +1414,6 @@ class RealtimeSession(
             return False
 
         for msg_id in diff_ops.to_remove:
-            # we don't have content synced down for some types of content (audio/images)
-            # these won't be present in the Agent's view of the context
-            # so in those cases, we do not want to remove them from the server context
-            if _is_content_empty(msg_id):
-                continue
             _delete_item(msg_id)
 
         for previous_msg_id, msg_id in diff_ops.to_create:
@@ -1426,7 +1421,7 @@ class RealtimeSession(
 
         # update the items with the same id but different content
         for previous_msg_id, msg_id in diff_ops.to_update:
-            # likewise, empty content almost always means the content is not synced down
+            # empty content almost always means the content is not synced down
             # we don't want to recreate these items there
             if _is_content_empty(msg_id):
                 continue
