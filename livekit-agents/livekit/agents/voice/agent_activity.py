@@ -258,6 +258,9 @@ class AgentActivity(RecognitionHooks):
         # model to auto-generate a tool reply (auto_tool_reply_generation=True).
         self._pending_auto_tool_reply_fut: asyncio.Future[None] | None = None
 
+        # cache the latest video frame so text input messages can include it
+        self._latest_video_frame: rtc.VideoFrame | None = None
+
     def _validate_turn_detection(
         self, turn_detection: TurnDetectionMode | None
     ) -> TurnDetectionMode | None:
@@ -1178,6 +1181,8 @@ class AgentActivity(RecognitionHooks):
     def push_video(self, frame: rtc.VideoFrame) -> None:
         if not self._started:
             return
+
+        self._latest_video_frame = frame
 
         if self._rt_session is not None:
             self._rt_session.push_video(frame)
@@ -3208,8 +3213,11 @@ class AgentActivity(RecognitionHooks):
             return
 
         if user_input is not None:
+            content: list[llm.ChatContent] = [user_input]
+            if self._latest_video_frame is not None:
+                content.append(llm.ImageContent(image=self._latest_video_frame))
             chat_ctx = self._rt_session.chat_ctx.copy()
-            msg = chat_ctx.add_message(role="user", content=user_input)
+            msg = chat_ctx.add_message(role="user", content=content)
             await self._rt_session.update_chat_ctx(chat_ctx)
             self._agent._chat_ctx._upsert_item(msg)
             self._session._conversation_item_added(msg)
