@@ -277,6 +277,7 @@ class _ResponseGeneration:
 
 class _DiscardedGeneration:
     """Marks a response cancelled before it surfaced, so its trailing events are skipped."""
+
     pass
 
 
