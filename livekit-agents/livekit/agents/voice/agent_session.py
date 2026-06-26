@@ -1588,6 +1588,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # skip the timer before user join the room
             return
 
+        # SIP participants are on telephony calls where silence doesn't mean
+        # the user is away — skip the away timer for SIP participants (#6030)
+        if (
+            room_io
+            and (linked := room_io.linked_participant)
+            and linked.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+        ):
+            return
+
         self._user_away_timer = self._loop.call_later(
             self._opts.user_away_timeout, self._update_user_state, "away"
         )

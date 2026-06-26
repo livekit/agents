@@ -1707,3 +1707,99 @@ async def test_pipeline_multi_segment_interrupted() -> None:
     assert len(assistant_msgs) == 1
     assert assistant_msgs[0].interrupted is True
     assert "How are you?" not in (assistant_msgs[0].text_content or "")
+
+
+async def test_user_away_timer_skipped_for_sip_participant() -> None:
+    """Test that user_away_timeout is not set for SIP participants (#6030).
+
+    SIP participants are on telephony calls where silence doesn't mean the user
+    is away — the away timer should be skipped for them.
+    """
+    from livekit import rtc
+
+    speed = 1
+    actions = FakeActions()
+    session = create_session(
+        actions,
+        speed_factor=speed,
+        extra_kwargs={"user_away_timeout": 5.0},
+    )
+    try:
+        # simulate a SIP participant via a mocked room_io
+        sip_participant = MagicMock(spec=rtc.RemoteParticipant)
+        sip_participant.kind = rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+
+        mock_room_io = MagicMock()
+        mock_room_io.linked_participant = sip_participant
+        mock_room_io.subscribed_fut = MagicMock()
+        mock_room_io.subscribed_fut.done.return_value = True
+
+        session._room_io = mock_room_io
+
+        # call _set_user_away_timer directly
+        session._set_user_away_timer()
+
+        # the timer should NOT be set for SIP participants
+        assert session._user_away_timer is None, (
+            "user_away_timer should not be set for SIP participants"
+        )
+    finally:
+        await _close_test_session(session)
+
+
+async def test_user_away_timer_fires_for_standard_participant() -> None:
+    """Test that user_away_timeout fires normally for standard (non-SIP) participants."""
+    from livekit import rtc
+
+    speed = 1
+    actions = FakeActions()
+    session = create_session(
+        actions,
+        speed_factor=speed,
+        extra_kwargs={"user_away_timeout": 5.0},
+    )
+    try:
+        # simulate a standard participant via a mocked room_io
+        std_participant = MagicMock(spec=rtc.RemoteParticipant)
+        std_participant.kind = rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD
+
+        mock_room_io = MagicMock()
+        mock_room_io.linked_participant = std_participant
+        mock_room_io.subscribed_fut = MagicMock()
+        mock_room_io.subscribed_fut.done.return_value = True
+
+        session._room_io = mock_room_io
+
+        # call _set_user_away_timer directly
+        session._set_user_away_timer()
+
+        # the timer SHOULD be set for standard participants
+        assert session._user_away_timer is not None, (
+            "user_away_timer should be set for standard participants"
+        )
+    finally:
+        await _close_test_session(session)
+
+
+async def test_user_away_timer_no_room_io() -> None:
+    """Test that user_away_timeout fires normally when there is no room_io."""
+    speed = 1
+    actions = FakeActions()
+    session = create_session(
+        actions,
+        speed_factor=speed,
+        extra_kwargs={"user_away_timeout": 5.0},
+    )
+    try:
+        # no room_io set — session not connected via room
+        session._room_io = None
+
+        # call _set_user_away_timer directly
+        session._set_user_away_timer()
+
+        # the timer SHOULD be set when there is no room_io
+        assert session._user_away_timer is not None, (
+            "user_away_timer should be set when room_io is None"
+        )
+    finally:
+        await _close_test_session(session)
