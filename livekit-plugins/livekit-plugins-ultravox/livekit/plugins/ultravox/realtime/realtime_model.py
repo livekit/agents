@@ -475,7 +475,7 @@ class RealtimeSession(
             self._msg_ch.send_nowait(audio_data)
 
     @utils.log_exceptions(logger=logger)
-    def generate_reply(
+    def _do_generate_reply(
         self,
         *,
         instructions: NotGivenOr[str] = NOT_GIVEN,
@@ -518,7 +518,8 @@ class RealtimeSession(
             if not fut.done():
                 fut.set_exception(
                     llm.RealtimeError(
-                        "generate_reply timed out waiting for generation_created event."
+                        "generate_reply timed out waiting for generation_created event.",
+                        recoverable=True,
                     )
                 )
                 if self._pending_generation_fut is fut:

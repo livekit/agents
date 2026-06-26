@@ -722,7 +722,7 @@ class RealtimeSession(llm.RealtimeSession):
         with contextlib.suppress(utils.aio.channel.ChanClosed):
             self._msg_ch.send_nowait(event)
 
-    def generate_reply(
+    def _do_generate_reply(
         self,
         *,
         instructions: NotGivenOr[str] = NOT_GIVEN,
@@ -737,7 +737,10 @@ class RealtimeSession(llm.RealtimeSession):
             )
             fut = asyncio.Future[llm.GenerationCreatedEvent]()
             fut.set_exception(
-                llm.RealtimeError(f"generate_reply is not compatible with '{self._opts.model}'")
+                llm.RealtimeError(
+                    f"generate_reply is not compatible with '{self._opts.model}'",
+                    recoverable=False,
+                )
             )
             return fut
         if self._pending_generation_fut and not self._pending_generation_fut.done():
@@ -773,7 +776,8 @@ class RealtimeSession(llm.RealtimeSession):
             if not fut.done():
                 fut.set_exception(
                     llm.RealtimeError(
-                        "generate_reply timed out waiting for generation_created event."
+                        "generate_reply timed out waiting for generation_created event.",
+                        recoverable=True,
                     )
                 )
                 if self._pending_generation_fut is fut:

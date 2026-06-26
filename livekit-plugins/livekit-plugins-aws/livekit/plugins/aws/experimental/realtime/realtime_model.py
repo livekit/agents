@@ -2024,7 +2024,7 @@ class RealtimeSession(  # noqa: F811
         else:
             logger.warning("audio input channel closed, skipping audio")
 
-    def generate_reply(
+    def _do_generate_reply(
         self,
         *,
         instructions: NotGivenOr[str] = NOT_GIVEN,
@@ -2132,7 +2132,10 @@ class RealtimeSession(  # noqa: F811
             def _on_timeout() -> None:
                 if not fut.done():
                     fut.set_exception(
-                        llm.RealtimeError("generate_reply timed out waiting for generation")
+                        llm.RealtimeError(
+                            "generate_reply timed out waiting for generation",
+                            recoverable=True,
+                        )
                     )
                     if self._pending_generation_fut is fut:
                         self._pending_generation_fut = None

@@ -229,7 +229,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
 
     # -- Public API: generation control --
 
-    def generate_reply(
+    def _do_generate_reply(
         self,
         *,
         instructions: NotGivenOr[str] = NOT_GIVEN,
