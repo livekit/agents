@@ -1,9 +1,4 @@
 import warnings
-
-import pytest
-
-pytestmark = pytest.mark.unit
-
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -11,6 +6,8 @@ import pytest
 from livekit.agents.utils import http_context
 from livekit.plugins.tavus.api import DEFAULT_FACE_ID, TavusAPI
 from livekit.plugins.tavus.avatar import AvatarSession
+
+pytestmark = pytest.mark.unit
 
 
 @pytest.fixture(autouse=True)
@@ -57,6 +54,21 @@ async def test_deprecated_args_still_work_and_warn():
     msgs = [str(w.message) for w in rec]
     assert any("replica_id" in s and "face_id" in s for s in msgs)
     assert any("persona_id" in s and "pal_id" in s for s in msgs)
+
+
+async def test_no_warning_when_new_and_deprecated_both_given():
+    api = _api()
+    with patch.object(api, "_post", new=_mock_post()) as m:
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            await api.create_conversation(
+                face_id="f1", replica_id="r1", pal_id="p1", persona_id="x1"
+            )
+    # the new values win, so the deprecated aliases are unused -> no warning
+    assert _no_deprecation(rec)
+    payload = m.call_args.args[1]
+    assert payload["face_id"] == "f1"
+    assert payload["pal_id"] == "p1"
 
 
 async def test_new_env_vars_fallback(monkeypatch):

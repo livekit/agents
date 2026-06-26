@@ -34,8 +34,8 @@ def _resolve_renamed_arg(
     deprecated_name: str,
     new_name: str,
 ) -> NotGivenOr[str]:
-    # Prefer the new arg; fall back to the deprecated alias and warn when it's used.
-    if deprecated_value:
+    # Prefer the new arg; fall back to the deprecated alias and warn only when it's used.
+    if deprecated_value and not new_value:
         warnings.warn(
             f"`{deprecated_name}` is deprecated, use `{new_name}` instead",
             DeprecationWarning,
