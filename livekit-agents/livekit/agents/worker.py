@@ -27,7 +27,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Generic, Literal, TypeVar, overload
-from urllib.parse import urljoin, urlparse
+from urllib.parse import quote, urljoin, urlparse
 
 import aiohttp
 import jwt
@@ -1270,6 +1270,16 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 "protocol": reg.server_info.protocol,
             },
         )
+
+        if self._devmode:
+            console_url = "https://cloud.livekit.io/projects/p_/agents/console/?autoStart=true"
+            if self._agent_name:
+                console_url += f"&agentName={quote(self._agent_name)}"
+            logger.info(
+                "to debug your agent using the web-based console, visit "
+                f"{utils.terminal_link(console_url)}"
+            )
+
         self.emit("worker_registered", reg.worker_id, reg.server_info)
 
     def _handle_availability(self, msg: agent.AvailabilityRequest) -> None:

@@ -56,3 +56,19 @@ def is_dev_mode() -> bool:
 def is_hosted() -> bool:
     """Return whether the agent is hosted on LiveKit Cloud."""
     return os.getenv("LIVEKIT_REMOTE_EOT_URL") is not None
+
+
+def terminal_link(url: str, *, text: str | None = None, color: str = "36") -> str:
+    """Format a URL for terminal output.
+
+    Colors the link with the given ANSI SGR ``color`` code (cyan by default) and
+    wraps it in an OSC 8 hyperlink escape so supporting terminals render it as a
+    clickable link. Terminals without OSC 8 support simply show the colored text.
+
+    Args:
+        url: The target URL.
+        text: The visible text. Defaults to ``url``.
+        color: ANSI SGR color code applied to the visible text.
+    """
+    text = text if text is not None else url
+    return f"\033]8;;{url}\033\\\033[{color}m{text}\033[0m\033]8;;\033\\"
