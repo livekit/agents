@@ -608,7 +608,7 @@ class RealtimeSession(llm.RealtimeSession):
                 )
             )
 
-    def generate_reply(
+    def _do_generate_reply(
         self,
         *,
         instructions: NotGivenOr[str] = NOT_GIVEN,
@@ -639,7 +639,7 @@ class RealtimeSession(llm.RealtimeSession):
 
         def _on_timeout() -> None:
             if not fut.done():
-                fut.set_exception(llm.RealtimeError("generate_reply timed out."))
+                fut.set_exception(llm.RealtimeError("generate_reply timed out.", recoverable=True))
 
         handle = asyncio.get_event_loop().call_later(10.0, _on_timeout)
 

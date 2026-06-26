@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, Awaitable
@@ -17,6 +18,11 @@ from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
 from .chat_context import ChatContext, ChatItem, FunctionCall
 from .tool_context import Tool, ToolChoice, ToolContext
+
+# Default retry configuration for generate_reply
+DEFAULT_MAX_RETRIES = int(os.environ.get("LIVEKIT_REALTIME_MAX_RETRIES", "3"))
+DEFAULT_RETRY_BASE_DELAY = float(os.environ.get("LIVEKIT_REALTIME_RETRY_BASE_DELAY", "1.0"))
+DEFAULT_RETRY_MAX_DELAY = float(os.environ.get("LIVEKIT_REALTIME_RETRY_MAX_DELAY", "10.0"))
 
 
 @dataclass
@@ -87,8 +93,9 @@ class RealtimeCapabilities:
 
 
 class RealtimeError(Exception):
-    def __init__(self, message: str) -> None:
+    def __init__(self, message: str, *, recoverable: bool = True) -> None:
         super().__init__(message)
+        self.recoverable = recoverable
 
 
 class RealtimeModel:
@@ -223,14 +230,127 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
     @abstractmethod
     def push_video(self, frame: rtc.VideoFrame) -> None: ...
 
-    @abstractmethod
     def generate_reply(
         self,
         *,
         instructions: NotGivenOr[str] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
-    ) -> asyncio.Future[GenerationCreatedEvent]: ...  # can raise RealtimeError on Timeout
+    ) -> asyncio.Future[GenerationCreatedEvent]:
+        fut: asyncio.Future[GenerationCreatedEvent] = asyncio.Future()
+        impl_fut = self._do_generate_reply(
+            instructions=instructions,
+            tool_choice=tool_choice,
+            tools=tools,
+        )
+
+        def _on_impl_done(f: asyncio.Future[GenerationCreatedEvent]) -> None:
+            if fut.done():
+                return
+            try:
+                fut.set_result(f.result())
+            except RealtimeError as e:
+                if e.recoverable:
+                    asyncio.ensure_future(
+                        self._retry_generate_reply(
+                            fut=fut,
+                            instructions=instructions,
+                            tool_choice=tool_choice,
+                            tools=tools,
+                            attempt=1,
+                        )
+                    )
+                else:
+                    fut.set_exception(e)
+            except Exception as e:
+                fut.set_exception(e)
+
+        impl_fut.add_done_callback(_on_impl_done)
+        return fut
+
+    async def _retry_generate_reply(
+        self,
+        *,
+        fut: asyncio.Future[GenerationCreatedEvent],
+        instructions: NotGivenOr[str],
+        tool_choice: NotGivenOr[ToolChoice],
+        tools: NotGivenOr[list[Tool]],
+        attempt: int,
+    ) -> None:
+        max_retries = DEFAULT_MAX_RETRIES
+        base_delay = DEFAULT_RETRY_BASE_DELAY
+        max_delay = DEFAULT_RETRY_MAX_DELAY
+
+        if attempt > max_retries:
+            if not fut.done():
+                fut.set_exception(
+                    RealtimeError(
+                        f"generate_reply failed after {max_retries} retries",
+                        recoverable=False,
+                    )
+                )
+            return
+
+        delay = min(base_delay * (2 ** (attempt - 1)), max_delay)
+        logger.warning(
+            "generate_reply failed (recoverable), retrying in %.1fs (attempt %d/%d)",
+            delay,
+            attempt,
+            max_retries,
+        )
+        await asyncio.sleep(delay)
+
+        if fut.done():
+            return
+
+        try:
+            impl_fut = self._do_generate_reply(
+                instructions=instructions,
+                tool_choice=tool_choice,
+                tools=tools,
+            )
+
+            def _on_retry_done(f: asyncio.Future[GenerationCreatedEvent]) -> None:
+                if fut.done():
+                    return
+                try:
+                    fut.set_result(f.result())
+                except RealtimeError as e:
+                    if e.recoverable and attempt < max_retries:
+                        asyncio.ensure_future(
+                            self._retry_generate_reply(
+                                fut=fut,
+                                instructions=instructions,
+                                tool_choice=tool_choice,
+                                tools=tools,
+                                attempt=attempt + 1,
+                            )
+                        )
+                    elif e.recoverable:
+                        fut.set_exception(
+                            RealtimeError(
+                                f"generate_reply failed after {max_retries} retries",
+                                recoverable=False,
+                            )
+                        )
+                    else:
+                        fut.set_exception(e)
+                except Exception as e:
+                    fut.set_exception(e)
+
+            impl_fut.add_done_callback(_on_retry_done)
+        except Exception as e:
+            if not fut.done():
+                fut.set_exception(e)
+
+    @abstractmethod
+    def _do_generate_reply(
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
+    ) -> asyncio.Future[GenerationCreatedEvent]: ...
 
     # commit the input audio buffer to the server
     @abstractmethod

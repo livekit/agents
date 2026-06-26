@@ -1551,7 +1551,7 @@ class RealtimeSession(
         self.send_event(InputAudioBufferClearEvent(type="input_audio_buffer.clear"))
         self._pushed_duration_s = 0
 
-    def generate_reply(
+    def _do_generate_reply(
         self,
         *,
         instructions: NotGivenOr[str] = NOT_GIVEN,
@@ -1583,7 +1583,7 @@ class RealtimeSession(
         def _on_timeout() -> None:
             self._response_created_futures.pop(event_id, None)
             if fut and not fut.done():
-                fut.set_exception(llm.RealtimeError("generate_reply timed out."))
+                fut.set_exception(llm.RealtimeError("generate_reply timed out.", recoverable=True))
 
         handle = asyncio.get_event_loop().call_later(10.0, _on_timeout)
 
@@ -1994,11 +1994,16 @@ class RealtimeSession(
             if event.response.status in ("failed", "incomplete"):
                 details = event.response.status_details
                 msg = f"response {event.response.status}"
+                recoverable = True
                 if details and details.error:
                     msg = f"{msg}: [{details.error.type}] {details.error.code}"
+                    if details.error.code == "rate_limit_exceeded":
+                        recoverable = False
                 elif details and details.reason:
                     msg = f"{msg}: {details.reason}"
-                self._current_generation._done_fut.set_exception(llm.RealtimeError(msg))
+                self._current_generation._done_fut.set_exception(
+                    llm.RealtimeError(msg, recoverable=recoverable)
+                )
             else:
                 self._current_generation._done_fut.set_result(None)
 
