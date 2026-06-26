@@ -1,5 +1,6 @@
 import asyncio
 import os
+import warnings
 from typing import Any
 
 import aiohttp
@@ -24,6 +25,35 @@ class TavusException(Exception):
 DEFAULT_API_URL = "https://tavusapi.com/v2"
 
 
+def _resolve_renamed_arg(
+    new_value: NotGivenOr[str],
+    deprecated_value: NotGivenOr[str],
+    *,
+    deprecated_name: str,
+    new_name: str,
+) -> NotGivenOr[str]:
+    # Prefer the new arg; fall back to the deprecated alias and warn when it's used.
+    if deprecated_value:
+        warnings.warn(
+            f"`{deprecated_name}` is deprecated, use `{new_name}` instead",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+    return new_value or deprecated_value
+
+
+def _deprecated_env(deprecated_name: str, new_name: str) -> str | None:
+    # Read a deprecated env var, warning if it's set so callers migrate to `new_name`.
+    value = os.getenv(deprecated_name)
+    if value:
+        warnings.warn(
+            f"`{deprecated_name}` is deprecated, use `{new_name}` instead",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+    return value
+
+
 class TavusAPI:
     def __init__(
         self,
@@ -45,24 +75,45 @@ class TavusAPI:
     async def create_conversation(
         self,
         *,
+        face_id: NotGivenOr[str] = NOT_GIVEN,
+        pal_id: NotGivenOr[str] = NOT_GIVEN,
         replica_id: NotGivenOr[str] = NOT_GIVEN,
         persona_id: NotGivenOr[str] = NOT_GIVEN,
         properties: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
         extra_payload: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> str:
-        replica_id = replica_id or (os.getenv("TAVUS_REPLICA_ID") or NOT_GIVEN)
-        if not replica_id:
-            raise TavusException("TAVUS_REPLICA_ID must be set")
+        # `replica_id`/`persona_id` are deprecated aliases for `face_id`/`pal_id`.
+        face_id = _resolve_renamed_arg(
+            face_id, replica_id, deprecated_name="replica_id", new_name="face_id"
+        )
+        pal_id = _resolve_renamed_arg(
+            pal_id, persona_id, deprecated_name="persona_id", new_name="pal_id"
+        )
 
-        persona_id = persona_id or (os.getenv("TAVUS_PERSONA_ID") or NOT_GIVEN)
-        if not persona_id:
-            # create a persona if not provided
-            persona_id = await self.create_persona()
+        face_id = (
+            face_id
+            or os.getenv("TAVUS_FACE_ID")
+            or _deprecated_env("TAVUS_REPLICA_ID", "TAVUS_FACE_ID")
+            or NOT_GIVEN
+        )
+        if not face_id:
+            raise TavusException("TAVUS_FACE_ID must be set")
+
+        pal_id = (
+            pal_id
+            or os.getenv("TAVUS_PAL_ID")
+            or _deprecated_env("TAVUS_PERSONA_ID", "TAVUS_PAL_ID")
+            or NOT_GIVEN
+        )
+        if not pal_id:
+            # create a pal (persona) if not provided
+            pal_id = await self.create_persona()
 
         properties = properties or {}
         payload = {
-            "replica_id": replica_id,
-            "persona_id": persona_id,
+            # Wire keys stay replica_id/persona_id; the Tavus API still expects them.
+            "replica_id": face_id,
+            "persona_id": pal_id,
             "properties": properties,
         }
         if utils.is_given(extra_payload):

@@ -17,7 +17,7 @@ from livekit.agents import (
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
-from .api import TavusAPI, TavusException
+from .api import TavusAPI, TavusException, _resolve_renamed_arg
 from .log import logger
 
 SAMPLE_RATE = 24000
@@ -31,6 +31,8 @@ class AvatarSession(BaseAvatarSession):
     def __init__(
         self,
         *,
+        face_id: NotGivenOr[str] = NOT_GIVEN,
+        pal_id: NotGivenOr[str] = NOT_GIVEN,
         replica_id: NotGivenOr[str] = NOT_GIVEN,
         persona_id: NotGivenOr[str] = NOT_GIVEN,
         api_url: NotGivenOr[str] = NOT_GIVEN,
@@ -43,8 +45,13 @@ class AvatarSession(BaseAvatarSession):
         self._http_session: aiohttp.ClientSession | None = None
         self._conn_options = conn_options
         self.conversation_id: str | None = None
-        self._persona_id = persona_id
-        self._replica_id = replica_id
+        # `replica_id`/`persona_id` are deprecated aliases for `face_id`/`pal_id`.
+        self._pal_id = _resolve_renamed_arg(
+            pal_id, persona_id, deprecated_name="persona_id", new_name="pal_id"
+        )
+        self._face_id = _resolve_renamed_arg(
+            face_id, replica_id, deprecated_name="replica_id", new_name="face_id"
+        )
         self._api = TavusAPI(
             api_url=api_url,
             api_key=api_key,
@@ -104,8 +111,8 @@ class AvatarSession(BaseAvatarSession):
 
         logger.debug("starting avatar session")
         self.conversation_id = await self._api.create_conversation(
-            persona_id=self._persona_id,
-            replica_id=self._replica_id,
+            pal_id=self._pal_id,
+            face_id=self._face_id,
             properties={"livekit_ws_url": livekit_url, "livekit_room_token": livekit_token},
         )
 
