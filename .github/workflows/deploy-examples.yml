@@ -1,0 +1,168 @@
+name: Deploy Examples
+
+on:
+  # Manual runs deploy from the branch picked in the Actions "Use workflow
+  # from" selector — no input needed.
+  workflow_dispatch:
+  # Called by publish.yml after a release to deploy the published commit.
+  workflow_call:
+    inputs:
+      ref:
+        description: "Commit/branch/tag to deploy. Defaults to the triggering ref."
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy ${{ matrix.example }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        example: [healthcare, survey, frontdesk, drive-thru, inference, avatar]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          # Fetch Git-LFS assets (e.g. examples/drive-thru/bg_noise.mp3) so the
+          # real binaries — not pointer files — get uploaded as the build context
+          # and copied into the image via `COPY . .`. This checkout authenticates
+          # with GITHUB_TOKEN, so its LFS fetch is allowed (unlike pip's anonymous
+          # git clone). Without this the agent crashes at runtime decoding a
+          # 131-byte pointer as audio.
+          lfs: true
+
+      - name: Install LiveKit CLI
+        run: |
+          curl -sSL https://get.livekit.io/cli | bash
+          lk --version
+
+      - name: Add LiveKit Cloud project
+        env:
+          LIVEKIT_URL: ${{ secrets.LIVEKIT_EXAMPLES_URL }}
+          LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_EXAMPLES_API_KEY }}
+          LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_EXAMPLES_API_SECRET }}
+        run: |
+          lk project add examples \
+            --url "$LIVEKIT_URL" \
+            --api-key "$LIVEKIT_API_KEY" \
+            --api-secret "$LIVEKIT_API_SECRET" \
+            --default
+
+      - name: Regenerate livekit.toml from playground.yaml
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 <<'PY'
+          import yaml
+          from pathlib import Path
+          data = yaml.safe_load(Path("examples/playground.yaml").read_text())
+          subdomain = data["project"]["subdomain"]
+          slug = "${{ matrix.example }}"
+          entry = data["examples"][slug]
+          toml = (
+              "[project]\n"
+              f'  subdomain = "{subdomain}"\n'
+              "\n"
+              "[agent]\n"
+              f'  id = "{entry["agent_id"]}"\n'
+          )
+          Path(f"examples/{slug}/livekit.toml").write_text(toml)
+          print(f"wrote examples/{slug}/livekit.toml")
+          PY
+
+      - name: Pin livekit-* requirements to the deployed ref
+        working-directory: examples/${{ matrix.example }}
+        env:
+          # Build the agent against the code at the ref we're deploying,
+          # not the latest release on PyPI. Without this, a branch deploy
+          # would silently run against the published livekit-agents instead
+          # of the branch's own SDK changes. Mirror the checkout ref above,
+          # using ref_name so it's a plain branch/tag pip can resolve.
+          DEPLOY_REF: ${{ inputs.ref || github.ref_name }}
+        run: |
+          python3 <<'PY'
+          import os, re
+          from pathlib import Path
+
+          REF = os.environ["DEPLOY_REF"]
+          REPO = "git+https://github.com/livekit/agents.git"
+          REPO_ROOT = Path(os.environ["GITHUB_WORKSPACE"])
+
+          # The package name (and optional [extras]) at the start of a
+          # requirement, e.g. "livekit-agents[evals]>=1.5.7".
+          REQUIREMENT = re.compile(r"^(?P<name>[A-Za-z0-9._-]+)(?P<extras>\[.*\])?")
+
+          def monorepo_path(name):
+              """Path of `name` within this repo, or None if it lives elsewhere.
+
+              We only pin packages that actually exist in the checkout. The
+              directory basename is the distribution name for every package
+              here (livekit-agents at the root, everything else under
+              livekit-plugins/ — including the irregular ones like
+              livekit-blingfire). Anything not found (livekit rtc,
+              livekit-local-inference, …) keeps its PyPI pin.
+              """
+              for rel in (name, f"livekit-plugins/{name}"):
+                  if (REPO_ROOT / rel).is_dir():
+                      return rel
+              return None
+
+          def pin_to_ref(line):
+              """Repoint an in-repo requirement at the deployed git ref.
+
+              External requirements, comments and blanks pass through
+              untouched (the regex doesn't match a leading '#' or '').
+              """
+              match = REQUIREMENT.match(line.strip())
+              path = monorepo_path(match["name"]) if match else None
+              if path is None:
+                  return line
+              return f"{match['name']}{match['extras'] or ''} @ {REPO}@{REF}#subdirectory={path}"
+
+          requirements = Path("requirements.txt")
+          pinned = [pin_to_ref(line) for line in requirements.read_text().splitlines()]
+          requirements.write_text("\n".join(pinned) + "\n")
+
+          print(f"--- requirements.txt pinned to {REF} ---")
+          print(requirements.read_text())
+          PY
+
+      - name: Build secrets file
+        working-directory: examples/${{ matrix.example }}
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          LEMONSLICE_API_KEY: ${{ secrets.LEMONSLICE_API_KEY }}
+        run: |
+          : > .env.deploy
+          # Register the agent under a deterministic name so the playground
+          # can dispatch to it explicitly. Matches the slug in playground.yaml.
+          echo "LIVEKIT_AGENT_NAME=${{ matrix.example }}" >> .env.deploy
+          case "${{ matrix.example }}" in
+            healthcare)
+              keys="OPENAI_API_KEY"
+              ;;
+            avatar)
+              keys="LEMONSLICE_API_KEY"
+              ;;
+            *)
+              keys=""
+              ;;
+          esac
+          for k in $keys; do
+            val="${!k}"
+            if [ -n "$val" ]; then
+              echo "${k}=${val}" >> .env.deploy
+            fi
+          done
+
+      - name: Deploy ${{ matrix.example }}
+        working-directory: examples/${{ matrix.example }}
+        run: |
+          args=()
+          if [ -s .env.deploy ]; then
+            args+=(--secrets-file .env.deploy)
+          fi
+          lk agent deploy "${args[@]}" .

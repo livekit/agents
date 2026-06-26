@@ -1,0 +1,235 @@
+[tool.uv]
+constraint-dependencies = ['onnxruntime<1.24; python_version < "3.11"']
+default-groups = ["dev", "typing"]
+
+[tool.uv.sources]
+livekit-agents = { workspace = true }
+livekit-plugins-anam = { workspace = true }
+livekit-plugins-anthropic = { workspace = true }
+livekit-plugins-assemblyai = { workspace = true }
+livekit-plugins-avatario = { workspace = true }
+livekit-plugins-asyncai = { workspace = true }
+livekit-plugins-aws = { workspace = true }
+livekit-plugins-azure = { workspace = true }
+livekit-plugins-baseten = { workspace = true }
+livekit-plugins-bey = { workspace = true }
+livekit-plugins-bithuman = { workspace = true }
+livekit-plugins-cambai = { workspace = true }
+livekit-plugins-cartesia = { workspace = true }
+livekit-plugins-cerebras = { workspace = true }
+livekit-plugins-clova = { workspace = true }
+livekit-plugins-deepgram = { workspace = true }
+livekit-plugins-elevenlabs = { workspace = true }
+livekit-plugins-fal = { workspace = true }
+livekit-plugins-fireworksai = { workspace = true }
+livekit-plugins-fishaudio = { workspace = true }
+livekit-plugins-gladia = { workspace = true }
+livekit-plugins-gnani = { workspace = true }
+livekit-plugins-google = { workspace = true }
+livekit-plugins-groq = { workspace = true }
+livekit-plugins-hedra = { workspace = true }
+livekit-plugins-hamming = { workspace = true }
+livekit-plugins-hume = { workspace = true }
+livekit-plugins-inworld = { workspace = true }
+livekit-plugins-krisp = { workspace = true }
+livekit-plugins-keyframe = { workspace = true }
+livekit-plugins-langchain = { workspace = true }
+livekit-plugins-lemonslice = { workspace = true}
+livekit-plugins-liveavatar = { workspace = true }
+livekit-plugins-lmnt = { workspace = true }
+livekit-plugins-minimax-ai = { workspace = true }
+livekit-plugins-mistralai = { workspace = true }
+livekit-plugins-murf = { workspace = true }
+livekit-plugins-neuphonic = { workspace = true }
+livekit-plugins-nltk = { workspace = true }
+livekit-plugins-nvidia = { workspace = true }
+livekit-plugins-openai = { workspace = true }
+livekit-plugins-perplexity = { workspace = true }
+livekit-plugins-protoface = { workspace = true }
+livekit-plugins-resemble = { workspace = true }
+livekit-plugins-respeecher = { workspace = true }
+livekit-plugins-rime = { workspace = true }
+livekit-plugins-runway = { workspace = true }
+livekit-plugins-rtzr = { workspace = true }
+livekit-plugins-sarvam = { workspace = true }
+livekit-plugins-silero = { workspace = true }
+livekit-plugins-simli = { workspace = true }
+livekit-plugins-slng = { workspace = true }
+livekit-plugins-avatartalk = { workspace = true }
+livekit-plugins-smallestai = { workspace = true }
+livekit-plugins-simplismart = { workspace = true }
+livekit-plugins-soniox = { workspace = true }
+livekit-plugins-speechify = { workspace = true }
+livekit-plugins-browser = { workspace = true }
+livekit-plugins-speechmatics = { workspace = true }
+livekit-plugins-spitch = { workspace = true }
+livekit-plugins-tavus = { workspace = true }
+livekit-plugins-telnyx = { workspace = true }
+livekit-plugins-trugen = { workspace = true }
+livekit-plugins-turn-detector = { workspace = true }
+livekit-plugins-ultravox = { workspace = true }
+livekit-plugins-upliftai = { workspace = true }
+livekit-plugins-gradium = { workspace = true }
+livekit-plugins-xai = { workspace = true }
+livekit-plugins-phonic = { workspace = true }
+livekit-plugins-did = { workspace = true }
+
+[tool.uv.workspace]
+members = ["livekit-plugins/*", "livekit-agents"]
+exclude = [
+    "livekit-plugins/community",
+    "livekit-plugins/livekit-blingfire",
+    "livekit-plugins/livekit-blockguard",
+    "livekit-plugins/livekit-durable",
+]
+
+[dependency-groups]
+dev = [
+    "python-dotenv>=1.0.1",
+    "mypy",
+    "scikit-learn",
+    "pytest>=9.0.3,<9.1",
+    "ruff",
+    "pytest-asyncio>=0.25.3",
+    "pytest-asyncio-concurrent==0.5.2",
+    "jiwer>=3.1.0",
+    "scipy>=1.13.1",
+    "tiktoken>=0.9.0",
+    "pytest-xdist>=3.8.0",
+    "playwright>=1.58.0",
+]
+docs = ["pdoc3", "setuptools", "beautifulsoup4", "markdownify"]
+typing = [
+    # .pyi stubs, never used at runtime
+    "pandas-stubs>=3.0.3.260530",
+    "scipy-stubs>=1.17.1.5",
+    "types-aiofiles>=25.1.0.20260518",
+    "types-cffi>=2.0.0.20260518",
+    "types-defusedxml>=0.7.0.20260504",
+    "types-grpcio>=1.0.0.20260607",
+    "types-grpcio-status>=1.0.0.20260408",
+    "types-gunicorn>=26.0.0.20260518",
+    "types-openpyxl>=3.1.5.20260518",
+    "types-pexpect>=4.9.0.20260518",
+    "types-psutil>=7.2.2.20260518",
+    "types-pyasn1>=0.6.0.20260408",
+    "types-pyaudio>=0.2.16.20260508",
+    "types-pygments>=2.20.0.20260518",
+    "types-pysocks>=1.7.1.20260518",
+    "types-python-dateutil>=2.9.0.20260518",
+    "types-pyyaml>=6.0.12.20260518",
+    "types-regex>=2026.5.9.20260518",
+    "types-simplejson>=3.20.0.20260518",
+    "types-tensorflow>=2.18.0.20260518",
+    "types-tqdm>=4.68.0.20260608",
+    "types-xlrd>=2.0.0.20260518",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+exclude = [".github"]
+
+[tool.ruff.lint]
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+    "B",  # flake8-bugbear
+    "C4", # flake8-comprehensions
+    "UP", # pyupgrade
+]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+known-first-party = ["livekit"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = [
+    # virtual-time tests override the event_loop_policy fixture (tests/virtual_time.py) to run on
+    # an autojumping virtual-time loop; pytest-asyncio deprecates the override but offers no per-test
+    # alternative that returns a default loop for unmarked tests without erroring.
+    "ignore:Overriding the \"event_loop_policy\" fixture is deprecated:Warning",
+]
+addopts = ["--import-mode=importlib", "--ignore=examples", "-p", "tests.concurrency"]
+pythonpath = ["."]
+testpaths = ["tests"]
+markers = [
+    "unit: fast tests with no external providers (select with --unit)",
+    "audio_eot: hermetic audio end-of-turn / turn-detection tests (select with --audio_eot)",
+    "plugin(name): provider integration test for `name` (select with --plugin [name])",
+    "realtime(name): realtime-model test, optionally for provider `name` (--realtime [name])",
+    "stt(name): speech-to-text test, optionally for provider `name` (--stt [name])",
+    "tts(name): text-to-speech test, optionally for provider `name` (--tts [name])",
+    "evals: behavioral evals run against the LiveKit inference gateway (--evals)",
+    "docs: tests for the docs-build tooling under .github/ (select with --docs)",
+]
+
+
+[tool.mypy]
+strict = true
+disallow_any_generics = false
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = "mcp.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "google.genai"
+follow_imports = "normal"
+follow_untyped_imports = true
+
+[[tool.mypy.overrides]]
+module = "boto3"
+follow_untyped_imports = true
+
+[[tool.mypy.overrides]]
+module = "aws_sdk_bedrock_runtime.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["aws_sdk_transcribe_streaming.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "smithy_aws_core.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "smithy_core.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "smithy_http.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "smithy_aws_event_stream.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "mistralai.*"
+follow_imports = "skip"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "speechmatics.*"
+follow_untyped_imports = true
+
+[[tool.mypy.overrides]]
+module = "bithuman.*"
+follow_untyped_imports = true
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "livekit.plugins"
+follow_untyped_imports = true

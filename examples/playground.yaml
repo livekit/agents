@@ -1,0 +1,345 @@
+# Examples metadata consumed by livekit/agents-jukebox.
+#
+# Each top-level key under `examples` is the agent name — used as
+#   - the directory name under examples/
+#   - the LIVEKIT_AGENT_NAME injected at deploy time
+#   - the dispatch target in the jukebox's token endpoint
+#
+# Pixel art icons: `1` = accent color, `2` = lighter accent (highlight
+# / secondary detail), `0` = transparent.
+
+version: 1
+
+# All examples deploy to this LiveKit Cloud project. The CI regenerates
+# each example's livekit.toml from this subdomain + the per-example
+# agent_id below before invoking `lk agent deploy`.
+project:
+  subdomain: examples-wfxyig8v
+
+examples:
+  frontdesk:
+    title: Front Desk
+    description: A receptionist agent wired up to a live calendar. Answers questions about availability, books appointments in real time, and confirms back to the caller.
+    # brand palette — indigo-500
+    accent: "#1F44F9"
+    agent_id: CA_9TqkLsnwhjmE
+    entry: agent.py
+    github: "https://github.com/livekit/agents/tree/main/examples/frontdesk"
+    tags: [tools, scheduling]
+    icon:
+      # Calendar with the top header strip in the highlight tone.
+      size: 12
+      pixels: |
+        000000000000
+        000100010000
+        001111111000
+        012222222100
+        011111111100
+        010000000100
+        010000000100
+        010000000100
+        010000000100
+        010000000100
+        001111111000
+        000000000000
+    views:
+      - rpc: set_appointment_status
+        title: "\uf073 Schedule"
+
+  healthcare:
+    title: Healthcare
+    description: A medical front-desk agent that handles intake, authenticates returning patients, books appointments, and hands the conversation off to a human when it needs to.
+    # LiveKit brand palette (raw-colors.ts) — green-500
+    accent: "#009E4F"
+    agent_id: CA_uFGnwowV2PMS
+    entry: agent.py
+    github: "https://github.com/livekit/agents/tree/main/examples/healthcare"
+    tags: [multi-agent, scheduling]
+    icon:
+      # Heart with a top-left specular highlight on the left lobe.
+      size: 12
+      pixels: |
+        000000000000
+        002100011000
+        022210111100
+        211111111110
+        111111111110
+        111111111110
+        011111111100
+        001111111000
+        000111110000
+        000011100000
+        000001000000
+        000000000000
+
+  survey:
+    title: Survey
+    description: A structured interview agent that walks candidates through a software engineer screening flow, captures answers as they go, and writes a graded summary to disk.
+    # brand palette — amber-500
+    accent: "#EF8B01"
+    agent_id: CA_APDyCSXwMUNS
+    entry: agent.py
+    github: "https://github.com/livekit/agents/tree/main/examples/survey"
+    tags: [multi-agent]
+    icon:
+      # Speech bubble outline with two highlight "text lines" inside.
+      size: 12
+      pixels: |
+        000000000000
+        001111111100
+        010000000010
+        010000000010
+        010222200010
+        010000000010
+        010220000010
+        010000000010
+        010111111100
+        011000000000
+        010000000000
+        000000000000
+
+  drive-thru:
+    title: Drive Thru
+    description: A drive-thru ordering agent that takes the order over voice, builds a structured cart with dynamically-generated tools per menu item, and reads back the total.
+    # brand palette — red-500
+    accent: "#FA4C39"
+    agent_id: CA_cn3jfgKTxXDL
+    entry: agent.py
+    github: "https://github.com/livekit/agents/tree/main/examples/drive-thru"
+    tags: [tools]
+    icon:
+      # Side-view car: cabin pillars in accent, windshield + side
+      # windows in the lighter tone, body and wheels in accent.
+      size: 12
+      pixels: |
+        000000000000
+        000000000000
+        001111110000
+        012221221000
+        012222111110
+        100000000001
+        101110011101
+        011011110110
+        001110011100
+        000000000000
+        000000000000
+        000000000000
+    # The playground reads these `views` and renders a read-only
+    # markdown card per entry on the right of the orb. The agent fills
+    # them at runtime by RPC'ing the matching `id` with a markdown
+    # payload — the card stays hidden until the first payload arrives.
+    # The agent fills these `views` at runtime by RPC'ing the
+    # declared method name (e.g. `set_cart_content`) with a markdown
+    # payload. Each entry renders as a card on the right of the orb,
+    # hidden until the first non-empty payload, re-hidden on empty.
+    views:
+      - rpc: set_cart_content
+        # Card title is rendered in the body font, which has the
+        # FA Solid range merged in — so YAML `\u` escapes for any
+        # FA codepoint render inline. `\uf07a` is shopping-cart.
+        title: "\uf07a Current order"
+
+  inference:
+    title: Inference
+    description: A voice agent powered end-to-end by LiveKit Inference. Pick the STT, LLM, and TTS provider live to hear how each one feels in the same conversation.
+    # brand palette — purple-500
+    accent: "#9B5CFF"
+    agent_id: CA_K9e3yQ3RPNKQ
+    entry: agent.py
+    github: "https://github.com/livekit/agents/tree/main/examples/inference"
+    tags: [inference]
+    icon:
+      # Three stacked bars: the STT → LLM → TTS pipeline, with the
+      # middle bar in the highlight tone.
+      size: 12
+      pixels: |
+        000000000000
+        000000000000
+        011111111110
+        011111111110
+        000000000000
+        022222222220
+        022222222220
+        000000000000
+        011111111110
+        011111111110
+        000000000000
+        000000000000
+    # The playground reads these `controls` and renders one widget per
+    # entry. `type` selects the widget — defaults to `dropdown` for
+    # backwards-compat with the other examples. Picking an option fires
+    # an RPC on the agent participant: `rpc` is the method name,
+    # payload is `{"value": "…"}`. Defaults match the agent's
+    # DEFAULT_* constants in agent.py.
+    #
+    # Supported types:
+    #   - dropdown (default): pill with options list
+    #   - textarea: multiline string editor. Fires `rpc` with the
+    #     current text on every edit-commit (debounced by the FE)
+    #     so the agent can apply it live.
+    #   - link: a button-styled action. On click fires `rpc` on the
+    #     agent (no payload) and opens the returned string as a URL
+    #     in a new tab. The agent owns the URL — useful for deep
+    #     links into Builder, dashboards, etc. where the params
+    #     depend on the agent's current state.
+    controls:
+      - rpc: set_system_prompt
+        type: textarea
+        label: System prompt
+        # Keep in sync with INSTRUCTIONS in examples/inference/agent.py.
+        default: "You're a friendly agent in the LiveKit Playground. The person talking to you is prototyping their own voice agent — they can edit this prompt in the side panel and swap the STT / LLM / TTS models live. Keep replies short, natural, and conversational. If asked which models you're using, answer honestly."
+        rows: 8
+      - rpc: set_stt_model
+        label: STT
+        default: deepgram/nova-3
+        options:
+          - { value: deepgram/nova-3, label: Deepgram Nova-3 }
+          - { value: deepgram/nova-3-medical, label: Deepgram Nova-3 Medical }
+          - { value: deepgram/flux-general-en, label: Deepgram Flux (English) }
+          - { value: deepgram/flux-general-multi, label: Deepgram Flux (Multilingual) }
+          - { value: assemblyai/u3-rt-pro, label: AssemblyAI Universal-3 Pro }
+          - { value: assemblyai/universal-streaming, label: AssemblyAI Universal-Streaming }
+          - { value: assemblyai/universal-streaming-multilingual, label: AssemblyAI Universal-Streaming Multilingual }
+          - { value: cartesia/ink-whisper, label: Cartesia Ink Whisper }
+          - { value: elevenlabs/scribe_v2_realtime, label: ElevenLabs Scribe v2 Realtime }
+          - { value: speechmatics/enhanced, label: Speechmatics Enhanced }
+          - { value: speechmatics/standard, label: Speechmatics Standard }
+          - { value: xai/stt-1, label: xAI Speech-to-Text }
+      - rpc: set_llm_model
+        label: LLM
+        default: openai/gpt-4.1-mini
+        options:
+          - { value: openai/gpt-4.1, label: OpenAI GPT-4.1 }
+          - { value: openai/gpt-4.1-mini, label: OpenAI GPT-4.1 mini }
+          - { value: openai/gpt-4.1-nano, label: OpenAI GPT-4.1 nano }
+          - { value: openai/gpt-4o, label: OpenAI GPT-4o }
+          - { value: openai/gpt-4o-mini, label: OpenAI GPT-4o mini }
+          - { value: openai/gpt-5, label: OpenAI GPT-5 }
+          - { value: openai/gpt-5-mini, label: OpenAI GPT-5 mini }
+          - { value: openai/gpt-5-nano, label: OpenAI GPT-5 nano }
+          - { value: openai/gpt-5.1, label: OpenAI GPT-5.1 }
+          - { value: openai/gpt-5.1-chat-latest, label: OpenAI GPT-5.1 Chat }
+          - { value: openai/gpt-5.2, label: OpenAI GPT-5.2 }
+          - { value: openai/gpt-5.2-chat-latest, label: OpenAI GPT-5.2 Chat }
+          - { value: openai/gpt-5.3-chat-latest, label: OpenAI GPT-5.3 Chat }
+          - { value: openai/gpt-5.4, label: OpenAI GPT-5.4 }
+          - { value: openai/gpt-5.4-mini, label: OpenAI GPT-5.4 mini }
+          - { value: openai/gpt-5.4-nano, label: OpenAI GPT-5.4 nano }
+          - { value: openai/gpt-5.5, label: OpenAI GPT-5.5 }
+          - { value: openai/gpt-oss-120b, label: OpenAI GPT OSS 120B }
+          - { value: google/gemini-2.0-flash, label: Gemini 2.0 Flash }
+          - { value: google/gemini-2.0-flash-lite, label: Gemini 2.0 Flash-Lite }
+          - { value: google/gemini-2.5-flash, label: Gemini 2.5 Flash }
+          - { value: google/gemini-2.5-flash-lite, label: Gemini 2.5 Flash-Lite }
+          - { value: google/gemini-2.5-pro, label: Gemini 2.5 Pro }
+          - { value: google/gemini-3-flash-preview, label: Gemini 3 Flash }
+          - { value: google/gemini-3-pro-preview, label: Gemini 3 Pro }
+          - { value: google/gemini-3.1-flash-lite, label: Gemini 3.1 Flash Lite }
+          - { value: google/gemini-3.1-pro-preview, label: Gemini 3.1 Pro }
+          - { value: xai/grok-4-1-fast-non-reasoning, label: Grok 4.1 Fast }
+          - { value: xai/grok-4-1-fast-reasoning, label: Grok 4.1 Fast Reasoning }
+          - { value: xai/grok-4.20-0309-non-reasoning, label: Grok 4.20 }
+          - { value: xai/grok-4.20-0309-reasoning, label: Grok 4.20 Reasoning }
+          - { value: xai/grok-4.20-multi-agent-0309, label: Grok 4.20 Multi-Agent }
+          - { value: deepseek-ai/deepseek-v3, label: DeepSeek-V3 }
+          - { value: deepseek-ai/deepseek-v3.1, label: DeepSeek-V3.1 }
+          - { value: deepseek-ai/deepseek-v3.2, label: DeepSeek-V3.2 }
+          - { value: moonshotai/kimi-k2-instruct, label: Kimi K2 Instruct }
+          - { value: moonshotai/kimi-k2.5, label: Kimi K2.5 }
+      - rpc: set_tts_model
+        label: TTS
+        default: cartesia/sonic-3
+        options:
+          - { value: cartesia/sonic, label: Cartesia Sonic }
+          - { value: cartesia/sonic-2, label: Cartesia Sonic-2 }
+          - { value: cartesia/sonic-3, label: Cartesia Sonic-3 }
+          - { value: cartesia/sonic-3-latest, label: Cartesia Sonic-3 Latest }
+          - { value: cartesia/sonic-turbo, label: Cartesia Sonic Turbo }
+          - { value: deepgram/aura, label: Deepgram Aura }
+          - { value: deepgram/aura-2, label: Deepgram Aura-2 }
+          - { value: elevenlabs/eleven_flash_v2, label: ElevenLabs Flash v2 }
+          - { value: elevenlabs/eleven_flash_v2_5, label: ElevenLabs Flash v2.5 }
+          - { value: elevenlabs/eleven_multilingual_v2, label: ElevenLabs Multilingual v2 }
+          - { value: elevenlabs/eleven_turbo_v2, label: ElevenLabs Turbo v2 }
+          - { value: elevenlabs/eleven_turbo_v2_5, label: ElevenLabs Turbo v2.5 }
+          - { value: elevenlabs/eleven_v3, label: ElevenLabs v3 }
+          - { value: inworld/inworld-tts-1, label: Inworld TTS 1 }
+          - { value: inworld/inworld-tts-1-max, label: Inworld TTS 1 Max }
+          - { value: inworld/inworld-tts-1.5-mini, label: Inworld TTS 1.5 Mini }
+          - { value: inworld/inworld-tts-1.5-max, label: Inworld TTS 1.5 Max }
+          - { value: inworld/inworld-tts-2, label: Inworld TTS 2 }
+          - { value: rime/arcana, label: Rime Arcana }
+          - { value: rime/mist, label: Rime Mist }
+          - { value: rime/mistv2, label: Rime Mist v2 }
+          - { value: rime/mistv3, label: Rime Mist v3 }
+          - { value: xai/tts-1, label: xAI Text-to-Speech }
+      # "Open in Builder" CTA. `type: link` fires `rpc` on the agent
+      # and opens the returned string as a URL in a new tab. The
+      # agent (examples/inference/agent.py :: open_in_builder) reads
+      # its current instructions + STT/LLM/TTS model strings and
+      # builds the Cloud Builder deep-link from there, so the
+      # frontend doesn't have to know the schema.
+      - rpc: open_in_builder
+        type: link
+        label: "Open in Builder \u2192"
+        primary: true
+    # Live conversation transcript. The agent doesn't push to this view
+    # by RPC the way other examples push markdown cards — the frontend
+    # subscribes to LiveKit `TranscriptionReceived` events and renders
+    # both sides of the conversation as text. `source: transcript` is
+    # the trigger; `rpc` is a sentinel value and isn't actually called.
+    views:
+      - rpc: __transcript
+        source: transcript
+        title: "\uf075 Transcript"
+
+  avatar:
+    title: Avatar
+    description: Talk to a LemonSlice avatar. Pick anyone from the dropdown to swap who you're chatting with, from Leila to a Pixar fox.
+    # LemonSlice brand \u2014 yellow-500 from the LK palette.
+    accent: "#F9E71F"
+    agent_id: CA_dzjZwsBsRKzZ
+    entry: agent.py
+    github: "https://github.com/livekit/agents/tree/main/examples/avatar"
+    tags: [avatar, video, multi-persona]
+    # Tells the jukebox frontend to render the AvatarFrame and drive
+    # the connect-time orb \u2192 video reveal animation. Without this
+    # flag the example renders like every other one (orb only).
+    avatar: true
+    icon:
+      # Head + shoulders. Head is filled with '2' (highlight tone) and
+      # the shoulders are '1' (full accent), so the two regions read as
+      # two distinct shades instead of a single blob.
+      size: 12
+      pixels: |
+        000000000000
+        000022220000
+        000222222000
+        002222222200
+        002222222200
+        002222222200
+        000222222000
+        000022220000
+        000000000000
+        001111111100
+        011111111110
+        111111111111
+    # The playground reads these `controls` and renders one widget
+    # per entry. The persona dropdown fires `set_avatar` on the
+    # agent with the chosen id as the payload value. The agent
+    # updates voice + system prompt live; the avatar image stays
+    # on the current persona until the session reconnects.
+    controls:
+      - rpc: set_avatar
+        label: Persona
+        default: leila
+        options:
+          - { value: leila, label: Leila }
+          - { value: jess, label: Jess }
+          - { value: software_engineer, label: Software Engineer }
+          - { value: social_worker, label: Social Worker }
+          - { value: ai_therapist, label: AI Therapist }
+          - { value: management_consultant, label: Management Consultant }
+          - { value: shopping_assistant, label: Shopping Assistant }
+          - { value: cat_girl, label: Cat Girl }
+          - { value: mr_fox, label: Mr Fox }

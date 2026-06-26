@@ -1,0 +1,1560 @@
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import json
+import os
+import time
+import weakref
+from collections.abc import Iterator
+from dataclasses import dataclass, field
+from typing import Literal
+
+import google.auth.credentials
+from google.auth._default_async import default_async
+from google.genai import Client as GenAIClient, types
+from google.genai.live import AsyncSession
+from livekit import rtc
+from livekit.agents import APIConnectionError, LanguageCode, llm, utils
+from livekit.agents.metrics import RealtimeModelMetrics
+from livekit.agents.metrics.base import Metadata
+from livekit.agents.types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    NotGivenOr,
+)
+from livekit.agents.utils import audio as audio_utils, images, is_given
+from livekit.plugins.google.realtime.api_proto import ClientEvents, LiveAPIModels, Voice
+
+from ..log import logger
+from ..utils import create_function_response, create_tools_config, get_tool_results_for_realtime
+from ..version import __version__
+
+INPUT_AUDIO_SAMPLE_RATE = 16000
+INPUT_AUDIO_CHANNELS = 1
+OUTPUT_AUDIO_SAMPLE_RATE = 24000
+OUTPUT_AUDIO_CHANNELS = 1
+
+DEFAULT_IMAGE_ENCODE_OPTIONS = images.EncodeOptions(
+    format="JPEG",
+    quality=75,
+    resize_options=images.ResizeOptions(width=1024, height=1024, strategy="scale_aspect_fit"),
+)
+
+lk_google_debug = int(os.getenv("LK_GOOGLE_DEBUG", 0))
+
+# stop rejecting tool calls after this many in a row to avoid a loop (tool_choice="none")
+MAX_TOOL_CALL_REJECTIONS = 3
+
+# Known VertexAI models for the Live API
+# See: https://docs.cloud.google.com/vertex-ai/generative-ai/docs/live-api
+KNOWN_VERTEXAI_MODELS: frozenset[str] = frozenset(
+    {
+        "gemini-live-2.5-flash-native-audio",
+    }
+)
+
+# Known Gemini API models for the Live API
+# See: https://ai.google.dev/gemini-api/docs/models#gemini-2.5-flash-live
+KNOWN_GEMINI_API_MODELS: frozenset[str] = frozenset(
+    {
+        "gemini-3.1-flash-live-preview",
+        "gemini-2.5-flash-native-audio-preview-12-2025",
+    }
+)
+
+
+def _validate_model_api_match(model: str, use_vertexai: bool) -> None:
+    """
+    Validate that the model name matches the API being used.
+
+    Raises ValueError if a known model is used with the wrong API configuration.
+
+    Args:
+        model: The model name being used
+        use_vertexai: Whether VertexAI is enabled
+    """
+    if use_vertexai and model in KNOWN_GEMINI_API_MODELS:
+        raise ValueError(
+            f"Model '{model}' is a Gemini API model, but vertexai=True. "
+            f"Use a VertexAI model (e.g., 'gemini-live-2.5-flash-native-audio') "
+            f"or set vertexai=False."
+        )
+
+    if not use_vertexai and model in KNOWN_VERTEXAI_MODELS:
+        raise ValueError(
+            f"Model '{model}' is a VertexAI model, but vertexai=False. "
+            f"Use a Gemini API model (e.g., 'gemini-2.5-flash-native-audio-preview-12-2025') "
+            f"or set vertexai=True."
+        )
+
+
+def _get_1008_error_hint(error_message: str) -> str | None:
+    """
+    Generate a hint for WebSocket 1008 policy violation errors.
+
+    This provides a generic hint when the connection fails with a 1008 error,
+    which often indicates the model name doesn't match the API being used.
+
+    Args:
+        error_message: The error message from the WebSocket exception
+
+    Returns:
+        A helpful hint string, or None if not a 1008 error
+    """
+    if "1008" not in error_message and "policy violation" not in error_message.lower():
+        return None
+
+    return (
+        "\n\nHint: A 1008 policy violation error often indicates that the model name "
+        "doesn't match the API being used. VertexAI models typically start with "
+        "'gemini-live-', while Gemini API models start with 'gemini-2.' or similar. "
+        "Please verify your model name matches your API configuration."
+    )
+
+
+@dataclass
+class InputTranscription:
+    item_id: str
+    transcript: str
+
+
+@dataclass
+class _RealtimeOptions:
+    model: LiveAPIModels | str
+    api_key: str | None
+    voice: Voice | str
+    language: NotGivenOr[LanguageCode]
+    response_modalities: list[types.Modality]
+    vertexai: bool
+    project: str | None
+    location: str | None
+    candidate_count: int
+    temperature: NotGivenOr[float]
+    max_output_tokens: NotGivenOr[int]
+    top_p: NotGivenOr[float]
+    top_k: NotGivenOr[int]
+    presence_penalty: NotGivenOr[float]
+    frequency_penalty: NotGivenOr[float]
+    instructions: NotGivenOr[str]
+    input_audio_transcription: types.AudioTranscriptionConfig | None
+    output_audio_transcription: types.AudioTranscriptionConfig | None
+    image_encode_options: NotGivenOr[images.EncodeOptions]
+    conn_options: APIConnectOptions
+    http_options: NotGivenOr[types.HttpOptions]
+    media_resolution: NotGivenOr[types.MediaResolution] = NOT_GIVEN
+    enable_affective_dialog: NotGivenOr[bool] = NOT_GIVEN
+    proactivity: NotGivenOr[bool] = NOT_GIVEN
+    realtime_input_config: NotGivenOr[types.RealtimeInputConfig] = NOT_GIVEN
+    context_window_compression: NotGivenOr[types.ContextWindowCompressionConfig] = NOT_GIVEN
+    api_version: NotGivenOr[str] = NOT_GIVEN
+    tool_behavior: NotGivenOr[types.Behavior] = NOT_GIVEN
+    tool_response_scheduling: NotGivenOr[types.FunctionResponseScheduling] = NOT_GIVEN
+    tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN
+    thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN
+    session_resumption: NotGivenOr[types.SessionResumptionConfig] = NOT_GIVEN
+    credentials: google.auth.credentials.Credentials | None = None
+
+
+@dataclass
+class _ResponseGeneration:
+    message_ch: utils.aio.Chan[llm.MessageGeneration]
+    function_ch: utils.aio.Chan[llm.FunctionCall]
+
+    input_id: str
+    response_id: str
+    text_ch: utils.aio.Chan[str]
+    audio_ch: utils.aio.Chan[rtc.AudioFrame]
+
+    input_transcription: str = ""
+    output_text: str = ""
+
+    _created_timestamp: float = field(default_factory=time.time)
+    """The timestamp when the generation is created"""
+    _first_token_timestamp: float | None = None
+    """The timestamp when the first audio token is received"""
+    _completed_timestamp: float | None = None
+    """The timestamp when the generation is completed"""
+    _done: bool = False
+    """Whether the generation is done (set when the turn is complete)"""
+
+    def push_text(self, text: str) -> None:
+        if self.output_text:
+            self.output_text += text
+        else:
+            self.output_text = text
+
+        self.text_ch.send_nowait(text)
+
+
+class RealtimeModel(llm.RealtimeModel):
+    def __init__(
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        model: NotGivenOr[LiveAPIModels | str] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        voice: Voice | str = "Puck",
+        language: NotGivenOr[str] = NOT_GIVEN,
+        modalities: NotGivenOr[list[types.Modality]] = NOT_GIVEN,
+        vertexai: NotGivenOr[bool] = NOT_GIVEN,
+        project: NotGivenOr[str] = NOT_GIVEN,
+        location: NotGivenOr[str] = NOT_GIVEN,
+        candidate_count: int = 1,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        max_output_tokens: NotGivenOr[int] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+        top_k: NotGivenOr[int] = NOT_GIVEN,
+        presence_penalty: NotGivenOr[float] = NOT_GIVEN,
+        frequency_penalty: NotGivenOr[float] = NOT_GIVEN,
+        input_audio_transcription: NotGivenOr[types.AudioTranscriptionConfig | None] = NOT_GIVEN,
+        output_audio_transcription: NotGivenOr[types.AudioTranscriptionConfig | None] = NOT_GIVEN,
+        image_encode_options: NotGivenOr[images.EncodeOptions] = NOT_GIVEN,
+        enable_affective_dialog: NotGivenOr[bool] = NOT_GIVEN,
+        proactivity: NotGivenOr[bool] = NOT_GIVEN,
+        realtime_input_config: NotGivenOr[types.RealtimeInputConfig] = NOT_GIVEN,
+        context_window_compression: NotGivenOr[types.ContextWindowCompressionConfig] = NOT_GIVEN,
+        tool_behavior: NotGivenOr[types.Behavior] = NOT_GIVEN,
+        tool_response_scheduling: NotGivenOr[types.FunctionResponseScheduling] = NOT_GIVEN,
+        session_resumption: NotGivenOr[types.SessionResumptionConfig] = NOT_GIVEN,
+        api_version: NotGivenOr[str] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        http_options: NotGivenOr[types.HttpOptions] = NOT_GIVEN,
+        media_resolution: NotGivenOr[types.MediaResolution] = NOT_GIVEN,
+        thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN,
+        credentials: google.auth.credentials.Credentials | None = None,
+    ) -> None:
+        """
+        Initializes a RealtimeModel instance for interacting with Google's Realtime API.
+
+        Environment Requirements:
+        - For VertexAI: Set the `GOOGLE_APPLICATION_CREDENTIALS` environment variable to the path of the service account key file or use any of the other Google Cloud auth methods.
+        The Google Cloud project and location can be set via `project` and `location` arguments or the environment variables
+        `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`. By default, the project is inferred from the service account key file,
+        and the location defaults to "us-central1".
+        - For Google Gemini API: Set the `api_key` argument or the `GOOGLE_API_KEY` environment variable.
+
+        Args:
+            instructions (str, optional): Initial system instructions for the model. Defaults to "".
+            api_key (str, optional): Google Gemini API key. If None, will attempt to read from the environment variable GOOGLE_API_KEY.
+            modalities (list[Modality], optional): Modalities to use, such as ["TEXT", "AUDIO"]. Defaults to ["AUDIO"].
+            model (str, optional): The name of the model to use. Defaults to "gemini-2.5-flash-native-audio-preview-12-2025" or "gemini-live-2.5-flash-native-audio" (vertexai).
+            voice (api_proto.Voice, optional): Voice setting for audio outputs. Defaults to "Puck".
+            language (str, optional): The language(BCP-47 Code) to use for the API. supported languages - https://ai.google.dev/gemini-api/docs/live#supported-languages
+            temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
+            vertexai (bool, optional): Whether to use VertexAI for the API. Defaults to False.
+                project (str, optional): The project id to use for the API. Defaults to None. (for vertexai)
+                location (str, optional): The location to use for the API. Defaults to None. (for vertexai)
+            candidate_count (int, optional): The number of candidate responses to generate. Defaults to 1.
+            top_p (float, optional): The top-p value for response generation
+            top_k (int, optional): The top-k value for response generation
+            presence_penalty (float, optional): The presence penalty for response generation
+            frequency_penalty (float, optional): The frequency penalty for response generation
+            input_audio_transcription (AudioTranscriptionConfig | None, optional): The configuration for input audio transcription. Defaults to None.)
+            output_audio_transcription (AudioTranscriptionConfig | None, optional): The configuration for output audio transcription. Defaults to AudioTranscriptionConfig().
+            image_encode_options (images.EncodeOptions, optional): The configuration for image encoding. Defaults to DEFAULT_ENCODE_OPTIONS.
+            media_resolution (MediaResolution, optional): The media resolution for the session. Defaults to None.
+            enable_affective_dialog (bool, optional): Whether to enable affective dialog. Defaults to False.
+            proactivity (bool, optional): Whether to enable proactive audio. Defaults to False.
+            realtime_input_config (RealtimeInputConfig, optional): The configuration for realtime input. Defaults to None.
+            context_window_compression (ContextWindowCompressionConfig, optional): The configuration for context window compression. Defaults to None.
+            tool_behavior (Behavior, optional): The behavior for tool call. Default behavior is BLOCK in Gemini Realtime API.
+            tool_response_scheduling (FunctionResponseScheduling, optional): The scheduling for tool response. Default scheduling is WHEN_IDLE.
+            session_resumption (SessionResumptionConfig, optional): The configuration for session resumption. Defaults to None.
+            thinking_config (ThinkingConfig, optional): Native audio thinking configuration.
+            conn_options (APIConnectOptions, optional): The configuration for the API connection. Defaults to DEFAULT_API_CONNECT_OPTIONS.
+
+        Raises:
+            ValueError: If the API key is required but not found.
+        """  # noqa: E501
+        if not is_given(input_audio_transcription):
+            input_audio_transcription = types.AudioTranscriptionConfig()
+        if not is_given(output_audio_transcription):
+            output_audio_transcription = types.AudioTranscriptionConfig()
+
+        server_turn_detection = True
+        if (
+            is_given(realtime_input_config)
+            and realtime_input_config.automatic_activity_detection
+            and realtime_input_config.automatic_activity_detection.disabled
+        ):
+            server_turn_detection = False
+        modalities = modalities if is_given(modalities) else [types.Modality.AUDIO]
+        use_vertexai = (
+            vertexai
+            if is_given(vertexai)
+            else os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "0").lower() in ["true", "1"]
+        )
+        if not is_given(model):
+            model = (
+                "gemini-live-2.5-flash-native-audio"
+                if use_vertexai
+                else "gemini-2.5-flash-native-audio-preview-12-2025"
+            )
+
+        mutable = "3.1" not in model
+        super().__init__(
+            capabilities=llm.RealtimeCapabilities(
+                message_truncation=False,
+                turn_detection=server_turn_detection,
+                user_transcription=input_audio_transcription is not None,
+                auto_tool_reply_generation=True,
+                audio_output=types.Modality.AUDIO in modalities,
+                manual_function_calls=False,
+                mutable_chat_context=mutable,
+                mutable_instructions=mutable,
+                mutable_tools=False,
+                per_response_tool_choice=False,
+            )
+        )
+
+        gemini_api_key = api_key if is_given(api_key) else os.environ.get("GOOGLE_API_KEY")
+        gcp_project = project if is_given(project) else os.environ.get("GOOGLE_CLOUD_PROJECT")
+        gcp_location: str | None = (
+            location
+            if is_given(location)
+            else os.environ.get("GOOGLE_CLOUD_LOCATION") or "us-central1"
+        )
+
+        if use_vertexai:
+            if not gcp_project:
+                _, gcp_project = default_async(  # type: ignore
+                    scopes=["https://www.googleapis.com/auth/cloud-platform"]
+                )
+            if not gcp_project or not gcp_location:
+                raise ValueError(
+                    "Project is required for VertexAI via project kwarg or GOOGLE_CLOUD_PROJECT environment variable"  # noqa: E501
+                )
+            gemini_api_key = None  # VertexAI does not require an API key
+        else:
+            gcp_project = None
+            gcp_location = None
+            if credentials is not None:
+                logger.warning(
+                    "'credentials' is only applicable to VertexAI and will be ignored for the Gemini API"
+                )
+                credentials = None
+            if not gemini_api_key:
+                raise ValueError(
+                    "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"  # noqa: E501
+                )
+
+        # Validate model/API compatibility for known models
+        _validate_model_api_match(model, use_vertexai)
+
+        if "3.1" in model:
+            logger.warning(
+                f"'{model}' has limited mid-session update support. instructions, chat "
+                "context, and tool updates will not be applied until the next session."
+            )
+
+        self._opts = _RealtimeOptions(
+            model=model,
+            api_key=gemini_api_key,
+            voice=voice,
+            response_modalities=modalities,
+            vertexai=use_vertexai,
+            project=gcp_project,
+            location=gcp_location,
+            candidate_count=candidate_count,
+            temperature=temperature,
+            max_output_tokens=max_output_tokens,
+            top_p=top_p,
+            top_k=top_k,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            instructions=instructions,
+            input_audio_transcription=input_audio_transcription,
+            output_audio_transcription=output_audio_transcription,
+            language=LanguageCode(language) if isinstance(language, str) else language,
+            image_encode_options=image_encode_options,
+            enable_affective_dialog=enable_affective_dialog,
+            proactivity=proactivity,
+            realtime_input_config=realtime_input_config,
+            context_window_compression=context_window_compression,
+            api_version=api_version,
+            tool_behavior=tool_behavior,
+            tool_response_scheduling=tool_response_scheduling,
+            conn_options=conn_options,
+            http_options=http_options,
+            media_resolution=media_resolution,
+            thinking_config=thinking_config,
+            session_resumption=session_resumption,
+            credentials=credentials,
+        )
+
+        self._sessions = weakref.WeakSet[RealtimeSession]()
+
+    @property
+    def model(self) -> str:
+        return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        if self._opts.vertexai:
+            return "Vertex AI"
+        else:
+            return "Gemini"
+
+    def session(self) -> RealtimeSession:
+        sess = RealtimeSession(self)
+        self._sessions.add(sess)
+        return sess
+
+    def update_options(
+        self,
+        *,
+        voice: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        tool_behavior: NotGivenOr[types.Behavior] = NOT_GIVEN,
+        tool_response_scheduling: NotGivenOr[types.FunctionResponseScheduling] = NOT_GIVEN,
+    ) -> None:
+        """
+        Update the options for the RealtimeModel.
+
+        Args:
+            voice (str, optional): The voice to use for the session.
+            temperature (float, optional): The temperature to use for the session.
+            tools (list[LLMTool], optional): The tools to use for the session.
+        """
+        if is_given(voice):
+            self._opts.voice = voice
+
+        if is_given(temperature):
+            self._opts.temperature = temperature
+
+        if is_given(tool_behavior):
+            self._opts.tool_behavior = tool_behavior
+
+        if is_given(tool_response_scheduling):
+            self._opts.tool_response_scheduling = tool_response_scheduling
+
+        for sess in self._sessions:
+            sess.update_options(
+                voice=self._opts.voice,
+                temperature=self._opts.temperature,
+                tool_behavior=self._opts.tool_behavior,
+                tool_response_scheduling=self._opts.tool_response_scheduling,
+            )
+
+    async def aclose(self) -> None:
+        pass
+
+
+class RealtimeSession(llm.RealtimeSession):
+    def __init__(self, realtime_model: RealtimeModel) -> None:
+        super().__init__(realtime_model)
+        self._opts = realtime_model._opts
+        self._tools = llm.ToolContext.empty()
+        self._chat_ctx = llm.ChatContext.empty()
+        self._msg_ch = utils.aio.Chan[ClientEvents]()
+        self._input_resampler: rtc.AudioResampler | None = None
+
+        # 50ms chunks
+        self._bstream = audio_utils.AudioByteStream(
+            INPUT_AUDIO_SAMPLE_RATE,
+            INPUT_AUDIO_CHANNELS,
+            samples_per_channel=INPUT_AUDIO_SAMPLE_RATE // 20,
+        )
+
+        api_version = self._opts.api_version
+        if (
+            not api_version
+            and (self._opts.enable_affective_dialog or self._opts.proactivity)
+            and not self._opts.vertexai
+        ):
+            api_version = "v1alpha"
+
+        http_options = self._opts.http_options or types.HttpOptions(
+            timeout=int(self._opts.conn_options.timeout * 1000)
+        )
+        if api_version:
+            http_options.api_version = api_version
+        if not http_options.headers:
+            http_options.headers = {}
+        http_options.headers["x-goog-api-client"] = f"livekit-agents/{__version__}"
+
+        self._client = GenAIClient(
+            api_key=self._opts.api_key,
+            vertexai=self._opts.vertexai,
+            project=self._opts.project,
+            location=self._opts.location,
+            credentials=self._opts.credentials,
+            http_options=http_options,
+        )
+
+        self._main_atask = asyncio.create_task(self._main_task(), name="gemini-realtime-session")
+
+        self._current_generation: _ResponseGeneration | None = None
+        self._active_session: AsyncSession | None = None
+        # indicates if the underlying session should end
+        self._session_should_close = asyncio.Event()
+        self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
+        self._pending_generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
+        # number of tool calls rejected in the current tool_choice="none" turn; non-zero also
+        # means we're draining that turn's trailing events (which have no generation to attach
+        # to). reset when the next generation starts.
+        self._rejected_tool_calls = 0
+
+        self._session_resumption_handle: str | None = (
+            self._opts.session_resumption.handle
+            if is_given(self._opts.session_resumption)
+            else None
+        )
+
+        self._in_user_activity = False
+        self._session_lock = asyncio.Lock()
+        self._num_retries = 0
+        # error recorded by the recv/send tasks so _main_task can bound retries
+        # and surface it through the "error" event
+        self._session_error: Exception | None = None
+
+    async def _close_active_session(self) -> None:
+        async with self._session_lock:
+            if self._active_session:
+                try:
+                    await self._active_session.close()
+                except Exception as e:
+                    logger.warning(f"error closing Gemini session: {e}")
+                finally:
+                    self._active_session = None
+
+    def _mark_restart_needed(self, on_error: bool = False) -> None:
+        if not self._session_should_close.is_set():
+            self._session_should_close.set()
+            # reset the msg_ch, do not send messages from previous session
+            if not on_error:
+                while not self._msg_ch.empty():
+                    msg = self._msg_ch.recv_nowait()
+                    if isinstance(msg, types.LiveClientContent) and msg.turn_complete is True:
+                        logger.warning(
+                            "discarding client content for turn completion, may cause generate_reply timeout",
+                            extra={"content": str(msg)},
+                        )
+
+            self._msg_ch = utils.aio.Chan[ClientEvents]()
+
+    def update_options(
+        self,
+        *,
+        voice: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
+        tool_behavior: NotGivenOr[types.Behavior] = NOT_GIVEN,
+        tool_response_scheduling: NotGivenOr[types.FunctionResponseScheduling] = NOT_GIVEN,
+    ) -> None:
+        should_restart = False
+        if is_given(voice) and self._opts.voice != voice:
+            self._opts.voice = voice
+            should_restart = True
+
+        if is_given(temperature) and self._opts.temperature != temperature:
+            self._opts.temperature = temperature if is_given(temperature) else NOT_GIVEN
+            should_restart = True
+
+        if is_given(tool_behavior) and self._opts.tool_behavior != tool_behavior:
+            self._opts.tool_behavior = tool_behavior
+            should_restart = True
+
+        if (
+            is_given(tool_response_scheduling)
+            and self._opts.tool_response_scheduling != tool_response_scheduling
+        ):
+            self._opts.tool_response_scheduling = tool_response_scheduling
+            # no need to restart
+
+        if is_given(tool_choice):
+            # no per-response tool_choice on Gemini; "none" is emulated by rejecting any tool
+            # call emitted during the turn (see _reject_tool_calls).
+            self._opts.tool_choice = tool_choice
+            if tool_choice == "none":
+                logger.warning(
+                    "the Google Realtime API has no tool_choice='none'; tool calls emitted "
+                    "this turn will be rejected so the model replies directly."
+                )
+            elif tool_choice not in (None, "auto"):
+                logger.warning(
+                    f"tool_choice='{tool_choice}' is not supported by the Google Realtime API, "
+                    "falling back to 'auto'."
+                )
+
+        if should_restart:
+            self._mark_restart_needed()
+
+    async def update_instructions(self, instructions: str) -> None:
+        if not is_given(self._opts.instructions) or self._opts.instructions != instructions:
+            self._opts.instructions = instructions
+
+            async with self._session_lock:
+                if not self._active_session:
+                    # No active session yet — restart will pick up new instructions via _build_connect_config
+                    self._mark_restart_needed()
+                    return
+
+            if not self._realtime_model.capabilities.mutable_instructions:
+                return
+
+            # Active session exists — send mid-session system instruction update (no reconnect needed)
+            logger.debug("Updating instructions mid-session")
+            self._send_client_event(
+                types.LiveClientContent(
+                    turns=[
+                        types.Content(
+                            parts=[types.Part(text=instructions)],
+                            # Vertex AI ignores role=None or role="system" and only works with role="model".
+                            # Gemini Live API (non-Vertex) errors on role="system"; role=None works as system role.
+                            role="model" if self._opts.vertexai else None,
+                        )
+                    ],
+                    turn_complete=False,
+                )
+            )
+
+    async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
+        # Check for system/developer messages that will be dropped
+        system_msg_count = sum(
+            1 for msg in chat_ctx.messages() if msg.role in ("system", "developer")
+        )
+        if system_msg_count > 0:
+            logger.warning(
+                f"Gemini Realtime model '{self._opts.model}' does not support 'system' or "
+                f"'developer' roles in chat history. Dropping {system_msg_count} system "
+                f"message(s) from chat context. Gemini Realtime only supports 'user' and "
+                f"'model' roles. Use update_instructions() to set system-level context instead."
+            )
+
+        chat_ctx = chat_ctx.copy(
+            exclude_handoff=True,
+            exclude_instructions=True,
+            exclude_empty_message=True,
+            exclude_config_update=True,
+        )
+        async with self._session_lock:
+            if not self._active_session:
+                self._chat_ctx = chat_ctx
+                return
+
+        diff_ops = llm.utils.compute_chat_ctx_diff(self._chat_ctx, chat_ctx)
+
+        if diff_ops.to_remove:
+            logger.warning("Gemini Live does not support removing messages")
+
+        append_ctx = llm.ChatContext.empty()
+        for _, item_id in diff_ops.to_create:
+            item = chat_ctx.get_by_id(item_id)
+            if item:
+                append_ctx.items.append(item)
+
+        if append_ctx.items:
+            tool_results = get_tool_results_for_realtime(
+                append_ctx,
+                vertexai=self._opts.vertexai,
+                tool_response_scheduling=self._opts.tool_response_scheduling,
+            )
+            if self._realtime_model.capabilities.mutable_chat_context:
+                turns_dict, _ = append_ctx.copy(exclude_function_call=True).to_provider_format(
+                    format="google", inject_dummy_user_message=False
+                )
+                turns = [types.Content.model_validate(turn) for turn in turns_dict]
+                if turns:
+                    self._send_client_event(
+                        types.LiveClientContent(turns=turns, turn_complete=False)
+                    )
+            if tool_results:
+                self._send_client_event(tool_results)
+
+        # since we don't have a view of the history on the server side, we'll assume
+        # the current state is accurate. this isn't perfect because removals aren't done.
+        self._chat_ctx = chat_ctx
+
+    async def update_tools(self, tools: list[llm.Tool]) -> None:
+        tool_ctx = llm.ToolContext(tools)
+        if self._tools == tool_ctx:
+            return
+
+        self._tools = tool_ctx
+        self._mark_restart_needed()
+
+    @property
+    def chat_ctx(self) -> llm.ChatContext:
+        return self._chat_ctx.copy()
+
+    @property
+    def tools(self) -> llm.ToolContext:
+        return self._tools.copy()
+
+    @property
+    def _manual_activity_detection(self) -> bool:
+        if (
+            is_given(self._opts.realtime_input_config)
+            and self._opts.realtime_input_config.automatic_activity_detection is not None
+            and self._opts.realtime_input_config.automatic_activity_detection.disabled
+        ):
+            return True
+        return False
+
+    @property
+    def session_resumption_handle(self) -> str | None:
+        return self._session_resumption_handle
+
+    def push_audio(self, frame: rtc.AudioFrame) -> None:
+        for f in self._resample_audio(frame):
+            for nf in self._bstream.write(f.data.tobytes()):
+                realtime_input = types.LiveClientRealtimeInput(
+                    audio=types.Blob(
+                        data=nf.data.tobytes(),
+                        mime_type=f"audio/pcm;rate={INPUT_AUDIO_SAMPLE_RATE}",
+                    )
+                )
+                self._send_client_event(realtime_input)
+
+    def push_video(self, frame: rtc.VideoFrame) -> None:
+        encoded_data = images.encode(
+            frame, self._opts.image_encode_options or DEFAULT_IMAGE_ENCODE_OPTIONS
+        )
+        realtime_input = types.LiveClientRealtimeInput(
+            video=types.Blob(data=encoded_data, mime_type="image/jpeg")
+        )
+        self._send_client_event(realtime_input)
+
+    def _send_client_event(self, event: ClientEvents) -> None:
+        with contextlib.suppress(utils.aio.channel.ChanClosed):
+            self._msg_ch.send_nowait(event)
+
+    def generate_reply(
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
+    ) -> asyncio.Future[llm.GenerationCreatedEvent]:
+        if is_given(tools):
+            logger.warning("per-response tools is not supported by Google Realtime API, ignoring")
+        if not self._realtime_model.capabilities.mutable_chat_context:
+            logger.warning(
+                f"generate_reply is not compatible with '{self._opts.model}' and will be ignored."
+            )
+            fut = asyncio.Future[llm.GenerationCreatedEvent]()
+            fut.set_exception(
+                llm.RealtimeError(f"generate_reply is not compatible with '{self._opts.model}'")
+            )
+            return fut
+        if self._pending_generation_fut and not self._pending_generation_fut.done():
+            logger.warning(
+                "generate_reply called while another generation is pending, cancelling previous."
+            )
+            # clear the slot before cancelling so the done callback doesn't treat it
+            # as an external cancellation and signal the server.
+            old_fut = self._pending_generation_fut
+            self._pending_generation_fut = None
+            old_fut.cancel("Superseded by new generate_reply call")
+
+        fut = asyncio.Future[llm.GenerationCreatedEvent]()
+        self._pending_generation_fut = fut
+
+        if self._in_user_activity:
+            self._send_client_event(
+                types.LiveClientRealtimeInput(
+                    activity_end=types.ActivityEnd(),
+                )
+            )
+            self._in_user_activity = False
+
+        # Gemini requires the last message to end with user's turn
+        # so we need to add a placeholder user turn in order to trigger a new generation
+        turns = []
+        if is_given(instructions):
+            turns.append(types.Content(parts=[types.Part(text=instructions)], role="model"))
+        turns.append(types.Content(parts=[types.Part(text=".")], role="user"))
+        self._send_client_event(types.LiveClientContent(turns=turns, turn_complete=True))
+
+        def _on_timeout() -> None:
+            if not fut.done():
+                fut.set_exception(
+                    llm.RealtimeError(
+                        "generate_reply timed out waiting for generation_created event."
+                    )
+                )
+                if self._pending_generation_fut is fut:
+                    self._pending_generation_fut = None
+
+        timeout_handle = asyncio.get_event_loop().call_later(5.0, _on_timeout)
+
+        def _on_fut_done(f: asyncio.Future[llm.GenerationCreatedEvent]) -> None:
+            timeout_handle.cancel()
+            is_current = self._pending_generation_fut is fut
+            if is_current:
+                self._pending_generation_fut = None
+            if f.cancelled() and is_current:
+                # external cancel: signal interrupt to Gemini via activity_start
+                self.interrupt()
+
+        fut.add_done_callback(_on_fut_done)
+
+        return fut
+
+    def start_user_activity(self) -> None:
+        if not self._manual_activity_detection:
+            return
+
+        if not self._in_user_activity:
+            self._in_user_activity = True
+            self._send_client_event(
+                types.LiveClientRealtimeInput(
+                    activity_start=types.ActivityStart(),
+                )
+            )
+
+    def interrupt(self) -> None:
+        # Gemini Live treats activity start as interruption, so we rely on start_user_activity
+        # notifications to handle it
+        if (
+            self._opts.realtime_input_config
+            and self._opts.realtime_input_config.activity_handling
+            == types.ActivityHandling.NO_INTERRUPTION
+        ):
+            return
+        self.start_user_activity()
+
+    def truncate(
+        self,
+        *,
+        message_id: str,
+        modalities: list[Literal["text", "audio"]],
+        audio_end_ms: int,
+        audio_transcript: NotGivenOr[str] = NOT_GIVEN,
+    ) -> None:
+        logger.warning("truncate is not supported by the Google Realtime API.")
+        pass
+
+    async def aclose(self) -> None:
+        self._msg_ch.close()
+        self._session_should_close.set()
+
+        if self._main_atask:
+            await utils.aio.cancel_and_wait(self._main_atask)
+
+        await self._close_active_session()
+
+        if self._pending_generation_fut and not self._pending_generation_fut.done():
+            self._pending_generation_fut.cancel("Session closed")
+
+        for fut in self._response_created_futures.values():
+            if not fut.done():
+                fut.set_exception(llm.RealtimeError("Session closed before response created"))
+        self._response_created_futures.clear()
+
+        if self._current_generation:
+            self._mark_current_generation_done()
+
+    @utils.log_exceptions(logger=logger)
+    async def _main_task(self) -> None:
+        max_retries = self._opts.conn_options.max_retry
+
+        while not self._msg_ch.closed:
+            # previous session might not be closed yet, we'll do it here.
+            await self._close_active_session()
+
+            self._session_should_close.clear()
+            config = self._build_connect_config()
+            session = None
+            try:
+                logger.debug("connecting to Gemini Realtime API...")
+                t0 = time.perf_counter()
+                async with self._client.aio.live.connect(
+                    model=self._opts.model, config=config
+                ) as session:
+                    self._report_connection_acquired(time.perf_counter() - t0)
+                    async with self._session_lock:
+                        self._active_session = session
+
+                        # Check for system/developer messages in initial chat context
+                        system_msg_count = sum(
+                            1
+                            for msg in self._chat_ctx.messages()
+                            if msg.role in ("system", "developer")
+                        )
+                        if system_msg_count > 0:
+                            logger.warning(
+                                f"Gemini Realtime model '{self._opts.model}' does not support 'system' or "
+                                f"'developer' roles in chat history. Dropping {system_msg_count} system "
+                                f"message(s) from initial chat context during session initialization. "
+                                f"Gemini Realtime only supports 'user' and 'model' roles. Use "
+                                f"update_instructions() to set system-level context instead."
+                            )
+
+                        turns_dict, _ = self._chat_ctx.copy(
+                            exclude_function_call=True,
+                            exclude_handoff=True,
+                            exclude_instructions=True,
+                            exclude_empty_message=True,
+                            exclude_config_update=True,
+                        ).to_provider_format(format="google", inject_dummy_user_message=False)
+                        turns = [types.Content.model_validate(turn) for turn in turns_dict]
+                        if turns:
+                            await session.send_client_content(
+                                turns=turns,  # type: ignore
+                                turn_complete=False,
+                            )
+
+                    # queue up existing chat context
+                    send_task = asyncio.create_task(
+                        self._send_task(session), name="gemini-realtime-send"
+                    )
+                    recv_task = asyncio.create_task(
+                        self._recv_task(session), name="gemini-realtime-recv"
+                    )
+                    restart_wait_task = asyncio.create_task(
+                        self._session_should_close.wait(), name="gemini-restart-wait"
+                    )
+
+                    done, pending = await asyncio.wait(
+                        [send_task, recv_task, restart_wait_task],
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+
+                    for task in done:
+                        if task is not restart_wait_task and task.exception():
+                            logger.error(f"error in task {task.get_name()}: {task.exception()}")
+                            raise task.exception() or Exception(f"{task.get_name()} failed")
+
+                    if restart_wait_task not in done and self._msg_ch.closed:
+                        break
+
+                    for task in pending:
+                        await utils.aio.cancel_and_wait(task)
+
+                    # the recv/send tasks signal restart by setting _session_should_close
+                    # rather than raising. propagate any error they recorded so the handler
+                    # below can bound retries and surface it through the "error" event.
+                    if self._session_error is not None:
+                        err = self._session_error
+                        self._session_error = None
+                        raise err
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                # Provide a hint for 1008 errors (often model/API mismatch for unknown models)
+                hint = _get_1008_error_hint(str(e))
+                if hint:
+                    logger.error(f"Gemini Realtime API error: {e}{hint}", exc_info=e)
+                else:
+                    logger.error(f"Gemini Realtime API error: {e}", exc_info=e)
+
+                if not self._msg_ch.closed:
+                    # Gemini Live closes with 1007 ("Request contains an invalid argument")
+                    # when the session context is exhausted. Reconnecting replays the same
+                    # oversized chat context and fails identically, producing a tight retry
+                    # loop, so treat it as fatal to the session instead of retrying.
+                    if getattr(e, "code", None) == 1007 or "1007" in str(e):
+                        logger.error(
+                            "Gemini Live closed the session: context exhausted (1007). "
+                            "Reconnecting would replay the same context and fail again; "
+                            "terminating the session.",
+                            exc_info=e,
+                        )
+                        self._emit_error(e, recoverable=False)
+                        raise APIConnectionError(
+                            message="Gemini Live session context exhausted (1007)"
+                        ) from e
+
+                    # we shouldn't retry when it's not connected, usually this means incorrect
+                    # parameters or setup
+                    if not session or max_retries == 0:
+                        self._emit_error(e, recoverable=False)
+                        error_msg = "Failed to connect to Gemini Live"
+                        if hint:
+                            error_msg += hint
+                        raise APIConnectionError(message=error_msg) from e
+
+                    if self._num_retries == max_retries:
+                        self._emit_error(e, recoverable=False)
+                        error_msg = f"Failed to connect to Gemini Live after {max_retries} attempts"
+                        if hint:
+                            error_msg += hint
+                        raise APIConnectionError(message=error_msg) from e
+
+                    self._emit_error(e, recoverable=True)
+                    retry_interval = self._opts.conn_options._interval_for_retry(self._num_retries)
+                    logger.warning(
+                        f"Gemini Realtime API connection failed, retrying in {retry_interval}s",
+                        exc_info=e,
+                        extra={"attempt": self._num_retries, "max_retries": max_retries},
+                    )
+                    await asyncio.sleep(retry_interval)
+                    self._num_retries += 1
+            finally:
+                await self._close_active_session()
+
+    async def _send_task(self, session: AsyncSession) -> None:
+        try:
+            async for msg in self._msg_ch:
+                async with self._session_lock:
+                    if self._session_should_close.is_set() or (
+                        not self._active_session or self._active_session != session
+                    ):
+                        break
+                if isinstance(msg, types.LiveClientContent):
+                    await session.send_client_content(
+                        turns=msg.turns,  # type: ignore
+                        turn_complete=msg.turn_complete if msg.turn_complete is not None else True,
+                    )
+                elif isinstance(msg, types.LiveClientToolResponse) and msg.function_responses:
+                    await session.send_tool_response(function_responses=msg.function_responses)
+                elif isinstance(msg, types.LiveClientRealtimeInput):
+                    if msg.audio:
+                        await session.send_realtime_input(audio=msg.audio)
+                    elif msg.video:
+                        await session.send_realtime_input(video=msg.video)
+                    elif msg.text:
+                        await session.send_realtime_input(text=msg.text)
+                    elif msg.activity_start:
+                        await session.send_realtime_input(activity_start=msg.activity_start)
+                    elif msg.activity_end:
+                        await session.send_realtime_input(activity_end=msg.activity_end)
+                else:
+                    logger.warning(f"Warning: Received unhandled message type: {type(msg)}")
+
+                if lk_google_debug and isinstance(
+                    msg,
+                    (
+                        types.LiveClientContent,
+                        types.LiveClientToolResponse,
+                        types.LiveClientRealtimeInput,
+                    ),
+                ):
+                    if not isinstance(msg, types.LiveClientRealtimeInput) or not (
+                        msg.audio or msg.video or msg.text
+                    ):
+                        logger.debug(
+                            f">>> sent {type(msg).__name__}",
+                            extra={"content": msg.model_dump(exclude_defaults=True)},
+                        )
+
+        except Exception as e:
+            if not self._session_should_close.is_set():
+                logger.error(f"error in send task: {e}", exc_info=e)
+                self._session_error = e
+                self._mark_restart_needed(on_error=True)
+        finally:
+            logger.debug("send task finished.")
+
+    async def _recv_task(self, session: AsyncSession) -> None:
+        try:
+            while True:
+                async with self._session_lock:
+                    if self._session_should_close.is_set() or (
+                        not self._active_session or self._active_session != session
+                    ):
+                        logger.debug("receive task: Session changed or closed, stopping receive.")
+                        break
+
+                async for response in session.receive():
+                    if lk_google_debug:
+                        resp_copy = response.model_dump(exclude_defaults=True)
+                        # remove audio from debugging logs
+                        if (
+                            (sc := resp_copy.get("server_content"))
+                            and (mt := sc.get("model_turn"))
+                            and (parts := mt.get("parts"))
+                        ):
+                            for part in parts:
+                                if part and part.get("inline_data"):
+                                    part["inline_data"] = "<audio>"
+                        logger.debug("<<< received response", extra={"response": resp_copy})
+
+                    if response.tool_call and self._opts.tool_choice == "none":
+                        # reject without opening a generation, so the pending generate_reply
+                        # stays bound to the model's eventual reply and tools stay suppressed
+                        # for the whole turn.
+                        self._reject_tool_calls(response.tool_call.function_calls or [])
+                        continue
+
+                    if not self._current_generation or self._current_generation._done:
+                        if (sc := response.server_content) and sc.interrupted:
+                            # two cases an interrupted event is sent without an active generation
+                            # 1) the generation is done but playout is not finished (turn_complete -> interrupted)
+                            # 2) the generation is not started (interrupted -> turn_complete)
+                            # for both cases, we interrupt the agent if there is no pending generation from `generate_reply`
+                            # for the second case, the pending generation will be stopped by `turn_complete` event coming later
+                            if not self._pending_generation_fut:
+                                self._handle_input_speech_started()
+
+                            sc.interrupted = None
+                            sc_copy = sc.model_dump(exclude_none=True)
+                            if not sc_copy:
+                                # ignore empty server content
+                                response.server_content = None
+                                if lk_google_debug:
+                                    logger.debug("ignoring empty server content")
+
+                        if self._is_new_generation(response):
+                            self._start_new_generation()
+                            if lk_google_debug:
+                                logger.debug(f"new generation started: {self._current_generation}")
+
+                    if response.session_resumption_update:
+                        if (
+                            response.session_resumption_update.resumable
+                            and response.session_resumption_update.new_handle
+                        ):
+                            self._session_resumption_handle = (
+                                response.session_resumption_update.new_handle
+                            )
+
+                    if response.server_content:
+                        self._handle_server_content(response.server_content)
+                    if response.tool_call:
+                        self._handle_tool_calls(response.tool_call)
+                    if response.tool_call_cancellation:
+                        self._handle_tool_call_cancellation(response.tool_call_cancellation)
+                    if response.usage_metadata:
+                        self._handle_usage_metadata(response.usage_metadata)
+                    if response.go_away:
+                        self._handle_go_away(response.go_away)
+
+                    if self._num_retries > 0:
+                        self._num_retries = 0  # reset the retry counter
+
+                # TODO(dz): a server-side turn is complete
+        except Exception as e:
+            if not self._session_should_close.is_set():
+                logger.error(f"error in receive task: {e}", exc_info=e)
+                self._session_error = e
+                self._mark_restart_needed(on_error=True)
+        finally:
+            self._mark_current_generation_done()
+
+    def _build_connect_config(self) -> types.LiveConnectConfig:
+        temp = self._opts.temperature if is_given(self._opts.temperature) else None
+
+        tools_config = create_tools_config(
+            self._tools,
+            tool_behavior=self._opts.tool_behavior,
+            use_parameters_json_schema=False,
+        )
+        conf = types.LiveConnectConfig(
+            response_modalities=self._opts.response_modalities,
+            history_config=types.HistoryConfig(initial_history_in_client_content=True)
+            if not self._realtime_model.capabilities.mutable_chat_context
+            else None,
+            generation_config=types.GenerationConfig(
+                candidate_count=self._opts.candidate_count,
+                temperature=temp,
+                max_output_tokens=self._opts.max_output_tokens
+                if is_given(self._opts.max_output_tokens)
+                else None,
+                top_p=self._opts.top_p if is_given(self._opts.top_p) else None,
+                top_k=self._opts.top_k if is_given(self._opts.top_k) else None,
+                presence_penalty=self._opts.presence_penalty
+                if is_given(self._opts.presence_penalty)
+                else None,
+                frequency_penalty=self._opts.frequency_penalty
+                if is_given(self._opts.frequency_penalty)
+                else None,
+                thinking_config=self._opts.thinking_config
+                if is_given(self._opts.thinking_config)
+                else None,
+                media_resolution=self._opts.media_resolution
+                if is_given(self._opts.media_resolution)
+                else None,
+            ),
+            system_instruction=types.Content(parts=[types.Part(text=self._opts.instructions)])
+            if is_given(self._opts.instructions)
+            else None,
+            speech_config=types.SpeechConfig(
+                voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=self._opts.voice)
+                ),
+                language_code=self._opts.language if is_given(self._opts.language) else None,
+            ),
+            tools=tools_config,
+            input_audio_transcription=self._opts.input_audio_transcription,
+            output_audio_transcription=self._opts.output_audio_transcription,
+            session_resumption=types.SessionResumptionConfig(
+                handle=self._session_resumption_handle
+            ),
+        )
+
+        if is_given(self._opts.proactivity):
+            conf.proactivity = types.ProactivityConfig(proactive_audio=self._opts.proactivity)
+        if is_given(self._opts.enable_affective_dialog):
+            conf.enable_affective_dialog = self._opts.enable_affective_dialog
+        if is_given(self._opts.realtime_input_config):
+            conf.realtime_input_config = self._opts.realtime_input_config
+        if is_given(self._opts.context_window_compression):
+            conf.context_window_compression = self._opts.context_window_compression
+
+        return conf
+
+    def _start_new_generation(self) -> None:
+        self._rejected_tool_calls = 0
+        if self._current_generation and not self._current_generation._done:
+            logger.warning("starting new generation while another is active. Finalizing previous.")
+            self._mark_current_generation_done()
+
+        response_id = utils.shortuuid("GR_")
+        self._current_generation = _ResponseGeneration(
+            message_ch=utils.aio.Chan[llm.MessageGeneration](),
+            function_ch=utils.aio.Chan[llm.FunctionCall](),
+            response_id=response_id,
+            input_id=utils.shortuuid("GI_"),
+            text_ch=utils.aio.Chan[str](),
+            audio_ch=utils.aio.Chan[rtc.AudioFrame](),
+            _created_timestamp=time.time(),
+        )
+        if not self._realtime_model.capabilities.audio_output:
+            self._current_generation.audio_ch.close()
+
+        msg_modalities = asyncio.Future[list[Literal["text", "audio"]]]()
+        msg_modalities.set_result(
+            ["audio", "text"] if self._realtime_model.capabilities.audio_output else ["text"]
+        )
+        self._current_generation.message_ch.send_nowait(
+            llm.MessageGeneration(
+                message_id=response_id,
+                text_stream=self._current_generation.text_ch,
+                audio_stream=self._current_generation.audio_ch,
+                modalities=msg_modalities,
+            )
+        )
+
+        generation_event = llm.GenerationCreatedEvent(
+            message_stream=self._current_generation.message_ch,
+            function_stream=self._current_generation.function_ch,
+            user_initiated=False,
+            response_id=self._current_generation.response_id,
+        )
+
+        if self._pending_generation_fut and not self._pending_generation_fut.done():
+            generation_event.user_initiated = True
+            self._pending_generation_fut.set_result(generation_event)
+            self._pending_generation_fut = None
+        else:
+            # emit input_speech_started event before starting an agent initiated generation
+            # to interrupt the previous audio playout if any
+            self._handle_input_speech_started()
+
+        self.emit("generation_created", generation_event)
+
+    def _handle_server_content(self, server_content: types.LiveServerContent) -> None:
+        current_gen = self._current_generation
+        if not current_gen:
+            if self._rejected_tool_calls:
+                logger.debug(
+                    "ignoring server content from a rejected tool call turn",
+                    extra={"server_content": server_content.model_dump_json(exclude_none=True)},
+                )
+            else:
+                logger.warning("received server content but no active generation.")
+            return
+
+        if model_turn := server_content.model_turn:
+            for part in model_turn.parts or []:
+                if part.thought:
+                    # bypass reasoning output
+                    continue
+                if part.text:
+                    current_gen.push_text(part.text)
+                if part.inline_data:
+                    if not current_gen._first_token_timestamp:
+                        current_gen._first_token_timestamp = time.time()
+                    frame_data = part.inline_data.data
+                    try:
+                        if not isinstance(frame_data, bytes):
+                            raise ValueError("frame_data is not bytes")
+                        frame = rtc.AudioFrame(
+                            data=frame_data,
+                            sample_rate=OUTPUT_AUDIO_SAMPLE_RATE,
+                            num_channels=OUTPUT_AUDIO_CHANNELS,
+                            samples_per_channel=len(frame_data) // (2 * OUTPUT_AUDIO_CHANNELS),
+                        )
+                        current_gen.audio_ch.send_nowait(frame)
+                    except ValueError as e:
+                        logger.error(f"Error creating audio frame from Gemini data: {e}")
+
+        if input_transcription := server_content.input_transcription:
+            text = input_transcription.text
+            if text:
+                if current_gen.input_transcription == "":
+                    # gemini would start with a space, which doesn't make sense
+                    # at beginning of the transcript
+                    text = text.lstrip()
+                current_gen.input_transcription += text
+                self.emit(
+                    "input_audio_transcription_completed",
+                    llm.InputTranscriptionCompleted(
+                        item_id=current_gen.input_id,
+                        transcript=current_gen.input_transcription,
+                        is_final=False,
+                    ),
+                )
+
+        if output_transcription := server_content.output_transcription:
+            text = output_transcription.text
+            if text:
+                current_gen.push_text(text)
+
+        if server_content.generation_complete or server_content.turn_complete:
+            current_gen._completed_timestamp = time.time()
+
+        if server_content.interrupted and not self._pending_generation_fut:
+            # interrupt agent if there is no pending user initiated generation
+            self._handle_input_speech_started()
+
+        if server_content.turn_complete:
+            self._mark_current_generation_done()
+
+    def _mark_current_generation_done(self) -> None:
+        if not self._current_generation or self._current_generation._done:
+            return
+
+        # emit input_speech_stopped event after the generation is done
+        self._handle_input_speech_stopped()
+
+        gen = self._current_generation
+
+        # The only way we'd know that the transcription is complete is by when they are
+        # done with generation
+        if gen.input_transcription:
+            self.emit(
+                "input_audio_transcription_completed",
+                llm.InputTranscriptionCompleted(
+                    item_id=gen.input_id,
+                    transcript=gen.input_transcription,
+                    is_final=True,
+                ),
+            )
+
+            # since gemini doesn't give us a view of the chat history on the server side,
+            # we would handle it manually here
+            self._chat_ctx.add_message(
+                role="user",
+                content=gen.input_transcription,
+                id=gen.input_id,
+            )
+
+        if gen.output_text:
+            self._chat_ctx.add_message(
+                role="assistant",
+                content=gen.output_text,
+                id=gen.response_id,
+            )
+
+        if not gen.text_ch.closed:
+            if self._opts.output_audio_transcription is None:
+                # close the text data of transcription synchronizer
+                gen.text_ch.send_nowait("")
+            gen.text_ch.close()
+        if not gen.audio_ch.closed:
+            gen.audio_ch.close()
+
+        gen.function_ch.close()
+        gen.message_ch.close()
+        gen._done = True
+        if lk_google_debug:
+            logger.debug(f"generation done {gen}")
+
+    def _handle_input_speech_started(self) -> None:
+        self.emit("input_speech_started", llm.InputSpeechStartedEvent())
+
+    def _handle_input_speech_stopped(self) -> None:
+        self.emit(
+            "input_speech_stopped",
+            llm.InputSpeechStoppedEvent(user_transcription_enabled=False),
+        )
+
+    def _reject_tool_calls(self, function_calls: list[types.FunctionCall]) -> None:
+        if not function_calls:
+            return
+
+        self._rejected_tool_calls += 1
+        extra = {"functions": [fnc_call.name for fnc_call in function_calls]}
+        if self._rejected_tool_calls > MAX_TOOL_CALL_REJECTIONS:
+            # stop responding to break the loop; the user can still interrupt by voice
+            if self._rejected_tool_calls == MAX_TOOL_CALL_REJECTIONS + 1:
+                logger.error(
+                    "model keeps calling tools despite tool_choice='none'; "
+                    f"stopping after {MAX_TOOL_CALL_REJECTIONS} rejections to avoid a loop",
+                    extra=extra,
+                )
+            return
+
+        logger.warning("rejecting tool call requested while tool_choice='none'", extra=extra)
+        responses = [
+            create_function_response(
+                llm.FunctionCallOutput(
+                    name=fnc_call.name or "",
+                    call_id=fnc_call.id or "",
+                    output="Tool calls are disabled for this turn, respond to the user directly.",
+                    is_error=True,
+                ),
+                vertexai=self._opts.vertexai,
+                tool_response_scheduling=self._opts.tool_response_scheduling,
+            )
+            for fnc_call in function_calls
+        ]
+        self._send_client_event(types.LiveClientToolResponse(function_responses=responses))
+
+    def _handle_tool_calls(self, tool_call: types.LiveServerToolCall) -> None:
+        if not self._current_generation:
+            logger.warning("received tool call but no active generation.")
+            return
+
+        gen = self._current_generation
+        for fnc_call in tool_call.function_calls or []:
+            arguments = json.dumps(fnc_call.args)
+
+            gen.function_ch.send_nowait(
+                llm.FunctionCall(
+                    call_id=fnc_call.id or utils.shortuuid("fnc-call-"),
+                    name=fnc_call.name,
+                    arguments=arguments,
+                )
+            )
+        self._mark_current_generation_done()
+
+    def _handle_tool_call_cancellation(
+        self, tool_call_cancellation: types.LiveServerToolCallCancellation
+    ) -> None:
+        logger.warning(
+            "server cancelled tool calls",
+            extra={"function_call_ids": tool_call_cancellation.ids},
+        )
+
+    def _handle_usage_metadata(self, usage_metadata: types.UsageMetadata) -> None:
+        current_gen = self._current_generation
+        if not current_gen:
+            if self._rejected_tool_calls:
+                logger.debug("ignoring usage metadata from a rejected tool call turn")
+            else:
+                logger.warning("no active generation to report metrics for")
+            return
+
+        ttft = (
+            current_gen._first_token_timestamp - current_gen._created_timestamp
+            if current_gen._first_token_timestamp
+            else -1
+        )
+        duration = (
+            current_gen._completed_timestamp or time.time()
+        ) - current_gen._created_timestamp
+
+        def _token_details_map(
+            token_details: list[types.ModalityTokenCount] | None,
+        ) -> dict[str, int]:
+            token_details_map = {"audio_tokens": 0, "text_tokens": 0, "image_tokens": 0}
+            if not token_details:
+                return token_details_map
+
+            for token_detail in token_details:
+                if not token_detail.token_count:
+                    continue
+
+                if token_detail.modality == types.MediaModality.AUDIO:
+                    token_details_map["audio_tokens"] += token_detail.token_count
+                elif token_detail.modality == types.MediaModality.TEXT:
+                    token_details_map["text_tokens"] += token_detail.token_count
+                elif token_detail.modality == types.MediaModality.IMAGE:
+                    token_details_map["image_tokens"] += token_detail.token_count
+            return token_details_map
+
+        metrics = RealtimeModelMetrics(
+            label=self._realtime_model.label,
+            request_id=current_gen.response_id,
+            timestamp=current_gen._created_timestamp,
+            duration=duration,
+            ttft=ttft,
+            cancelled=False,
+            input_tokens=usage_metadata.prompt_token_count or 0,
+            output_tokens=usage_metadata.response_token_count or 0,
+            total_tokens=usage_metadata.total_token_count or 0,
+            tokens_per_second=(usage_metadata.response_token_count or 0) / duration
+            if duration > 0
+            else 0,
+            input_token_details=RealtimeModelMetrics.InputTokenDetails(
+                **_token_details_map(usage_metadata.prompt_tokens_details),
+                cached_tokens=sum(
+                    token_detail.token_count or 0
+                    for token_detail in usage_metadata.cache_tokens_details or []
+                ),
+                cached_tokens_details=RealtimeModelMetrics.CachedTokenDetails(
+                    **_token_details_map(usage_metadata.cache_tokens_details),
+                ),
+            ),
+            output_token_details=RealtimeModelMetrics.OutputTokenDetails(
+                **_token_details_map(usage_metadata.response_tokens_details),
+            ),
+            metadata=Metadata(
+                model_name=self._realtime_model.model, model_provider=self._realtime_model.provider
+            ),
+        )
+        self.emit("metrics_collected", metrics)
+
+    def _handle_go_away(self, go_away: types.LiveServerGoAway) -> None:
+        logger.warning(
+            f"Gemini server indicates disconnection soon. Time left: {go_away.time_left}"
+        )
+        # TODO(dz): this isn't a seamless reconnection just yet
+        self._session_should_close.set()
+
+    def commit_audio(self) -> None:
+        logger.warning("commit_audio is not supported by Gemini Realtime API.")
+
+    def clear_audio(self) -> None:
+        logger.warning("clear_audio is not supported by Gemini Realtime API.")
+
+    def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
+        if self._input_resampler:
+            if frame.sample_rate != self._input_resampler._input_rate:
+                # input audio changed to a different sample rate
+                self._input_resampler = None
+
+        if self._input_resampler is None and (
+            frame.sample_rate != INPUT_AUDIO_SAMPLE_RATE
+            or frame.num_channels != INPUT_AUDIO_CHANNELS
+        ):
+            self._input_resampler = rtc.AudioResampler(
+                input_rate=frame.sample_rate,
+                output_rate=INPUT_AUDIO_SAMPLE_RATE,
+                num_channels=INPUT_AUDIO_CHANNELS,
+            )
+
+        if self._input_resampler:
+            # TODO(long): flush the resampler when the input source is changed
+            yield from self._input_resampler.push(frame)
+        else:
+            yield frame
+
+    def _emit_error(self, error: Exception, recoverable: bool) -> None:
+        self.emit(
+            "error",
+            llm.RealtimeModelError(
+                timestamp=time.time(),
+                label=self._realtime_model._label,
+                error=error,
+                recoverable=recoverable,
+            ),
+        )
+
+    def _is_new_generation(self, resp: types.LiveServerMessage) -> bool:
+        if resp.tool_call:
+            return True
+
+        if (sc := resp.server_content) and (
+            sc.model_turn
+            or (
+                sc.output_transcription and sc.output_transcription and sc.output_transcription.text
+            )
+            or (sc.input_transcription and sc.input_transcription and sc.input_transcription.text)
+            # or (sc.generation_complete is not None)
+            # or (sc.turn_complete is not None)
+        ):
+            # Some Gemini models send a `generation_complete` event after tool calls, but others do not.
+            # We mark the generation as done after a tool call and need to ignore any empty transcriptions or generation_complete events.
+            # This prevents new empty generations from starting and interrupting tool execution.
+            return True
+
+        return False
