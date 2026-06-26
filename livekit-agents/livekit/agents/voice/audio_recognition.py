@@ -434,8 +434,13 @@ class AudioRecognition:
             )
             self._ignore_user_transcript_until = ignore_until - end_cooldown
 
-            # flush held transcripts if possible
-            task = asyncio.create_task(self._flush_held_transcripts(cooldown=end_cooldown))
+            # capture the anchor so a stale flush can't clear one a newer cycle has set
+            agent_speech_started_at = self._agent_speech_started_at
+            task = asyncio.create_task(
+                self._flush_held_transcripts(
+                    cooldown=end_cooldown, agent_speech_started_at=agent_speech_started_at
+                )
+            )
             task.add_done_callback(lambda _: self._tasks.discard(task))
             self._tasks.add(task)
 
@@ -516,7 +521,12 @@ class AudioRecognition:
         await self._user_silence_ev.wait()
 
     @utils.log_exceptions(logger=logger)
-    async def _flush_held_transcripts(self, cooldown: float, force: bool = False) -> None:
+    async def _flush_held_transcripts(
+        self,
+        cooldown: float,
+        force: bool = False,
+        agent_speech_started_at: float | None = None,
+    ) -> None:
         """Flush held transcripts.
 
         When ``force`` is True, all buffered events are emitted unconditionally; this
@@ -528,13 +538,13 @@ class AudioRecognition:
         without timestamps are treated as the next valid event.
         """
         if not self._transcript_buffer:
-            self._reset_interruption_detection()
+            self._reset_interruption_detection(agent_speech_started_at=agent_speech_started_at)
             return
 
         if force:
             events_to_emit = list(self._transcript_buffer)
             # reset before emitting to avoid recursive calls
-            self._reset_interruption_detection()
+            self._reset_interruption_detection(agent_speech_started_at=agent_speech_started_at)
             for ev in events_to_emit:
                 await self._on_stt_event(ev)
             return
@@ -544,7 +554,7 @@ class AudioRecognition:
             or not is_given(self._ignore_user_transcript_until)
             or self._input_started_at is None
         ):
-            self._reset_interruption_detection()
+            self._reset_interruption_detection(agent_speech_started_at=agent_speech_started_at)
             return
 
         emit_from_index: int | None = None
@@ -555,7 +565,7 @@ class AudioRecognition:
                 emit_from_index = min(emit_from_index, i) if emit_from_index is not None else i
                 continue
             if ev.alternatives[0].start_time == ev.alternatives[0].end_time == 0:
-                self._reset_interruption_detection()
+                self._reset_interruption_detection(agent_speech_started_at=agent_speech_started_at)
                 return
 
             if ev.alternatives[0].end_time > 0 and self._within_ignore_window(
@@ -601,11 +611,17 @@ class AudioRecognition:
             )
             await self._on_stt_event(ev)
 
-    def _reset_interruption_detection(self) -> None:
+    def _reset_interruption_detection(
+        self, *, agent_speech_started_at: float | None = None
+    ) -> None:
         """Reset relevant states for adaptive interruption detection."""
         self._transcript_buffer.clear()
         self._ignore_user_transcript_until = NOT_GIVEN
-        self._agent_speech_started_at = None
+        if (
+            agent_speech_started_at is None
+            or self._agent_speech_started_at == agent_speech_started_at
+        ):
+            self._agent_speech_started_at = None
 
     def _within_ignore_window(self, event_time: float) -> bool:
         """Whether a wall-clock event time falls inside the active ignore-user-transcript window.
