@@ -75,7 +75,6 @@ class STTOptions:
     tags: NotGivenOr[list[str]] = NOT_GIVEN
     utterance_end_ms: int | None = None
     dictation: bool = False
-    redact: list[str] | None = None
     replace: dict[str, str] | None = None
     search: list[str] | None = None
 
@@ -109,7 +108,6 @@ class STT(stt.STT):
         vad_events: bool = True,
         utterance_end_ms: int | None = None,
         dictation: bool = False,
-        redact: list[str] | None = None,
         replace: dict[str, str] | None = None,
         search: list[str] | None = None,
         # deprecated
@@ -151,9 +149,6 @@ class STT(stt.STT):
             dictation: Whether to enable dictation mode which converts spoken punctuation commands
                       (e.g. "comma", "period") into punctuation marks. Defaults to False.
                       See https://developers.deepgram.com/reference/speech-to-text/listen-streaming#query-dictation
-            redact: List of sensitive information types to redact from the transcript
-                   (e.g. ["pci", "pii", "numbers", "ssn"]).
-                   See https://developers.deepgram.com/reference/speech-to-text/listen-streaming#query-redact
             replace: Dictionary of terms to replace in the transcript, where keys are the original
                     terms and values are the replacements (e.g. {"hello": "hi"}).
                     See https://developers.deepgram.com/reference/speech-to-text/listen-streaming#query-replace
@@ -218,7 +213,6 @@ class STT(stt.STT):
             endpoint_url=base_url,
             utterance_end_ms=utterance_end_ms,
             dictation=dictation,
-            redact=redact,
             replace=replace,
             search=search,
         )
@@ -341,7 +335,6 @@ class STT(stt.STT):
         endpoint_url: NotGivenOr[str] = NOT_GIVEN,
         utterance_end_ms: NotGivenOr[int | None] = NOT_GIVEN,
         dictation: NotGivenOr[bool] = NOT_GIVEN,
-        redact: NotGivenOr[list[str] | None] = NOT_GIVEN,
         replace: NotGivenOr[dict[str, str] | None] = NOT_GIVEN,
         search: NotGivenOr[list[str] | None] = NOT_GIVEN,
         # deprecated
@@ -396,8 +389,6 @@ class STT(stt.STT):
             self._opts.utterance_end_ms = utterance_end_ms
         if is_given(dictation):
             self._opts.dictation = dictation
-        if is_given(redact):
-            self._opts.redact = redact
         if is_given(replace):
             self._opts.replace = replace
         if is_given(search):
@@ -424,7 +415,6 @@ class STT(stt.STT):
                 endpoint_url=endpoint_url,
                 utterance_end_ms=utterance_end_ms,
                 dictation=dictation,
-                redact=redact,
                 replace=replace,
                 search=search,
             )
@@ -506,7 +496,6 @@ class SpeechStream(stt.SpeechStream):
         endpoint_url: NotGivenOr[str] = NOT_GIVEN,
         utterance_end_ms: NotGivenOr[int | None] = NOT_GIVEN,
         dictation: NotGivenOr[bool] = NOT_GIVEN,
-        redact: NotGivenOr[list[str] | None] = NOT_GIVEN,
         replace: NotGivenOr[dict[str, str] | None] = NOT_GIVEN,
         search: NotGivenOr[list[str] | None] = NOT_GIVEN,
         # deprecated
@@ -561,8 +550,6 @@ class SpeechStream(stt.SpeechStream):
             self._opts.utterance_end_ms = utterance_end_ms
         if is_given(dictation):
             self._opts.dictation = dictation
-        if is_given(redact):
-            self._opts.redact = redact
         if is_given(replace):
             self._opts.replace = replace
         if is_given(search):
@@ -726,8 +713,6 @@ class SpeechStream(stt.SpeechStream):
             live_config["utterance_end_ms"] = self._opts.utterance_end_ms
         if self._opts.dictation:
             live_config["dictation"] = True
-        if self._opts.redact:
-            live_config["redact"] = self._opts.redact
         if self._opts.replace:
             live_config["replace"] = self._opts.replace
         if self._opts.search:
