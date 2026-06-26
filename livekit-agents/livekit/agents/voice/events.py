@@ -65,6 +65,9 @@ class RunContext(Generic[Userdata_T]):
         self._executor: _ToolExecutor | None = None
         self._first_update_fut: asyncio.Future[Any] | None = None
 
+        # stores an Agent returned after ctx.update() for deferred handoff
+        self._deferred_agent_handoff: Any = None
+
     @property
     def session(self) -> AgentSession[Userdata_T]:
         return self._session

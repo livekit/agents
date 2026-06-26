@@ -1495,6 +1495,51 @@ class TestToolExecutorLifecycle:
         assert run_ctx._first_update_fut is None
 
 
+class TestDeferredAgentHandoff:
+    """Agent handoff after ctx.update() should work (issue #5936)."""
+
+    @pytest.mark.asyncio
+    async def test_agent_return_after_update_stored_for_handoff(self):
+        import asyncio as _asyncio
+
+        from livekit.agents.voice.events import RunContext
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        @function_tool
+        async def tool_with_update_then_agent(ctx: RunContext) -> Agent:
+            """Tool that calls ctx.update() then returns an Agent."""
+            await ctx.update("Please hold on")
+            return DummyAgent()
+
+        executor = _ToolExecutor()
+        run_ctx = _make_run_context(call_id="handoff_1", name="tool_with_update_then_agent")
+        result = await executor.execute(tool=tool_with_update_then_agent, run_ctx=run_ctx, raw_arguments={})
+
+        assert result is not None
+        assert isinstance(result, str)
+        assert "Please hold on" in result
+        assert run_ctx._deferred_agent_handoff is not None
+        assert isinstance(run_ctx._deferred_agent_handoff, DummyAgent)
+
+    @pytest.mark.asyncio
+    async def test_agent_return_without_update_works_normally(self):
+        import asyncio as _asyncio
+
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        @function_tool
+        async def tool_returns_agent() -> Agent:
+            """Tool that returns an Agent without calling ctx.update()."""
+            return DummyAgent()
+
+        executor = _ToolExecutor()
+        run_ctx = _make_run_context(call_id="handoff_2", name="tool_returns_agent")
+        result = await executor.execute(tool=tool_returns_agent, run_ctx=run_ctx, raw_arguments={})
+
+        assert isinstance(result, DummyAgent)
+        assert run_ctx._deferred_agent_handoff is None
+
+
 class TestAgentSessionWaitForIdle:
     def test_raises_runtime_error_when_no_activity(self):
         """wait_for_idle raises instead of spinning when no activity has started."""

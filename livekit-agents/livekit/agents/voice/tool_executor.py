@@ -325,16 +325,10 @@ class _ToolExecutor:
             if output is None or isinstance(output, StopResponse):
                 return
 
-            # the first update has already been returned to dispatch, so an Agent
-            # return now has no surface to carry an agent_task back
             from .agent import Agent
 
             if isinstance(output, Agent):
-                logger.error(
-                    f"tool `{fnc_name}` returned an Agent after ctx.update(); "
-                    "agent handoff after a progress update is not supported",
-                    extra={"call_id": call_id, "function": fnc_name},
-                )
+                run_ctx._deferred_agent_handoff = output
                 return
 
             # final return goes through the coalescer as a synthetic output
@@ -364,6 +358,9 @@ class _ToolExecutor:
                 session_tasks.pop(call_id, None)
             # detach so a stashed RunContext can't drive the executor post-completion
             run_ctx._detach_executor()
+
+            if run_ctx._deferred_agent_handoff is not None:
+                session.update_agent(run_ctx._deferred_agent_handoff)
 
         exe_task.add_done_callback(_on_done)
 
