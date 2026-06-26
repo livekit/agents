@@ -36,8 +36,8 @@ async def test_new_args_map_to_unchanged_wire_keys():
             cid = await api.create_conversation(face_id="f1", pal_id="p1")
     assert cid == "conv1"
     payload = m.call_args.args[1]
-    assert payload["replica_id"] == "f1"
-    assert payload["persona_id"] == "p1"
+    assert payload["face_id"] == "f1"
+    assert payload["pal_id"] == "p1"
     assert _no_deprecation(rec)
 
 
@@ -47,8 +47,8 @@ async def test_deprecated_args_still_work_and_warn():
         with pytest.warns(DeprecationWarning) as rec:
             await api.create_conversation(replica_id="r1", persona_id="x1")
     payload = m.call_args.args[1]
-    assert payload["replica_id"] == "r1"
-    assert payload["persona_id"] == "x1"
+    assert payload["face_id"] == "r1"
+    assert payload["pal_id"] == "x1"
     msgs = [str(w.message) for w in rec]
     assert any("replica_id" in s and "face_id" in s for s in msgs)
     assert any("persona_id" in s and "pal_id" in s for s in msgs)
@@ -63,8 +63,8 @@ async def test_new_env_vars_fallback(monkeypatch):
             warnings.simplefilter("always")
             await api.create_conversation()
     payload = m.call_args.args[1]
-    assert payload["replica_id"] == "envf"
-    assert payload["persona_id"] == "envp"
+    assert payload["face_id"] == "envf"
+    assert payload["pal_id"] == "envp"
     assert _no_deprecation(rec)
 
 
@@ -76,8 +76,22 @@ async def test_deprecated_env_vars_still_work_and_warn(monkeypatch):
         with pytest.warns(DeprecationWarning):
             await api.create_conversation()
     payload = m.call_args.args[1]
-    assert payload["replica_id"] == "oldf"
-    assert payload["persona_id"] == "oldp"
+    assert payload["face_id"] == "oldf"
+    assert payload["pal_id"] == "oldp"
+
+
+async def test_auto_creates_pal_when_none_given():
+    api = _api()
+    post = AsyncMock(side_effect=[{"pal_id": "pal_new"}, {"conversation_id": "conv1"}])
+    with patch.object(api, "_post", new=post):
+        await api.create_conversation(face_id="f1")
+    pal_endpoint, pal_payload = post.call_args_list[0].args
+    conv_endpoint, conv_payload = post.call_args_list[1].args
+    assert pal_endpoint == "pals"
+    assert pal_payload["default_face_id"] == "f1"
+    assert conv_endpoint == "conversations"
+    assert conv_payload["face_id"] == "f1"
+    assert conv_payload["pal_id"] == "pal_new"
 
 
 async def test_missing_face_id_raises():

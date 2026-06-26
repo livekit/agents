@@ -106,14 +106,13 @@ class TavusAPI:
             or NOT_GIVEN
         )
         if not pal_id:
-            # create a pal (persona) if not provided
-            pal_id = await self.create_persona()
+            # create a pal (requires a face) if not provided
+            pal_id = await self.create_pal(default_face_id=face_id)
 
         properties = properties or {}
         payload = {
-            # Wire keys stay replica_id/persona_id; the Tavus API still expects them.
-            "replica_id": face_id,
-            "persona_id": pal_id,
+            "face_id": face_id,
+            "pal_id": pal_id,
             "properties": properties,
         }
         if utils.is_given(extra_payload):
@@ -125,12 +124,42 @@ class TavusAPI:
         response_data = await self._post("conversations", payload)
         return response_data["conversation_id"]  # type: ignore
 
+    async def create_pal(
+        self,
+        name: NotGivenOr[str] = NOT_GIVEN,
+        *,
+        default_face_id: str,
+        extra_payload: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+    ) -> str:
+        name = name or utils.shortuuid("lk_pal_")
+
+        payload = {
+            "pal_name": name,
+            "default_face_id": default_face_id,
+            "pipeline_mode": "echo",
+            "layers": {
+                "transport": {"transport_type": "livekit"},
+            },
+        }
+
+        if utils.is_given(extra_payload):
+            payload.update(extra_payload)
+
+        response_data = await self._post("pals", payload)
+        return response_data["pal_id"]  # type: ignore
+
     async def create_persona(
         self,
         name: NotGivenOr[str] = NOT_GIVEN,
         *,
         extra_payload: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> str:
+        # Deprecated: use create_pal(). Kept on the legacy /v2/personas endpoint.
+        warnings.warn(
+            "`create_persona` is deprecated, use `create_pal` instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         name = name or utils.shortuuid("lk_persona_")
 
         payload = {
