@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
+import os
 import time
 import weakref
 from collections.abc import AsyncGenerator, AsyncIterable, Callable
@@ -27,6 +28,7 @@ from typing import cast, get_args
 from grpc.aio import StreamStreamCall
 
 import google.auth
+import google.auth.credentials
 from google.api_core.client_options import ClientOptions
 from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
 from google.auth import default as gauth_default
@@ -35,6 +37,8 @@ from google.cloud.speech_v1 import SpeechAsyncClient as SpeechAsyncClientV1
 from google.cloud.speech_v1.types import cloud_speech as cloud_speech_v1, resource as resource_v1
 from google.cloud.speech_v2 import SpeechAsyncClient as SpeechAsyncClientV2
 from google.cloud.speech_v2.types import cloud_speech as cloud_speech_v2
+from google.genai import Client as GenAIClient, types as genai_types
+from google.genai.errors import APIError as GenAIAPIError, ClientError, ServerError
 from google.protobuf.duration_pb2 import Duration
 from livekit import rtc
 from livekit.agents import (
@@ -56,7 +60,13 @@ from livekit.agents.utils.aio import ChanClosed
 from livekit.agents.voice.io import TimedString
 
 from .log import logger
-from .models import EndpointingSensitivity, SpeechLanguages, SpeechModels, SpeechModelsV2
+from .models import (
+    EndpointingSensitivity,
+    GeminiSTTModels,
+    SpeechLanguages,
+    SpeechModels,
+    SpeechModelsV2,
+)
 
 LgType = SpeechLanguages | str
 LanguagesInput = LgType | list[LgType]
@@ -67,6 +77,82 @@ _max_session_duration = 240
 
 # Google is very sensitive to background noise, so we'll ignore results with low confidence
 _default_min_confidence = 0.65
+
+# Default prompt used when transcribing audio with a Gemini multimodal model.
+_default_gemini_prompt = (
+    "Generate a verbatim transcript of the speech in the provided audio. "
+    "Return only the transcript text, with no preamble, commentary, or "
+    'formatting such as quotes or "Transcript:" labels. '
+    "If no speech is present, return an empty response."
+)
+
+
+def _is_gemini_model(model: str) -> bool:
+    """Whether the given model name targets a Gemini multimodal model."""
+    return model.lower().startswith("gemini-")
+
+
+def _build_genai_client(
+    *,
+    api_key: NotGivenOr[str],
+    vertexai: NotGivenOr[bool],
+    project: NotGivenOr[str],
+    location: str,
+    credentials: google.auth.credentials.Credentials | None,
+) -> GenAIClient:
+    """Build a google-genai Client for Gemini transcription, mirroring the
+    LLM/TTS auth wiring used elsewhere in this plugin.
+    """
+    gcp_project = project if is_given(project) else os.environ.get("GOOGLE_CLOUD_PROJECT")
+    # Cloud Speech uses "global" as its default location, but VertexAI requires a real
+    # region. Fall back to env/us-central1 in that case.
+    gcp_location: str | None = (
+        location
+        if location and location != "global"
+        else os.environ.get("GOOGLE_CLOUD_LOCATION") or "us-central1"
+    )
+    use_vertexai = (
+        vertexai
+        if is_given(vertexai)
+        else os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "0").lower() in ["true", "1"]
+    )
+    gemini_api_key = api_key if is_given(api_key) else os.environ.get("GOOGLE_API_KEY")
+
+    if use_vertexai:
+        if not gcp_project:
+            from google.auth._default_async import default_async
+
+            _, gcp_project = default_async(  # type: ignore[no-untyped-call]
+                scopes=["https://www.googleapis.com/auth/cloud-platform"]
+            )
+        if not gcp_project or not gcp_location:
+            raise ValueError(
+                "Project is required for VertexAI via the project kwarg or "
+                "GOOGLE_CLOUD_PROJECT environment variable"
+            )
+        gemini_api_key = None
+    else:
+        gcp_project = None
+        gcp_location = None
+        if credentials is not None:
+            logger.warning(
+                "'credentials' is only applicable to VertexAI and will be ignored "
+                "for the Gemini API"
+            )
+            credentials = None
+        if not gemini_api_key:
+            raise ValueError(
+                "API key is required for Gemini transcription either via api_key "
+                "or GOOGLE_API_KEY environment variable"
+            )
+
+    return GenAIClient(
+        api_key=gemini_api_key,
+        vertexai=use_vertexai,
+        project=gcp_project,
+        location=gcp_location,
+        credentials=credentials,
+    )
 
 
 # This class is only be used internally to encapsulate the options
@@ -92,6 +178,9 @@ class STTOptions:
     speech_start_timeout: NotGivenOr[float] = NOT_GIVEN
     speech_end_timeout: NotGivenOr[float] = NOT_GIVEN
     endpointing_sensitivity: NotGivenOr[EndpointingSensitivity] = NOT_GIVEN
+    # Gemini-only options. Used when ``model`` is a Gemini multimodal model.
+    gemini_prompt: str = _default_gemini_prompt
+    gemini_temperature: NotGivenOr[float] = NOT_GIVEN
 
     @property
     def version(self) -> int:
@@ -142,7 +231,7 @@ class STT(stt.STT):
         enable_word_time_offsets: NotGivenOr[bool] = NOT_GIVEN,
         enable_word_confidence: bool = False,
         enable_voice_activity_events: bool = False,
-        model: SpeechModels | str = "latest_long",
+        model: SpeechModels | GeminiSTTModels | str = "latest_long",
         location: str = "global",
         profanity_filter: bool = False,
         sample_rate: int = 16000,
@@ -158,13 +247,30 @@ class STT(stt.STT):
         speech_end_timeout: NotGivenOr[float] = NOT_GIVEN,
         endpointing_sensitivity: NotGivenOr[EndpointingSensitivity] = NOT_GIVEN,
         use_streaming: NotGivenOr[bool] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        vertexai: NotGivenOr[bool] = NOT_GIVEN,
+        project: NotGivenOr[str] = NOT_GIVEN,
+        prompt: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        credentials: google.auth.credentials.Credentials | None = None,
     ):
         """
         Create a new instance of Google STT.
 
-        Credentials must be provided, either by using the ``credentials_info`` dict, or reading
-        from the file specified in ``credentials_file`` or via Application Default Credentials as
-        described in https://cloud.google.com/docs/authentication/application-default-credentials
+        This class supports two backends:
+
+        - **Cloud Speech-to-Text** (default): used when ``model`` is one of the
+          Cloud Speech models (e.g. ``"latest_long"``, ``"chirp_3"``).
+          Credentials must be provided via ``credentials_info``,
+          ``credentials_file``, or Application Default Credentials (see
+          https://cloud.google.com/docs/authentication/application-default-credentials).
+
+        - **Gemini** (multimodal): used when ``model`` is a Gemini model
+          (e.g. ``"gemini-2.5-flash"``). Gemini transcribes via
+          ``generate_content`` and is non-streaming — wrap with
+          ``livekit.agents.stt.StreamAdapter`` for live audio. Auth uses
+          ``api_key`` / ``GOOGLE_API_KEY``, or set ``vertexai=True`` for
+          VertexAI auth.
 
         args:
             languages(LanguagesInput): list of language codes to recognize (default: "en-US")
@@ -175,8 +281,10 @@ class STT(stt.STT):
             enable_word_time_offsets(bool): whether to enable word time offsets (default: None)
             enable_word_confidence(bool): whether to enable word confidence (default: False)
             enable_voice_activity_events(bool): whether to enable voice activity events (default: False)
-            model(SpeechModels): the model to use for recognition default: "latest_long"
-            location(str): the location to use for recognition default: "global"
+            model(SpeechModels | GeminiSTTModels): the model to use for recognition default: "latest_long"
+            location(str): the location to use for recognition default: "global". For Gemini on
+                VertexAI this is the GCP region (e.g. "us-central1"); "global" falls back to
+                GOOGLE_CLOUD_LOCATION or "us-central1".
             profanity_filter(bool): whether to filter out profanities default: False
             sample_rate(int): the sample rate of the audio default: 16000
             min_confidence_threshold(float): minimum confidence threshold for recognition
@@ -192,34 +300,69 @@ class STT(stt.STT):
                 and accuracy when detecting end-of-speech. Only supported with chirp_3.
                 Options: ENDPOINTING_SENSITIVITY_STANDARD (default),
                 ENDPOINTING_SENSITIVITY_SHORT, ENDPOINTING_SENSITIVITY_SUPERSHORT (default: None)
-            use_streaming(bool): whether to use streaming for recognition (default: True)
+            use_streaming(bool): whether to use streaming for recognition (default: True).
+                Ignored for Gemini models (always non-streaming).
+            api_key(str): Gemini API key. Falls back to GOOGLE_API_KEY. Gemini only.
+            vertexai(bool): Whether to use VertexAI for Gemini. Falls back to
+                GOOGLE_GENAI_USE_VERTEXAI. Gemini only.
+            project(str): GCP project for VertexAI Gemini. Falls back to
+                GOOGLE_CLOUD_PROJECT. Gemini only.
+            prompt(str): Override the default transcription prompt sent to Gemini. Gemini only.
+            temperature(float): Sampling temperature for Gemini transcription. Gemini only.
+            credentials(Credentials): Optional google.auth credentials for VertexAI Gemini.
         """
-        if is_given(endpointing_sensitivity) and model != "chirp_3":
-            logger.warning(
-                "endpointing_sensitivity is only supported with the chirp_3 model; ignoring."
-            )
-            endpointing_sensitivity = NOT_GIVEN
+        gemini = _is_gemini_model(model)
 
-        if is_given(adaptation):
-            if is_given(keywords):
+        if gemini:
+            # Gemini transcribes via generate_content; many Cloud Speech options
+            # don't apply. Warn about ones that were explicitly set so users
+            # aren't surprised they're ignored.
+            for name, value in (
+                ("adaptation", adaptation),
+                ("keywords", keywords),
+                ("denoiser_config", denoiser_config),
+                ("endpointing_sensitivity", endpointing_sensitivity),
+                ("speech_start_timeout", speech_start_timeout),
+                ("speech_end_timeout", speech_end_timeout),
+            ):
+                if is_given(value):
+                    logger.warning("'%s' is not supported for Gemini models; ignoring.", name)
+
+            if is_given(use_streaming) and use_streaming:
                 logger.warning(
-                    "Both 'adaptation' and 'keywords' are set; 'keywords' will be ignored."
+                    "Gemini models do not support streaming recognition; "
+                    "use stt.StreamAdapter with a VAD for live audio."
                 )
-            self._validate_adaptation(adaptation, 2 if model in get_args(SpeechModelsV2) else 1)
-
-        if not is_given(use_streaming):
-            use_streaming = True
-
-        if model == "chirp_3":
-            if is_given(enable_word_time_offsets) and enable_word_time_offsets:
-                logger.warning(
-                    "Chirp 3 does not support word timestamps, setting 'enable_word_time_offsets' to False."
-                )
+            use_streaming = False
             enable_word_time_offsets = False
-        elif is_given(enable_word_time_offsets):
-            enable_word_time_offsets = enable_word_time_offsets
         else:
-            enable_word_time_offsets = True
+            if is_given(endpointing_sensitivity) and model != "chirp_3":
+                logger.warning(
+                    "endpointing_sensitivity is only supported with the chirp_3 model; ignoring."
+                )
+                endpointing_sensitivity = NOT_GIVEN
+
+            if is_given(adaptation):
+                if is_given(keywords):
+                    logger.warning(
+                        "Both 'adaptation' and 'keywords' are set; 'keywords' will be ignored."
+                    )
+                self._validate_adaptation(adaptation, 2 if model in get_args(SpeechModelsV2) else 1)
+
+            if not is_given(use_streaming):
+                use_streaming = True
+
+            if model == "chirp_3":
+                if is_given(enable_word_time_offsets) and enable_word_time_offsets:
+                    logger.warning(
+                        "Chirp 3 does not support word timestamps, "
+                        "setting 'enable_word_time_offsets' to False."
+                    )
+                enable_word_time_offsets = False
+            elif is_given(enable_word_time_offsets):
+                enable_word_time_offsets = enable_word_time_offsets
+            else:
+                enable_word_time_offsets = True
 
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -233,8 +376,17 @@ class STT(stt.STT):
         self._credentials_info = credentials_info
         self._credentials_file = credentials_file
         self._project_id: str | None = None
+        self._genai_client: GenAIClient | None = None
 
-        if not is_given(credentials_file) and not is_given(credentials_info):
+        if gemini:
+            self._genai_client = _build_genai_client(
+                api_key=api_key,
+                vertexai=vertexai,
+                project=project,
+                location=location,
+                credentials=credentials,
+            )
+        elif not is_given(credentials_file) and not is_given(credentials_info):
             try:
                 gauth_default()
             except DefaultCredentialsError:
@@ -268,12 +420,16 @@ class STT(stt.STT):
             speech_start_timeout=speech_start_timeout,
             speech_end_timeout=speech_end_timeout,
             endpointing_sensitivity=endpointing_sensitivity,
+            gemini_prompt=prompt if is_given(prompt) else _default_gemini_prompt,
+            gemini_temperature=temperature,
         )
         self._streams = weakref.WeakSet[SpeechStream]()
-        self._pool = utils.ConnectionPool[SpeechAsyncClientV2 | SpeechAsyncClientV1](
-            max_session_duration=_max_session_duration,
-            connect_cb=self._create_client,
-        )
+        self._pool: utils.ConnectionPool[SpeechAsyncClientV2 | SpeechAsyncClientV1] | None = None
+        if not gemini:
+            self._pool = utils.ConnectionPool[SpeechAsyncClientV2 | SpeechAsyncClientV1](
+                max_session_duration=_max_session_duration,
+                connect_cb=self._create_client,
+            )
 
     @property
     def model(self) -> str:
@@ -407,6 +563,9 @@ class STT(stt.STT):
         language: NotGivenOr[SpeechLanguages | str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
+        if self._genai_client is not None:
+            return await self._recognize_gemini(buffer, language=language)
+
         frame = rtc.combine_audio_frames(buffer)
 
         config = self._build_recognition_config(
@@ -415,6 +574,7 @@ class STT(stt.STT):
             language=language,
         )
 
+        assert self._pool is not None
         try:
             async with self._pool.connection(timeout=conn_options.timeout) as client:
                 raw = await client.recognize(
@@ -429,12 +589,85 @@ class STT(stt.STT):
         except Exception as e:
             raise APIConnectionError() from e
 
+    async def _recognize_gemini(
+        self,
+        buffer: utils.AudioBuffer,
+        *,
+        language: NotGivenOr[SpeechLanguages | str],
+    ) -> stt.SpeechEvent:
+        assert self._genai_client is not None
+
+        frame = rtc.combine_audio_frames(buffer)
+        wav_bytes = frame.to_wav_bytes()
+
+        config = self._sanitize_options(language=language)
+
+        lang: LanguageCode | None = None
+        if config.languages:
+            lang = config.languages[0] if isinstance(config.languages[0], LanguageCode) else None
+        prompt = config.gemini_prompt
+        if lang:
+            prompt = f"{prompt}\n\nThe spoken language is {lang}."
+
+        gen_config = genai_types.GenerateContentConfig(
+            response_modalities=["TEXT"],
+            temperature=config.gemini_temperature if is_given(config.gemini_temperature) else None,
+        )
+
+        contents = cast(
+            genai_types.ContentListUnion,
+            [
+                prompt,
+                genai_types.Part.from_bytes(data=wav_bytes, mime_type="audio/wav"),
+            ],
+        )
+        try:
+            response = await self._genai_client.aio.models.generate_content(
+                model=config.model,
+                contents=contents,
+                config=gen_config,
+            )
+        except ClientError as e:
+            raise APIStatusError(
+                "gemini stt: client error",
+                status_code=e.code,
+                body=f"{e.message} {e.status}",
+                retryable=e.code in {429, 499},
+            ) from e
+        except ServerError as e:
+            raise APIStatusError(
+                "gemini stt: server error",
+                status_code=e.code,
+                body=f"{e.message} {e.status}",
+                retryable=True,
+            ) from e
+        except GenAIAPIError as e:
+            raise APIStatusError(
+                "gemini stt: api error",
+                status_code=e.code,
+                body=f"{e.message} {e.status}",
+                retryable=True,
+            ) from e
+        except Exception as e:
+            raise APIConnectionError(f"gemini stt: error generating transcript {e}") from e
+
+        text = (response.text or "").strip()
+        return stt.SpeechEvent(
+            type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+            alternatives=[stt.SpeechData(language=lang or LanguageCode(""), text=text)],
+        )
+
     def stream(
         self,
         *,
         language: NotGivenOr[SpeechLanguages | str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
+        if self._genai_client is not None or self._pool is None:
+            raise NotImplementedError(
+                "Gemini transcription is non-streaming; wrap this STT with "
+                "livekit.agents.stt.StreamAdapter and a VAD for live audio."
+            )
         config = self._sanitize_options(language=language)
         stream = SpeechStream(
             stt=self,
@@ -455,7 +688,7 @@ class STT(stt.STT):
         punctuate: NotGivenOr[bool] = NOT_GIVEN,
         spoken_punctuation: NotGivenOr[bool] = NOT_GIVEN,
         profanity_filter: NotGivenOr[bool] = NOT_GIVEN,
-        model: NotGivenOr[SpeechModels] = NOT_GIVEN,
+        model: NotGivenOr[SpeechModels | GeminiSTTModels | str] = NOT_GIVEN,
         location: NotGivenOr[str] = NOT_GIVEN,
         denoiser_config: NotGivenOr[cloud_speech_v2.DenoiserConfig] = NOT_GIVEN,
         adaptation: NotGivenOr[
@@ -465,7 +698,14 @@ class STT(stt.STT):
         speech_start_timeout: NotGivenOr[float] = NOT_GIVEN,
         speech_end_timeout: NotGivenOr[float] = NOT_GIVEN,
         endpointing_sensitivity: NotGivenOr[EndpointingSensitivity] = NOT_GIVEN,
+        prompt: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
+        if is_given(model) and _is_gemini_model(model) != _is_gemini_model(self._config.model):
+            raise ValueError(
+                "Cannot switch between Gemini and Cloud Speech models at runtime; "
+                "create a new STT instance instead."
+            )
         if is_given(languages):
             if isinstance(languages, str):
                 self._config.languages = [LanguageCode(languages)]
@@ -481,6 +721,10 @@ class STT(stt.STT):
             self._config.spoken_punctuation = spoken_punctuation
         if is_given(profanity_filter):
             self._config.profanity_filter = profanity_filter
+        if is_given(prompt):
+            self._config.gemini_prompt = prompt
+        if is_given(temperature):
+            self._config.gemini_temperature = temperature
         new_version = (
             (2 if model in get_args(SpeechModelsV2) else 1)
             if is_given(model)
@@ -493,13 +737,14 @@ class STT(stt.STT):
         if is_given(model):
             old_version = self._config.version
             self._config.model = model
-            if self._config.version != old_version:
+            if self._config.version != old_version and self._pool is not None:
                 self._pool.invalidate()
 
         if is_given(location):
             self._location = location
             # if location is changed, fetch a new client and recognizer as per the new location
-            self._pool.invalidate()
+            if self._pool is not None:
+                self._pool.invalidate()
         if is_given(denoiser_config):
             self._config.denoiser_config = denoiser_config
         if is_given(adaptation):
@@ -545,7 +790,8 @@ class STT(stt.STT):
             )
 
     async def aclose(self) -> None:
-        await self._pool.aclose()
+        if self._pool is not None:
+            await self._pool.aclose()
         await super().aclose()
 
     def _validate_adaptation(
@@ -592,7 +838,7 @@ class SpeechStream(stt.SpeechStream):
         punctuate: NotGivenOr[bool] = NOT_GIVEN,
         spoken_punctuation: NotGivenOr[bool] = NOT_GIVEN,
         profanity_filter: NotGivenOr[bool] = NOT_GIVEN,
-        model: NotGivenOr[SpeechModels] = NOT_GIVEN,
+        model: NotGivenOr[SpeechModels | GeminiSTTModels | str] = NOT_GIVEN,
         min_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
         denoiser_config: NotGivenOr[cloud_speech_v2.DenoiserConfig] = NOT_GIVEN,
         adaptation: NotGivenOr[
