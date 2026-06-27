@@ -27,7 +27,10 @@ from . import realtime, responses, tools
 from .embeddings import EmbeddingData, create_embeddings
 from .llm import LLM, LLMStream
 from .models import (
+    OpenRouterMaxPrice,
+    OpenRouterPercentiles,
     OpenRouterProviderPreferences,
+    OpenRouterSortOption,
     OpenRouterWebPlugin,
     STTModels,
     TTSModels,
@@ -42,7 +45,10 @@ __all__ = [
     "TTS",
     "LLM",
     "LLMStream",
+    "OpenRouterMaxPrice",
+    "OpenRouterPercentiles",
     "OpenRouterProviderPreferences",
+    "OpenRouterSortOption",
     "OpenRouterWebPlugin",
     "STTModels",
     "TTSModels",
