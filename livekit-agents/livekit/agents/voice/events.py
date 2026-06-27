@@ -315,6 +315,12 @@ class UserInputTranscribedEvent(BaseModel):
     type: Literal["user_input_transcribed"] = "user_input_transcribed"
     transcript: str
     is_final: bool
+    item_id: str | None = None
+    """Identifier that groups interim and final transcription results for the same
+    utterance.  Callers can use this to deduplicate interim results or correlate a
+    final transcript back to its preceding interim updates.  Derived from the
+    upstream ``InputTranscriptionCompleted.item_id`` for realtime models and from
+    ``SpeechEvent.request_id`` for STT-based pipelines."""
     speaker_id: str | None = None
     language: LanguageCode | None = None
     created_at: float = Field(default_factory=time.time)
