@@ -3,9 +3,13 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import cast
 
+import pytest
+
 from livekit.agents import llm
 from livekit.agents.llm.remote_chat_context import RemoteChatContext
 from livekit.plugins.openai.realtime.realtime_model import RealtimeSession
+
+pytestmark = pytest.mark.realtime
 
 
 def test_update_chat_ctx_deletes_empty_remote_items() -> None:
