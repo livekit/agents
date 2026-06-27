@@ -840,6 +840,15 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 )
                 tasks.append(self._conn_task)
 
+                # propagate a terminal connection failure out of run()
+                def _on_conn_task_done(task: asyncio.Task[None]) -> None:
+                    if task.cancelled() or self._close_future is None or self._close_future.done():
+                        return
+                    if (exc := task.exception()) is not None:
+                        self._close_future.set_exception(exc)
+
+                self._conn_task.add_done_callback(_on_conn_task_done)
+
             self.emit("worker_started")
 
         await self._close_future
@@ -1007,7 +1016,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         async with self._lock:
             if self._closed:
                 if self._close_future is not None:
-                    await self._close_future
+                    # _close_future may hold run()'s error; keep aclose() a no-op
+                    with contextlib.suppress(Exception):
+                        await self._close_future
                 return
 
             self._closed = True
