@@ -618,6 +618,26 @@ class TestNoParametersSchema:
         assert "required" not in params
 
 
+class TestProviderSchemaFormatting:
+    def test_openai_responses_raw_schema_does_not_mutate_tool(self):
+        tool_ctx = ToolContext([raw_tool_1])
+        original_schema = dict(raw_tool_1.info.raw_schema)
+
+        schema = tool_ctx.parse_function_tools("openai.responses")[0]
+
+        assert schema["type"] == "function"
+        assert raw_tool_1.info.raw_schema == original_schema
+        assert "type" not in raw_tool_1.info.raw_schema
+
+    def test_openai_responses_raw_schema_isolated_from_caller_mutation(self):
+        tool_ctx = ToolContext([raw_tool_1])
+        schema = tool_ctx.parse_function_tools("openai.responses")[0]
+
+        schema["parameters"]["properties"]["extra"] = {"type": "string"}
+
+        assert "extra" not in raw_tool_1.info.raw_schema["parameters"]["properties"]
+
+
 class _NullableEnumModel(BaseModel):
     status: Literal["active", "inactive"] | None = Field(None)
 

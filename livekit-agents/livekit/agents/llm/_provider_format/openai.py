@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 from typing import Any, Literal
 
 from livekit.agents import llm
@@ -236,7 +237,7 @@ def to_responses_fnc_ctx(
     schemas: list[dict[str, Any]] = []
     for tool in tool_ctx.flatten():
         if isinstance(tool, llm.RawFunctionTool):
-            schema = tool.info.raw_schema
+            schema = copy.deepcopy(tool.info.raw_schema)
             schema["type"] = "function"
             schemas.append(schema)
         elif isinstance(tool, llm.FunctionTool):
