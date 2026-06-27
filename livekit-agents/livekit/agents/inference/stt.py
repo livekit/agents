@@ -277,6 +277,7 @@ STTEncoding = Literal["pcm_s16le"]
 
 DEFAULT_ENCODING: STTEncoding = "pcm_s16le"
 DEFAULT_SAMPLE_RATE: int = 16000
+WS_HEARTBEAT: float = 30.0
 
 
 @dataclass
@@ -879,7 +880,9 @@ class SpeechStream(stt.SpeechStream):
         try:
             ws = await asyncio.wait_for(
                 http_session.ws_connect(
-                    f"{base_url}/stt?model={self._opts.model}", headers=headers
+                    f"{base_url}/stt?model={self._opts.model}",
+                    headers=headers,
+                    heartbeat=WS_HEARTBEAT,
                 ),
                 self._conn_options.timeout,
             )

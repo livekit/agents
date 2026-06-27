@@ -1,8 +1,12 @@
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
 from livekit.agents.inference.stt import (
     STT,
+    WS_HEARTBEAT,
     FallbackModel,
+    SpeechStream,
     _normalize_fallback,
     _parse_model_string,
 )
@@ -25,6 +29,23 @@ def _make_stt(**kwargs):
     }
     defaults.update(kwargs)
     return STT(**defaults)
+
+
+class _FakeWebSocket:
+    def __init__(self):
+        self.sent = []
+
+    async def send_str(self, data: str) -> None:
+        self.sent.append(data)
+
+
+def _make_stream_without_tasks(stt: STT) -> SpeechStream:
+    def _fake_create_task(coro, *args, **kwargs):
+        coro.close()
+        return MagicMock()
+
+    with patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=_fake_create_task):
+        return stt.stream()
 
 
 class TestParseModelString:
@@ -259,6 +280,19 @@ class TestSTTConstructorFallbackAndConnectOptions:
         assert stt._opts.conn_options.timeout == 60.0
         assert stt._opts.conn_options.max_retry == 10
         assert stt._opts.conn_options.retry_interval == 2.0
+
+
+async def test_connect_ws_enables_websocket_heartbeat():
+    stt = _make_stt(model="deepgram/nova-3")
+    stream = _make_stream_without_tasks(stt)
+    fake_ws = _FakeWebSocket()
+    session = MagicMock()
+    session.ws_connect = AsyncMock(return_value=fake_ws)
+
+    assert await stream._connect_ws(session) is fake_ws
+
+    _, kwargs = session.ws_connect.call_args
+    assert kwargs["heartbeat"] == WS_HEARTBEAT
 
 
 class TestSTTDiarizationCapabilities:
