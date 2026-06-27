@@ -904,6 +904,7 @@ class SpeechStream(stt.RecognizeStream):
                 start_time=segment.get("metadata", {}).get("start_time", 0)
                 + self.start_time_offset,
                 end_time=segment.get("metadata", {}).get("end_time", 0) + self.start_time_offset,
+                confidence=_extract_confidence(segment),
             )
 
             # Create speech event
@@ -941,6 +942,27 @@ class SpeechStream(stt.RecognizeStream):
         # Remove from active streams
         if self in self._stt._streams:
             self._stt._streams.remove(self)
+
+
+def _extract_confidence(segment: dict[str, Any]) -> float:
+    value = segment.get("confidence")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+
+    confidences: list[float] = []
+    for fragment in segment.get("fragments") or []:
+        if not isinstance(fragment, dict):
+            continue
+        fragment_confidence = fragment.get("confidence")
+        if isinstance(fragment_confidence, (int, float)) and not isinstance(
+            fragment_confidence, bool
+        ):
+            confidences.append(float(fragment_confidence))
+
+    if confidences:
+        return sum(confidences) / len(confidences)
+
+    return 0.0
 
 
 def _check_deprecated_args(kwargs: dict[str, Any], opts: STTOptions) -> None:
