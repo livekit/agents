@@ -93,12 +93,11 @@ def test_ssl_context_falls_back_to_certifi_without_system_store(
 ) -> None:
     """When the host has no resolvable system trust store, certifi is loaded.
 
-    We assert on the actual ``load_verify_locations(cafile=certifi.where())``
-    call rather than on cert counts: ``create_default_context()`` pulls in
-    OpenSSL's compiled-in roots at the C level (unaffected by the
-    ``get_default_verify_paths`` monkeypatch), so on a host *with* a system
-    store a count-based assertion would pass whether or not the certifi branch
-    ran. Spying on the load is the only host-independent signal.
+    Asserts on the actual ``load_verify_locations(certifi.where())`` call, not
+    cert counts: ``create_default_context()`` loads OpenSSL's compiled-in roots
+    at the C level regardless of the ``get_default_verify_paths`` monkeypatch,
+    so a count check would pass on a host with a system store even if the
+    certifi branch never ran.
     """
     monkeypatch.delenv("SSL_CERT_FILE", raising=False)
     monkeypatch.delenv("SSL_CERT_DIR", raising=False)
@@ -135,16 +134,47 @@ def test_ssl_context_uses_system_store_when_present(
     monkeypatch.delenv("SSL_CERT_FILE", raising=False)
     monkeypatch.delenv("SSL_CERT_DIR", raising=False)
 
-    paths = ssl.get_default_verify_paths()
-    has_system_store = bool(
-        (paths.cafile and os.path.exists(paths.cafile))
-        or (paths.capath and os.path.isdir(paths.capath))
-    )
-    if not has_system_store:
+    if not http_context._has_system_trust_store():
         pytest.skip("host has no system trust store to exercise this path")
 
     ctx = http_context._create_ssl_context()
     assert ctx.verify_mode == ssl.CERT_REQUIRED
+
+
+def test_set_default_cert_env_sets_var_without_system_store(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With no env override and no system store, SSL_CERT_FILE is set to certifi."""
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    monkeypatch.delenv("SSL_CERT_DIR", raising=False)
+    monkeypatch.setattr(http_context, "_has_system_trust_store", lambda: False)
+
+    http_context._set_default_cert_env()
+    assert os.environ.get("SSL_CERT_FILE") == certifi.where()
+
+
+def test_set_default_cert_env_noop_with_system_store(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A resolvable system store is left alone — SSL_CERT_FILE stays unset."""
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    monkeypatch.delenv("SSL_CERT_DIR", raising=False)
+    monkeypatch.setattr(http_context, "_has_system_trust_store", lambda: True)
+
+    http_context._set_default_cert_env()
+    assert "SSL_CERT_FILE" not in os.environ
+
+
+def test_set_default_cert_env_respects_existing_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit SSL_CERT_FILE is never overwritten, even with no system store."""
+    monkeypatch.setenv("SSL_CERT_FILE", "/custom/bundle.pem")
+    monkeypatch.delenv("SSL_CERT_DIR", raising=False)
+    monkeypatch.setattr(http_context, "_has_system_trust_store", lambda: False)
+
+    http_context._set_default_cert_env()
+    assert os.environ["SSL_CERT_FILE"] == "/custom/bundle.pem"
 
 
 async def test_inference_stt_surfaces_real_error_outside_ctx(

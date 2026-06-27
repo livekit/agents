@@ -726,6 +726,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             if self._deployment:
                 os.environ["LIVEKIT_AGENT_DEPLOYMENT"] = self._deployment
 
+            # must run before job processes spawn so they inherit the SSL_CERT_FILE fallback
+            http_context._set_default_cert_env()
+
             logger.info(
                 "starting worker",
                 extra={"version": __version__, "rtc-version": rtc.__version__},

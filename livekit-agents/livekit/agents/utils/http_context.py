@@ -15,13 +15,41 @@ _ClientFactory = Callable[[], aiohttp.ClientSession]
 _ContextVar = contextvars.ContextVar[_ClientFactory | None]("agent_http_session")
 
 
+def _has_system_trust_store() -> bool:
+    """Whether OpenSSL's default verify paths resolve to something on disk.
+
+    cert_store_stats() can't tell us this: a hashed capath dir loads lazily and
+    reports 0 even when present.
+    """
+    paths = ssl.get_default_verify_paths()
+    return bool(
+        (paths.cafile and os.path.exists(paths.cafile))
+        or (paths.capath and os.path.isdir(paths.capath))
+    )
+
+
+def _set_default_cert_env() -> None:
+    """Point ``SSL_CERT_FILE`` at certifi when there's no system trust store.
+
+    Unlike building an ``SSLContext``, the env var also reaches job subprocesses
+    (which inherit it) and the Rust livekit-rtc SDK, since both OpenSSL and
+    rustls-native-certs honor it. Otherwise room connections in minimal
+    containers fail with "no native root CA certificates found".
+    """
+    if os.environ.get("SSL_CERT_FILE") or os.environ.get("SSL_CERT_DIR"):
+        return
+    if _has_system_trust_store():
+        return
+    os.environ["SSL_CERT_FILE"] = certifi.where()
+    logger.debug("no system trust store found, setting SSL_CERT_FILE to the certifi bundle")
+
+
 def _create_ssl_context() -> ssl.SSLContext:
     """TLS context for the shared http session.
 
-    Honors ``SSL_CERT_FILE`` / ``SSL_CERT_DIR``, otherwise prefers the system
-    trust store and falls back to certifi when no system store is resolvable
-    (e.g. minimal containers without ca-certificates), matching the httpx
-    client used by the inference LLM.
+    Falls back to certifi when no system trust store is resolvable (e.g. minimal
+    containers without ca-certificates); ``SSL_CERT_FILE`` / ``SSL_CERT_DIR``
+    take precedence.
     """
     cafile = os.environ.get("SSL_CERT_FILE")
     capath = os.environ.get("SSL_CERT_DIR")
@@ -29,15 +57,7 @@ def _create_ssl_context() -> ssl.SSLContext:
         return ssl.create_default_context(cafile=cafile, capath=capath)
 
     ctx = ssl.create_default_context()
-
-    # cert_store_stats() can't tell us this: a hashed capath dir loads lazily and
-    # reports 0 even when present. Check whether the verify paths exist on disk.
-    paths = ssl.get_default_verify_paths()
-    has_system_store = bool(
-        (paths.cafile and os.path.exists(paths.cafile))
-        or (paths.capath and os.path.isdir(paths.capath))
-    )
-    if not has_system_store:
+    if not _has_system_trust_store():
         ctx.load_verify_locations(cafile=certifi.where())
     return ctx
 
