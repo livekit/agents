@@ -91,7 +91,15 @@ def test_ssl_context_honors_env_override(monkeypatch: pytest.MonkeyPatch) -> Non
 def test_ssl_context_falls_back_to_certifi_without_system_store(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """When the host has no resolvable system trust store, certifi is loaded."""
+    """When the host has no resolvable system trust store, certifi is loaded.
+
+    We assert on the actual ``load_verify_locations(cafile=certifi.where())``
+    call rather than on cert counts: ``create_default_context()`` pulls in
+    OpenSSL's compiled-in roots at the C level (unaffected by the
+    ``get_default_verify_paths`` monkeypatch), so on a host *with* a system
+    store a count-based assertion would pass whether or not the certifi branch
+    ran. Spying on the load is the only host-independent signal.
+    """
     monkeypatch.delenv("SSL_CERT_FILE", raising=False)
     monkeypatch.delenv("SSL_CERT_DIR", raising=False)
     monkeypatch.setattr(
@@ -107,8 +115,17 @@ def test_ssl_context_falls_back_to_certifi_without_system_store(
         ),
     )
 
-    ctx = http_context._create_ssl_context()
-    assert ctx.cert_store_stats()["x509"] >= _certifi_cert_count()
+    loaded_cafiles: list[str | None] = []
+    real_load = ssl.SSLContext.load_verify_locations
+
+    def _spy(self: ssl.SSLContext, *args: object, **kwargs: object) -> object:
+        loaded_cafiles.append(kwargs.get("cafile"))  # type: ignore[arg-type]
+        return real_load(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(ssl.SSLContext, "load_verify_locations", _spy)
+
+    http_context._create_ssl_context()
+    assert certifi.where() in loaded_cafiles
 
 
 def test_ssl_context_uses_system_store_when_present(
