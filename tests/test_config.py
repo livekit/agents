@@ -1,3 +1,4 @@
+from livekit.plugins.openai.llm import LLM
 from livekit.plugins.openai.realtime.realtime_model import process_base_url
 
 
@@ -42,3 +43,14 @@ def test_process_base_url():
         )
         == "wss://test.azure.com/custom/path?model=gpt-4"
     )
+
+
+def test_llm_with_azure_uses_deployment_as_default_model():
+    llm = LLM.with_azure(
+        azure_endpoint="https://test.azure.com/openai",
+        azure_deployment="my-deployment",
+        api_version="2025-04-12",
+        api_key="test-key",
+    )
+
+    assert llm.model == "my-deployment"

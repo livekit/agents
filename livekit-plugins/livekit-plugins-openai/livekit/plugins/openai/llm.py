@@ -190,7 +190,7 @@ class LLM(llm.LLM):
     @staticmethod
     def with_azure(
         *,
-        model: str | ChatModels = "gpt-4o",
+        model: str | ChatModels | None = None,
         azure_endpoint: str | None = None,
         azure_deployment: str | None = None,
         api_version: str | None = None,
@@ -238,8 +238,10 @@ class LLM(llm.LLM):
             else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
         )  # type: ignore
 
+        resolved_model = model if model is not None else azure_deployment or "gpt-4o"
+
         llm = LLM(
-            model=model,
+            model=resolved_model,
             client=azure_client,
             user=user,
             temperature=temperature,
