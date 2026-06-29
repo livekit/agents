@@ -45,7 +45,7 @@ def test_process_base_url():
     )
 
 
-def test_llm_with_azure_uses_deployment_as_default_model():
+def test_llm_with_azure_keeps_unknown_without_explicit_model():
     llm = LLM.with_azure(
         azure_endpoint="https://test.azure.com/openai",
         azure_deployment="my-deployment",
@@ -53,7 +53,7 @@ def test_llm_with_azure_uses_deployment_as_default_model():
         api_key="test-key",
     )
 
-    assert llm.model == "my-deployment"
+    assert llm.model == "unknown"
 
 
 def test_llm_with_azure_uses_unknown_without_model_or_deployment():

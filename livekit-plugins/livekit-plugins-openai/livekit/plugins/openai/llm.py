@@ -239,8 +239,8 @@ class LLM(llm.LLM):
         )  # type: ignore
 
         # For Azure, the model name is only used as a metric label, so keep the
-        # fallback neutral when neither model nor deployment is provided.
-        resolved_model = model if model is not None else azure_deployment or "unknown"
+        # fallback neutral unless the caller provided an explicit model name.
+        resolved_model = model if model is not None else "unknown"
 
         llm = LLM(
             model=resolved_model,
