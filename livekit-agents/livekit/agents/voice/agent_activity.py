@@ -660,15 +660,16 @@ class AgentActivity(RecognitionHooks):
             # that eagerly open WebSockets don't waste resources on an instance that
             # will never be used.
             agent_owns_tts = self._agent is not None and is_given(self._agent.tts)
-            if agent_owns_tts and resolved_tts is not None:
-                logger.warning(
-                    "AgentSession.update_options(tts=...) is a no-op because the "
-                    "current agent was constructed with its own tts (%r); "
-                    "activity.tts will continue to resolve to the agent's value. "
-                    "Use session.update_agent(...) or construct the agent "
-                    "without an explicit tts to redirect the session swap.",
-                    self._agent.tts,
-                )
+            if agent_owns_tts:
+                if resolved_tts is not None:
+                    logger.warning(
+                        "AgentSession.update_options(tts=...) is a no-op because the "
+                        "current agent was constructed with its own tts (%r); "
+                        "activity.tts will continue to resolve to the agent's value. "
+                        "Use session.update_agent(...) or construct the agent "
+                        "without an explicit tts to redirect the session swap.",
+                        self._agent.tts,
+                    )
             else:
                 # Common path: prewarm and migrate listeners. Listener migration
                 # is what _start_session does for the initial TTS — _stop_session
