@@ -80,10 +80,13 @@ def _resolve_auth_provider(
 
     Resolution rules:
     1. ``auth_provider`` given → use it.
-    2. ``model_path`` given OR ``KRISP_VIVA_SDK_LICENSE_KEY`` env set →
-       construct ``KrispLicenseAuthProvider`` (deprecation warning if
-       ``model_path`` was passed explicitly).
-    3. Otherwise → default ``LiveKitCloudAuthProvider``.
+    2. ``model_path`` given → construct ``KrispLicenseAuthProvider``
+       (deprecation warning, since ``model_path`` should be passed on the
+       provider instead).
+    3. Both ``KRISP_VIVA_SDK_LICENSE_KEY`` and ``KRISP_VIVA_FILTER_MODEL_PATH``
+       env vars set → construct ``KrispLicenseAuthProvider`` from the
+       environment (the user is responsible for installing ``krisp_audio``).
+    4. Otherwise → default ``LiveKitCloudAuthProvider``.
     """
     global _LEGACY_DEPRECATION_SHOWN
 
@@ -108,7 +111,9 @@ def _resolve_auth_provider(
             _LEGACY_DEPRECATION_SHOWN = True
         return KrispLicenseAuthProvider(model_path=model_path)
 
-    if os.getenv("KRISP_VIVA_SDK_LICENSE_KEY"):
+    # Auto-select Krisp-direct license auth when both env vars are set;
+    # otherwise fall back to LiveKit Cloud auth.
+    if os.getenv("KRISP_VIVA_SDK_LICENSE_KEY") and os.getenv("KRISP_VIVA_FILTER_MODEL_PATH"):
         return KrispLicenseAuthProvider()
 
     return LiveKitCloudAuthProvider()
