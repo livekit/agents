@@ -2557,3 +2557,260 @@ async def test_update_options_stt_none_with_agent_bound_stt_does_not_tear_down_p
         assert not mock_logger.warning.called
     finally:
         await session.aclose()
+
+
+async def test_update_options_stt_migrates_metrics_collected_and_error_listeners() -> None:
+    """Devin Review on PR #6235 — listener migration on STT swap.
+
+    After a runtime STT swap, the metrics_collected and error event
+    listeners must be moved from the old instance to the new one. Without
+    this, the new instance never emits those events (silently dropping
+    metrics and error forwarding) and the old instance retains orphaned
+    listeners (preventing GC).
+
+    Verified by patching .on() and .off() on the test instances to track
+    calls. After update_options(stt=new_stt):
+      - new_stt has both listeners attached
+      - old_stt has both listeners detached
+    """
+    from livekit.agents.voice.agent_session import AgentSession
+    from livekit.agents.voice.audio_recognition import AudioRecognition
+
+    from .fake_stt import FakeSTT
+
+    old_stt = FakeSTT()
+    new_stt = FakeSTT()
+    session = AgentSession(stt=old_stt)
+    try:
+        agent = MyAgent()
+        activity = AgentActivity(agent, session)
+
+        audio_recognition = AudioRecognition(
+            session,
+            hooks=activity,
+            stt=None,
+            vad=None,
+            using_default_vad=False,
+            interruption_detection=None,
+            endpointing=create_endpointing(activity.endpointing_opts),
+            turn_detection=None,
+            stt_model=None,
+            stt_provider=None,
+        )
+        activity._audio_recognition = audio_recognition
+        session._activity = activity
+        session._agent = agent
+
+        # Spy on update_stt with a no-op so we don't accidentally spawn an
+        # _STTPipeline consumer task under a manually-wired audio_recognition
+        # that doesn't have a real agent activity context.
+        def spy_update_stt(stt_node, **kwargs):  # type: ignore[no-untyped-def]
+            pass
+
+        audio_recognition.update_stt = spy_update_stt  # type: ignore[method-assign]
+
+        # Spy on .on() / .off() calls per instance — track which events /
+        # callbacks are attached to which STT.
+        def make_tracker(instance: FakeSTT) -> tuple[list[str], list[str], list[str]]:
+            on_log: list[str] = []
+            off_log: list[str] = []
+            cb_log: list[str] = []
+
+            original_on = instance.on
+            original_off = instance.off
+
+            def tracked_on(event, callback=None, **kwargs):  # type: ignore[no-untyped-def]
+                on_log.append(event)
+                cb_log.append(repr(callback))
+                return original_on(event, callback, **kwargs)
+
+            def tracked_off(event, callback=None, **kwargs):  # type: ignore[no-untyped-def]
+                off_log.append(event)
+                return original_off(event, callback, **kwargs)
+
+            instance.on = tracked_on  # type: ignore[method-assign]
+            instance.off = tracked_off  # type: ignore[method-assign]
+            return on_log, off_log, cb_log
+
+        old_on, old_off, old_cb = make_tracker(old_stt)
+        new_on, new_off, new_cb = make_tracker(new_stt)
+
+        # Baseline: nothing attached yet
+        assert old_on == []
+        assert old_off == []
+        assert new_on == []
+        assert new_off == []
+
+        session.update_options(stt=new_stt)
+
+        # The new instance must have metrics_collected and error listeners attached
+        assert "metrics_collected" in new_on
+        assert "error" in new_on
+        # The old instance must have the listeners detached
+        assert "metrics_collected" in old_off
+        assert "error" in old_off
+        # The old instance must NOT have new listeners attached by the swap
+        assert "metrics_collected" not in old_on
+        assert "error" not in old_on
+        # Sanity: the callbacks should be the activity's own handlers
+        assert any(repr(activity._on_metrics_collected) in c for c in new_cb)
+        assert any(repr(activity._on_error) in c for c in new_cb)
+    finally:
+        await session.aclose()
+
+
+async def test_update_options_tts_migrates_metrics_collected_and_error_listeners() -> None:
+    """Mirror of test_update_options_stt_migrates_metrics_collected_and_error_listeners
+    but for TTS. The TTS swap path must also migrate event listeners.
+
+    Devin Review on PR #6235.
+    """
+    from livekit.agents.voice.agent_session import AgentSession
+    from livekit.agents.voice.audio_recognition import AudioRecognition
+
+    from .fake_tts import FakeTTS
+
+    old_tts = FakeTTS()
+    new_tts = FakeTTS()
+    session = AgentSession(tts=old_tts)
+    try:
+        agent = MyAgent()
+        activity = AgentActivity(agent, session)
+
+        audio_recognition = AudioRecognition(
+            session,
+            hooks=activity,
+            stt=None,
+            vad=None,
+            using_default_vad=False,
+            interruption_detection=None,
+            endpointing=create_endpointing(activity.endpointing_opts),
+            turn_detection=None,
+            stt_model=None,
+            stt_provider=None,
+        )
+        activity._audio_recognition = audio_recognition
+        session._activity = activity
+        session._agent = agent
+
+        # See STT-migration test for why this no-op spy is needed.
+        def spy_update_stt(stt_node, **kwargs):  # type: ignore[no-untyped-def]
+            pass
+
+        audio_recognition.update_stt = spy_update_stt  # type: ignore[method-assign]
+
+        def make_tracker(instance: FakeTTS) -> tuple[list[str], list[str], list[str]]:
+            on_log: list[str] = []
+            off_log: list[str] = []
+            cb_log: list[str] = []
+
+            original_on = instance.on
+            original_off = instance.off
+
+            def tracked_on(event, callback=None, **kwargs):  # type: ignore[no-untyped-def]
+                on_log.append(event)
+                cb_log.append(repr(callback))
+                return original_on(event, callback, **kwargs)
+
+            def tracked_off(event, callback=None, **kwargs):  # type: ignore[no-untyped-def]
+                off_log.append(event)
+                return original_off(event, callback, **kwargs)
+
+            instance.on = tracked_on  # type: ignore[method-assign]
+            instance.off = tracked_off  # type: ignore[method-assign]
+            return on_log, off_log, cb_log
+
+        old_on, old_off, old_cb = make_tracker(old_tts)
+        new_on, new_off, new_cb = make_tracker(new_tts)
+
+        # Baseline
+        assert old_on == []
+        assert new_on == []
+
+        session.update_options(tts=new_tts)
+
+        # new has both, old has both detached
+        assert "metrics_collected" in new_on
+        assert "error" in new_on
+        assert "metrics_collected" in old_off
+        assert "error" in old_off
+        # Old does not have new listeners attached
+        assert "metrics_collected" not in old_on
+        assert "error" not in old_on
+        # Callbacks should be the activity's handlers
+        assert any(repr(activity._on_metrics_collected) in c for c in new_cb)
+        assert any(repr(activity._on_error) in c for c in new_cb)
+    finally:
+        await session.aclose()
+
+
+async def test_update_options_no_listener_swap_when_agent_owns_stt() -> None:
+    """When the agent owns its STT, the swap is a no-op so listeners
+    must NOT be migrated. Devin's prompt: 'This listener management should
+    be skipped in the agent_owns_stt / agent_owns_tts branches where the
+    effective instance doesn't actually change.'
+    """
+    from unittest.mock import patch
+
+    from livekit.agents.voice.agent_session import AgentSession
+    from livekit.agents.voice.audio_recognition import AudioRecognition
+
+    from .fake_stt import FakeSTT
+
+    agent_stt = FakeSTT()
+    new_stt = FakeSTT()
+    session = AgentSession(stt=FakeSTT())
+    try:
+        agent = MyAgent()
+        agent._stt = agent_stt
+        activity = AgentActivity(agent, session)
+
+        audio_recognition = AudioRecognition(
+            session,
+            hooks=activity,
+            stt=None,
+            vad=None,
+            using_default_vad=False,
+            interruption_detection=None,
+            endpointing=create_endpointing(activity.endpointing_opts),
+            turn_detection=None,
+            stt_model=None,
+            stt_provider=None,
+        )
+        activity._audio_recognition = audio_recognition
+        session._activity = activity
+        session._agent = agent
+
+        # See STT-migration test for why this no-op spy is needed.
+        def spy_update_stt(stt_node, **kwargs):  # type: ignore[no-untyped-def]
+            pass
+
+        audio_recognition.update_stt = spy_update_stt  # type: ignore[method-assign]
+
+        # Track .on() and .off() on the new instance — must NOT be called
+        # because the agent-bound contract shadows the swap entirely.
+        new_on: list[str] = []
+        new_off: list[str] = []
+        original_on = new_stt.on
+        original_off = new_stt.off
+
+        def tracked_on(event, callback=None, **kwargs):  # type: ignore[no-untyped-def]
+            new_on.append(event)
+            return original_on(event, callback, **kwargs)
+
+        def tracked_off(event, callback=None, **kwargs):  # type: ignore[no-untyped-def]
+            new_off.append(event)
+            return original_off(event, callback, **kwargs)
+
+        new_stt.on = tracked_on  # type: ignore[method-assign]
+        new_stt.off = tracked_off  # type: ignore[method-assign]
+
+        with patch("livekit.agents.voice.agent_activity.logger") as mock_logger:
+            session.update_options(stt=new_stt)
+
+        # agent-bound path: warning fires, but listeners are not migrated
+        assert mock_logger.warning.called
+        assert new_on == []
+        assert new_off == []
+    finally:
+        await session.aclose()
