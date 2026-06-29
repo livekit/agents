@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from dataclasses import dataclass
 from typing import Any, Literal, cast
@@ -21,13 +22,18 @@ from openai.types.shared_params import Metadata
 from typing_extensions import TypedDict
 
 from .. import llm
-from .._exceptions import APIConnectionError, APIStatusError, APITimeoutError
+from .._exceptions import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+)
 from ..llm import ToolChoice, utils as llm_utils
 from ..llm.chat_context import ChatContext
 from ..llm.tool_context import Tool
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
+from ._exceptions import InferenceQuotaExceededError
 from ._utils import (
     HEADER_INFERENCE_PRIORITY,
     HEADER_INFERENCE_PROVIDER,
@@ -454,6 +460,22 @@ class LLMStream(llm.LLMStream):
         except openai.APITimeoutError:
             raise APITimeoutError(retryable=retryable) from None
         except openai.APIStatusError as e:
+            # OpenAI's SDK stores only body["error"] on the exception; for gateway quota
+            # payloads that's a bare string, dropping the `type`/`category` fields we need,
+            # so re-parse the raw response to recover the full JSON body.
+            body: object = e.body
+            if not isinstance(body, dict):
+                with contextlib.suppress(Exception):
+                    body = e.response.json()
+
+            if quota_error := InferenceQuotaExceededError.from_response(
+                e.message,
+                status_code=e.status_code,
+                request_id=e.request_id,
+                body=body,
+            ):
+                raise quota_error from None
+
             raise APIStatusError(
                 e.message,
                 status_code=e.status_code,

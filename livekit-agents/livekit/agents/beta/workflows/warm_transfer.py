@@ -18,11 +18,10 @@ from ...utils import is_given
 from ...voice import room_io
 from ...voice.agent import Agent, AgentTask
 from ...voice.agent_session import AgentSession
+from ...voice.audio_source import AudioSource, BuiltinAudioClip
 from ...voice.background_audio import (
     AudioConfig,
-    AudioSource,
     BackgroundAudioPlayer,
-    BuiltinAudioClip,
     PlayHandle,
 )
 from .utils import InstructionParts

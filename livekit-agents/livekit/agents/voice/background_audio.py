@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-import atexit
 import contextlib
-import enum
 import random
 from collections.abc import AsyncGenerator, AsyncIterator, Generator
-from importlib.resources import as_file, files
 from typing import Any, NamedTuple
 
 import numpy as np
@@ -20,27 +17,8 @@ from ..utils import is_given, log_exceptions
 from ..utils.aio import cancel_and_wait
 from ..utils.audio import audio_frames_from_file
 from .agent_session import AgentSession
+from .audio_source import AudioSource, BuiltinAudioClip
 from .events import AgentStateChangedEvent
-
-_resource_stack = contextlib.ExitStack()
-atexit.register(_resource_stack.close)
-
-
-class BuiltinAudioClip(enum.Enum):
-    CITY_AMBIENCE = "city-ambience.ogg"
-    FOREST_AMBIENCE = "forest-ambience.ogg"
-    OFFICE_AMBIENCE = "office-ambience.ogg"
-    CROWDED_ROOM = "crowded-room.ogg"
-    KEYBOARD_TYPING = "keyboard-typing.ogg"
-    KEYBOARD_TYPING2 = "keyboard-typing2.ogg"
-    HOLD_MUSIC = "hold_music.ogg"
-
-    def path(self) -> str:
-        file_path = files("livekit.agents.resources") / self.value
-        return str(_resource_stack.enter_context(as_file(file_path)))
-
-
-AudioSource = AsyncIterator[rtc.AudioFrame] | str | BuiltinAudioClip
 
 
 def _frame_gain(

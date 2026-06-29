@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import os
 import time
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Sequence
 from contextlib import AbstractContextManager, asynccontextmanager, nullcontext
@@ -41,6 +42,7 @@ from ..types import (
     APIConnectOptions,
     NotGivenOr,
 )
+from ..utils.audio import audio_frames_from_file
 from ..utils.deprecation import deprecate_params
 from ..utils.misc import is_given
 from . import io, room_io
@@ -48,6 +50,7 @@ from ._utils import _set_participant_attributes
 from .agent import Agent, AgentTask
 from .agent_activity import AgentActivity, _ReusableResources
 from .amd import AMD
+from .audio_source import AudioSource, BuiltinAudioClip
 from .events import (
     AgentEvent,
     AgentState,
@@ -55,6 +58,7 @@ from .events import (
     CloseEvent,
     CloseReason,
     ConversationItemAddedEvent,
+    ErrorEvent,
     EventTypes,
     UserInputTranscribedEvent,
     UserState,
@@ -205,6 +209,11 @@ class VoiceActivityVideoSampler:
 
 DEFAULT_TTS_TEXT_TRANSFORMS: list[TextTransforms] = ["filter_markdown", "filter_emoji"]
 
+DEFAULT_UNRECOVERABLE_ERROR_MESSAGE = (
+    "I'm sorry, the assistant is temporarily unavailable. Please try again later."
+)
+_ERROR_MESSAGE_PLAYOUT_TIMEOUT = 16.0
+
 
 class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @deprecate_params(
@@ -246,6 +255,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         ivr_detection: bool = False,
         user_away_timeout: float | None = 15.0,
         session_close_transcript_timeout: float = 2.0,
+        unrecoverable_error_message: NotGivenOr[AudioSource | None] = NOT_GIVEN,
         # Runtime settings
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
@@ -324,6 +334,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             session_close_transcript_timeout (float, optional): Seconds to wait for the
                 final STT transcript when closing the session (after audio is detached).
                 Default ``2.0`` s (independent of ``commit_user_turn``'s ``transcript_timeout``).
+            unrecoverable_error_message (str | AudioSource | None, optional): Spoken just
+                before the session closes on an unrecoverable error, so the agent isn't
+                silent. A ``str`` is synthesized via TTS (or played as-is if it's a file
+                path); any other :data:`~livekit.agents.AudioSource` is played directly
+                (use this when TTS is the failed resource). ``None`` disables spoken errors. The
+                default speaks :data:`DEFAULT_UNRECOVERABLE_ERROR_MESSAGE` (English) only on
+                terminal errors; set your own for non-English agents. ``error``/``close``
+                events fire regardless.
             preemptive_generation (NotGivenOr[bool | PreemptiveGenerationOptions]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
             min_endpointing_delay (NotGivenOr[float]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
             max_endpointing_delay (NotGivenOr[float]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
@@ -398,6 +416,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             session_close_transcript_timeout=session_close_transcript_timeout,
         )
         self._conn_options = conn_options or SessionConnectOptions()
+        self._unrecoverable_error_message = unrecoverable_error_message
         self._started = False
 
         if isinstance(stt, str):
@@ -1521,20 +1540,27 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # debug messages ride the proto, not the Pydantic event union.
         super().emit("debug_message", agent_pb.DebugMessage(payload=st))
 
-    def _on_error(
-        self, error: llm.LLMError | stt.STTError | tts.TTSError | llm.RealtimeModelError
-    ) -> None:
+    def _on_error(self, ev: ErrorEvent) -> None:
+        error = ev.error
+        if not isinstance(
+            error, (llm.LLMError, stt.STTError, tts.TTSError, llm.RealtimeModelError)
+        ):
+            return
+
         if self._closing_task or error.recoverable:
             return
 
-        if error.type == "llm_error":
-            self._llm_error_counts += 1
-            if self._llm_error_counts <= self.conn_options.max_unrecoverable_errors:
-                return
-        elif error.type == "tts_error":
-            self._tts_error_counts += 1
-            if self._tts_error_counts <= self.conn_options.max_unrecoverable_errors:
-                return
+        terminal = isinstance(error.error, APIError) and error.error.terminal
+
+        if not terminal:
+            if error.type == "llm_error":
+                self._llm_error_counts += 1
+                if self._llm_error_counts <= self.conn_options.max_unrecoverable_errors:
+                    return
+            elif error.type == "tts_error":
+                self._tts_error_counts += 1
+                if self._tts_error_counts <= self.conn_options.max_unrecoverable_errors:
+                    return
 
         if isinstance(error.error, APIError):
             logger.error(f"AgentSession is closing due to unrecoverable error: {error.error}")
@@ -1547,10 +1573,52 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         def on_close_done(_: asyncio.Task[None]) -> None:
             self._closing_task = None
 
-        self._closing_task = asyncio.create_task(
-            self._aclose_impl(error=error, reason=CloseReason.ERROR)
-        )
+        self._closing_task = asyncio.create_task(self._close_on_error(error))
         self._closing_task.add_done_callback(on_close_done)
+
+    def _resolve_error_message(self, error: Exception) -> AudioSource | None:
+        """Resolve the message to speak before closing on an unrecoverable error."""
+        if is_given(message := self._unrecoverable_error_message):
+            return message
+        # Terminal errors (e.g. depleted LiveKit Inference credits) get a generic spoken
+        # message — we deliberately don't surface provider quota details to end users.
+        if isinstance(error, APIError) and error.terminal:
+            return DEFAULT_UNRECOVERABLE_ERROR_MESSAGE
+        return None
+
+    async def _close_on_error(
+        self, error: llm.LLMError | stt.STTError | tts.TTSError | llm.RealtimeModelError
+    ) -> None:
+        # best-effort: speak a fallback message before teardown so the agent isn't silent.
+        # A failing or unavailable source just falls through to close — the error/close
+        # events fire either way.
+        try:
+            message = self._resolve_error_message(error.error)
+            if message is None or self._activity is None or self.output.audio is None:
+                return
+
+            # pre-recorded audio is played as-is, so it survives a dead/exhausted TTS; a
+            # non-file str falls back to TTS synthesis.
+            text = ""
+            audio: NotGivenOr[AsyncIterable[rtc.AudioFrame]] = NOT_GIVEN
+            if isinstance(message, BuiltinAudioClip):
+                audio = audio_frames_from_file(message.path())
+            elif isinstance(message, str):
+                if os.path.isfile(message):
+                    audio = audio_frames_from_file(message)
+                else:
+                    text = message
+            else:
+                audio = message
+
+            handle = self.say(text, audio=audio, allow_interruptions=False, add_to_chat_ctx=False)
+            await asyncio.wait_for(
+                handle.wait_for_playout(), timeout=_ERROR_MESSAGE_PLAYOUT_TIMEOUT
+            )
+        except Exception:
+            logger.warning("failed to play the unrecoverable-error message", exc_info=True)
+        finally:
+            await self._aclose_impl(error=error, reason=CloseReason.ERROR)
 
     @utils.log_exceptions(logger=logger)
     async def _forward_audio_task(self) -> None:

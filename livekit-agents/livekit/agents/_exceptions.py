@@ -29,20 +29,33 @@ class APIError(Exception):
     """
 
     retryable: bool = False
-    """Whether the error can be retried."""
+    """Whether the error can be retried (within the request's retry loop)."""
 
-    def __init__(self, message: str, *, body: object | None = None, retryable: bool = True) -> None:
+    terminal: bool = False
+    """Whether the error is terminal — it will fail identically on every turn, so
+    callers should surface it immediately rather than absorbing it under a
+    transient-error tolerance (e.g. ``AgentSession``'s ``max_unrecoverable_errors``)."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        body: object | None = None,
+        retryable: bool = True,
+        terminal: bool = False,
+    ) -> None:
         super().__init__(message)
 
         self.message = message
         self.body = body
-        self.retryable = retryable
+        self.retryable = retryable and not terminal
+        self.terminal = terminal
 
     def __str__(self) -> str:
         return self.message
 
     def __repr__(self) -> str:
-        return f"{self.__class__.__name__}({self.message!r}, body={self.body!r}, retryable={self.retryable!r})"
+        return f"{self.__class__.__name__}({self.message!r}, body={self.body!r}, retryable={self.retryable!r}, terminal={self.terminal!r})"
 
 
 class APIStatusError(APIError):
@@ -62,6 +75,7 @@ class APIStatusError(APIError):
         request_id: str | None = None,
         body: object | None = None,
         retryable: bool | None = None,
+        terminal: bool = False,
     ) -> None:
         if retryable is None:
             retryable = True
@@ -73,7 +87,7 @@ class APIStatusError(APIError):
         if 400 <= status_code < 500 and status_code not in (408, 429, 499):
             retryable = False
 
-        super().__init__(message, body=body, retryable=retryable)
+        super().__init__(message, body=body, retryable=retryable, terminal=terminal)
 
         self.status_code = status_code
         self.request_id = request_id
@@ -83,6 +97,7 @@ class APIStatusError(APIError):
             f"message={self.message!r}",
             f"status_code={self.status_code}",
             f"retryable={self.retryable}",
+            f"terminal={self.terminal}",
         ]
         if self.request_id:
             parts.append(f"request_id={self.request_id}")
@@ -96,7 +111,8 @@ class APIStatusError(APIError):
             f"status_code={self.status_code!r}, "
             f"request_id={self.request_id!r}, "
             f"body={self.body!r}, "
-            f"retryable={self.retryable!r})"
+            f"retryable={self.retryable!r}, "
+            f"terminal={self.terminal!r})"
         )
 
 

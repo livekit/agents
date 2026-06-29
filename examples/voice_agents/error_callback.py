@@ -1,12 +1,10 @@
 import asyncio
 import logging
-import os
 import pathlib
 
 from dotenv import load_dotenv
 
 from livekit.agents import AgentServer, JobContext, cli, inference
-from livekit.agents.utils.audio import audio_frames_from_file
 from livekit.agents.voice import Agent, AgentSession
 from livekit.agents.voice.events import CloseEvent, ErrorEvent
 from livekit.rtc import ParticipantKind
@@ -29,23 +27,21 @@ async def entrypoint(ctx: JobContext):
         stt=inference.STT("deepgram/nova-3"),
         llm=inference.LLM("openai/gpt-4.1-mini"),
         tts=inference.TTS("cartesia/sonic-3"),
+        # play a pre-recorded file (or any AudioSource) before the session closes on an
+        # unrecoverable error; bypasses TTS, so it's still heard when TTS is the failed
+        # resource. A non-file str is synthesized through TTS instead.
+        unrecoverable_error_message=str(pathlib.Path(__file__).parent / "error_message.ogg"),
     )
 
-    custom_error_audio = os.path.join(pathlib.Path(__file__).parent.absolute(), "error_message.ogg")
-
+    # Advanced path: for full control (e.g. continuing the conversation on recoverable
+    # errors, or triggering a SIP transfer) handle the "error" event yourself. This runs
+    # in addition to the built-in unrecoverable_error_message above.
     @session.on("error")
     def on_error(ev: ErrorEvent):
         if ev.error.recoverable:
             return
 
         logger.info(f"session is closing due to unrecoverable error {ev.error}")
-
-        # To bypass the TTS service in case it's unavailable, we use a custom audio file instead
-        session.say(
-            "I'm having trouble connecting right now. Let me transfer your call.",
-            audio=audio_frames_from_file(custom_error_audio),
-            allow_interruptions=False,
-        )
 
         # If want to continue the conversation, we can set the recoverable to True
 
