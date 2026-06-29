@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from livekit.agents.utils import http_context
-from livekit.plugins.tavus.api import DEFAULT_FACE_ID, TavusAPI
+from livekit.plugins.tavus.api import DEFAULT_PAL_ID, TavusAPI
 from livekit.plugins.tavus.avatar import AvatarSession
 
 pytestmark = pytest.mark.unit
@@ -97,18 +97,14 @@ async def test_deprecated_env_vars_still_work_and_warn(monkeypatch):
     assert payload["pal_id"] == "oldp"
 
 
-async def test_auto_creates_pal_when_none_given():
+async def test_no_pal_uses_default_pal_with_face_override():
     api = _api()
-    post = AsyncMock(side_effect=[{"pal_id": "pal_new"}, {"conversation_id": "conv1"}])
-    with patch.object(api, "_post", new=post):
+    with patch.object(api, "_post", new=_mock_post()) as m:
         await api.create_conversation(face_id="f1")
-    pal_endpoint, pal_payload = post.call_args_list[0].args
-    conv_endpoint, conv_payload = post.call_args_list[1].args
-    assert pal_endpoint == "pals"
-    assert pal_payload["default_face_id"] == "f1"
-    assert conv_endpoint == "conversations"
-    assert conv_payload["face_id"] == "f1"
-    assert conv_payload["pal_id"] == "pal_new"
+    assert "pals" not in [c.args[0] for c in m.call_args_list]  # no pal is created
+    payload = m.call_args.args[1]
+    assert payload["pal_id"] == DEFAULT_PAL_ID
+    assert payload["face_id"] == "f1"
 
 
 async def test_pal_id_only_skips_pal_creation_and_omits_face():
@@ -122,14 +118,14 @@ async def test_pal_id_only_skips_pal_creation_and_omits_face():
     assert "face_id" not in payload
 
 
-async def test_defaults_face_when_neither_given():
+async def test_defaults_to_stock_pal_when_neither_given():
     api = _api()
-    post = AsyncMock(side_effect=[{"pal_id": "pal_new"}, {"conversation_id": "conv1"}])
-    with patch.object(api, "_post", new=post):
+    with patch.object(api, "_post", new=_mock_post()) as m:
         await api.create_conversation()
-    pal_endpoint, pal_payload = post.call_args_list[0].args
-    assert pal_endpoint == "pals"
-    assert pal_payload["default_face_id"] == DEFAULT_FACE_ID
+    assert "pals" not in [c.args[0] for c in m.call_args_list]  # no pal is created
+    payload = m.call_args.args[1]
+    assert payload["pal_id"] == DEFAULT_PAL_ID
+    assert "face_id" not in payload
 
 
 async def test_avatar_session_resolves_new_and_deprecated_args():

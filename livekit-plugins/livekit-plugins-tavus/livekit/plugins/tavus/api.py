@@ -23,8 +23,8 @@ class TavusException(Exception):
 
 
 DEFAULT_API_URL = "https://tavusapi.com/v2"
-# Stock face used when the caller provides neither a face nor a pal.
-DEFAULT_FACE_ID = "r72f7f7f7c8b"
+# Stock Tavus PAL. Use create_pal() to create a PAL with the appearance you'd like.
+DEFAULT_PAL_ID = "pb87e71797da"
 
 
 def _resolve_renamed_arg(
@@ -106,8 +106,8 @@ class TavusAPI:
         )
 
         if not pal_id:
-            # no pal to reuse, so create one — falling back to the default face
-            pal_id = await self.create_pal(default_face_id=face_id or DEFAULT_FACE_ID)
+            # no pal supplied — use the default stock pal (carries its own face)
+            pal_id = DEFAULT_PAL_ID
 
         properties = properties or {}
         payload: dict[str, Any] = {"pal_id": pal_id, "properties": properties}
