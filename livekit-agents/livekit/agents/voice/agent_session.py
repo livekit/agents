@@ -1100,9 +1100,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         Args:
             stt (NotGivenOr[stt.STT | None], optional): Replace the speech-to-text component.
                 The live recognition pipeline is rewired immediately; the new language/model
-                takes effect from the next speech segment.
+                takes effect from the next speech segment. If the current agent was
+                constructed with its own STT, it continues to take precedence via the
+                existing ``activity.stt`` resolution order — use ``session.update_agent``
+                or construct the agent without its own STT to redirect fully.
             tts (NotGivenOr[tts.TTS | None], optional): Replace the text-to-speech component.
                 Takes effect from the next synthesis call — no pipeline restart required.
+                Agent-bound TTS behaves the same way as agent-bound STT.
             endpointing_opts (NotGivenOr[EndpointingOptions], optional): Endpointing options.
             turn_detection (NotGivenOr[TurnDetectionMode | None], optional): Strategy for deciding
                 when the user has finished speaking. ``None`` reverts to automatic selection.
@@ -1144,18 +1148,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         if is_given(stt):
             self._stt = stt
-            # activity.stt prefers agent._stt when the agent was initialized with its own
-            # STT instance, so mirror the swap there too. Otherwise the activity would keep
-            # reading the old agent-bound STT and ignore the new session-level one.
-            if self._agent is not None and is_given(self._agent.stt):
-                self._agent._stt = stt
 
         if is_given(tts):
             self._tts = tts
-            # Same rationale as stt above: if the current agent was given its own TTS at
-            # construction, the activity resolves tts via agent._tts first.
-            if self._agent is not None and is_given(self._agent.tts):
-                self._agent._tts = tts
 
         if self._activity is not None:
             self._activity.update_options(
