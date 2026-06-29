@@ -75,6 +75,7 @@ class STTOptions:
     server_vad: NotGivenOr[VADOptions | None]
     keyterms: NotGivenOr[list[str]]
     no_verbatim: bool
+    enable_logging: bool
 
 
 class STT(stt.STT):
@@ -93,6 +94,7 @@ class STT(stt.STT):
         model_id: NotGivenOr[ElevenLabsSTTModels | str] = NOT_GIVEN,
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
         no_verbatim: NotGivenOr[bool] = NOT_GIVEN,
+        enable_logging: bool = True,
     ) -> None:
         """
         Create a new instance of ElevenLabs STT.
@@ -117,6 +119,8 @@ class STT(stt.STT):
             no_verbatim (NotGivenOr[bool]): When True, the model removes filler words, false starts
                 and disfluencies from the transcript, producing cleaner output. Supported for both
                 Scribe v2 (batch) and Scribe v2 realtime. Default is False.
+            enable_logging (bool): Enable logging of the request. When set to false, zero retention
+                mode will be used. Defaults to True.
         """
 
         if is_given(use_realtime):
@@ -163,6 +167,7 @@ class STT(stt.STT):
             model_id=model_id,
             keyterms=keyterms,
             no_verbatim=no_verbatim if is_given(no_verbatim) else False,
+            enable_logging=enable_logging,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -206,7 +211,8 @@ class STT(stt.STT):
 
         try:
             async with self._ensure_session().post(
-                f"{self._opts.base_url}/speech-to-text",
+                f"{self._opts.base_url}/speech-to-text"
+                f"?enable_logging={str(self._opts.enable_logging).lower()}",
                 data=form,
                 headers={AUTHORIZATION_HEADER: self._opts.api_key},
             ) as response:
@@ -506,6 +512,7 @@ class SpeechStream(stt.SpeechStream):
             f"model_id={self._opts.model_id}",
             f"audio_format=pcm_{self._opts.sample_rate}",
             f"commit_strategy={commit_strategy}",
+            f"enable_logging={str(self._opts.enable_logging).lower()}",
         ]
 
         if not self._language:
