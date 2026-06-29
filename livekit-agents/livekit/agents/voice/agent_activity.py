@@ -561,31 +561,36 @@ class AgentActivity(RecognitionHooks):
             # Rewire the live STT pipeline. We pass the agent's stt_node (the bound method),
             # which the agent_activity wired in during __init__ — passing it here mirrors that
             # initial wiring, but the STT instance it pulls from inside the node now reads
-            # activity.stt per call (which has been updated on the session and agent).
-            # Passing None disables STT.
+            # activity.stt per call. Passing None disables STT.
             if self._audio_recognition is not None:
                 self._audio_recognition.update_stt(
                     self._agent.stt_node if stt is not None else None
                 )
-            # Also mirror the swap onto session._stt / agent._stt so activity.stt
-            # resolves to the new instance on the next read. AgentSession.update_options
-            # already does this before calling here, so this branch is normally a no-op
-            # — but it makes the contract symmetric for callers that invoke
-            # update_options on the activity directly (e.g. custom plugins or tests).
+            # Mirror the swap onto session._stt so activity.stt resolves to the new
+            # instance on the next read. AgentSession.update_options already does this
+            # before calling here, so this is normally a no-op — but it keeps the contract
+            # symmetric for callers that invoke update_options on the activity directly.
+            # We deliberately do NOT touch agent._stt; that is user-owned agent config
+            # and the existing activity.stt resolution order prefers it when present.
             resolved_stt = stt if stt is not None else None
             self._session._stt = resolved_stt
-            if is_given(self._agent.stt):
-                self._agent._stt = resolved_stt
+            # Prewarm the new STT instance so providers that eagerly open connections
+            # don't pay first-call latency after a swap. Base-class prewarm() is a no-op,
+            # so this is a free call for the common case.
+            if resolved_stt is not None:
+                resolved_stt.prewarm()
 
         if is_given(tts):
             # No pipeline to restart: tts_node reads activity.tts fresh on every synthesis
-            # call. Mirror the swap onto session._tts / agent._tts so activity.tts
-            # resolves to the new instance on the next read — see the stt branch above
-            # for the rationale.
+            # call. Mirror the swap onto session._tts so activity.tts resolves to the new
+            # instance on the next read — see the stt branch above for the rationale.
             resolved_tts = tts if tts is not None else None
             self._session._tts = resolved_tts
-            if is_given(self._agent.tts):
-                self._agent._tts = resolved_tts
+            # Prewarm the new TTS instance. For providers like Sarvam TTS that open a
+            # WebSocket from a connection pool, this opens one connection during the
+            # swap so the first synthesis doesn't pay connection-setup latency.
+            if resolved_tts is not None:
+                resolved_tts.prewarm()
 
         if self._audio_recognition:
             self._audio_recognition.update_options(
