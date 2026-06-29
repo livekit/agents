@@ -330,6 +330,8 @@ class UserInputTranscribedEvent(BaseModel):
     type: Literal["user_input_transcribed"] = "user_input_transcribed"
     transcript: str
     is_final: bool
+    item_id: str | None = None
+    """Provider-specific ID for the transcribed input item, when available."""
     speaker_id: str | None = None
     language: LanguageCode | None = None
     created_at: float = Field(default_factory=time.time)

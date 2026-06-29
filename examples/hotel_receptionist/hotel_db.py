@@ -78,6 +78,7 @@ DisputeCategory = Literal[
     "damage_cleaning",
     "late_checkout_fee",
     "cancellation_fee",
+    "no_show",
     "double_charge_billing_error",
     "other",
 ]
@@ -138,6 +139,16 @@ DISPUTE_POLICIES: dict[DisputeCategory, DisputePolicy] = {
             f"Our policy is free cancellation up to {PRICING.cancellation_window_hours} "
             f"hours before check-in. Inside that window it's one night. "
             "If you're a returning guest I can waive it once."
+        ),
+    ),
+    "no_show": DisputePolicy(
+        action="explain_no_refund",
+        escalation="manager",
+        explanation=(
+            "This room was guaranteed to your card and there's no cancellation on record, "
+            "so it was held for you and charged as a no-show under the guarantee policy. "
+            "I can't reverse a guaranteed charge myself, but I can have the manager review "
+            "it and follow up by email."
         ),
     ),
     "double_charge_billing_error": DisputePolicy(
@@ -254,7 +265,26 @@ FollowupKind = Literal[
     "verification_help",  # verification failed; route to a human
     "early_checkout",  # in-house guest wants to leave early; front desk handles
     "abandoned_booking",  # caller dropped mid-booking; a human can call back
+    "lost_and_found",  # guest reports an item left behind; route to housekeeping/lost-and-found
     "other",
+]
+
+EmailKind = Literal[
+    "booking_confirmation",  # the room booking details + code, re-sent to the address on file
+    "folio",  # itemized bill / invoice, re-sent to the address on file
+]
+
+# Emergency classification (manual P1§13/P3§8): health -> ambulance, fire -> fire
+# brigade, safety/theft/assault/threat -> police; every kind also alerts the duty
+# manager and sends hotel staff to the room.
+EmergencyKind = Literal["medical", "fire", "security"]
+
+# Hotel departments a caller can be transferred to. NOT a guest room - the
+# operator never connects a caller to a guest (see guest-privacy policy).
+TransferDestination = Literal[
+    "restaurant",
+    "duty_manager",
+    "housekeeping",
 ]
 
 
@@ -314,6 +344,100 @@ TOURS: dict[str, Tour] = {
         max_party=4,
         description="private car and English-speaking guide, flexible start, up to 4 guests",
     ),
+}
+
+
+@dataclass(frozen=True)
+class SpaService:
+    name: str
+    price: int  # cents, per guest
+    duration_min: int
+    max_party: int
+    description: str
+
+
+# Bookable through the spa / health club desk. policies/spa.md describes the
+# same catalog to the agent - keep the two in sync.
+SPA_SERVICES: dict[str, SpaService] = {
+    "deep_tissue_massage": SpaService(
+        name="Deep-tissue massage",
+        price=14000,
+        duration_min=60,
+        max_party=2,
+        description="60-minute deep-tissue massage with a licensed therapist",
+    ),
+    "signature_facial": SpaService(
+        name="Signature facial",
+        price=12000,
+        duration_min=50,
+        max_party=2,
+        description="50-minute signature facial, all skin types",
+    ),
+    "personal_training": SpaService(
+        name="Personal training session",
+        price=8000,
+        duration_min=45,
+        max_party=1,
+        description="45-minute one-on-one session in the health club with a trainer",
+    ),
+    "group_yoga": SpaService(
+        name="Group yoga class",
+        price=4000,
+        duration_min=60,
+        max_party=8,
+        description="60-minute group yoga class in the studio",
+    ),
+}
+
+
+@dataclass(frozen=True)
+class BusinessCenterService:
+    name: str
+    price_per_hour: int | None  # cents; None for flat-priced services
+    flat_price: int | None
+    max_hours: int
+    description: str
+
+
+# Bookable through the business centre. policies/business_center.md describes the
+# same catalog to the agent - keep the two in sync.
+BUSINESS_CENTER_SERVICES: dict[str, BusinessCenterService] = {
+    "meeting_room": BusinessCenterService(
+        name="Meeting room",
+        price_per_hour=4000,
+        flat_price=None,
+        max_hours=8,
+        description="seats up to 8, screen and whiteboard, booked by the hour",
+    ),
+    "secretarial": BusinessCenterService(
+        name="Secretarial service",
+        price_per_hour=3500,
+        flat_price=None,
+        max_hours=4,
+        description="typing, dictation, and document prep, booked by the hour",
+    ),
+    "printing": BusinessCenterService(
+        name="Printing and binding",
+        price_per_hour=None,
+        flat_price=2500,
+        max_hours=1,
+        description="flat-rate print, copy, and bind job, ready same day",
+    ),
+}
+
+
+@dataclass(frozen=True)
+class FloralArrangement:
+    name: str
+    price: int  # cents, flat per arrangement
+
+
+# Ordered through the concierge desk via the hotel florist. policies/florist.md
+# describes the same catalog to the agent - keep the two in sync.
+FLORIST_ARRANGEMENTS: dict[str, FloralArrangement] = {
+    "bouquet": FloralArrangement(name="Seasonal hand-tied bouquet", price=6500),
+    "roses": FloralArrangement(name="Dozen long-stem roses", price=9500),
+    "centerpiece": FloralArrangement(name="Table centerpiece arrangement", price=14000),
 }
 
 # The partner property used when a confirmed guest has to be walked.
@@ -599,12 +723,15 @@ class HotelDB:
         check_in: date,
         check_out: date,
         extras: list[RoomExtra],
+        view: str | None = None,
     ) -> RoomBooking:
         # Re-pick a free room of the new (type, smoking) for the new dates,
         # ignoring the booking being modified itself (so same-room "extend
         # by one night" doesn't conflict with itself). The room the guest
         # already has wins when it still fits - a date change must never
-        # quietly move someone out of their garden view.
+        # quietly move someone out of their garden view. A requested `view`
+        # filters to rooms with that view, which is how the guest gets moved
+        # to a different room (e.g. a city-view room to a garden-view one).
         clean_extras = sorted(e for e in extras if e in ALLOWED_EXTRAS)
         conn = self.connection
         with conn:
@@ -621,12 +748,13 @@ class HotelDB:
                     "check_in": check_in.isoformat(),
                     "check_out": check_out.isoformat(),
                     "exclude": booking_code,
-                    "view": None,
+                    "view": view,
                     "prefer": current[0] if current else None,
                 },
             ).fetchone()
             if not row:
-                raise Unavailable(f"sold out: {room_type}")
+                what = f"{view} {room_type}" if view else room_type
+                raise Unavailable(f"sold out: {what}")
             room_id, nightly_rate = row
             nights = (check_out - check_in).days
             subtotal, taxes, total, items = compute_invoice(
@@ -677,6 +805,85 @@ class HotelDB:
         )
         if changed == 0:
             raise NotFound(f"booking not found: {booking_code}")
+        if self.on_change:
+            await self.on_change()
+
+    async def lookup_guest_history(self, *, last_name: str) -> str | None:
+        """Return a returning guest's remembered preferences from past stays, or None
+        if there's no history on file for that name."""
+        row = self.connection.execute(
+            "SELECT preferences FROM guest_history WHERE LOWER(last_name) = LOWER(?)",
+            (last_name,),
+        ).fetchone()
+        return row[0] if row else None
+
+    async def set_do_not_disturb(self, *, room: str) -> str:
+        """Record a Do-Not-Disturb hold on a room and return a reference. The switchboard
+        holds the room's calls and messages until it's lifted; emergencies override it."""
+        # Normalize to the canonical room id (and reject a mis-heard room) so storage
+        # matches every other room-referencing table regardless of how it was spoken.
+        room_id = self._require_room(room)
+        code = shortuuid("DND-")
+        with self.connection as conn:
+            _insert(conn, "do_not_disturb", {"code": code, "room_id": room_id})
+        if self.on_change:
+            await self.on_change()
+        return code
+
+    async def add_to_waitlist(
+        self,
+        *,
+        first_name: str,
+        last_name: str,
+        phone: str,
+        check_in: date,
+        check_out: date,
+        guests: int,
+    ) -> str:
+        """Record a waitlist entry for dates the hotel is sold out on, and return a
+        reference. No room is held - the desk calls back only if something frees up."""
+        code = shortuuid("WL-")
+        with self.connection as conn:
+            _insert(
+                conn,
+                "waitlist",
+                {
+                    "code": code,
+                    "first_name": first_name,
+                    "last_name": last_name,
+                    "phone": "".join(c for c in phone if c.isdigit()) or phone,
+                    "check_in": check_in.isoformat(),
+                    "check_out": check_out.isoformat(),
+                    "guests": guests,
+                },
+            )
+        if self.on_change:
+            await self.on_change()
+        return code
+
+    async def reinstate_booking(self, booking_code: str) -> None:
+        """Reactivate a previously cancelled booking, but only if its original room is
+        still free for its dates. Raises NotFound if the code is unknown, Unavailable if
+        the room has since been taken. A no-op if the booking is already confirmed."""
+        conn = self.connection
+        row = conn.execute(
+            "SELECT room_id, check_in, check_out, status FROM hotel_bookings WHERE code = ?",
+            (booking_code,),
+        ).fetchone()
+        if row is None:
+            raise NotFound(f"booking not found: {booking_code}")
+        room_id, check_in, check_out, status = row
+        if status == "confirmed":
+            return
+        clash = conn.execute(
+            "SELECT 1 FROM hotel_bookings WHERE room_id = ? AND status = 'confirmed' "
+            "AND code != ? AND NOT (check_out <= ? OR check_in >= ?) LIMIT 1",
+            (room_id, booking_code, check_in, check_out),
+        ).fetchone()
+        if clash:
+            raise Unavailable("that room is no longer free for those dates")
+        with conn:
+            _update(conn, "hotel_bookings", {"status": "confirmed"}, {"code": booking_code})
         if self.on_change:
             await self.on_change()
 
@@ -743,6 +950,67 @@ class HotelDB:
             raise NotFound(f"reservation not found: {code}")
         if self.on_change:
             await self.on_change()
+
+    async def modify_restaurant_reservation(
+        self,
+        *,
+        code: str,
+        on_date: date,
+        at_time: time,
+        party_size: int | None = None,
+    ) -> RestaurantReservation:
+        """Change a confirmed reservation's date/time (and optionally party size).
+
+        Prefers the reservation's current table when it's still free at the new
+        slot (mirrors the prefer-current-room logic in update_booking), so a
+        same-table time shift leaves table_location unchanged. Falls back to the
+        next free table only if the current one is taken or too small.
+        """
+        if on_date < TODAY:
+            raise Unavailable(f"{on_date.isoformat()} is in the past")
+        conn = self.connection
+        with conn:
+            current = conn.execute(
+                "SELECT table_id, party_size FROM restaurant_reservations "
+                "WHERE code = :code AND status = 'confirmed'",
+                {"code": code},
+            ).fetchone()
+            if not current:
+                raise NotFound(f"reservation not found: {code}")
+            current_table_id, current_party = current
+            new_party = party_size if party_size is not None else current_party
+            row = conn.execute(
+                _SQL_FREE_TABLE_FOR_MODIFY,
+                {
+                    "party_size": new_party,
+                    "date": on_date.isoformat(),
+                    "time": at_time.isoformat(),
+                    "code": code,
+                    "current_table_id": current_table_id,
+                },
+            ).fetchone()
+            if not row:
+                raise Unavailable(f"restaurant full: {on_date} {at_time}")
+            table_id = row[0]
+            _update(
+                conn,
+                "restaurant_reservations",
+                {
+                    "table_id": table_id,
+                    "party_size": new_party,
+                    "date": on_date.isoformat(),
+                    "time": at_time.isoformat(),
+                },
+                {"code": code, "status": "confirmed"},
+            )
+        if self.on_change:
+            await self.on_change()
+        updated = _row_to_reservation(
+            conn.execute(_SQL_RESERVATION_BY_CODE, {"code": code}).fetchone()
+        )
+        if updated is None:
+            raise NotFound(f"reservation vanished mid-update: {code}")
+        return updated
 
     async def flag_late_arrival(self, *, booking_code: str, note: str) -> None:
         conn = self.connection
@@ -863,6 +1131,170 @@ class HotelDB:
             await self.on_change()
         return code, tour, total
 
+    async def book_spa_appointment(
+        self,
+        *,
+        service_id: str,
+        guest_name: str,
+        guest_phone: str,
+        on_date: date,
+        at_time: time,
+        party_size: int,
+    ) -> tuple[str, SpaService, int]:
+        service = SPA_SERVICES.get(service_id)
+        if service is None:
+            raise NotFound(
+                f"no such spa service: {service_id} - options: {', '.join(SPA_SERVICES)}"
+            )
+        if on_date < TODAY:
+            raise Unavailable(f"{on_date.isoformat()} is in the past")
+        if party_size > service.max_party:
+            raise Unavailable(f"{service.name} takes at most {service.max_party} guests")
+        total = service.price * party_size
+        code = shortuuid("SPA-")
+        with self.connection as conn:
+            _insert(
+                conn,
+                "spa_bookings",
+                {
+                    "code": code,
+                    "service_id": service_id,
+                    "guest_name": guest_name,
+                    "guest_phone": "".join(c for c in guest_phone if c.isdigit()),
+                    "date": on_date.isoformat(),
+                    "time": at_time.isoformat(),
+                    "party_size": party_size,
+                    "total": total,
+                },
+            )
+        if self.on_change:
+            await self.on_change()
+        return code, service, total
+
+    async def book_business_center(
+        self,
+        *,
+        service_id: str,
+        guest_name: str,
+        guest_phone: str,
+        on_date: date,
+        at_time: time,
+        duration_hours: int,
+    ) -> tuple[str, BusinessCenterService, int]:
+        service = BUSINESS_CENTER_SERVICES.get(service_id)
+        if service is None:
+            raise NotFound(
+                f"no such service: {service_id} - options: {', '.join(BUSINESS_CENTER_SERVICES)}"
+            )
+        if on_date < TODAY:
+            raise Unavailable(f"{on_date.isoformat()} is in the past")
+        if duration_hours > service.max_hours:
+            raise Unavailable(f"{service.name} is booked for at most {service.max_hours} hours")
+        total = service.flat_price or (service.price_per_hour or 0) * duration_hours
+        code = shortuuid("BIZ-")
+        with self.connection as conn:
+            _insert(
+                conn,
+                "business_center_bookings",
+                {
+                    "code": code,
+                    "service_id": service_id,
+                    "guest_name": guest_name,
+                    "guest_phone": "".join(c for c in guest_phone if c.isdigit()),
+                    "date": on_date.isoformat(),
+                    "time": at_time.isoformat(),
+                    "duration_hours": duration_hours,
+                    "total": total,
+                },
+            )
+        if self.on_change:
+            await self.on_change()
+        return code, service, total
+
+    async def order_flowers(
+        self,
+        *,
+        arrangement_id: str,
+        guest_name: str,
+        guest_phone: str,
+        deliver_to: str,
+        on_date: date,
+        card_message: str,
+    ) -> tuple[str, FloralArrangement, int]:
+        arrangement = FLORIST_ARRANGEMENTS.get(arrangement_id)
+        if arrangement is None:
+            raise NotFound(
+                f"no such arrangement: {arrangement_id} - options: "
+                f"{', '.join(FLORIST_ARRANGEMENTS)}"
+            )
+        if on_date < TODAY:
+            raise Unavailable(f"{on_date.isoformat()} is in the past")
+        total = arrangement.price
+        code = shortuuid("FLR-")
+        with self.connection as conn:
+            _insert(
+                conn,
+                "florist_orders",
+                {
+                    "code": code,
+                    "arrangement_id": arrangement_id,
+                    "guest_name": guest_name,
+                    "guest_phone": "".join(c for c in guest_phone if c.isdigit()),
+                    "deliver_to": deliver_to,
+                    "date": on_date.isoformat(),
+                    "message": card_message,
+                    "total": total,
+                },
+            )
+        if self.on_change:
+            await self.on_change()
+        return code, arrangement, total
+
+    async def send_email(self, *, recipient: str, kind: str) -> str:
+        """Stub email send: records that a document of `kind` was sent to `recipient`
+        and returns a reference. No real mail goes out; the row is the gradable signal
+        that the agent actually sent rather than just claiming to."""
+        if kind not in get_args(EmailKind):
+            raise NotFound(
+                f"unknown email kind: {kind} - options: {', '.join(get_args(EmailKind))}"
+            )
+        code = shortuuid("EML-")
+        with self.connection as conn:
+            _insert(
+                conn,
+                "emails_sent",
+                {
+                    "code": code,
+                    "recipient": recipient.strip().lower(),
+                    "kind": kind,
+                },
+            )
+        if self.on_change:
+            await self.on_change()
+        return code
+
+    async def transfer_call(self, *, destination: str, summary: str) -> str:
+        """Stub call transfer: records that the caller was transferred to a hotel
+        department with a one-line summary, and returns a reference."""
+        if destination not in get_args(TransferDestination):
+            raise NotFound(
+                f"unknown destination: {destination} - options: {', '.join(get_args(TransferDestination))}"
+            )
+        code = shortuuid("XFR-")
+        with self.connection as conn:
+            _insert(
+                conn,
+                "transfer_calls",
+                {
+                    "code": code,
+                    "destination": destination,
+                    "summary": summary,
+                },
+            )
+        if self.on_change:
+            await self.on_change()
+        return code
+
     async def request_flight_reconfirmation(
         self,
         *,
@@ -924,14 +1356,20 @@ class HotelDB:
             await self.on_change()
         return code
 
-    async def dispatch_emergency(self, *, room: str, situation: str) -> str:
+    async def dispatch_emergency(self, *, room: str, kind: str, situation: str) -> str:
+        # A bad kind is an invalid argument, not a missing entity - keep it distinct
+        # from the room's NotFound so the tool can't misreport it as a bad room number.
+        if kind not in get_args(EmergencyKind):
+            raise ValueError(
+                f"unknown emergency kind: {kind} - options: {', '.join(get_args(EmergencyKind))}"
+            )
         room_id = self._require_room(room)
         code = shortuuid("EMG-")
         with self.connection as conn:
             _insert(
                 conn,
                 "emergency_dispatches",
-                {"code": code, "room_id": room_id, "situation": situation},
+                {"code": code, "room_id": room_id, "kind": kind, "situation": situation},
             )
         if self.on_change:
             await self.on_change()
@@ -1272,7 +1710,7 @@ CREATE TABLE IF NOT EXISTS hotel_disputes (
     booking_code  TEXT    NOT NULL REFERENCES hotel_bookings(code),
     line_item     TEXT    NOT NULL,
     amount        INTEGER NOT NULL,
-    category      TEXT    NOT NULL CHECK (category IN ('minibar','room_service_restaurant','damage_cleaning','late_checkout_fee','cancellation_fee','double_charge_billing_error','other')),
+    category      TEXT    NOT NULL CHECK (category IN ('minibar','room_service_restaurant','damage_cleaning','late_checkout_fee','cancellation_fee','no_show','double_charge_billing_error','other')),
     caller_note   TEXT    NOT NULL,
     outcome       TEXT    NOT NULL CHECK (outcome IN ('auto_refunded','credit_offered','explained_no_action','goodwill_waived','escalated_to_manager','accounting_ticket_opened','open')),
     refund_amount INTEGER NOT NULL DEFAULT 0,
@@ -1282,7 +1720,7 @@ CREATE TABLE IF NOT EXISTS hotel_disputes (
 CREATE TABLE IF NOT EXISTS hotel_followups (
     id           INTEGER PRIMARY KEY,
     code         TEXT    NOT NULL UNIQUE,
-    kind         TEXT    NOT NULL CHECK (kind IN ('housekeeping','sales_lead','identity_change','callback','verification_help','early_checkout','abandoned_booking','other')),
+    kind         TEXT    NOT NULL CHECK (kind IN ('housekeeping','sales_lead','identity_change','callback','verification_help','early_checkout','abandoned_booking','lost_and_found','other')),
     caller_name  TEXT    NOT NULL,
     caller_phone TEXT    NOT NULL,
     summary      TEXT    NOT NULL,
@@ -1299,6 +1737,88 @@ CREATE TABLE IF NOT EXISTS tour_bookings (
     party_size   INTEGER NOT NULL CHECK (party_size >= 1),
     total        INTEGER NOT NULL,
     status       TEXT    NOT NULL DEFAULT 'confirmed' CHECK (status IN ('confirmed','cancelled'))
+);
+
+CREATE TABLE IF NOT EXISTS spa_bookings (
+    id           INTEGER PRIMARY KEY,
+    code         TEXT    NOT NULL UNIQUE,
+    service_id   TEXT    NOT NULL CHECK (service_id IN ('deep_tissue_massage','signature_facial','personal_training','group_yoga')),
+    guest_name   TEXT    NOT NULL,
+    guest_phone  TEXT    NOT NULL,
+    date         DATE    NOT NULL,
+    time         TIME    NOT NULL,
+    party_size   INTEGER NOT NULL CHECK (party_size >= 1),
+    total        INTEGER NOT NULL,
+    status       TEXT    NOT NULL DEFAULT 'confirmed' CHECK (status IN ('confirmed','cancelled'))
+);
+
+CREATE TABLE IF NOT EXISTS business_center_bookings (
+    id             INTEGER PRIMARY KEY,
+    code           TEXT    NOT NULL UNIQUE,
+    service_id     TEXT    NOT NULL CHECK (service_id IN ('meeting_room','secretarial','printing')),
+    guest_name     TEXT    NOT NULL,
+    guest_phone    TEXT    NOT NULL,
+    date           DATE    NOT NULL,
+    time           TIME    NOT NULL,
+    duration_hours INTEGER NOT NULL CHECK (duration_hours >= 1),
+    total          INTEGER NOT NULL,
+    status         TEXT    NOT NULL DEFAULT 'confirmed' CHECK (status IN ('confirmed','cancelled'))
+);
+
+CREATE TABLE IF NOT EXISTS florist_orders (
+    id             INTEGER PRIMARY KEY,
+    code           TEXT    NOT NULL UNIQUE,
+    arrangement_id TEXT    NOT NULL CHECK (arrangement_id IN ('bouquet','roses','centerpiece')),
+    guest_name     TEXT    NOT NULL,
+    guest_phone    TEXT    NOT NULL,
+    deliver_to     TEXT    NOT NULL,
+    date           DATE    NOT NULL,
+    message        TEXT    NOT NULL DEFAULT '',
+    total          INTEGER NOT NULL,
+    status         TEXT    NOT NULL DEFAULT 'confirmed' CHECK (status IN ('confirmed','cancelled'))
+);
+
+CREATE TABLE IF NOT EXISTS emails_sent (
+    id         INTEGER PRIMARY KEY,
+    code       TEXT    NOT NULL UNIQUE,
+    recipient  TEXT    NOT NULL,
+    kind       TEXT    NOT NULL CHECK (kind IN ('booking_confirmation','folio')),
+    status     TEXT    NOT NULL DEFAULT 'sent'
+);
+
+CREATE TABLE IF NOT EXISTS transfer_calls (
+    id           INTEGER PRIMARY KEY,
+    code         TEXT    NOT NULL UNIQUE,
+    destination  TEXT    NOT NULL CHECK (destination IN ('restaurant','duty_manager','housekeeping')),
+    summary      TEXT    NOT NULL DEFAULT '',
+    status       TEXT    NOT NULL DEFAULT 'transferred'
+);
+
+CREATE TABLE IF NOT EXISTS waitlist (
+    id          INTEGER PRIMARY KEY,
+    code        TEXT    NOT NULL UNIQUE,
+    first_name  TEXT    NOT NULL,
+    last_name   TEXT    NOT NULL,
+    phone       TEXT    NOT NULL,
+    check_in    TEXT    NOT NULL,
+    check_out   TEXT    NOT NULL,
+    guests      INTEGER NOT NULL,
+    status      TEXT    NOT NULL DEFAULT 'waiting'
+);
+
+CREATE TABLE IF NOT EXISTS do_not_disturb (
+    id      INTEGER PRIMARY KEY,
+    code    TEXT    NOT NULL UNIQUE,
+    room_id TEXT    NOT NULL REFERENCES hotel_rooms(id),
+    status  TEXT    NOT NULL DEFAULT 'active'
+);
+
+-- Reference data (read-only): preferences remembered from a returning guest's past
+-- stays. The agent reads this to personalize; it never writes here.
+CREATE TABLE IF NOT EXISTS guest_history (
+    id          INTEGER PRIMARY KEY,
+    last_name   TEXT    NOT NULL,
+    preferences TEXT    NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS flight_reconfirmations (
@@ -1328,6 +1848,7 @@ CREATE TABLE IF NOT EXISTS emergency_dispatches (
     id        INTEGER PRIMARY KEY,
     code      TEXT    NOT NULL UNIQUE,
     room_id   TEXT    NOT NULL REFERENCES hotel_rooms(id),
+    kind      TEXT    NOT NULL DEFAULT 'medical' CHECK (kind IN ('medical','fire','security')),
     situation TEXT    NOT NULL,
     status    TEXT    NOT NULL DEFAULT 'dispatched' CHECK (status IN ('dispatched','resolved'))
 );
@@ -1463,6 +1984,21 @@ WHERE t.capacity >= :party_size
 ORDER BY t.capacity, t.id LIMIT 1
 """
 
+# Pick a table for a modified reservation: prefer the reservation's CURRENT
+# table when it's still big enough and free at the new slot (so a same-evening
+# time shift keeps the same table_id and table_location), otherwise fall back to
+# the next free table. Excludes the reservation being modified from the conflict
+# check so shifting in place doesn't collide with itself.
+_SQL_FREE_TABLE_FOR_MODIFY = """
+SELECT t.id FROM restaurant_tables t
+WHERE t.capacity >= :party_size
+  AND NOT EXISTS (
+    SELECT 1 FROM restaurant_reservations r
+    WHERE r.table_id = t.id AND r.status = 'confirmed' AND r.code != :code
+      AND r.date = :date AND r.time = :time)
+ORDER BY (t.id = :current_table_id) DESC, t.capacity, t.id LIMIT 1
+"""
+
 _SQL_DINING_AVAILABILITY = """
 WITH slots(slot) AS (
     VALUES ('17:30:00'),('18:00:00'),('18:30:00'),('19:00:00'),
@@ -1501,6 +2037,11 @@ WHERE LOWER(last_name) = LOWER(:last_name)
   AND (:code IS NULL OR REPLACE(code, '-', '') = REPLACE(:code, '-', ''))
   AND (:date IS NULL OR date = :date)
 LIMIT 1
+"""
+
+_SQL_RESERVATION_BY_CODE = f"""
+SELECT {", ".join(_RESERVATION_COLS)} FROM restaurant_reservations
+WHERE code = :code LIMIT 1
 """
 
 _SQL_GET_INVOICE = "SELECT id, line_items, subtotal, taxes, total, paid FROM hotel_invoices WHERE booking_code = :code"

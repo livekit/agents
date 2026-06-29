@@ -71,7 +71,7 @@ class RealtimeModel(openai.realtime.RealtimeModel):
             model=model if is_given(model) else XAI_DEFAULT_MODEL,
             voice=resolved_voice,  # type: ignore[arg-type]
             api_key=api_key,
-            modalities=["audio"],
+            modalities=["audio", "text"],
             input_audio_transcription=XAI_DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
             turn_detection=turn_detection
             if is_given(turn_detection)

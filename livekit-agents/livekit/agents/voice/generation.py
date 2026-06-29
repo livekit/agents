@@ -4,7 +4,7 @@ import asyncio
 import functools
 import json
 import time
-from collections.abc import AsyncIterable, Callable, Sequence
+from collections.abc import AsyncIterable, Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
@@ -53,6 +53,66 @@ class _LLMGenerationData:
     id: str = field(default_factory=lambda: utils.shortuuid("item_"))
     started_fut: asyncio.Future[None] = field(default_factory=asyncio.Future)
     ttft: float | None = None
+
+
+# output for an injected in-progress tool call, phrased so the model waits instead of
+# re-issuing the call.
+_RUNNING_TOOL_PLACEHOLDER = "The tool call is still in progress."
+# extra flag marking an injected pair so it can be stripped before the ctx is forwarded.
+_RUNNING_PLACEHOLDER_KEY = "__lk_running_placeholder__"
+
+
+def _inject_running_tool_calls(
+    chat_ctx: ChatContext,
+    running_calls: Iterable[llm.FunctionCall],
+    *,
+    placeholder: str = _RUNNING_TOOL_PLACEHOLDER,
+) -> None:
+    """Add a flagged in-progress pair for each running tool call missing from ``chat_ctx``
+    so the model won't re-issue an in-flight call. Mutates in place; strip the pairs with
+    :func:`_strip_running_tool_calls` before the ctx is persisted or forwarded."""
+    existing = {
+        item.call_id
+        for item in chat_ctx.items
+        if item.type in ("function_call", "function_call_output")
+    }
+    for fnc_call in running_calls:
+        if fnc_call.call_id in existing:
+            continue
+        existing.add(fnc_call.call_id)
+        # copy so the executor's live FunctionCall stays unflagged
+        call = fnc_call.model_copy(
+            update={"extra": {**fnc_call.extra, _RUNNING_PLACEHOLDER_KEY: True}}
+        )
+        chat_ctx.insert(
+            [
+                call,
+                llm.FunctionCallOutput(
+                    call_id=fnc_call.call_id,
+                    name=fnc_call.name,
+                    output=placeholder,
+                    is_error=False,
+                    created_at=fnc_call.created_at,
+                ),
+            ]
+        )
+
+
+def _strip_running_tool_calls(chat_ctx: ChatContext) -> None:
+    """Remove the pairs added by :func:`_inject_running_tool_calls`, keeping everything
+    else (e.g. items a custom ``llm_node`` added)."""
+    flagged = {
+        item.call_id
+        for item in chat_ctx.items
+        if item.type == "function_call" and item.extra.get(_RUNNING_PLACEHOLDER_KEY)
+    }
+    if not flagged:
+        return
+    chat_ctx.items[:] = [
+        item
+        for item in chat_ctx.items
+        if not (item.type in ("function_call", "function_call_output") and item.call_id in flagged)
+    ]
 
 
 def perform_llm_inference(

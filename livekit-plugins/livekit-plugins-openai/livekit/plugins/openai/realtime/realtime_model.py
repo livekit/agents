@@ -275,6 +275,12 @@ class _ResponseGeneration:
         self.message_ch.close()
 
 
+class _DiscardedGeneration:
+    """Marks a response cancelled before it surfaced, so its trailing events are skipped."""
+
+    pass
+
+
 class RealtimeModel(llm.RealtimeModel):
     @overload
     def __init__(
@@ -834,10 +840,14 @@ class RealtimeSession(
         self._item_delete_future: dict[str, asyncio.Future] = {}
         self._item_create_future: dict[str, asyncio.Future] = {}
 
+        # generate_reply event_ids cancelled or timed out before response.created arrived; the
+        # response is cancelled by id and discarded when it finally arrives
+        self._discarded_event_ids: set[str] = set()
+
         # accumulates partial input-audio transcripts per (item_id, content_index)
         self._input_transcript_accumulators: dict[str, dict[int, str]] = {}
 
-        self._current_generation: _ResponseGeneration | None = None
+        self._current_generation: _ResponseGeneration | _DiscardedGeneration | None = None
         self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
 
         self._update_chat_ctx_lock = asyncio.Lock()
@@ -914,6 +924,7 @@ class RealtimeSession(
                         llm.RealtimeError("pending response discarded due to session reconnection")
                     )
             self._response_created_futures.clear()
+            self._discarded_event_ids.clear()
             self._close_current_generation("session reconnection")
 
             logger.debug(f"reconnected to {self._realtime_model._provider_label}")
@@ -1152,7 +1163,11 @@ class RealtimeSession(
                 if task != wait_reconnect_task:
                     task.result()
 
-            if wait_reconnect_task and wait_reconnect_task in done and self._current_generation:
+            if (
+                wait_reconnect_task
+                and wait_reconnect_task in done
+                and isinstance(self._current_generation, _ResponseGeneration)
+            ):
                 # wait for the current generation to complete before reconnecting
                 await self._current_generation._done_fut
                 closing = True
@@ -1414,11 +1429,6 @@ class RealtimeSession(
             return False
 
         for msg_id in diff_ops.to_remove:
-            # we don't have content synced down for some types of content (audio/images)
-            # these won't be present in the Agent's view of the context
-            # so in those cases, we do not want to remove them from the server context
-            if _is_content_empty(msg_id):
-                continue
             _delete_item(msg_id)
 
         for previous_msg_id, msg_id in diff_ops.to_create:
@@ -1426,7 +1436,7 @@ class RealtimeSession(
 
         # update the items with the same id but different content
         for previous_msg_id, msg_id in diff_ops.to_update:
-            # likewise, empty content almost always means the content is not synced down
+            # empty content almost always means the content is not synced down
             # we don't want to recreate these items there
             if _is_content_empty(msg_id):
                 continue
@@ -1583,6 +1593,8 @@ class RealtimeSession(
         def _on_timeout() -> None:
             self._response_created_futures.pop(event_id, None)
             if fut and not fut.done():
+                # discard the response if the server still creates it after the timeout
+                self._discarded_event_ids.add(event_id)
                 fut.set_exception(llm.RealtimeError("generate_reply timed out."))
 
         handle = asyncio.get_event_loop().call_later(10.0, _on_timeout)
@@ -1593,6 +1605,9 @@ class RealtimeSession(
             if f.cancelled():
                 # response.create was already sent; cancel the response server-side
                 self.send_event(ResponseCancelEvent(type="response.cancel"))
+                # the cancel above is a no-op if the response isn't created yet; discard it by id
+                # when it arrives
+                self._discarded_event_ids.add(event_id)
 
         fut.add_done_callback(_on_fut_done)
         return fut
@@ -1650,6 +1665,10 @@ class RealtimeSession(
         This prevents consumers from hanging indefinitely when a generation is
         interrupted by a reconnection or session close.
         """
+        if isinstance(self._current_generation, _DiscardedGeneration):
+            self._current_generation = None
+            return
+
         if self._current_generation is None or self._current_generation._done_fut.done():
             return
 
@@ -1707,6 +1726,21 @@ class RealtimeSession(
     def _handle_response_created(self, event: ResponseCreatedEvent) -> None:
         assert event.response.id is not None, "response.id is None"
 
+        client_event_id: str | None = None
+        if isinstance(event.response.metadata, dict):
+            client_event_id = event.response.metadata.get("client_event_id")
+
+        if client_event_id and client_event_id in self._discarded_event_ids:
+            # interrupted or timed out before the server created it: cancel by id and mark it
+            # discarded so its trailing events are skipped, instead of surfacing it
+            self._discarded_event_ids.discard(client_event_id)
+            self.send_event(
+                ResponseCancelEvent(type="response.cancel", response_id=event.response.id)
+            )
+            self._current_generation = _DiscardedGeneration()
+            logger.warning("discarding response that arrived after it was timed out or interrupted")
+            return
+
         self._current_generation = _ResponseGeneration(
             message_ch=utils.aio.Chan(),
             function_ch=utils.aio.Chan(),
@@ -1722,11 +1756,7 @@ class RealtimeSession(
             response_id=event.response.id,
         )
 
-        if (
-            isinstance(event.response.metadata, dict)
-            and (client_event_id := event.response.metadata.get("client_event_id"))
-            and (fut := self._response_created_futures.pop(client_event_id, None))
-        ):
+        if client_event_id and (fut := self._response_created_futures.pop(client_event_id, None)):
             if not fut.done():
                 generation_ev.user_initiated = True
                 fut.set_result(generation_ev)
@@ -1736,6 +1766,8 @@ class RealtimeSession(
         self.emit("generation_created", generation_ev)
 
     def _handle_response_output_item_added(self, event: ResponseOutputItemAddedEvent) -> None:
+        if isinstance(self._current_generation, _DiscardedGeneration):
+            return
         assert self._current_generation is not None, "current_generation is None"
         assert (item_id := event.item.id) is not None, "item.id is None"
         assert (item_type := event.item.type) is not None, "item.type is None"
@@ -1762,6 +1794,8 @@ class RealtimeSession(
             self._current_generation.messages[item_id] = item_generation
 
     def _handle_response_content_part_added(self, event: ResponseContentPartAddedEvent) -> None:
+        if isinstance(self._current_generation, _DiscardedGeneration):
+            return
         assert self._current_generation is not None, "current_generation is None"
         assert (item_id := event.item_id) is not None, "item_id is None"
         assert (item_type := event.part.type) is not None, "part.type is None"
@@ -1884,6 +1918,8 @@ class RealtimeSession(
         )
 
     def _handle_response_text_delta(self, event: ResponseTextDeltaEvent) -> None:
+        if isinstance(self._current_generation, _DiscardedGeneration):
+            return
         assert self._current_generation is not None, "current_generation is None"
         item_generation = self._current_generation.messages[event.item_id]
         if (
@@ -1897,9 +1933,13 @@ class RealtimeSession(
         item_generation.audio_transcript += event.delta
 
     def _handle_response_text_done(self, event: ResponseTextDoneEvent) -> None:
+        if isinstance(self._current_generation, _DiscardedGeneration):
+            return
         assert self._current_generation is not None, "current_generation is None"
 
     def _handle_response_audio_transcript_delta(self, event: dict[str, Any]) -> None:
+        if isinstance(self._current_generation, _DiscardedGeneration):
+            return
         assert self._current_generation is not None, "current_generation is None"
 
         item_id = event["item_id"]
@@ -1913,6 +1953,8 @@ class RealtimeSession(
         item_generation.audio_transcript += delta
 
     def _handle_response_audio_delta(self, event: ResponseAudioDeltaEvent) -> None:
+        if isinstance(self._current_generation, _DiscardedGeneration):
+            return
         assert self._current_generation is not None, "current_generation is None"
         item_generation = self._current_generation.messages[event.item_id]
         if self._current_generation._first_token_timestamp is None:
@@ -1932,9 +1974,13 @@ class RealtimeSession(
         )
 
     def _handle_response_audio_done(self, _: ResponseAudioDoneEvent) -> None:
+        if isinstance(self._current_generation, _DiscardedGeneration):
+            return
         assert self._current_generation is not None, "current_generation is None"
 
     def _handle_response_output_item_done(self, event: ResponseOutputItemDoneEvent) -> None:
+        if isinstance(self._current_generation, _DiscardedGeneration):
+            return
         assert self._current_generation is not None, "current_generation is None"
         assert (item_id := event.item.id) is not None, "item.id is None"
         assert (item_type := event.item.type) is not None, "item.type is None"
@@ -1953,7 +1999,9 @@ class RealtimeSession(
                 item_generation.modalities.set_result(self._opts.modalities)
 
     def _handle_function_call(self, item: RealtimeConversationItemFunctionCall) -> None:
-        assert self._current_generation is not None, "current_generation is None"
+        assert isinstance(self._current_generation, _ResponseGeneration), (
+            "current_generation is None"
+        )
 
         assert item.id is not None, "item.id is None"
         assert item.call_id is not None, "call_id is None"
@@ -1970,6 +2018,10 @@ class RealtimeSession(
         )
 
     def _handle_response_done(self, event: ResponseDoneEvent) -> None:
+        if isinstance(self._current_generation, _DiscardedGeneration):
+            self._current_generation = None
+            return
+
         if self._current_generation is None:
             return  # OpenAI has a race condition where we could receive response.done without any previous response.created (This happens generally during interruption)  # noqa: E501
 
