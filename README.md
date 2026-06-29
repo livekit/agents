@@ -136,11 +136,13 @@ if __name__ == "__main__":
     cli.run_app(server)
 ```
 
-You'll need the following environment variables for this example:
+- `LIVEKIT_URL`
+- `LIVEKIT_API_KEY`
+- `LIVEKIT_API_SECRET`
 
-- LIVEKIT_URL
-- LIVEKIT_API_KEY
-- LIVEKIT_API_SECRET
+You can find these credentials in your [LiveKit Cloud dashboard](https://cloud.livekit.io).
+If you're self-hosting, refer to the [LiveKit server docs](https://docs.livekit.io/home/self-hosting/local/).
+
 
 ### Multi-agent handoff
 
@@ -366,9 +368,14 @@ python myagent.py dev
 Starts the agent server and enables hot reloading when files change. This mode allows each process to host multiple concurrent agents efficiently.
 
 The agent connects to LiveKit Cloud or your self-hosted server. Set the following environment variables:
-- LIVEKIT_URL
-- LIVEKIT_API_KEY
-- LIVEKIT_API_SECRET
+
+- `LIVEKIT_URL`
+- `LIVEKIT_API_KEY`
+- `LIVEKIT_API_SECRET`
+
+You can find these credentials in your [LiveKit Cloud dashboard](https://cloud.livekit.io).
+If you're self-hosting, refer to the [LiveKit server docs](https://docs.livekit.io/home/self-hosting/local/).
+
 
 You can connect using any LiveKit client SDK or telephony integration.
 To get started quickly, try the [Agents Playground](https://agents-playground.livekit.io/).
