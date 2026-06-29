@@ -2223,6 +2223,8 @@ async def test_update_options_does_not_rewire_pipeline_when_agent_owns_stt() -> 
     Regression for the unnecessary-pipeline-restart gap flagged by Devin
     Review on PR #6235.
     """
+    from unittest.mock import patch
+
     from livekit.agents.voice.agent_session import AgentSession
     from livekit.agents.voice.audio_recognition import AudioRecognition
 
@@ -2263,8 +2265,10 @@ async def test_update_options_does_not_rewire_pipeline_when_agent_owns_stt() -> 
         # sanity: activity.stt resolves to the agent's STT
         assert activity.stt is agent_stt
 
-        # session-level swap — agent still owns its own STT
-        session.update_options(stt=new_stt)
+        # the silent-failure path now logs a warning when caller provides
+        # a non-None STT but the agent-bound contract shadows it
+        with patch("livekit.agents.voice.agent_activity.logger") as mock_logger:
+            session.update_options(stt=new_stt)
 
         # session-level STT was updated (state changed)
         assert session._stt is new_stt
@@ -2272,5 +2276,132 @@ async def test_update_options_does_not_rewire_pipeline_when_agent_owns_stt() -> 
         assert update_stt_calls == []
         # and activity.stt still resolves to the agent's STT (unchanged)
         assert activity.stt is agent_stt
+        # and a warning was logged to surface the silent failure
+        assert mock_logger.warning.called
+        warning_msg = str(mock_logger.warning.call_args)
+        assert "no-op" in warning_msg
+    finally:
+        await session.aclose()
+
+
+async def test_update_options_warns_when_agent_stt_is_explicit_none() -> None:
+    """When the agent is constructed with stt=None (explicit disable), the
+    session-level swap is silently a no-op — but the caller clearly intended
+    to set STT. A warning must fire.
+
+    Devin Review on PR #6235: is_given(None) is True, so this is the same
+    code path as a non-None agent STT. The warning helps the caller realize
+    they need update_agent or omit the stt kwarg on the agent.
+    """
+    from unittest.mock import patch
+
+    from livekit.agents.voice.agent_session import AgentSession
+    from livekit.agents.voice.audio_recognition import AudioRecognition
+
+    from .fake_stt import FakeSTT
+
+    new_stt = FakeSTT()
+    session = AgentSession(stt=FakeSTT())  # session-level STT exists
+    try:
+        agent = MyAgent()
+        agent._stt = None  # agent explicitly opted out of STT
+        activity = AgentActivity(agent, session)
+
+        audio_recognition = AudioRecognition(
+            session,
+            hooks=activity,
+            stt=None,
+            vad=None,
+            using_default_vad=False,
+            interruption_detection=None,
+            endpointing=create_endpointing(activity.endpointing_opts),
+            turn_detection=None,
+            stt_model=None,
+            stt_provider=None,
+        )
+        activity._audio_recognition = audio_recognition
+        session._activity = activity
+        session._agent = agent
+
+        update_stt_calls: list[object] = []
+
+        def spy_update_stt(stt_node, **kwargs):  # type: ignore[no-untyped-def]
+            update_stt_calls.append(stt_node)
+
+        audio_recognition.update_stt = spy_update_stt  # type: ignore[method-assign]
+
+        # sanity: activity.stt resolves to the agent's explicit None
+        assert activity.stt is None
+
+        with patch("livekit.agents.voice.agent_activity.logger") as mock_logger:
+            session.update_options(stt=new_stt)
+
+        # session-level STT was updated
+        assert session._stt is new_stt
+        # but the pipeline was NOT rewired — agent's explicit None still wins
+        assert update_stt_calls == []
+        # and activity.stt still resolves to the agent's None
+        assert activity.stt is None
+        # and a warning was logged so the caller knows the swap was silently blocked
+        assert mock_logger.warning.called
+        warning_msg = str(mock_logger.warning.call_args)
+        assert "no-op" in warning_msg
+    finally:
+        await session.aclose()
+
+
+async def test_update_options_no_warning_when_agent_has_no_stt() -> None:
+    """When the agent has no STT of its own (default), the session-level swap
+    must rewire the pipeline cleanly without any warning — this is the
+    common path that exercises the actual fix.
+    """
+    from unittest.mock import patch
+
+    from livekit.agents.voice.agent_session import AgentSession
+    from livekit.agents.voice.audio_recognition import AudioRecognition
+
+    from .fake_stt import FakeSTT
+
+    old_stt = FakeSTT()
+    new_stt = FakeSTT()
+    session = AgentSession(stt=old_stt)
+    try:
+        agent = MyAgent()  # no stt kwarg → agent does not own its STT
+        activity = AgentActivity(agent, session)
+
+        audio_recognition = AudioRecognition(
+            session,
+            hooks=activity,
+            stt=None,
+            vad=None,
+            using_default_vad=False,
+            interruption_detection=None,
+            endpointing=create_endpointing(activity.endpointing_opts),
+            turn_detection=None,
+            stt_model=None,
+            stt_provider=None,
+        )
+        activity._audio_recognition = audio_recognition
+        session._activity = activity
+        session._agent = agent
+
+        update_stt_calls: list[object] = []
+
+        def spy_update_stt(stt_node, **kwargs):  # type: ignore[no-untyped-def]
+            update_stt_calls.append(stt_node)
+
+        audio_recognition.update_stt = spy_update_stt  # type: ignore[method-assign]
+
+        # the common path is silent — no warning
+        with patch("livekit.agents.voice.agent_activity.logger") as mock_logger:
+            session.update_options(stt=new_stt)
+
+        # swap took effect through the activity
+        assert session._stt is new_stt
+        assert activity.stt is new_stt
+        # and the pipeline was rewired (no agent-stt to block it)
+        assert len(update_stt_calls) == 1
+        # the contract: no warning on the common path
+        assert not mock_logger.warning.called
     finally:
         await session.aclose()
