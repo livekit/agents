@@ -2481,3 +2481,79 @@ async def test_update_options_tts_warns_and_skips_prewarm_when_agent_owns_tts() 
         new_tts.prewarm = original_prewarm  # type: ignore[method-assign]
     finally:
         await session.aclose()
+
+
+async def test_update_options_stt_none_with_agent_bound_stt_does_not_tear_down_pipeline() -> None:
+    """Devin Review on PR #6235 — pipeline-teardown bug.
+
+    When the agent was constructed with its own STT and the caller passes
+    stt=None via session.update_options, the rewire path must NOT tear
+    down the pipeline. activity.stt resolves to agent._stt (still valid),
+    so a destructive update_stt(None) would silently stop speech recognition
+    for the rest of the session.
+
+    Before the fix: agent_owns_stt=True + resolved_stt=None fell through
+    the elif and called self._audio_recognition.update_stt(None), which
+    cancels the consumer task and tears down the pipeline.
+    After the fix: agent_owns_stt alone is the guard condition, so any
+    agent-bound STT path skips the rewire — no matter what value the
+    caller passes.
+    """
+    from unittest.mock import patch
+
+    from livekit.agents.voice.agent_session import AgentSession
+    from livekit.agents.voice.audio_recognition import AudioRecognition
+
+    from .fake_stt import FakeSTT
+
+    agent_stt = FakeSTT()
+    session = AgentSession(stt=FakeSTT())
+    try:
+        agent = MyAgent()
+        agent._stt = agent_stt  # agent owns its STT
+        activity = AgentActivity(agent, session)
+
+        audio_recognition = AudioRecognition(
+            session,
+            hooks=activity,
+            stt=None,
+            vad=None,
+            using_default_vad=False,
+            interruption_detection=None,
+            endpointing=create_endpointing(activity.endpointing_opts),
+            turn_detection=None,
+            stt_model=None,
+            stt_provider=None,
+        )
+        activity._audio_recognition = audio_recognition
+        session._activity = activity
+        session._agent = agent
+
+        update_stt_calls: list[object] = []
+
+        def spy_update_stt(stt_node, **kwargs):  # type: ignore[no-untyped-def]
+            update_stt_calls.append(stt_node)
+
+        audio_recognition.update_stt = spy_update_stt  # type: ignore[method-assign]
+
+        # sanity: activity.stt resolves to the agent's STT
+        assert activity.stt is agent_stt
+
+        # the dangerous path: caller passes stt=None, agent owns its STT
+        with patch("livekit.agents.voice.agent_activity.logger") as mock_logger:
+            session.update_options(stt=None)
+
+        # session-level STT was set to None (state changed)
+        assert session._stt is None
+        # CRITICAL: pipeline must NOT be torn down. update_stt(None) must NOT be called.
+        # If it were, speech recognition would silently stop since activity.stt
+        # still resolves to the agent's STT — which is the original bug.
+        assert update_stt_calls == []
+        # activity.stt still resolves to the agent's STT (unchanged)
+        assert activity.stt is agent_stt
+        # no warning here — caller is disabling STT, agent wins, that's
+        # consistent with the resolution order. Warning only fires when
+        # caller passes a non-None STT (the "you tried to set" case).
+        assert not mock_logger.warning.called
+    finally:
+        await session.aclose()
