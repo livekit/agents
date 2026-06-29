@@ -69,9 +69,6 @@ async def entrypoint(ctx: JobContext):
 | `sample_rate` | int | None | **Deprecated.** The processor now adapts to the input sample rate automatically. |
 | `model_path` | str | None | **Deprecated.** Use `auth_provider=krisp.auth.krisp_license(model_path=...)`. License-mode only. |
 
-### Supported Sample Rates
-
-8000, 16000, 24000, 32000, 44100, 48000 Hz
 
 ## Alternative: Krisp License Auth
 
@@ -115,12 +112,6 @@ processor = krisp.KrispVivaFilterFrameProcessor(
 ```
 
 `license_key` and `model_path` fall back to the environment variables above when omitted.
-
-## Important Notes
-
-### Resource Management
-
-- Call `close()` when done to free resources
 
 ## Troubleshooting
 
