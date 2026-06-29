@@ -27,7 +27,7 @@ DEFAULT_API_URL = "https://tavusapi.com/v2"
 DEFAULT_PAL_ID = "pb87e71797da"
 
 
-def _resolve_renamed_arg(
+def _coalesce_with_deprecated(
     new_value: NotGivenOr[str],
     deprecated_value: NotGivenOr[str],
     *,
@@ -85,10 +85,10 @@ class TavusAPI:
         extra_payload: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> str:
         # `replica_id`/`persona_id` are deprecated aliases for `face_id`/`pal_id`.
-        face_id = _resolve_renamed_arg(
+        face_id = _coalesce_with_deprecated(
             face_id, replica_id, deprecated_name="replica_id", new_name="face_id"
         )
-        pal_id = _resolve_renamed_arg(
+        pal_id = _coalesce_with_deprecated(
             pal_id, persona_id, deprecated_name="persona_id", new_name="pal_id"
         )
 

@@ -17,7 +17,7 @@ from livekit.agents import (
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
-from .api import TavusAPI, TavusException, _resolve_renamed_arg
+from .api import TavusAPI, TavusException, _coalesce_with_deprecated
 from .log import logger
 
 SAMPLE_RATE = 24000
@@ -46,10 +46,10 @@ class AvatarSession(BaseAvatarSession):
         self._conn_options = conn_options
         self.conversation_id: str | None = None
         # `replica_id`/`persona_id` are deprecated aliases for `face_id`/`pal_id`.
-        self._pal_id = _resolve_renamed_arg(
+        self._pal_id = _coalesce_with_deprecated(
             pal_id, persona_id, deprecated_name="persona_id", new_name="pal_id"
         )
-        self._face_id = _resolve_renamed_arg(
+        self._face_id = _coalesce_with_deprecated(
             face_id, replica_id, deprecated_name="replica_id", new_name="face_id"
         )
         self._api = TavusAPI(
