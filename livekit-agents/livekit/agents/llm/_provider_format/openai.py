@@ -179,12 +179,21 @@ def _to_responses_chat_item(msg: llm.ChatItem) -> dict[str, Any]:
                 list_content.append(_to_responses_image_content(content))
 
         if not list_content:
-            return {"role": msg.role, "content": text_content}
+            item: dict[str, Any] = {"role": msg.role, "content": text_content}
+        else:
+            if text_content:
+                list_content.append({"type": "input_text", "text": text_content})
+            item = {"role": msg.role, "content": list_content}
 
-        if text_content:
-            list_content.append({"type": "input_text", "text": text_content})
+        # Re-attach the assistant message phase (commentary / final_answer) captured from
+        # the Responses API. Dropping it on follow-up requests can degrade performance for
+        # models like gpt-5.3-codex.
+        if msg.role == "assistant":
+            phase = msg.extra.get("openai", {}).get("phase")
+            if phase is not None:
+                item["phase"] = phase
 
-        return {"role": msg.role, "content": list_content}
+        return item
 
     elif msg.type == "function_call_output":
         return {

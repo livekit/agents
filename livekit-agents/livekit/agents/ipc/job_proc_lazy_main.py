@@ -62,6 +62,7 @@ class ProcStartArgs:
     mp_cch: socket.socket
     log_cch: socket.socket
     logger_levels: dict[str, int]
+    simulation_end_fnc: Callable[[Any], Any] | None = None
 
 
 def proc_main(args: ProcStartArgs) -> None:
@@ -85,6 +86,7 @@ def proc_main(args: ProcStartArgs) -> None:
         session_end_timeout=args.session_end_timeout,
         executor_type=JobExecutorType.PROCESS,
         user_arguments=args.user_arguments,
+        simulation_end_fnc=args.simulation_end_fnc,
     )
 
     client = _ProcClient(args.mp_cch, args.log_cch, job_proc.initialize, job_proc.entrypoint)
@@ -192,12 +194,14 @@ class _JobProc:
         session_end_timeout: float,
         executor_type: JobExecutorType,
         user_arguments: Any | None = None,
+        simulation_end_fnc: Callable[[Any], Any] | None = None,
     ) -> None:
         self._executor_type = executor_type
         self._user_arguments = user_arguments
         self._initialize_process_fnc = initialize_process_fnc
         self._job_entrypoint_fnc = job_entrypoint_fnc
         self._session_end_fnc = session_end_fnc
+        self._simulation_end_fnc = simulation_end_fnc
         self._session_end_timeout = session_end_timeout
         self._job_task: asyncio.Task[None] | None = None
 
@@ -298,6 +302,8 @@ class _JobProc:
             on_shutdown=_on_ctx_shutdown,
             inference_executor=self._inf_client,
         )
+        # Reachable from SessionHost (via get_job_context) when a simulation finalizes.
+        self._job_ctx._simulation_end_fnc = self._simulation_end_fnc
 
         def _exit_proc_cb(_: asyncio.Task[None]) -> None:
             self._exit_proc_flag.set()
@@ -442,6 +448,7 @@ class ThreadStartArgs:
     join_fnc: Callable[[], None]
     mp_cch: socket.socket
     user_arguments: Any | None
+    simulation_end_fnc: Callable[[Any], Any] | None = None
 
 
 def thread_main(
@@ -458,6 +465,7 @@ def thread_main(
             session_end_timeout=args.session_end_timeout,
             executor_type=JobExecutorType.THREAD,
             user_arguments=args.user_arguments,
+            simulation_end_fnc=args.simulation_end_fnc,
         )
 
         client = _ProcClient(args.mp_cch, None, job_proc.initialize, job_proc.entrypoint)

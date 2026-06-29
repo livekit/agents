@@ -9,6 +9,8 @@ from livekit.agents.llm import FunctionToolCall
 
 from .fake_llm import FakeLLM, FakeLLMResponse
 
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
+
 
 class InnerTask(AgentTask):
     """A task that needs a second user turn to complete (user must trigger 'finish')."""

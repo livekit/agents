@@ -170,7 +170,7 @@ class SpeechHandle:
                 info
                 and info.function_call
                 and info.speech_handle == self
-                and not info.function_call.extra.get("__livekit_agents_tool_pending", False)
+                and not info.function_call.extra.get("__livekit_agents_tool_non_blocking", False)
             ):
                 raise RuntimeError(
                     f"cannot call `SpeechHandle.wait_for_playout()` from inside the function tool `{info.function_call.name}` that owns this SpeechHandle. "
@@ -273,13 +273,13 @@ class SpeechHandle:
         with contextlib.suppress(asyncio.InvalidStateError):
             self._generations[-1].set_result(None)
 
-    def _mark_done(self) -> None:
+    def _mark_done(self, error: BaseException | None = None) -> None:
         with contextlib.suppress(asyncio.InvalidStateError):
-            self._done_fut.set_result(None)
+            if error is not None:
+                self._done_fut.set_exception(error)
+            else:
+                self._done_fut.set_result(None)
 
-        # must be outside the _done_fut suppress block: if _done_fut is already
-        # done, InvalidStateError would suppress the entire block and skip this,
-        # leaving the generation future unresolved and _wait_for_generation stuck.
         if self._generations:
             self._mark_generation_done()
 

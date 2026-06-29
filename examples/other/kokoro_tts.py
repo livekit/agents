@@ -2,9 +2,16 @@ import logging
 
 from dotenv import load_dotenv
 
-from livekit.agents import Agent, AgentServer, AgentSession, JobContext, JobProcess, cli, metrics
+from livekit.agents import (
+    Agent,
+    AgentServer,
+    AgentSession,
+    JobContext,
+    cli,
+    metrics,
+)
 from livekit.agents.voice import MetricsCollectedEvent
-from livekit.plugins import deepgram, openai, silero
+from livekit.plugins import deepgram, openai
 
 logger = logging.getLogger("kokoro-tts-agent")
 
@@ -27,13 +34,6 @@ class MyAgent(Agent):
 server = AgentServer()
 
 
-def prewarm(proc: JobProcess):
-    proc.userdata["vad"] = silero.VAD.load()
-
-
-server.setup_fnc = prewarm
-
-
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     # each log entry will include these fields
@@ -42,7 +42,6 @@ async def entrypoint(ctx: JobContext):
         "user_id": "your user_id",
     }
     session = AgentSession(
-        vad=ctx.proc.userdata["vad"],
         # any combination of STT, LLM, TTS, or realtime API can be used
         llm=openai.LLM(model="gpt-4.1-mini"),
         stt=deepgram.STT(model="nova-3", language="multi"),

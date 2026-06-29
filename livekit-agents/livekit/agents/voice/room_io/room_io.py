@@ -11,7 +11,6 @@ from ...log import logger
 from ...types import (
     ATTRIBUTE_AGENT_STATE,
     ATTRIBUTE_PUBLISH_ON_BEHALF,
-    ATTRIBUTE_SIMULATOR,
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     TOPIC_CHAT,
@@ -76,6 +75,7 @@ class RoomIO:
         self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
         self._room_connected_fut = asyncio.Future[None]()
 
+        self._ready_fut: asyncio.Future[None] = asyncio.Future()
         self._init_atask: asyncio.Task[None] | None = None
         self._user_transcript_ch: utils.aio.Chan[UserInputTranscribedEvent] | None = None
         self._user_transcript_atask: asyncio.Task[None] | None = None
@@ -85,7 +85,6 @@ class RoomIO:
         self._delete_room_task: asyncio.Future[api.DeleteRoomResponse] | None = None
 
         self._pre_connect_audio_handler: PreConnectAudioHandler | None = None
-
         self._text_input_cb: TextInputCallback | None = None
         self._chat_handler_registered = False
 
@@ -345,30 +344,19 @@ class RoomIO:
         participant = await self._participant_available_fut
         self.set_participant(participant.identity)
 
-        # check if participant is a simulator - disable audio I/O for faster testing
-        if participant.attributes.get(ATTRIBUTE_SIMULATOR) == "true":
-            logger.info(
-                "simulator participant detected, disabling audio I/O",
-                extra={"participant": participant.identity},
-            )
-            # disable audio input
-            if self._audio_input:
-                await self._audio_input.aclose()
-                self._audio_input = None
-                self._agent_session.input.audio = None
-
-            # disable audio output
-            if self._audio_output:
-                await self._audio_output.aclose()
-                self._audio_output = None
-                self._agent_session.output.audio = None
-
         # init outputs
         if self._agent_tr_output:
             self._agent_tr_output.set_participant(self._room.local_participant.identity)
 
         if self._audio_output:
             await self._audio_output.start()
+
+        if not self._ready_fut.done():
+            self._ready_fut.set_result(None)
+
+    async def wait_for_ready(self) -> None:
+        """Wait until participant detection and audio setup are complete."""
+        await self._ready_fut
 
     @utils.log_exceptions(logger=logger)
     async def _forward_user_transcript(

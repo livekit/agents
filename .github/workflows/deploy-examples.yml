@@ -1,16 +1,14 @@
 name: Deploy Examples
 
 on:
+  # Manual runs deploy from the branch picked in the Actions "Use workflow
+  # from" selector — no input needed.
   workflow_dispatch:
-    inputs:
-      ref:
-        description: "Branch or ref to deploy from (default: main)"
-        type: string
-        required: false
-        default: "main"
+  # Called by publish.yml after a release to deploy the published commit.
   workflow_call:
     inputs:
       ref:
+        description: "Commit/branch/tag to deploy. Defaults to the triggering ref."
         type: string
         required: false
 
@@ -28,7 +26,14 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
-          ref: ${{ inputs.ref || 'main' }}
+          ref: ${{ inputs.ref || github.ref }}
+          # Fetch Git-LFS assets (e.g. examples/drive-thru/bg_noise.mp3) so the
+          # real binaries — not pointer files — get uploaded as the build context
+          # and copied into the image via `COPY . .`. This checkout authenticates
+          # with GITHUB_TOKEN, so its LFS fetch is allowed (unlike pip's anonymous
+          # git clone). Without this the agent crashes at runtime decoding a
+          # 131-byte pointer as audio.
+          lfs: true
 
       - name: Install LiveKit CLI
         run: |
@@ -68,6 +73,63 @@ jobs:
           print(f"wrote examples/{slug}/livekit.toml")
           PY
 
+      - name: Pin livekit-* requirements to the deployed ref
+        working-directory: examples/${{ matrix.example }}
+        env:
+          # Build the agent against the code at the ref we're deploying,
+          # not the latest release on PyPI. Without this, a branch deploy
+          # would silently run against the published livekit-agents instead
+          # of the branch's own SDK changes. Mirror the checkout ref above,
+          # using ref_name so it's a plain branch/tag pip can resolve.
+          DEPLOY_REF: ${{ inputs.ref || github.ref_name }}
+        run: |
+          python3 <<'PY'
+          import os, re
+          from pathlib import Path
+
+          REF = os.environ["DEPLOY_REF"]
+          REPO = "git+https://github.com/livekit/agents.git"
+          REPO_ROOT = Path(os.environ["GITHUB_WORKSPACE"])
+
+          # The package name (and optional [extras]) at the start of a
+          # requirement, e.g. "livekit-agents[evals]>=1.5.7".
+          REQUIREMENT = re.compile(r"^(?P<name>[A-Za-z0-9._-]+)(?P<extras>\[.*\])?")
+
+          def monorepo_path(name):
+              """Path of `name` within this repo, or None if it lives elsewhere.
+
+              We only pin packages that actually exist in the checkout. The
+              directory basename is the distribution name for every package
+              here (livekit-agents at the root, everything else under
+              livekit-plugins/ — including the irregular ones like
+              livekit-blingfire). Anything not found (livekit rtc,
+              livekit-local-inference, …) keeps its PyPI pin.
+              """
+              for rel in (name, f"livekit-plugins/{name}"):
+                  if (REPO_ROOT / rel).is_dir():
+                      return rel
+              return None
+
+          def pin_to_ref(line):
+              """Repoint an in-repo requirement at the deployed git ref.
+
+              External requirements, comments and blanks pass through
+              untouched (the regex doesn't match a leading '#' or '').
+              """
+              match = REQUIREMENT.match(line.strip())
+              path = monorepo_path(match["name"]) if match else None
+              if path is None:
+                  return line
+              return f"{match['name']}{match['extras'] or ''} @ {REPO}@{REF}#subdirectory={path}"
+
+          requirements = Path("requirements.txt")
+          pinned = [pin_to_ref(line) for line in requirements.read_text().splitlines()]
+          requirements.write_text("\n".join(pinned) + "\n")
+
+          print(f"--- requirements.txt pinned to {REF} ---")
+          print(requirements.read_text())
+          PY
+
       - name: Build secrets file
         working-directory: examples/${{ matrix.example }}
         env:
@@ -104,103 +166,3 @@ jobs:
             args+=(--secrets-file .env.deploy)
           fi
           lk agent deploy "${args[@]}" .
-
-  publish-manifest:
-    name: Publish examples manifest to agents-jukebox
-    runs-on: ubuntu-latest
-    needs: deploy
-    if: ${{ always() && !cancelled() }}
-    steps:
-      - name: Checkout agents
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-        with:
-          ref: ${{ inputs.ref || 'main' }}
-          path: agents
-
-      - name: Setup Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
-        with:
-          python-version: "3.12"
-
-      - run: python -m pip install --quiet pyyaml
-
-      - name: Build manifest
-        run: |
-          python <<'PY' > examples-manifest.json
-          # The playground links out to GitHub for source / README; we only
-          # need the yaml metadata in the manifest now.
-          #
-          # ensure_ascii=True keeps any non-ASCII codepoint (e.g. the
-          # FontAwesome private-use glyphs `` in view titles) as
-          # literal `\uXXXX` escapes in the JSON. Without it they get
-          # written as raw UTF-8 bytes that look like invisible blanks
-          # in any editor without the FA font, making the manifest
-          # diffs unreadable.
-          import json, yaml
-          from pathlib import Path
-          root = Path("agents/examples")
-          m = yaml.safe_load((root / "playground.yaml").read_text())
-          print(json.dumps(m, indent=2, ensure_ascii=True))
-          PY
-
-      - name: Checkout agents-jukebox
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-        with:
-          repository: livekit/agents-jukebox
-          token: ${{ secrets.JUKEBOX_BOT_TOKEN }}
-          path: jukebox
-
-      - name: Open / refresh manifest PR
-        working-directory: jukebox
-        env:
-          GH_TOKEN: ${{ secrets.JUKEBOX_BOT_TOKEN }}
-        run: |
-          cp ../examples-manifest.json public/examples-manifest.json
-          git config user.name "livekit-examples-bot"
-          git config user.email "examples-bot@livekit.io"
-          git add public/examples-manifest.json
-          if git diff --cached --quiet; then
-            echo "Manifest unchanged, nothing to commit."
-            exit 0
-          fi
-          branch="bot/refresh-examples-manifest"
-          # `main` is protected — push to a bot branch and open a PR.
-          git checkout -B "$branch"
-          git commit -m "chore: refresh examples manifest"
-          # Plain `--force`: the bot branch is fully bot-managed and
-          # rewritten on every deploy. `--force-with-lease` aborts with
-          # "stale info" here because actions/checkout does a shallow
-          # clone of `main` only, so there's no remote-tracking ref for
-          # the bot branch for the lease check to compare against.
-          git push --force origin "$branch"
-
-          # Open the PR if one doesn't already exist for this head; `gh pr view`
-          # finds open *or* closed PRs, so filter by state.
-          existing=$(gh pr list \
-            --repo livekit/agents-jukebox \
-            --head "$branch" \
-            --state open \
-            --json number \
-            --jq '.[0].number // empty')
-          if [ -z "$existing" ]; then
-            gh pr create \
-              --repo livekit/agents-jukebox \
-              --base main \
-              --head "$branch" \
-              --title "chore: refresh examples manifest" \
-              --body "Auto-generated by the livekit/agents Deploy Examples workflow. Replays the latest \`examples/playground.yaml\` into \`public/examples-manifest.json\`."
-          else
-            echo "Re-using open PR #$existing on $branch."
-          fi
-
-          # Auto-merge once the branch protection's required checks (if any)
-          # pass. Best-effort: if the repo doesn't allow auto-merge, or a
-          # required review is missing, we keep the PR open for manual
-          # merge rather than failing the deploy.
-          if ! gh pr merge \
-                --repo livekit/agents-jukebox \
-                --auto \
-                --squash \
-                "$branch"; then
-            echo "::warning::Auto-merge could not be enabled on $branch — merge the PR manually."
-          fi

@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
 from openai.types.realtime import RealtimeReasoning
 
 from livekit.agents.types import APIConnectOptions
 from livekit.plugins.openai.realtime.realtime_model import RealtimeModel
+
+pytestmark = pytest.mark.plugin("openai")
 
 _NO_RETRY = APIConnectOptions(max_retry=0, timeout=0.1)
 

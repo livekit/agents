@@ -11,11 +11,12 @@ from livekit.agents import (
     MetricsCollectedEvent,
     StopResponse,
     cli,
+    inference,
     llm,
     metrics,
     room_io,
 )
-from livekit.plugins import openai, silero
+from livekit.plugins import openai
 
 load_dotenv()
 
@@ -50,7 +51,7 @@ async def entrypoint(ctx: JobContext):
 
     session = AgentSession(
         # vad is needed for non-streaming STT implementations
-        vad=silero.VAD.load(min_silence_duration=0.3),
+        vad=inference.VAD(model="silero", min_silence_duration=0.3),
     )
 
     @session.on("metrics_collected")

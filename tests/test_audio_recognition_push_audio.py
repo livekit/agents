@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
+
 from livekit import rtc
 from livekit.agents.voice.audio_recognition import AudioRecognition
+
+pytestmark = pytest.mark.unit
 
 
 def _make_frame(byte: int = 0x11, samples: int = 160, sample_rate: int = 16000) -> rtc.AudioFrame:
@@ -19,12 +23,14 @@ def _make_frame(byte: int = 0x11, samples: int = 160, sample_rate: int = 16000) 
 def _make_recognition() -> AudioRecognition:
     """Build an AudioRecognition stub with just the attributes ``push_audio`` reads."""
     ar = object.__new__(AudioRecognition)
-    ar._input_started_at = None  # type: ignore[attr-defined]
     ar._sample_rate = None  # type: ignore[attr-defined]
     ar._stt_pipeline = MagicMock()  # type: ignore[attr-defined]
+    # the input anchor lives on the pipeline (see _STTPipeline.input_started_at)
+    ar._stt_pipeline.input_started_at = None  # type: ignore[attr-defined]
     ar._vad_ch = MagicMock()  # type: ignore[attr-defined]
     ar._interruption_ch = MagicMock()  # type: ignore[attr-defined]
     ar._session = MagicMock()  # type: ignore[attr-defined]
+    ar._turn_detector_stream = None  # type: ignore[attr-defined]
     return ar
 
 

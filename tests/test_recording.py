@@ -27,6 +27,8 @@ from .fake_stt import FakeSTT
 from .fake_tts import FakeTTS
 from .fake_vad import FakeVAD
 
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
+
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------

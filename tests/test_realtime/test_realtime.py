@@ -15,6 +15,8 @@ from livekit import rtc
 from livekit.agents import RunContext, function_tool, llm, utils
 from livekit.plugins import openai, xai
 
+pytestmark = pytest.mark.realtime
+
 TESTS_DIR = Path(__file__).parent
 SAMPLE_RATE = 24000
 

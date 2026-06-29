@@ -19,6 +19,8 @@ from livekit.agents.stt import (
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 from livekit.agents.utils.audio import AudioBuffer
 
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
+
 
 class _DummyStream(RecognizeStream):
     """Minimal RecognizeStream for unit tests — does not hit the network."""

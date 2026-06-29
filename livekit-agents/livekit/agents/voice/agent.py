@@ -17,6 +17,7 @@ from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils import is_given, misc
 from .events import UserTurnExceededEvent
 from .speech_handle import SpeechHandle
+from .tool_executor import ToolHandlingOptions
 from .turn import TurnHandlingOptions, _migrate_turn_handling
 
 if TYPE_CHECKING:
@@ -45,6 +46,7 @@ class Agent:
         stt: NotGivenOr[stt.STT | STTModels | str | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
+        tool_handling: NotGivenOr[ToolHandlingOptions] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
         min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,
@@ -105,6 +107,11 @@ class Agent:
         self._min_endpointing_delay = endpointing.get("min_delay", NOT_GIVEN)
         self._max_endpointing_delay = endpointing.get("max_delay", NOT_GIVEN)
         self._turn_handling = turn_handling
+        # stored unresolved so the resolution chain can tell "set on agent" from "fall
+        # back to session"; async_options absent on a given tool_handling means NOT_GIVEN
+        self._async_tool_options = (
+            tool_handling.get("async_options", NOT_GIVEN) if is_given(tool_handling) else NOT_GIVEN
+        )
 
         if isinstance(mcp_servers, list) and len(mcp_servers) == 0:
             mcp_servers = None  # treat empty list as None (but keep NOT_GIVEN)
@@ -862,6 +869,10 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         ):
             blocked_tasks.append(old_activity._on_enter_task)
 
+        # register before any await so a concurrent drain (e.g. session close)
+        # won't wait for tasks blocked on this handoff
+        old_activity._add_drain_blocked_tasks(blocked_tasks)
+
         if (
             task_info.function_call
             and isinstance(old_activity.llm, RealtimeModel)
@@ -941,7 +952,11 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 except BaseException:
                     logger.exception("error in on_enter task of agent %s", self.id)
 
-            if session.current_agent != self:
+            if session._closing and self._activity is None:
+                # the activity never started (session closing), skip the handoff;
+                # the close path owns the previous activity
+                pass
+            elif session.current_agent != self:
                 logger.warning(
                     f"{self.__class__.__name__} completed, but the agent has changed in the meantime. "
                     "Ignoring handoff to the previous agent, likely due to `AgentSession.update_agent` being invoked."

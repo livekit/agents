@@ -32,7 +32,6 @@ from livekit.agents.beta.workflows import (
     WarmTransferTask,
 )
 from livekit.agents.llm import ToolError, function_tool
-from livekit.plugins import silero
 
 logger = logging.getLogger("HealthcareAgent")
 
@@ -754,7 +753,6 @@ async def entrypoint(ctx: JobContext):
         stt=inference.STT("deepgram/nova-3", language="multi"),
         llm=inference.LLM("openai/gpt-4.1-mini"),
         tts=inference.TTS("inworld/inworld-tts-1"),
-        vad=silero.VAD.load(),
         preemptive_generation=True,
     )
 

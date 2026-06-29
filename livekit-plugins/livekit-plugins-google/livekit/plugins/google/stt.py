@@ -753,6 +753,7 @@ class SpeechStream(stt.SpeechStream):
         ]:
             nonlocal audio_pushed
             stop_task = asyncio.create_task(should_stop.wait())
+            frame_task: asyncio.Task[object] | None = None
             try:
                 yield self._build_init_request(client)
 
@@ -766,12 +767,13 @@ class SpeechStream(stt.SpeechStream):
                         [frame_task, stop_task], return_when=asyncio.FIRST_COMPLETED
                     )
                     if stop_task in done:
-                        frame_task.cancel()
                         return
                     try:
                         frame = frame_task.result()
                     except ChanClosed:
                         return
+                    finally:
+                        frame_task = None
 
                     if isinstance(frame, rtc.AudioFrame):
                         yield self._build_audio_request(frame)
@@ -781,7 +783,9 @@ class SpeechStream(stt.SpeechStream):
             except Exception:
                 logger.exception("an error occurred while streaming input to google STT")
             finally:
-                stop_task.cancel()
+                await utils.aio.gracefully_cancel(
+                    stop_task, *([frame_task] if frame_task is not None else [])
+                )
 
         async def process_stream(
             client: SpeechAsyncClientV2 | SpeechAsyncClientV1,

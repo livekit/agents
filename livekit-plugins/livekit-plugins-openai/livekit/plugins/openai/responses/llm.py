@@ -33,6 +33,7 @@ from openai.types.responses import (
     ResponseFailedEvent,
     ResponseInputParam,
     ResponseOutputItemDoneEvent,
+    ResponseOutputMessage,
     ResponseTextDeltaEvent,
     ToolParam,
     response_create_params,
@@ -185,7 +186,7 @@ class LLM(llm.LLM):
         super().__init__()
 
         if not is_given(reasoning) and _supports_reasoning_effort(model):
-            if model in ["gpt-5.1", "gpt-5.2", "gpt-5.4"]:
+            if model in ["gpt-5.1", "gpt-5.2", "gpt-5.4", "gpt-5.4-mini"]:
                 reasoning = Reasoning(effort="none")
             else:
                 reasoning = Reasoning(effort="minimal")
@@ -601,6 +602,17 @@ class LLMStream(llm.LLMStream):
                 ),
             )
             self._pending_tool_calls.add(event.item.call_id)
+        elif isinstance(event.item, ResponseOutputMessage) and event.item.phase is not None:
+            # Models like gpt-5.3-codex label assistant messages as intermediate
+            # `commentary` or the `final_answer`
+            chunk = llm.ChatChunk(
+                id=self._response_id,
+                delta=llm.ChoiceDelta(
+                    role="assistant",
+                    content=None,
+                    extra={"openai": {"phase": event.item.phase}},
+                ),
+            )
         return chunk
 
     def _handle_response_output_text_delta(

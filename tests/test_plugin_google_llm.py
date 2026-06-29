@@ -7,8 +7,11 @@ from google.genai import types
 
 from livekit.agents import llm
 from livekit.agents.llm import ChatContext, function_tool
+from livekit.agents.types import APIConnectOptions
 from livekit.plugins.google.llm import LLM, LLMStream
 from livekit.plugins.google.realtime.realtime_api import RealtimeModel, RealtimeSession
+
+pytestmark = pytest.mark.plugin("google")
 
 
 @pytest.fixture
@@ -240,6 +243,34 @@ class TestCachedContentRequestSuppression:
         config = captured["config"]
         assert config.system_instruction is not None
         assert config.tools is not None and len(config.tools) >= 1
+
+    @pytest.mark.asyncio
+    async def test_request_merges_timeout_into_caller_http_options(self) -> None:
+        caller_http_options = types.HttpOptions(headers={"X-Vertex-Test": "1"})
+        llm = LLM(
+            model="gemini-2.5-flash",
+            api_key="test",
+            http_options=caller_http_options,
+        )
+
+        fake, captured = self._patched_stream_capture()
+        with patch.object(llm._client.aio.models, "generate_content_stream", fake):
+            stream = llm.chat(
+                chat_ctx=ChatContext.empty(),
+                conn_options=APIConnectOptions(timeout=7.5),
+            )
+            try:
+                async for _ in stream:
+                    pass
+            finally:
+                await stream.aclose()
+
+        config = captured["config"]
+        assert config.http_options.timeout == 7500
+        assert config.http_options.headers["X-Vertex-Test"] == "1"
+        assert "livekit-agents/" in config.http_options.headers["x-goog-api-client"]
+        assert caller_http_options.timeout is None
+        assert caller_http_options.headers == {"X-Vertex-Test": "1"}
 
 
 class TestMediaResolution:

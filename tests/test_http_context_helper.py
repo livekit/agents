@@ -12,6 +12,8 @@ import pytest
 from livekit.agents import inference
 from livekit.agents.utils import http_context
 
+pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
+
 
 async def test_open_yields_working_session_and_closes_on_exit() -> None:
     with pytest.raises(RuntimeError):

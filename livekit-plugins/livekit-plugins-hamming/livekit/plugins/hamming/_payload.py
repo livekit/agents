@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -56,6 +56,9 @@ class PayloadBuildConfig:
     call_id_metadata_key: str = _CALL_ID_METADATA_KEY
     resolve_call_id: CallIdResolver | None = None
     capture_manifest: Mapping[str, Any] | None = None
+    customer_metadata: Mapping[str, Any] | None = None
+    external_links: Sequence[Mapping[str, Any]] | None = None
+    session_mode: str | None = None
 
 
 def build_livekit_monitoring_envelope(
@@ -114,7 +117,21 @@ def build_livekit_monitoring_envelope(
         "plugin_version": config.plugin_version,
         "payload": payload,
         "metadata": metadata,
+        **_optional_envelope_fields(config),
     }
+
+
+def _optional_envelope_fields(config: PayloadBuildConfig) -> dict[str, Any]:
+    optional_fields: dict[str, Any] = {}
+
+    if config.customer_metadata:
+        optional_fields["customer_metadata"] = dict(config.customer_metadata)
+    if config.external_links:
+        optional_fields["external_links"] = [dict(link) for link in config.external_links]
+    if config.session_mode:
+        optional_fields["session_mode"] = config.session_mode
+
+    return optional_fields
 
 
 def _build_livekit_capture(

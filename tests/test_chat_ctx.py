@@ -14,6 +14,8 @@ from livekit.agents.types import (
 
 from .fake_llm import FakeLLM, FakeLLMResponse
 
+pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
+
 
 def ai_function1(a: int, b: str = "default") -> None:
     """
@@ -658,3 +660,39 @@ def test_instructions_as_modality():
     turn2_ctx = turn1_ctx.copy()
     apply_instructions_modality(turn2_ctx, modality="audio")
     assert str(turn2_ctx.items[0].content[0]) == "audio instructions"
+
+
+def test_responses_assistant_phase_round_trip():
+    """The OpenAI Responses `phase` captured in message.extra is resent on follow-up requests."""
+    from livekit.agents.llm import ChatContext
+
+    ctx = ChatContext.empty()
+    ctx.add_message(role="user", content="hello")
+    ctx.add_message(
+        role="assistant",
+        content="thinking out loud",
+        extra={"openai": {"phase": "commentary"}},
+    )
+    ctx.add_message(
+        role="assistant",
+        content="the answer",
+        extra={"openai": {"phase": "final_answer"}},
+    )
+
+    items, _ = ctx.to_provider_format(format="openai.responses")
+    assistant_items = [item for item in items if item.get("role") == "assistant"]
+    assert [item.get("phase") for item in assistant_items] == ["commentary", "final_answer"]
+
+
+def test_responses_assistant_phase_absent_when_not_set():
+    """Assistant messages without a phase don't get a `phase` key in the responses payload."""
+    from livekit.agents.llm import ChatContext
+
+    ctx = ChatContext.empty()
+    ctx.add_message(role="user", content="hello")
+    ctx.add_message(role="assistant", content="hi there")
+
+    items, _ = ctx.to_provider_format(format="openai.responses")
+    assistant_items = [item for item in items if item.get("role") == "assistant"]
+    assert assistant_items
+    assert all("phase" not in item for item in assistant_items)

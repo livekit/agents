@@ -20,7 +20,6 @@ Prerequisites:
     2. Install required packages:
        - livekit-agents (with PR #4145 support for FrameProcessor)
        - livekit-plugins-krisp
-       - livekit-plugins-silero (for VAD)
        - livekit-plugins-openai (or your preferred STT/LLM/TTS)
 
 Usage:
@@ -37,9 +36,10 @@ from livekit.agents import (
     AgentSession,
     JobContext,
     cli,
+    inference,
     room_io,
 )
-from livekit.plugins import krisp, openai, silero
+from livekit.plugins import krisp, openai
 
 logger = logging.getLogger("krisp-agent-example")
 load_dotenv()
@@ -73,7 +73,7 @@ async def entrypoint(ctx: JobContext):
 
     # Configure the agent session
     session = AgentSession(
-        vad=silero.VAD.load(),
+        vad=inference.VAD(),
         stt=openai.STT(model="whisper-1"),
         llm=openai.LLM(model="gpt-4o-mini"),
         tts=openai.TTS(voice="alloy"),

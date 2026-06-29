@@ -5,6 +5,8 @@ from datetime import datetime
 
 from dotenv import load_dotenv
 
+from livekit.agents.beta.workflows import GetEmailTask
+
 try:
     from ddgs import DDGS
 except ImportError as e:
@@ -12,33 +14,67 @@ except ImportError as e:
         "ddgs (duckduckgo search) is required for this example. Install it with: pip install ddgs"
     ) from e
 
-from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli, inference, llm
-from livekit.agents.llm.async_toolset import AsyncRunContext, AsyncToolset
-from livekit.plugins import silero
+from livekit.agents import (
+    Agent,
+    AgentServer,
+    AgentSession,
+    JobContext,
+    RunContext,
+    cli,
+    inference,
+    llm,
+)
 
 logger = logging.getLogger("async-travel-helper")
 
-_annoying_loggers = ["h2", "rustls", "hyper_util", "cookie_store", "primp"]
+_annoying_loggers = [
+    "h2",
+    "rustls",
+    "hyper_util",
+    "cookie_store",
+    "primp",
+    "hpack",
+    "hickory_net",
+    "hickory_dns",
+    "hickory_resolver",
+    "hickory_proto",
+    "reqwest",
+    "ddgs.ddgs",
+]
 for name in _annoying_loggers:
     logging.getLogger(name).setLevel(logging.WARNING)
 
 load_dotenv()
 
 
-class TravelToolset(AsyncToolset):
+class TravelAgent(Agent):
     def __init__(self) -> None:
-        super().__init__(id="travel")
+        super().__init__(
+            instructions=(
+                "You are a friendly travel assistant that communicates via voice. "
+                "Avoid emojis and markdown — speak naturally and concisely. "
+                "You can help with two things: booking flights and recommending what "
+                "to see, eat, and do at a destination. "
+                "Use the book_flight tool when the user wants to book a flight. "
+                "Use the tour_guide tool when the user asks about places to visit, "
+                "restaurants, sightseeing, nightlife, or things to do somewhere. "
+                "Summarize the results in a concise and natural manner that suitable for voice communication. "
+                f"Today is {datetime.now().strftime('%Y-%m-%d %A')}. "
+                "When user is not asking, don't repeat the messages you have already said in the conversation. "
+                "Don't make up flight details or ask for flight preferences — always use the tools. "
+            ),
+        )
         self._thinking_llm = inference.LLM(
             "openai/gpt-5.4", extra_kwargs={"reasoning_effort": "medium"}
         )
         self._ddgs = DDGS()
+        self._user_email: str | None = None
 
-    # -- Tool 1: Mock flight booking (takes ~2 minutes with progress updates) --
+    async def on_enter(self):
+        self.session.generate_reply(instructions="Greet the user and introduce yourself.")
 
-    @llm.function_tool
-    async def book_flight(
-        self, ctx: AsyncRunContext, origin: str, destination: str, date: str
-    ) -> str:
+    @llm.function_tool(flags=llm.ToolFlag.CANCELLABLE, on_duplicate="confirm")
+    async def book_flight(self, ctx: RunContext, origin: str, destination: str, date: str) -> str:
         """Called when user wants to book a flight.
 
         Args:
@@ -73,6 +109,16 @@ class TravelToolset(AsyncToolset):
         )
 
         # Phase 2: confirming booking
+        if self._user_email is None:
+            logger.info("Getting user's email address")
+            async with ctx.foreground():
+                ctx.session.say("We will need your email address to confirm the flight booking.")
+                email = await GetEmailTask(
+                    extra_instructions="You are capturing the email address of the user for the flight booking."
+                )
+            self._user_email = email.email_address
+            logger.info(f"User's email address: {self._user_email}")
+
         await asyncio.sleep(40)
 
         logger.info("Flight booked")
@@ -82,13 +128,14 @@ class TravelToolset(AsyncToolset):
         #  It was $289 and your confirmation number is FL-847293."
         return (
             f"Flight booked! {cheapest} from {origin} to {destination} on {date}. "
-            f"Price: ${prices[cheapest]}. Confirmation: {confirmation}."
+            f"Price: ${prices[cheapest]}. Confirmation: {confirmation}. "
+            f"The details will be sent to your email."
         )
 
     # -- Tool 2: Tour guide via web search --
 
-    @llm.function_tool
-    async def tour_guide(self, ctx: AsyncRunContext, destination: str, interests: str) -> str:
+    @llm.function_tool(flags=llm.ToolFlag.CANCELLABLE, on_duplicate="confirm")
+    async def tour_guide(self, ctx: RunContext, destination: str, interests: str) -> str:
         """Called when user wants to know about a destination, including
         sightseeing spots, restaurants, local food, nightlife, or neighborhood tips.
 
@@ -160,30 +207,6 @@ class TravelToolset(AsyncToolset):
         return response.text
 
 
-class TravelAgent(Agent):
-    def __init__(self) -> None:
-        super().__init__(
-            instructions=(
-                "You are a friendly travel assistant that communicates via voice. "
-                "Avoid emojis and markdown — speak naturally and concisely. "
-                "You can help with two things: booking flights and recommending what "
-                "to see, eat, and do at a destination. "
-                "Use the book_flight tool when the user wants to book a flight. "
-                "Use the tour_guide tool when the user asks about places to visit, "
-                "restaurants, sightseeing, nightlife, or things to do somewhere. "
-                "Summarize the results in a concise and natural manner that suitable for voice communication. "
-                f"Today is {datetime.now().strftime('%Y-%m-%d %A')}. "
-                "When user is not asking, don't repeat the messages you have already said in the conversation. "
-                "Don't make up flight details or ask for flight preferences — always use the tools. "
-            ),
-            tools=[TravelToolset()],
-        )
-        self._llm_count = 0
-
-    async def on_enter(self):
-        self.session.generate_reply(instructions="Greet the user and introduce yourself.")
-
-
 server = AgentServer()
 
 
@@ -191,10 +214,10 @@ server = AgentServer()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
         stt=inference.STT("deepgram/nova-3"),
-        llm=inference.LLM("openai/gpt-5.3-chat-latest"),
+        # llm=inference.LLM("openai/gpt-5.3-chat-latest"),
+        llm=inference.LLM("google/gemini-3.1-flash-lite"),
         tts=inference.TTS("cartesia/sonic-3", voice="e07c00bc-4134-4eae-9ea4-1a55fb45746b"),
         # llm=google.realtime.RealtimeModel(),
-        vad=silero.VAD.load(),
         turn_handling={"interruption": {"mode": "vad"}},
     )
 

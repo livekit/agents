@@ -90,7 +90,7 @@ jobs:
           LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_API_KEY }}
           LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_API_SECRET }}
 
-        run: uv run pytest tests/test_workflows.py tests/test_evals.py
+        run: uv run pytest --evals
 
   tests:
     # don't run tests for PRs on forks

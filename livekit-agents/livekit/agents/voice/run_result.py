@@ -203,6 +203,13 @@ class RunResult(Generic[Run_T]):
                 self._done_fut.set_result(None)
                 return
 
+            # propagate speech handle errors (e.g. LLM failures)
+            if self.__last_speech_handle._done_fut.done():
+                exc = self.__last_speech_handle._done_fut.exception()
+                if exc is not None:
+                    self._done_fut.set_exception(exc)
+                    return
+
             final_output = self.__last_speech_handle._maybe_run_final_output
             if not isinstance(final_output, BaseException):
                 if self._output_type and not isinstance(final_output, self._output_type):
@@ -1047,6 +1054,43 @@ def mock_tools(agent: type[Agent], mocks: dict[str, Callable]) -> Generator[None
         yield
     finally:
         _MockToolsContextVar.reset(token)
+
+
+async def _run_mock(mock: Callable, *fnc_args: Any, **fnc_kwargs: Any) -> Any:
+    """Invoke a mock tool, trimming args/kwargs to whatever subset of the real
+    tool's parameters the mock actually declares."""
+    import inspect
+
+    sig = inspect.signature(mock)
+
+    pos_param_names = [
+        name
+        for name, param in sig.parameters.items()
+        if param.kind
+        in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        )
+    ]
+    max_positional = len(pos_param_names)
+    trimmed_args = fnc_args[:max_positional]
+    kw_param_names = [
+        name
+        for name, param in sig.parameters.items()
+        if param.kind
+        in (
+            inspect.Parameter.KEYWORD_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        )
+    ]
+    trimmed_kwargs = {k: v for k, v in fnc_kwargs.items() if k in kw_param_names}
+
+    bound = sig.bind_partial(*trimmed_args, **trimmed_kwargs)
+    bound.apply_defaults()
+
+    if inspect.iscoroutinefunction(mock):
+        return await mock(*bound.args, **bound.kwargs)
+    return mock(*bound.args, **bound.kwargs)
 
 
 def _format_events(events: list[RunEvent], *, selected_index: int | None = None) -> list[str]:

@@ -1,13 +1,36 @@
 from __future__ import annotations
 
-from typing import Literal, Protocol
+import asyncio
+from dataclasses import dataclass
+from typing import Literal, Protocol, runtime_checkable
 
 from typing_extensions import TypedDict
 
+from livekit import rtc
+
 from ..language import LanguageCode
 from ..llm import ChatContext
-from ..types import NOT_GIVEN, NotGivenOr
+from ..types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    NotGivenOr,
+)
 from ..utils import is_given
+
+
+@dataclass
+class TurnDetectionEvent:
+    type: Literal["eot_prediction"]
+    end_of_turn_probability: float
+    last_speaking_time: float
+    detection_delay: float | None = None
+    """Latest input audio creation time -> prediction receive time."""
+    inference_duration: float | None = None
+    """Server-side model inference time."""
+    backchannel_probability: float | None = None
+    """How appropriate it is for the agent to backchannel at this pause.
+    ``None`` when the detector does not produce one (e.g. the local mini model)."""
 
 
 class _TurnDetector(Protocol):
@@ -28,7 +51,50 @@ class _TurnDetector(Protocol):
     ) -> float: ...
 
 
-TurnDetectionMode = Literal["stt", "vad", "realtime_llm", "manual"] | _TurnDetector
+@runtime_checkable
+class _StreamingTurnDetectorStream(Protocol):
+    """I/O stream for the streaming turn detector."""
+
+    @property
+    def model(self) -> str: ...
+    @property
+    def provider(self) -> str: ...
+    @property
+    def is_fallback(self) -> bool: ...
+    @property
+    def prediction_timeout(self) -> float: ...
+
+    async def unlikely_threshold(self, language: LanguageCode | None) -> float | None: ...
+    async def backchannel_threshold(self, language: LanguageCode | None) -> float | None: ...
+    async def supports_language(self, language: LanguageCode | None) -> bool: ...
+
+    def predict(self) -> asyncio.Future[TurnDetectionEvent]: ...
+    def cancel_inference(self, *, timed_out: bool = False) -> None: ...
+    def flush(self, reason: str | None = None) -> None: ...
+    def push_audio(self, frame: rtc.AudioFrame) -> None: ...
+    def end_input(self) -> None: ...
+    async def aclose(self) -> None: ...
+
+
+@runtime_checkable
+class _StreamingTurnDetector(Protocol):
+    """Turn detector that processes streaming data."""
+
+    @property
+    def model(self) -> str: ...
+    @property
+    def provider(self) -> str: ...
+
+    def stream(
+        self,
+        *,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> _StreamingTurnDetectorStream: ...
+
+
+TurnDetectionMode = (
+    Literal["stt", "vad", "realtime_llm", "manual"] | _TurnDetector | _StreamingTurnDetector
+)
 """
 The mode of turn detection to use.
 
@@ -70,6 +136,13 @@ _ENDPOINTING_DEFAULTS: EndpointingOptions = {
     "mode": "fixed",
     "min_delay": 0.5,
     "max_delay": 3.0,
+    "alpha": 0.9,
+}
+
+_STREAMING_ENDPOINTING_DEFAULTS: EndpointingOptions = {
+    "mode": "fixed",
+    "min_delay": 0.3,
+    "max_delay": 2.5,
     "alpha": 0.9,
 }
 
@@ -222,11 +295,24 @@ def _resolve_preemptive_generation(
     return PreemptiveGenerationOptions(**{**_PREEMPTIVE_GENERATION_DEFAULTS, **config})
 
 
-def _resolve_endpointing(config: EndpointingOptions | None = None) -> EndpointingOptions:
-    """Fill in defaults for missing keys."""
+def _resolve_endpointing(
+    config: EndpointingOptions | None = None,
+    *,
+    turn_detection: TurnDetectionMode | None = None,
+) -> EndpointingOptions:
+    """Fill in defaults for missing keys.
+
+    When ``turn_detection`` is a streaming turn detector, keys the caller did
+    not provide fall back to the tighter streaming defaults instead of the
+    legacy ones."""
+    base = (
+        _STREAMING_ENDPOINTING_DEFAULTS
+        if isinstance(turn_detection, _StreamingTurnDetector)
+        else _ENDPOINTING_DEFAULTS
+    )
     if config is None:
-        return EndpointingOptions(**_ENDPOINTING_DEFAULTS)
-    return EndpointingOptions(**{**_ENDPOINTING_DEFAULTS, **config})
+        return EndpointingOptions(**base)
+    return EndpointingOptions(**{**base, **config})
 
 
 def _resolve_interruption(

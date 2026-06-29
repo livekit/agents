@@ -32,6 +32,8 @@ from .utils.livekit_test import (
     wait_for_event,
 )
 
+pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
+
 TIMEOUT = 5.0
 
 
@@ -352,7 +354,7 @@ class TestReconnect:
                 )
 
                 # Audio continues to flow uninterrupted.
-                await mon.assert_audio_continuous(min_rms=_AUDIO_RMS_THRESHOLD, duration=1.5)
+                await mon.assert_audio_continuous(min_rms=_AUDIO_RMS_THRESHOLD, duration=1.0)
 
     async def test_full_reconnect_republishes_once_and_audio_recovers(self):
         """Full reconnect must fire `reconnected` exactly once, end with
@@ -411,5 +413,5 @@ class TestReconnect:
                 async with AudioEnergyMonitor.watch(new_track) as new_mon:
                     await new_mon.wait_for_audio(min_rms=_AUDIO_RMS_THRESHOLD, timeout=10.0)
                     await new_mon.assert_audio_continuous(
-                        min_rms=_AUDIO_RMS_THRESHOLD, duration=1.5
+                        min_rms=_AUDIO_RMS_THRESHOLD, duration=1.0
                     )

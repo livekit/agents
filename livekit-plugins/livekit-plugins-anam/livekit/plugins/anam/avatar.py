@@ -20,7 +20,7 @@ from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 from .api import DEFAULT_API_URL, AnamAPI
 from .errors import AnamException
 from .log import logger
-from .types import PersonaConfig
+from .types import PersonaConfig, SessionOptions
 
 SAMPLE_RATE = 24000
 _AVATAR_AGENT_IDENTITY = "anam-avatar-agent"
@@ -34,6 +34,7 @@ class AvatarSession(BaseAvatarSession):
         self,
         *,
         persona_config: PersonaConfig,
+        session_options: NotGivenOr[SessionOptions] = NOT_GIVEN,
         api_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_identity: NotGivenOr[str] = NOT_GIVEN,
@@ -47,6 +48,7 @@ class AvatarSession(BaseAvatarSession):
         self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
         self._persona_config: PersonaConfig = persona_config
+        self._session_options = session_options if utils.is_given(session_options) else None
 
         api_url_val = (
             api_url if utils.is_given(api_url) else os.getenv("ANAM_API_URL", DEFAULT_API_URL)
@@ -115,6 +117,7 @@ class AvatarSession(BaseAvatarSession):
                 persona_config=self._persona_config,
                 livekit_url=livekit_url,
                 livekit_token=livekit_token,
+                session_options=self._session_options,
             )
             logger.debug("Anam session token created successfully.")
 
@@ -124,9 +127,11 @@ class AvatarSession(BaseAvatarSession):
             )
             self.session_id = session_details.get("sessionId")
 
-        agent_session.output.audio = DataStreamAudioOutput(
-            room=room,
-            destination_identity=self._avatar_participant_identity,
-            sample_rate=SAMPLE_RATE,
-            wait_remote_track=rtc.TrackKind.KIND_VIDEO,
+        agent_session.output.replace_audio_tail(
+            DataStreamAudioOutput(
+                room=room,
+                destination_identity=self._avatar_participant_identity,
+                sample_rate=SAMPLE_RATE,
+                wait_remote_track=rtc.TrackKind.KIND_VIDEO,
+            ),
         )

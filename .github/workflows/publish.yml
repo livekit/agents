@@ -74,21 +74,18 @@ jobs:
 
           case "$key" in
             patch|minor|major)
-              python .github/update_versions.py \
-                --ignore-changesets --bump-type "$key"
+              python .github/update_versions.py --bump-type "$key"
               ;;
             patch-rc|minor-rc|major-rc)
               bump="${key%-rc}"
-              python .github/update_versions.py \
-                --ignore-changesets --bump-type "$bump"
+              python .github/update_versions.py --bump-type "$bump"
               python .github/update_versions.py --pre rc
               ;;
             next-rc)
               python .github/update_versions.py --pre rc
               ;;
             promote)
-              python .github/update_versions.py \
-                --ignore-changesets --bump-type release
+              python .github/update_versions.py --bump-type release
               ;;
           esac
 

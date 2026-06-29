@@ -24,6 +24,8 @@ from livekit.agents.inference._utils import (
     get_inference_headers,
 )
 
+pytestmark = pytest.mark.unit
+
 
 class _FakeLiveRoom:
     """Stands in for ``JobContext.room`` (the live rtc.Room with isconnected())."""

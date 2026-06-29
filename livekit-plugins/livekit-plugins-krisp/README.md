@@ -26,8 +26,8 @@ bundled backend ships the noise-reduction model and authenticates against LiveKi
 using the room JWT the agent framework hands to the FrameProcessor automatically.
 
 ```python
-from livekit.agents import AgentSession, Agent, JobContext, room_io
-from livekit.plugins import krisp, silero, openai
+from livekit.agents import AgentSession, Agent, JobContext, inference, room_io
+from livekit.plugins import krisp, openai
 
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
@@ -37,7 +37,7 @@ async def entrypoint(ctx: JobContext):
     )
 
     session = AgentSession(
-        vad=silero.VAD.load(),
+        vad=inference.VAD(),
         stt=openai.STT(),
         llm=openai.LLM(model="gpt-4o-mini"),
         tts=openai.TTS(),

@@ -6,7 +6,15 @@ import pytest
 from pydantic import BaseModel, Field, ValidationError
 
 from livekit.agents import Agent
-from livekit.agents.llm import ProviderTool, Tool, ToolContext, ToolError, Toolset, function_tool
+from livekit.agents.llm import (
+    ProviderTool,
+    Tool,
+    ToolContext,
+    ToolError,
+    ToolFlag,
+    Toolset,
+    function_tool,
+)
 from livekit.agents.llm._strict import to_strict_json_schema
 from livekit.agents.llm.utils import (
     build_legacy_openai_schema,
@@ -14,6 +22,8 @@ from livekit.agents.llm.utils import (
     function_arguments_to_pydantic_model,
     prepare_function_arguments,
 )
+
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
 
 class MockOption(str, enum.Enum):
@@ -846,33 +856,652 @@ class TestExecuteFunctionCallValidationErrors:
 
 
 class TestAsyncToolsetDedup:
-    """Test that multiple AsyncToolsets can coexist without duplicate tool name conflicts."""
-
-    def test_two_async_toolsets_no_conflict(self):
-        """Two AsyncToolsets share the same get_running_tasks/cancel_task singleton tools."""
-        from livekit.agents.llm.async_toolset import AsyncToolset
-
-        ts1 = AsyncToolset(id="booking", tools=[mock_tool_1])
-        ts2 = AsyncToolset(id="search", tools=[mock_tool_2])
-
-        # should not raise — the management tools are the same module-level instances
-        ctx = ToolContext([ts1, ts2])
-
-        # only one copy of each management tool in the flattened list
-        names = [t.id for t in ctx.flatten() if hasattr(t, "id")]
-        assert names.count("get_running_tasks") == 1
-        assert names.count("cancel_task") == 1
-
-    def test_async_toolset_same_id_no_conflict(self):
-        """Two AsyncToolsets with the same id should not conflict."""
+    def test_same_id_no_conflict(self):
+        """Two AsyncToolsets with the same id and different tools should not raise."""
         from livekit.agents.llm.async_toolset import AsyncToolset
 
         ts1 = AsyncToolset(id="same_id", tools=[mock_tool_1])
         ts2 = AsyncToolset(id="same_id", tools=[mock_tool_2])
 
-        # should not raise
         ctx = ToolContext([ts1, ts2])
 
         names = [t.id for t in ctx.flatten() if hasattr(t, "id")]
-        assert names.count("get_running_tasks") == 1
-        assert names.count("cancel_task") == 1
+        assert "mock_tool_1" in names
+        assert "mock_tool_2" in names
+
+
+class TestConfirmDuplicateSchema:
+    """Schema injection for @function_tool(on_duplicate='confirm')."""
+
+    @staticmethod
+    @function_tool(on_duplicate="confirm")
+    async def _confirm_tool(origin: str, destination: str) -> dict[str, str]:
+        """Book a flight.
+
+        Args:
+            origin: where to fly from
+            destination: where to fly to
+        """
+        return {"origin": origin, "destination": destination}
+
+    @staticmethod
+    @function_tool(
+        raw_schema={
+            "name": "raw_confirm_tool",
+            "description": "raw tool",
+            "parameters": {
+                "type": "object",
+                "properties": {"gate_id": {"type": "string"}},
+                "required": ["gate_id"],
+            },
+        },
+        on_duplicate="confirm",
+    )
+    async def _raw_confirm_tool(raw_arguments: dict[str, Any]) -> dict[str, Any]:
+        return raw_arguments
+
+    def test_legacy_schema_has_confirm_param(self):
+        params = build_legacy_openai_schema(self._confirm_tool)["function"]["parameters"]
+        assert "lk_agents_confirm_duplicate" in params["properties"]
+        # legacy: not in required, has a default
+        assert "lk_agents_confirm_duplicate" not in params.get("required", [])
+        assert params["properties"]["lk_agents_confirm_duplicate"]["default"] is False
+
+    def test_strict_schema_has_confirm_param(self):
+        params = build_strict_openai_schema(self._confirm_tool)["function"]["parameters"]
+        assert "lk_agents_confirm_duplicate" in params["properties"]
+        # strict: in required, nullable type for optionality
+        assert "lk_agents_confirm_duplicate" in params["required"]
+        prop_type = params["properties"]["lk_agents_confirm_duplicate"]["type"]
+        assert "null" in prop_type and "boolean" in prop_type
+
+    def test_raw_schema_has_confirm_param(self):
+        params = self._raw_confirm_tool.info.raw_schema["parameters"]
+        assert "lk_agents_confirm_duplicate" in params["properties"]
+        assert "lk_agents_confirm_duplicate" in params["required"]
+        prop_type = params["properties"]["lk_agents_confirm_duplicate"]["type"]
+        assert "null" in prop_type and "boolean" in prop_type
+
+    def test_plain_tool_has_no_confirm_param(self):
+        params = build_strict_openai_schema(mock_tool_1)["function"]["parameters"]
+        assert "lk_agents_confirm_duplicate" not in params.get("properties", {})
+
+    @pytest.mark.asyncio
+    async def test_direct_call_with_typed_args(self):
+        # Wrapper preserves direct invocation with the original signature.
+        result = await self._confirm_tool(origin="NYC", destination="Tokyo")
+        assert result == {"origin": "NYC", "destination": "Tokyo"}
+
+    @pytest.mark.asyncio
+    async def test_wrapper_drops_confirm_kwarg(self):
+        # The wrapper pops lk_agents_confirm_duplicate before calling the user fn.
+        result = await self._confirm_tool(
+            origin="NYC", destination="Tokyo", lk_agents_confirm_duplicate=True
+        )
+        assert result == {"origin": "NYC", "destination": "Tokyo"}
+
+
+class TestAsyncToolOptions:
+    """``AsyncToolOptions`` resolution, override layering, and routing."""
+
+    def test_resolve_defaults_filled(self):
+        from livekit.agents.voice.tool_executor import (
+            _ASYNC_TOOL_OPTIONS_DEFAULTS,
+            _resolve_async_tool_options,
+        )
+
+        # None → all defaults
+        resolved = _resolve_async_tool_options(None)
+        assert resolved == _ASYNC_TOOL_OPTIONS_DEFAULTS
+
+    def test_resolve_partial_fills_missing_with_defaults(self):
+        from livekit.agents.voice.tool_executor import (
+            _ASYNC_TOOL_OPTIONS_DEFAULTS,
+            _resolve_async_tool_options,
+        )
+
+        resolved = _resolve_async_tool_options({"update_template": "custom-update"})
+        assert resolved["update_template"] == "custom-update"
+        # other keys retain the module default
+        assert (
+            resolved["duplicate_reject_template"]
+            == _ASYNC_TOOL_OPTIONS_DEFAULTS["duplicate_reject_template"]
+        )
+        assert (
+            resolved["reply_at_tail_template"]
+            == _ASYNC_TOOL_OPTIONS_DEFAULTS["reply_at_tail_template"]
+        )
+
+    def test_executor_uses_resolved_options(self):
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        executor = _ToolExecutor(async_tool_options={"duplicate_reject_template": "rejected!"})
+        assert executor._tool_options["duplicate_reject_template"] == "rejected!"
+        # unspecified key falls back to default, NOT to anything else
+        assert "{function_name}" in executor._tool_options["update_template"]
+
+    @staticmethod
+    def _mock_scope(session_update: str = "session", agent_update: str | None = None):
+        # minimal stand-ins for what AsyncToolset._attach_activity reads from
+        from livekit.agents.types import NOT_GIVEN
+        from livekit.agents.voice.tool_executor import _resolve_async_tool_options
+
+        class _Session:
+            _async_tool_options = _resolve_async_tool_options({"update_template": session_update})
+
+        class _Agent:
+            _async_tool_options = (
+                {"update_template": agent_update} if agent_update is not None else NOT_GIVEN
+            )
+
+        class _Activity:
+            _agent = _Agent()
+
+        return _Session(), _Activity()
+
+    def test_toolset_own_override_wins(self):
+        from livekit.agents.llm.async_toolset import AsyncToolset
+
+        ts = AsyncToolset(
+            id="t",
+            tools=[mock_tool_1],
+            tool_handling={"async_options": {"update_template": "toolset-own"}},
+        )
+        session, activity = self._mock_scope(agent_update="agent")
+        ts._attach_activity(activity=activity, session=session)
+        assert ts._executor._tool_options["update_template"] == "toolset-own"
+
+    def test_toolset_inherits_agent_when_no_override(self):
+        from livekit.agents.llm.async_toolset import AsyncToolset
+
+        ts = AsyncToolset(id="t", tools=[mock_tool_1])
+        session, activity = self._mock_scope(agent_update="agent")
+        ts._attach_activity(activity=activity, session=session)
+        # whole-value override: only `update_template` was given on agent, the rest fall
+        # back to module defaults (NOT to session options)
+        assert ts._executor._tool_options["update_template"] == "agent"
+
+    def test_toolset_inherits_session_when_no_agent_no_override(self):
+        from livekit.agents.llm.async_toolset import AsyncToolset
+
+        ts = AsyncToolset(id="t", tools=[mock_tool_1])
+        session, activity = self._mock_scope()
+        ts._attach_activity(activity=activity, session=session)
+        assert ts._executor._tool_options["update_template"] == "session"
+
+    def test_session_scoped_toolset_skips_agent(self):
+        # _attach_activity(activity=None) marks the toolset as session-scoped;
+        # agent options are ignored even if present.
+        from livekit.agents.llm.async_toolset import AsyncToolset
+
+        ts = AsyncToolset(id="t", tools=[mock_tool_1])
+        session, _activity = self._mock_scope(agent_update="agent-should-be-ignored")
+        ts._attach_activity(activity=None, session=session)
+        assert ts._executor._tool_options["update_template"] == "session"
+        assert ts._executor._owning_activity is None
+
+    def test_build_executor_map_routes_toolset_tools(self):
+        from livekit.agents.llm.async_toolset import AsyncToolset
+        from livekit.agents.voice.tool_executor import _build_executor_map, _ToolExecutor
+
+        ts = AsyncToolset(id="async-1", tools=[mock_tool_1])
+        default = _ToolExecutor()
+        mapping = _build_executor_map(toolsets=[ts], default=default)
+
+        # tool inside AsyncToolset routes to that toolset's executor
+        assert mapping["mock_tool_1"] is ts._executor
+        # tools not in the map fall back to default at the call site
+        assert mapping.get("not_in_map") is None
+
+    def test_build_executor_map_nested_async_toolset_wins(self):
+        from livekit.agents.llm.async_toolset import AsyncToolset
+        from livekit.agents.llm.tool_context import Toolset
+        from livekit.agents.voice.tool_executor import _build_executor_map, _ToolExecutor
+
+        inner = AsyncToolset(id="inner", tools=[mock_tool_2])
+        outer_async = AsyncToolset(id="outer", tools=[mock_tool_1, inner])
+
+        # routing keeps inner's executor for inner's tools, outer's for outer's
+        mapping = _build_executor_map(toolsets=[outer_async], default=_ToolExecutor())
+        assert mapping["mock_tool_1"] is outer_async._executor
+        assert mapping["mock_tool_2"] is inner._executor
+
+        # plain Toolset doesn't change executor; its tools route to the surrounding default
+        plain = Toolset(id="plain", tools=[mock_tool_3])
+        default = _ToolExecutor()
+        mapping2 = _build_executor_map(toolsets=[plain], default=default)
+        assert mapping2["mock_tool_3"] is default
+
+    def test_session_stores_resolved_options(self):
+        # session-level options are resolved and stored at __init__; the actual
+        # wiring onto toolset executors happens later at activity start (so
+        # toolsets added after session.__init__ are picked up).
+        from livekit.agents.voice.agent_session import AgentSession
+
+        session = AgentSession(tool_handling={"async_options": {"update_template": "from-session"}})
+        assert session._async_tool_options["update_template"] == "from-session"
+        # other keys fall back to defaults, not to anything else
+        assert "{function_name}" in session._async_tool_options["duplicate_reject_template"]
+
+    def test_agent_stores_raw_options(self):
+        from livekit.agents.utils.misc import is_given
+        from livekit.agents.voice.agent import Agent
+
+        agent = Agent(
+            instructions="x",
+            tool_handling={"async_options": {"update_template": "from-agent"}},
+        )
+        assert is_given(agent._async_tool_options)
+        assert agent._async_tool_options["update_template"] == "from-agent"
+
+
+# --- helpers for executor / RunContext tests ----------------------------------
+
+
+def _make_run_context(
+    call_id: str = "call_1",
+    name: str = "test_tool",
+    arguments: str = "{}",
+    extra: dict[str, Any] | None = None,
+    allow_interruptions: bool = True,
+):
+    """Build a minimal RunContext — only what the executor and update() actually read."""
+    from unittest.mock import MagicMock
+
+    from livekit.agents.llm import FunctionCall
+    from livekit.agents.voice.events import RunContext
+
+    speech_handle = MagicMock()
+    speech_handle.num_steps = 1
+    speech_handle.allow_interruptions = allow_interruptions
+
+    fnc_call = FunctionCall(
+        call_id=call_id,
+        name=name,
+        arguments=arguments,
+        extra=extra if extra is not None else {},
+    )
+    return RunContext(
+        session=MagicMock(),
+        speech_handle=speech_handle,
+        function_call=fnc_call,
+    )
+
+
+@pytest.fixture(autouse=False)
+def _clear_running_tasks():
+    """Wipe the module-level registry between tests to avoid cross-test bleed."""
+    from livekit.agents.voice.tool_executor import _RunningTasks
+
+    _RunningTasks.clear()
+    yield
+    _RunningTasks.clear()
+
+
+class TestRunContextUpdate:
+    """RunContext.update() — call_id suffix, extra-dict isolation, ordering."""
+
+    @pytest.mark.asyncio
+    async def test_first_update_keeps_original_call_id(self):
+        """First update reuses the original call_id (so realtime/response models can
+        match it server-side); later updates get an ``_update_N`` suffix."""
+        ctx = _make_run_context(call_id="orig")
+        await ctx.update("msg1")
+        await ctx.update("msg2")
+
+        assert ctx._updates[0][0].call_id == "orig"
+        assert ctx._updates[1][0].call_id == "orig_update_1"
+
+    @pytest.mark.asyncio
+    async def test_synthesized_pair_extra_is_copy(self):
+        """Each synthesized pair gets its own ``extra`` dict so later mutation doesn't leak back."""
+        ctx = _make_run_context(call_id="orig", extra={"k": "v"})
+        await ctx.update("msg1")
+
+        ctx.function_call.extra["leaked"] = True
+
+        assert "leaked" not in ctx._updates[0][0].extra
+        assert ctx._updates[0][0].extra == {"k": "v"}
+
+    @pytest.mark.asyncio
+    async def test_updates_recorded_without_executor(self):
+        """With no executor attached, update() just appends to ``_updates`` and returns."""
+        ctx = _make_run_context()
+        await ctx.update("first")
+        await ctx.update("second")
+        assert len(ctx._updates) == 2
+        assert "first" in ctx._updates[0][1].output
+        assert "second" in ctx._updates[1][1].output
+
+    @pytest.mark.asyncio
+    async def test_update_accepts_callable_template(self):
+        """``template=`` may be a callable receiving the placeholder dict."""
+        ctx = _make_run_context(call_id="orig", name="fn")
+        await ctx.update(
+            "hello", template=lambda c: f"[{c['function_name']}/{c['call_id']}] {c['message']}"
+        )
+        assert ctx._updates[0][1].output == "[fn/orig] hello"
+
+
+class TestAsyncToolOptionsRendering:
+    """``_render`` dispatches between ``str.format`` and callable templates."""
+
+    def test_render_string(self):
+        from livekit.agents.voice.tool_executor import _render
+
+        assert _render("hi {name}", {"name": "world"}) == "hi world"
+
+    def test_render_callable(self):
+        from livekit.agents.voice.tool_executor import _render
+
+        assert _render(lambda c: f"hi {c['name']}", {"name": "world"}) == "hi world"
+
+
+class TestExecuteFunctionCallWithUpdate:
+    """execute_function_call wires ctx.update() into FunctionCallResult.fnc_call_updates."""
+
+    @pytest.mark.asyncio
+    async def test_fnc_call_updates_populated(self):
+        from livekit.agents.llm.llm import FunctionToolCall
+        from livekit.agents.llm.utils import execute_function_call
+        from livekit.agents.voice.events import RunContext
+
+        @function_tool
+        async def progress_tool(ctx: RunContext, query: str) -> str:
+            """Look up something.
+
+            Args:
+                query: the query string
+            """
+            await ctx.update("searching...")
+            return f"result for {query}"
+
+        tool_ctx = ToolContext([progress_tool])
+        run_ctx = _make_run_context(call_id="probe", name="progress_tool")
+        tool_call = FunctionToolCall(
+            name="progress_tool", arguments='{"query": "x"}', call_id="probe"
+        )
+
+        result = await execute_function_call(tool_call, tool_ctx, call_ctx=run_ctx)
+
+        assert result.fnc_call_out is not None
+        assert "result for x" in result.fnc_call_out.output
+        assert len(result.fnc_call_updates) == 1
+        assert "searching" in result.fnc_call_updates[0][1].output
+
+
+class TestHasCancellableTool:
+    """`has_cancellable_tool` decides whether AgentActivity auto-exposes
+    cancel_task / get_running_tasks."""
+
+    def test_plain_tools_not_cancellable(self):
+        from livekit.agents.voice.tool_executor import has_cancellable_tool
+
+        assert has_cancellable_tool([mock_tool_1, mock_tool_2]) is False
+
+    def test_one_cancellable_tool_returns_true(self):
+        from livekit.agents.voice.tool_executor import has_cancellable_tool
+
+        @function_tool(flags=ToolFlag.CANCELLABLE)
+        async def long_running() -> str:
+            return "done"
+
+        assert has_cancellable_tool([mock_tool_1, long_running]) is True
+
+    def test_recurses_into_toolsets(self):
+        from livekit.agents.llm.async_toolset import AsyncToolset
+        from livekit.agents.voice.tool_executor import has_cancellable_tool
+
+        @function_tool(flags=ToolFlag.CANCELLABLE)
+        async def long_running() -> str:
+            return "done"
+
+        ts = AsyncToolset(id="t", tools=[long_running])
+        assert has_cancellable_tool([mock_tool_1, ts]) is True
+
+
+def _register_fake(
+    executor, call_id: str, name: str, *, allow_cancellation: bool, allow_interruptions: bool = True
+):
+    """Stub a _RunningTask into the executor so policy methods can be tested
+    without choreographing real execute() lifetimes. Caller must clean up the
+    returned task via _cleanup_fakes."""
+    import asyncio as _asyncio
+
+    from livekit.agents.voice.tool_executor import _RunningTask
+
+    async def _runner():
+        try:
+            await _asyncio.Event().wait()
+        except _asyncio.CancelledError:
+            return
+
+    exe_task = _asyncio.create_task(_runner(), name=f"fake_{call_id}")
+    run_ctx = _make_run_context(call_id=call_id, name=name, allow_interruptions=allow_interruptions)
+    executor._running_tasks[call_id] = _RunningTask(
+        ctx=run_ctx,
+        exe_task=exe_task,
+        executor=executor,
+        allow_cancellation=allow_cancellation,
+    )
+    return exe_task
+
+
+async def _cleanup_fakes(*exe_tasks):
+    import asyncio as _asyncio
+
+    for t in exe_tasks:
+        if not t.done():
+            t.cancel()
+    await _asyncio.gather(*exe_tasks, return_exceptions=True)
+
+
+class TestCheckDuplicate:
+    """_check_duplicate policy decisions, exercised with a pre-populated registry."""
+
+    @pytest.mark.asyncio
+    async def test_allow_returns_none(self):
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        executor = _ToolExecutor()
+        t = _register_fake(executor, "a", "tool_x", allow_cancellation=True)
+        try:
+            assert (
+                await executor._check_duplicate(
+                    "tool_x", on_duplicate="allow", confirm_duplicate=None
+                )
+                is None
+            )
+        finally:
+            await _cleanup_fakes(t)
+
+    @pytest.mark.asyncio
+    async def test_reject_returns_message(self):
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        executor = _ToolExecutor()
+        t = _register_fake(executor, "a", "tool_x", allow_cancellation=True)
+        try:
+            result = await executor._check_duplicate(
+                "tool_x", on_duplicate="reject", confirm_duplicate=None
+            )
+            assert isinstance(result, str) and "already running" in result
+        finally:
+            await _cleanup_fakes(t)
+
+    @pytest.mark.asyncio
+    async def test_confirm_blocks_without_param(self):
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        executor = _ToolExecutor()
+        t = _register_fake(executor, "a", "tool_x", allow_cancellation=True)
+        try:
+            result = await executor._check_duplicate(
+                "tool_x", on_duplicate="confirm", confirm_duplicate=False
+            )
+            assert isinstance(result, str) and "confirm duplicate" in result.lower()
+            # with confirm=True, the policy lets the new call through
+            assert (
+                await executor._check_duplicate(
+                    "tool_x", on_duplicate="confirm", confirm_duplicate=True
+                )
+                is None
+            )
+        finally:
+            await _cleanup_fakes(t)
+
+    @pytest.mark.asyncio
+    async def test_replace_cancels_when_cancellable(self):
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        executor = _ToolExecutor()
+        t = _register_fake(executor, "a", "tool_x", allow_cancellation=True)
+        try:
+            assert (
+                await executor._check_duplicate(
+                    "tool_x", on_duplicate="replace", confirm_duplicate=None
+                )
+                is None
+            )
+            assert t.cancelled() or t.done()
+        finally:
+            await _cleanup_fakes(t)
+
+    @pytest.mark.asyncio
+    async def test_replace_raises_when_non_cancellable(self):
+        """replace must honor allow_cancellation, not bypass it."""
+        from livekit.agents.llm.tool_context import ToolError
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        executor = _ToolExecutor()
+        t = _register_fake(executor, "a", "tool_x", allow_cancellation=False)
+        try:
+            with pytest.raises(ToolError, match="not cancellable"):
+                await executor._check_duplicate(
+                    "tool_x", on_duplicate="replace", confirm_duplicate=None
+                )
+            assert not t.cancelled()  # the running tool was left alone
+        finally:
+            await _cleanup_fakes(t)
+
+    @pytest.mark.asyncio
+    async def test_duplicate_check_lock_serializes(self):
+        """Holding the executor's lock blocks any concurrent _check_duplicate."""
+        import asyncio as _asyncio
+
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        executor = _ToolExecutor()
+        t = _register_fake(executor, "a", "tool_x", allow_cancellation=True)
+        try:
+            await executor._duplicate_check_lock.acquire()
+            pending = _asyncio.create_task(
+                executor._check_duplicate("tool_x", on_duplicate="reject", confirm_duplicate=None)
+            )
+            await _asyncio.sleep(0)
+            assert not pending.done()  # blocked on the lock
+            executor._duplicate_check_lock.release()
+            result = await pending
+            assert isinstance(result, str) and "already running" in result
+        finally:
+            await _cleanup_fakes(t)
+
+
+class TestCancelAll:
+    """cancel_all / drain semantics, exercised with a pre-populated registry."""
+
+    @pytest.mark.asyncio
+    async def test_cancellable_only_cancels_flagged(self):
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        executor = _ToolExecutor()
+        cancellable = _register_fake(executor, "c", "tool_c", allow_cancellation=True)
+        non_cancellable = _register_fake(executor, "nc", "tool_nc", allow_cancellation=False)
+        try:
+            # drain cancels the cancellable but awaits the non-cancellable
+            import asyncio as _asyncio
+
+            drain_task = _asyncio.create_task(executor.drain())
+            await cancellable
+            assert cancellable.done()
+            assert not drain_task.done()
+            assert not non_cancellable.done()
+        finally:
+            non_cancellable.cancel()
+            await _cleanup_fakes(cancellable, non_cancellable)
+            await drain_task
+
+    @pytest.mark.asyncio
+    async def test_cancel_raises_when_interruptions_disallowed(self):
+        """cancel() refuses when the speech handle has ``allow_interruptions=False`` —
+        the same predicate gates drain and LLM-driven cancel."""
+        from livekit.agents.llm.tool_context import ToolError
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        executor = _ToolExecutor()
+        t = _register_fake(
+            executor, "a", "tool_x", allow_cancellation=True, allow_interruptions=False
+        )
+        try:
+            with pytest.raises(ToolError, match="interruptions are disallowed"):
+                await executor.cancel("a")
+        finally:
+            await _cleanup_fakes(t)
+
+    @pytest.mark.asyncio
+    async def test_cancel_task_companion_misses_non_cancellable(self):
+        """The LLM-facing ``cancel_task`` raises ToolError for tools registered with
+        ``allow_cancellation=False``."""
+        from livekit.agents.llm.tool_context import ToolError
+        from livekit.agents.voice.tool_executor import _RunningTasks, _ToolExecutor, cancel_task
+
+        executor = _ToolExecutor()
+        t = _register_fake(executor, "a", "tool_x", allow_cancellation=False)
+        # cancel_task reads from the module-level registry, keyed by session
+        run_ctx = executor._running_tasks["a"].ctx
+        _RunningTasks[run_ctx.session] = executor._running_tasks
+        try:
+            with pytest.raises(ToolError, match="not cancellable"):
+                await cancel_task(run_ctx, "a")
+            assert not t.cancelled()
+        finally:
+            _RunningTasks.pop(run_ctx.session, None)
+            await _cleanup_fakes(t)
+
+
+class TestToolExecutorLifecycle:
+    pytestmark = pytest.mark.usefixtures("_clear_running_tasks")
+
+    @pytest.mark.asyncio
+    async def test_run_context_back_refs_cleared_on_finish(self):
+        """RunContext drops its executor refs once the tool finishes — a stashed
+        ctx can't drive the executor post-completion."""
+        import asyncio as _asyncio
+
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        @function_tool
+        async def quick_tool() -> str:
+            """q"""
+            return "ok"
+
+        executor = _ToolExecutor()
+        run_ctx = _make_run_context(call_id="a", name="quick_tool")
+        result = await executor.execute(tool=quick_tool, run_ctx=run_ctx, raw_arguments={})
+        assert result == "ok"
+
+        await _asyncio.sleep(0)  # let _on_done fire
+        assert run_ctx._executor is None
+        assert run_ctx._first_update_fut is None
+
+
+class TestAgentSessionWaitForIdle:
+    def test_raises_runtime_error_when_no_activity(self):
+        """wait_for_idle raises instead of spinning when no activity has started."""
+        import asyncio as _asyncio
+
+        from livekit.agents.voice.agent_session import AgentSession
+
+        session = AgentSession()
+        with pytest.raises(RuntimeError, match="no active AgentActivity"):
+            _asyncio.get_event_loop().run_until_complete(session.wait_for_idle())

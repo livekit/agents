@@ -13,7 +13,6 @@ authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
 keywords = ["voice", "ai", "realtime", "audio", "video", "livekit", "webrtc"]
 classifiers = [
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: Apache Software License",
     "Topic :: Multimedia :: Sound/Audio",
     "Topic :: Multimedia :: Video",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
@@ -22,10 +21,11 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents>=1.5.17",
+    "livekit-agents>=1.6.4",
     "transformers>=4.47.1,!=4.57.2,!=4.57.3",  # 4.57.2-4.57.3 have a bug with local_files_only=True (huggingface/transformers#42369)
     "numpy>=1.26",
-    "onnxruntime>=1.18",
+    "onnxruntime>=1.18; python_version >= '3.11'",
+    "onnxruntime>=1.18,<1.24; python_version < '3.11'",
     "jinja2",
 ]
 

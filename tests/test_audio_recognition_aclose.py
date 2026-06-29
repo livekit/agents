@@ -15,6 +15,8 @@ import pytest
 
 from livekit.agents.voice.audio_recognition import AudioRecognition
 
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
+
 
 class TestAudioRecognitionAclose:
     """Test cases for AudioRecognition.aclose() handling cancelled tasks."""
@@ -29,10 +31,14 @@ class TestAudioRecognitionAclose:
         audio_recognition._hooks = MagicMock()
         audio_recognition._closing = asyncio.Event()
         audio_recognition._tasks = set()
-        audio_recognition._stt_atask = None
+        audio_recognition._stt_consumer_atask = None
+        audio_recognition._stt_pipeline = None
         audio_recognition._vad_atask = None
+        audio_recognition._interruption_atask = None
+        audio_recognition._turn_detector_stream = None
         audio_recognition._commit_user_turn_atask = None
         audio_recognition._end_of_turn_task = None
+        audio_recognition._backchannel_boundary_timer = None
 
         return audio_recognition
 

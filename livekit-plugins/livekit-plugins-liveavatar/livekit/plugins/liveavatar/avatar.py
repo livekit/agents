@@ -176,7 +176,7 @@ class AvatarSession(BaseAvatarSession):
         await self._audio_buffer.start()
         self._audio_buffer.on("clear_buffer", self._on_clear_buffer)  # type: ignore[arg-type]
 
-        agent_session.output.audio = self._audio_buffer
+        agent_session.output.replace_audio_tail(self._audio_buffer)
         self._main_atask = asyncio.create_task(self._main_task(), name="AvatarSession._main_task")
 
     def _on_clear_buffer(self) -> None:
