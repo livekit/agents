@@ -62,6 +62,9 @@ class KeytermDetectionOptions(TypedDict, total=False):
     """Cap on the confirmed (applied) detected keyterms if provided. Defaults to ``None``."""
     instructions: str | None
     """Override the built-in extraction prompt."""
+    timeout: float
+    """Seconds a single detection pass may run before it is dropped (no keyterm change).
+    Defaults to ``10.0``. Raise it if a slow detection ``llm`` needs longer."""
 
 
 class ChatContextOptions(TypedDict, total=False):
@@ -76,12 +79,17 @@ class ChatContextOptions(TypedDict, total=False):
     """Whether to forward conversation context to the STT. Defaults to ``False``."""
 
 
+# bound a single pass so a stuck LLM call can't hold the single-flight guard forever and
+# stall detection for the rest of the call; a timed-out pass simply makes no change
+_DETECTION_TIMEOUT = 10.0
+
 _KEYTERM_DETECTION_DEFAULTS: KeytermDetectionOptions = {
     "enabled": False,
     "llm": None,
     "turn_interval": 1,
     "max_keyterms": None,
     "instructions": None,
+    "timeout": _DETECTION_TIMEOUT,
 }
 
 _CHAT_CONTEXT_DEFAULTS: ChatContextOptions = {
@@ -90,10 +98,6 @@ _CHAT_CONTEXT_DEFAULTS: ChatContextOptions = {
 
 _PENDING_TTL = 3  # a pending term not confirmed within this many passes is dropped
 _MAX_TRANSCRIPT_MESSAGES = 12
-
-# bound a single pass so a stuck LLM call can't hold the single-flight guard forever and
-# stall detection for the rest of the call; a timed-out pass simply makes no change
-_DETECTION_TIMEOUT = 10.0
 
 # default model for keyterm extraction when ``keyterm_detection.llm`` is not set
 _DEFAULT_DETECTION_MODEL = "google/gemini-3.5-flash"
@@ -210,6 +214,7 @@ class KeytermDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
         self._max_keyterms = options["max_keyterms"]
         self._turn_interval = max(1, options["turn_interval"])
         self._instructions = options["instructions"] or _DEFAULT_KEYTERM_INSTRUCTIONS
+        self._detection_timeout = options["timeout"]
 
         self._static_terms = list(dict.fromkeys(static_keyterms or []))
         self._detected_terms: list[str] = []  # confirmed terms, oldest first (for eviction)
@@ -333,6 +338,7 @@ class KeytermDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
             chat_ctx=chat_ctx,
             current_keyterms=current,
             instructions=self._instructions,
+            timeout=self._detection_timeout,
         )
 
         before = self.keyterms
@@ -384,6 +390,7 @@ async def _detect_keyterms(
     *,
     instructions: str | None = None,
     current_keyterms: list[tuple[str, bool]] | None = None,
+    timeout: float = _DETECTION_TIMEOUT,
 ) -> tuple[list[str], list[str], list[str]]:
     """Run one extraction pass via a forced function call.
 
@@ -399,10 +406,10 @@ async def _detect_keyterms(
     try:
         response = await asyncio.wait_for(
             llm.chat(chat_ctx=req_ctx, tools=[_record_keyterms], tool_choice="required").collect(),
-            timeout=_DETECTION_TIMEOUT,
+            timeout=timeout,
         )
     except asyncio.TimeoutError:
-        logger.warning("keyterm detection: pass timed out after %ss; skipping", _DETECTION_TIMEOUT)
+        logger.warning("keyterm detection: pass timed out after %ss; skipping", timeout)
         return [], [], []
     result = _parse_tool_call(response.tool_calls)
 
