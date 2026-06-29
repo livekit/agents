@@ -570,9 +570,12 @@ class AgentActivity(RecognitionHooks):
             # agent-bound chain too — on the agent-bound path self.stt returns agent._stt,
             # but we only reach this point on the common path. Reading the raw attribute
             # makes the captured reference the exact instance being replaced.
+            # AgentSession.update_options writes self._session._stt AFTER calling us
+            # when _activity is None, so this capture correctly sees the prior value
+            # in both cases (when _activity is set, AgentSession doesn't pre-write
+            # — letting us do the write + migration atomically).
             old_stt = self._session._stt
             self._session._stt = resolved_stt
-            # Rewire the live STT pipeline only if the agent does NOT own its STT.
             # When the agent was constructed with its own STT, activity.stt resolves
             # to agent._stt (unchanged by this swap, per the agent-bound contract),
             # so the pipeline would just restart with the exact same STT instance —
@@ -661,6 +664,18 @@ class AgentActivity(RecognitionHooks):
             # will never be used.
             agent_owns_tts = self._agent is not None and is_given(self._agent.tts)
             if agent_owns_tts:
+                # Mirror the STT branch: when the agent owns its own TTS,
+                # session-level swap is silently shadowed by the agent-bound value
+                # on the next read regardless of whether the caller passes a
+                # non-None TTS or None. Skip prewarm, listener migration, and
+                # everything else — the agent-bound contract means there's no
+                # actual swap. The warning only fires on the "you tried to set"
+                # case (caller passed a non-None TTS).
+                # Devin Review on PR #6235: this also closes the
+                # double-attach bug — _start_session attaches listeners on the
+                # agent-bound TTS, and previously update_options would call
+                # .on() again when agent_owns_tts=True and resolved_tts=None,
+                # leaking listeners that never get cleaned up.
                 if resolved_tts is not None:
                     logger.warning(
                         "AgentSession.update_options(tts=...) is a no-op because the "

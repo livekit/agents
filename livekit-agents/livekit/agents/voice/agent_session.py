@@ -1154,12 +1154,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if is_given(turn_detection):
             self._turn_detection = turn_detection
 
-        # Note: self._stt / self._tts are NOT written here. AgentActivity.update_options
-        # performs the actual swap (writes self._session._stt, self._session._tts, and
-        # migrates metrics/error event listeners) so the capture-old / apply-new sequence
-        # runs in one method. This ordering is required for listener migration to work —
-        # the activity reads the prior session._stt before mutating it, and that prior
-        # value must still be the old instance.
+        # self._stt and self._tts are mutated by Activity.update_options when
+        # _activity is set. When _activity is None (pre-start or between agent
+        # handoffs), we still need to keep public state consistent so callers
+        # can read it back via session._stt / session._tts. We do this AFTER the
+        # activity call to preserve listener migration — the activity needs to
+        # read the prior value of self._stt before we mutate it. When _activity
+        # is None, no listener migration is needed (no listeners exist yet),
+        # so the post-write is harmless.
 
         if self._activity is not None:
             self._activity.update_options(
@@ -1170,6 +1172,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 ),
                 turn_detection=turn_detection,
             )
+        else:
+            # No activity yet — just update public state so the next time an
+            # activity starts (session.start(agent)), it sees the swapped values.
+            if is_given(stt):
+                self._stt = stt
+            if is_given(tts):
+                self._tts = tts
 
     async def _start_ivr_detection(self, transcript: str | None = None) -> None:
         """Start IVR detection on this session.
