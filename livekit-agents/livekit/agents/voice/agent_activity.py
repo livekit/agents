@@ -565,6 +565,12 @@ class AgentActivity(RecognitionHooks):
             # We deliberately do NOT touch agent._stt; that is user-owned agent config
             # and the existing activity.stt resolution order prefers it when present.
             resolved_stt = stt if stt is not None else None
+            # Capture the *prior* session-level STT before mutating it. We read the raw
+            # session attribute (NOT self.stt) because self.stt resolves through the
+            # agent-bound chain too — on the agent-bound path self.stt returns agent._stt,
+            # but we only reach this point on the common path. Reading the raw attribute
+            # makes the captured reference the exact instance being replaced.
+            old_stt = self._session._stt
             self._session._stt = resolved_stt
             # Rewire the live STT pipeline only if the agent does NOT own its STT.
             # When the agent was constructed with its own STT, activity.stt resolves
@@ -610,6 +616,29 @@ class AgentActivity(RecognitionHooks):
                 # the common case.
                 if resolved_stt is not None:
                     resolved_stt.prewarm()
+                # Migrate metrics/error event listeners from old to new STT.
+                # _start_session (lines ~906-908) attaches metrics_collected/error
+                # listeners to whichever STT instance is current at start time,
+                # and _stop_session (lines ~1188-1190) detaches from whichever
+                # instance is current at teardown time. After a runtime swap,
+                # the new instance never had listeners attached (silently dropping
+                # metrics and error events), while the old instance retained
+                # orphaned listeners (preventing GC and routing stale events).
+                # We close that gap here on the common-path branch — the only
+                # branch where the effective STT actually changes. Listener
+                # migration is a no-op when the old and new instances are the
+                # same object.
+                from .. import stt as _stt_module  # local re-import to get the
+
+                # module reference; the `stt` parameter on update_options shadows
+                # the module-level name inside this function body.
+                if isinstance(old_stt, _stt_module.STT):
+                    old_stt.off("metrics_collected", self._on_metrics_collected)
+                    old_stt.off("error", self._on_error)
+                new_stt = self.stt  # reads through the updated session._stt
+                if isinstance(new_stt, _stt_module.STT) and new_stt is not old_stt:
+                    new_stt.on("metrics_collected", self._on_metrics_collected)
+                    new_stt.on("error", self._on_error)
 
         if is_given(tts):
             # No TTS pipeline to restart: tts_node reads activity.tts fresh on every
@@ -619,6 +648,10 @@ class AgentActivity(RecognitionHooks):
             # update_options on the activity directly. As with STT, we deliberately
             # do NOT touch agent._tts; agent-bound TTS keeps precedence.
             resolved_tts = tts if tts is not None else None
+            # Capture the *prior* session-level TTS before mutating session._tts.
+            # See the STT branch above for the rationale (raw session attribute
+            # instead of self.tts to avoid the agent-bound resolution).
+            old_tts = self._session._tts
             self._session._tts = resolved_tts
             # Mirror the STT branch: when the agent owns its own TTS, session-level
             # swaps are silently shadowed by the agent-bound value on the next read.
@@ -637,12 +670,26 @@ class AgentActivity(RecognitionHooks):
                     self._agent.tts,
                 )
             else:
-                # Prewarm the new TTS instance so providers that eagerly open
-                # connections don't pay first-call latency after a swap. Only
-                # called on the safe branch above; the agent-bound case skipped
-                # prewarm to avoid opening WebSockets that will never be used.
+                # Common path: prewarm and migrate listeners. Listener migration
+                # is what _start_session does for the initial TTS — _stop_session
+                # symmetrically detaches from the current instance at teardown.
+                # Without this, swapping TTS at runtime would silently drop
+                # metrics_collected/error events from the new instance and leave
+                # orphaned listeners on the old one. Mirrors the STT listener
+                # migration above.
                 if resolved_tts is not None:
                     resolved_tts.prewarm()
+                from .. import tts as _tts_module  # local re-import to get the
+
+                # module reference; the `tts` parameter on update_options shadows
+                # the module-level name inside this function body.
+                if isinstance(old_tts, _tts_module.TTS):
+                    old_tts.off("metrics_collected", self._on_metrics_collected)
+                    old_tts.off("error", self._on_error)
+                new_tts = self.tts  # reads through the updated session._tts
+                if isinstance(new_tts, _tts_module.TTS) and new_tts is not old_tts:
+                    new_tts.on("metrics_collected", self._on_metrics_collected)
+                    new_tts.on("error", self._on_error)
 
         if self._audio_recognition:
             self._audio_recognition.update_options(

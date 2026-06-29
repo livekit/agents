@@ -1154,11 +1154,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if is_given(turn_detection):
             self._turn_detection = turn_detection
 
-        if is_given(stt):
-            self._stt = stt
-
-        if is_given(tts):
-            self._tts = tts
+        # Note: self._stt / self._tts are NOT written here. AgentActivity.update_options
+        # performs the actual swap (writes self._session._stt, self._session._tts, and
+        # migrates metrics/error event listeners) so the capture-old / apply-new sequence
+        # runs in one method. This ordering is required for listener migration to work —
+        # the activity reads the prior session._stt before mutating it, and that prior
+        # value must still be the old instance.
 
         if self._activity is not None:
             self._activity.update_options(
