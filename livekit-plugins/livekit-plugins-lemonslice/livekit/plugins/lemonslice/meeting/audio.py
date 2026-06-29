@@ -8,6 +8,7 @@ import struct
 from collections.abc import Callable
 
 import aiohttp
+import numpy as np
 
 from livekit import rtc
 from livekit.agents.voice.io import AudioInput
@@ -16,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 _HEADER = struct.Struct("<IB")
 _DEFAULT_STT_RATE = 16000
+_STT_CHANNELS = 1
 _INITIAL_RECONNECT_DELAY_S = 1.0
 _MAX_RECONNECT_DELAY_S = 30.0
 
@@ -34,6 +36,21 @@ def _deserialize_frame(payload: bytes) -> rtc.AudioFrame | None:
         sample_rate=sample_rate or _DEFAULT_STT_RATE,
         num_channels=channels,
         samples_per_channel=samples_per_channel,
+    )
+
+
+def _downmix_to_mono(frame: rtc.AudioFrame) -> rtc.AudioFrame:
+    """Downmix multi-channel PCM to mono for STT (parity with RoomIO)."""
+    if frame.num_channels == 1:
+        return frame
+
+    data = np.array(frame.data, dtype=np.int16)
+    mono = data.reshape(-1, frame.num_channels).mean(axis=1).astype(np.int16)
+    return rtc.AudioFrame(
+        data=mono.tobytes(),
+        sample_rate=frame.sample_rate,
+        num_channels=_STT_CHANNELS,
+        samples_per_channel=frame.samples_per_channel,
     )
 
 
@@ -76,6 +93,7 @@ class MeetingAudioInput(AudioInput):
         frame = _deserialize_frame(payload)
         if frame is None:
             return
+        frame = _downmix_to_mono(frame)
         for out in self._resample(frame):
             self._enqueue(out)
 
@@ -156,29 +174,3 @@ async def stream_meeting_relay(
         if not stop.is_set():
             await asyncio.sleep(backoff_time)
             backoff_time = min(backoff_time * 2, max_reconnect_delay_s)
-
-
-async def stream_meeting_audio(
-    websocket_url: str,
-    sink: Callable[[bytes], None],
-    *,
-    stop: asyncio.Event,
-    reconnect_delay_s: float = _INITIAL_RECONNECT_DELAY_S,
-    max_reconnect_delay_s: float = _MAX_RECONNECT_DELAY_S,
-) -> None:
-    """Stream meeting audio from the LemonSlice meeting relay.
-
-    Args:
-        websocket_url: WebSocket URL returned by join_meeting.
-        sink: Callback invoked with each binary PCM payload.
-        stop: Event that signals the relay loop to exit.
-        reconnect_delay_s: Initial reconnect delay in seconds.
-        max_reconnect_delay_s: Maximum reconnect delay in seconds.
-    """
-    await stream_meeting_relay(
-        websocket_url,
-        sink,
-        stop=stop,
-        reconnect_delay_s=reconnect_delay_s,
-        max_reconnect_delay_s=max_reconnect_delay_s,
-    )
