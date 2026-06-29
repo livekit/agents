@@ -91,6 +91,10 @@ _CHAT_CONTEXT_DEFAULTS: ChatContextOptions = {
 _PENDING_TTL = 3  # a pending term not confirmed within this many passes is dropped
 _MAX_TRANSCRIPT_MESSAGES = 12
 
+# bound a single pass so a stuck LLM call can't hold the single-flight guard forever and
+# stall detection for the rest of the call; a timed-out pass simply makes no change
+_DETECTION_TIMEOUT = 10.0
+
 # default model for keyterm extraction when ``keyterm_detection.llm`` is not set
 _DEFAULT_DETECTION_MODEL = "google/gemini-3.5-flash"
 
@@ -392,9 +396,14 @@ async def _detect_keyterms(
     req_ctx = ChatContext.empty()
     req_ctx.add_message(role="system", content=instructions or _DEFAULT_KEYTERM_INSTRUCTIONS)
     req_ctx.add_message(role="user", content=user_msg)
-    response = await llm.chat(
-        chat_ctx=req_ctx, tools=[_record_keyterms], tool_choice="required"
-    ).collect()
+    try:
+        response = await asyncio.wait_for(
+            llm.chat(chat_ctx=req_ctx, tools=[_record_keyterms], tool_choice="required").collect(),
+            timeout=_DETECTION_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("keyterm detection: pass timed out after %ss; skipping", _DETECTION_TIMEOUT)
+        return [], [], []
     result = _parse_tool_call(response.tool_calls)
 
     if lk_keyterms_debug:
