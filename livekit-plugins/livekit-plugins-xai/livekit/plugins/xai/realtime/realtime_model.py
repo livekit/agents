@@ -159,6 +159,24 @@ class RealtimeSession(openai.realtime.RealtimeSession):
     def _handle_conversion_item_input_audio_transcription_completed(
         self, event: ConversationItemInputAudioTranscriptionCompletedEvent
     ) -> None:
+        # Unlike OpenAI, xAI streams partial transcripts through this same event,
+        # distinguishing them with a `status` field ("in_progress" for partials,
+        # "completed" for the final transcript). The OpenAI base handler ignores
+        # `status` and always emits is_final=True, so every partial would be
+        # surfaced as a final transcription (and a duplicate conversation item).
+        # Emit interim updates for in-progress transcripts and only delegate to the
+        # base handler for the final one.
+        if getattr(event, "status", None) == "in_progress":
+            self.emit(
+                "input_audio_transcription_completed",
+                llm.InputTranscriptionCompleted(
+                    item_id=event.item_id,
+                    transcript=event.transcript,
+                    is_final=False,
+                ),
+            )
+            return
+
         # audio transcription is included when the item is added
         # clear the content before appending the transcript to avoid duplicates
         if remote_item := self._remote_chat_ctx.get(event.item_id):
