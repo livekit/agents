@@ -81,6 +81,8 @@ class _LLMOptions:
     automatic_function_calling_config: NotGivenOr[types.AutomaticFunctionCallingConfigOrDict]
     http_options: NotGivenOr[types.HttpOptions]
     seed: NotGivenOr[int]
+    response_mime_type: NotGivenOr[str]
+    response_schema: NotGivenOr[types.SchemaUnion | type]
     safety_settings: NotGivenOr[list[types.SafetySettingOrDict]]
     service_tier: NotGivenOr[types.ServiceTier]
     cached_content: NotGivenOr[str]
@@ -120,6 +122,10 @@ class LLM(llm.LLM):
         ] = NOT_GIVEN,
         http_options: NotGivenOr[types.HttpOptions] = NOT_GIVEN,
         seed: NotGivenOr[int] = NOT_GIVEN,
+        response_mime_type: NotGivenOr[str] = NOT_GIVEN,
+        response_schema: NotGivenOr[
+            types.SchemaUnion | type[llm_utils.ResponseFormatT]
+        ] = NOT_GIVEN,
         safety_settings: NotGivenOr[list[types.SafetySettingOrDict]] = NOT_GIVEN,
         service_tier: NotGivenOr[types.ServiceTier] = NOT_GIVEN,
         cached_content: NotGivenOr[str] = NOT_GIVEN,
@@ -154,6 +160,8 @@ class LLM(llm.LLM):
             automatic_function_calling_config (AutomaticFunctionCallingConfigOrDict, optional): The automatic function calling configuration for response generation. Defaults to None.
             http_options (HttpOptions, optional): The HTTP options to use for the session.
             seed (int, optional): Random seed for reproducible generation. Defaults to None.
+            response_mime_type (str, optional): Output MIME type, e.g. "application/json" or "text/plain". Can be used alone without response_schema. Defaults to None.
+            response_schema (SchemaUnion | type, optional): Schema to constrain the JSON output structure. When set, response_mime_type defaults to "application/json" if not explicitly provided. Defaults to None.
             safety_settings (list[SafetySettingOrDict], optional): Safety settings for content filtering. Defaults to None.
             service_tier (types.ServiceTier, optional): The service tier for the request (e.g. types.ServiceTier.PRIORITY). Defaults to None.
             cached_content (str, optional): Resource name of an explicit context cache to attach to every request from this LLM instance, e.g. ``"cachedContents/abc123"`` for the Gemini API or ``"projects/<project>/locations/<location>/cachedContents/abc123"`` for VertexAI. The cache must already exist — create it via ``client.caches.create(...)`` and pass the returned ``name``. Gemini rejects ``generateContent`` requests that combine ``cached_content`` with ``system_instruction``, ``tools``, or ``tool_config``, so when this option is set the plugin bakes those fields out of every outgoing request; the cache resource itself must contain whichever of them the model needs (typically the system prompt and the tool schemas). Useful for long-lived static prefixes where implicit caching is unreliable. See https://ai.google.dev/gemini-api/docs/caching for details and minimum prefix-token requirements. Defaults to None.
@@ -229,6 +237,8 @@ class LLM(llm.LLM):
             automatic_function_calling_config=automatic_function_calling_config,
             http_options=http_options,
             seed=seed,
+            response_mime_type=response_mime_type,
+            response_schema=response_schema,
             safety_settings=safety_settings,
             service_tier=service_tier,
             cached_content=cached_content,
@@ -327,8 +337,24 @@ class LLM(llm.LLM):
             )
 
         if is_given(response_format):
-            extra["response_schema"] = to_response_format(response_format)
+            if isinstance(response_format, (dict, types.Schema)):
+                extra["response_schema"] = response_format
+            else:
+                extra["response_schema"] = to_response_format(response_format)
             extra["response_mime_type"] = "application/json"
+        else:
+            if is_given(self._opts.response_schema):
+                if isinstance(self._opts.response_schema, (dict, types.Schema)):
+                    extra["response_schema"] = self._opts.response_schema
+                else:
+                    extra["response_schema"] = to_response_format(self._opts.response_schema)
+                extra["response_mime_type"] = (
+                    self._opts.response_mime_type
+                    if is_given(self._opts.response_mime_type)
+                    else "application/json"
+                )
+            elif is_given(self._opts.response_mime_type):
+                extra["response_mime_type"] = self._opts.response_mime_type
 
         if is_given(self._opts.temperature):
             extra["temperature"] = self._opts.temperature
