@@ -575,7 +575,22 @@ class AgentActivity(RecognitionHooks):
             # session swap changes the effective STT and a rewire ensures the next
             # utterance picks up the new instance.
             agent_owns_stt = self._agent is not None and is_given(self._agent.stt)
-            if not agent_owns_stt and self._audio_recognition is not None:
+            if agent_owns_stt and resolved_stt is not None:
+                # Silent-failure case: caller is providing a non-None STT but the
+                # agent-bound contract shadows it. Note that the resolution path
+                # treats both `agent.stt = None` and `agent.stt = SomeSTT` the same
+                # way (`is_given()` returns True for both), so this warning covers
+                # both "agent has its own STT" and "agent has STT disabled" cases
+                # where the caller tries to enable via session-level swap.
+                logger.warning(
+                    "AgentSession.update_options(stt=...) is a no-op because the "
+                    "current agent was constructed with its own stt (%r); "
+                    "activity.stt will continue to resolve to the agent's value. "
+                    "Use session.update_agent(...) or construct the agent "
+                    "without an explicit stt to redirect the session swap.",
+                    self._agent.stt,
+                )
+            elif self._audio_recognition is not None:
                 self._audio_recognition.update_stt(
                     self._agent.stt_node if resolved_stt is not None else None
                 )
