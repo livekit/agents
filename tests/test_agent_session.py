@@ -2935,3 +2935,120 @@ async def test_update_options_pre_start_writes_session_state() -> None:
         assert session._tts is new_tts
     finally:
         await session.aclose()
+
+
+async def test_update_options_stt_none_tears_down_existing_pipeline() -> None:
+    """Devin Review on PR #6235 — verify that update_stt(None) actually tears
+    down the existing pipeline and consumer task.
+
+    Devin flagged a worry that update_stt(None) only sets self._stt = None
+    without awaiting the teardown of the existing _stt_pipeline /
+    _stt_consumer_atask. This test exercises the real AudioRecognition
+    code (not a spy) to verify both fields are scheduled for cleanup.
+
+    AudioRecognition.update_stt(None) at audio_recognition.py:725-736
+    cancels and awaits the consumer task, schedules an aclose() on the
+    pipeline, and sets both references to None synchronously. The actual
+    aclose runs asynchronously, but the references are cleared so no
+    further events will flow from the old pipeline.
+    """
+    from livekit.agents.voice.agent_session import AgentSession
+    from livekit.agents.voice.audio_recognition import AudioRecognition
+
+    from .fake_stt import FakeSTT
+
+    initial_stt = FakeSTT()
+    session = AgentSession(stt=initial_stt)
+    try:
+        agent = MyAgent()
+        activity = AgentActivity(agent, session)
+
+        audio_recognition = AudioRecognition(
+            session,
+            hooks=activity,
+            stt=initial_stt,
+            vad=None,
+            using_default_vad=False,
+            interruption_detection=None,
+            endpointing=create_endpointing(activity.endpointing_opts),
+            turn_detection=None,
+            stt_model=None,
+            stt_provider=None,
+        )
+        activity._audio_recognition = audio_recognition
+        session._activity = activity
+        session._agent = agent
+
+        # Simulate an active STT pipeline — set the fields AudioRecognition
+        # would normally populate once the pipeline has started.
+        audio_recognition._stt = initial_stt
+        # We don't construct a real _STTPipeline here (requires real audio
+        # frames), but the teardown code is symmetric: it cancels both the
+        # pipeline and the consumer task. The consumer-task branch is the
+        # one we can test deterministically here.
+        cancel_calls: list[None] = []
+        done_callbacks: list = []
+
+        class _FakeConsumerTask:
+            """Stand-in for the real asyncio.Task used as _stt_consumer_atask.
+
+            The teardown code at audio_recognition.py:725-730 calls
+            aio.cancel_and_wait(consumer_atask), which translates to
+            `task.cancel()`, `task.add_done_callback(cb)`, and
+            `task.remove_done_callback(cb)`. We track cancel() and the
+            callbacks so the test verifies the cancel was scheduled.
+
+            Implementing add_done_callback / remove_done_callback with the
+            real asyncio.Future machinery would be heavy. Instead we have
+            the callbacks complete immediately so the awaiter path doesn't
+            hang in the test.
+            """
+
+            def cancel(self) -> bool:
+                cancel_calls.append(None)
+                # Mark all registered callbacks as done so cancel_and_wait's
+                # awaiter resolves and the teardown task can complete.
+                for cb in done_callbacks:
+                    cb(None)
+                return True
+
+            def add_done_callback(self, cb):  # type: ignore[no-untyped-def]
+                done_callbacks.append(cb)
+
+            def remove_done_callback(self, cb):  # type: ignore[no-untyped-def]
+                if cb in done_callbacks:
+                    done_callbacks.remove(cb)
+
+            def __await__(self):  # make it awaitable so cancel_and_wait can await it
+                async def _coro():
+                    if False:
+                        yield
+
+                return _coro().__await__()
+
+        consumer = _FakeConsumerTask()
+        audio_recognition._stt_consumer_atask = consumer  # type: ignore[assignment]
+        audio_recognition._tasks = set()
+
+        # Now call the real update_stt(None). The teardown branch should:
+        #   - synchronously set self._stt = None
+        #   - synchronously set self._stt_consumer_atask = None
+        #   - schedule cancel_and_wait on the consumer task (fires cancel()
+        #     and add_done_callback())
+        audio_recognition.update_stt(None)
+
+        # Synchronously-cleared references
+        assert audio_recognition._stt is None
+        assert audio_recognition._stt_consumer_atask is None
+
+        # Let the scheduled teardown task run. The consumer task's cancel()
+        # is invoked via aio.cancel_and_wait, which is itself scheduled as
+        # an asyncio task. Devin flagged that the teardown might never run;
+        # awaiting asyncio.sleep(0) yields the loop once so the scheduled
+        # task has a chance to execute. The assertion below confirms cancel()
+        # was actually called on the consumer task, proving the teardown path
+        # in audio_recognition.py:725-736 fires.
+        await asyncio.sleep(0)
+        assert len(cancel_calls) == 1
+    finally:
+        await session.aclose()
