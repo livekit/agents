@@ -238,7 +238,9 @@ class LLM(llm.LLM):
             else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
         )  # type: ignore
 
-        resolved_model = model if model is not None else azure_deployment or "gpt-4o"
+        # For Azure, the model name is only used as a metric label, so keep the
+        # fallback neutral when neither model nor deployment is provided.
+        resolved_model = model if model is not None else azure_deployment or "unknown"
 
         llm = LLM(
             model=resolved_model,
