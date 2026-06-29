@@ -13,7 +13,7 @@ class DirectorNotes:
         expressivity: Normalized expressivity in [0, 1] controlling how strongly the
             avatar responds to ``presetStyle``/``customStylePrompt`` and any inline
             cues: 1 responds more strongly, 0 less strongly. ``None`` falls back to
-            the default value of 0.35. Out-of-range values are rejected by Anam with
+            the default value of 0.5. Out-of-range values are rejected by Anam with
             an HTTP 400.
         presetStyle: A built-in expressive style (e.g. ``"happy"``, ``"warm"``,
             ``"playful"``). Mutually exclusive with ``customStylePrompt`` — Anam
