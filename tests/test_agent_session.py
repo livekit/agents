@@ -1827,8 +1827,14 @@ async def test_update_options_tts_swaps_session_and_agent_resolves_to_new_tts() 
         await session.aclose()
 
 
-async def test_update_options_stt_mirrors_to_agent_when_agent_has_own_stt() -> None:
-    """If the agent was constructed with its own STT, the swap mirrors onto the agent."""
+async def test_update_options_does_not_overwrite_agent_stt() -> None:
+    """If the agent was constructed with its own STT, the swap does NOT overwrite it.
+
+    update_options only manages session-owned state. Agent-bound STT is the
+    agent's private configuration; the existing activity.stt resolution order
+    (agent.stt if present, else session.stt) keeps using the agent's value.
+    Callers who want to redirect agent-owned STT should use update_agent.
+    """
     from livekit.agents.voice.agent_session import AgentSession
 
     from .fake_stt import FakeSTT
@@ -1848,11 +1854,12 @@ async def test_update_options_stt_mirrors_to_agent_when_agent_has_own_stt() -> N
 
         session.update_options(stt=new_stt)
 
-        # both session-level and agent-level STT are swapped
+        # session-level STT was updated
         assert session._stt is new_stt
-        assert agent._stt is new_stt
-        # activity.stt resolves to the new STT via the agent
-        assert activity.stt is new_stt
+        # agent-level STT is preserved — update_options does not cross the boundary
+        assert agent._stt is agent_stt
+        # activity.stt still resolves to the agent's STT, not the new session STT
+        assert activity.stt is agent_stt
     finally:
         await session.aclose()
 
@@ -2031,7 +2038,7 @@ async def test_update_options_directly_on_activity_swaps_state() -> None:
 
 async def test_update_options_directly_on_activity_with_agent_bound_stt() -> None:
     """When the agent has its own STT, calling activity.update_options directly
-    must still mirror the swap onto agent._stt.
+    must NOT overwrite the agent's STT — only session-level state is updated.
     """
     from livekit.agents.voice.agent_session import AgentSession
     from livekit.agents.voice.audio_recognition import AudioRecognition
@@ -2074,9 +2081,132 @@ async def test_update_options_directly_on_activity_with_agent_bound_stt() -> Non
         # direct call on the activity
         activity.update_options(stt=new_stt)
 
-        # session, agent, and activity all see the new STT
+        # session is updated; agent's STT is preserved (no boundary crossing)
         assert session._stt is new_stt
-        assert agent._stt is new_stt
-        assert activity.stt is new_stt
+        assert agent._stt is agent_stt
+        # activity.stt still resolves to the agent's STT
+        assert activity.stt is agent_stt
+    finally:
+        await session.aclose()
+
+
+async def test_update_options_prewarms_new_stt_and_tts() -> None:
+    """Swapping STT/TTS via update_options must call .prewarm() on the new
+    instances so providers that eagerly open connections (e.g. Sarvam TTS)
+    don't pay first-call latency on the first synthesis after a swap.
+
+    Regression for the prewarm gap flagged by Devin Review on PR #6235.
+    """
+    from livekit.agents.voice.agent_session import AgentSession
+    from livekit.agents.voice.audio_recognition import AudioRecognition
+
+    from .fake_stt import FakeSTT
+    from .fake_tts import FakeTTS
+
+    prewarm_stt_calls: list[FakeSTT] = []
+    prewarm_tts_calls: list[FakeTTS] = []
+
+    class PrewarmSTT(FakeSTT):
+        def prewarm(self) -> None:
+            prewarm_stt_calls.append(self)
+
+    class PrewarmTTS(FakeTTS):
+        def prewarm(self) -> None:
+            prewarm_tts_calls.append(self)
+
+    old_stt = PrewarmSTT()
+    old_tts = PrewarmTTS()
+    new_stt = PrewarmSTT()
+    new_tts = PrewarmTTS()
+
+    session = AgentSession(stt=old_stt, tts=old_tts)
+    try:
+        agent = MyAgent()
+        activity = AgentActivity(agent, session)
+
+        audio_recognition = AudioRecognition(
+            session,
+            hooks=activity,
+            stt=None,
+            vad=None,
+            using_default_vad=False,
+            interruption_detection=None,
+            endpointing=create_endpointing(activity.endpointing_opts),
+            turn_detection=None,
+            stt_model=None,
+            stt_provider=None,
+        )
+        activity._audio_recognition = audio_recognition
+        session._activity = activity
+        session._agent = agent
+
+        # spy on update_stt without invoking the original — see comment above
+        def spy_update_stt(stt_node, **kwargs):  # type: ignore[no-untyped-def]
+            pass
+
+        audio_recognition.update_stt = spy_update_stt  # type: ignore[method-assign]
+
+        # baseline: nothing prewarmed yet
+        assert prewarm_stt_calls == []
+        assert prewarm_tts_calls == []
+
+        session.update_options(stt=new_stt, tts=new_tts)
+
+        # the new instances must be prewarmed — once each, after the swap
+        assert prewarm_stt_calls == [new_stt]
+        assert prewarm_tts_calls == [new_tts]
+        # the old instances must NOT be prewarmed (only the new ones go through prewarm)
+        assert old_stt not in prewarm_stt_calls
+        assert old_tts not in prewarm_tts_calls
+    finally:
+        await session.aclose()
+
+
+async def test_update_options_prewarm_skipped_when_stt_none() -> None:
+    """Passing stt=None to update_options disables STT and must NOT call
+    prewarm() (which would AttributeError on None).
+    """
+    from livekit.agents.voice.agent_session import AgentSession
+    from livekit.agents.voice.audio_recognition import AudioRecognition
+
+    from .fake_stt import FakeSTT
+
+    prewarm_stt_calls: list[FakeSTT] = []
+
+    class PrewarmSTT(FakeSTT):
+        def prewarm(self) -> None:
+            prewarm_stt_calls.append(self)
+
+    session = AgentSession(stt=PrewarmSTT())
+    try:
+        agent = MyAgent()
+        activity = AgentActivity(agent, session)
+
+        audio_recognition = AudioRecognition(
+            session,
+            hooks=activity,
+            stt=None,
+            vad=None,
+            using_default_vad=False,
+            interruption_detection=None,
+            endpointing=create_endpointing(activity.endpointing_opts),
+            turn_detection=None,
+            stt_model=None,
+            stt_provider=None,
+        )
+        activity._audio_recognition = audio_recognition
+        session._activity = activity
+        session._agent = agent
+
+        # spy on update_stt to avoid spawning a real _stt_pump consumer task
+        def spy_update_stt(stt_node, **kwargs):  # type: ignore[no-untyped-def]
+            pass
+
+        audio_recognition.update_stt = spy_update_stt  # type: ignore[method-assign]
+
+        # disable STT — None disables, must skip prewarm
+        session.update_options(stt=None)
+
+        assert prewarm_stt_calls == []
     finally:
         await session.aclose()
