@@ -558,14 +558,6 @@ class AgentActivity(RecognitionHooks):
             )
 
         if is_given(stt):
-            # Rewire the live STT pipeline. We pass the agent's stt_node (the bound method),
-            # which the agent_activity wired in during __init__ — passing it here mirrors that
-            # initial wiring, but the STT instance it pulls from inside the node now reads
-            # activity.stt per call. Passing None disables STT.
-            if self._audio_recognition is not None:
-                self._audio_recognition.update_stt(
-                    self._agent.stt_node if stt is not None else None
-                )
             # Mirror the swap onto session._stt so activity.stt resolves to the new
             # instance on the next read. AgentSession.update_options already does this
             # before calling here, so this is normally a no-op — but it keeps the contract
@@ -574,6 +566,19 @@ class AgentActivity(RecognitionHooks):
             # and the existing activity.stt resolution order prefers it when present.
             resolved_stt = stt if stt is not None else None
             self._session._stt = resolved_stt
+            # Rewire the live STT pipeline only if the agent does NOT own its STT.
+            # When the agent was constructed with its own STT, activity.stt resolves
+            # to agent._stt (unchanged by this swap, per the agent-bound contract),
+            # so the pipeline would just restart with the exact same STT instance —
+            # tearing down the in-progress stream and losing buffered transcription
+            # for no functional change. When the agent does not own its STT, the
+            # session swap changes the effective STT and a rewire ensures the next
+            # utterance picks up the new instance.
+            agent_owns_stt = self._agent is not None and is_given(self._agent.stt)
+            if not agent_owns_stt and self._audio_recognition is not None:
+                self._audio_recognition.update_stt(
+                    self._agent.stt_node if resolved_stt is not None else None
+                )
             # Prewarm the new STT instance so providers that eagerly open connections
             # don't pay first-call latency after a swap. Base-class prewarm() is a no-op,
             # so this is a free call for the common case.

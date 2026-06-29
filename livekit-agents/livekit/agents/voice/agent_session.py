@@ -1117,6 +1117,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             ``stt`` and ``tts`` are also module names imported at the top of this file. Inside
             this method they are rebound to the parameter values; the module references are
             not used in the method body, so no aliasing is required.
+
+        Note:
+            The framework does not take ownership of STT/TTS instances passed in. The previous
+            instances are *not* closed automatically — the caller is responsible for managing
+            their lifecycle (consistent with how ``AgentSession``'s constructor treats the
+            initial ``stt`` and ``tts`` arguments). If you want the old instances closed
+            after a swap, call ``await old_stt.aclose()`` (and likewise for TTS) yourself
+            once the swap is complete.
         """
         if is_given(min_endpointing_delay) or is_given(max_endpointing_delay):
             logger.warning(
