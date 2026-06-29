@@ -293,7 +293,6 @@ class AudioRecognition:
         self._turn_detector_flushed: bool = False
         self._turn_detector_late_prediction_warned: bool = False
         self._last_emitted_prediction: TurnDetectionEvent | None = None
-        self._user_speaking_event = asyncio.Event()
 
     def update_options(
         self,
@@ -1228,7 +1227,6 @@ class AudioRecognition:
                 self._hooks.on_start_of_speech(ev, speech_start_time=speech_start_time)
 
             self._speaking = True
-            self._user_speaking_event.set()
 
             if self._turn_detector_stream is not None:
                 self._turn_detector_stream.cancel_inference()
@@ -1250,13 +1248,10 @@ class AudioRecognition:
 
                 if self._speech_start_time is None:
                     self._speech_start_time = time.time() - ev.raw_accumulated_speech
-                self._user_speaking_event.set()
                 if self._speaking and self._turn_detector_prediction_fut is not None:
                     if self._turn_detector_stream is not None:
                         self._turn_detector_stream.cancel_inference()
                     self._turn_detector_prediction_fut = None
-            elif not self._speaking:
-                self._user_speaking_event.clear()
 
             if ev.raw_accumulated_silence >= MIN_SILENCE_DURATION_MS / 1000 and self._speaking:
                 if (
@@ -1271,7 +1266,6 @@ class AudioRecognition:
 
             self._vad_speech_started = False
             self._speaking = False
-            self._user_speaking_event.clear()
             self._last_speaking_time = time.time() - ev.silence_duration - ev.inference_duration
 
             if self._vad_base_turn_detection or (
@@ -1588,57 +1582,12 @@ class AudioRecognition:
 
             self._user_turn_committed = False
 
-        async def _bounce_eou_task_with_speaking_guard(
-            last_speaking_time: float | None = None,
-            last_final_transcript_time: float | None = None,
-            speech_start_time: float | None = None,
-        ) -> None:
-            if self._speaking:
-                logger.debug(
-                    "user is still speaking, skipping end of turn task",
-                    extra={
-                        "last_speaking_time": last_speaking_time,
-                        "last_final_transcript_time": last_final_transcript_time,
-                        "speech_start_time": speech_start_time,
-                    },
-                )
-                return
-
-            tasks = [
-                (speaking_task := asyncio.create_task(self._user_speaking_event.wait())),
-                asyncio.create_task(
-                    _bounce_eou_task(
-                        last_speaking_time, last_final_transcript_time, speech_start_time
-                    )
-                ),
-            ]
-            try:
-                done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-                if speaking_task in done:
-                    logger.debug(
-                        "user spoke during endpointing, cancelling end of turn task",
-                        extra={
-                            "last_speaking_time": last_speaking_time,
-                            "last_final_transcript_time": last_final_transcript_time,
-                            "speech_start_time": speech_start_time,
-                        },
-                    )
-                    return
-            finally:
-                await aio.cancel_and_wait(*tasks)
-
         if self._end_of_turn_task is not None:
             # TODO(theomonnom): disallow cancel if the extra sleep is done
             self._end_of_turn_task.cancel()
-
-        task_func = (
-            _bounce_eou_task_with_speaking_guard
-            if isinstance(self._turn_detector, _StreamingTurnDetector)
-            else _bounce_eou_task
-        )
         # copy the last_speaking_time before awaiting (the value can change)
         self._end_of_turn_task = asyncio.create_task(
-            task_func(
+            _bounce_eou_task(
                 self._last_speaking_time,
                 self._last_final_transcript_time,
                 self._user_turn_start,
