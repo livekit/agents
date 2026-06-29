@@ -575,43 +575,70 @@ class AgentActivity(RecognitionHooks):
             # session swap changes the effective STT and a rewire ensures the next
             # utterance picks up the new instance.
             agent_owns_stt = self._agent is not None and is_given(self._agent.stt)
-            if agent_owns_stt:
-                if resolved_stt is not None:
-                    # Silent-failure case: caller is providing a non-None STT but the
-                    # agent-bound contract shadows it. Note that the resolution path
-                    # treats both `agent.stt = None` and `agent.stt = SomeSTT` the same
-                    # way (`is_given()` returns True for both), so this warning covers
-                    # both "agent has its own STT" and "agent has STT disabled" cases
-                    # where the caller tries to enable via session-level swap.
-                    logger.warning(
-                        "AgentSession.update_options(stt=...) is a no-op because the "
-                        "current agent was constructed with its own stt (%r); "
-                        "activity.stt will continue to resolve to the agent's value. "
-                        "Use session.update_agent(...) or construct the agent "
-                        "without an explicit stt to redirect the session swap.",
-                        self._agent.stt,
-                    )
+            if agent_owns_stt and resolved_stt is not None:
+                # Silent-failure case: caller is providing a non-None STT but the
+                # agent-bound contract shadows it. Note that the resolution path
+                # treats both `agent.stt = None` and `agent.stt = SomeSTT` the same
+                # way (`is_given()` returns True for both), so this warning covers
+                # both "agent has its own STT" and "agent has STT disabled" cases
+                # where the caller tries to enable via session-level swap. We also
+                # skip prewarm() here so providers that eagerly open connections
+                # (e.g. Sarvam STT overriding prewarm) don't open WebSockets that
+                # will never be used (since activity.stt will keep resolving to
+                # agent._stt).
+                logger.warning(
+                    "AgentSession.update_options(stt=...) is a no-op because the "
+                    "current agent was constructed with its own stt (%r); "
+                    "activity.stt will continue to resolve to the agent's value. "
+                    "Use session.update_agent(...) or construct the agent "
+                    "without an explicit stt to redirect the session swap.",
+                    self._agent.stt,
+                )
             elif self._audio_recognition is not None:
                 self._audio_recognition.update_stt(
                     self._agent.stt_node if resolved_stt is not None else None
                 )
-            # Prewarm the new STT instance so providers that eagerly open connections
-            # don't pay first-call latency after a swap. Base-class prewarm() is a no-op,
-            # so this is a free call for the common case.
-            if resolved_stt is not None:
-                resolved_stt.prewarm()
+                # Prewarm the new STT instance so providers that eagerly open
+                # connections don't pay first-call latency after a swap. Only
+                # called on the safe branch above; the agent-bound case skipped
+                # prewarm to avoid opening connections that will never be used.
+                # Base-class prewarm() is a no-op, so this is a free call for
+                # the common case.
+                if resolved_stt is not None:
+                    resolved_stt.prewarm()
 
         if is_given(tts):
-            # No pipeline to restart: tts_node reads activity.tts fresh on every synthesis
-            # call. Mirror the swap onto session._tts so activity.tts resolves to the new
-            # instance on the next read — see the stt branch above for the rationale.
+            # No TTS pipeline to restart: tts_node reads activity.tts fresh on every
+            # synthesis call, so the session swap takes effect on the next synthesis
+            # without rewiring. The session mirror (line below) keeps the resolution
+            # order consistent when callers bypass the session entry point and call
+            # update_options on the activity directly. As with STT, we deliberately
+            # do NOT touch agent._tts; agent-bound TTS keeps precedence.
             resolved_tts = tts if tts is not None else None
             self._session._tts = resolved_tts
-            # Prewarm the new TTS instance. For providers like Sarvam TTS that open a
-            # WebSocket from a connection pool, this opens one connection during the
-            # swap so the first synthesis doesn't pay connection-setup latency.
-            if resolved_tts is not None:
-                resolved_tts.prewarm()
+            # Mirror the STT branch: when the agent owns its own TTS, session-level
+            # swaps are silently shadowed by the agent-bound value on the next read.
+            # Warn so callers know they need update_agent(...) or to omit the tts
+            # kwarg on the agent, and skip prewarm() so providers like Sarvam TTS
+            # that eagerly open WebSockets don't waste resources on an instance that
+            # will never be used.
+            agent_owns_tts = self._agent is not None and is_given(self._agent.tts)
+            if agent_owns_tts and resolved_tts is not None:
+                logger.warning(
+                    "AgentSession.update_options(tts=...) is a no-op because the "
+                    "current agent was constructed with its own tts (%r); "
+                    "activity.tts will continue to resolve to the agent's value. "
+                    "Use session.update_agent(...) or construct the agent "
+                    "without an explicit tts to redirect the session swap.",
+                    self._agent.tts,
+                )
+            else:
+                # Prewarm the new TTS instance so providers that eagerly open
+                # connections don't pay first-call latency after a swap. Only
+                # called on the safe branch above; the agent-bound case skipped
+                # prewarm to avoid opening WebSockets that will never be used.
+                if resolved_tts is not None:
+                    resolved_tts.prewarm()
 
         if self._audio_recognition:
             self._audio_recognition.update_options(
