@@ -45,7 +45,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import AudioBuffer, is_given
 from livekit.agents.voice.io import TimedString
 
-from ._utils import PeriodicCollector, _to_deepgram_url
+from ._utils import PeriodicCollector, _strip_keyterm, _to_deepgram_url
 from .log import logger
 from .models import DeepgramLanguages, DeepgramModels
 
@@ -187,6 +187,8 @@ class STT(stt.STT):
                 "`keyterms` is deprecated, use `keyterm` instead for consistency with Deepgram API."
             )
             keyterm = keyterms
+        if is_given(keyterm):
+            keyterm = _strip_keyterm(keyterm)
         _validate_keyterm(model, language, keyterm, keywords)
 
         self._opts = STTOptions(
@@ -370,7 +372,7 @@ class STT(stt.STT):
             )
             keyterm = keyterms
         if is_given(keyterm):
-            self._opts.keyterm = keyterm
+            self._opts.keyterm = _strip_keyterm(keyterm)
         if is_given(profanity_filter):
             self._opts.profanity_filter = profanity_filter
         if is_given(redact):
@@ -531,7 +533,7 @@ class SpeechStream(stt.SpeechStream):
             )
             keyterm = keyterms
         if is_given(keyterm):
-            self._opts.keyterm = keyterm
+            self._opts.keyterm = _strip_keyterm(keyterm)
         if is_given(profanity_filter):
             self._opts.profanity_filter = profanity_filter
         if is_given(redact):

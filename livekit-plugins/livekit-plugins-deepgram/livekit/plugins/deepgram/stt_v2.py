@@ -41,7 +41,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import AudioBuffer, is_given
 from livekit.agents.voice.io import TimedString
 
-from ._utils import PeriodicCollector, _to_deepgram_url
+from ._utils import PeriodicCollector, _strip_keyterm, _to_deepgram_url
 from .log import logger
 from .models import V2Models
 
@@ -123,6 +123,8 @@ class STTv2(stt.STT):
                 "`keyterms` is deprecated, use `keyterm` instead for consistency with Deepgram API."
             )
             keyterm = keyterms
+        if is_given(keyterm):
+            keyterm = _strip_keyterm(keyterm)
 
         if is_given(eager_eot_threshold):
             effective_eot = eot_threshold if is_given(eot_threshold) else 0.7
@@ -236,7 +238,7 @@ class STTv2(stt.STT):
             )
             keyterm = keyterms
         if is_given(keyterm):
-            self._opts.keyterm = keyterm
+            self._opts.keyterm = _strip_keyterm(keyterm)
         if is_given(mip_opt_out):
             self._opts.mip_opt_out = mip_opt_out
         if is_given(tags):
@@ -327,7 +329,7 @@ class SpeechStreamv2(stt.SpeechStream):
             )
             keyterm = keyterms
         if is_given(keyterm):
-            self._opts.keyterm = keyterm
+            self._opts.keyterm = _strip_keyterm(keyterm)
         if is_given(mip_opt_out):
             self._opts.mip_opt_out = mip_opt_out
         if is_given(tags):
