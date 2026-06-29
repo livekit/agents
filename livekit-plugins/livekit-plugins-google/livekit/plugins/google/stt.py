@@ -524,8 +524,10 @@ class STT(stt.STT):
                     "Both 'adaptation' and 'keywords' are set; 'keywords' will be ignored."
                 )
             self._user_keywords = list(keywords)
-            # re-merge with the active session keyterms so a user update doesn't drop them
-            self._config.keywords = self._get_merged_keywords()
+            # re-merge with the active session keyterms so a user update doesn't drop them,
+            # and forward the merged value to the streams below (not the raw user keywords)
+            keywords = self._get_merged_keywords()
+            self._config.keywords = keywords
         if is_given(speech_start_timeout):
             self._config.speech_start_timeout = speech_start_timeout
         if is_given(speech_end_timeout):
