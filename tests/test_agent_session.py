@@ -2405,3 +2405,79 @@ async def test_update_options_no_warning_when_agent_has_no_stt() -> None:
         assert not mock_logger.warning.called
     finally:
         await session.aclose()
+
+
+async def test_update_options_tts_warns_and_skips_prewarm_when_agent_owns_tts() -> None:
+    """Mirror of test_update_options_does_not_rewire_pipeline_when_agent_owns_stt
+    but for TTS. When the agent is constructed with its own TTS, the session
+    swap must log a warning AND skip prewarm on the unused new TTS instance.
+
+    Devin Review on PR #6235: TTS branch was missing the symmetric warning
+    and the symmetric prewarm-skip. TTS has no pipeline to restart, but the
+    unused-instance waste (e.g. Sarvam TTS opening a WebSocket from pool) is
+    the same shape as the STT bug.
+    """
+    from unittest.mock import patch
+
+    from livekit.agents.voice.agent_session import AgentSession
+    from livekit.agents.voice.audio_recognition import AudioRecognition
+
+    from .fake_tts import FakeTTS
+
+    agent_tts = FakeTTS()
+    new_tts = FakeTTS()
+    session = AgentSession(tts=FakeTTS())
+    try:
+        agent = MyAgent()
+        agent._tts = agent_tts  # agent owns its TTS
+        activity = AgentActivity(agent, session)
+
+        # AudioRecognition is required because AgentActivity.__init__ references
+        # it; we don't exercise the STT path here.
+        audio_recognition = AudioRecognition(
+            session,
+            hooks=activity,
+            stt=None,
+            vad=None,
+            using_default_vad=False,
+            interruption_detection=None,
+            endpointing=create_endpointing(activity.endpointing_opts),
+            turn_detection=None,
+            stt_model=None,
+            stt_provider=None,
+        )
+        activity._audio_recognition = audio_recognition
+        session._activity = activity
+        session._agent = agent
+
+        # Spy on prewarm() of the new TTS — must NOT be called when the agent
+        # owns TTS (the new instance will never be used).
+        new_tts_prewarm_calls: list[FakeTTS] = []
+        original_prewarm = new_tts.prewarm
+
+        def prewarm_spy() -> None:
+            new_tts_prewarm_calls.append(new_tts)
+
+        new_tts.prewarm = prewarm_spy  # type: ignore[method-assign]
+
+        # sanity: activity.tts resolves to the agent's TTS
+        assert activity.tts is agent_tts
+
+        with patch("livekit.agents.voice.agent_activity.logger") as mock_logger:
+            session.update_options(tts=new_tts)
+
+        # session-level TTS was updated (state changed)
+        assert session._tts is new_tts
+        # activity.tts still resolves to the agent's TTS (unchanged)
+        assert activity.tts is agent_tts
+        # prewarm was NOT called on the unused new instance
+        assert new_tts_prewarm_calls == []
+        # and a warning was logged to surface the silent failure
+        assert mock_logger.warning.called
+        warning_msg = str(mock_logger.warning.call_args)
+        assert "no-op" in warning_msg
+        assert "tts" in warning_msg.lower()
+
+        new_tts.prewarm = original_prewarm  # type: ignore[method-assign]
+    finally:
+        await session.aclose()
