@@ -2210,3 +2210,67 @@ async def test_update_options_prewarm_skipped_when_stt_none() -> None:
         assert prewarm_stt_calls == []
     finally:
         await session.aclose()
+
+
+async def test_update_options_does_not_rewire_pipeline_when_agent_owns_stt() -> None:
+    """When the agent was constructed with its own STT, the session-level swap
+    must NOT trigger audio_recognition.update_stt.
+
+    The pipeline restart would tear down the in-progress stream, clear the
+    transcript buffer, and reset interruption state — all for no functional
+    change, since activity.stt still resolves to agent._stt (unchanged).
+
+    Regression for the unnecessary-pipeline-restart gap flagged by Devin
+    Review on PR #6235.
+    """
+    from livekit.agents.voice.agent_session import AgentSession
+    from livekit.agents.voice.audio_recognition import AudioRecognition
+
+    from .fake_stt import FakeSTT
+
+    agent_stt = FakeSTT()
+    new_stt = FakeSTT()
+    session = AgentSession(stt=FakeSTT())  # different from agent_stt so the
+    # session-level swap is observable on session._stt
+    try:
+        agent = MyAgent()
+        agent._stt = agent_stt  # agent owns its STT
+        activity = AgentActivity(agent, session)
+
+        audio_recognition = AudioRecognition(
+            session,
+            hooks=activity,
+            stt=None,
+            vad=None,
+            using_default_vad=False,
+            interruption_detection=None,
+            endpointing=create_endpointing(activity.endpointing_opts),
+            turn_detection=None,
+            stt_model=None,
+            stt_provider=None,
+        )
+        activity._audio_recognition = audio_recognition
+        session._activity = activity
+        session._agent = agent
+
+        update_stt_calls: list[object] = []
+
+        def spy_update_stt(stt_node, **kwargs):  # type: ignore[no-untyped-def]
+            update_stt_calls.append(stt_node)
+
+        audio_recognition.update_stt = spy_update_stt  # type: ignore[method-assign]
+
+        # sanity: activity.stt resolves to the agent's STT
+        assert activity.stt is agent_stt
+
+        # session-level swap — agent still owns its own STT
+        session.update_options(stt=new_stt)
+
+        # session-level STT was updated (state changed)
+        assert session._stt is new_stt
+        # but the pipeline was NOT rewired — agent's STT is still in effect
+        assert update_stt_calls == []
+        # and activity.stt still resolves to the agent's STT (unchanged)
+        assert activity.stt is agent_stt
+    finally:
+        await session.aclose()
