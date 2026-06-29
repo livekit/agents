@@ -10,7 +10,10 @@ import pytest
 from livekit import rtc
 from livekit.agents.llm import LLM, ChatContext, ChatMessage, CollectedResponse, FunctionToolCall
 from livekit.agents.stt import STT, RecognizeStream, SpeechEvent, STTCapabilities
-from livekit.agents.stt.recognition_context import (
+from livekit.agents.types import NOT_GIVEN, APIConnectOptions, NotGivenOr
+from livekit.agents.utils import AudioBuffer
+from livekit.agents.voice.events import ConversationItemAddedEvent
+from livekit.agents.voice.keyterm_detection import (
     _PENDING_TTL,
     KeytermDetector,
     _detect_keyterms,
@@ -18,9 +21,6 @@ from livekit.agents.stt.recognition_context import (
     _parse_tool_call,
     _resolve_detection,
 )
-from livekit.agents.types import NOT_GIVEN, APIConnectOptions, NotGivenOr
-from livekit.agents.utils import AudioBuffer
-from livekit.agents.voice.events import ConversationItemAddedEvent
 
 pytestmark = pytest.mark.unit
 

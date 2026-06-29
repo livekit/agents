@@ -112,6 +112,7 @@ class STT(stt.STT):
         prompt: NotGivenOr[str] = NOT_GIVEN,
         agent_context: NotGivenOr[str] = NOT_GIVEN,
         previous_context_n_turns: NotGivenOr[int] = NOT_GIVEN,
+        agent_context_carryover: bool = False,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         speaker_labels: NotGivenOr[bool] = NOT_GIVEN,
         max_speakers: NotGivenOr[int] = NOT_GIVEN,
@@ -161,6 +162,11 @@ class STT(stt.STT):
                 Only supported with the 'u3-rt-pro' / 'u3-rt-pro-beta-1' / 'universal-3-5-pro'
                 models. Set at construction (connect) time only; it cannot be changed via
                 `update_options`.
+            agent_context_carryover: When the model supports it, let an ``AgentSession`` push each
+                assistant reply into ``agent_context`` so it is carried into the model's
+                conversation context. Defaults to False; set True to enable. Prior user turns are
+                carried automatically by the model regardless of this flag. Ignored on models
+                without context support.
             voice_focus: Voice Focus isolates the primary voice and suppresses background
                 noise (chatter, keyboard clicks, fan hum, room echo) before the audio reaches
                 the model. Use 'near-field' for headsets, handsets, and close-talking
@@ -182,6 +188,14 @@ class STT(stt.STT):
                 'u3-rt-pro-beta-1' / 'universal-3-5-pro' models. Set at construction (connect)
                 time only.
         """
+        # agent_context carryover is only available on the u3-rt-pro family
+        # ("u3-pro" is normalized to "u3-rt-pro" below) and is opt-in via the user
+        supports_carryover = model in _U3_PRO_MODELS or model == "u3-pro"
+        if agent_context_carryover and not supports_carryover:
+            logger.warning(
+                "agent_context_carryover is enabled but model %r does not support it; ignoring",
+                model,
+            )
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
@@ -190,9 +204,7 @@ class STT(stt.STT):
                 offline_recognize=False,
                 diarization=is_given(speaker_labels) and speaker_labels is True,
                 keyterms=True,
-                # agent_context carryover is only available on the u3-rt-pro family
-                # ("u3-pro" is normalized to "u3-rt-pro" below)
-                chat_context=model in _U3_PRO_MODELS or model == "u3-pro",
+                chat_context=agent_context_carryover and supports_carryover,
             ),
         )
         if model == "u3-pro":

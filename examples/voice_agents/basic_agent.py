@@ -103,7 +103,7 @@ async def entrypoint(ctx: JobContext) -> None:
             text_transforms.replace({"LiveKit": "<<ˈ|l|aɪ|v|k|ɪ|t>>"}),
         ],
         # automatically detect keyterms and apply them to the STT per user turn
-        stt_context_options={
+        keyterms_options={
             "keyterms": ["LiveKit"],
             "keyterm_detection": {
                 "enabled": True,

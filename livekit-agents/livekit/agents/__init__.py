@@ -67,7 +67,6 @@ from .simulation import (
     SimulationRun,
     SimulationVerdict,
 )
-from .stt.recognition_context import ChatContextOptions, KeytermDetectionOptions, STTContextOptions
 from .types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -109,6 +108,7 @@ from .voice.amd import (
     AMDPredictionEvent,
 )
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
+from .voice.keyterm_detection import KeytermDetectionOptions, KeytermsOptions
 from .voice.room_io import RoomInputOptions, RoomIO, RoomOutputOptions
 from .voice.run_result import (
     AgentHandoffEvent,
@@ -257,9 +257,8 @@ __all__ = [
     "InterruptionOptions",
     "PreemptiveGenerationOptions",
     "UserTurnLimitOptions",
-    "STTContextOptions",
+    "KeytermsOptions",
     "KeytermDetectionOptions",
-    "ChatContextOptions",
     "UserTurnExceededEvent",
 ]
 
