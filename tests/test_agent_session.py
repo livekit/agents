@@ -2814,3 +2814,124 @@ async def test_update_options_no_listener_swap_when_agent_owns_stt() -> None:
         assert new_off == []
     finally:
         await session.aclose()
+
+
+async def test_update_options_tts_none_with_agent_bound_tts_does_not_double_attach() -> None:
+    """Devin Review on PR #6235 — TTS double-attach regression test.
+
+    When the agent is constructed with its own TTS and the caller passes
+    tts=None, the listener migration must NOT run. _start_session already
+    attached listeners at startup, and re-attaching them via the common-
+    path migration would double-deliver every metrics_collected/error
+    event AND leak one set of listeners that _stop_session never cleans
+    up (since _stop_session only detaches from the current instance).
+
+    The symmetric STT equivalent is test_update_options_stt_none_with_
+    agent_bound_stt_does_not_tear_down_pipeline.
+    """
+    from unittest.mock import patch
+
+    from livekit.agents.voice.agent_session import AgentSession
+    from livekit.agents.voice.audio_recognition import AudioRecognition
+
+    from .fake_tts import FakeTTS
+
+    agent_tts = FakeTTS()
+    session = AgentSession(tts=FakeTTS())
+    try:
+        agent = MyAgent()
+        agent._tts = agent_tts  # agent owns its TTS
+        activity = AgentActivity(agent, session)
+
+        audio_recognition = AudioRecognition(
+            session,
+            hooks=activity,
+            stt=None,
+            vad=None,
+            using_default_vad=False,
+            interruption_detection=None,
+            endpointing=create_endpointing(activity.endpointing_opts),
+            turn_detection=None,
+            stt_model=None,
+            stt_provider=None,
+        )
+        activity._audio_recognition = audio_recognition
+        session._activity = activity
+        session._agent = agent
+
+        # no-op spy on update_stt
+        def spy_update_stt(stt_node, **kwargs):  # type: ignore[no-untyped-def]
+            pass
+
+        audio_recognition.update_stt = spy_update_stt  # type: ignore[method-assign]
+
+        # sanity: activity.tts resolves to the agent's TTS
+        assert activity.tts is agent_tts
+
+        # track .on() and .off() on the agent's TTS — must NOT be called
+        # because the agent-bound contract shadows the swap entirely.
+        agent_on: list[str] = []
+        agent_off: list[str] = []
+        original_on = agent_tts.on
+        original_off = agent_tts.off
+
+        def tracked_on(event, callback=None, **kwargs):  # type: ignore[no-untyped-def]
+            agent_on.append(event)
+            return original_on(event, callback, **kwargs)
+
+        def tracked_off(event, callback=None, **kwargs):  # type: ignore[no-untyped-def]
+            agent_off.append(event)
+            return original_off(event, callback, **kwargs)
+
+        agent_tts.on = tracked_on  # type: ignore[method-assign]
+        agent_tts.off = tracked_off  # type: ignore[method-assign]
+
+        # the dangerous path: caller passes tts=None, agent owns its TTS
+        with patch("livekit.agents.voice.agent_activity.logger") as mock_logger:
+            session.update_options(tts=None)
+
+        # session-level TTS was set to None (state changed)
+        assert session._tts is None
+        # activity.tts still resolves to the agent's TTS (unchanged)
+        assert activity.tts is agent_tts
+        # CRITICAL: no listener migration. agent_tts is the SAME instance as
+        # before the swap, and _start_session already attached listeners at
+        # startup. Re-attaching would double-deliver every event AND leak
+        # one set that _stop_session never cleans up.
+        assert agent_on == []
+        assert agent_off == []
+        # no warning here — caller is disabling TTS, agent wins, consistent.
+        assert not mock_logger.warning.called
+    finally:
+        await session.aclose()
+
+
+async def test_update_options_pre_start_writes_session_state() -> None:
+    """Devin Review on PR #6235 — pre-start swap.
+
+    When session.update_options is called BEFORE session.start(agent, room),
+    there's no activity yet. The swap must still write to session._stt /
+    session._tts so the next start() picks up the swapped values.
+
+    Without the else-branch write in AgentSession.update_options, the swap
+    would silently drop and the new STT/TTS would be lost.
+    """
+    from livekit.agents.voice.agent_session import AgentSession
+
+    from .fake_stt import FakeSTT
+    from .fake_tts import FakeTTS
+
+    old_stt = FakeSTT()
+    new_stt = FakeSTT()
+    old_tts = FakeTTS()
+    new_tts = FakeTTS()
+    session = AgentSession(stt=old_stt, tts=old_tts)
+    try:
+        # No activity attached (pre-start). Calling update_options should not crash.
+        session.update_options(stt=new_stt, tts=new_tts)
+
+        # session-level state was updated even though no activity exists
+        assert session._stt is new_stt
+        assert session._tts is new_tts
+    finally:
+        await session.aclose()
