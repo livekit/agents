@@ -45,12 +45,14 @@ The task is still running, so DON'T make up or give information not included in 
 
 DUPLICATE_REJECT = """Same tool `{function_name}` is already running:
 {fnc_calls_text}
-If you want to cancel the existing one, call `lk_agents_cancel_task` with call_id."""
+If you want to cancel the existing one, call `lk_agents_cancel_task` with call_id.
+Only do this when user explicitly requests it."""
 
 DUPLICATE_CONFIRM = """Same tool `{function_name}` is already running:
 {fnc_calls_text}
 Re-call with confirm duplicate True to run a duplicate if needed,
-or if you want to cancel the existing one, call `lk_agents_cancel_task` with call_id."""
+or if you want to cancel the existing one, call `lk_agents_cancel_task` with call_id.
+Only run duplicate or cancel the existing one when user explicitly requests it."""
 
 # used when the pending update is the most recent item in chat_ctx — the agent
 # can't have already talked about it.

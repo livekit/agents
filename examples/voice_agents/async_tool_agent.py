@@ -114,9 +114,10 @@ class TravelAgent(Agent):
         if self._user_email is None:
             logger.info("Getting user's email address")
             async with ctx.foreground():
-                ctx.session.say("We will need your email address to confirm the flight booking.")
+                # collect user input in an async tool
                 email = await GetEmailTask(
-                    extra_instructions="You are capturing the email address of the user for the flight booking."
+                    extra_instructions="Tell user we need the email addrss to confirm "
+                    "the flight booking when you first ask for it."
                 )
             self._user_email = email.email_address
             logger.info(f"User's email address: {self._user_email}")
