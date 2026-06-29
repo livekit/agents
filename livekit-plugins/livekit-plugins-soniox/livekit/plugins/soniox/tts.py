@@ -72,6 +72,7 @@ class TTS(tts.TTS):
         model: str = DEFAULT_MODEL,
         language: str = DEFAULT_LANGUAGE,
         voice: str = DEFAULT_VOICE,
+        speed: float | None = None,
         audio_format: str = DEFAULT_AUDIO_FORMAT,
         sample_rate: int = DEFAULT_SAMPLE_RATE,
         bitrate: int | None = None,
@@ -84,7 +85,8 @@ class TTS(tts.TTS):
         Args:
             model (str): Soniox TTS model to use. Defaults to "tts-rt-v1-preview".
             language (str): Language code (e.g., "en", "es", "fr"). Defaults to "en".
-            voice (str): Voice name (e.g., "Maya", "Adrian"). Defaults to "Maya".
+            voice (str): Voice name (e.g. "Maya") or a cloned-voice UUID. Defaults to "Maya".
+            speed (float): Speech rate multiplier 0.7-1.3; None uses the server default.
             audio_format (str): Audio format (e.g., "pcm_s16le", "mp3"). Defaults to "pcm_s16le".
             sample_rate (int): Sample rate in Hz. Required for raw audio formats. Defaults to 24000.
             bitrate (int): Codec bitrate in bps for compressed formats. Optional.
@@ -106,6 +108,7 @@ class TTS(tts.TTS):
             model=model,
             language=language,
             voice=voice,
+            speed=speed,
             audio_format=audio_format,
             sample_rate=sample_rate,
             bitrate=bitrate,
@@ -160,12 +163,14 @@ class TTS(tts.TTS):
         model: NotGivenOr[str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
         voice: NotGivenOr[str] = NOT_GIVEN,
+        speed: NotGivenOr[float | None] = NOT_GIVEN,
     ) -> None:
         """
         Args:
             model: TTS model to use.
             language: Language code to use.
-            voice: Voice to use.
+            voice: Voice name or cloned-voice UUID to use.
+            speed: Speech rate multiplier (0.7-1.3); None uses the server default.
         """
         if is_given(model):
             self._opts.model = model
@@ -173,6 +178,8 @@ class TTS(tts.TTS):
             self._opts.language = language
         if is_given(voice):
             self._opts.voice = voice
+        if is_given(speed):
+            self._opts.speed = speed
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -309,6 +316,7 @@ class _TTSOptions:
     model: str
     language: str
     voice: str
+    speed: float | None
     audio_format: str
     sample_rate: int
     bitrate: int | None
@@ -490,6 +498,8 @@ class _Connection:
                     }
                     if msg.opts.bitrate is not None:
                         config["bitrate"] = msg.opts.bitrate
+                    if msg.opts.speed is not None:
+                        config["speed"] = msg.opts.speed
                     await self._ws.send_str(json.dumps(config))
                 elif isinstance(msg, _SendText):
                     payload: dict[str, Any] = {"stream_id": msg.stream_id}
