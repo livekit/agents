@@ -244,6 +244,9 @@ class STT(stt.STT):
         if config.redact:
             recognize_config["redact"] = config.redact
         if config.diarize_model:
+            # Pre-recorded diarization is supported; diarize_model needs
+            # diarize=true alongside it (some models are pre-recorded only).
+            recognize_config["diarize"] = True
             recognize_config["diarize_model"] = config.diarize_model
         if config.enable_diarization:
             logger.warning("speaker diarization is not supported in non-streaming mode, ignoring")
@@ -384,6 +387,7 @@ class STT(stt.STT):
                 sample_rate=sample_rate,
                 no_delay=no_delay,
                 endpointing_ms=endpointing_ms,
+                enable_diarization=enable_diarization,
                 diarize_model=diarize_model,
                 filler_words=filler_words,
                 keywords=keywords,
@@ -671,7 +675,9 @@ class SpeechStream(stt.SpeechStream):
             "numerals": self._opts.numerals,
             "mip_opt_out": self._opts.mip_opt_out,
         }
-        if self._opts.enable_diarization:
+        # Deepgram needs diarize=true to actually turn diarization on;
+        # diarize_model only selects the model, so set both when it is given.
+        if self._opts.enable_diarization or self._opts.diarize_model:
             live_config["diarize"] = True
         if self._opts.diarize_model:
             live_config["diarize_model"] = self._opts.diarize_model
