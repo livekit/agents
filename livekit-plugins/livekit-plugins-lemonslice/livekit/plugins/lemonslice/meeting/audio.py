@@ -31,6 +31,10 @@ def _deserialize_frame(payload: bytes) -> rtc.AudioFrame | None:
     samples_per_channel = len(pcm) // 2 // channels
     if samples_per_channel <= 0:
         return None
+
+    frame_bytes = samples_per_channel * channels * 2
+    pcm = pcm[:frame_bytes]
+
     return rtc.AudioFrame(
         data=pcm,
         sample_rate=sample_rate or _DEFAULT_STT_RATE,
