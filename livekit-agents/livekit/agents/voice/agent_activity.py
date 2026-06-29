@@ -635,10 +635,10 @@ class AgentActivity(RecognitionHooks):
 
                 # module reference; the `stt` parameter on update_options shadows
                 # the module-level name inside this function body.
-                if isinstance(old_stt, _stt_module.STT):
+                new_stt = self.stt  # reads through the updated session._stt
+                if isinstance(old_stt, _stt_module.STT) and new_stt is not old_stt:
                     old_stt.off("metrics_collected", self._on_metrics_collected)
                     old_stt.off("error", self._on_error)
-                new_stt = self.stt  # reads through the updated session._stt
                 if isinstance(new_stt, _stt_module.STT) and new_stt is not old_stt:
                     new_stt.on("metrics_collected", self._on_metrics_collected)
                     new_stt.on("error", self._on_error)
@@ -699,10 +699,10 @@ class AgentActivity(RecognitionHooks):
 
                 # module reference; the `tts` parameter on update_options shadows
                 # the module-level name inside this function body.
-                if isinstance(old_tts, _tts_module.TTS):
+                new_tts = self.tts  # reads through the updated session._tts
+                if isinstance(old_tts, _tts_module.TTS) and new_tts is not old_tts:
                     old_tts.off("metrics_collected", self._on_metrics_collected)
                     old_tts.off("error", self._on_error)
-                new_tts = self.tts  # reads through the updated session._tts
                 if isinstance(new_tts, _tts_module.TTS) and new_tts is not old_tts:
                     new_tts.on("metrics_collected", self._on_metrics_collected)
                     new_tts.on("error", self._on_error)
