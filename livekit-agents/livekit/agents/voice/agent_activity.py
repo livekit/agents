@@ -34,7 +34,12 @@ from ..metrics import (
 )
 from ..telemetry import otel_metrics, trace_types, tracer, utils as trace_utils
 from ..tokenize.basic import split_words
-from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
+from ..types import (
+    ATTRIBUTE_TRANSCRIPTION_EXPRESSIVE_TAGS,
+    NOT_GIVEN,
+    FlushSentinel,
+    NotGivenOr,
+)
 from ..utils.misc import is_given
 from ._utils import _set_participant_attributes
 from .agent import (
@@ -93,6 +98,7 @@ from .turn import (
 
 if TYPE_CHECKING:
     from ..llm import mcp
+    from ..tts._provider_format import ExpressiveTag
     from .agent_session import AgentSession, ExpressiveOptions
 
 
@@ -2989,12 +2995,39 @@ class AgentActivity(RecognitionHooks):
                     if chunk:
                         yield chunk
 
+            # markup stripping also collects the tags it removes into expressive_tags
+            # (single pass), so we can surface them as transcription attributes
+            expressive_tags: list[ExpressiveTag] = []
             source: AsyncIterable[str] = _plain_chunks()
             if _strip_markup and self.tts:
-                source = self.tts.markup.to_text_stream(source)
+                source = self.tts.markup.to_text_stream(source, tags_out=expressive_tags)
 
+            def _publish_expressive_tags() -> None:
+                # surface the stripped tags (in document order) on this transcription
+                # segment so the frontend can react to e.g. [speak happy]
+                if text_output is None or not expressive_tags:
+                    return
+                text_output.set_segment_attributes(
+                    {
+                        ATTRIBUTE_TRANSCRIPTION_EXPRESSIVE_TAGS: json.dumps(
+                            expressive_tags, separators=(",", ":")
+                        )
+                    }
+                )
+
+            published = False
             async for chunk in source:
+                # publish before the first chunk opens the segment writer, so the tags
+                # land on the segment's opening header (the frontend gets them at segment
+                # start). by here to_text_stream has already collected the leading tags.
+                if not published:
+                    _publish_expressive_tags()
+                    published = True
                 yield chunk
+
+            # refresh with the complete set for the flush trailer (covers any tags that
+            # appeared later in a multi-sentence segment, after the header was sent)
+            _publish_expressive_tags()
 
         started_speaking_at: float | None = None
         stopped_speaking_at: float | None = None

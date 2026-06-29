@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from collections.abc import Mapping
 
 from google.protobuf.json_format import MessageToDict
 
@@ -279,6 +280,11 @@ class _ParticipantLegacyTranscriptionOutput:
         )
         self._reset_state()
 
+    def set_segment_attributes(self, attributes: Mapping[str, str]) -> None:
+        # the deprecated rtc Transcription API has no attribute channel; ignored here
+        # (the stream-based output carries the attributes instead).
+        pass
+
     async def aclose(self) -> None:
         if self._closed:
             return
@@ -365,6 +371,9 @@ class _ParticipantStreamTranscriptionOutput:
         self._track_id: str | None = None
         self._participant_identity: str | None = None
         self._additional_attributes = attributes or {}
+        # per-segment attributes set during the current segment (e.g. stripped voice
+        # tags), merged into the segment's final attributes on flush, then cleared.
+        self._pending_segment_attributes: dict[str, str] = {}
 
         self._writer: rtc.TextStreamWriter | None = None
         self._json_format = json_format
@@ -418,6 +427,11 @@ class _ParticipantStreamTranscriptionOutput:
             if key not in attributes:
                 attributes[key] = val
 
+        # carry per-segment attributes (e.g. expressive tags) on the opening header
+        # so the frontend gets them at segment start; the flush trailer refreshes them
+        for key, val in self._pending_segment_attributes.items():
+            attributes.setdefault(key, val)
+
         return await self._room.local_participant.stream_text(
             topic=TOPIC_TRANSCRIPTION,
             sender_identity=self._participant_identity,
@@ -465,10 +479,16 @@ class _ParticipantStreamTranscriptionOutput:
         except Exception as e:
             logger.warning("failed to publish agent transcription to room: %s", e)
 
-    async def _flush_task(self, writer: rtc.TextStreamWriter | None) -> None:
+    async def _flush_task(
+        self,
+        writer: rtc.TextStreamWriter | None,
+        extra_attributes: dict[str, str] | None = None,
+    ) -> None:
         attributes = {ATTRIBUTE_TRANSCRIPTION_FINAL: "true"}
         if self._track_id:
             attributes[ATTRIBUTE_TRANSCRIPTION_TRACK_ID] = self._track_id
+        for key, val in (extra_attributes or {}).items():
+            attributes.setdefault(key, val)
 
         try:
             if self._room.isconnected():
@@ -482,14 +502,22 @@ class _ParticipantStreamTranscriptionOutput:
         except Exception as e:
             logger.warning("failed to publish agent transcription to room: %s", e)
 
+    def set_segment_attributes(self, attributes: Mapping[str, str]) -> None:
+        self._pending_segment_attributes.update(attributes)
+
     def flush(self) -> None:
+        # only ride along on a segment that has captured text — don't emit an extra
+        # empty transcription just to carry tags (keeps lk.transcription cadence intact)
         if self._participant_identity is None or not self._capturing:
+            self._pending_segment_attributes = {}
             return
 
         self._capturing = False
         curr_writer = self._writer
         self._writer = None
-        self._flush_atask = asyncio.create_task(self._flush_task(curr_writer))
+        extra_attributes = self._pending_segment_attributes
+        self._pending_segment_attributes = {}
+        self._flush_atask = asyncio.create_task(self._flush_task(curr_writer, extra_attributes))
 
     async def aclose(self) -> None:
         if self._closed:
@@ -569,6 +597,13 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
 
         if self.next_in_chain:
             await self.next_in_chain.capture_text(text)
+
+    def set_segment_attributes(self, attributes: Mapping[str, str]) -> None:
+        for sink in self.__outputs:
+            sink.set_segment_attributes(attributes)
+
+        if self.next_in_chain:
+            self.next_in_chain.set_segment_attributes(attributes)
 
     def flush(self) -> None:
         for source in self.__outputs:

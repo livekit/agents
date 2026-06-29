@@ -15,15 +15,24 @@ Provider docs:
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypedDict
 
 from ..llm.chat_context import Instructions
-from .markup_utils import (
-    convert_break_to_ellipsis,
-    convert_expression_tags,
-    strip_bracket_tags,
-    strip_xml_tags,
-)
+from .markup_utils import convert_expression_tags, extract_and_strip
+
+
+class ExpressiveTag(TypedDict):
+    """An expressive markup tag stripped from a transcript, surfaced for the frontend.
+
+    ``type`` is the markup tag name (``"emotion"``, ``"expression"``, ``"sound"``, ...),
+    or ``""`` for square-bracket tags which carry no name. ``value`` is the spoken or
+    semantic payload (the ``value="..."`` attribute, the tag's inner text, or the bracket
+    content).
+    """
+
+    type: str
+    value: str
+
 
 if TYPE_CHECKING:
     from .. import tokenize
@@ -468,19 +477,44 @@ def llm_instructions(provider: str) -> str | None:
     return None
 
 
+# Per-provider markup spec: (xml tag names, whether square-bracket tags are used).
+_PROVIDER_MARKUP: dict[str, tuple[list[str], bool]] = {
+    "cartesia": (_CARTESIA_TAGS, False),
+    "elevenlabs": (_ELEVENLABS_TAGS, False),
+    "elevenlabs_v3": (_ELEVENLABS_V3_TAGS, True),
+    "inworld": (_INWORLD_TAGS, True),
+}
+
+
+def split_markup(provider: str, text: str) -> tuple[str, list[ExpressiveTag]]:
+    """Strip provider markup and collect the stripped tags in a single pass.
+
+    Returns ``(clean_text, tags)`` — the user-visible transcript plus the expressive
+    tags that were removed (in document order), the single source of truth for both
+    :func:`strip_markup` and :func:`extract_markup`. ``([], text)`` for providers
+    without markup support.
+    """
+    spec = _PROVIDER_MARKUP.get(provider)
+    if spec is None:
+        return text, []
+    xml_tags, brackets = spec
+    clean, raw_tags = extract_and_strip(text, xml_tags=xml_tags, brackets=brackets)
+    return clean, [{"type": tag, "value": value} for tag, value in raw_tags]
+
+
 def strip_markup(provider: str, text: str) -> str:
     """Strip provider-specific markup tags from text, preserving content."""
-    if provider == "cartesia":
-        return strip_xml_tags(text, _CARTESIA_TAGS)
-    elif provider == "elevenlabs":
-        return strip_xml_tags(text, _ELEVENLABS_TAGS)
-    elif provider == "elevenlabs_v3":
-        text = strip_xml_tags(text, _ELEVENLABS_V3_TAGS)
-        return strip_bracket_tags(text)
-    elif provider == "inworld":
-        text = strip_xml_tags(text, _INWORLD_TAGS)
-        return strip_bracket_tags(text)
-    return text
+    return split_markup(provider, text)[0]
+
+
+def extract_markup(provider: str, text: str) -> list[ExpressiveTag]:
+    """Extract the markup tags that :func:`strip_markup` would remove, in order.
+
+    Lets the framework surface stripped expressive tags (e.g. as ``lk.transcription``
+    attributes for the frontend) instead of discarding them. Returns ``[]`` for
+    providers without markup support.
+    """
+    return split_markup(provider, text)[1]
 
 
 _SELF_CLOSING_TAGS: dict[str, list[str]] = {
@@ -508,7 +542,5 @@ def convert_markup(provider: str, text: str) -> str:
     """Convert framework-standard markup to a provider's native syntax."""
     if provider in ("elevenlabs_v3", "inworld"):
         text = convert_expression_tags(text)
-    if provider == "inworld":
-        # Inworld prefers punctuation-based pacing; rewrite <break> to ellipsis.
-        text = convert_break_to_ellipsis(text)
+    # <break> is passed through unchanged: Inworld accepts it as native SSML.
     return text

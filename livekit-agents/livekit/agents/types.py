@@ -7,6 +7,16 @@ from pydantic_core import CoreSchema, core_schema
 ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID = "lk.segment_id"
 ATTRIBUTE_TRANSCRIPTION_TRACK_ID = "lk.transcribed_track_id"
 ATTRIBUTE_TRANSCRIPTION_FINAL = "lk.transcription_final"
+ATTRIBUTE_TRANSCRIPTION_EXPRESSIVE_TAGS = "lk.expressive_tags"
+"""
+Expressive tags (emotion/expression/sound/... markup) that were stripped from a
+transcription segment before it was shown to the user, surfaced so the frontend can react
+to them. The value is a JSON-encoded list of ``{"type", "value"}`` objects in the order
+they appeared in the segment, e.g.
+``[{"type": "expression", "value": "speak happy"}, {"type": "sound", "value": "laugh"}]``.
+``type`` is the markup tag name ("" for square-bracket tags); ``value`` is the spoken or
+semantic payload.
+"""
 ATTRIBUTE_PUBLISH_ON_BEHALF = "lk.publish_on_behalf"
 """
 The identity of the agent participant that an avatar worker is publishing on behalf of.

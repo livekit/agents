@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Literal
 
@@ -403,6 +403,17 @@ class TextOutput(ABC):
     @abstractmethod
     def flush(self) -> None:
         """Mark the current text segment as complete (e.g LLM generation is complete)"""
+
+    def set_segment_attributes(self, attributes: Mapping[str, str]) -> None:
+        """Attach extra attributes to the current (in-progress) output segment.
+
+        Used to surface side-channel metadata — e.g. expressive tags stripped
+        from the transcript — that should ride along with the segment on its next
+        flush. The base implementation forwards to the chained output; outputs that
+        publish to a transport (e.g. RoomIO transcription) override this to apply them.
+        """
+        if self.next_in_chain:
+            self.next_in_chain.set_segment_attributes(attributes)
 
     def on_attached(self) -> None:
         if self.next_in_chain:

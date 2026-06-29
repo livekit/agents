@@ -25,6 +25,7 @@ from ..utils import aio, audio, codecs, log_exceptions, shortuuid
 
 if TYPE_CHECKING:
     from ..voice.io import TimedString
+    from ._provider_format import ExpressiveTag
 
 lk_dump_tts = int(os.getenv("LK_DUMP_TTS", 0))
 
@@ -98,38 +99,56 @@ class TTS(
 
             return llm_instructions(self._provider_key())
 
+        def _split(self, text: str) -> tuple[str, list[ExpressiveTag]]:
+            """Strip markup and collect the stripped tags in one pass."""
+            from ._provider_format import split_markup
+
+            return split_markup(self._provider_key(), text)
+
         def to_text(self, text: str) -> str:
             """Strip TTS-specific markup from *text*, returning plain text.
 
             Used for transcripts streamed to the user and for chat history storage.
             The TTS itself receives the original marked-up text.
             """
-            from ._provider_format import strip_markup
-
-            return strip_markup(self._provider_key(), text)
+            return self._split(text)[0]
 
         async def to_text_stream(
-            self, text_stream: AsyncIterable[str]
+            self, text_stream: AsyncIterable[str], *, tags_out: list[ExpressiveTag] | None = None
         ) -> AsyncGenerator[str, None]:
             """Strip TTS markup from a stream of text chunks.
 
-            Buffers partial XML tags across chunks so that ``to_text`` always
-            receives complete tags to strip.
+            Buffers partial XML tags across chunks so that each buffer is stripped as a
+            whole. When ``tags_out`` is given, the stripped tags are appended to it (in
+            document order) as a byproduct of the same pass — no second scan.
             """
             buf = ""
             async for chunk in text_stream:
                 buf += chunk
                 if buf.rfind("<") > buf.rfind(">"):
                     continue
-                stripped = self.to_text(buf)
+                stripped, tags = self._split(buf)
                 buf = ""
+                if tags_out is not None:
+                    tags_out.extend(tags)
                 if stripped:
                     yield stripped
 
             if buf:
-                buf = self.to_text(buf)
-            if buf:
-                yield buf
+                stripped, tags = self._split(buf)
+                if tags_out is not None:
+                    tags_out.extend(tags)
+                if stripped:
+                    yield stripped
+
+        def extract_tags(self, text: str) -> list[ExpressiveTag]:
+            """Extract the markup tags that :meth:`to_text` would strip, in order.
+
+            Lets the framework surface stripped expressive tags (e.g. as transcription
+            attributes for the frontend) instead of discarding them. Returns ``[]`` when
+            the provider declares no markup.
+            """
+            return self._split(text)[1]
 
         def normalize(self, text: str) -> str:
             """Fix common LLM markup mistakes (e.g. unclosed self-closing tags)."""
