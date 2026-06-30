@@ -68,6 +68,8 @@ from .generation import (
     ToolExecutionOutput,
     _AudioOutput,
     _ForwardOutput,
+    _inject_running_tool_calls,
+    _strip_running_tool_calls,
     _TextOutput,
     _TTSGenerationData,
     apply_instructions_modality,
@@ -81,7 +83,7 @@ from .generation import (
     update_instructions,
 )
 from .speech_handle import DEFAULT_INPUT_DETAILS, InputDetails, SpeechHandle
-from .tool_executor import _resolve_async_tool_options, _ToolExecutor
+from .tool_executor import _resolve_async_tool_options, _RunningTasks, _ToolExecutor
 from .turn import (
     EndpointingOptions,
     PreemptiveGenerationOptions,
@@ -807,6 +809,9 @@ class AgentActivity(RecognitionHooks):
         if isinstance(self._turn_detection, inference.TurnDetector):
             self._turn_detection.on("metrics_collected", self._on_metrics_collected)
 
+        # keyterm detection runs its own LLM, surface its usage
+        self._session._keyterm_detector.on("metrics_collected", self._on_metrics_collected)
+
         if isinstance(self.llm, llm.RealtimeModel):
             rt_reused = reuse_resources is not None and reuse_resources.rt_session is not None
             if rt_reused:
@@ -915,6 +920,17 @@ class AgentActivity(RecognitionHooks):
             reuse_resources.stt_pipeline = None
             reuse_resources.turn_detector_stream = None
 
+        if isinstance(self.stt, stt.STT):
+            # bind the session's keyterm detector to this activity's STT (detection uses its
+            # own LLM, configured via keyterms_options, not the agent's)
+            self._session._keyterm_detector.start(self._session, stt=self.stt)
+
+            # forward conversation turns to STTs that consume context natively; gated by the
+            # STT's own capability (toggled via the STT's args). stateless and activity-scoped,
+            # so it lives here rather than in the detector.
+            if self.stt.capabilities.chat_context:
+                self._session.on("conversation_item_added", self.stt._push_conversation_item)
+
     @tracer.start_as_current_span("drain_agent_activity")
     async def drain(
         self, *, new_activity: AgentActivity | None = None
@@ -963,6 +979,8 @@ class AgentActivity(RecognitionHooks):
 
         if self._scheduling_paused:
             return
+
+        await self._session._keyterm_detector.aclose()
 
         self._scheduling_paused = True
         if blocked_tasks:
@@ -1073,6 +1091,7 @@ class AgentActivity(RecognitionHooks):
         if isinstance(self.stt, stt.STT):
             self.stt.off("metrics_collected", self._on_metrics_collected)
             self.stt.off("error", self._on_error)
+            self._session.off("conversation_item_added", self.stt._push_conversation_item)
 
         if isinstance(self.tts, tts.TTS):
             self.tts.off("metrics_collected", self._on_metrics_collected)
@@ -1088,6 +1107,8 @@ class AgentActivity(RecognitionHooks):
 
         if isinstance(self._turn_detection, inference.TurnDetector):
             self._turn_detection.off("metrics_collected", self._on_metrics_collected)
+
+        self._session._keyterm_detector.off("metrics_collected", self._on_metrics_collected)
 
         if self._rt_session is not None:
             await self._rt_session.aclose()
@@ -1113,6 +1134,7 @@ class AgentActivity(RecognitionHooks):
 
             self._closed = True
             self._cancel_preemptive_generation()
+            await self._session._keyterm_detector.aclose()
 
             # on_exit_task should be awaited in `drain`
             self._on_exit_task = None
@@ -1728,7 +1750,11 @@ class AgentActivity(RecognitionHooks):
 
     def _on_input_audio_transcription_completed(self, ev: llm.InputTranscriptionCompleted) -> None:
         self._session._user_input_transcribed(
-            UserInputTranscribedEvent(transcript=ev.transcript, is_final=ev.is_final)
+            UserInputTranscribedEvent(
+                transcript=ev.transcript,
+                is_final=ev.is_final,
+                item_id=ev.item_id,
+            )
         )
 
         if ev.is_final:
@@ -2699,6 +2725,15 @@ class AgentActivity(RecognitionHooks):
         # TODO(theomonnom): since pause is closing STT/LLM/TTS, we have issues for SpeechHandle still in queue  # noqa: E501
         # I should implement a retry mechanism?
 
+        # a tool still running from a previous turn isn't in this turn's ctx, so the model
+        # re-issues it and duplicates side effects. inject an in-progress placeholder so it
+        # leaves the call alone. mutating chat_ctx directly (not a copy) keeps a custom
+        # llm_node's edits; the placeholder is stripped again before chat_ctx is forwarded.
+        _inject_running_tool_calls(
+            chat_ctx,
+            [task.ctx.function_call for task in _RunningTasks.get(self._session, {}).values()],
+        )
+
         tasks: list[asyncio.Task[Any]] = []
         llm_task, llm_gen_data = perform_llm_inference(
             node=self._agent.llm_node,
@@ -3117,7 +3152,11 @@ class AgentActivity(RecognitionHooks):
                 draining = True
 
             tool_messages = new_calls + new_fnc_outputs
-            if fnc_executed_ev._reply_required:
+            if fnc_executed_ev._reply_required and not speech_handle.interrupted:
+                # forwarding chat_ctx to the tool reply: drop the in-progress placeholders
+                # (the next turn re-injects from the live running set)
+                _strip_running_tool_calls(chat_ctx)
+
                 # refresh conversation items added during tool execution: a tool that
                 # awaits an inline AgentTask runs a whole sub-conversation, merged into
                 # the agent's chat_ctx at handoff-return - this turn's snapshot predates

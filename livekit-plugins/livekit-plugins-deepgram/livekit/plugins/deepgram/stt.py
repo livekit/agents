@@ -73,6 +73,10 @@ class STTOptions:
     numerals: bool = False
     mip_opt_out: bool = False
     tags: NotGivenOr[list[str]] = NOT_GIVEN
+    utterance_end_ms: int | None = None
+    dictation: bool = False
+    replace: dict[str, str] | None = None
+    search: list[str] | None = None
 
 
 class STT(stt.STT):
@@ -102,6 +106,10 @@ class STT(stt.STT):
         numerals: bool = False,
         mip_opt_out: bool = False,
         vad_events: bool = True,
+        utterance_end_ms: int | None = None,
+        dictation: bool = False,
+        replace: dict[str, str] | None = None,
+        search: list[str] | None = None,
         extra_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         # deprecated
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
@@ -136,6 +144,18 @@ class STT(stt.STT):
             mip_opt_out: Whether to take part in the model improvement program
             vad_events: Whether to enable VAD (Voice Activity Detection) events.
                        When enabled, SpeechStarted events are sent when speech is detected. Defaults to True.
+            utterance_end_ms: Duration of silence in milliseconds to detect the end of an utterance
+                             and emit an UtteranceEnd event. Requires interim_results=True.
+                             See https://developers.deepgram.com/docs/understand-endpointing-interim-results
+            dictation: Whether to enable dictation mode which converts spoken punctuation commands
+                      (e.g. "comma", "period") into punctuation marks. Defaults to False.
+                      See https://developers.deepgram.com/reference/speech-to-text/listen-streaming#query-dictation
+            replace: Dictionary of terms to replace in the transcript, where keys are the original
+                    terms and values are the replacements (e.g. {"hello": "hi"}).
+                    See https://developers.deepgram.com/reference/speech-to-text/listen-streaming#query-replace
+            search: List of terms to search for in the transcript. Matched terms are returned with
+                   confidence scores in the response.
+                   See https://developers.deepgram.com/reference/speech-to-text/listen-streaming#query-search
             extra_headers: Additional HTTP headers sent on every connection, merged over the
                 default ``Authorization: Token`` header. Useful for self-hosted Deepgram or
                 gateways with custom auth. When no API key is set, these become the sole auth.
@@ -155,6 +175,7 @@ class STT(stt.STT):
                 interim_results=interim_results,
                 diarization=enable_diarization,
                 aligned_transcript="word",
+                keyterms=True,
             )
         )
 
@@ -193,7 +214,9 @@ class STT(stt.STT):
             sample_rate=sample_rate,
             num_channels=1,
             keywords=keywords if is_given(keywords) else [],
-            keyterm=keyterm if is_given(keyterm) else [],
+            keyterm=([keyterm] if isinstance(keyterm, str) else list(keyterm))
+            if is_given(keyterm)
+            else [],
             profanity_filter=profanity_filter,
             redact=redact if is_given(redact) else [],
             numerals=numerals,
@@ -201,7 +224,14 @@ class STT(stt.STT):
             vad_events=vad_events,
             tags=_validate_tags(tags) if is_given(tags) else [],
             endpoint_url=base_url,
+            utterance_end_ms=utterance_end_ms,
+            dictation=dictation,
+            replace=replace,
+            search=search,
         )
+        # user keyterms; _opts.keyterm holds the effective set (user + session)
+        self._user_keyterm: list[str] = list(self._opts.keyterm)
+        self._session_keyterms: list[str] = []
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
 
@@ -383,6 +413,10 @@ class STT(stt.STT):
         vad_events: NotGivenOr[bool] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
         endpoint_url: NotGivenOr[str] = NOT_GIVEN,
+        utterance_end_ms: NotGivenOr[int | None] = NOT_GIVEN,
+        dictation: NotGivenOr[bool] = NOT_GIVEN,
+        replace: NotGivenOr[dict[str, str] | None] = NOT_GIVEN,
+        search: NotGivenOr[list[str] | None] = NOT_GIVEN,
         # deprecated
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
@@ -416,6 +450,8 @@ class STT(stt.STT):
             )
             keyterm = keyterms
         if is_given(keyterm):
+            self._user_keyterm = [keyterm] if isinstance(keyterm, str) else list(keyterm)
+            keyterm = list(dict.fromkeys([*self._user_keyterm, *self._session_keyterms]))
             self._opts.keyterm = keyterm
         if is_given(profanity_filter):
             self._opts.profanity_filter = profanity_filter
@@ -431,6 +467,14 @@ class STT(stt.STT):
             self._opts.tags = _validate_tags(tags)
         if is_given(endpoint_url):
             self._opts.endpoint_url = endpoint_url
+        if is_given(utterance_end_ms):
+            self._opts.utterance_end_ms = utterance_end_ms
+        if is_given(dictation):
+            self._opts.dictation = dictation
+        if is_given(replace):
+            self._opts.replace = replace
+        if is_given(search):
+            self._opts.search = search
 
         for stream in self._streams:
             stream.update_options(
@@ -451,7 +495,24 @@ class STT(stt.STT):
                 mip_opt_out=mip_opt_out,
                 vad_events=vad_events,
                 endpoint_url=endpoint_url,
+                utterance_end_ms=utterance_end_ms,
+                dictation=dictation,
+                replace=replace,
+                search=search,
             )
+
+    def _update_session_keyterms(self, keyterms: list[str]) -> None:
+        if keyterms == self._session_keyterms:
+            return
+        self._session_keyterms = list(keyterms)
+        merged = list(dict.fromkeys([*self._user_keyterm, *keyterms]))
+        self._opts.keyterm = merged
+        for stream in self._streams:
+            if stream._speaking:
+                # defer the reconnect to the end of the utterance so we don't cut it off
+                stream._pending_keyterm = merged
+            else:
+                stream.update_options(keyterm=merged)
 
     def _sanitize_options(
         self, *, language: NotGivenOr[DeepgramLanguages | str] = NOT_GIVEN
@@ -500,6 +561,9 @@ class SpeechStream(stt.SpeechStream):
 
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
+        # keyterms set while the user is speaking; applied at END_OF_SPEECH (latest wins)
+        self._pending_keyterm: list[str] | None = None
+
         # Track how much duration has already been reported so we can emit
         # the connection-lifetime remainder on close, matching what Deepgram
         # actually bills (which includes WebSocket open/teardown overhead
@@ -528,6 +592,10 @@ class SpeechStream(stt.SpeechStream):
         vad_events: NotGivenOr[bool] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
         endpoint_url: NotGivenOr[str] = NOT_GIVEN,
+        utterance_end_ms: NotGivenOr[int | None] = NOT_GIVEN,
+        dictation: NotGivenOr[bool] = NOT_GIVEN,
+        replace: NotGivenOr[dict[str, str] | None] = NOT_GIVEN,
+        search: NotGivenOr[list[str] | None] = NOT_GIVEN,
         # deprecated
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
@@ -562,6 +630,7 @@ class SpeechStream(stt.SpeechStream):
             keyterm = keyterms
         if is_given(keyterm):
             self._opts.keyterm = keyterm
+            self._pending_keyterm = None
         if is_given(profanity_filter):
             self._opts.profanity_filter = profanity_filter
         if is_given(redact):
@@ -576,8 +645,21 @@ class SpeechStream(stt.SpeechStream):
             self._opts.tags = _validate_tags(tags)
         if is_given(endpoint_url):
             self._opts.endpoint_url = endpoint_url
+        if is_given(utterance_end_ms):
+            self._opts.utterance_end_ms = utterance_end_ms
+        if is_given(dictation):
+            self._opts.dictation = dictation
+        if is_given(replace):
+            self._opts.replace = replace
+        if is_given(search):
+            self._opts.search = search
 
         self._reconnect_event.set()
+
+    def _on_end_of_speech(self) -> None:
+        if self._pending_keyterm is not None:
+            self.update_options(keyterm=self._pending_keyterm)
+            self._pending_keyterm = None
 
     async def _run(self) -> None:
         closing_ws = False
@@ -731,6 +813,14 @@ class SpeechStream(stt.SpeechStream):
             live_config["keywords"] = self._opts.keywords
         if self._opts.keyterm:
             live_config["keyterm"] = self._opts.keyterm
+        if self._opts.utterance_end_ms is not None:
+            live_config["utterance_end_ms"] = self._opts.utterance_end_ms
+        if self._opts.dictation:
+            live_config["dictation"] = True
+        if self._opts.replace:
+            live_config["replace"] = self._opts.replace
+        if self._opts.search:
+            live_config["search"] = self._opts.search
 
         if self._opts.language:
             live_config["language"] = self._opts.language
@@ -832,7 +922,15 @@ class SpeechStream(stt.SpeechStream):
             if is_endpoint and self._speaking:
                 self._speaking = False
                 self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+                self._on_end_of_speech()
 
+        elif data["type"] == "UtteranceEnd":
+            # Fired when utterance_end_ms is set and the configured silence duration has elapsed.
+            # https://developers.deepgram.com/docs/understand-endpointing-interim-results
+            if self._speaking:
+                self._speaking = False
+                self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+                self._on_end_of_speech()
         elif data["type"] == "Metadata":
             pass  # metadata is too noisy
         else:

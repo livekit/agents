@@ -54,6 +54,48 @@ async def test_update_chat_ctx_keeps_existing_remote_empty_messages() -> None:
     assert session._sent_events == []
 
 
+def test_truncate_deletes_item_when_no_audio_played() -> None:
+    """Interrupting before any audio frame plays (audio_end_ms == 0) must not
+    send a conversation.item.truncate (the Realtime API rejects it with
+    "Only model output audio messages can be truncated"). The item is deleted
+    instead so a generated-but-unplayed audio message is not left dangling in
+    the remote chat ctx."""
+    from openai.types.realtime import ConversationItemDeleteEvent
+
+    session = _create_session()
+
+    session.truncate(
+        message_id="item_1",
+        modalities=["audio", "text"],
+        audio_end_ms=0,
+    )
+
+    assert len(session._sent_events) == 1
+    event = session._sent_events[0]
+    assert isinstance(event, ConversationItemDeleteEvent)
+    assert event.item_id == "item_1"
+
+
+def test_truncate_sends_event_when_audio_played() -> None:
+    """When audio has actually played (audio_end_ms > 0) the truncate event is
+    still sent for audio modalities."""
+    from openai.types.realtime import ConversationItemTruncateEvent
+
+    session = _create_session()
+
+    session.truncate(
+        message_id="item_1",
+        modalities=["audio", "text"],
+        audio_end_ms=500,
+    )
+
+    assert len(session._sent_events) == 1
+    event = session._sent_events[0]
+    assert isinstance(event, ConversationItemTruncateEvent)
+    assert event.item_id == "item_1"
+    assert event.audio_end_ms == 500
+
+
 def test_response_done_handles_string_status_details(monkeypatch) -> None:
     session = _create_session()
     session._realtime_model = types.SimpleNamespace(_provider_label="xAI")

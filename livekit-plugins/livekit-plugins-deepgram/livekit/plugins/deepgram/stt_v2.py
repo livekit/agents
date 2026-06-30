@@ -110,6 +110,7 @@ class STTv2(stt.STT):
                 interim_results=True,
                 aligned_transcript="word",
                 offline_recognize=False,
+                keyterms=True,
             )
         )
 
@@ -140,7 +141,9 @@ class STTv2(stt.STT):
         self._opts = STTOptions(
             model=model,
             sample_rate=sample_rate,
-            keyterm=keyterm if is_given(keyterm) else [],
+            keyterm=([keyterm] if isinstance(keyterm, str) else list(keyterm))
+            if is_given(keyterm)
+            else [],
             mip_opt_out=mip_opt_out,
             tags=_validate_tags(tags) if is_given(tags) else [],
             language_hint=language_hint if is_given(language_hint) else [],
@@ -149,6 +152,9 @@ class STTv2(stt.STT):
             eot_timeout_ms=eot_timeout_ms,
             endpoint_url=base_url,
         )
+        # user keyterms; _opts.keyterm holds the effective set (user + session)
+        self._user_keyterm: list[str] = list(self._opts.keyterm)
+        self._session_keyterms: list[str] = []
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStreamv2]()
 
@@ -236,6 +242,8 @@ class STTv2(stt.STT):
             )
             keyterm = keyterms
         if is_given(keyterm):
+            self._user_keyterm = [keyterm] if isinstance(keyterm, str) else list(keyterm)
+            keyterm = list(dict.fromkeys([*self._user_keyterm, *self._session_keyterms]))
             self._opts.keyterm = keyterm
         if is_given(mip_opt_out):
             self._opts.mip_opt_out = mip_opt_out
@@ -267,6 +275,19 @@ class STTv2(stt.STT):
                 eager_eot_threshold=eager_eot_threshold,
             )
 
+    def _update_session_keyterms(self, keyterms: list[str]) -> None:
+        if keyterms == self._session_keyterms:
+            return
+        self._session_keyterms = list(keyterms)
+        merged = list(dict.fromkeys([*self._user_keyterm, *keyterms]))
+        self._opts.keyterm = merged
+        for stream in self._streams:
+            if stream._speaking:
+                # defer the reconnect to the end of the utterance so we don't cut it off
+                stream._pending_keyterm = merged
+            else:
+                stream.update_options(keyterm=merged)
+
 
 class SpeechStreamv2(stt.SpeechStream):
     # _KEEPALIVE_MSG: str = json.dumps({"type": "KeepAlive"})
@@ -296,6 +317,8 @@ class SpeechStreamv2(stt.SpeechStream):
 
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
+        # keyterms set while the user is speaking; applied at END_OF_SPEECH (latest wins)
+        self._pending_keyterm: list[str] | None = None
 
     def update_options(
         self,
@@ -328,6 +351,7 @@ class SpeechStreamv2(stt.SpeechStream):
             keyterm = keyterms
         if is_given(keyterm):
             self._opts.keyterm = keyterm
+            self._pending_keyterm = None
         if is_given(mip_opt_out):
             self._opts.mip_opt_out = mip_opt_out
         if is_given(tags):
@@ -340,6 +364,11 @@ class SpeechStreamv2(stt.SpeechStream):
             self._opts.eager_eot_threshold = eager_eot_threshold
 
         self._reconnect_event.set()
+
+    def _on_end_of_speech(self) -> None:
+        if self._pending_keyterm is not None:
+            self.update_options(keyterm=self._pending_keyterm)
+            self._pending_keyterm = None
 
     async def _run(self) -> None:
         closing_ws = False
@@ -567,6 +596,7 @@ class SpeechStreamv2(stt.SpeechStream):
 
                 end_event = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                 self._event_ch.send_nowait(end_event)
+                self._on_end_of_speech()
 
         elif data["type"] == "Error":
             logger.warning("deepgram sent an error", extra={"data": data})

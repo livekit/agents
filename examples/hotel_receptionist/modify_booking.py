@@ -28,11 +28,15 @@ Identity fields (name, email, phone, card) cannot be changed here. If the caller
 
 Run set_stay before choose_room when changing dates - new dates may make the current room unavailable, in which case set_stay will tell you which types are available for the new range.
 
+A caller unhappy with their room's view (e.g. "I booked a garden view but this room has none") is a room change you CAN make here: pass the view to choose_room and it moves them to a room with that view. If that view isn't available for their current type, choose_room tells you which type has it - offer that, don't fall back to a callback when a real move exists.
+
 For extras (breakfast, valet, late_checkout, pets) the caller adds and removes additively in conversation - merge their request with the current extras list and pass the full new list to choose_room.
 
 Each tool returns a short status with what's pending. When the status says all set, call confirm_changes() - the call IS the next action, no filler turn.
 
-If the caller decides they don't want to change anything after all - or needs anything this flow can't do (cancel the booking, a manager callback, a followup, a new booking) - call give_up with a short reason; the booking stays as it was and the right tools for their request become available again outside this flow. Your only tools here are set_stay, choose_room, confirm_changes, and give_up: a call to anything else returns an error and does NOTHING - never tell the caller something was logged, promised, or arranged after an error.
+A caller moving rooms because of a view/type complaint often pushes back hard or demands a manager - that is NOT a reason to give up. As long as a room with what they want is available (choose_room tells you when it is, even under a different type), the fix is to complete the move here, not to hand off to a callback. Stay calm, re-offer the available room as the concrete fix, and only escalate if there is genuinely no matching room. A manager callback is a worse outcome than the move you can make right now.
+
+If the caller decides they don't want to change anything after all - or needs anything this flow genuinely can't do (cancel the booking, a callback for something unrelated, a new booking) - call give_up with a short reason; the booking stays as it was and the right tools for their request become available again outside this flow. Your only tools here are set_stay, choose_room, confirm_changes, and give_up: a call to anything else returns an error and does NOTHING - never tell the caller something was logged, promised, or arranged after an error.
 """
 
 
@@ -58,6 +62,10 @@ class ModifyBookingTask(AgentTask[RoomBooking]):
         self._room_type: RoomType = existing.room_type
         self._extras: list[RoomExtra] = list(existing.extras)
         self._smoking: bool = existing.smoking
+        # None = no view change requested, so confirm_changes keeps the guest's
+        # current room when it still fits. A stated view re-picks the room to one
+        # with that view (e.g. moving an unhappy guest to a garden-view room).
+        self._view: str | None = None
         # Set of slot names that diverge from `existing` after a tool call.
         # `confirm_changes()` consults this both to decide if there's anything to do
         # and to produce a faithful summary of what changed.
@@ -93,7 +101,12 @@ class ModifyBookingTask(AgentTask[RoomBooking]):
         if not self._changed:
             return "draft unchanged so far - ask the caller what to update"
         parts = sorted(self._changed)
-        return f"pending changes: {', '.join(parts)} | call confirm_changes() when the caller has nothing else to change"
+        return (
+            f"pending changes: {', '.join(parts)} - NOT saved yet. The caller already named what to "
+            "change, so call confirm_changes() now to finalize it; don't ask 'anything else?' as a "
+            "filler turn (that reads as done and the caller may hang up before it's saved). Only hold "
+            "off if the caller themselves raised another change."
+        )
 
     @function_tool()
     async def set_stay(
@@ -159,15 +172,19 @@ class ModifyBookingTask(AgentTask[RoomBooking]):
         room_type: RoomType,
         extras: list[RoomExtra],
         smoking_room: bool = False,
+        view: str | None = None,
     ) -> str:
-        """Update the chosen room type, extras, and smoking preference on the booking being modified.
+        """Update the chosen room type, extras, smoking preference, and view on the booking being modified.
 
         Pass the FULL new extras list (e.g. caller asks to add breakfast on a booking that already has valet -> pass ["breakfast", "valet"]). To clear all extras, pass an empty list.
+
+        A stated view moves the guest to a room with that view (this is how you resolve "I booked a garden view but my room has none"). The view is a property of specific rooms, NOT a separate type - if the requested view isn't available for the chosen type, this errors with where that view IS available, so you can offer the right type. Omit view entirely unless the caller asks for one.
 
         Args:
             room_type: Room type for the booking (king / queen_2beds / double_queen / suite / penthouse).
             extras: Full new list of extras after the caller's change.
             smoking_room: True if the caller wants a smoking-permitted room.
+            view: The view the caller asked for (city / garden / ocean), ONLY if they stated one - omit entirely otherwise.
         """
         avail = await self._db.list_room_types_available(
             check_in=self._check_in,
@@ -181,14 +198,40 @@ class ModifyBookingTask(AgentTask[RoomBooking]):
             kind = "smoking " if smoking_room else ""
             offer = ", ".join(sorted(a.type for a in avail)) or "nothing for those dates"
             raise ToolError(f"no {kind}{room_type} available; offer one of: {offer}")
+        # Models sometimes send placeholder strings for optional args they
+        # should omit - normalize those to "no view preference".
+        if view is not None:
+            view = view.strip().casefold()
+            if view in ("", "null", "none", "any", "no preference", "unspecified"):
+                view = None
+        if view is not None and view not in chosen.views:
+            matching = [a.type for a in avail if view in a.views]
+            if matching:
+                rec = " or ".join(t.replace("_", " ") for t in matching)
+                raise ToolError(
+                    f"no {view}-view {room_type.replace('_', ' ')} for those dates, but the "
+                    f"{view} view IS open as a {rec} - that is the real fix here. Offer it warmly "
+                    f'as "the {view}-view room available for your dates" (don\'t dwell on the type '
+                    f"as a downgrade), then call choose_room again with that type and view to "
+                    f"complete the move. Do NOT give up to a manager callback - this flow can do it."
+                )
+            where = ", ".join(f"{a.type.replace('_', ' ')} ({' or '.join(a.views)})" for a in avail)
+            raise ToolError(
+                f"no {view}-view room of any type for those dates - the views by room type are: "
+                f"{where}. Be honest that the exact view isn't open, and offer the closest option."
+            )
         self._room_type = room_type
+        self._view = view
         self._extras = list(extras)
         self._smoking = smoking_room
-        self._set_changed("room", room_type != self._existing.room_type)
+        # A stated view re-picks the room, so it's a change even when the type
+        # is unchanged (the whole point of moving an unhappy guest's room).
+        self._set_changed("room", room_type != self._existing.room_type or view is not None)
         self._set_changed("smoking", smoking_room != self._existing.smoking)
         self._set_changed("extras", sorted(extras) != sorted(self._existing.extras))
+        view_part = f" with a {view} view" if view else ""
         extras_part = f", extras: {', '.join(extras)}" if extras else ", no extras"
-        return f"room updated: {room_type.replace('_', ' ')}{extras_part} | {self._status()}"
+        return f"room updated: {room_type.replace('_', ' ')}{view_part}{extras_part} | {self._status()}"
 
     @function_tool()
     async def confirm_changes(self) -> str | None:
@@ -209,10 +252,12 @@ class ModifyBookingTask(AgentTask[RoomBooking]):
                 check_in=self._check_in,
                 check_out=self._check_out,
                 extras=self._extras,
+                view=self._view,
             )
         except Unavailable:
+            view_part = f"{self._view}-view " if self._view else ""
             raise ToolError(
-                f"{self._room_type.replace('_', ' ')} just got taken for those dates - pick another room or adjust the dates"
+                f"{view_part}{self._room_type.replace('_', ' ')} just got taken for those dates - pick another room or adjust the dates"
             ) from None
 
         if not self.done():
