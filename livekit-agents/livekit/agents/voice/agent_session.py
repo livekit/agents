@@ -1154,15 +1154,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if is_given(turn_detection):
             self._turn_detection = turn_detection
 
-        # self._stt and self._tts are mutated by Activity.update_options when
-        # _activity is set. When _activity is None (pre-start or between agent
-        # handoffs), we still need to keep public state consistent so callers
-        # can read it back via session._stt / session._tts. We do this AFTER the
-        # activity call to preserve listener migration — the activity needs to
-        # read the prior value of self._stt before we mutate it. When _activity
-        # is None, no listener migration is needed (no listeners exist yet),
-        # so the post-write is harmless.
-
+        # When _activity is set, delegate to it for pipeline rewire + listener
+        # migration. Regardless of the activity path, the session MUST write
+        # self._stt/self._tts explicitly so the two paths (with/without activity)
+        # stay consistent.stay in sync. The activity writes to self._session._stt for its own
+        # internal needs, but the session owns the public state.
         if self._activity is not None:
             self._activity.update_options(
                 stt=stt,
@@ -1172,13 +1168,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 ),
                 turn_detection=turn_detection,
             )
-        else:
-            # No activity yet — just update public state so the next time an
-            # activity starts (session.start(agent)), it sees the swapped values.
-            if is_given(stt):
-                self._stt = stt
-            if is_given(tts):
-                self._tts = tts
+
+        # Explicitly update session-level state so callers reading session._stt
+        # or session._tts get the swapped values immediately. This also covers
+        # the pre-start case (_activity is None) where no activity exists to
+        # do the write.
+        if is_given(stt):
+            self._stt = stt
+        if is_given(tts):
+            self._tts = tts
 
     async def _start_ivr_detection(self, transcript: str | None = None) -> None:
         """Start IVR detection on this session.
