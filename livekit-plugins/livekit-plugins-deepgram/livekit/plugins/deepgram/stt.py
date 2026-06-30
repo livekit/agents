@@ -855,6 +855,14 @@ def prerecorded_transcription_to_speech_event(
                 end_time=alt["words"][-1]["end"] if alt["words"] else 0,
                 confidence=alt["confidence"],
                 text=alt["transcript"],
+                # Surface diarized speakers (diarize_model / enable_diarization):
+                # Deepgram tags each word with a `speaker`; mirror the streaming
+                # parser and attribute the alternative to its most common one.
+                speaker_id=(
+                    f"S{Counter(speakers).most_common(1)[0][0]}"
+                    if (speakers := [w["speaker"] for w in alt["words"] if "speaker" in w])
+                    else None
+                ),
                 words=[
                     TimedString(
                         text=word.get("word", ""),
