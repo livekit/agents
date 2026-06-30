@@ -88,7 +88,7 @@ session = AgentSession(
 
 ### 📊 Tracing & Error Handling
 
-- [`langfuse_trace.py`](./langfuse_trace.py) - LangFuse integration for conversation tracing
+- [`otel_trace.py`](./otel_trace.py) - OpenTelemetry (OTLP) integration for conversation tracing
 - [`error_callback.py`](./error_callback.py) - Error handling callback
 - [`session_close_callback.py`](./session_close_callback.py) - Session lifecycle management
 

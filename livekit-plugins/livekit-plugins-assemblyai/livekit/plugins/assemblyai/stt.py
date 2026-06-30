@@ -60,6 +60,7 @@ class STTOptions:
         "universal-3-5-pro",
     ] = "universal-3-5-pro"
     language_detection: NotGivenOr[bool] = NOT_GIVEN
+    language_code: NotGivenOr[str] = NOT_GIVEN
     end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN
     min_turn_silence: NotGivenOr[int] = NOT_GIVEN
     max_turn_silence: NotGivenOr[int] = NOT_GIVEN
@@ -79,7 +80,7 @@ class STTOptions:
     mode: NotGivenOr[Literal["min_latency", "balanced", "max_accuracy"]] = NOT_GIVEN
 
 
-# Speech models in the u3-rt-pro family, which share the same parameter support
+# Speech models in the Universal-3 Pro family, which share the same parameter support
 # (prompt, agent_context, previous_context_n_turns, continuous_partials,
 # interruption_delay, voice_focus, voice_focus_threshold) and connect-time
 # defaults. Mirrors the server-side `SpeechModel.is_u3_pro`.
@@ -102,6 +103,7 @@ class STT(stt.STT):
             "universal-3-5-pro",
         ] = "universal-3-5-pro",
         language_detection: NotGivenOr[bool] = NOT_GIVEN,
+        language_code: NotGivenOr[str] = NOT_GIVEN,
         end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
         min_turn_silence: NotGivenOr[int] = NOT_GIVEN,
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
@@ -136,6 +138,13 @@ class STT(stt.STT):
                 0 and 1 that determines how sensitive the VAD is. Lower values make the VAD
                 more sensitive (detects quieter speech). Higher values make it less sensitive.
                 Defaults to 0.4.
+            language_code: Steer transcription toward a specific language (e.g. 'en', 'es',
+                'fr'). Accepts any common format ('en', 'en-US', 'english'); it is normalized
+                to a bare ISO 639-1 code before being sent. When set, the model is biased
+                toward this language instead of automatically detecting/code-switching across
+                the supported languages. Leave unset to use the model's default multilingual
+                behavior. Only supported with the Universal-3 Pro family models. Set at
+                construction (connect) time only.
             min_turn_silence: Minimum silence in ms before a confident end-of-turn is finalized.
             min_end_of_turn_silence_when_confident: Deprecated. Use min_turn_silence instead.
             continuous_partials: Whether to emit additional partial transcripts during long
@@ -146,22 +155,21 @@ class STT(stt.STT):
                 LiveKit; AssemblyAI server defaults to False), additional partials covering
                 the full turn transcript are emitted approximately every 3 seconds while
                 speech continues, on top of those baseline partials. Only supported with
-                the 'u3-rt-pro' / 'u3-rt-pro-beta-1' models.
+                the Universal-3 Pro family models.
             interruption_delay: How soon the first early partial is emitted, in ms.
                 Range 0–1000, default 500. Lower values produce faster time-to-first-token
                 for barge-in; higher values produce more confident first partials. Only
-                supported with the 'u3-rt-pro' / 'u3-rt-pro-beta-1' models.
+                supported with the Universal-3 Pro family models.
             agent_context: Free-text context describing what the agent said, used to bias
                 transcription of the user's reply. Set at construction or updated per-turn
                 via `update_options(agent_context=...)`. Only supported with the
-                'u3-rt-pro' / 'u3-rt-pro-beta-1' models (max 1500 characters).
+                Universal-3 Pro family models (max 1500 characters).
             previous_context_n_turns: Maximum number of prior conversation entries (user
                 transcripts and any `agent_context` values) carried forward as context for
                 each transcription. Set to 0 to disable automatic context carryover
                 entirely; leave unset to use the server default (recommended). Range 0–100.
-                Only supported with the 'u3-rt-pro' / 'u3-rt-pro-beta-1' / 'universal-3-5-pro'
-                models. Set at construction (connect) time only; it cannot be changed via
-                `update_options`.
+                Only supported with the Universal-3 Pro family models. Set at construction
+                (connect) time only; it cannot be changed via `update_options`.
             agent_context_carryover: When the model supports it, let an ``AgentSession`` push each
                 assistant reply into ``agent_context`` so it is carried into the model's
                 conversation context. Defaults to False; set True to enable. Prior user turns are
@@ -171,22 +179,22 @@ class STT(stt.STT):
                 noise (chatter, keyboard clicks, fan hum, room echo) before the audio reaches
                 the model. Use 'near-field' for headsets, handsets, and close-talking
                 microphones; use 'far-field' for conference rooms, laptop mics, and other
-                distant-mic setups. Only supported with the 'u3-rt-pro' / 'u3-rt-pro-beta-1' /
-                'universal-3-5-pro' models. Set at construction (connect) time only.
+                distant-mic setups. Only supported with the Universal-3 Pro family models.
+                Set at construction (connect) time only.
                 See https://www.assemblyai.com/docs/streaming/voice-focus.
             voice_focus_threshold: Controls how aggressively background audio is suppressed,
                 a float between 0.0 and 1.0 (higher is more aggressive). Only takes effect
-                alongside `voice_focus`. Only supported with the 'u3-rt-pro' /
-                'u3-rt-pro-beta-1' / 'universal-3-5-pro' models. Set at construction (connect)
-                time only.
-            mode: Accuracy/latency preset forwarded to the u3-pro model: 'min_latency'
+                alongside `voice_focus`. Only supported with the Universal-3 Pro family
+                models. Set at construction (connect) time only.
+            mode: Accuracy/latency preset for the Universal-3 Pro family: 'min_latency'
                 (fastest time-to-text), 'balanced' (the server default, recommended for
                 voice agents), or 'max_accuracy' (highest accuracy, for scribes/post-call).
-                The model applies its own per-mode tuning; any silence, partials, or VAD
-                knobs you set explicitly still take precedence over the mode's defaults.
-                Leave unset to use the server default. Only supported with the 'u3-rt-pro' /
-                'u3-rt-pro-beta-1' / 'universal-3-5-pro' models. Set at construction (connect)
-                time only.
+                The model applies its own per-mode silence tuning. To let that tuning take
+                effect, the plugin suppresses its default 100ms min/max turn-silence windows
+                when a mode is set; values you pass explicitly for `min_turn_silence` /
+                `max_turn_silence` still take precedence over the mode's defaults.
+                Leave unset to use the server default. Only supported with the Universal-3 Pro
+                family models. Set at construction (connect) time only.
         """
         # agent_context carryover is only available on the u3-rt-pro family
         # ("u3-pro" is normalized to "u3-rt-pro" below) and is opt-in via the user
@@ -208,10 +216,10 @@ class STT(stt.STT):
             ),
         )
         if model == "u3-pro":
-            logger.warning("'u3-pro' is deprecated, use 'u3-rt-pro' instead.")
-            model = "u3-rt-pro"
+            logger.warning("'u3-pro' is deprecated, use 'universal-3-5-pro' instead.")
+            model = "universal-3-5-pro"
 
-        # These parameters are only supported by the u3-rt-pro family of models.
+        # These parameters are only supported by the Universal-3 Pro family of models.
         if model not in _U3_PRO_MODELS:
             _u3_pro_only_params = {
                 "prompt": prompt,
@@ -222,6 +230,7 @@ class STT(stt.STT):
                 "voice_focus": voice_focus,
                 "voice_focus_threshold": voice_focus_threshold,
                 "mode": mode,
+                "language_code": language_code,
             }
             for _param_name, _param_value in _u3_pro_only_params.items():
                 if is_given(_param_value):
@@ -232,7 +241,7 @@ class STT(stt.STT):
 
         # LiveKit defaults continuous_partials to True (vs. AssemblyAI's server default of
         # False) for steady-cadence partials. This parameter is only supported for
-        # the u3-rt-pro family, enforced by the validation above.
+        # the Universal-3 Pro family, enforced by the validation above.
         if not is_given(continuous_partials) and model in _U3_PRO_MODELS:
             continuous_partials = True
 
@@ -256,9 +265,17 @@ class STT(stt.STT):
                 min_turn_silence = min_end_of_turn_silence_when_confident
 
         # we want to minimize latency as much as possible, it's ok if the phrase arrives in multiple final transcripts
-        # designed to work with LK's end of turn models
-        if not is_given(min_turn_silence):
+        # designed to work with LK's end of turn models.
+        # Skip this default when a `mode` preset is selected so the server's
+        # per-mode silence tuning governs instead of being overridden by 100.
+        if not is_given(min_turn_silence) and not is_given(mode):
             min_turn_silence = 100
+
+        # Normalize to a bare ISO 639-1 code (e.g. "es-ES" / "Spanish" -> "es"),
+        # the form AssemblyAI's language steering expects.
+        normalized_language_code: NotGivenOr[str] = NOT_GIVEN
+        if is_given(language_code):
+            normalized_language_code = LanguageCode(language_code).language
 
         self._opts = STTOptions(
             sample_rate=sample_rate,
@@ -266,6 +283,7 @@ class STT(stt.STT):
             encoding=encoding,
             speech_model=model,
             language_detection=language_detection,
+            language_code=normalized_language_code,
             end_of_turn_confidence_threshold=end_of_turn_confidence_threshold,
             min_turn_silence=min_turn_silence,
             max_turn_silence=max_turn_silence,
@@ -658,12 +676,18 @@ class SpeechStream(stt.SpeechStream):
                 await ws.close()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        # u3-rt-pro defaults: min=100, max=min (so both 100 unless overridden)
+        # Universal-3 Pro family defaults: min=100, max=min (so both 100 unless overridden).
+        # When a `mode` preset is selected, leave them unset (None) unless the
+        # caller set them explicitly, so the server's per-mode silence tuning is
+        # not overridden by the latency-optimized 100ms default.
         min_silence: int | None
         max_silence: int | None
         if self._opts.speech_model in _U3_PRO_MODELS:
+            default_min = None if is_given(self._opts.mode) else 100
             min_silence = (
-                self._opts.min_turn_silence if is_given(self._opts.min_turn_silence) else 100
+                self._opts.min_turn_silence
+                if is_given(self._opts.min_turn_silence)
+                else default_min
             )
             max_silence = (
                 self._opts.max_turn_silence
@@ -703,6 +727,9 @@ class SpeechStream(stt.SpeechStream):
             if "multilingual" in self._opts.speech_model
             or self._opts.speech_model in _U3_PRO_MODELS
             else False,
+            "language_code": self._opts.language_code
+            if is_given(self._opts.language_code)
+            else None,
             "prompt": self._opts.prompt if is_given(self._opts.prompt) else None,
             "agent_context": self._opts.agent_context
             if is_given(self._opts.agent_context)

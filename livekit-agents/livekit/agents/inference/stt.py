@@ -117,6 +117,10 @@ class AssemblyaiOptions(TypedDict, total=False):
     inactivity_timeout: float  # seconds
     prompt: str  # default: not specified (u3-rt-pro only, mutually exclusive with keyterms_prompt)
     speaker_labels: bool  # when True, enables speaker diarization (default off)
+    agent_context: str  # context to bias recognition (u3-rt-pro only, max 1500 chars)
+    voice_focus: Literal["near-field", "far-field"]  # isolate primary voice (u3-rt-pro only)
+    voice_focus_threshold: float  # background suppression strength (u3-rt-pro only)
+    mode: Literal["min_latency", "balanced", "max_accuracy"]  # accuracy/latency preset (u3-rt-pro)
 
 
 class ElevenlabsOptions(TypedDict, total=False):
