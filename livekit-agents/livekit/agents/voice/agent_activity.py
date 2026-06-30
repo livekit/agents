@@ -2411,7 +2411,7 @@ class AgentActivity(RecognitionHooks):
         options: ExpressiveOptions,
         speech_handle: SpeechHandle,
     ) -> None:
-        """Inject TTS markup guide and speaker context into the chat context."""
+        """Inject the TTS markup guide into the chat context."""
 
         def _to_instructions(v: Instructions | str) -> Instructions:
             return v if isinstance(v, Instructions) else Instructions(v)
@@ -2428,22 +2428,6 @@ class AgentActivity(RecognitionHooks):
                         "markup": {
                             "llm_instructions": tts_instructions,
                         },
-                    },
-                },
-            )
-            if text.strip():
-                chat_ctx.add_message(role="system", content=text)
-
-        stt_ctx = self._audio_recognition.stt_context if self._audio_recognition else None
-        llm_instr = self._audio_recognition.llm_instructions() if self._audio_recognition else None
-        if stt_ctx is not None and llm_instr is not None:
-            speaker_template = _to_instructions(options["audio_recognition_instructions_template"])
-            text = speaker_template.render(
-                modality=turn_modality,
-                data={
-                    "audio_recognition": {
-                        "stt_context": stt_ctx.model_dump(),
-                        "llm_instructions": llm_instr,
                     },
                 },
             )
@@ -2865,9 +2849,9 @@ class AgentActivity(RecognitionHooks):
         segment_ch = utils.aio.Chan[_SpeechSegment]()
 
         # Raw LLM output with TTS markup intact, accumulated across all segments.
-        # The transcript path strips markup before it reaches forwarded_text (see
-        # _read_segment_text), so this is the only place the marked-up text survives
-        # for capture into expressive_content / _restore_expressive_content.
+        # When markup is stripped from the transcript (strip_expressive_markup), this is
+        # the only place the marked-up text survives, for capture into expressive_content
+        # / _restore_expressive_content; when kept inline it also reaches forwarded_text.
         assistant_llm_text_parts: list[str] = []
 
         @utils.log_exceptions(logger=logger)
@@ -2979,10 +2963,15 @@ class AgentActivity(RecognitionHooks):
 
         reply_started_at = time.time()
 
-        # strip TTS markup from the live transcript stream when expressive injected
-        # markup into the LLM context (providers interpret the markup as audio directives,
-        # so it must not leak into the user-visible transcript)
-        _strip_markup = self.tts is not None and self._resolve_expressive_options() is not None
+        # In expressive mode the LLM emits markup the TTS interprets as audio directives.
+        # By default we keep that markup inline in the transcript (so its position is
+        # preserved); when `strip_expressive_markup` is set we strip it from the
+        # user-visible transcript and surface the stripped tags as `lk.expressive_tags`.
+        _strip_markup = (
+            self.tts is not None
+            and self._resolve_expressive_options() is not None
+            and self._session.options.strip_expressive_markup
+        )
 
         async def _read_segment_text(
             segment_text: AsyncIterable[str | BaseModel],
@@ -3212,18 +3201,19 @@ class AgentActivity(RecognitionHooks):
             )
 
         if forwarded_text:
-            # When expressive injected markup instructions into the LLM context,
-            # preserve the agent's own marked-up text on the message so future LLM
-            # turns can see its expressive style (_restore_expressive_content).
-            # forwarded_text is already markup-free here (the transcript stream is
-            # stripped in _read_segment_text), so the markup is recovered from the
-            # raw LLM output captured in assistant_llm_text_parts instead. Skip on
-            # interruption: the raw text covers the full reply, not just the spoken
+            # When expressive markup was stripped from the transcript, preserve the
+            # agent's own marked-up text on the message so future LLM turns can see its
+            # expressive style (_restore_expressive_content). forwarded_text is markup-free
+            # in that case (stripped in _read_segment_text), so the markup is recovered
+            # from the raw LLM output captured in assistant_llm_text_parts instead. When
+            # markup is kept inline, forwarded_text already carries it, so this is a no-op.
+            # Skip on interruption: the raw text covers the full reply, not just the spoken
             # portion, so it wouldn't line up with the (partial) stored content.
             expressive_text: str | None = None
             expressive_source: str | None = None
             if (
-                self.tts
+                _strip_markup
+                and self.tts
                 and self._resolve_expressive_options() is not None
                 and not speech_handle.interrupted
             ):

@@ -18,7 +18,6 @@ and can never disagree with the markup pipeline (both read the same provider key
 Customize by spreading a constant into a new dict (don't mutate the constant in place):
 
     expressive={**presets.CUSTOMER_SERVICE, "tts_instructions_append": "Confirm the name."}
-    expressive={**presets.CASUAL, "audio_recognition_instructions_template": "..."}
 """
 
 from __future__ import annotations
@@ -69,9 +68,9 @@ def resolve_options(
 
     If ``expr`` carries a ``preset``, start from that provider's tuned preset (or
     ``default`` when the provider has none); otherwise start from ``default``. Then apply
-    any explicit template overrides and ``tts_instructions_append``. The returned dict
-    always has both template keys and never the ``preset`` / ``tts_instructions_append``
-    helper keys.
+    any explicit ``tts_instructions_template`` override and ``tts_instructions_append``.
+    The returned dict always has ``tts_instructions_template`` and never the ``preset`` /
+    ``tts_instructions_append`` helper keys.
     """
     preset = expr.get("preset")
     if preset is not None:
@@ -80,17 +79,12 @@ def resolve_options(
         base = default
 
     tts_tmpl = expr.get("tts_instructions_template", base["tts_instructions_template"])
-    ar_tmpl = expr.get(
-        "audio_recognition_instructions_template",
-        base["audio_recognition_instructions_template"],
-    )
     append = expr.get("tts_instructions_append")
     if append:
         tts_tmpl = _append(tts_tmpl, append)
 
     result: ExpressiveOptions = {
         "tts_instructions_template": tts_tmpl,
-        "audio_recognition_instructions_template": ar_tmpl,
     }
     return result
 

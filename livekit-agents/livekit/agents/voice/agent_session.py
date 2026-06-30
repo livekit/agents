@@ -143,8 +143,8 @@ class SessionConnectOptions:
 class ExpressiveOptions(TypedDict, total=False):
     """Configuration for the expressive pipeline.
 
-    Controls how TTS markup instructions and speaker context are injected into the LLM
-    when expressive is enabled. All keys are optional; common shapes:
+    Controls how TTS markup instructions are injected into the LLM when expressive is
+    enabled. All keys are optional; common shapes:
 
     - ``{"preset": Preset.CASUAL}`` — a domain preset, resolved to the active
       TTS provider's tuned tags (see ``voice.presets``). Prefer the ``presets.*`` constants.
@@ -159,7 +159,6 @@ class ExpressiveOptions(TypedDict, total=False):
     preset: Preset
     tts_instructions_template: Instructions | str
     tts_instructions_append: str
-    audio_recognition_instructions_template: Instructions | str
 
 
 DEFAULT_EXPRESSIVE_OPTIONS: ExpressiveOptions = ExpressiveOptions(
@@ -167,11 +166,6 @@ DEFAULT_EXPRESSIVE_OPTIONS: ExpressiveOptions = ExpressiveOptions(
         "You can control how you speak using the following formatting tags. "
         "Use them when appropriate to make your speech more expressive and natural:\n\n"
         "{tts.markup.llm_instructions}"
-    ),
-    audio_recognition_instructions_template=Instructions(
-        "Here is what has been detected about the speaker you are talking to:\n\n"
-        "{audio_recognition.llm_instructions}\n\n"
-        "Adapt your tone and response accordingly."
     ),
 )
 
@@ -190,6 +184,16 @@ class AgentSessionOptions:
     aec_warmup_duration: float | None
     session_close_transcript_timeout: float
     expressive: bool | ExpressiveOptions
+    strip_expressive_markup: bool
+    """Strip expressive markup tags from the transcript instead of keeping them inline.
+
+    Only applies when ``expressive`` is enabled. When ``False`` (the default), the markup
+    the LLM produced (e.g. ``<expression value="speak happy"/>``) is kept inline in the
+    transcript, chat history, and response trace, so its position is preserved. When
+    ``True``, the markup is stripped from the user-visible transcript and the stripped
+    tags are surfaced on the ``lk.transcription`` segment via the ``lk.expressive_tags``
+    attribute instead.
+    """
 
     @property
     def endpointing(self) -> EndpointingOptions:
@@ -279,6 +283,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         min_consecutive_speech_delay: float = 0.0,
         # Expressive
         expressive: bool | ExpressiveOptions = False,
+        strip_expressive_markup: bool = False,
         # Misc settings
         userdata: NotGivenOr[Userdata_T] = NOT_GIVEN,
         video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
@@ -437,6 +442,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             aec_warmup_duration=aec_warmup_duration,
             session_close_transcript_timeout=session_close_transcript_timeout,
             expressive=expressive,
+            strip_expressive_markup=strip_expressive_markup,
         )
         self._conn_options = conn_options or SessionConnectOptions()
         self._started = False

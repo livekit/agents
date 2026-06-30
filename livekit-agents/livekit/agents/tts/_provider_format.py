@@ -244,12 +244,6 @@ _INWORLD_CUSTOMER_SERVICE: ExpressiveOptions = {
         "- If the customer switches languages, respond in that language immediately and stay there "
         "until they switch back — but keep the expression and sound tag descriptions in English."
     ),
-    "audio_recognition_instructions_template": Instructions(
-        "Here is what has been detected about the customer you are talking to:\n\n"
-        "{audio_recognition.llm_instructions}\n\n"
-        "Meet them where they are: empathy if frustrated, gentler and slower if distressed or "
-        "anxious, concise if rushed, more clarity and pauses if confused or struggling to follow."
-    ),
 }
 
 _INWORLD_CASUAL: ExpressiveOptions = {
@@ -325,12 +319,6 @@ _INWORLD_CASUAL: ExpressiveOptions = {
         "- If a reaction wouldn't happen in a real conversation, skip it — there's always another "
         "genuine beat to lean into."
     ),
-    "audio_recognition_instructions_template": Instructions(
-        "Here is what has been detected about the person you are talking to:\n\n"
-        "{audio_recognition.llm_instructions}\n\n"
-        "Match their energy and conversational style, and let it move you — get excited with them, "
-        "soften when they do, tease when they tease, react honestly to how they sound."
-    ),
 }
 
 
@@ -379,12 +367,6 @@ _CARTESIA_CUSTOMER_SERVICE: ExpressiveOptions = {
         "- If the customer switches languages, respond in that language immediately and stay there "
         "until they switch back — but keep the emotion tag values in English."
     ),
-    "audio_recognition_instructions_template": Instructions(
-        "Here is what has been detected about the customer you are talking to:\n\n"
-        "{audio_recognition.llm_instructions}\n\n"
-        "Meet them where they are: empathy if frustrated, gentler and slower if distressed or "
-        "anxious, concise if rushed, more clarity and pauses if confused or struggling to follow."
-    ),
 }
 
 _CARTESIA_CASUAL: ExpressiveOptions = {
@@ -421,12 +403,6 @@ _CARTESIA_CASUAL: ExpressiveOptions = {
         "in a real conversation, skip it — there's always another genuine beat to lean into.\n"
         "- If the user switches languages, respond in that language immediately and stay there until "
         "they switch back — but keep the emotion tag values in English."
-    ),
-    "audio_recognition_instructions_template": Instructions(
-        "Here is what has been detected about the person you are talking to:\n\n"
-        "{audio_recognition.llm_instructions}\n\n"
-        "Match their energy and conversational style, and let it move you — get excited with them, "
-        "soften when they do, tease when they tease, react honestly to how they sound."
     ),
 }
 
