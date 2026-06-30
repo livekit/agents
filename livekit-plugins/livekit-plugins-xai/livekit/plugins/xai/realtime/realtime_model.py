@@ -147,6 +147,15 @@ class RealtimeSession(openai.realtime.RealtimeSession):
             ):
                 session.turn_detection = audio_input.turn_detection  # type: ignore[attr-defined]
                 audio_input.model_fields_set.discard("turn_detection")
+
+            # if the relocation emptied both sub-blocks (a voice/turn_detection-only update),
+            # drop the now-hollow audio key instead of sending audio={"input":{},"output":{}}
+            out_set = isinstance(output, RealtimeAudioConfigOutput) and bool(output.model_fields_set)
+            in_set = isinstance(audio_input, RealtimeAudioConfigInput) and bool(
+                audio_input.model_fields_set
+            )
+            if not out_set and not in_set:
+                session.model_fields_set.discard("audio")
         return super()._wrap_session_update(event_id=event_id, session=session)
 
     def _create_tools_update_event(self, tools: list[llm.Tool]) -> dict[str, Any]:
