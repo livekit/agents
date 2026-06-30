@@ -150,7 +150,9 @@ class RealtimeSession(openai.realtime.RealtimeSession):
 
             # if the relocation emptied both sub-blocks (a voice/turn_detection-only update),
             # drop the now-hollow audio key instead of sending audio={"input":{},"output":{}}
-            out_set = isinstance(output, RealtimeAudioConfigOutput) and bool(output.model_fields_set)
+            out_set = isinstance(output, RealtimeAudioConfigOutput) and bool(
+                output.model_fields_set
+            )
             in_set = isinstance(audio_input, RealtimeAudioConfigInput) and bool(
                 audio_input.model_fields_set
             )
