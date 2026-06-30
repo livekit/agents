@@ -35,7 +35,7 @@ from ..metrics import (
 from ..telemetry import otel_metrics, trace_types, tracer, utils as trace_utils
 from ..tokenize.basic import split_words
 from ..types import (
-    ATTRIBUTE_TRANSCRIPTION_EXPRESSIVE_TAGS,
+    ATTRIBUTE_TRANSCRIPTION_EXPRESSION,
     NOT_GIVEN,
     FlushSentinel,
     NotGivenOr,
@@ -2966,7 +2966,7 @@ class AgentActivity(RecognitionHooks):
         # In expressive mode the LLM emits markup the TTS interprets as audio directives.
         # By default we keep that markup inline in the transcript (so its position is
         # preserved); when `strip_expressive_markup` is set we strip it from the
-        # user-visible transcript and surface the stripped tags as `lk.expressive_tags`.
+        # user-visible transcript and surface the expression as `lk.expression`.
         _strip_markup = (
             self.tts is not None
             and self._resolve_expressive_options() is not None
@@ -2992,30 +2992,40 @@ class AgentActivity(RecognitionHooks):
                 source = self.tts.markup.to_text_stream(source, tags_out=expressive_tags)
 
             def _publish_expressive_tags() -> None:
-                # surface the stripped tags (in document order) on this transcription
-                # segment so the frontend can react to e.g. [speak happy]
-                if text_output is None or not expressive_tags:
+                # surface the segment's expression on the transcription so the frontend
+                # can react to e.g. [speak happy]. We capture only the delivery/emotion
+                # ("expression" for Inworld/ElevenLabs v3, "emotion" for Cartesia) and
+                # take the first (leading) one, since it sets the segment's delivery. The
+                # value is a JSON object ({"value": ...}) so the shape can gain fields
+                # later without breaking parsers.
+                if text_output is None:
+                    return
+                expression = next(
+                    (t["value"] for t in expressive_tags if t["type"] in ("expression", "emotion")),
+                    None,
+                )
+                if expression is None:
                     return
                 text_output.set_segment_attributes(
                     {
-                        ATTRIBUTE_TRANSCRIPTION_EXPRESSIVE_TAGS: json.dumps(
-                            expressive_tags, separators=(",", ":")
+                        ATTRIBUTE_TRANSCRIPTION_EXPRESSION: json.dumps(
+                            {"value": expression}, separators=(",", ":")
                         )
                     }
                 )
 
             published = False
             async for chunk in source:
-                # publish before the first chunk opens the segment writer, so the tags
-                # land on the segment's opening header (the frontend gets them at segment
-                # start). by here to_text_stream has already collected the leading tags.
+                # publish before the first chunk opens the segment writer, so the
+                # expression lands on the segment's opening header (the frontend gets it
+                # at segment start). by here to_text_stream has collected the leading tag.
                 if not published:
                     _publish_expressive_tags()
                     published = True
                 yield chunk
 
-            # refresh with the complete set for the flush trailer (covers any tags that
-            # appeared later in a multi-sentence segment, after the header was sent)
+            # refresh on the flush trailer in case the leading expression was only
+            # collected after the header was sent
             _publish_expressive_tags()
 
         started_speaking_at: float | None = None

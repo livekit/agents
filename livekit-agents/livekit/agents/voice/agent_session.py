@@ -190,8 +190,8 @@ class AgentSessionOptions:
     Only applies when ``expressive`` is enabled. When ``False`` (the default), the markup
     the LLM produced (e.g. ``<expression value="speak happy"/>``) is kept inline in the
     transcript, chat history, and response trace, so its position is preserved. When
-    ``True``, the markup is stripped from the user-visible transcript and the stripped
-    tags are surfaced on the ``lk.transcription`` segment via the ``lk.expressive_tags``
+    ``True``, the markup is stripped from the user-visible transcript and the segment's
+    expression is surfaced on the ``lk.transcription`` segment via the ``lk.expression``
     attribute instead.
     """
 
