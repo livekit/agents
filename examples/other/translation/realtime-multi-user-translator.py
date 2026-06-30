@@ -1,4 +1,8 @@
-"""Realtime multi-user speech translation using OpenAI ``gpt-realtime-translate``.
+"""Realtime multi-user speech translation using a realtime translation model.
+
+The backend is selectable via the ``TRANSLATION_PROVIDER`` env var ("openai" — the
+default — or "google"), since both ``openai.realtime.RealtimeTranslationModel`` and
+``google.realtime.RealtimeTranslationModel`` expose the same interface.
 
 Every participant speaks their own language (declared via a ``language`` token
 attribute) and hears every other participant translated into their own language.
@@ -31,6 +35,27 @@ No STT/LLM/TTS plugins are used — the realtime model transcribes, translates a
 synthesizes in one step. Each participant's token must carry a ``language``
 attribute (e.g. ``en``/``de``); participants without one are assumed to speak
 English.
+
+How to run
+----------
+Set ``LIVEKIT_URL``, ``LIVEKIT_API_KEY`` and ``LIVEKIT_API_SECRET`` (plus the
+provider key, e.g. ``GOOGLE_API_KEY`` / ``OPENAI_API_KEY``) in your env or a
+``.env`` file, then pick a backend via ``TRANSLATION_PROVIDER`` ("openai" — the
+default — or "google").
+
+1) Connect to an already-existing room (the agent joins immediately and starts
+   reconciling translation directions for whoever is in the room)::
+
+       TRANSLATION_PROVIDER=google python examples/other/translation/realtime-multi-user-translator.py connect --room translate-test
+
+2) Deploy as a worker that waits for incoming jobs from the LiveKit server.
+   The agent is dispatched on demand (agent name ``realtime-translator``)::
+
+       # development, with hot reload
+       TRANSLATION_PROVIDER=google python examples/other/translation/realtime-multi-user-translator.py dev
+
+       # production
+       TRANSLATION_PROVIDER=google python examples/other/translation/realtime-multi-user-translator.py start
 """
 
 import asyncio
@@ -50,14 +75,25 @@ from livekit.agents import (
     JobContext,
     JobRequest,
     cli,
+    llm,
     room_io,
     utils,
 )
-from livekit.plugins import openai
+from livekit.plugins import google, openai
 
 load_dotenv()
 
 logger = logging.getLogger("realtime-translator")
+
+# realtime translation backend: "openai" (default) or "google"
+TRANSLATION_PROVIDER = os.getenv("TRANSLATION_PROVIDER", "openai").lower()
+
+
+def _build_translation_model(target_language: str) -> llm.RealtimeModel:
+    if TRANSLATION_PROVIDER == "google":
+        return google.realtime.RealtimeTranslationModel(target_language=target_language)
+    return openai.realtime.RealtimeTranslationModel(target_language=target_language)
+
 
 # identity prefix for the per-direction agent participants we publish from
 _XLATOR_PREFIX = "xlator-"
@@ -124,7 +160,7 @@ class TranslationAgent(Agent):
     def __init__(self, *, target_language: str, audience: list[str]) -> None:
         super().__init__(
             instructions="",
-            llm=openai.realtime.RealtimeTranslationModel(target_language=target_language),
+            llm=_build_translation_model(target_language),
         )
         self._audience = list(audience)
 
@@ -175,7 +211,7 @@ class TranslationDirection:
         self._audience = list(audience)
 
         self._room = rtc.Room()
-        self._session = AgentSession()
+        self._session = AgentSession(aec_warmup_duration=None)
         self._agent: TranslationAgent | None = None
         self._relay_task: asyncio.Task | None = None
 
