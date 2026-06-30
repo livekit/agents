@@ -772,6 +772,7 @@ class SpeechStream(stt.SpeechStream):
             self._opts.language = LanguageCode(language)
         if is_given(extra):
             self._opts.extra_kwargs.update(extra)
+            self._pending_extra = None
 
         has_update = is_given(model) or is_given(language) or is_given(extra)
         if has_update and self._ws is not None and not self._ws.closed:

@@ -556,6 +556,7 @@ class SpeechStream(stt.SpeechStream):
             keyterm = keyterms
         if is_given(keyterm):
             self._opts.keyterm = keyterm
+            self._pending_keyterm = None
         if is_given(profanity_filter):
             self._opts.profanity_filter = profanity_filter
         if is_given(redact):
@@ -855,6 +856,7 @@ class SpeechStream(stt.SpeechStream):
             if self._speaking:
                 self._speaking = False
                 self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+                self._on_end_of_speech()
         elif data["type"] == "Metadata":
             pass  # metadata is too noisy
         else:

@@ -678,6 +678,7 @@ class SpeechStream(stt.SpeechStream):
             self._config.adaptation = adaptation
         if is_given(keywords):
             self._config.keywords = keywords
+            self._pending_keywords = None
         if is_given(speech_start_timeout):
             self._config.speech_start_timeout = speech_start_timeout
         if is_given(speech_end_timeout):
