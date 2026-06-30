@@ -9,12 +9,16 @@ from openai.types.realtime import (
     ConversationItemAdded,
     ConversationItemDeletedEvent,
     ConversationItemInputAudioTranscriptionCompletedEvent,
+    RealtimeAudioConfig,
+    RealtimeAudioConfigInput,
+    RealtimeAudioConfigOutput,
     RealtimeConversationItemFunctionCall,
+    RealtimeSessionCreateRequest,
 )
 from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
-from pydantic import BaseModel
+from openai.types.realtime.session_update_event import SessionUpdateEvent
 
-from livekit.agents import llm, utils
+from livekit.agents import llm
 from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import (
@@ -120,33 +124,30 @@ class RealtimeSession(openai.realtime.RealtimeSession):
             self.emit("metrics_collected", metrics)
         await super().aclose()
 
-    def _create_session_update_event(self) -> dict[str, Any]:
-        event = super()._create_session_update_event()
-        if isinstance(event, BaseModel):
-            event = event.model_dump(by_alias=True, exclude_unset=True, exclude_defaults=False)
-
-        session = event["session"]
-        output = session.get("audio", {}).get("output", {})
-        if (voice := output.pop("voice", None)) is not None:
-            session["voice"] = voice
-        return event
-
-    def update_options(self, *, voice: NotGivenOr[str] = NOT_GIVEN, **kwargs: Any) -> None:
-        # xAI expects `voice` at the session top-level, not nested under
-        # `audio.output.voice` like OpenAI. Handle voice changes here and delegate the
-        # remaining options to the base implementation.
-        if is_given(voice):
-            if self._opts.voice != voice:
-                self.send_event(
-                    {
-                        "type": "session.update",
-                        "event_id": utils.shortuuid("options_update_"),
-                        "session": {"voice": voice},
-                    }
-                )
-            self._opts.voice = voice
-
-        super().update_options(**kwargs)
+    def _wrap_session_update(
+        self, event_id: str, session: RealtimeSessionCreateRequest
+    ) -> SessionUpdateEvent | dict[str, Any]:
+        # xAI expects `voice` and `turn_detection` as top-level session fields, whereas the
+        # OpenAI base nests them under audio.output / audio.input. Relocate them on the typed
+        # request (RealtimeSessionCreateRequest is extra="allow") before the base serializes,
+        # so this single seam covers every session.update the base emits — initial config,
+        # reconnect, and update_options — with no duplicated logic and no extra events.
+        # Gating on model_fields_set keeps an untouched field from leaking as a top-level null.
+        audio = session.audio
+        if isinstance(audio, RealtimeAudioConfig):
+            output = audio.output
+            if isinstance(output, RealtimeAudioConfigOutput) and "voice" in output.model_fields_set:
+                # voice/turn_detection are set as extra fields (the model is extra="allow")
+                session.voice = output.voice  # type: ignore[attr-defined]
+                output.model_fields_set.discard("voice")
+            audio_input = audio.input
+            if (
+                isinstance(audio_input, RealtimeAudioConfigInput)
+                and "turn_detection" in audio_input.model_fields_set
+            ):
+                session.turn_detection = audio_input.turn_detection  # type: ignore[attr-defined]
+                audio_input.model_fields_set.discard("turn_detection")
+        return super()._wrap_session_update(event_id=event_id, session=session)
 
     def _create_tools_update_event(self, tools: list[llm.Tool]) -> dict[str, Any]:
         event = super()._create_tools_update_event(tools)
