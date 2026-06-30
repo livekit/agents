@@ -809,6 +809,9 @@ class AgentActivity(RecognitionHooks):
         if isinstance(self._turn_detection, inference.TurnDetector):
             self._turn_detection.on("metrics_collected", self._on_metrics_collected)
 
+        # keyterm detection runs its own LLM, surface its usage
+        self._session._keyterm_detector.on("metrics_collected", self._on_metrics_collected)
+
         if isinstance(self.llm, llm.RealtimeModel):
             rt_reused = reuse_resources is not None and reuse_resources.rt_session is not None
             if rt_reused:
@@ -917,6 +920,17 @@ class AgentActivity(RecognitionHooks):
             reuse_resources.stt_pipeline = None
             reuse_resources.turn_detector_stream = None
 
+        if isinstance(self.stt, stt.STT):
+            # bind the session's keyterm detector to this activity's STT (detection uses its
+            # own LLM, configured via keyterms_options, not the agent's)
+            self._session._keyterm_detector.start(self._session, stt=self.stt)
+
+            # forward conversation turns to STTs that consume context natively; gated by the
+            # STT's own capability (toggled via the STT's args). stateless and activity-scoped,
+            # so it lives here rather than in the detector.
+            if self.stt.capabilities.chat_context:
+                self._session.on("conversation_item_added", self.stt._push_conversation_item)
+
     @tracer.start_as_current_span("drain_agent_activity")
     async def drain(
         self, *, new_activity: AgentActivity | None = None
@@ -965,6 +979,8 @@ class AgentActivity(RecognitionHooks):
 
         if self._scheduling_paused:
             return
+
+        await self._session._keyterm_detector.aclose()
 
         self._scheduling_paused = True
         if blocked_tasks:
@@ -1075,6 +1091,7 @@ class AgentActivity(RecognitionHooks):
         if isinstance(self.stt, stt.STT):
             self.stt.off("metrics_collected", self._on_metrics_collected)
             self.stt.off("error", self._on_error)
+            self._session.off("conversation_item_added", self.stt._push_conversation_item)
 
         if isinstance(self.tts, tts.TTS):
             self.tts.off("metrics_collected", self._on_metrics_collected)
@@ -1090,6 +1107,8 @@ class AgentActivity(RecognitionHooks):
 
         if isinstance(self._turn_detection, inference.TurnDetector):
             self._turn_detection.off("metrics_collected", self._on_metrics_collected)
+
+        self._session._keyterm_detector.off("metrics_collected", self._on_metrics_collected)
 
         if self._rt_session is not None:
             await self._rt_session.aclose()
@@ -1115,6 +1134,7 @@ class AgentActivity(RecognitionHooks):
 
             self._closed = True
             self._cancel_preemptive_generation()
+            await self._session._keyterm_detector.aclose()
 
             # on_exit_task should be awaited in `drain`
             self._on_exit_task = None
