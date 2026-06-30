@@ -1,4 +1,23 @@
 from dataclasses import dataclass
+from typing import Literal
+
+# Anam's built-in director-note styles — single source of truth for both the persona-config
+# ``presetStyle`` and the inline cue tags (see :data:`director_notes.DIRECTOR_NOTE_TAGS`, derived
+# from this). Keep in sync with Anam's preset styles.
+PresetStyle = Literal[
+    "happy",
+    "warm",
+    "playful",
+    "laughter",
+    "curious",
+    "supportive",
+    "concerned",
+    "sad",
+    "surprised",
+    "angry",
+    "distressed",
+    "neutral",
+]
 
 
 @dataclass
@@ -15,15 +34,15 @@ class DirectorNotes:
             cues: 1 responds more strongly, 0 less strongly. ``None`` falls back to
             the default value of 0.35. Out-of-range values are rejected by Anam with
             an HTTP 400.
-        presetStyle: A built-in expressive style (e.g. ``"happy"``, ``"warm"``,
-            ``"playful"``). Mutually exclusive with ``customStylePrompt`` — Anam
+        presetStyle: A built-in expressive style (one of :data:`PresetStyle`, e.g. ``"happy"``,
+            ``"warm"``, ``"playful"``). Mutually exclusive with ``customStylePrompt`` — Anam
             rejects the pair with an HTTP 400.
         customStylePrompt: A free-form expressive style prompt. Mutually exclusive
             with ``presetStyle``.
     """
 
     expressivity: float | None = None
-    presetStyle: str | None = None
+    presetStyle: PresetStyle | None = None
     customStylePrompt: str | None = None
 
 
