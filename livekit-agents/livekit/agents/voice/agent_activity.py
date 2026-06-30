@@ -2292,6 +2292,13 @@ class AgentActivity(RecognitionHooks):
                     "preemptive generation enabled but chat context or tools have changed after `on_user_turn_completed`",  # noqa: E501
                 )
                 preemptive.speech_handle._cancel()
+                # `_cancel()` only resolves the interrupt future; the
+                # preemptive's inner LLM/TTS tasks won't tear down until after
+                # the synchronous _generate_reply() below has already kicked
+                # off a fresh stream. Cancel them now so cleanup races us, not
+                # the new stream.
+                for task in preemptive.speech_handle._tasks:
+                    task.cancel()
 
             self._preemptive_generation = None
 
@@ -2834,7 +2841,13 @@ class AgentActivity(RecognitionHooks):
             tasks.append(synthesize_task)
 
         wait_for_scheduled = asyncio.ensure_future(speech_handle._wait_for_scheduled())
-        await speech_handle.wait_if_not_interrupted([wait_for_scheduled])
+        try:
+            await speech_handle.wait_if_not_interrupted([wait_for_scheduled])
+        except BaseException:
+            # Cancellation here skips the interrupted-branch cleanup at the
+            # next block, so `wait_for_scheduled` would leak. Handle it inline.
+            wait_for_scheduled.cancel()
+            raise
 
         # add new message to chat context if the speech is scheduled
 
