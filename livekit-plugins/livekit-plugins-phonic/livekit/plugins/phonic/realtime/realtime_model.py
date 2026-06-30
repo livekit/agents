@@ -798,6 +798,8 @@ class RealtimeSession(llm.RealtimeSession):
     @utils.log_exceptions(logger=logger)
     async def _send_task(self, socket: AsyncConversationsSocketClient) -> None:
         async for payload in self._send_ch:
+            if self._session_should_close.is_set():
+                break
             await socket.send_audio_chunk(payload)
 
     @utils.log_exceptions(logger=logger)
@@ -828,13 +830,19 @@ class RealtimeSession(llm.RealtimeSession):
                 elif msg_type == "error":
                     self._emit_error(Exception(message.error.message), recoverable=False)
                 elif msg_type == "assistant_ended_conversation":
-                    self._emit_error(
-                        Exception(
-                            "assistant_ended_conversation is not supported by "
-                            "the Phonic realtime model with LiveKit Agents."
-                        ),
-                        recoverable=False,
-                    )
+                    logger.info(f"Phonic Conversation {self._conversation_id} ended by assistant")
+                    self._session_should_close.set()
+                    from livekit.agents.job import get_job_context
+
+                    job_ctx = get_job_context(required=False)
+                    if job_ctx:
+
+                        async def _delete_room() -> None:
+                            await job_ctx.delete_room()
+
+                        job_ctx.add_shutdown_callback(_delete_room)
+                        job_ctx.shutdown()
+                    break
                 elif msg_type == "conversation_created":
                     self._conversation_id = message.conversation_id
                     logger.info(f"Phonic Conversation began with ID: {self._conversation_id}")

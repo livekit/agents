@@ -25,6 +25,7 @@ class MyAgent(Agent):
             llm=RealtimeModel(
                 voice="sabrina",
                 audio_speed=1.2,
+                phonic_tools=["natural_conversation_ending"],
             ),
         )
 
