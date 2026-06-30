@@ -2,15 +2,17 @@ import re
 from collections.abc import AsyncIterable, Callable, Sequence
 from typing import Literal
 
-from .filters import filter_emoji, filter_markdown
+from .filters import filter_emoji, filter_markdown, filter_ssml
 
 TextTransforms = (
-    Literal["filter_markdown", "filter_emoji"] | Callable[[AsyncIterable[str]], AsyncIterable[str]]
+    Literal["filter_markdown", "filter_emoji", "filter_ssml"]
+    | Callable[[AsyncIterable[str]], AsyncIterable[str]]
 )
 
 _BUILTIN_TRANSFORMS: dict[str, Callable[[AsyncIterable[str]], AsyncIterable[str]]] = {
     "filter_markdown": lambda text: filter_markdown(text),
     "filter_emoji": lambda text: filter_emoji(text),
+    "filter_ssml": lambda text: filter_ssml(text),
 }
 
 
