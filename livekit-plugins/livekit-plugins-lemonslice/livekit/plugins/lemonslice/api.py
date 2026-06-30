@@ -17,6 +17,7 @@ from livekit.agents import (
 )
 
 from .log import logger
+from .meeting.room import JoinMeetingResult
 
 
 class LemonSliceException(Exception):
@@ -71,6 +72,7 @@ class LemonSliceAPI:
         *,
         livekit_url: str,
         livekit_token: str,
+        livekit_session_id: str,
         agent_id: NotGivenOr[str] = NOT_GIVEN,
         agent_image_url: NotGivenOr[str] = NOT_GIVEN,
         agent_prompt: NotGivenOr[str] = NOT_GIVEN,
@@ -84,6 +86,7 @@ class LemonSliceAPI:
         Args:
             livekit_url: The LiveKit Cloud server URL.
             livekit_token: The LiveKit access token for the agent.
+            livekit_session_id: LiveKit room session ID (room SID).
             agent_id: The ID of the LemonSlice agent to add to the session.
             agent_image_url: The URL of the image to use as the agent's avatar.
             agent_prompt: A prompt that subtly influences the avatar's movements and expressions while responding.
@@ -105,6 +108,7 @@ class LemonSliceAPI:
             "properties": {
                 "livekit_url": livekit_url,
                 "livekit_token": livekit_token,
+                "livekit_session_id": livekit_session_id,
             },
         }
 
@@ -126,7 +130,64 @@ class LemonSliceAPI:
         logger.debug(f"LemonSlice Session ID = {session_id}")
         return session_id  # type: ignore
 
-    async def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
+    async def join_meeting(
+        self,
+        session_id: str,
+        *,
+        meeting_url: str,
+        livekit_url: str,
+        broadcast_token: str,
+        bot_name: NotGivenOr[str] = NOT_GIVEN,
+    ) -> JoinMeetingResult:
+        """Add an active avatar session to an external video meeting.
+
+        Supports Zoom, Google Meet, Microsoft Teams, and Webex.
+
+        Args:
+            session_id: LemonSlice agent session ID.
+            meeting_url: URL of the external meeting to join.
+            livekit_url: LiveKit server URL for the agent room.
+            broadcast_token: LiveKit token used to subscribe to avatar media.
+            bot_name: Optional display name for the bot in the meeting.
+
+        Returns:
+            JoinMeetingResult with relay WebSocket URL and meeting bot ID.
+        """
+        payload: dict[str, Any] = {
+            "session_id": session_id,
+            "meeting_url": meeting_url,
+            "livekit_url": livekit_url,
+            "broadcast_token": broadcast_token,
+        }
+        if utils.is_given(bot_name) and bot_name:
+            payload["bot_name"] = bot_name
+
+        url = f"{self._api_url.rstrip('/')}/{session_id}/join-meeting"
+        data = await self._post(payload, url=url)
+        return JoinMeetingResult(
+            websocket_url=str(data["websocket_url"]),
+            meeting_bot_id=str(data["meeting_bot_id"]),
+        )
+
+    async def leave_meeting(
+        self,
+        session_id: str,
+        *,
+        meeting_bot_id: str,
+    ) -> None:
+        """Remove the avatar from an external meeting.
+
+        Args:
+            session_id: LemonSlice agent session ID.
+            meeting_bot_id: Meeting bot ID returned by join_meeting().
+        """
+        url = f"{self._api_url.rstrip('/')}/{session_id}/leave-meeting"
+        await self._post(
+            {"meeting_bot_id": meeting_bot_id},
+            url=url,
+        )
+
+    async def _post(self, payload: dict[str, Any], *, url: str | None = None) -> dict[str, Any]:
         """
         Make a POST request to the LemonSlice API with retry logic.
 
@@ -144,7 +205,7 @@ class LemonSliceAPI:
             for i in range(self._conn_options.max_retry + 1):
                 try:
                     async with session.post(
-                        self._api_url,
+                        url or self._api_url,
                         headers={
                             "Content-Type": "application/json",
                             "X-API-Key": self._api_key,
