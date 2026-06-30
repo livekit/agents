@@ -179,7 +179,17 @@ class SpeechHandle:
                     "To wait for the assistant’s spoken response prior to running this tool, use `RunContext.wait_for_playout()` instead."
                 )
 
-        await asyncio.shield(self._done_fut)
+        # Wait for whichever resolves first: full playout (_done_fut) or
+        # interruption (_interrupt_fut).  Without the interrupt branch,
+        # callers of wait_for_playout() block until INTERRUPTION_TIMEOUT
+        # force-kills them when the user interrupts during playout.
+        done, _ = await asyncio.wait(
+            [
+                asyncio.ensure_future(asyncio.shield(self._done_fut)),
+                asyncio.ensure_future(asyncio.shield(self._interrupt_fut)),
+            ],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
 
     def __await__(self) -> Generator[None, None, SpeechHandle]:
         async def _await_impl() -> SpeechHandle:
