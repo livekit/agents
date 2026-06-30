@@ -751,7 +751,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     room_input_options=room_input_options,
                     room_output_options=room_output_options,
                 )
-                room_options = copy.copy(room_options)  # shadow copy is enough
+                room_options = copy.copy(room_options)  # shallow copy is enough
 
                 if self._text_only:
                     room_options.audio_input = False
@@ -1035,6 +1035,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             if self._forward_audio_atask is not None:
                 await utils.aio.cancel_and_wait(self._forward_audio_atask)
+
+            if self._forward_video_atask is not None:
+                await utils.aio.cancel_and_wait(self._forward_video_atask)
 
             if self._recorder_io:
                 await self._recorder_io.aclose()
