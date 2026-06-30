@@ -211,8 +211,7 @@ class STT(stt.STT):
 
         try:
             async with self._ensure_session().post(
-                f"{self._opts.base_url}/speech-to-text"
-                f"?enable_logging={str(self._opts.enable_logging).lower()}",
+                _synthesize_url(self._opts),
                 data=form,
                 headers={AUTHORIZATION_HEADER: self._opts.api_key},
             ) as response:
@@ -670,3 +669,9 @@ class SpeechStream(stt.SpeechStream):
             pass
         else:
             logger.warning("ElevenLabs STT unknown message type: %s, data: %s", message_type, data)
+
+
+def _synthesize_url(opts: STTOptions) -> str:
+    base_url = opts.base_url
+    url = f"{base_url}/speech-to-text?enable_logging={str(opts.enable_logging).lower()}"
+    return url
