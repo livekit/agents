@@ -126,7 +126,10 @@ class FunASRSTT(stt.STT):
         channels = combined.num_channels
         if combined.sample_rate != _SAMPLE_RATE:
             resampler = rtc.AudioResampler(
-                combined.sample_rate, _SAMPLE_RATE, num_channels=channels
+                input_rate=combined.sample_rate,
+                output_rate=_SAMPLE_RATE,
+                num_channels=channels,
+                quality=rtc.AudioResamplerQuality.HIGH,
             )
             frames = list(resampler.push(combined)) + list(resampler.flush())
             data = b"".join(bytes(f.data) for f in frames)
@@ -149,7 +152,7 @@ class FunASRSTT(stt.STT):
             async with self._lock:
                 raw = await asyncio.to_thread(_run)
         except Exception as e:
-            raise APIConnectionError("failed to run FunASR inference") from e
+            raise APIConnectionError("failed to run FunASR inference", retryable=False) from e
 
         text = rich_transcription_postprocess(raw).strip()
         m = _LANG_TAG_RE.match(raw)
