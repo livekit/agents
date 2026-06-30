@@ -219,4 +219,3 @@ def director_note_cue_transform(
             yield partial
 
     return _transform
-
