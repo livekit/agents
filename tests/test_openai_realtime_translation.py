@@ -198,7 +198,9 @@ async def test_late_delta_reopens_segment(monkeypatch: pytest.MonkeyPatch) -> No
     # long idle so the timer can't interfere; we simulate the close/late-delta race
     model, session, fake = _make_session(monkeypatch, output_segment_idle=5.0)
     gens: list[llm.GenerationCreatedEvent] = []
+    metrics: list = []
     session.on("generation_created", gens.append)
+    session.on("metrics_collected", metrics.append)
     try:
         await _wait_for(lambda: len(fake.sent) >= 1)
         fake.feed({"type": "session.output_transcript.delta", "delta": "a"})
@@ -212,6 +214,16 @@ async def test_late_delta_reopens_segment(monkeypatch: pytest.MonkeyPatch) -> No
         seg.audio_ch.close()
         fake.feed({"type": "session.output_transcript.delta", "delta": "b"})
         await _wait_for(lambda: len(gens) == 2)
+
+        # the reopened segment must still record a first-token timestamp, so its
+        # ttft metric is real (not -1) once it closes
+        reopened = session._current_segment
+        assert reopened is not None
+        assert reopened.first_token_timestamp is not None
+        session._close_segment()
+        await _wait_for(lambda: any(m.request_id == gens[1].response_id for m in metrics))
+        reopened_metric = next(m for m in metrics if m.request_id == gens[1].response_id)
+        assert reopened_metric.ttft >= 0
     finally:
         await session.aclose()
 

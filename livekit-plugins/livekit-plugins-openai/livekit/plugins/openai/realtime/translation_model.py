@@ -584,15 +584,16 @@ class RealtimeTranslationSession(
         if not delta:
             return
         segment = self._ensure_segment()
-        if segment.first_token_timestamp is None:
-            segment.first_token_timestamp = time.time()
         try:
             segment.text_ch.send_nowait(delta)
         except utils.aio.ChanClosed:
             # belt-and-suspenders: a late delta after the idle timer closed the
             # segment. Open a fresh segment and retry.
             self._current_segment = None
-            self._ensure_segment().text_ch.send_nowait(delta)
+            segment = self._ensure_segment()
+            segment.text_ch.send_nowait(delta)
+        if segment.first_token_timestamp is None:
+            segment.first_token_timestamp = time.time()
         self._reset_output_idle_timer()
 
     def _on_output_audio_delta(self, event: dict[str, Any]) -> None:
@@ -610,13 +611,14 @@ class RealtimeTranslationSession(
         )
 
         segment = self._ensure_segment()
-        if segment.first_token_timestamp is None:
-            segment.first_token_timestamp = time.time()
         try:
             segment.audio_ch.send_nowait(frame)
         except utils.aio.ChanClosed:
             self._current_segment = None
-            self._ensure_segment().audio_ch.send_nowait(frame)
+            segment = self._ensure_segment()
+            segment.audio_ch.send_nowait(frame)
+        if segment.first_token_timestamp is None:
+            segment.first_token_timestamp = time.time()
         self._reset_output_idle_timer()
 
     def _reset_output_idle_timer(self) -> None:
