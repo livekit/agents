@@ -488,8 +488,13 @@ class RoomIO:
                 # still "connected", which triggers spurious ERROR-level logs:
                 #   "publisher data channel '_reliable' closed unexpectedly"
                 # See https://github.com/livekit/agents/issues/6250
-                await self._room.disconnect()
-                delete_fut = job_ctx.delete_room(room_name=self._room.name)
+                try:
+                    await self._room.disconnect()
+                except Exception:
+                    logger.exception("error disconnecting room before delete; proceeding with delete")
+                delete_fut: asyncio.Future[api.DeleteRoomResponse] = job_ctx.delete_room(
+                    room_name=self._room.name
+                )
                 return await delete_fut
 
             self._delete_room_task = asyncio.ensure_future(_disconnect_then_delete())
