@@ -59,14 +59,23 @@ anxious, panicked, proud, confident, contemplative, determined, joking/comedic.
 3. Pauses - you can insert silence when appropriate.
    <break time="1s"/> - pause in seconds or milliseconds.
 
-4. Spell - reads text character by character.
+4. Spell - reads text character by character (for codes, IDs, or a spelled-out name).
    <spell>TEXT</spell>
+   Keep punctuation out of <spell> — a period inside is read as "dot"; add spaces inside \
+for grouped pauses (<spell>ABC 123</spell>).
+   Reading identifiers: for an email, spell the local part (before the @) with <spell>, \
+then say "@" as "at" and "." as "dot" outside the tag. Say a common domain as a whole word \
+(<spell>jdoe</spell> at gmail dot com), but spell an uncommon domain out too \
+(<spell>jdoe</spell> at <spell>acme</spell> dot com). Cartesia reads phone numbers cleanly \
+from a plain digit string, so write them normally (555-123-4567) and let normalization \
+pace them rather than using <spell>.
 
 Examples:
   <emotion value="excited"/> I can't wait to tell you! <emotion value="happy"/> This is going to be great!
   <emotion value="sad"/> I'm sorry about that. <emotion value="calm"/> Let's figure this out together.
   <emotion value="angry"/> I can't believe this happened. <emotion value="determined"/> We're going to fix it.
   <emotion value="curious"/> Really? <break time="500ms"/> <emotion value="excited"/> Tell me more!
+  <emotion value="calm"/> Sure, that's <spell>jdoe</spell> at gmail dot com, and your callback number is 555-123-4567?
   Your code is <spell>A7X9</spell>. <break time="1s"/> <emotion value="calm"/> Got it?"""
 
 _ELEVENLABS_TAGS = ["break", "phoneme"]
@@ -74,6 +83,16 @@ _ELEVENLABS_TAGS = ["break", "phoneme"]
 _ELEVENLABS_LLM_INSTRUCTIONS = """\
 Expand all numbers, symbols, and abbreviations into spoken form \
 (e.g. $42.50 to forty-two dollars and fifty cents, Dr. to Doctor).
+
+Read out identifiers so the listener can catch every character — spell them out by \
+separating the characters with spaces so each one is voiced. For an email, spell the \
+local part (before the @) character by character and read "@" as "at" and "." as "dot" \
+(e.g. j.doe@... becomes "j dot d o e at ..."). Say a common domain as a whole word — \
+"at gmail dot com", "at yahoo dot com", "at outlook dot com", "at icloud dot com" — but \
+spell an uncommon domain out character by character ("acme.com" becomes "at a c m e dot \
+com"). Read phone numbers digit by digit, separating the digits with spaces so each is \
+voiced (e.g. (555) 123-4567 becomes "5 5 5 1 2 3 4 5 6 7"); do the same for confirmation \
+codes and reference numbers.
 
 You can use two self-closing XML tags:
 
@@ -92,6 +111,16 @@ _ELEVENLABS_V3_TAGS = ["expression"]
 _ELEVENLABS_V3_LLM_INSTRUCTIONS = """\
 Expand all numbers, symbols, and abbreviations into spoken form \
 (e.g. $42.50 to forty-two dollars and fifty cents, Dr. to Doctor).
+
+Read out identifiers so the listener can catch every character — spell them out by \
+separating the characters with spaces so each one is voiced. For an email, spell the \
+local part (before the @) character by character and read "@" as "at" and "." as "dot" \
+(e.g. j.doe@... becomes "j dot d o e at ..."). Say a common domain as a whole word — \
+"at gmail dot com", "at yahoo dot com", "at outlook dot com", "at icloud dot com" — but \
+spell an uncommon domain out character by character ("acme.com" becomes "at a c m e dot \
+com"). Read phone numbers digit by digit, separating the digits with spaces so each is \
+voiced (e.g. (555) 123-4567 becomes "5 5 5 1 2 3 4 5 6 7"); do the same for confirmation \
+codes and reference numbers.
 
 You have one self-closing XML tag for vocal delivery. Place before EVERY sentence.
   <expression value="EXPRESSION"/>
@@ -118,6 +147,16 @@ Write natural spoken sentences. No markdown, emojis, or special characters. \
 Use contractions. Expand all numbers, symbols, and abbreviations into spoken \
 form (e.g. $42.50 to forty-two dollars and fifty cents, Dr. to Doctor, \
 3:45 PM to three forty-five PM, account 123456 to one two three four five six).
+
+Read out identifiers so the listener can catch every character — spell them out by \
+separating the characters with spaces so the TTS voices each one. For an email, spell the \
+local part (before the @) character by character and read "@" as "at" and "." as "dot" \
+(e.g. j.doe@... becomes "j dot d o e at ..."). Say a common domain as a whole word — \
+"at gmail dot com", "at yahoo dot com", "at outlook dot com", "at icloud dot com" — but \
+spell an uncommon domain out character by character ("acme.com" becomes "at a c m e dot \
+com"). Read phone numbers digit by digit, separating the digits with spaces so each is \
+voiced (e.g. (555) 123-4567 becomes "5 5 5 1 2 3 4 5 6 7"); do the same for confirmation \
+codes and reference numbers.
 
 Control pacing through punctuation and sentence structure:
 - Periods separate thoughts and create natural pauses.
