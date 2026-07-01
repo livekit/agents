@@ -7,6 +7,8 @@ from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Generator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 
+from pydantic import BaseModel
+
 from livekit import rtc
 
 from .. import inference, llm, stt, tokenize, tts, utils, vad
@@ -24,7 +26,8 @@ if TYPE_CHECKING:
     from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
     from .agent_activity import AgentActivity
-    from .agent_session import AgentSession
+    from .agent_session import AgentSession, ExpressiveOptions
+    from .audio_recognition import AudioRecognition
     from .io import TimedString
     from .turn import TurnDetectionMode
 
@@ -36,6 +39,29 @@ class ModelSettings:
 
 
 class Agent:
+    llm_output_format: type[BaseModel] | None = None
+    """Class-level Pydantic model for structured LLM output. One field must be
+    annotated with ``llm.Response`` (the spoken text routed to TTS). Other fields
+    are structured metadata available on ``ChatMessage.llm_output``."""
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        fmt = cls.__dict__.get("llm_output_format")
+        if fmt is None:
+            return
+
+        from ..llm.response_field import find_response_field
+
+        find_response_field(fmt)
+        for name, field_info in fmt.model_fields.items():
+            if field_info.is_required():
+                raise TypeError(
+                    f"{cls.__name__}.llm_output_format: field '{name}' on "
+                    f"{fmt.__name__} must have a default value "
+                    f'(e.g. `{name}: str | None = None` or `{name}: llm.Response = ""`). '
+                    f"All fields need defaults for streaming partial parsing."
+                )
+
     def __init__(
         self,
         *,
@@ -49,6 +75,7 @@ class Agent:
         tool_handling: NotGivenOr[ToolHandlingOptions] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
+        expressive: NotGivenOr[bool | ExpressiveOptions] = NOT_GIVEN,
         min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         # deprecated
@@ -122,6 +149,14 @@ class Agent:
                 "passing MCP servers to AgentSession or Agent is deprecated "
                 "and will be removed in a future version. Use `MCPToolset` instead."
             )
+        self._expressive = expressive
+
+        self._response_field_name: str | None = None
+        if self.llm_output_format is not None:
+            from ..llm.response_field import find_response_field
+
+            self._response_field_name = find_response_field(self.llm_output_format)
+
         self._activity: AgentActivity | None = None
 
     @property
@@ -165,6 +200,24 @@ class Agent:
     @property
     def interruption_detection(self) -> NotGivenOr[Literal["adaptive", "vad"]]:
         return self._interruption_detection
+
+    @property
+    def expressive(self) -> NotGivenOr[bool | ExpressiveOptions]:
+        return self._expressive
+
+    @property
+    def audio_recognition(self) -> AudioRecognition:
+        """Access the audio recognition system for this agent.
+
+        The only public member is ``stt_context`` — live speaker metadata from the
+        STT stream.
+
+        Raises:
+            RuntimeError: If the agent is not running.
+        """
+        activity = self._get_activity_or_raise()
+        assert activity._audio_recognition is not None
+        return activity._audio_recognition
 
     async def update_instructions(self, instructions: str) -> None:
         """
@@ -373,7 +426,7 @@ class Agent:
         return Agent.default.transcription_node(self, text, model_settings)
 
     def tts_node(
-        self, text: AsyncIterable[str], model_settings: ModelSettings
+        self, text: AsyncIterable[str | BaseModel], model_settings: ModelSettings
     ) -> (
         AsyncIterable[rtc.AudioFrame]
         | Coroutine[Any, Any, AsyncIterable[rtc.AudioFrame]]
@@ -491,7 +544,9 @@ class Agent:
 
         @staticmethod
         async def tts_node(
-            agent: Agent, text: AsyncIterable[str], model_settings: ModelSettings
+            agent: Agent,
+            text: AsyncIterable[str | BaseModel],
+            model_settings: ModelSettings,
         ) -> AsyncGenerator[rtc.AudioFrame, None]:
             """Default implementation for `Agent.tts_node`"""
             activity = agent._get_activity_or_raise()
@@ -509,12 +564,29 @@ class Agent:
                     sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(retain_format=True),
                 )
 
+            response_field = agent._response_field_name
+
+            # Mark whether expressive is active for this synthesis, synchronously
+            # just before stream() snapshots it. Doing it here (the single synthesis
+            # choke point for both generate_reply and say()) scopes it to this turn
+            # rather than leaving stale state on the instance. The provider's chunk
+            # defaults then drive the TTS's input tokenizer.
+            activity.tts._set_expressive(activity._resolve_expressive_options() is not None)
+
             conn_options = activity.session.conn_options.tts_conn_options
             async with wrapped_tts.stream(conn_options=conn_options) as stream:
 
                 async def _forward_input() -> None:
+                    prev_response = ""
                     async for chunk in text:
-                        stream.push_text(chunk)
+                        if isinstance(chunk, str):
+                            stream.push_text(chunk)
+                        elif isinstance(chunk, BaseModel) and response_field:
+                            full_response = getattr(chunk, response_field, "") or ""
+                            delta = full_response[len(prev_response) :]
+                            if delta:
+                                stream.push_text(delta)
+                            prev_response = full_response
 
                     stream.end_input()
 

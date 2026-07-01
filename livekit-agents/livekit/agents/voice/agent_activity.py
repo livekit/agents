@@ -5,11 +5,12 @@ import contextvars
 import heapq
 import json
 import time
-from collections.abc import AsyncIterable, Coroutine, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from opentelemetry import context as otel_context, trace
+from pydantic import BaseModel
 
 from livekit import rtc
 from livekit.agents.llm.realtime import MessageGeneration
@@ -33,7 +34,12 @@ from ..metrics import (
 )
 from ..telemetry import otel_metrics, trace_types, tracer, utils as trace_utils
 from ..tokenize.basic import split_words
-from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
+from ..types import (
+    ATTRIBUTE_TRANSCRIPTION_EXPRESSION,
+    NOT_GIVEN,
+    FlushSentinel,
+    NotGivenOr,
+)
 from ..utils.misc import is_given
 from ._utils import _set_participant_attributes
 from .agent import (
@@ -72,7 +78,6 @@ from .generation import (
     _strip_running_tool_calls,
     _TextOutput,
     _TTSGenerationData,
-    apply_instructions_modality,
     forward_generation,
     perform_audio_forwarding,
     perform_llm_inference,
@@ -95,7 +100,8 @@ from .turn import (
 
 if TYPE_CHECKING:
     from ..llm import mcp
-    from .agent_session import AgentSession
+    from ..tts._provider_format import ExpressiveTag
+    from .agent_session import AgentSession, ExpressiveOptions
 
 
 _AgentActivityContextVar = contextvars.ContextVar["AgentActivity"]("agents_activity")
@@ -556,7 +562,7 @@ class AgentActivity(RecognitionHooks):
             )
 
         if self._audio_recognition:
-            self._audio_recognition.update_options(
+            self._audio_recognition._update_options(
                 endpointing=create_endpointing(endpointing_opts)
                 if is_given(endpointing_opts)
                 else NOT_GIVEN,
@@ -683,7 +689,7 @@ class AgentActivity(RecognitionHooks):
                 and type(new_activity.agent).stt_node is Agent.stt_node
                 and self.stt is new_activity.stt
             ):
-                resources.stt_pipeline = await self._audio_recognition.detach_stt()
+                resources.stt_pipeline = await self._audio_recognition._detach_stt()
 
             # reuse the stream during a handoff whenever we can
             if (
@@ -691,7 +697,7 @@ class AgentActivity(RecognitionHooks):
                 and isinstance(self._turn_detection, _StreamingTurnDetector)
                 and self._turn_detection is new_activity._turn_detection
             ):
-                resources.turn_detector_stream = self._audio_recognition.detach_turn_detector()
+                resources.turn_detector_stream = self._audio_recognition._detach_turn_detector()
 
             # rt session
             if (
@@ -849,7 +855,7 @@ class AgentActivity(RecognitionHooks):
                 reset_tools = capabilities.mutable_tools
 
             await self._rt_session._update_session(
-                instructions=self._agent.instructions if reset_instructions else NOT_GIVEN,
+                instructions=str(self._agent.instructions) if reset_instructions else NOT_GIVEN,
                 chat_ctx=self._agent.chat_ctx if reset_chat_ctx else NOT_GIVEN,
                 tools=llm.ToolContext(self.tools).flatten() if reset_tools else NOT_GIVEN,
             )
@@ -876,7 +882,7 @@ class AgentActivity(RecognitionHooks):
         initial_tools = get_fnc_tool_names(self.tools) or None
         if self._agent.instructions or initial_tools:
             initial_config = llm.AgentConfigUpdate(
-                instructions=self._agent.instructions,
+                instructions=str(self._agent.instructions),
                 tools_added=initial_tools,
             )
             initial_config._tools = llm.ToolContext(self.tools).flatten()
@@ -911,7 +917,7 @@ class AgentActivity(RecognitionHooks):
             logger.debug("reusing STT pipeline from previous activity")
         if turn_detector_stream is not None:
             logger.debug("reusing turn detector stream from previous activity")
-        self._audio_recognition.start(
+        self._audio_recognition._start(
             stt_pipeline=stt_pipeline,
             turn_detector_stream=turn_detector_stream,
         )
@@ -1117,7 +1123,7 @@ class AgentActivity(RecognitionHooks):
             self._realtime_spans.clear()
 
         if self._audio_recognition is not None:
-            await self._audio_recognition.aclose()
+            await self._audio_recognition._aclose()
 
         await self._cancel_speech_pause(
             old_task=self._cancel_speech_pause_task,
@@ -1195,7 +1201,7 @@ class AgentActivity(RecognitionHooks):
             self._rt_session.push_audio(stt_frame if stt_frame is not None else frame)
 
         if self._audio_recognition is not None:
-            self._audio_recognition.push_audio(frame, stt_frame=stt_frame)
+            self._audio_recognition._push_audio(frame, stt_frame=stt_frame)
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
         if not self._started:
@@ -1366,7 +1372,7 @@ class AgentActivity(RecognitionHooks):
                     speech_handle=handle,
                     # TODO(theomonnom): support llm.ChatMessage for the realtime model
                     user_input=user_message.text_content if user_message else None,
-                    instructions=instructions or None,
+                    instructions=str(instructions) if instructions else None,
                     tools=resolved_tools if is_given(resolved_tools) else None,
                     model_settings=ModelSettings(tool_choice=tool_choice),
                 ),
@@ -1456,7 +1462,7 @@ class AgentActivity(RecognitionHooks):
 
     def clear_user_turn(self) -> None:
         if self._audio_recognition:
-            self._audio_recognition.clear_user_turn()
+            self._audio_recognition._clear_user_turn()
 
         if self._rt_session is not None:
             self._rt_session.clear_audio()
@@ -1474,7 +1480,7 @@ class AgentActivity(RecognitionHooks):
             skip_reply = True
 
         assert self._audio_recognition is not None
-        return self._audio_recognition.commit_user_turn(
+        return self._audio_recognition._commit_user_turn(
             audio_detached=not self._session.input.audio_enabled,
             transcript_timeout=transcript_timeout,
             stt_flush_duration=stt_flush_duration,
@@ -1719,7 +1725,7 @@ class AgentActivity(RecognitionHooks):
         if self.vad is None or self.using_default_vad:
             self._session._update_user_state("speaking")
             if self._audio_recognition:
-                self._audio_recognition.on_start_of_speech(
+                self._audio_recognition._on_start_of_speech(
                     started_at=time.time(),
                     user_speaking_span=self._session._user_speaking_span,
                 )
@@ -1736,7 +1742,7 @@ class AgentActivity(RecognitionHooks):
     def _on_input_speech_stopped(self, ev: llm.InputSpeechStoppedEvent) -> None:
         if self.vad is None or self.using_default_vad:
             if self._audio_recognition:
-                self._audio_recognition.on_end_of_speech(
+                self._audio_recognition._on_end_of_speech(
                     ended_at=time.time(),
                     user_speaking_span=self._session._user_speaking_span,
                 )
@@ -1831,7 +1837,7 @@ class AgentActivity(RecognitionHooks):
             and interruption_options["min_words"] > 0
             and self._audio_recognition is not None
         ):
-            text = self._audio_recognition.current_transcript
+            text = self._audio_recognition._current_transcript
 
             # TODO(long): better word splitting for multi-language
             if len(split_words(text, split_character=True)) < interruption_options["min_words"]:
@@ -1856,7 +1862,7 @@ class AgentActivity(RecognitionHooks):
                 and not self._audio_recognition._endpointing.overlapping
                 and self._session.agent_state == "speaking"
             ):
-                self._audio_recognition.on_start_of_speech(
+                self._audio_recognition._on_start_of_speech(
                     started_at=time.time(),
                 )
 
@@ -1868,7 +1874,7 @@ class AgentActivity(RecognitionHooks):
                 audio_output.pause()
                 self._session._update_agent_state("listening")
                 if self._audio_recognition:
-                    self._audio_recognition.on_end_of_agent_speech(
+                    self._audio_recognition._on_end_of_agent_speech(
                         ignore_user_transcript_until=ignore_user_transcript_until or time.time()
                     )
                 if self.interruption_enabled:
@@ -1888,7 +1894,7 @@ class AgentActivity(RecognitionHooks):
     ) -> None:
         self._session._update_user_state("speaking", last_speaking_time=speech_start_time)
         if self._audio_recognition:
-            self._audio_recognition.on_start_of_speech(
+            self._audio_recognition._on_start_of_speech(
                 started_at=speech_start_time,
                 speech_duration=ev.speech_duration if ev else 0.0,
                 user_speaking_span=self._session._user_speaking_span,
@@ -1925,7 +1931,7 @@ class AgentActivity(RecognitionHooks):
             self._stt_eos_received = True
 
         if self._audio_recognition:
-            self._audio_recognition.on_end_of_speech(
+            self._audio_recognition._on_end_of_speech(
                 ended_at=speech_end_time,
                 user_speaking_span=self._session._user_speaking_span,
                 interruption=self._interruption_detected
@@ -1976,7 +1982,7 @@ class AgentActivity(RecognitionHooks):
         )
         # flush held transcripts again if possible
         if self._audio_recognition:
-            self._audio_recognition.on_end_of_agent_speech(
+            self._audio_recognition._on_end_of_agent_speech(
                 ignore_user_transcript_until=ev.overlap_started_at or ev.detected_at
             )
 
@@ -2406,11 +2412,92 @@ class AgentActivity(RecognitionHooks):
 
     # endregion
 
+    def _resolve_expressive_options(self) -> ExpressiveOptions | None:
+        """Resolve expressive from agent (overrides session). Returns None if disabled."""
+        from . import presets
+        from .agent_session import DEFAULT_EXPRESSIVE_OPTIONS
+
+        expr = self._agent.expressive
+        if not utils.is_given(expr):
+            expr = self._session.options.expressive
+        if isinstance(expr, dict):
+            # a `preset` selector resolves to the active TTS provider's tuned preset
+            # (falling back to the agnostic default); explicit fields override on top
+            provider_key = self.tts.markup._provider_key() if self.tts else ""
+            return presets.resolve_options(
+                expr, provider_key=provider_key, default=DEFAULT_EXPRESSIVE_OPTIONS
+            )
+        if expr:
+            return DEFAULT_EXPRESSIVE_OPTIONS
+        return None
+
+    def _inject_expressive_instructions(
+        self,
+        chat_ctx: llm.ChatContext,
+        options: ExpressiveOptions,
+        speech_handle: SpeechHandle,
+    ) -> None:
+        """Inject the TTS markup guide into the chat context."""
+
+        def _to_instructions(v: Instructions | str) -> Instructions:
+            return v if isinstance(v, Instructions) else Instructions(v)
+
+        turn_modality = speech_handle.input_details.modality if speech_handle else None
+
+        tts_instructions = self.tts.markup.llm_instructions() if self.tts else None
+        if tts_instructions:
+            tts_template = _to_instructions(options["tts_instructions_template"])
+            text = tts_template.render(
+                modality=turn_modality,
+                data={
+                    "tts": {
+                        "markup": {
+                            "llm_instructions": tts_instructions,
+                        },
+                    },
+                },
+            )
+            if text.strip():
+                chat_ctx.add_message(role="system", content=text)
+
+    def _restore_expressive_content(self, chat_ctx: llm.ChatContext) -> None:
+        """Swap assistant message content for the marked-up text on the per-turn copy.
+
+        Chat history stores clean text (``content``) with the original marked-up text
+        preserved on ``expressive_content``. Re-injecting the markup lets the LLM see
+        its own past expressive style instead of being few-shotted by a tag-free
+        history. The items are shared with the persistent chat context, so swapped
+        messages are replaced with copies rather than mutated.
+
+        Markup is only restored for messages captured under the same TTS (matched by
+        label): tag vocabularies differ between providers, so after a TTS handoff
+        another provider's tags would teach the LLM the wrong vocabulary.
+        """
+        if self.tts is None:
+            return
+
+        current_label = self.tts.label
+        items = chat_ctx.items
+        for i, item in enumerate(items):
+            if (
+                item.type == "message"
+                and item.role == "assistant"
+                and item.expressive_content is not None
+                and item.expressive_content.source == current_label
+            ):
+                copied = item.model_copy()
+                # expressive_content.markup is the full text of the message; non-text
+                # content (images/audio) is preserved as-is
+                copied.content = [item.expressive_content.markup] + [
+                    c for c in item.content if not isinstance(c, str)
+                ]
+                items[i] = copied
+
     def _on_pipeline_reply_done(self, _: asyncio.Task[None]) -> None:
         if not self._speech_q and (not self._current_speech or self._current_speech.done()):
             self._session._update_agent_state("listening")
             if self._audio_recognition:
-                self._audio_recognition.on_end_of_agent_speech(
+                self._audio_recognition._on_end_of_agent_speech(
                     ignore_user_transcript_until=time.time()
                 )
             if self.interruption_enabled:
@@ -2519,7 +2606,7 @@ class AgentActivity(RecognitionHooks):
                 otel_context=speech_handle._agent_turn_context,
             )
             if self._audio_recognition:
-                self._audio_recognition.on_start_of_agent_speech(started_at=started_speaking_at)
+                self._audio_recognition._on_start_of_agent_speech(started_at=started_speaking_at)
             if self.interruption_enabled:
                 self._disable_vad_interruption_soon()
 
@@ -2639,7 +2726,7 @@ class AgentActivity(RecognitionHooks):
         if self._session.agent_state == "speaking":
             self._session._update_agent_state("listening")
             if self._audio_recognition:
-                self._audio_recognition.on_end_of_agent_speech(
+                self._audio_recognition._on_end_of_agent_speech(
                     ignore_user_transcript_until=time.time()
                 )
             if self.interruption_enabled:
@@ -2697,7 +2784,13 @@ class AgentActivity(RecognitionHooks):
         current_span = trace.get_current_span(context=speech_handle._agent_turn_context)
         current_span.set_attribute(trace_types.ATTR_SPEECH_ID, speech_handle.id)
         if instructions is not None:
-            current_span.set_attribute(trace_types.ATTR_INSTRUCTIONS, instructions)
+            turn_modality = speech_handle.input_details.modality
+            instr_trace = (
+                instructions.render(modality=turn_modality)
+                if isinstance(instructions, Instructions)
+                else instructions
+            )
+            current_span.set_attribute(trace_types.ATTR_INSTRUCTIONS, instr_trace)
         if new_message:
             current_span.set_attribute(trace_types.ATTR_USER_INPUT, new_message.text_content or "")
 
@@ -2716,11 +2809,31 @@ class AgentActivity(RecognitionHooks):
         if new_message is not None:
             chat_ctx.insert(new_message)
 
+        # resolve modality-specific instructions for this turn
+        turn_modality = speech_handle.input_details.modality
         if instructions is not None:
-            chat_ctx.add_message(role="system", content=[instructions])
+            instr_text = (
+                instructions.render(modality=turn_modality)
+                if isinstance(instructions, Instructions)
+                else instructions
+            )
+            chat_ctx.add_message(role="system", content=[instr_text])
+        elif isinstance(self._agent.instructions, Instructions):
+            update_instructions(
+                chat_ctx,
+                instructions=self._agent.instructions,
+                modality=turn_modality,
+                add_if_missing=False,
+            )
 
-        # apply the correct variant of the instructions for the turn's input modality
-        apply_instructions_modality(chat_ctx, modality=speech_handle.input_details.modality)
+        # inject expressive instructions (TTS markup guide + speaker context)
+        _expr_opts = self._resolve_expressive_options()
+        if _expr_opts is not None:
+            self._inject_expressive_instructions(chat_ctx, _expr_opts, speech_handle)
+            # only restore markup when the current TTS understands it; after a handoff
+            # to a TTS without markup support, old tags would leak through unconverted
+            if self.tts and self.tts.markup.llm_instructions():
+                self._restore_expressive_content(chat_ctx)
 
         # TODO(theomonnom): since pause is closing STT/LLM/TTS, we have issues for SpeechHandle still in queue  # noqa: E501
         # I should implement a retry mechanism?
@@ -2742,6 +2855,8 @@ class AgentActivity(RecognitionHooks):
             model_settings=model_settings,
             model=self.llm.model if self.llm else None,
             provider=self.llm.provider if self.llm else None,
+            llm_output_format=self._agent.llm_output_format,
+            response_field_name=self._agent._response_field_name,
         )
         tasks.append(llm_task)
 
@@ -2762,16 +2877,23 @@ class AgentActivity(RecognitionHooks):
         # without a FlushSentinel there is a single (continuous) segment
         @dataclass
         class _SpeechSegment:
-            text: utils.aio.Chan[str]  # transcript text for this segment
+            # transcript text for this segment; may include structured-output BaseModel chunks
+            text: utils.aio.Chan[str | BaseModel]
             tts: _TTSGenerationData | None = None  # audio + timed transcript, when enabled
 
         segment_ch = utils.aio.Chan[_SpeechSegment]()
+
+        # Raw LLM output with TTS markup intact, accumulated across all segments.
+        # The transcript path strips markup before it reaches forwarded_text (see
+        # _read_segment_text), so this is the only place the marked-up text survives
+        # for capture into expressive_content / _restore_expressive_content.
+        assistant_llm_text_parts: list[str] = []
 
         @utils.log_exceptions(logger=logger)
         async def _produce_segments() -> None:
             await llm_gen_data.started_fut  # keep the tts span under the llm span
             current: _SpeechSegment | None = None
-            tts_text: utils.aio.Chan[str] | None = None
+            tts_text: utils.aio.Chan[str | BaseModel] | None = None
             prev_tts_task: asyncio.Task[bool] | None = None
 
             async def _start_segment() -> _SpeechSegment:
@@ -2783,7 +2905,7 @@ class AgentActivity(RecognitionHooks):
                 if audio_output is not None:
                     if prev_tts_task is not None:
                         await prev_tts_task
-                    tts_text = utils.aio.Chan[str]()
+                    tts_text = utils.aio.Chan[str | BaseModel]()
                     prev_tts_task, tts_data = perform_tts_inference(
                         node=self._agent.tts_node,
                         input=tts_text,
@@ -2793,7 +2915,7 @@ class AgentActivity(RecognitionHooks):
                         provider=self.tts.provider if self.tts else None,
                     )
                     tasks.append(prev_tts_task)
-                seg = _SpeechSegment(text=utils.aio.Chan[str](), tts=tts_data)
+                seg = _SpeechSegment(text=utils.aio.Chan[str | BaseModel](), tts=tts_data)
                 segment_ch.send_nowait(seg)
                 return seg
 
@@ -2812,6 +2934,8 @@ class AgentActivity(RecognitionHooks):
                         continue
                     if current is None:
                         current = await _start_segment()
+                    if isinstance(chunk, str):
+                        assistant_llm_text_parts.append(chunk)
                     current.text.send_nowait(chunk)
                     if tts_text is not None:
                         tts_text.send_nowait(chunk)
@@ -2874,6 +2998,66 @@ class AgentActivity(RecognitionHooks):
 
         reply_started_at = time.time()
 
+        # In expressive mode the LLM emits markup the TTS interprets as audio directives,
+        # so strip it from the user-visible transcript and surface the expression as
+        # `lk.expression` instead (the markup must not leak into the transcript).
+        _strip_markup = self.tts is not None and self._resolve_expressive_options() is not None
+
+        async def _read_segment_text(
+            segment_text: AsyncIterable[str | BaseModel],
+        ) -> AsyncIterable[str]:
+            # structured-output BaseModel chunks carry no spoken text for the transcript
+            async def _plain_chunks() -> AsyncGenerator[str, None]:
+                async for chunk in segment_text:
+                    if isinstance(chunk, BaseModel):
+                        continue
+                    if chunk:
+                        yield chunk
+
+            # markup stripping also collects the tags it removes into expressive_tags
+            # (single pass), so we can surface them as transcription attributes
+            expressive_tags: list[ExpressiveTag] = []
+            source: AsyncIterable[str] = _plain_chunks()
+            if _strip_markup and self.tts:
+                source = self.tts.markup.to_text_stream(source, tags_out=expressive_tags)
+
+            def _publish_expressive_tags() -> None:
+                # surface the segment's expression on the transcription so the frontend
+                # can react to e.g. [speak happy]. We capture only the delivery/emotion
+                # ("expression" for Inworld/ElevenLabs v3, "emotion" for Cartesia) and
+                # take the first (leading) one, since it sets the segment's delivery. The
+                # value is a JSON object ({"value": ...}) so the shape can gain fields
+                # later without breaking parsers.
+                if text_output is None:
+                    return
+                expression = next(
+                    (t["value"] for t in expressive_tags if t["type"] in ("expression", "emotion")),
+                    None,
+                )
+                if expression is None:
+                    return
+                text_output.set_segment_attributes(
+                    {
+                        ATTRIBUTE_TRANSCRIPTION_EXPRESSION: json.dumps(
+                            {"value": expression}, separators=(",", ":")
+                        )
+                    }
+                )
+
+            published = False
+            async for chunk in source:
+                # publish before the first chunk opens the segment writer, so the
+                # expression lands on the segment's opening header (the frontend gets it
+                # at segment start). by here to_text_stream has collected the leading tag.
+                if not published:
+                    _publish_expressive_tags()
+                    published = True
+                yield chunk
+
+            # refresh on the flush trailer in case the leading expression was only
+            # collected after the header was sent
+            _publish_expressive_tags()
+
         started_speaking_at: float | None = None
         stopped_speaking_at: float | None = None
         started_forwarding_at: float | None = None
@@ -2923,7 +3107,7 @@ class AgentActivity(RecognitionHooks):
             )
 
             if self._audio_recognition:
-                self._audio_recognition.on_start_of_agent_speech(started_at=started_speaking_at)
+                self._audio_recognition._on_start_of_agent_speech(started_at=started_speaking_at)
             if self.interruption_enabled:
                 self._disable_vad_interruption_soon()
 
@@ -2980,7 +3164,7 @@ class AgentActivity(RecognitionHooks):
             if first_tts_gen_data is None:
                 first_tts_gen_data = segment.tts
 
-            transcript: AsyncIterable[str] = segment.text
+            transcript: AsyncIterable[str | BaseModel] = segment.text
             if (
                 segment.tts is not None
                 and use_aligned_transcript
@@ -2989,7 +3173,7 @@ class AgentActivity(RecognitionHooks):
                 transcript = timed_texts
                 read_transcript_from_tts = True
 
-            tr_node = self._agent.transcription_node(transcript, model_settings)
+            tr_node = self._agent.transcription_node(_read_segment_text(transcript), model_settings)
             text_source = await tr_node if asyncio.iscoroutine(tr_node) else tr_node
             audio_source = segment.tts.audio_ch if segment.tts else None
 
@@ -3057,6 +3241,26 @@ class AgentActivity(RecognitionHooks):
             )
 
         if forwarded_text:
+            # When expressive injected markup instructions into the LLM context,
+            # preserve the agent's own marked-up text on the message so future LLM
+            # turns can see its expressive style (_restore_expressive_content).
+            # forwarded_text is already markup-free here (the transcript stream is
+            # stripped in _read_segment_text), so the markup is recovered from the
+            # raw LLM output captured in assistant_llm_text_parts instead. Skip on
+            # interruption: the raw text covers the full reply, not just the spoken
+            # portion, so it wouldn't line up with the (partial) stored content.
+            expressive_text: str | None = None
+            expressive_source: str | None = None
+            if (
+                self.tts
+                and self._resolve_expressive_options() is not None
+                and not speech_handle.interrupted
+            ):
+                raw_text = "".join(assistant_llm_text_parts)
+                if raw_text and self.tts.markup.to_text(raw_text) != raw_text:
+                    expressive_text = raw_text
+                    expressive_source = self.tts.label
+
             extra_kwargs: dict = {}
             if llm_gen_data.generated_extra:
                 extra_kwargs["extra"] = llm_gen_data.generated_extra
@@ -3069,6 +3273,12 @@ class AgentActivity(RecognitionHooks):
                 metrics=assistant_metrics,
                 **extra_kwargs,
             )
+            if llm_gen_data.llm_output is not None:
+                msg.llm_output = llm_gen_data.llm_output
+            if expressive_text is not None and expressive_source is not None:
+                msg.expressive_content = llm.ExpressiveContent(
+                    markup=expressive_text, source=expressive_source
+                )
             self._agent._chat_ctx.insert(msg)
             self._session._conversation_item_added(msg)
             speech_handle._item_added([msg])
@@ -3079,7 +3289,7 @@ class AgentActivity(RecognitionHooks):
         elif self._session.agent_state == "speaking":
             self._session._update_agent_state("listening")
             if self._audio_recognition:
-                self._audio_recognition.on_end_of_agent_speech(
+                self._audio_recognition._on_end_of_agent_speech(
                     ignore_user_transcript_until=time.time()
                 )
             if self.interruption_enabled:
@@ -3173,6 +3383,7 @@ class AgentActivity(RecognitionHooks):
                 update_instructions(
                     chat_ctx,
                     instructions=self._agent._instructions,
+                    modality=speech_handle.input_details.modality,
                     add_if_missing=False,
                 )
 
@@ -3426,7 +3637,7 @@ class AgentActivity(RecognitionHooks):
                 otel_context=speech_handle._agent_turn_context,
             )
             if self._audio_recognition:
-                self._audio_recognition.on_start_of_agent_speech(started_at=started_speaking_at)
+                self._audio_recognition._on_start_of_agent_speech(started_at=started_speaking_at)
             if self.interruption_enabled:
                 self._disable_vad_interruption_soon()
 
@@ -3586,7 +3797,7 @@ class AgentActivity(RecognitionHooks):
         if audio_output is not None:
             self._session._update_agent_state("listening")
             if self._audio_recognition:
-                self._audio_recognition.on_end_of_agent_speech(
+                self._audio_recognition._on_end_of_agent_speech(
                     ignore_user_transcript_until=time.time()
                 )
             if self.interruption_enabled:
@@ -3889,7 +4100,7 @@ class AgentActivity(RecognitionHooks):
                     otel_context=self._paused_speech.handle._agent_turn_context,
                 )
                 if self._audio_recognition and self._paused_speech.agent_state == "speaking":
-                    self._audio_recognition.on_start_of_agent_speech(started_at=time.time())
+                    self._audio_recognition._on_start_of_agent_speech(started_at=time.time())
                 if self.interruption_enabled:
                     self._disable_vad_interruption_soon()
                 audio_output.resume()
@@ -3947,7 +4158,7 @@ class AgentActivity(RecognitionHooks):
 
     def _disable_vad_interruption_soon(self) -> None:
         """Disable VAD interruption after the backchannel boundary expires."""
-        if self._audio_recognition and self._audio_recognition.backchannel_boundary_active:
+        if self._audio_recognition and self._audio_recognition._backchannel_boundary_active:
 
             def _disable_vad_interruption() -> None:
                 # only disable it if the agent is still speaking
@@ -3958,7 +4169,7 @@ class AgentActivity(RecognitionHooks):
                     logger.trace("backchannel boundary expired")
                     self._interruption_by_audio_activity_enabled = False
 
-            self._audio_recognition.backchannel_boundary_callback = _disable_vad_interruption
+            self._audio_recognition._backchannel_boundary_callback = _disable_vad_interruption
         else:
             self._interruption_by_audio_activity_enabled = False
 
@@ -3992,7 +4203,7 @@ class AgentActivity(RecognitionHooks):
 
         if self._audio_recognition:
             # this also releases any held transcripts
-            self._audio_recognition.update_interruption_detection(None)
+            self._audio_recognition._update_interruption_detection(None)
 
         logger.info(
             "adaptive interruption disabled due to unrecoverable error, "
