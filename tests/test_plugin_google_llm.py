@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from google.genai import types
 
-from livekit.agents import llm
+from livekit.agents import llm, utils
 from livekit.agents.llm import ChatContext, function_tool
 from livekit.agents.types import APIConnectOptions
 from livekit.plugins.google.llm import LLM, LLMStream
+from livekit.plugins.google.realtime import realtime_api as google_realtime
 from livekit.plugins.google.realtime.realtime_api import RealtimeModel, RealtimeSession
 
 pytestmark = pytest.mark.plugin("google")
@@ -333,3 +335,72 @@ class TestMediaResolution:
 
         assert config.generation_config
         assert config.generation_config.media_resolution is None
+
+
+class TestRealtimeToolCallAudioDrain:
+    @staticmethod
+    def _audio_content(data: bytes) -> types.LiveServerContent:
+        return types.LiveServerContent(
+            model_turn=types.Content(
+                parts=[
+                    types.Part(
+                        inline_data=types.Blob(
+                            data=data,
+                            mime_type="audio/pcm;rate=24000",
+                        )
+                    )
+                ]
+            )
+        )
+
+    @staticmethod
+    def _tool_call() -> types.LiveServerToolCall:
+        return types.LiveServerToolCall(
+            function_calls=[types.FunctionCall(id="call-1", name="end_call", args={})]
+        )
+
+    @staticmethod
+    def _new_session_with_generation() -> tuple[
+        RealtimeSession, google_realtime._ResponseGeneration
+    ]:
+        model = RealtimeModel(api_key="test-api-key")
+        session = RealtimeSession.__new__(RealtimeSession)
+        llm.RealtimeSession.__init__(session, model)
+        session._opts = model._opts
+        session._chat_ctx = llm.ChatContext.empty()
+        session._pending_generation_fut = None
+        session._rejected_tool_calls = 0
+
+        gen = google_realtime._ResponseGeneration(
+            message_ch=utils.aio.Chan[llm.MessageGeneration](),
+            function_ch=utils.aio.Chan[llm.FunctionCall](),
+            input_id="GI_test",
+            response_id="GR_test",
+            text_ch=utils.aio.Chan[str](),
+            audio_ch=utils.aio.Chan(),
+        )
+        session._current_generation = gen
+        return session, gen
+
+    @pytest.mark.asyncio
+    async def test_tool_call_keeps_audio_open_until_trailing_audio_drains(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(google_realtime, "TOOL_CALL_AUDIO_DRAIN_QUIESCENCE", 0.01)
+        monkeypatch.setattr(google_realtime, "TOOL_CALL_AUDIO_DRAIN_TIMEOUT", 0.2)
+        session, gen = self._new_session_with_generation()
+
+        session._handle_server_content(self._audio_content(b"\x01" * 960))
+        session._handle_tool_calls(self._tool_call())
+
+        assert gen.function_ch.closed
+        assert not gen.audio_ch.closed
+
+        session._handle_server_content(self._audio_content(b"\x02" * 960))
+        assert gen.audio_ch.qsize() == 2
+
+        await asyncio.sleep(0.03)
+
+        assert gen.audio_ch.closed
+        assert gen.message_ch.closed
+        assert gen._done
