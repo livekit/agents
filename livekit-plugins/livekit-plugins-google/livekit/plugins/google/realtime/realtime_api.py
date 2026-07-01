@@ -1196,11 +1196,21 @@ class RealtimeSession(llm.RealtimeSession):
 
         return conf
 
-    def _start_new_generation(self) -> None:
+    def _start_new_generation(self, *, interrupt_previous_audio: bool = True) -> None:
         self._rejected_tool_calls = 0
-        if self._current_generation and not self._current_generation._done:
-            logger.warning("starting new generation while another is active. Finalizing previous.")
-            self._mark_current_generation_done()
+        active_gen = self._current_generation
+        if active_gen and not active_gen._done:
+            if (
+                active_gen.function_ch.closed
+                and active_gen._audio_drain_atask
+                and not active_gen._audio_drain_atask.done()
+            ):
+                logger.debug("starting new generation while previous tool-call audio is draining")
+            else:
+                logger.warning(
+                    "starting new generation while another is active. Finalizing previous."
+                )
+                self._mark_generation_done(active_gen)
 
         response_id = utils.shortuuid("GR_")
         self._current_generation = _ResponseGeneration(
@@ -1239,7 +1249,7 @@ class RealtimeSession(llm.RealtimeSession):
             generation_event.user_initiated = True
             self._pending_generation_fut.set_result(generation_event)
             self._pending_generation_fut = None
-        else:
+        elif interrupt_previous_audio:
             # emit input_speech_started event before starting an agent initiated generation
             # to interrupt the previous audio playout if any
             self._handle_input_speech_started()
@@ -1319,10 +1329,14 @@ class RealtimeSession(llm.RealtimeSession):
         if not self._current_generation or self._current_generation._done:
             return
 
+        self._mark_generation_done(self._current_generation)
+
+    def _mark_generation_done(self, gen: _ResponseGeneration) -> None:
+        if gen._done:
+            return
+
         # emit input_speech_stopped event after the generation is done
         self._handle_input_speech_stopped()
-
-        gen = self._current_generation
 
         # The only way we'd know that the transcription is complete is by when they are
         # done with generation
@@ -1377,7 +1391,7 @@ class RealtimeSession(llm.RealtimeSession):
         last_audio_frame_at = gen._last_audio_frame_at
 
         while True:
-            if gen._done or self._current_generation is not gen:
+            if gen._done:
                 return
 
             elapsed = time.monotonic() - started_at
@@ -1393,8 +1407,7 @@ class RealtimeSession(llm.RealtimeSession):
                 break
             last_audio_frame_at = current_last_audio_frame_at
 
-        if self._current_generation is gen and not gen._done:
-            self._mark_current_generation_done()
+        self._mark_generation_done(gen)
 
     def _schedule_generation_done_after_audio_drain(self, gen: _ResponseGeneration) -> None:
         if gen._audio_drain_atask and not gen._audio_drain_atask.done():
@@ -1452,6 +1465,13 @@ class RealtimeSession(llm.RealtimeSession):
             return
 
         gen = self._current_generation
+        if gen.function_ch.closed:
+            # Tool execution starts after each function stream closes. A chained tool-call
+            # batch therefore needs a fresh generation while the prior audio drains.
+            self._start_new_generation(interrupt_previous_audio=False)
+            gen = self._current_generation
+            assert gen is not None
+
         for fnc_call in tool_call.function_calls or []:
             arguments = json.dumps(fnc_call.args)
 

@@ -354,9 +354,9 @@ class TestRealtimeToolCallAudioDrain:
         )
 
     @staticmethod
-    def _tool_call() -> types.LiveServerToolCall:
+    def _tool_call(call_id: str = "call-1", name: str = "end_call") -> types.LiveServerToolCall:
         return types.LiveServerToolCall(
-            function_calls=[types.FunctionCall(id="call-1", name="end_call", args={})]
+            function_calls=[types.FunctionCall(id=call_id, name=name, args={})]
         )
 
     @staticmethod
@@ -404,3 +404,35 @@ class TestRealtimeToolCallAudioDrain:
         assert gen.audio_ch.closed
         assert gen.message_ch.closed
         assert gen._done
+
+    @pytest.mark.asyncio
+    async def test_repeated_tool_call_starts_new_generation_while_audio_drains(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(google_realtime, "TOOL_CALL_AUDIO_DRAIN_QUIESCENCE", 0.01)
+        monkeypatch.setattr(google_realtime, "TOOL_CALL_AUDIO_DRAIN_TIMEOUT", 0.2)
+        session, first_gen = self._new_session_with_generation()
+
+        session._handle_server_content(self._audio_content(b"\x01" * 960))
+        session._handle_tool_calls(self._tool_call(call_id="call-1", name="first_tool"))
+
+        assert first_gen.function_ch.closed
+        assert not first_gen.audio_ch.closed
+
+        session._handle_tool_calls(self._tool_call(call_id="call-2", name="second_tool"))
+
+        second_gen = session._current_generation
+        assert second_gen is not first_gen
+        assert second_gen is not None
+        assert second_gen.function_ch.closed
+        assert not first_gen.audio_ch.closed
+
+        second_call = second_gen.function_ch.recv_nowait()
+        assert second_call.call_id == "call-2"
+        assert second_call.name == "second_tool"
+
+        await asyncio.sleep(0.03)
+
+        assert first_gen.audio_ch.closed
+        assert first_gen.message_ch.closed
+        assert first_gen._done
