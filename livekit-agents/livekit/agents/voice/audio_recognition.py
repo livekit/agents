@@ -611,18 +611,7 @@ class AudioRecognition:
             self._agent_speech_started_at = None
 
     def _within_ignore_window(self, event_time: float) -> bool:
-        """Whether a wall-clock event time falls inside the active ignore-user-transcript window.
-
-        ``_ignore_user_transcript_until`` marks how long user transcripts are ignored
-        while the interruption detector adjudicates overlapping speech. The window is
-        bounded so a mis-anchored STT timestamp cannot be mistaken for a transcript
-        inside it: the event must land after the agent started speaking (lower bound)
-        and before both ``now`` and the ignore cutoff (upper bound). A timestamp computed
-        into the past (e.g. a fallback STT leg that reset its timeline) or into the future
-        therefore falls outside and is not held. The agent speech start is used as the
-        lower bound rather than the overlap start, since a turn may contain several
-        overlap episodes and each is still within the same ignore window.
-        """
+        """Whether a wall-clock event time falls inside the active ignore-user-transcript window."""
         if not is_given(self._ignore_user_transcript_until):
             return False
         lower = self._agent_speech_started_at or 0.0
