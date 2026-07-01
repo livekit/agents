@@ -25,7 +25,7 @@ dependencies = [
     "transformers>=4.47.1,!=4.57.2,!=4.57.3",  # 4.57.2-4.57.3 have a bug with local_files_only=True (huggingface/transformers#42369)
     "numpy>=1.26",
     "onnxruntime>=1.18; python_version >= '3.11'",
-    "onnxruntime>=1.18,<1.24; python_version < '3.11'",
+    "onnxruntime>=1.27,<1.28; python_version < '3.11'",
     "jinja2",
 ]
 
