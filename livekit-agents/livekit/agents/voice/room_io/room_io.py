@@ -479,5 +479,25 @@ class RoomIO:
                 "deleting room on agent session close (disable via `RoomInputOptions.delete_room_on_close=False`)",
                 extra={"room": self._room.name},
             )
-            self._delete_room_task = job_ctx.delete_room(room_name=self._room.name)
+
+            async def _disconnect_then_delete() -> api.DeleteRoomResponse:
+                # Disconnect locally before issuing the server-side delete so the
+                # rust-sdk's connection-closed flag is set before the server
+                # closes the publisher data channels.  Without this the channels
+                # are torn down from the remote side while the local session is
+                # still "connected", which triggers spurious ERROR-level logs:
+                #   "publisher data channel '_reliable' closed unexpectedly"
+                # See https://github.com/livekit/agents/issues/6250
+                try:
+                    await self._room.disconnect()
+                except Exception:
+                    logger.exception(
+                        "error disconnecting room before delete; proceeding with delete"
+                    )
+                delete_fut: asyncio.Future[api.DeleteRoomResponse] = job_ctx.delete_room(
+                    room_name=self._room.name
+                )
+                return await delete_fut
+
+            self._delete_room_task = asyncio.ensure_future(_disconnect_then_delete())
             self._delete_room_task.add_done_callback(_on_delete_room_task_done)
