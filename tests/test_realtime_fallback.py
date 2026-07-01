@@ -399,7 +399,27 @@ async def test_drops_audio_during_swap() -> None:
     assert frame not in backup.active_session.pushed_audio
 
 
-async def test_swap_failure_escalates_non_recoverable() -> None:
+async def test_swap_cascades_past_a_model_that_cannot_start() -> None:
+    primary = FakeRealtimeModel()
+    backup1 = FakeRealtimeModel()
+    backup2 = FakeRealtimeModel()
+    adapter = RealtimeModelFallbackAdapter([primary, backup1, backup2])
+    session = adapter.session()
+    errors: list = []
+    session.on("error", lambda e: errors.append(e))
+
+    # the first fallback fails to bring up; the swap should skip it and land on the next
+    backup1.bring_up_error = RuntimeError("cannot start")
+    primary.active_session.emit_error(recoverable=False)
+    await session._swap_task
+
+    assert session._active_index == 2
+    assert session._active is backup2.active_session
+    # only the recoverable hand-off was surfaced; nothing session-ending
+    assert all(e.recoverable for e in errors)
+
+
+async def test_swap_escalates_when_no_model_can_start() -> None:
     primary = FakeRealtimeModel()
     backup = FakeRealtimeModel()
     adapter = RealtimeModelFallbackAdapter([primary, backup])
@@ -407,12 +427,11 @@ async def test_swap_failure_escalates_non_recoverable() -> None:
     errors: list = []
     session.on("error", lambda e: errors.append(e))
 
-    # the swap itself fails (e.g. the dying child's aclose raises)
-    primary.active_session.aclose_error = RuntimeError("boom")
+    # the only fallback also fails to bring up: escalate a non-recoverable error
+    backup.bring_up_error = RuntimeError("cannot start")
     primary.active_session.emit_error(recoverable=False)
     await session._swap_task
 
-    # rather than wedging silently, a failed swap escalates a non-recoverable error
     assert any(not e.recoverable for e in errors)
 
 

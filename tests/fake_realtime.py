@@ -59,6 +59,8 @@ class FakeRealtimeSession(RealtimeSession):
         self.aclose_entered = asyncio.Event()
         self.block_aclose: asyncio.Event | None = None
         self.aclose_error: Exception | None = None
+        # test hook to fail bring-up (raised from update_chat_ctx during _update_session)
+        self.update_error: Exception | None = None
 
     @property
     def chat_ctx(self) -> ChatContext:
@@ -72,6 +74,8 @@ class FakeRealtimeSession(RealtimeSession):
         self.updated_instructions = instructions
 
     async def update_chat_ctx(self, chat_ctx: ChatContext) -> None:
+        if self.update_error is not None:
+            raise self.update_error
         self._chat_ctx = chat_ctx
 
     async def update_tools(self, tools: list[Tool]) -> None:
@@ -160,6 +164,8 @@ class FakeRealtimeModel(RealtimeModel):
         self._label = label
         self.created_sessions: list[FakeRealtimeSession] = []
         self.closed = False
+        # when set, every session this model creates fails to bring up
+        self.bring_up_error: Exception | None = None
 
     @property
     def active_session(self) -> FakeRealtimeSession:
@@ -167,6 +173,7 @@ class FakeRealtimeModel(RealtimeModel):
 
     def session(self) -> FakeRealtimeSession:
         sess = FakeRealtimeSession(self)
+        sess.update_error = self.bring_up_error
         self.created_sessions.append(sess)
         return sess
 
