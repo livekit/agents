@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 import weakref
 from collections.abc import AsyncIterable, Callable
@@ -11,7 +12,7 @@ from livekit import rtc
 
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
-from ..utils import is_given
+from ..utils import aio, is_given
 from .chat_context import ChatContext
 from .realtime import (
     EventTypes,
@@ -200,6 +201,9 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
         if self._available[index] == available:
             return
         self._available[index] = available
+        if not available:
+            # keep the model out of rotation until the cooldown expires
+            self._cooldown_deadline[index] = time.time() + self._adapter._cooldown
         self._adapter.emit(
             "realtime_availability_changed",
             RealtimeAvailabilityChangedEvent(
@@ -236,7 +240,6 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
 
         # mark the dead model unavailable for a cooldown, then find a fallback
         self._set_available(self._active_index, False)
-        self._cooldown_deadline[self._active_index] = time.time() + self._adapter._cooldown
         target = self._next_available_index()
         if target is None:
             # exhausted: escalate so AgentSession can close
@@ -280,33 +283,57 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
             else:
                 chat_ctx = self._active.chat_ctx
 
+            # bring up a fresh child on ``index``; on failure clean it up, cool it down, and
+            # return the error so the caller can try the next model
+            async def _bring_up(index: int) -> Exception | None:
+                try:
+                    self._active = self._adapter._models[index].session()
+                    self._active_index = index
+                    self._bind(self._active)
+                    await self._active._update_session(
+                        instructions=self._instructions, chat_ctx=chat_ctx, tools=self._tools
+                    )
+                    if is_given(self._tool_choice):
+                        self._active.update_options(tool_choice=self._tool_choice)
+                    return None
+                except Exception as e:
+                    logger.exception("failed to start realtime model on swap, trying next")
+                    self._unbind(self._active)
+                    with contextlib.suppress(Exception):
+                        await self._active.aclose()
+                    self._set_available(index, False)
+                    return e
+
             self._swapping = True
             try:
+                # close the old child; best-effort since the provider may already be dead
                 self._unbind(self._active)
-                await self._active.aclose()
+                with contextlib.suppress(Exception):
+                    await self._active.aclose()
 
-                self._active = self._adapter._models[target_index].session()
-                self._active_index = target_index
-                self._bind(self._active)
+                # cascade to further models if one fails to start
+                error = await _bring_up(target_index)
+                while error is not None:
+                    nxt = self._next_available_index()
+                    if nxt is None:
+                        break
+                    error = await _bring_up(nxt)
+            finally:
+                self._swapping = False
 
-                await self._active._update_session(
-                    instructions=self._instructions, chat_ctx=chat_ctx, tools=self._tools
-                )
-                if is_given(self._tool_choice):
-                    self._active.update_options(tool_choice=self._tool_choice)
-            except Exception as e:
-                # a failed swap would otherwise wedge the session silently; escalate so the
-                # AgentSession can close instead of continuing on a broken session
-                logger.exception("failed to swap the realtime session")
+            if error is not None:
+                # every model failed to start; escalate so AgentSession can close instead of
+                # continuing on a broken session
                 self.emit(
                     "error",
                     RealtimeModelError(
-                        timestamp=time.time(), label=self._adapter.label, error=e, recoverable=False
+                        timestamp=time.time(),
+                        label=self._adapter.label,
+                        error=error,
+                        recoverable=False,
                     ),
                 )
                 return
-            finally:
-                self._swapping = False
 
             # a swap is a reconnect from the caller's perspective
             self.emit("session_reconnected", RealtimeSessionReconnectedEvent())
@@ -357,6 +384,8 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
         self._active.push_audio(frame)
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
+        if self._swapping:
+            return
         self._active.push_video(frame)
 
     def generate_reply(
@@ -401,5 +430,8 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
         )
 
     async def aclose(self) -> None:
+        # cancel an in-flight swap first, else its fresh child would leak past aclose
+        if self._swap_task is not None:
+            await aio.cancel_and_wait(self._swap_task)
         self._unbind(self._active)
         await self._active.aclose()
