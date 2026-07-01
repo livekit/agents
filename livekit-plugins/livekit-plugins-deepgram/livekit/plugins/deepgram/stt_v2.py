@@ -361,12 +361,8 @@ class SpeechStreamv2(stt.SpeechStream):
             self._opts.eager_eot_threshold = eager_eot_threshold
 
         # these only take effect on a fresh connection
-        needs_reconnect = (
-            is_given(model)
-            or is_given(sample_rate)
-            or is_given(mip_opt_out)
-            or is_given(tags)
-            or is_given(endpoint_url)
+        needs_reconnect = any(
+            is_given(opt) for opt in (model, sample_rate, mip_opt_out, tags, endpoint_url)
         )
         if needs_reconnect:
             # reconnect carries the latest options
