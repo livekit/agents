@@ -651,9 +651,7 @@ class _Connection:
                 if elapsed % _STREAM_KEEPALIVE_INTERVAL < tick:
                     for stream_id, stream in list(self._streams.items()):
                         if stream.config_sent and not stream.audio_ended:
-                            self._input_queue.send_nowait(
-                                _KeepAliveStream(stream_id=stream_id)
-                            )
+                            self._input_queue.send_nowait(_KeepAliveStream(stream_id=stream_id))
         except Exception as e:
             logger.warning(f"Soniox TTS keepalive error: {e}")
 
