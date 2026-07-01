@@ -7,7 +7,7 @@ from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from types import TracebackType
-from typing import Any, Generic, Literal, Protocol, TypeVar, runtime_checkable
+from typing import TYPE_CHECKING, Any, Generic, Literal, Protocol, TypeVar, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -27,6 +27,9 @@ from ..types import (
 )
 from ..utils import AudioBuffer, aio, is_given
 from ..utils.audio import calculate_audio_duration
+
+if TYPE_CHECKING:
+    from ..voice.events import ConversationItemAddedEvent
 
 
 @unique
@@ -128,6 +131,10 @@ class STTCapabilities:
     aligned_transcript: Literal["word", "chunk", False] = False
     offline_recognize: bool = True
     """Whether the STT supports batch recognition via recognize() method"""
+    keyterms: bool = False
+    """Whether the STT supports keyterm prompting"""
+    chat_context: bool = False
+    """Whether the STT can natively consume conversation context (see STT._push_conversation_item)"""
 
 
 class STTError(BaseModel):
@@ -152,6 +159,8 @@ class STT(
         self._capabilities = capabilities
         self._label = f"{type(self).__module__}.{type(self).__name__}"
         self._recognize_metrics_needed = True
+        self._keyterms_unsupported_warned = False
+        self._chat_context_unsupported_warned = False
 
     @property
     def label(self) -> str:
@@ -263,6 +272,37 @@ class STT(
                 recoverable=recoverable,
             ),
         )
+
+    def _update_session_keyterms(self, keyterms: list[str]) -> None:
+        """Set the framework-managed keyterms (session config + auto-detection).
+
+        Internal hook called by the framework, kept separate from the user's own keyterms
+        (constructor / ``update_options``). Plugins that support keyterms override this to
+        store the session set and apply it merged with the user keyterms.
+        """
+        if not self._capabilities.keyterms:
+            if not self._keyterms_unsupported_warned:
+                self._keyterms_unsupported_warned = True
+                logger.warning(
+                    "keyterms are not supported by this STT, ignoring keyterms update",
+                    extra={"stt": self._label},
+                )
+            return
+
+    def _push_conversation_item(self, ev: ConversationItemAddedEvent) -> None:
+        """Feed a new conversation turn to the STT to bias recognition (context carryover).
+
+        Plugins with native context support set ``STTCapabilities.chat_context`` and override
+        this to forward the item to their provider's carryover field.
+        """
+        if not self._capabilities.chat_context:
+            if not self._chat_context_unsupported_warned:
+                self._chat_context_unsupported_warned = True
+                logger.warning(
+                    "chat context is not supported by this STT, ignoring chat context update",
+                    extra={"stt": self._label},
+                )
+            return
 
     def stream(
         self,

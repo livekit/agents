@@ -109,6 +109,7 @@ from .voice.amd import (
     AMDPredictionEvent,
 )
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
+from .voice.keyterm_detection import KeytermDetectionOptions, KeytermsOptions
 from .voice.room_io import RoomInputOptions, RoomIO, RoomOutputOptions
 from .voice.run_result import (
     AgentHandoffEvent,
@@ -258,6 +259,8 @@ __all__ = [
     "InterruptionOptions",
     "PreemptiveGenerationOptions",
     "UserTurnLimitOptions",
+    "KeytermsOptions",
+    "KeytermDetectionOptions",
     "UserTurnExceededEvent",
 ]
 

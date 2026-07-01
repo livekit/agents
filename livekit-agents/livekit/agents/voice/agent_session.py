@@ -61,6 +61,7 @@ from .events import (
     UserStateChangedEvent,
 )
 from .ivr import IVRActivity
+from .keyterm_detection import KeytermDetector, KeytermsOptions, _resolve_keyterms_options
 from .recorder_io import RecorderIO
 from .remote_session import RoomSessionTransport, SessionHost, SessionTransport
 from .run_result import RunResult
@@ -173,6 +174,7 @@ DEFAULT_EXPRESSIVE_OPTIONS: ExpressiveOptions = ExpressiveOptions(
 @dataclass
 class AgentSessionOptions:
     turn_handling: TurnHandlingOptions
+    keyterms_options: KeytermsOptions
     endpointing_overrides: EndpointingOptions
     """sparse endpointing keys the user provided explicitly"""
     max_tool_steps: int
@@ -184,16 +186,6 @@ class AgentSessionOptions:
     aec_warmup_duration: float | None
     session_close_transcript_timeout: float
     expressive: bool | ExpressiveOptions
-    strip_expressive_markup: bool
-    """Strip expressive markup tags from the transcript instead of keeping them inline.
-
-    Only applies when ``expressive`` is enabled. When ``False`` (the default), the markup
-    the LLM produced (e.g. ``<expression value="speak happy"/>``) is kept inline in the
-    transcript, chat history, and response trace, so its position is preserved. When
-    ``True``, the markup is stripped from the user-visible transcript and the segment's
-    expression is surfaced on the ``lk.transcription`` segment via the ``lk.expression``
-    attribute instead.
-    """
 
     @property
     def endpointing(self) -> EndpointingOptions:
@@ -273,6 +265,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str] = NOT_GIVEN,
         turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
+        keyterms_options: NotGivenOr[KeytermsOptions] = NOT_GIVEN,
         # Tool settings
         tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
         tool_handling: NotGivenOr[ToolHandlingOptions] = NOT_GIVEN,
@@ -283,7 +276,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         min_consecutive_speech_delay: float = 0.0,
         # Expressive
         expressive: bool | ExpressiveOptions = False,
-        strip_expressive_markup: bool = False,
         # Misc settings
         userdata: NotGivenOr[Userdata_T] = NOT_GIVEN,
         video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
@@ -336,6 +328,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 providing external tools for the agent to use.
             userdata (Userdata_T, optional): Arbitrary per-session user data.
             turn_handling (TurnHandlingOptions, optional): Configuration for turn handling.
+            keyterms_options (KeytermsOptions, optional): Keyterm biasing for the STT. Holds
+                static ``keyterms`` plus ``keyterm_detection`` (LLM extraction). Applies to STTs
+                that accept a term list; on others it warns and is ignored.
             max_endpointing_delay (float): Maximum time-in-seconds the agent
                 will wait before terminating the turn. Default ``3.0`` s.
             max_tool_steps (int): Maximum consecutive tool calls per LLM turn.
@@ -426,6 +421,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 preemptive_generation=preemptive_gen,
                 user_turn_limit=user_turn_limit,
             ),
+            keyterms_options=_resolve_keyterms_options(keyterms_options or None),
             endpointing_overrides=endpointing_overrides,
             max_tool_steps=max_tool_steps,
             user_away_timeout=user_away_timeout,
@@ -442,7 +438,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             aec_warmup_duration=aec_warmup_duration,
             session_close_transcript_timeout=session_close_transcript_timeout,
             expressive=expressive,
-            strip_expressive_markup=strip_expressive_markup,
         )
         self._conn_options = conn_options or SessionConnectOptions()
         self._started = False
@@ -463,6 +458,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._vad = vad or None
         self._llm = llm or None
         self._tts = tts or None
+
+        self._keyterm_detector = KeytermDetector(
+            static_keyterms=self._opts.keyterms_options["keyterms"],
+            options=self._opts.keyterms_options["keyterm_detection"],
+        )
 
         self._turn_detection = raw_turn_detection
         self._interruption_detection = interruption.get("mode", NOT_GIVEN)
@@ -611,6 +611,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @property
     def history(self) -> llm.ChatContext:
         return self._chat_ctx
+
+    @property
+    def keyterms(self) -> list[str]:
+        """The effective keyterms (user-defined + auto-detected) currently applied to the STT."""
+        return self._keyterm_detector.keyterms
 
     @property
     def current_speech(self) -> SpeechHandle | None:
@@ -1135,6 +1140,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         *,
         endpointing_opts: NotGivenOr[EndpointingOptions] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
+        keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
         # deprecated
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
@@ -1146,9 +1152,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             endpointing_opts (NotGivenOr[EndpointingOptions], optional): Endpointing options.
             turn_detection (NotGivenOr[TurnDetectionMode | None], optional): Strategy for deciding
                 when the user has finished speaking. ``None`` reverts to automatic selection.
+            keyterms (NotGivenOr[list[str]], optional): Replace the user-defined keyterms applied
+                to the STT. Auto-detected keyterms are left untouched.
             min_endpointing_delay: Deprecated, use ``endpointing_opts`` instead.
             max_endpointing_delay: Deprecated, use ``endpointing_opts`` instead.
         """
+        if is_given(keyterms):
+            self._keyterm_detector.set_static_keyterms(keyterms)
         if is_given(min_endpointing_delay) or is_given(max_endpointing_delay):
             logger.warning(
                 "min_endpointing_delay and max_endpointing_delay are deprecated, "

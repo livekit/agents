@@ -155,6 +155,8 @@ class _STTPipeline:
         self._event_ch = aio.Chan[stt.SpeechEvent]()
         self._pump_task = asyncio.create_task(self._stt_pump())
         self._pump_task.add_done_callback(lambda _: self._event_ch.close())
+        # wall-clock anchor for this stream, used in STT driven timestamps and barge-in
+        self.input_started_at: float | None = None
 
     @property
     def audio_ch(self) -> aio.Chan[rtc.AudioFrame]:
@@ -254,7 +256,6 @@ class AudioRecognition:
         self._interruption_atask: asyncio.Task[None] | None = None
         self._interruption_detection = interruption_detection
         self._interruption_ch: aio.Chan[inference.InterruptionDataFrameType] | None = None
-        self._input_started_at: float | None = None
         self._ignore_user_transcript_until: NotGivenOr[float] = NOT_GIVEN
         self._transcript_buffer: deque[SpeechEvent] = deque()
         self._interruption_enabled: bool = interruption_detection is not None and vad is not None
@@ -328,6 +329,10 @@ class AudioRecognition:
                     if self._turn_detector_stream is not None:
                         self._turn_detector_stream.cancel_inference()
                     self._turn_detector_prediction_fut = None
+
+    @property
+    def _input_started_at(self) -> float | None:
+        return self._stt_pipeline.input_started_at if self._stt_pipeline is not None else None
 
     def _start(
         self,
@@ -598,6 +603,7 @@ class AudioRecognition:
             else []
         )
         _ignore_user_transcript_until = self._ignore_user_transcript_until
+        _input_started_at = self._input_started_at
         # reset before emitting to avoid recursive calls
         self._reset_interruption_detection()
 
@@ -608,7 +614,7 @@ class AudioRecognition:
                     0,
                     (
                         ev.alternatives[0].end_time
-                        + self._input_started_at
+                        + _input_started_at
                         - _ignore_user_transcript_until
                     )
                     + (cooldown or 0.0),
@@ -677,11 +683,11 @@ class AudioRecognition:
         ``frame`` (e.g. a silence substitute during AEC warmup or uninterruptible
         speech). VAD, AMD and the interruption channel always receive ``frame``.
         """
-        if self._input_started_at is None:
-            self._input_started_at = time.time() - frame.duration
-
         self._sample_rate = frame.sample_rate
         if self._stt_pipeline is not None:
+            # stamp the wall-clock anchor on the first frame to reach the pipeline
+            if self._stt_pipeline.input_started_at is None:
+                self._stt_pipeline.input_started_at = time.time() - frame.duration
             self._stt_pipeline.audio_ch.send_nowait(stt_frame if stt_frame is not None else frame)
 
         if self._vad_ch is not None:
@@ -746,7 +752,6 @@ class AudioRecognition:
             # reset interruption handling related state
             self._transcript_buffer.clear()
             self._ignore_user_transcript_until = NOT_GIVEN
-            self._input_started_at = None
         else:
             if self._stt_consumer_atask is not None:
                 task = asyncio.create_task(aio.cancel_and_wait(self._stt_consumer_atask))
@@ -828,7 +833,6 @@ class AudioRecognition:
             )
             self._transcript_buffer.clear()
             self._ignore_user_transcript_until = NOT_GIVEN
-            self._input_started_at = None
         elif self._interruption_atask is not None:
             task = asyncio.create_task(aio.cancel_and_wait(self._interruption_atask))
             task.add_done_callback(lambda _: self._tasks.discard(task))
@@ -1063,10 +1067,11 @@ class AudioRecognition:
             and ev.alternatives[0].end_time > 0
             and self._input_started_at is not None
         )
+        now = time.time()
         stt_last_speaking_time = (
-            ev.alternatives[0].end_time + self._input_started_at
+            min(ev.alternatives[0].end_time + self._input_started_at, now)
             if has_stt_end_time and self._input_started_at is not None
-            else time.time()
+            else now
         )
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
             transcript = ev.alternatives[0].text
@@ -1323,9 +1328,8 @@ class AudioRecognition:
             if not self._turn_detector_late_prediction_warned:
                 self._turn_detector_late_prediction_warned = True
                 logger.warning(
-                    "eou detection ran after the audio eot turn was already flushed "
-                    "(likely a late stt final). consider raising `min_delay` in the "
-                    "endpointing options to accommodate slow stt. subsequent "
+                    "transcript arrives after turn has been committed. consider raising `min_delay` in the "
+                    "endpointing options to accommodate a slow stt. subsequent "
                     "occurrences will log at debug level.",
                 )
             else:
@@ -1385,10 +1389,12 @@ class AudioRecognition:
                         if isinstance(turn_detector, _StreamingTurnDetectorStream):
                             fut = self._turn_detector_prediction_fut
                             if fut is None:
-                                self._on_missing_eot_prediction()
+                                if trigger == "stt":
+                                    self._on_missing_eot_prediction()
                             else:
                                 from_cache = fut.done()
-                                done, _ = await asyncio.wait([fut], timeout=endpointing_delay)
+                                prediction_timeout = turn_detector.prediction_timeout
+                                done, _ = await asyncio.wait([fut], timeout=prediction_timeout)
                                 if fut in done and not fut.cancelled():
                                     prediction_event = fut.result()
                                     end_of_turn_probability = (
@@ -1405,7 +1411,7 @@ class AudioRecognition:
                                 else:
                                     logger.warning(
                                         "eot prediction timed out, committing without a prediction",
-                                        extra={"timeout": endpointing_delay},
+                                        extra={"timeout": prediction_timeout},
                                     )
                                     turn_detector.cancel_inference(timed_out=True)
                                     self._turn_detector_prediction_fut = None
@@ -1413,7 +1419,6 @@ class AudioRecognition:
                             try:
                                 end_of_turn_probability = await turn_detector.predict_end_of_turn(
                                     chat_ctx,
-                                    timeout=endpointing_delay,
                                 )
                                 unlikely_threshold = await turn_detector.unlikely_threshold(
                                     self._last_language

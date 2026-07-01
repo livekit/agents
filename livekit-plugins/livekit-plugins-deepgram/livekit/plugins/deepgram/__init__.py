@@ -19,12 +19,23 @@ Support for speech-to-text with [Deepgram](https://deepgram.com/).
 See https://docs.livekit.io/agents/integrations/stt/deepgram/ for more information.
 """
 
+from .models import DeepgramLanguages, DeepgramModels, TTSModels
 from .stt import STT, SpeechStream
 from .stt_v2 import SpeechStreamv2, STTv2
 from .tts import TTS
 from .version import __version__
 
-__all__ = ["STT", "SpeechStream", "STTv2", "SpeechStreamv2", "__version__", "TTS"]
+__all__ = [
+    "STT",
+    "SpeechStream",
+    "STTv2",
+    "SpeechStreamv2",
+    "TTS",
+    "DeepgramModels",
+    "DeepgramLanguages",
+    "TTSModels",
+    "__version__",
+]
 
 
 from livekit.agents import Plugin

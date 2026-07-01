@@ -34,7 +34,7 @@ class MyAgent(Agent):
             "with that in mind keep your responses concise and to the point."
             "do not use emojis, asterisks, markdown, or other special characters in your responses."
             "You are curious and friendly, and have a sense of humor."
-            "you will speak english to the user",
+            "You will speak english to the user over voice.",
             tools=[EndCallTool()],
         )
 
@@ -102,10 +102,20 @@ async def entrypoint(ctx: JobContext) -> None:
             "filter_markdown",
             text_transforms.replace({"LiveKit": "<<ˈ|l|aɪ|v|k|ɪ|t>>"}),
         ],
+        # automatically detect keyterms and apply them to the STT per user turn
+        keyterms_options={
+            "keyterms": ["LiveKit"],
+            "keyterm_detection": {
+                "enabled": True,
+                "turn_interval": 1,  # increase to reduce LLM API calls
+            },
+        },
     )
 
     @session.on("metrics_collected")
     def _on_metrics_collected(ev: MetricsCollectedEvent) -> None:
+        if ev.metrics.type == "stt_metrics":
+            return
         metrics.log_metrics(ev.metrics)
 
     async def log_usage():

@@ -4,6 +4,7 @@ import asyncio
 import logging
 import time
 from collections.abc import AsyncIterable
+from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
@@ -26,9 +27,7 @@ from livekit.agents import (
     inference,
     vad,
 )
-from livekit.agents.llm import (
-    FunctionToolCall,
-)
+from livekit.agents.llm import FunctionToolCall, InputTranscriptionCompleted
 from livekit.agents.llm.chat_context import ChatContext, ChatMessage
 from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
 from livekit.agents.utils import aio
@@ -90,6 +89,31 @@ class MyAgent(Agent):
 
 
 SESSION_TIMEOUT = 60.0
+
+
+def test_realtime_user_input_transcription_preserves_item_id() -> None:
+    captured_events: list[UserInputTranscribedEvent] = []
+
+    class DummySession:
+        def _user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
+            captured_events.append(ev)
+
+    activity = object.__new__(AgentActivity)
+    activity._session = DummySession()
+
+    AgentActivity._on_input_audio_transcription_completed(
+        activity,
+        InputTranscriptionCompleted(
+            item_id="item_123",
+            transcript="hello",
+            is_final=False,
+        ),
+    )
+
+    assert len(captured_events) == 1
+    assert captured_events[0].transcript == "hello"
+    assert captured_events[0].is_final is False
+    assert captured_events[0].item_id == "item_123"
 
 
 async def test_events_and_metrics() -> None:
@@ -833,7 +857,8 @@ async def test_backchannel_boundary_releases_end_boundary_transcript() -> None:
     recognition._interruption_enabled = True
     recognition._interruption_ch = aio.Chan[inference.InterruptionDataFrameType]()
     input_started_at = time.time() - 10.0
-    recognition._input_started_at = input_started_at
+    # the input anchor lives on the STT pipeline (see _STTPipeline.input_started_at)
+    recognition._stt_pipeline = SimpleNamespace(input_started_at=input_started_at)  # type: ignore[assignment]
 
     try:
         recognition._on_start_of_agent_speech(started_at=time.time())
