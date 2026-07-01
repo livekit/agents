@@ -377,8 +377,11 @@ class TestRealtimeToolCallAudioDrain:
         return session, gen
 
     @staticmethod
-    def _new_session() -> RealtimeSession:
-        model = RealtimeModel(api_key="test-api-key")
+    def _new_session(*, modalities: list[types.Modality] | None = None) -> RealtimeSession:
+        model = RealtimeModel(
+            api_key="test-api-key",
+            modalities=modalities if modalities is not None else [types.Modality.AUDIO],
+        )
         session = RealtimeSession.__new__(RealtimeSession)
         llm.RealtimeSession.__init__(session, model)
         session._opts = model._opts
@@ -391,7 +394,6 @@ class TestRealtimeToolCallAudioDrain:
         session._response_created_futures = {}
         session._pending_generation_fut = None
         session._rejected_tool_calls = 0
-        session._draining_generations = []
         session._current_generation = None
         return session
 
@@ -399,6 +401,15 @@ class TestRealtimeToolCallAudioDrain:
     async def _wait_for_generation_done(gen: google_realtime._ResponseGeneration) -> None:
         if gen._audio_drain_atask and not gen._audio_drain_atask.done():
             await gen._audio_drain_atask
+
+    @staticmethod
+    def _drain_function_calls(
+        gen: google_realtime._ResponseGeneration,
+    ) -> list[llm.FunctionCall]:
+        calls = []
+        while not gen.function_ch.empty():
+            calls.append(gen.function_ch.recv_nowait())
+        return calls
 
     @pytest.mark.asyncio
     async def test_tool_call_keeps_audio_open_until_trailing_audio_drains(
@@ -411,20 +422,23 @@ class TestRealtimeToolCallAudioDrain:
         session._handle_server_content(self._audio_content(b"\x01" * 960))
         session._handle_tool_calls(self._tool_call())
 
-        assert gen.function_ch.closed
+        assert not gen.function_ch.closed
         assert not gen.audio_ch.closed
+        call = gen.function_ch.recv_nowait()
+        assert call.call_id == "call-1"
 
         session._handle_server_content(self._audio_content(b"\x02" * 960))
         assert gen.audio_ch.qsize() == 2
 
-        await asyncio.sleep(0.03)
+        await asyncio.wait_for(self._wait_for_generation_done(gen), timeout=1.0)
 
         assert gen.audio_ch.closed
         assert gen.message_ch.closed
+        assert gen.function_ch.closed
         assert gen._done
 
     @pytest.mark.asyncio
-    async def test_repeated_tool_call_starts_new_generation_while_audio_drains(
+    async def test_repeated_tool_call_uses_same_generation_while_audio_drains(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(google_realtime, "TOOL_CALL_AUDIO_DRAIN_QUIESCENCE", 0.01)
@@ -434,26 +448,144 @@ class TestRealtimeToolCallAudioDrain:
         session._handle_server_content(self._audio_content(b"\x01" * 960))
         session._handle_tool_calls(self._tool_call(call_id="call-1", name="first_tool"))
 
-        assert first_gen.function_ch.closed
+        assert not first_gen.function_ch.closed
         assert not first_gen.audio_ch.closed
 
         session._handle_tool_calls(self._tool_call(call_id="call-2", name="second_tool"))
 
-        second_gen = session._current_generation
-        assert second_gen is not first_gen
-        assert second_gen is not None
-        assert second_gen.function_ch.closed
+        assert session._current_generation is first_gen
         assert not first_gen.audio_ch.closed
 
-        second_call = second_gen.function_ch.recv_nowait()
-        assert second_call.call_id == "call-2"
-        assert second_call.name == "second_tool"
+        calls = self._drain_function_calls(first_gen)
+        assert [call.call_id for call in calls] == ["call-1", "call-2"]
+        assert [call.name for call in calls] == ["first_tool", "second_tool"]
 
-        await asyncio.sleep(0.03)
+        await asyncio.wait_for(self._wait_for_generation_done(first_gen), timeout=1.0)
 
         assert first_gen.audio_ch.closed
         assert first_gen.message_ch.closed
+        assert first_gen.function_ch.closed
         assert first_gen._done
+
+    @pytest.mark.asyncio
+    async def test_trailing_audio_after_repeated_tool_call_stays_on_draining_generation(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(google_realtime, "TOOL_CALL_AUDIO_DRAIN_QUIESCENCE", 0.01)
+        monkeypatch.setattr(google_realtime, "TOOL_CALL_AUDIO_DRAIN_TIMEOUT", 0.2)
+        session, gen = self._new_session_with_generation()
+
+        session._handle_server_content(self._audio_content(b"\x01" * 960))
+        session._handle_tool_calls(self._tool_call(call_id="call-1", name="first_tool"))
+        session._handle_tool_calls(self._tool_call(call_id="call-2", name="second_tool"))
+        session._handle_server_content(self._audio_content(b"\x02" * 960))
+
+        assert session._current_generation is gen
+        assert gen.audio_ch.qsize() == 2
+        assert not gen.audio_ch.closed
+
+        await asyncio.wait_for(self._wait_for_generation_done(gen), timeout=1.0)
+
+        assert gen.audio_ch.closed
+        assert gen.message_ch.closed
+        assert gen.function_ch.closed
+
+    @pytest.mark.asyncio
+    async def test_repeated_tool_call_refreshes_audio_drain_window(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(google_realtime, "TOOL_CALL_AUDIO_DRAIN_QUIESCENCE", 0.02)
+        monkeypatch.setattr(google_realtime, "TOOL_CALL_AUDIO_DRAIN_TIMEOUT", 0.2)
+        session, gen = self._new_session_with_generation()
+
+        session._handle_server_content(self._audio_content(b"\x01" * 960))
+        session._handle_tool_calls(self._tool_call(call_id="call-1", name="first_tool"))
+        await asyncio.sleep(0.015)
+
+        session._handle_tool_calls(self._tool_call(call_id="call-2", name="second_tool"))
+        await asyncio.sleep(0.01)
+
+        assert not gen.audio_ch.closed
+        assert not gen.function_ch.closed
+
+        session._handle_server_content(self._audio_content(b"\x02" * 960))
+        assert gen.audio_ch.qsize() == 2
+
+        await asyncio.wait_for(self._wait_for_generation_done(gen), timeout=1.0)
+
+        assert gen.audio_ch.closed
+        assert gen.function_ch.closed
+
+    @pytest.mark.asyncio
+    async def test_repeated_tool_calls_are_emitted_on_generation_event_stream(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(google_realtime, "TOOL_CALL_AUDIO_DRAIN_QUIESCENCE", 0.01)
+        monkeypatch.setattr(google_realtime, "TOOL_CALL_AUDIO_DRAIN_TIMEOUT", 0.2)
+        session = self._new_session()
+        generation_events: list[llm.GenerationCreatedEvent] = []
+        session.on("generation_created", generation_events.append)
+
+        session._start_new_generation()
+        gen = session._current_generation
+        assert gen is not None
+
+        session._handle_server_content(self._audio_content(b"\x01" * 960))
+        session._handle_tool_calls(self._tool_call(call_id="call-1", name="first_tool"))
+        session._handle_tool_calls(self._tool_call(call_id="call-2", name="second_tool"))
+        await asyncio.wait_for(self._wait_for_generation_done(gen), timeout=1.0)
+
+        assert len(generation_events) == 1
+        calls = [call async for call in generation_events[0].function_stream]
+        assert [call.call_id for call in calls] == ["call-1", "call-2"]
+        assert [call.name for call in calls] == ["first_tool", "second_tool"]
+
+    def test_tool_call_finalizes_immediately_when_audio_is_already_closed(self) -> None:
+        session, gen = self._new_session_with_generation()
+        gen.audio_ch.close()
+
+        session._handle_tool_calls(self._tool_call())
+
+        assert gen._audio_drain_atask is None
+        assert gen.function_ch.closed
+        assert gen.message_ch.closed
+        assert gen._done
+
+    def test_tool_call_finalizes_immediately_for_text_only_modality(self) -> None:
+        session = self._new_session(modalities=[types.Modality.TEXT])
+        session._start_new_generation()
+        gen = session._current_generation
+        assert gen is not None
+
+        session._handle_tool_calls(self._tool_call())
+
+        assert gen._audio_drain_atask is None
+        assert gen.function_ch.closed
+        assert gen.message_ch.closed
+        assert gen._done
+
+    @pytest.mark.asyncio
+    async def test_audio_modality_waits_for_first_trailing_audio_after_tool_call(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(google_realtime, "TOOL_CALL_AUDIO_DRAIN_QUIESCENCE", 0.01)
+        monkeypatch.setattr(google_realtime, "TOOL_CALL_AUDIO_DRAIN_TIMEOUT", 0.2)
+        session, gen = self._new_session_with_generation()
+
+        session._handle_tool_calls(self._tool_call())
+
+        assert not gen.audio_ch.closed
+        assert not gen.function_ch.closed
+
+        session._handle_server_content(self._audio_content(b"\x01" * 960))
+
+        assert gen.audio_ch.qsize() == 1
+
+        await asyncio.wait_for(self._wait_for_generation_done(gen), timeout=1.0)
+
+        assert gen.audio_ch.closed
+        assert gen.function_ch.closed
+        assert gen._done
 
     @pytest.mark.asyncio
     async def test_chained_tool_call_does_not_emit_unpaired_speech_stopped(
@@ -473,19 +605,14 @@ class TestRealtimeToolCallAudioDrain:
         session._handle_server_content(self._audio_content(b"\x01" * 960))
         session._handle_tool_calls(self._tool_call(call_id="call-1", name="first_tool"))
         session._handle_tool_calls(self._tool_call(call_id="call-2", name="second_tool"))
-        second_gen = session._current_generation
-        assert second_gen is not None
-        assert second_gen is not first_gen
 
         await self._wait_for_generation_done(first_gen)
-        await self._wait_for_generation_done(second_gen)
 
         assert first_gen._done
-        assert second_gen._done
         assert speech_events == ["started", "stopped"]
 
     @pytest.mark.asyncio
-    async def test_close_finalizes_non_current_draining_generation(
+    async def test_close_finalizes_draining_generation(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(google_realtime, "TOOL_CALL_AUDIO_DRAIN_QUIESCENCE", 0.2)
@@ -499,9 +626,6 @@ class TestRealtimeToolCallAudioDrain:
         session._handle_server_content(self._audio_content(b"\x01" * 960))
         session._handle_tool_calls(self._tool_call(call_id="call-1", name="first_tool"))
         session._handle_tool_calls(self._tool_call(call_id="call-2", name="second_tool"))
-        second_gen = session._current_generation
-        assert second_gen is not None
-        assert second_gen is not first_gen
 
         await session.aclose()
         await asyncio.sleep(0)
@@ -509,4 +633,3 @@ class TestRealtimeToolCallAudioDrain:
         assert first_gen._done
         assert first_gen.audio_ch.closed
         assert first_gen.message_ch.closed
-        assert second_gen._done

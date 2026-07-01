@@ -181,12 +181,10 @@ class _ResponseGeneration:
     """The timestamp when the generation is completed"""
     _done: bool = False
     """Whether the generation is done (set when the turn is complete)"""
-    _last_audio_frame_at: float | None = None
-    """Monotonic timestamp of the last audio frame received"""
+    _last_audio_drain_activity_at: float | None = None
+    """Monotonic timestamp of the last audio-drain-extending event"""
     _audio_drain_atask: asyncio.Task[None] | None = None
     """Task that closes the generation after tool-call audio has drained"""
-    _emit_input_speech_stopped: bool = False
-    """Whether finalizing this generation should emit input_speech_stopped"""
 
     def push_text(self, text: str) -> None:
         if self.output_text:
@@ -496,7 +494,6 @@ class RealtimeSession(llm.RealtimeSession):
         self._main_atask = asyncio.create_task(self._main_task(), name="gemini-realtime-session")
 
         self._current_generation: _ResponseGeneration | None = None
-        self._draining_generations: list[_ResponseGeneration] = []
         self._active_session: AsyncSession | None = None
         # indicates if the underlying session should end
         self._session_should_close = asyncio.Event()
@@ -857,8 +854,6 @@ class RealtimeSession(llm.RealtimeSession):
 
         if self._current_generation:
             self._mark_current_generation_done()
-        for gen in list(self._draining_generations):
-            self._mark_generation_done(gen)
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
@@ -1201,21 +1196,11 @@ class RealtimeSession(llm.RealtimeSession):
 
         return conf
 
-    def _start_new_generation(self, *, interrupt_previous_audio: bool = True) -> None:
+    def _start_new_generation(self) -> None:
         self._rejected_tool_calls = 0
-        active_gen = self._current_generation
-        if active_gen and not active_gen._done:
-            if (
-                active_gen.function_ch.closed
-                and active_gen._audio_drain_atask
-                and not active_gen._audio_drain_atask.done()
-            ):
-                logger.debug("starting new generation while previous tool-call audio is draining")
-            else:
-                logger.warning(
-                    "starting new generation while another is active. Finalizing previous."
-                )
-                self._mark_generation_done(active_gen)
+        if self._current_generation and not self._current_generation._done:
+            logger.warning("starting new generation while another is active. Finalizing previous.")
+            self._mark_current_generation_done()
 
         response_id = utils.shortuuid("GR_")
         self._current_generation = _ResponseGeneration(
@@ -1252,13 +1237,11 @@ class RealtimeSession(llm.RealtimeSession):
 
         if self._pending_generation_fut and not self._pending_generation_fut.done():
             generation_event.user_initiated = True
-            self._current_generation._emit_input_speech_stopped = True
             self._pending_generation_fut.set_result(generation_event)
             self._pending_generation_fut = None
-        elif interrupt_previous_audio:
+        else:
             # emit input_speech_started event before starting an agent initiated generation
             # to interrupt the previous audio playout if any
-            self._current_generation._emit_input_speech_stopped = True
             self._handle_input_speech_started()
 
         self.emit("generation_created", generation_event)
@@ -1296,7 +1279,7 @@ class RealtimeSession(llm.RealtimeSession):
                             samples_per_channel=len(frame_data) // (2 * OUTPUT_AUDIO_CHANNELS),
                         )
                         current_gen.audio_ch.send_nowait(frame)
-                        current_gen._last_audio_frame_at = time.monotonic()
+                        current_gen._last_audio_drain_activity_at = time.monotonic()
                     except ValueError as e:
                         logger.error(f"Error creating audio frame from Gemini data: {e}")
 
@@ -1342,9 +1325,8 @@ class RealtimeSession(llm.RealtimeSession):
         if gen._done:
             return
 
-        if gen._emit_input_speech_stopped:
-            # emit input_speech_stopped event after the generation is done
-            self._handle_input_speech_stopped()
+        # emit input_speech_stopped event after the generation is done
+        self._handle_input_speech_stopped()
 
         # The only way we'd know that the transcription is complete is by when they are
         # done with generation
@@ -1387,9 +1369,6 @@ class RealtimeSession(llm.RealtimeSession):
             and gen._audio_drain_atask is not asyncio.current_task()
         ):
             gen._audio_drain_atask.cancel()
-        self._draining_generations = [
-            draining_gen for draining_gen in self._draining_generations if draining_gen is not gen
-        ]
 
         gen.function_ch.close()
         gen.message_ch.close()
@@ -1399,7 +1378,7 @@ class RealtimeSession(llm.RealtimeSession):
 
     async def _mark_generation_done_after_audio_drain(self, gen: _ResponseGeneration) -> None:
         started_at = time.monotonic()
-        last_audio_frame_at = gen._last_audio_frame_at
+        last_drain_activity_at = gen._last_audio_drain_activity_at
 
         while True:
             if gen._done:
@@ -1413,10 +1392,10 @@ class RealtimeSession(llm.RealtimeSession):
                 min(TOOL_CALL_AUDIO_DRAIN_QUIESCENCE, TOOL_CALL_AUDIO_DRAIN_TIMEOUT - elapsed)
             )
 
-            current_last_audio_frame_at = gen._last_audio_frame_at
-            if current_last_audio_frame_at == last_audio_frame_at:
+            current_last_drain_activity_at = gen._last_audio_drain_activity_at
+            if current_last_drain_activity_at == last_drain_activity_at:
                 break
-            last_audio_frame_at = current_last_audio_frame_at
+            last_drain_activity_at = current_last_drain_activity_at
 
         self._mark_generation_done(gen)
 
@@ -1424,8 +1403,10 @@ class RealtimeSession(llm.RealtimeSession):
         if gen._audio_drain_atask and not gen._audio_drain_atask.done():
             return
 
-        if not any(draining_gen is gen for draining_gen in self._draining_generations):
-            self._draining_generations.append(gen)
+        if gen.audio_ch.closed or types.Modality.AUDIO not in self._opts.response_modalities:
+            self._mark_generation_done(gen)
+            return
+
         gen._audio_drain_atask = asyncio.create_task(
             self._mark_generation_done_after_audio_drain(gen),
             name="gemini-realtime-audio-drain",
@@ -1478,13 +1459,7 @@ class RealtimeSession(llm.RealtimeSession):
             return
 
         gen = self._current_generation
-        if gen.function_ch.closed:
-            # Tool execution starts after each function stream closes. A chained tool-call
-            # batch therefore needs a fresh generation while the prior audio drains.
-            self._start_new_generation(interrupt_previous_audio=False)
-            gen = self._current_generation
-            assert gen is not None
-
+        gen._last_audio_drain_activity_at = time.monotonic()
         for fnc_call in tool_call.function_calls or []:
             arguments = json.dumps(fnc_call.args)
 
@@ -1496,7 +1471,6 @@ class RealtimeSession(llm.RealtimeSession):
                 )
             )
 
-        gen.function_ch.close()
         self._schedule_generation_done_after_audio_drain(gen)
 
     def _handle_tool_call_cancellation(
