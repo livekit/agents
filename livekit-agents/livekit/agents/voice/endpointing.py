@@ -33,6 +33,11 @@ class BaseEndpointing:
     def overlapping(self) -> bool:
         return self._overlapping
 
+    def endpointing_delay(self, *, probability: float | None, threshold: float | None) -> float:
+        if probability is not None and threshold is not None and probability < threshold:
+            return self.max_delay
+        return self.min_delay
+
     def on_start_of_speech(self, started_at: float, overlapping: bool = False) -> None:
         self._overlapping = overlapping
 
@@ -52,11 +57,12 @@ class DynamicEndpointing(BaseEndpointing):
         Dynamically adjust the endpointing delay based on the speech activity.
 
         Args:
-            min_delay: Minimum delay in seconds.
-            max_delay: Maximum delay in seconds.
+            min_delay: Minimum delay in seconds (the learned floor).
+            max_delay: Maximum delay in seconds (a fixed ceiling).
             alpha: Exponential moving average coefficient. The higher the value, the more weight is given to the history. Defaults to 0.9.
 
-        The endpointing delay is adjusted based on the following information:
+        ``min_delay`` is learned from the user's pausing behavior so we don't cut
+        off a user who pauses mid-turn. It adapts from the following pauses:
 
         1. Pauses between utterances:
 
@@ -67,19 +73,19 @@ class DynamicEndpointing(BaseEndpointing):
         [utterance] [   pause   ] [immediate interruption] (<- this should be a false EOT, and min delay should cover this)
                         [agent speech interrupted]
 
-        3. Pauses between a user utterance and agent speech:
+        ``max_delay`` is a fixed ceiling, not learned. The gap between a user
+        utterance and the agent's reply is system-determined (it includes LLM and
+        TTS latency) rather than a natural user statistic, so it carries no signal
+        worth learning from.
 
-        [utterance] [pause]                  (<- max delay should cover this)
-                           [agent speech]    (this could be interrupted later, but that would be the next turn)
+        The actual per-turn delay is interpolated within ``[min_delay, max_delay]``
+        from the end-of-turn prediction; see :meth:`endpointing_delay`.
         """
 
         super().__init__(min_delay=min_delay, max_delay=max_delay)
 
         self._utterance_pause = ExpFilter(
             alpha=alpha, initial=min_delay, min_val=min_delay, max_val=max_delay
-        )
-        self._turn_pause = ExpFilter(
-            alpha=alpha, initial=max_delay, min_val=min_delay, max_val=max_delay
         )
 
         self._utterance_started_at: float | None = None
@@ -98,8 +104,16 @@ class DynamicEndpointing(BaseEndpointing):
 
     @property
     def max_delay(self) -> float:
-        turn_val = self._turn_pause.value if self._turn_pause.value is not None else self._max_delay
-        return max(turn_val, self.min_delay)
+        # fixed ceiling, clamped so a learned min_delay can never exceed it
+        return max(self._max_delay, self.min_delay)
+
+    def endpointing_delay(self, *, probability: float | None, threshold: float | None) -> float:
+        """Interpolate the endpointing delay within ``[min_delay, max_delay]``."""
+        if probability is None or threshold is None or threshold <= 0:
+            return self.min_delay
+
+        margin = min(max((threshold - probability) / threshold, 0.0), 1.0)
+        return self.min_delay + margin * (self.max_delay - self.min_delay)
 
     @property
     def between_utterance_delay(self) -> float:
@@ -227,40 +241,9 @@ class DynamicEndpointing(BaseEndpointing):
                         "min_delay": self.min_delay,
                     },
                 )
-            # If this is not an immediate interruption, update the max delay (case 3)
-            elif (pause := self.between_turn_delay) > 0:
-                prev_val = self.max_delay
-                self._turn_pause.apply(1.0, pause)
-                logger.debug(
-                    "max endpointing delay updated: %s -> %s",
-                    prev_val,
-                    self.max_delay,
-                    extra={
-                        "reason": "new turn (interruption)",
-                        "pause": pause,
-                        "max_delay": self.max_delay,
-                        "min_delay": self.min_delay,
-                        "between_utterance_delay": self.between_utterance_delay,
-                        "between_turn_delay": self.between_turn_delay,
-                    },
-                )
 
         else:  # this is a normal end of speech
-            if (pause := self.between_turn_delay) > 0:
-                prev_val = self.max_delay
-                self._turn_pause.apply(1.0, pause)
-                logger.debug(
-                    "max endpointing delay updated due to pause: %s -> %s",
-                    prev_val,
-                    self.max_delay,
-                    extra={
-                        "reason": "new turn",
-                        "pause": pause,
-                        "max_delay": self.max_delay,
-                        "min_delay": self.min_delay,
-                    },
-                )
-            elif (
+            if (
                 (pause := self.between_utterance_delay) > 0
                 and self._agent_speech_ended_at is None
                 and self._agent_speech_started_at is None
@@ -295,16 +278,13 @@ class DynamicEndpointing(BaseEndpointing):
         if is_given(min_delay):
             self._min_delay = min_delay
             self._utterance_pause.reset(initial=self._min_delay, min_val=self._min_delay)
-            self._turn_pause.reset(min_val=self._min_delay)
 
         if is_given(max_delay):
             self._max_delay = max_delay
-            self._turn_pause.reset(initial=self._max_delay, max_val=self._max_delay)
             self._utterance_pause.reset(max_val=self._max_delay)
 
         if is_given(alpha):
             self._utterance_pause.reset(alpha=alpha)
-            self._turn_pause.reset(alpha=alpha)
 
 
 def create_endpointing(options: EndpointingOptions) -> BaseEndpointing:
