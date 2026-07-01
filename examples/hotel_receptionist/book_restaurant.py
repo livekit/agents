@@ -5,7 +5,7 @@ from typing import Annotated
 
 from context import speech_only
 from hotel_db import MAX_PARTY_SIZE, TODAY, HotelDB, RestaurantReservation, Unavailable, speak_time
-from persona import COMMON_INSTRUCTIONS
+from persona import COMMON_INSTRUCTIONS, PHONE_READBACK_INSTRUCTIONS
 from pydantic import Field
 
 from livekit.agents import NOT_GIVEN, NotGivenOr, beta
@@ -138,7 +138,8 @@ class BookRestaurantTask(AgentTask[RestaurantReservation]):
     async def open_phone_dialog(self) -> str:
         """Open the phone dialog. It collects the guest's phone number (read back and confirmed) from the caller."""
         r = await beta.workflows.GetPhoneNumberTask(
-            chat_ctx=speech_only(self.chat_ctx), extra_instructions=COMMON_INSTRUCTIONS
+            chat_ctx=speech_only(self.chat_ctx),
+            extra_instructions=COMMON_INSTRUCTIONS + PHONE_READBACK_INSTRUCTIONS,
         )
         self._phone = r.phone_number
         return f"phone recorded: {self._phone} | {self._status()}"

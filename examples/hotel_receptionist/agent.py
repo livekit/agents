@@ -23,6 +23,7 @@ from tools_services import ServicesToolsMixin
 from ui_view import UiView
 
 from livekit.agents import (
+    NOT_GIVEN,
     Agent,
     AgentServer,
     AgentSession,
@@ -200,7 +201,7 @@ async def on_session_end(ctx: JobContext) -> None:
         logger.exception("error closing hotel DB")
 
 
-@server.rtc_session(on_session_end=on_session_end, on_simulation_end=on_simulation_end)
+@server.rtc_session(on_session_end=on_session_end, on_simulation_end=on_simulation_end, agent_name="hotel_receptionist")
 async def hotel_receptionist_agent(ctx: JobContext) -> None:
     await ctx.connect()
 
@@ -213,14 +214,10 @@ async def hotel_receptionist_agent(ctx: JobContext) -> None:
     userdata = Userdata(db=db)
     session = AgentSession[Userdata](
         userdata=userdata,
-        # An explicit VAD is required (not the bundled default): without it the
-        # speaking anchor falls back to the STT stream clock, which drifts into the
-        # future across a long call / nested-task switch and makes the turn-commit
-        # logic sleep for that offset (~the elapsed call time) before replying.
         vad=inference.VAD(model="silero"),
         stt=inference.STT("deepgram/nova-3"),
         llm=inference.LLM("google/gemma-4-31b-it"),
-        tts=inference.TTS("inworld/inworld-tts-2"),
+        tts=inference.TTS("inworld/inworld-tts-2", voice=os.getenv("HOTEL_TTS_VOICE") or NOT_GIVEN),
         max_tool_steps=5,
     )
 

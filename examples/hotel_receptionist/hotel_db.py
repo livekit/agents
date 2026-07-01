@@ -59,10 +59,10 @@ def format_usd(cents: int) -> str:
 
 
 def speak_usd(cents: int) -> str:
+    # Hand the TTS a plain currency string ("$100.10"); its parser reads it
+    # correctly - we don't spell the amount out in words.
     dollars, change = divmod(abs(cents), 100)
-    if change == 0:
-        return f"{dollars} dollars"
-    return f"{dollars} dollars and {change} cents"
+    return f"${dollars:,}" if change == 0 else f"${dollars:,}.{change:02d}"
 
 
 def speak_time(t: time) -> str:
