@@ -491,7 +491,9 @@ class RoomIO:
                 try:
                     await self._room.disconnect()
                 except Exception:
-                    logger.exception("error disconnecting room before delete; proceeding with delete")
+                    logger.exception(
+                        "error disconnecting room before delete; proceeding with delete"
+                    )
                 delete_fut: asyncio.Future[api.DeleteRoomResponse] = job_ctx.delete_room(
                     room_name=self._room.name
                 )
