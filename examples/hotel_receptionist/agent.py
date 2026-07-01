@@ -17,6 +17,7 @@ from hotel_db import (
 from instructions import build_instructions
 from policies import build_lookup_policy_tool
 from run_artifacts import dump_run_artifacts
+from suggested_replies import SuggestedReplies
 from tools_restaurant import RestaurantToolsMixin
 from tools_rooms import RoomToolsMixin
 from tools_services import ServicesToolsMixin
@@ -220,6 +221,10 @@ async def hotel_receptionist_agent(ctx: JobContext) -> None:
         tts=inference.TTS("inworld/inworld-tts-2", voice=os.getenv("HOTEL_TTS_VOICE") or NOT_GIVEN),
         max_tool_steps=5,
     )
+
+    # After each receptionist turn, a small sidecar LLM suggests a reply the caller
+    # This is for the frontend at http://livekit.com/agents/hotel-receptionist
+    SuggestedReplies(session, ctx.room, llm=inference.LLM("google/gemma-4-31b-it")).attach()
 
     await session.start(agent=HotelReceptionistAgent(), room=ctx.room)
 
