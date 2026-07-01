@@ -20,10 +20,12 @@ from livekit.agents import (
     AgentSession,
     JobContext,
     RunContext,
+    ToolExecutionUpdatedEvent,
     cli,
     inference,
     llm,
 )
+from livekit.agents.utils import aio
 
 logger = logging.getLogger("async-travel-helper")
 
@@ -112,12 +114,16 @@ class TravelAgent(Agent):
         if self._user_email is None:
             logger.info("Getting user's email address")
             async with ctx.foreground():
-                ctx.session.say("We will need your email address to confirm the flight booking.")
+                # collect user input in an async tool
                 email = await GetEmailTask(
-                    extra_instructions="You are capturing the email address of the user for the flight booking."
+                    extra_instructions="Tell user we need the email addrss to confirm "
+                    "the flight booking when you first ask for it."
                 )
             self._user_email = email.email_address
             logger.info(f"User's email address: {self._user_email}")
+            await ctx.update(
+                "Thanks for providing your email address, we are confirming the booking now."
+            )
 
         await asyncio.sleep(40)
 
@@ -220,6 +226,25 @@ async def entrypoint(ctx: JobContext):
         # llm=google.realtime.RealtimeModel(),
         turn_handling={"interruption": {"mode": "vad"}},
     )
+
+    # stream tool execution (calls, ctx.update progress, reply lifecycle) to the frontend
+    status_ch = aio.Chan[ToolExecutionUpdatedEvent]()
+
+    @session.on("tool_execution_updated")
+    def _on_tool_status(ev: ToolExecutionUpdatedEvent) -> None:
+        status_ch.send_nowait(ev)
+
+    async def _publish_status() -> None:
+        async for ev in status_ch:
+            await ctx.room.local_participant.publish_data(ev.model_dump_json(), topic="tool_status")
+
+    publish_task = asyncio.create_task(_publish_status())
+
+    async def _close_status() -> None:
+        status_ch.close()
+        await aio.cancel_and_wait(publish_task)
+
+    ctx.add_shutdown_callback(_close_status)
 
     await session.start(agent=TravelAgent(), room=ctx.room)
 
