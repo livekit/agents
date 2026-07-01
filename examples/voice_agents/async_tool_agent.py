@@ -218,8 +218,6 @@ server = AgentServer()
 
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
-    await ctx.connect()
-
     session = AgentSession(
         stt=inference.STT("deepgram/nova-3"),
         # llm=inference.LLM("openai/gpt-5.3-chat-latest"),
