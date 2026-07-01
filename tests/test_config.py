@@ -56,11 +56,11 @@ def test_llm_with_azure_keeps_unknown_without_explicit_model():
     assert llm.model == "unknown"
 
 
-def test_llm_with_azure_uses_unknown_without_model_or_deployment():
+def test_llm_with_azure_uses_default_model_without_deployment():
     llm = LLM.with_azure(
         azure_endpoint="https://test.azure.com/openai",
         api_version="2025-04-12",
         api_key="test-key",
     )
 
-    assert llm.model == "unknown"
+    assert llm.model == "gpt-4o"
