@@ -12,17 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Anam virtual avatar plugin for LiveKit Agents
+
+See https://docs.livekit.io/agents/integrations/avatar/anam/ for setup, and
+https://anam.ai/docs/integrations/livekit/configuration for persona config and the API reference.
+"""
+
 from .avatar import AvatarSession
+from .director_notes import DIRECTOR_NOTE_TAGS, director_note_cue_transform
 from .errors import AnamException
-from .types import PersonaConfig, SessionOptions
+from .types import DirectorNotes, PersonaConfig, SessionOptions
 from .version import __version__
 
 __all__ = [
+    "DIRECTOR_NOTE_TAGS",
     "AnamException",
     "AvatarSession",
+    "DirectorNotes",
     "PersonaConfig",
     "SessionOptions",
     "__version__",
+    "director_note_cue_transform",
 ]
 
 from livekit.agents import Plugin
