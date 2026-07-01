@@ -37,12 +37,9 @@ dependencies = [
     "livekit-agents>=1.6.4",
     "livekit>=1.0.23,<2",  # FrameProcessor support requires livekit>=1.0.23 (PR #4145)
     "numpy>=1.20.0",
-    # Note: krisp-audio is a required runtime dependency but not available on public PyPI.
-    # It must be obtained and installed separately from Krisp.
-    # Install with: pip install krisp-audio (from Krisp's private repository or distribution)
-    # The plugin handles missing krisp-audio gracefully with ImportError.
-    # This dependency is declared here for documentation purposes only.
-    # Since it's not on PyPI, it cannot be listed in dependencies or optional-dependencies.
+    # Closed-source default backend (bundles the Krisp VIVA SDK); distributed
+    # under the LiveKit Terms of Service: https://livekit.io/legal/terms-of-service
+    "livekit-plugins-krisp-internal>=0.1.0",
 ]
 
 [project.urls]
@@ -58,4 +55,3 @@ packages = ["livekit"]
 
 [tool.hatch.build.targets.sdist]
 include = ["/livekit"]
-
