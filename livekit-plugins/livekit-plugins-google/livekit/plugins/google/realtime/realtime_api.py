@@ -47,6 +47,9 @@ lk_google_debug = int(os.getenv("LK_GOOGLE_DEBUG", 0))
 # stop rejecting tool calls after this many in a row to avoid a loop (tool_choice="none")
 MAX_TOOL_CALL_REJECTIONS = 3
 
+TOOL_CALL_AUDIO_DRAIN_QUIESCENCE = 0.5
+TOOL_CALL_AUDIO_DRAIN_TIMEOUT = 5.0
+
 # Known VertexAI models for the Live API
 # See: https://docs.cloud.google.com/vertex-ai/generative-ai/docs/live-api
 KNOWN_VERTEXAI_MODELS: frozenset[str] = frozenset(
@@ -178,6 +181,10 @@ class _ResponseGeneration:
     """The timestamp when the generation is completed"""
     _done: bool = False
     """Whether the generation is done (set when the turn is complete)"""
+    _last_audio_drain_activity_at: float | None = None
+    """Monotonic timestamp of the last audio-drain-extending event"""
+    _audio_drain_atask: asyncio.Task[None] | None = None
+    """Task that closes the generation after tool-call audio has drained"""
 
     def push_text(self, text: str) -> None:
         if self.output_text:
@@ -1272,6 +1279,7 @@ class RealtimeSession(llm.RealtimeSession):
                             samples_per_channel=len(frame_data) // (2 * OUTPUT_AUDIO_CHANNELS),
                         )
                         current_gen.audio_ch.send_nowait(frame)
+                        current_gen._last_audio_drain_activity_at = time.monotonic()
                     except ValueError as e:
                         logger.error(f"Error creating audio frame from Gemini data: {e}")
 
@@ -1311,10 +1319,14 @@ class RealtimeSession(llm.RealtimeSession):
         if not self._current_generation or self._current_generation._done:
             return
 
+        self._mark_generation_done(self._current_generation)
+
+    def _mark_generation_done(self, gen: _ResponseGeneration) -> None:
+        if gen._done:
+            return
+
         # emit input_speech_stopped event after the generation is done
         self._handle_input_speech_stopped()
-
-        gen = self._current_generation
 
         # The only way we'd know that the transcription is complete is by when they are
         # done with generation
@@ -1351,11 +1363,54 @@ class RealtimeSession(llm.RealtimeSession):
         if not gen.audio_ch.closed:
             gen.audio_ch.close()
 
+        if (
+            gen._audio_drain_atask
+            and not gen._audio_drain_atask.done()
+            and gen._audio_drain_atask is not asyncio.current_task()
+        ):
+            gen._audio_drain_atask.cancel()
+
         gen.function_ch.close()
         gen.message_ch.close()
         gen._done = True
         if lk_google_debug:
             logger.debug(f"generation done {gen}")
+
+    async def _mark_generation_done_after_audio_drain(self, gen: _ResponseGeneration) -> None:
+        started_at = time.monotonic()
+        last_drain_activity_at = gen._last_audio_drain_activity_at
+
+        while True:
+            if gen._done:
+                return
+
+            elapsed = time.monotonic() - started_at
+            if elapsed >= TOOL_CALL_AUDIO_DRAIN_TIMEOUT:
+                break
+
+            await asyncio.sleep(
+                min(TOOL_CALL_AUDIO_DRAIN_QUIESCENCE, TOOL_CALL_AUDIO_DRAIN_TIMEOUT - elapsed)
+            )
+
+            current_last_drain_activity_at = gen._last_audio_drain_activity_at
+            if current_last_drain_activity_at == last_drain_activity_at:
+                break
+            last_drain_activity_at = current_last_drain_activity_at
+
+        self._mark_generation_done(gen)
+
+    def _schedule_generation_done_after_audio_drain(self, gen: _ResponseGeneration) -> None:
+        if gen._audio_drain_atask and not gen._audio_drain_atask.done():
+            return
+
+        if gen.audio_ch.closed or types.Modality.AUDIO not in self._opts.response_modalities:
+            self._mark_generation_done(gen)
+            return
+
+        gen._audio_drain_atask = asyncio.create_task(
+            self._mark_generation_done_after_audio_drain(gen),
+            name="gemini-realtime-audio-drain",
+        )
 
     def _handle_input_speech_started(self) -> None:
         self.emit("input_speech_started", llm.InputSpeechStartedEvent())
@@ -1404,6 +1459,7 @@ class RealtimeSession(llm.RealtimeSession):
             return
 
         gen = self._current_generation
+        gen._last_audio_drain_activity_at = time.monotonic()
         for fnc_call in tool_call.function_calls or []:
             arguments = json.dumps(fnc_call.args)
 
@@ -1414,7 +1470,8 @@ class RealtimeSession(llm.RealtimeSession):
                     arguments=arguments,
                 )
             )
-        self._mark_current_generation_done()
+
+        self._schedule_generation_done_after_audio_drain(gen)
 
     def _handle_tool_call_cancellation(
         self, tool_call_cancellation: types.LiveServerToolCallCancellation
