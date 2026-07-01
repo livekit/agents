@@ -33,7 +33,7 @@ classifiers = [
 ]
 dependencies = [
     "livekit-agents[codecs]>=1.6.4",
-    "websockets>=13.1,<16.0",
+    "websockets>=16,<16.1",
 ]
 
 [project.urls]
