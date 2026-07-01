@@ -3135,9 +3135,17 @@ class AgentActivity(RecognitionHooks):
                 fnc_executed_ev.function_call_outputs.append(sanitized_out.fnc_call_out)
 
                 if new_agent_task is not None and sanitized_out.agent_task is not None:
-                    logger.error("expected to receive only one AgentTask from the tool executions")
-                    ignore_task_switch = True
-                    # TODO(long): should we mark the function call as failed to notify the LLM?
+                    if sanitized_out.agent_task is not new_agent_task:
+                        # genuinely different handoff targets in a single turn: ambiguous,
+                        # refuse the switch (unchanged behavior).
+                        logger.error(
+                            "expected to receive only one AgentTask from the tool executions"
+                        )
+                        ignore_task_switch = True
+                        # TODO(long): should we mark the function call as failed to notify the LLM?
+                    # else: the LLM requested the SAME handoff target more than once in one
+                    # turn (parallel/duplicate tool calls, common with real LLMs). Collapse to
+                    # a single handoff instead of discarding it (livekit/agents#5990).
 
                 new_agent_task = sanitized_out.agent_task
 
@@ -3734,10 +3742,16 @@ class AgentActivity(RecognitionHooks):
                     self._session._tool_items_added([sanitized_out.fnc_call_out])
 
                 if new_agent_task is not None and sanitized_out.agent_task is not None:
-                    logger.error(
-                        "expected to receive only one Agent from the tool executions",
-                    )
-                    ignore_task_switch = True
+                    if sanitized_out.agent_task is not new_agent_task:
+                        # genuinely different handoff targets in a single turn: ambiguous,
+                        # refuse the switch (unchanged behavior).
+                        logger.error(
+                            "expected to receive only one Agent from the tool executions",
+                        )
+                        ignore_task_switch = True
+                    # else: the LLM requested the SAME handoff target more than once in one
+                    # turn (parallel/duplicate tool calls, common with real LLMs). Collapse to
+                    # a single handoff instead of discarding it (livekit/agents#5990).
 
                 new_agent_task = sanitized_out.agent_task
 
