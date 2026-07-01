@@ -33,6 +33,18 @@ And these on Vertex AI:
 
 - gemini-live-2.5-flash-native-audio
 
+### Gemini 3.1 instructions
+
+Gemini 3.1 Live does not allow system instructions to be changed after the
+session has started. Calls such as `AgentSession.update_instructions()` and
+`session.generate_reply(instructions=...)` are ignored for
+`gemini-3.1-flash-live-preview`.
+
+For dynamic behavior with Gemini 3.1, prefer starting a new session with the
+updated instructions. For turn-specific context, include the extra context in
+the user message or a tool result before the model responds instead of relying
+on mid-session instruction updates.
+
 References:
 
 - [Gemini API Models](https://ai.google.dev/gemini-api/docs/models)
