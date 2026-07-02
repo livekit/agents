@@ -34,6 +34,7 @@ def _make_classifier(
     timeout: float = 10.0,
     wait_until_finished: bool = False,
     max_endpointing_delay: float = 6.0,
+    source: str = "stt",
 ) -> _AMDClassifier:
     return _AMDClassifier(
         llm or FakeLLM(),
@@ -44,6 +45,7 @@ def _make_classifier(
         timeout=timeout,
         wait_until_finished=wait_until_finished,
         max_endpointing_delay=max_endpointing_delay,
+        source=source,
     )
 
 
@@ -545,5 +547,159 @@ class TestAMDClassifier:
         # well past the original backstop deadline → still not reached
         await asyncio.sleep(0.4)
         assert clf._eot_reached is False
+
+        await clf.close()
+
+
+class TestAMDClassifierReset:
+    """reset() re-arms the classifier for the next internal screening turn."""
+
+    async def test_reset_rearms_for_next_turn(self) -> None:
+        llm = FakeLLM(
+            fake_responses=[
+                _machine_vm_response("voicemail greeting"),
+                _machine_vm_response("second greeting"),
+            ]
+        )
+        clf = _make_classifier(llm=llm, human_speech_threshold=0.05, machine_silence_threshold=0.3)
+        clf.start_listening()
+        results: list[AMDPredictionEvent] = []
+        clf.on("amd_prediction", results.append)
+
+        # turn 1 → machine-vm
+        clf.on_user_speech_started()
+        await asyncio.sleep(0.1)
+        clf.on_user_speech_ended(silence_duration=0.0)
+        clf.push_text("voicemail greeting")
+        await asyncio.sleep(0.4)
+        clf.on_end_of_turn()
+        assert len(results) == 1
+
+        # reset re-arms a fresh turn
+        await clf.reset()
+        assert clf.listening is True
+        assert clf._verdict_result is None
+        assert clf._verdict_ready.is_set() is False
+        assert clf._input_ch.closed is False
+        assert clf._emitted is False
+        assert clf._silence_reached is False
+        assert clf._eot_reached is False
+        assert clf._transcript == ""
+
+        # turn 2 produces a second independent verdict
+        clf.on_user_speech_started()
+        await asyncio.sleep(0.1)
+        clf.on_user_speech_ended(silence_duration=0.0)
+        clf.push_text("second greeting")
+        await asyncio.sleep(0.4)
+        clf.on_end_of_turn()
+        assert len(results) == 2
+
+        await clf.close()
+
+
+class TestAMDClassifierSource:
+    """Source filtering: race-based fallback and switch_source."""
+
+    async def test_session_stt_wins_race_flips_source(self) -> None:
+        """A session transcript before any amd_stt transcript flips the source one-way."""
+        clf = _make_classifier(source="amd_stt")
+        clf.start_listening()
+
+        clf.push_text("hello", source="stt")
+        assert clf._source == "stt"
+        assert clf._transcript == "hello"
+
+        await clf.close()
+
+    async def test_amd_stt_first_keeps_source(self) -> None:
+        """If amd_stt produced text first, a later session transcript is dropped."""
+        clf = _make_classifier(source="amd_stt")
+        clf.start_listening()
+
+        clf.push_text("from amd", source="amd_stt")
+        assert clf._source == "amd_stt"
+        clf.push_text("from session", source="stt")
+        assert clf._source == "amd_stt"
+        assert "from session" not in clf._transcript
+
+        await clf.close()
+
+    async def test_switch_source_redirects_consumption(self) -> None:
+        clf = _make_classifier(source="amd_stt")
+        clf.start_listening()
+
+        clf.switch_source("stt")
+        clf.push_text("session text", source="stt")
+        assert clf._transcript == "session text"
+        clf.push_text("amd text", source="amd_stt")
+        assert "amd text" not in clf._transcript
+
+        await clf.close()
+
+
+class TestAMDClassifierNoVAD:
+    """Transcript-before-VAD synthesizes a quick utterance so the verdict emits promptly."""
+
+    async def test_transcript_without_vad_emits_on_silence_timer(self) -> None:
+        llm = FakeLLM(fake_responses=[_machine_vm_response("voicemail greeting")])
+        clf = _make_classifier(
+            llm=llm,
+            machine_silence_threshold=0.3,
+            timeout=10.0,
+        )
+        clf.start_listening()
+        results: list[AMDPredictionEvent] = []
+        clf.on("amd_prediction", results.append)
+
+        # no on_user_speech_started — transcript arrives directly
+        clf.push_text("voicemail greeting")
+        assert clf._speech_started_at is not None  # synthesized
+        assert clf._silence_timer is not None
+        assert clf._eot_timer is not None
+
+        # emits via the silence timer + eot backstop, well before the 10s detection timeout
+        await asyncio.sleep(0.4)
+        clf.on_end_of_turn()
+        assert len(results) == 1
+        assert results[0].category == AMDCategory.MACHINE_VM
+
+        await clf.close()
+
+    async def test_transcript_without_vad_human_uses_short_human_silence(self) -> None:
+        """A VAD-missed utterance is treated as short: a human verdict releases on the
+        human_silence window, not the longer machine_silence one."""
+        llm = FakeLLM(
+            fake_responses=[
+                FakeLLMResponse(
+                    input="hello",
+                    content="",
+                    ttft=0.0,
+                    duration=0.02,
+                    tool_calls=[
+                        FunctionToolCall(
+                            name="save_prediction",
+                            arguments='{"label": "human"}',
+                            call_id="c1",
+                        )
+                    ],
+                )
+            ]
+        )
+        # human_silence (0.1) << machine_silence (0.5): emitting before 0.5 proves the
+        # short window is used.
+        clf = _make_classifier(
+            llm=llm, human_silence_threshold=0.1, machine_silence_threshold=0.5, timeout=10.0
+        )
+        clf.start_listening()
+        results: list[AMDPredictionEvent] = []
+        clf.on("amd_prediction", results.append)
+
+        clf.push_text("hello")  # no VAD event
+
+        # past human_silence, before machine_silence — human releases on silence alone
+        await asyncio.sleep(0.25)
+        assert len(results) == 1
+        assert results[0].category == AMDCategory.HUMAN
 
         await clf.close()
