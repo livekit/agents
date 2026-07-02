@@ -81,7 +81,7 @@ _PENDING_TTL = 3  # a pending term not confirmed within this many passes is drop
 _MAX_TRANSCRIPT_MESSAGES = 12
 
 # default model for keyterm extraction when ``keyterm_detection.llm`` is not set
-_DEFAULT_DETECTION_MODEL = "google/gemini-3.5-flash"
+_DEFAULT_DETECTION_MODEL = "google/gemma-4-31b-it"
 
 # set LK_KEYTERMS_DEBUG=1 to log the input/output of every detection pass
 lk_keyterms_debug = int(os.getenv("LK_KEYTERMS_DEBUG", 0))
