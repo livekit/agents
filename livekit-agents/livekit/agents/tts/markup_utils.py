@@ -81,7 +81,15 @@ def extract_and_strip(
 
         return ""  # lone closing tag
 
-    clean = pattern.sub(_repl, text)
+    # iterate to a fixed point so nested wrapping tags are fully removed: a single pass
+    # strips only the outer tag (e.g. <excited><loud>hi</loud></excited> -> keeps the
+    # inner <loud>hi</loud>), so repeat until the text stops changing. Each pass removes
+    # at least the matched delimiters, so this always terminates.
+    clean = text
+    prev = None
+    while clean != prev:
+        prev = clean
+        clean = pattern.sub(_repl, clean)
     return clean, tags
 
 

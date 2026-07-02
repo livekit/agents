@@ -49,6 +49,10 @@ _REGISTRY: dict[str, dict[Preset, ExpressiveOptions]] = {
         Preset.CUSTOMER_SERVICE: _pf._CARTESIA_CUSTOMER_SERVICE,
         Preset.CASUAL: _pf._CARTESIA_CASUAL,
     },
+    "xai": {
+        Preset.CUSTOMER_SERVICE: _pf._XAI_CUSTOMER_SERVICE,
+        Preset.CASUAL: _pf._XAI_CASUAL,
+    },
 }
 
 

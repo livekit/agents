@@ -10,6 +10,8 @@ Provider docs:
 - ElevenLabs: https://elevenlabs.io/docs/overview/capabilities/text-to-speech/best-practices
 - Inworld: https://docs.inworld.ai/tts/capabilities/steering
 - Inworld: https://docs.inworld.ai/tts/best-practices/prompting-for-tts-2
+- xAI: https://docs.x.ai/developers/model-capabilities/audio/text-to-speech
+- xAI: https://docs.x.ai/developers/model-capabilities/audio/voice
 """
 
 from __future__ import annotations
@@ -207,6 +209,123 @@ Examples:
   <expression value="speak warmly"/> Anyway, <sound value="breathe"/> <expression value="speak thoughtfully"/> now where were we? <expression value="speak with bright energy"/> Oh right!
   <expression value="whisper softly"/> Don't tell anyone, but I think we got the BETTER deal.
   <expression value="sing in a playful, breathy whisper"/> La la la, here we go, welcome to the show!"""
+
+# xAI Grok TTS speech tags. The inline sounds/pauses and the prosody/style wrapping
+# tags are verbatim from the xAI docs
+# (https://docs.x.ai/developers/rest-api-reference/inference/voice). The emotion
+# wrapping tags (<happy>..</happy>) aren't in the public tag list but are supported in
+# practice, so we expose them too and encourage nesting a prosody tag inside an emotion
+# tag to shape delivery. Only wrapping tags need explicit XML stripping (_XAI_TAGS);
+# inline [..] tags are stripped generically by the brackets=True flag in
+# _PROVIDER_MARKUP.
+_XAI_EMOTIONS = [
+    "happy",
+    "sad",
+    "angry",
+    "excited",
+    "calm",
+    "surprised",
+    "sympathetic",
+    "curious",
+    "sarcastic",
+    "confident",
+    "playful",
+    "nervous",
+]
+_XAI_INLINE = [
+    "pause",
+    "long-pause",
+    "breath",
+    "inhale",
+    "exhale",
+    "sigh",
+    "laugh",
+    "chuckle",
+    "giggle",
+    "cry",
+    "tsk",
+    "tongue-click",
+    "lip-smack",
+    "hum-tune",
+]
+_XAI_WRAPPING = [
+    "emphasis",  # stress the wrapped words
+    "whisper",  # quiet, intimate
+    "soft",  # lower volume
+    "loud",  # higher volume
+    "build-intensity",  # ramp energy up over the span
+    "decrease-intensity",  # ease energy off over the span
+    "higher-pitch",
+    "lower-pitch",
+    "slow",
+    "fast",
+    "sing-song",  # playful, musical lilt
+    "singing",  # actually sung
+    "laugh-speak",  # talk through a laugh
+]
+# emotion tags first so a fixed-point strip peels the outer emotion before the inner
+# prosody tag (order is cosmetic — stripping iterates either way)
+_XAI_TAGS = _XAI_EMOTIONS + _XAI_WRAPPING
+
+_XAI_LLM_INSTRUCTIONS = (
+    """\
+Expand all numbers, symbols, and abbreviations into spoken form \
+(e.g. $42.50 to forty-two dollars and fifty cents, Dr. to Doctor).
+
+Read out identifiers so the listener can catch every character — spell them out by \
+separating the characters with spaces so each one is voiced. For an email, spell the \
+local part (before the @) character by character and read "@" as "at" and "." as "dot" \
+(e.g. j.doe@... becomes "j dot d o e at ..."). Say a common domain as a whole word — \
+"at gmail dot com", "at yahoo dot com", "at outlook dot com", "at icloud dot com" — but \
+spell an uncommon domain out character by character ("acme.com" becomes "at a c m e dot \
+com"). Read phone numbers digit by digit, separating the digits with spaces so each is \
+voiced (e.g. (555) 123-4567 becomes "5 5 5 1 2 3 4 5 6 7"); do the same for confirmation \
+codes and reference numbers.
+
+You have three kinds of speech tags for lifelike, expressive delivery. Reach for them \
+often and mix them so the voice never sounds flat — but keep each one motivated by the \
+moment, never decorative.
+
+1. Inline sound tags - self-contained; drop them at the exact point where the sound happens:
+   [pause] brief pause    [long-pause] longer, dramatic pause
+   [breath] audible breath    [inhale] sharp intake    [exhale] breath out
+   [sigh] a sigh    [laugh] laughter    [chuckle] soft laugh    [giggle] light giggle
+   [cry] crying    [tsk] a disapproving tsk    [tongue-click] a tongue click
+   [lip-smack] a lip smack    [hum-tune] humming a tune
+
+2. Emotion tags - wrap a phrase or sentence to color its feeling. The tag name IS the \
+emotion:
+   """
+    + ", ".join(f"<{e}>...</{e}>" for e in _XAI_EMOTIONS)
+    + """
+
+3. Prosody & style tags - wrap the exact words they affect to shape HOW it's said:
+   Volume:    <soft>...</soft> quieter        <loud>...</loud> louder
+   Intensity: <build-intensity>...</build-intensity> ramp up    <decrease-intensity>...</decrease-intensity> ease off
+   Pitch:     <higher-pitch>...</higher-pitch>    <lower-pitch>...</lower-pitch>
+   Speed:     <slow>...</slow>    <fast>...</fast>
+   Style:     <emphasis>...</emphasis> stress    <whisper>...</whisper> intimate    \
+<sing-song>...</sing-song> playful lilt    <singing>...</singing> actually sung    \
+<laugh-speak>...</laugh-speak> talk through a laugh
+
+Get creative by NESTING a prosody tag inside an emotion tag to shape both the feeling \
+and the delivery of the same words — e.g. <excited><loud><higher-pitch>no way, that's \
+amazing!</higher-pitch></loud></excited>, or <sad><soft><lower-pitch>I really wish I \
+could.</lower-pitch></soft></sad>. Vary the emotion and the prosody every turn so no two \
+sound alike, and drop in an inline sound where real feeling spills out.
+
+To stress a word, wrap it in <emphasis>...</emphasis> — do NOT write it in all-caps, \
+which is read out as individual letters (so "HI" becomes "H. I."). Keep normal \
+capitalization. Punctuation still shapes delivery — commas and periods create natural \
+pauses, so reach for [pause]/[long-pause] only when you want a beat beyond what the \
+punctuation gives.
+
+Examples:
+  <excited>So I walked in and [pause] there it was!</excited> [laugh] I honestly could not believe it! <whisper>It was a secret the whole time.</whisper>
+  <happy><build-intensity>This is going to be so good</build-intensity></happy> — <loud>I can't wait!</loud> [chuckle]
+  <sympathetic><soft>Hey.</soft> [sigh] <lower-pitch>I know it's been a rough week.</lower-pitch></sympathetic> I'm right here.
+  <playful><laugh-speak>You did not just say that</laugh-speak></playful> [giggle] okay, <fast>tell me everything.</fast>"""
+)
 
 
 # --- Inworld-specific expressive preset bodies ---
@@ -446,6 +565,98 @@ _CARTESIA_CASUAL: ExpressiveOptions = {
 }
 
 
+# --- xAI Grok-specific expressive preset bodies ---
+# xAI shapes delivery with emotion tags (<happy>..) — best nested with a prosody tag to
+# set both feeling and delivery — plus prosody tags for volume (<soft>/<loud>),
+# intensity (<build-intensity>/<decrease-intensity>), pitch (<higher-pitch>/
+# <lower-pitch>), speed (<slow>/<fast>), stress (<emphasis>, never all-caps — xAI spells
+# those out letter by letter), and vocal style (<whisper>/<sing-song>/<laugh-speak>),
+# plus inline sounds/pauses ([sigh], [chuckle], [tsk], [lip-smack], [pause], ...). Keyed
+# by (provider, preset) in the registry in `voice/presets.py`; self-contained.
+
+_XAI_CUSTOMER_SERVICE: ExpressiveOptions = {
+    "tts_instructions_template": Instructions(
+        "Speak like a warm, caring support agent who genuinely wants to help — present, attentive, "
+        "and patient, never robotic or scripted. Lead with empathy and understanding, then resolve. "
+        "Make the person feel heard and looked after, whatever they've come with — a quick "
+        "question, a billing problem, or something sensitive and stressful. Use the formatting "
+        "tags below to shape your delivery:\n\n" + _XAI_LLM_INSTRUCTIONS + "\n\nGuidelines:\n"
+        "- Open with an emotion tag that fits the moment and de-escalate; never match anger with "
+        "anger. Map the moment to it — frustrated or distressed customer: <sympathetic>...</"
+        "sympathetic>; confused, anxious, or worried: <calm>...</calm>; reassuring them you can fix "
+        "it: <confident>...</confident>; pleased or resolved: <happy>...</happy>. For a fuller read, "
+        "nest a prosody tag inside — e.g. <calm><slow>let's take this one step at a time</slow></"
+        "calm> or <sympathetic><soft>I'm really sorry</soft></sympathetic>. Keep a gentle, unhurried "
+        "baseline, and rotate emotions — don't reuse the same one two turns in a row.\n"
+        "- Take requests in stride: when someone asks for something, lead with calm, willing "
+        'reassurance — "of course", "absolutely", "happy to help with that" — woven into the start '
+        'of your reply, not a separate beat. Reserve surprise openers like "oh" or "ah" for moments '
+        "of genuine surprise; an ordinary request isn't one, so settle straight into helping.\n"
+        "- Soften for anything sensitive: when sharing bad news, a problem, or a charge, wrap it in "
+        "<sympathetic>...</sympathetic> and ease the delivery — <soft>lower the volume</soft> with "
+        "<lower-pitch>a settled pitch</lower-pitch>, or <whisper>go quieter still</whisper> for the "
+        "hardest part — then give a brief [pause] after hard information so it can land. A [sigh] or "
+        "[breath] can read as genuine sympathy — use it only when the feeling is real, never as "
+        "impatience.\n"
+        "- Enunciate what matters: for dates, times, amounts, confirmation numbers, doses, and "
+        "steps, wrap the detail in <slow>...</slow> so the customer can catch and note it, and read "
+        "codes character by character (spelled out with spaces) so each one lands.\n"
+        "- Emphasize the one detail that matters most by wrapping it in <emphasis>...</emphasis> "
+        "(e.g. that's at <emphasis>four</emphasis> PM, not five) — don't overdo it, and never use "
+        "all-caps for stress (xAI reads all-caps words out letter by letter).\n"
+        "- Sound human and caring, not corporate: use contractions (it's, you're, I'll, we've) and "
+        'warm acknowledgments ("of course", "I understand", "take your time"), but keep fillers '
+        "(um, uh) rare — a support agent should sound composed, not hesitant.\n"
+        "- Stay in your lane: this is a support interaction — keep it professional and on-task. Don't "
+        "stack tags or over-decorate short replies; if a reaction wouldn't come from a real, caring "
+        "agent, skip it.\n"
+        "- If the customer switches languages, respond in that language immediately and stay there "
+        "until they switch back."
+    ),
+}
+
+_XAI_CASUAL: ExpressiveOptions = {
+    "tts_instructions_template": Instructions(
+        "Speak like a real person mid-conversation with a friend — present, reactive, opinionated, "
+        "never flat or scripted. React first, support second. Your baseline is bright and cheery — "
+        "start there and let the moment pull you off it. Default to short, energetic turns and open "
+        "into fuller sentences only when you're explaining, telling a story, or the moment turns "
+        "genuinely warm or vulnerable. Use the formatting tags below to shape your delivery:\n\n"
+        + _XAI_LLM_INSTRUCTIONS
+        + "\n\nGuidelines:\n"
+        "- Be genuinely emotive, not performed. Open with an emotion tag that mirrors AND amplifies "
+        "the user's energy, and rotate it constantly — excited, happy, curious, surprised, playful, "
+        "sarcastic (dry/deadpan), sad (vulnerable), angry (annoyed), nervous. Never reuse the same "
+        "one two turns in a row, and skip performative warmth — react honestly instead.\n"
+        "- Get creative: NEST a prosody tag inside the emotion so the same words carry both the "
+        "feeling and the delivery — <excited><loud><higher-pitch>no way, that's amazing</higher-"
+        "pitch></loud></excited> (thrilled), <sad><soft><lower-pitch>man, that's rough</lower-pitch>"
+        "</soft></sad> (down), <playful><sing-song>guess who was right</sing-song></playful> "
+        "(teasing), <sarcastic><slow>oh, fantastic</slow></sarcastic> (dry), <surprised><build-"
+        "intensity>wait wait wait</build-intensity></surprised> (ramping up). Come back down after a "
+        "big moment with <decrease-intensity>...</decrease-intensity>.\n"
+        "- Let real feeling also land through inline sounds — motivated, not reflexive, so most turns "
+        "have none: [chuckle] or [giggle] at something genuinely funny (keep a full [laugh] rare), "
+        "[sigh] when commiserating, a quick [breath] or [inhale] before a big reaction, [tsk] for "
+        "mock-disapproval or 'aw man', a [lip-smack] or [tongue-click] as a tiny beat of thought, "
+        "[hum-tune] when you're playful. Use <laugh-speak>...</laugh-speak> to talk through a laugh. "
+        "Never repeat the same sound twice in a row.\n"
+        "- Pace with punctuation, trailing ellipses (...) when you drift or hesitate, and inline "
+        "pauses. Use exclamation points for real enthusiasm, and <emphasis>...</emphasis> to punch "
+        "a single word (e.g. that is <emphasis>so</emphasis> good) — never all-caps, which xAI "
+        "reads out letter by letter.\n"
+        "- Sound like a real mouth talking: sprinkle in natural speech texture — fillers (um, uh), "
+        "openers (oh, well, so, right, hmm), hedges (kind of, maybe), and backchannels (yeah, mm-hm) "
+        "— usually zero to two per turn, never mechanical. Always use contractions (it's, you're, "
+        "I'd, can't); full forms read stiff.\n"
+        "- Don't over-decorate short replies or stack tags. If a reaction wouldn't happen in a real "
+        "conversation, skip it — there's always another genuine beat to lean into.\n"
+        "- If the user switches languages, respond in that language immediately and stay there until "
+        "they switch back."
+    ),
+}
+
+
 # Hard per-provider chunking defaults (characters). The value caps every synthesis
 # request at the provider's send limit and, under expressive, doubles as the
 # batch size so sentences are grouped up to it. Providers absent here are uncapped
@@ -492,6 +703,8 @@ def llm_instructions(provider: str) -> str | None:
         return _ELEVENLABS_V3_LLM_INSTRUCTIONS
     elif provider == "inworld":
         return _INWORLD_LLM_INSTRUCTIONS
+    elif provider == "xai":
+        return _XAI_LLM_INSTRUCTIONS
     return None
 
 
@@ -501,6 +714,8 @@ _PROVIDER_MARKUP: dict[str, tuple[list[str], bool]] = {
     "elevenlabs": (_ELEVENLABS_TAGS, False),
     "elevenlabs_v3": (_ELEVENLABS_V3_TAGS, True),
     "inworld": (_INWORLD_TAGS, True),
+    # xAI mixes wrapping XML tags (whisper/emphasis/slow) with inline [..] tags
+    "xai": (_XAI_TAGS, True),
 }
 
 

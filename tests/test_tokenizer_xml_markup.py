@@ -77,6 +77,114 @@ class TestStripXmlTags:
 
 
 # ===========================================================================
+# xAI dialect (mixed inline [..] + wrapping <..>)
+# ===========================================================================
+
+
+class TestXaiDialect:
+    """xAI mixes inline square-bracket sounds/pauses with wrapping angle-bracket tags."""
+
+    def test_llm_instructions_registered(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        instr = pf.llm_instructions("xai")
+        # non-None is what the expressive gate keys on
+        assert instr is not None
+        assert "[laugh]" in instr and "<whisper>" in instr
+
+    def test_split_markup_strips_inline_keeps_wrapping_inner(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        raw = "So I walked in and [pause] there it was. [laugh] <whisper>a secret</whisper> <emphasis>wow</emphasis>."
+        clean, tags = pf.split_markup("xai", raw)
+        # inline tags removed entirely; wrapping tags keep their inner text
+        assert "[pause]" not in clean and "[laugh]" not in clean
+        assert "<whisper>" not in clean and "a secret" in clean and "wow" in clean
+        types = [(t["type"], t["value"]) for t in tags]
+        assert ("", "pause") in types and ("", "laugh") in types
+        assert ("whisper", "a secret") in types and ("emphasis", "wow") in types
+
+    def test_emotion_wrapping_tags_stripped_inner_kept(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        raw = "<happy>Great to hear from you!</happy> <sad>I'm sorry about that.</sad>"
+        clean, tags = pf.split_markup("xai", raw)
+        # emotion is the tag name; delimiters removed, spoken words preserved
+        assert "<happy>" not in clean and "</sad>" not in clean
+        assert "Great to hear from you!" in clean and "I'm sorry about that." in clean
+        types = [(t["type"], t["value"]) for t in tags]
+        assert ("happy", "Great to hear from you!") in types
+        assert ("sad", "I'm sorry about that.") in types
+
+    def test_every_documented_tag_is_strippable(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        # every emotion AND prosody tag the instructions offer must be in _XAI_TAGS,
+        # or it would leak into the user-visible transcript
+        for tag in pf._XAI_EMOTIONS + pf._XAI_WRAPPING:
+            assert f"<{tag}>" in pf._XAI_LLM_INSTRUCTIONS, f"{tag} not documented"
+            assert tag in pf._XAI_TAGS
+            clean, _ = pf.split_markup("xai", f"<{tag}>hello there</{tag}>")
+            assert clean.strip() == "hello there", f"{tag} not stripped: {clean!r}"
+
+    def test_documented_inline_tags_present(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        # nonverbals from xAI's docs, incl. the ones the user called out
+        for name in ("tsk", "lip-smack", "tongue-click", "chuckle", "giggle", "hum-tune"):
+            assert name in pf._XAI_INLINE
+            assert f"[{name}]" in pf._XAI_LLM_INSTRUCTIONS
+
+    def test_pitch_volume_intensity_speed_present(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        # the request: pitch, volume, intensity, speed — real xAI tag names
+        for tag in (
+            "higher-pitch",
+            "lower-pitch",
+            "soft",
+            "loud",
+            "build-intensity",
+            "decrease-intensity",
+            "slow",
+            "fast",
+            "emphasis",
+        ):
+            assert tag in pf._XAI_WRAPPING
+
+    def test_nested_emotion_prosody_strips_cleanly(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        # combining emotion + prosody means nesting; the transcript must come out clean
+        # (no leaked inner markup) — this is what the fixed-point strip guarantees
+        raw = "<excited><loud><higher-pitch>no way</higher-pitch></loud></excited> [laugh] okay"
+        clean, _ = pf.split_markup("xai", raw)
+        assert "<" not in clean and ">" not in clean and "[" not in clean
+        assert clean.strip() == "no way  okay".replace("  ", " ") or "no way" in clean
+        assert "no way" in clean and "okay" in clean
+
+    def test_normalize_and_convert_are_noops(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        raw = "[laugh] <whisper>hi</whisper> <slow>A B C</slow>"
+        # xAI has no self-closing tags and emits native syntax → both pass through
+        assert pf.normalize_markup("xai", raw) == raw
+        assert pf.convert_markup("xai", raw) == raw
+
+    def test_presets_registered_for_xai(self) -> None:
+        from livekit.agents.voice import presets
+        from livekit.agents.voice.agent_session import DEFAULT_EXPRESSIVE_OPTIONS
+
+        for preset in (presets.CUSTOMER_SERVICE, presets.CASUAL):
+            opts = presets.resolve_options(
+                preset, provider_key="xai", default=DEFAULT_EXPRESSIVE_OPTIONS
+            )
+            body = opts["tts_instructions_template"].common
+            # tuned body, not the agnostic default (which has no xai tag reference)
+            assert "<whisper>" in body
+
+
+# ===========================================================================
 # Batch sentence tokenizer
 # ===========================================================================
 
