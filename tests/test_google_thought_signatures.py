@@ -1,5 +1,6 @@
 import pytest
 
+from livekit.agents.llm import ChatContext, FunctionCall, FunctionCallOutput
 from livekit.plugins.google.llm import (
     _is_gemini_3_flash_model,
     _is_gemini_3_model,
@@ -7,6 +8,45 @@ from livekit.plugins.google.llm import (
 )
 
 pytestmark = pytest.mark.unit
+
+
+class TestGoogleThoughtSignatureFormatting:
+    def test_injects_existing_thought_signature_for_function_call(self):
+        ctx = ChatContext.empty()
+        ctx.add_message(role="user", content="hello")
+        ctx.insert(FunctionCall(call_id="call_1", name="tool", arguments="{}"))
+        ctx.insert(FunctionCallOutput(call_id="call_1", name="tool", output="ok", is_error=False))
+
+        turns, _ = ctx.to_provider_format(
+            format="google", thought_signatures={"call_1": b"real_signature"}
+        )
+
+        function_call_part = turns[1]["parts"][0]
+        assert function_call_part["thought_signature"] == b"real_signature"
+
+    def test_injects_skip_sentinel_for_missing_thought_signature(self):
+        ctx = ChatContext.empty()
+        ctx.add_message(role="user", content="hello")
+        ctx.insert(FunctionCall(call_id="call_from_openai", name="tool", arguments="{}"))
+        ctx.insert(
+            FunctionCallOutput(call_id="call_from_openai", name="tool", output="ok", is_error=False)
+        )
+
+        turns, _ = ctx.to_provider_format(format="google", thought_signatures={})
+
+        function_call_part = turns[1]["parts"][0]
+        assert function_call_part["thought_signature"] == b"skip_thought_signature_validator"
+
+    def test_omits_thought_signature_when_not_required(self):
+        ctx = ChatContext.empty()
+        ctx.add_message(role="user", content="hello")
+        ctx.insert(FunctionCall(call_id="call_1", name="tool", arguments="{}"))
+        ctx.insert(FunctionCallOutput(call_id="call_1", name="tool", output="ok", is_error=False))
+
+        turns, _ = ctx.to_provider_format(format="google")
+
+        function_call_part = turns[1]["parts"][0]
+        assert "thought_signature" not in function_call_part
 
 
 class TestGeminiModelDetection:
