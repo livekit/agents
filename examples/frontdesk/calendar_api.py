@@ -4,6 +4,7 @@ import base64
 import datetime
 import hashlib
 import logging
+import os
 import random
 from dataclasses import dataclass
 from typing import Protocol
@@ -13,6 +14,14 @@ from zoneinfo import ZoneInfo
 import aiohttp
 
 from livekit.agents.utils import http_context
+
+
+def now(tz: ZoneInfo) -> datetime.datetime:
+    """Current time, or the time pinned via ``FRONTDESK_NOW`` (keeps the
+    absolute dates in scenarios.yaml from going stale)."""
+    if pinned := os.getenv("FRONTDESK_NOW"):
+        return datetime.datetime.fromisoformat(pinned).replace(tzinfo=tz)
+    return datetime.datetime.now(tz)
 
 
 class SlotUnavailableError(Exception):
@@ -46,16 +55,30 @@ class Calendar(Protocol):
     ) -> list[AvailableSlot]: ...
 
 
+@dataclass
+class BookedAppointment:
+    slot: AvailableSlot
+    attendee_email: str
+
+
 class FakeCalendar(Calendar):
-    def __init__(self, *, timezone: str, slots: list[AvailableSlot] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        timezone: str,
+        slots: list[AvailableSlot] | None = None,
+        seed: int | None = None,
+    ) -> None:
         self.tz = ZoneInfo(timezone)
         self._slots: list[AvailableSlot] = []
+        self.scheduled_appointments: list[BookedAppointment] = []
 
         if slots is not None:
             self._slots.extend(slots)
             return
 
-        today = datetime.datetime.now(self.tz).date()
+        rng = random.Random(seed)
+        today = now(self.tz).date()
         for day_offset in range(1, 90):  # generate slots for the next 90 days
             current_day = today + datetime.timedelta(days=day_offset)
             if current_day.weekday() >= 5:
@@ -68,8 +91,8 @@ class FakeCalendar(Calendar):
                 for i in range(int((17 - 9) * 2))  # (17-9)=8 hours => 16 slots
             ]
 
-            num_slots = random.randint(3, 6)
-            chosen = random.sample(slots_in_day, num_slots)
+            num_slots = rng.randint(3, 6)
+            chosen = rng.sample(slots_in_day, num_slots)
 
             for slot_start in sorted(chosen):
                 self._slots.append(AvailableSlot(start_time=slot_start, duration_min=30))
@@ -80,8 +103,14 @@ class FakeCalendar(Calendar):
     async def schedule_appointment(
         self, *, start_time: datetime.datetime, attendee_email: str
     ) -> None:
-        # fake it by just removing it from our slots list
-        self._slots = [slot for slot in self._slots if slot.start_time != start_time]
+        slot = next((s for s in self._slots if s.start_time == start_time), None)
+        if slot is None:
+            raise SlotUnavailableError(f"no available slot at {start_time.isoformat()}")
+
+        self._slots.remove(slot)
+        self.scheduled_appointments.append(
+            BookedAppointment(slot=slot, attendee_email=attendee_email)
+        )
 
     async def list_available_slots(
         self, *, start_time: datetime.datetime, end_time: datetime.datetime

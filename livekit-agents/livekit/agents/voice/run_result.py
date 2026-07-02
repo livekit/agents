@@ -6,6 +6,7 @@ import contextvars
 import functools
 import json
 import os
+import weakref
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -29,6 +30,7 @@ from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
     from .agent import Agent
+    from .agent_session import AgentSession
 
 
 lk_evals_verbose = int(os.getenv("LIVEKIT_EVALS_VERBOSE", 0))
@@ -1036,17 +1038,42 @@ class AgentHandoffAssert:
 if TYPE_CHECKING:
     MockTools = dict[type[Agent], dict[str, Callable]]
 _MockToolsContextVar = contextvars.ContextVar["MockTools"]("agents_mock_tools")
+_SessionMockTools: weakref.WeakKeyDictionary[AgentSession, MockTools] = weakref.WeakKeyDictionary()
+
+
+@overload
+def mock_tools(
+    agent: type[Agent], mocks: dict[str, Callable]
+) -> contextlib.AbstractContextManager[None]: ...
+
+
+@overload
+def mock_tools(
+    agent: type[Agent], mocks: dict[str, Callable], *, session: AgentSession
+) -> None: ...
+
+
+def mock_tools(
+    agent: type[Agent], mocks: dict[str, Callable], *, session: AgentSession | None = None
+) -> contextlib.AbstractContextManager[None] | None:
+    """Assign mock tool callables to an Agent type.
+
+    Mocks intercept tool execution only; the LLM keeps seeing the real tool
+    schemas, and a mock may declare any subset of the real tool's parameters.
+
+    Without ``session``, returns a context manager scoping the mocks to the
+    current context. With ``session``, ``mocks`` becomes the mock set for the
+    Agent type on that session for its lifetime: call again to replace it, or
+    pass ``{}`` to remove it. Context-manager mocks take precedence.
+    """
+    if session is not None:
+        _SessionMockTools.setdefault(session, {})[agent] = dict(mocks)
+        return None
+    return _mock_tools_ctx(agent, mocks)
 
 
 @contextmanager
-def mock_tools(agent: type[Agent], mocks: dict[str, Callable]) -> Generator[None, None, None]:
-    """
-    Temporarily assign a set of mock tool callables to a specific Agent type within the current context.
-
-    Usage:
-        with mock_tools(MyAgentClass, {"tool_name": mock_fn}):
-            # inside this block, MyAgentClass will see the given mocks
-    """  # noqa: E501
+def _mock_tools_ctx(agent: type[Agent], mocks: dict[str, Callable]) -> Generator[None, None, None]:
     current = _MockToolsContextVar.get({})
     updated = {**current, agent: mocks}  # create a new dict
     token = _MockToolsContextVar.set(updated)

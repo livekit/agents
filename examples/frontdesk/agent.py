@@ -4,13 +4,22 @@ import datetime
 import logging
 import os
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal
 from zoneinfo import ZoneInfo
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from calendar_api import AvailableSlot, CalComCalendar, Calendar, FakeCalendar, SlotUnavailableError
+import simulation
+from calendar_api import (
+    AvailableSlot,
+    CalComCalendar,
+    Calendar,
+    FakeCalendar,
+    SlotUnavailableError,
+    now,
+)
 from dotenv import load_dotenv
 from ui_view import UIView
 
@@ -20,12 +29,14 @@ from livekit.agents import (
     AgentSession,
     JobContext,
     RunContext,
+    SimulationContext,
     ToolError,
     beta,
     cli,
     function_tool,
     get_job_context,
     inference,
+    mock_tools,
 )
 from livekit.agents.evals import (
     JudgeGroup,
@@ -59,7 +70,7 @@ logger = logging.getLogger("front-desk")
 class FrontDeskAgent(Agent):
     def __init__(self, *, timezone: str) -> None:
         self.tz = ZoneInfo(timezone)
-        today = datetime.datetime.now(self.tz).strftime("%A, %B %d, %Y")
+        today = now(self.tz).strftime("%A, %B %d, %Y")
 
         super().__init__(
             instructions=(
@@ -152,7 +163,7 @@ class FrontDeskAgent(Agent):
         Args:
             range: Determines how far ahead to search for free time slots.
         """
-        now = datetime.datetime.now(self.tz)
+        current_time = now(self.tz)
         lines: list[str] = []
 
         if range == "+2week" or range == "default":
@@ -163,21 +174,21 @@ class FrontDeskAgent(Agent):
             range_days = 90
 
         slots = await ctx.userdata.cal.list_available_slots(
-            start_time=now, end_time=now + datetime.timedelta(days=range_days)
+            start_time=current_time, end_time=current_time + datetime.timedelta(days=range_days)
         )
 
         for slot in slots:
             local = slot.start_time.astimezone(self.tz)
-            delta = local - now
+            delta = local - current_time
             days = delta.days
             seconds = delta.seconds
 
-            if local.date() == now.date():
+            if local.date() == current_time.date():
                 if seconds < 3600:
                     rel = "in less than an hour"
                 else:
                     rel = "later today"
-            elif local.date() == (now.date() + datetime.timedelta(days=1)):
+            elif local.date() == (current_time.date() + datetime.timedelta(days=1)):
                 rel = "tomorrow"
             elif days < 7:
                 rel = f"in {days} days"
@@ -193,12 +204,36 @@ class FrontDeskAgent(Agent):
             self._slots_map[slot.unique_hash] = slot
 
         if ctx.userdata.ui is not None:
-            ctx.userdata.ui.slots_listed(slots, now, self.tz, range_days)
+            ctx.userdata.ui.slots_listed(slots, current_time, self.tz, range_days)
 
         return "\n".join(lines) or "No slots available at the moment."
 
 
 server = AgentServer()
+
+
+async def on_simulation_end(ctx: SimulationContext) -> None:
+    # grade the run on final calendar state; a mismatch vetoes the run
+    userdata = ctx.userdata()
+    if "expected_booking" not in userdata:
+        return  # scenario graded on conversation only
+
+    cal: FakeCalendar = ctx.job_context.primary_session.userdata.cal
+    booked = cal.scheduled_appointments
+
+    def speak(dt: datetime.datetime) -> str:
+        return dt.astimezone(cal.tz).isoformat()
+
+    if (expected_raw := userdata["expected_booking"]) is None:
+        if booked:
+            times = ", ".join(speak(b.slot.start_time) for b in booked)
+            ctx.fail(reason=f"no booking was expected, but the agent booked: {times}")
+        return
+
+    expected = simulation.parse_slot(expected_raw, cal.tz)
+    if len(booked) != 1 or booked[0].slot.start_time != expected:
+        times = ", ".join(speak(b.slot.start_time) for b in booked) or "nothing"
+        ctx.fail(reason=f"expected a single booking at {speak(expected)}, got {times}")
 
 
 async def on_session_end(ctx: JobContext) -> None:
@@ -240,13 +275,22 @@ async def on_session_end(ctx: JobContext) -> None:
     logger.info("session tags: %s", ctx.tagger.tags)
 
 
-@server.rtc_session(on_session_end=on_session_end)
+@server.rtc_session(on_session_end=on_session_end, on_simulation_end=on_simulation_end)
 async def frontdesk_agent(ctx: JobContext):
     await ctx.connect()
 
     timezone = "UTC"
+    tool_mocks: dict[str, Callable] = {}
 
-    if cal_api_key := os.getenv("CAL_API_KEY", None):
+    # the simulator carries the scenario in its participant attributes;
+    # it must have joined before simulation_context() can resolve
+    await ctx.wait_for_participant()
+
+    if sim := ctx.simulation_context():
+        # the scenario's userdata seeds the calendar; the tools run mocked
+        cal = simulation.fake_calendar(sim, timezone=timezone)
+        tool_mocks = simulation.tool_mocks(cal, ZoneInfo(timezone))
+    elif cal_api_key := os.getenv("CAL_API_KEY", None):
         logger.info("CAL_API_KEY detected, using cal.com calendar")
         cal = CalComCalendar(api_key=cal_api_key, timezone=timezone)
     else:
@@ -267,6 +311,7 @@ async def frontdesk_agent(ctx: JobContext):
         max_tool_steps=1,
     )
 
+    mock_tools(FrontDeskAgent, tool_mocks, session=session)
     await session.start(agent=FrontDeskAgent(timezone=timezone), room=ctx.room)
 
 

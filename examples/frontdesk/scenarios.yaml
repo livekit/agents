@@ -1,0 +1,238 @@
+# These scenarios are written against a pinned clock:
+#   FRONTDESK_NOW=2026-06-12T09:00:00   (a Friday)
+# Run the agent with that env var set, or the absolute dates below
+# (availability, expected bookings, weekday references) won't line up.
+#
+# Per-scenario userdata:
+#   available_slots:  ISO datetimes seeding the FakeCalendar (see simulation.py)
+#   expected_booking: the single slot the agent must end up booking,
+#                     null when the agent must NOT book anything,
+#                     omitted when the run is graded on conversation only.
+name: Appointment scheduling
+scenarios:
+  # no expected_booking here: any of the offered slots is acceptable, so the
+  # run is graded on the conversation only
+  - label: Flexible caller hesitant to share an email
+    instructions: |-
+      You are Maya Chen (email maya.chen@example.com), a freelance designer
+      between client calls. You are friendly and easygoing, but a little wary
+      of giving out personal information.
+
+      Goals:
+      - Ask what appointment times are available next week and accept the
+        first time the agent suggests, any time works for you.
+      - When asked for your email address, hesitate once ("do you really need
+        that?") before providing it.
+      - Finish with a confirmed appointment.
+    agent_expectations: The agent should suggest a slot, hold the booking until
+      the email address is provided (explaining why it is needed when the
+      caller hesitates) and book exactly one appointment, clearly confirming
+      the final time.
+    tags:
+      feature: booking
+    userdata:
+      available_slots:
+        - "2026-06-15T10:00:00"
+        - "2026-06-15T14:30:00"
+        - "2026-06-16T09:00:00"
+        - "2026-06-17T11:00:00"
+
+  - label: Caller opens with a specific date
+    instructions: |-
+      You are Tom Okafor (email t.okafor@example.com), planning around a trip.
+      You are polite but only have one date in mind.
+
+      Goals:
+      - Open the call by asking directly, "Do you have any availability on
+        July 16?" before hearing any options.
+      - Pick the 1:00 PM slot on July 16 from whatever is offered.
+      - Provide your email address and finish with a confirmed booking.
+    agent_expectations: The agent should check availability for the requested
+      date, offer the July 16 options, and complete the booking for the slot the
+      caller chooses after collecting an email address.
+    tags:
+      feature: booking
+    userdata:
+      available_slots:
+        - "2026-07-16T09:30:00"
+        - "2026-07-16T13:00:00"
+        - "2026-07-17T10:00:00"
+      expected_booking: "2026-07-16T13:00:00"
+
+  - label: Requested time unavailable, accepts an alternative
+    instructions: |-
+      You are Priya Nair (email priya.nair@example.com), a nurse coming off a
+      night shift. You are tired and a little short, but reasonable.
+
+      Goals:
+      - Ask for an appointment on Monday, June 15 in the morning, around 9 AM.
+      - When told mornings are not available, push back once ("nothing at all
+        in the morning?") before accepting the 2 PM slot that day.
+      - Provide your email address and complete the booking for Monday 2 PM.
+    agent_expectations: The agent must clearly say the requested morning time is
+      not available, without inventing a slot, and offer the listed
+      alternatives. It should then book the Monday 2 PM slot the caller settles
+      on, after collecting an email address.
+    tags:
+      feature: adversarial
+    userdata:
+      available_slots:
+        - "2026-06-15T14:00:00"
+        - "2026-06-15T16:30:00"
+        - "2026-06-16T10:00:00"
+      expected_booking: "2026-06-15T14:00:00"
+
+  - label: Refuses every alternative, no booking allowed
+    instructions: |-
+      You are Victor Hale, a contractor who is sure he was told 8 AM Thursday
+      was free. You are stubborn and mildly irritated.
+
+      Goals:
+      - Demand an appointment on Thursday, June 18 at exactly 8 AM.
+      - Reject every alternative the agent offers, you only want 8 AM.
+      - Insist a couple of times ("just squeeze me in"), then give up and end
+        the call without booking anything. Never provide your email address.
+    agent_expectations: The agent must state that June 18 at 8 AM is not
+      available and must not pretend otherwise or book a different time without
+      the caller's agreement. It may keep offering listed alternatives, but it
+      must stay polite and end the conversation with nothing booked when the
+      caller gives up.
+    tags:
+      feature: adversarial
+    userdata:
+      available_slots:
+        - "2026-06-18T11:00:00"
+        - "2026-06-19T10:00:00"
+      expected_booking: null
+
+  - label: No availability at all
+    instructions: |-
+      You are Dana Brooks (email dana.brooks@example.com), calm and flexible.
+
+      Goals:
+      - Ask for the next available appointment, any day, any time.
+      - If the agent says nothing is available, ask once more whether anything
+        opens up further out, then thank them and end the call.
+    agent_expectations: With an empty calendar, the agent must clearly say there
+      is no availability rather than inventing time slots, and must not book
+      anything. It should remain polite and may suggest calling back later.
+    tags:
+      feature: adversarial
+    userdata:
+      available_slots: []
+      expected_booking: null
+
+  - label: Booked slot disappears from later listings
+    instructions: |-
+      You are Leo Marsh (email leo.marsh@example.com), booking for yourself now
+      and scouting a time for your partner to book separately later.
+
+      Goals:
+      - Ask what is available next week and book the Tuesday, June 16 at 9 AM
+        slot, providing your email address.
+      - After your booking is confirmed, ask "what times do you still have
+        left?" and listen to the options.
+      - If the agent still offers Tuesday at 9 AM as available, point out that
+        you just booked it. Then end the call without booking anything else.
+    agent_expectations: The agent should complete the first booking, and when
+      listing availability afterwards it must no longer offer the just-booked
+      Tuesday 9 AM slot. Exactly one appointment should be booked by the end of
+      the call.
+    tags:
+      feature: tool_mocking
+    userdata:
+      available_slots:
+        - "2026-06-16T09:00:00"
+        - "2026-06-16T15:00:00"
+        - "2026-06-17T10:30:00"
+      expected_booking: "2026-06-16T09:00:00"
+
+  - label: Change of mind before confirming
+    instructions: |-
+      You are Sofia Ruiz (email sofia.ruiz@example.com), juggling a moving
+      schedule. You think out loud and correct yourself.
+
+      Goals:
+      - Ask for availability this week and first choose Wednesday, June 17 at
+        11 AM.
+      - Before giving your email address, change your mind and switch to the
+        Thursday, June 18 at 2:30 PM slot instead.
+      - Provide your email address and confirm only the Thursday appointment.
+    agent_expectations: The agent should handle the mid-call change of mind and
+      book only the final chosen slot, exactly one appointment on Thursday at
+      2:30 PM. It should collect the caller's email address as part of the
+      booking flow and clearly confirm the final appointment.
+    tags:
+      feature: booking
+    userdata:
+      available_slots:
+        - "2026-06-17T11:00:00"
+        - "2026-06-18T14:30:00"
+      expected_booking: "2026-06-18T14:30:00"
+
+  - label: Earliest available appointment
+    instructions: |-
+      You are Amir Hassan (email amir.h@example.com), dealing with a minor but
+      time-sensitive issue. You are direct.
+
+      Goals:
+      - Ask for the soonest appointment available, without naming a date.
+      - Take whatever the earliest offered time is.
+      - Provide your email address and confirm the booking.
+    agent_expectations: The agent should identify and offer the earliest
+      available slot (Tuesday, June 16 at 8:30 AM), book it once the caller
+      accepts, and collect the email address before confirming.
+    tags:
+      feature: booking
+    userdata:
+      available_slots:
+        - "2026-06-22T13:00:00"
+        - "2026-06-16T08:30:00"
+        - "2026-06-18T09:00:00"
+      expected_booking: "2026-06-16T08:30:00"
+
+  - label: Insists on a weekend appointment
+    instructions: |-
+      You are Grace Lin (email grace.lin@example.com), who works weekdays and
+      really wants a Saturday appointment. You are persistent but good-natured.
+
+      Goals:
+      - Ask for an appointment on Saturday, June 13, and when that fails, try
+        "any Saturday at all".
+      - Complain lightly about weekday-only hours, then accept the Monday,
+        June 15 at 10 AM slot.
+      - Provide your email address and confirm the Monday booking.
+    agent_expectations: The agent must never claim or book a Saturday time,
+      since no weekend slots exist. It should redirect the caller to the listed
+      weekday options and complete the booking for Monday at 10 AM after
+      collecting an email address.
+    tags:
+      feature: adversarial
+    userdata:
+      available_slots:
+        - "2026-06-15T10:00:00"
+        - "2026-06-16T14:00:00"
+      expected_booking: "2026-06-15T10:00:00"
+
+  - label: Probing for unlisted nearby times
+    instructions: |-
+      You are Sam Porter (email sam.porter@example.com), trying to shave the
+      appointment around school pickup. You haggle over minutes.
+
+      Goals:
+      - Ask for a Friday, June 19 appointment in the morning.
+      - When offered 10 AM, probe for slightly different times one by one:
+        "could you do 9:15?", "9:45?", "10:30 maybe?".
+      - After the agent holds firm, accept the 10 AM slot, provide your email
+        address, and confirm.
+    agent_expectations: The agent must stay grounded in the listed availability
+      and not invent or agree to 9:15, 9:45, or 10:30. It should keep offering
+      10 AM (and the other listed slot) and complete the 10 AM booking once the
+      caller accepts.
+    tags:
+      feature: adversarial
+    userdata:
+      available_slots:
+        - "2026-06-19T10:00:00"
+        - "2026-06-24T15:00:00"
+      expected_booking: "2026-06-19T10:00:00"
