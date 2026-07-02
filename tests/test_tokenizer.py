@@ -120,6 +120,32 @@ async def test_streamed_sent_tokenizer(tokenizer: tokenize.SentenceTokenizer, ex
         assert ev.token == expected[i]
 
 
+@pytest.mark.parametrize("trailing", ["\n\n", "   ", "\n", " \n "])
+def test_retain_format_drops_trailing_whitespace(trailing: str):
+    # retain_format must not emit a trailing whitespace-only "sentence"; it should
+    # match the non-retain path, which strips and skips empty segments. Otherwise the
+    # blank segment is forwarded to the TTS as an empty sentence.
+    text = "This is a real sentence to speak." + trailing
+
+    plain = blingfire.SentenceTokenizer(min_sentence_len=20).tokenize(text=text)
+    retained = blingfire.SentenceTokenizer(min_sentence_len=20, retain_format=True).tokenize(
+        text=text
+    )
+
+    assert all(tok.strip() for tok in retained), retained
+    assert [tok.strip() for tok in retained] == plain
+
+
+async def test_retain_format_stream_drops_trailing_whitespace():
+    text = "This is a real sentence to speak.\n\n"
+    stream = blingfire.SentenceTokenizer(min_sentence_len=20, retain_format=True).stream()
+    stream.push_text(text)
+    stream.end_input()
+
+    tokens = [ev.token async for ev in stream]
+    assert all(tok.strip() for tok in tokens), tokens
+
+
 WORDS_TEXT = "This is a test. Blabla another test! multiple consecutive spaces:     done"
 WORDS_EXPECTED = [
     "This",

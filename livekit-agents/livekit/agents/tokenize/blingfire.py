@@ -35,10 +35,12 @@ def _split_sentences(
 
     if start < len(text):
         raw_sentence = text[start:]
-        if retain_format:
-            merged_sentences.append((raw_sentence, start, len(text)))
-        elif sentence := raw_sentence.strip():
-            merged_sentences.append((sentence, start, len(text)))
+        # only emit the trailing segment when it has actual content; a trailing
+        # whitespace-only segment (e.g. "\n\n") must be dropped here too, otherwise
+        # retain_format would forward it to the TTS as an empty sentence — unlike the
+        # non-retain path, which strips and skips empties.
+        if stripped := raw_sentence.strip():
+            merged_sentences.append((raw_sentence if retain_format else stripped, start, len(text)))
 
     return merged_sentences
 
