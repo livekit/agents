@@ -6,7 +6,12 @@ import struct
 
 import pytest
 
-from livekit.plugins.blaze._utils import apply_normalization_rules, convert_pcm_to_wav
+from livekit.agents import APIConnectOptions, DEFAULT_API_CONNECT_OPTIONS
+from livekit.plugins.blaze._utils import (
+    apply_normalization_rules,
+    convert_pcm_to_wav,
+    effective_connect_timeout,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -50,3 +55,15 @@ def test_apply_normalization_rules_prefers_longer_patterns_first() -> None:
 def test_apply_normalization_rules_skips_empty_patterns() -> None:
     rules = {"": "ignored", "API": "A P I"}
     assert apply_normalization_rules("API", rules) == "A P I"
+
+
+def test_effective_connect_timeout_uses_plugin_default_for_framework_default() -> None:
+    assert effective_connect_timeout(DEFAULT_API_CONNECT_OPTIONS, 60.0) == 60.0
+
+
+def test_effective_connect_timeout_honors_explicit_override() -> None:
+    assert effective_connect_timeout(APIConnectOptions(timeout=5.0), 60.0) == 5.0
+
+
+def test_effective_connect_timeout_zero_falls_back_to_plugin_default() -> None:
+    assert effective_connect_timeout(APIConnectOptions(timeout=0), 30.0) == 30.0

@@ -50,6 +50,7 @@ from livekit.agents import (
 )
 
 from ._config import BlazeConfig
+from ._utils import effective_connect_timeout
 from .log import logger
 
 
@@ -341,7 +342,7 @@ class LLMStream(llm.LLMStream):
                 url,
                 json=body,
                 headers=headers,
-                timeout=self._conn_options.timeout or blaze._timeout,
+                timeout=effective_connect_timeout(self._conn_options, blaze._timeout),
             ) as response:
                 if response.status_code != 200:
                     error_text = (await response.aread()).decode(errors="replace")
