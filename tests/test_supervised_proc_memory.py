@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import multiprocessing as mp
+import os
 import socket
+import sys
 
+import psutil
 import pytest
 
 from livekit.agents.ipc.supervised_proc import (
@@ -74,7 +77,7 @@ async def test_memory_logging_extra_reports_baseline_and_growth() -> None:
     proc = _make_proc()
 
     # before a baseline is captured, only the basic fields are present
-    extra = proc._memory_logging_extra(520.0)
+    extra = proc._memory_logging_extra(520.0, "pss")
     assert extra["memory_usage_mb"] == 520.0
     assert extra["memory_warn_mb"] == 500
     assert extra["has_running_job"] is False
@@ -83,7 +86,7 @@ async def test_memory_logging_extra_reports_baseline_and_growth() -> None:
 
     # once a baseline is set, growth-since-startup is reported
     proc._memory_baseline_mb = 300.0
-    extra = proc._memory_logging_extra(520.0)
+    extra = proc._memory_logging_extra(520.0, "pss")
     assert extra["baseline_memory_mb"] == 300.0
     assert extra["growth_memory_mb"] == 220.0
 
@@ -169,3 +172,63 @@ def test_subclassing_without_process_kind_is_rejected() -> None:
             mp_ctx=mp.get_context("spawn"),
             loop=asyncio.get_event_loop(),
         )
+
+
+def test_sample_memory_picks_metric_psutil_actually_exposes() -> None:
+    proc = _make_proc()
+    proc._pid = os.getpid()
+
+    value_mb, metric = proc._sample_memory_mb()
+
+    assert metric in ("pss", "uss", "rss")
+    assert value_mb > 0
+
+    # must select the highest-priority field psutil reports nonzero on this host
+    info = psutil.Process(os.getpid()).memory_full_info()
+    expected_metric = next(m for m in ("pss", "uss", "rss") if getattr(info, m, 0))
+    assert metric == expected_metric
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="PSS is only exposed on Linux")
+def test_sample_memory_reports_pss_on_linux() -> None:
+    proc = _make_proc()
+    proc._pid = os.getpid()
+
+    value_mb, metric = proc._sample_memory_mb()
+
+    assert metric == "pss"
+    assert value_mb > 0
+
+
+@pytest.mark.skipif(
+    sys.platform not in ("darwin", "win32"),
+    reason="USS-without-PSS path applies to macOS and Windows",
+)
+def test_sample_memory_reports_uss_on_macos_and_windows() -> None:
+    proc = _make_proc()
+    proc._pid = os.getpid()
+
+    value_mb, metric = proc._sample_memory_mb()
+
+    assert metric == "uss"
+    assert value_mb > 0
+
+
+def test_sample_memory_falls_back_to_rss_when_full_info_unavailable() -> None:
+    # AccessDenied/NotImplementedError can't be provoked on one's own process, so
+    # only the trigger is faked: memory_full_info is shadowed on a real Process
+    # instance (instance attribute, so no global/class state leaks across the
+    # concurrent suite) while memory_info().rss stays a genuine psutil read.
+    proc = _make_proc()
+    real = psutil.Process(os.getpid())
+
+    def _unavailable():
+        raise NotImplementedError
+
+    real.memory_full_info = _unavailable  # type: ignore[method-assign]
+    proc._psutil_process = real
+
+    value_mb, metric = proc._sample_memory_mb()
+
+    assert metric == "rss"
+    assert value_mb > 0

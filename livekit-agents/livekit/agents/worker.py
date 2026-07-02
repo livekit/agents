@@ -195,7 +195,7 @@ class ServerOptions:
     Defaults to 0.7 on "production" mode, and is disabled in "development" mode.
     """
 
-    job_memory_warn_mb: float = 1000
+    job_memory_warn_mb: float = 500
     """Memory warning threshold in MB. If the job process exceeds this limit, a warning will be logged."""  # noqa: E501
     job_memory_limit_mb: float = 0
     """Maximum memory usage for a job in MB, the job process will be killed if it exceeds this limit.
@@ -305,7 +305,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         *,
         job_executor_type: JobExecutorType = _default_job_executor_type,
         load_threshold: float | ServerEnvOption[float] = _default_load_threshold,
-        job_memory_warn_mb: float = 1000,
+        job_memory_warn_mb: float = 500,
         job_memory_limit_mb: float = 0,
         drain_timeout: int = DRAIN_TIMEOUT,
         num_idle_processes: int | ServerEnvOption[int] = _default_num_idle_processes,
