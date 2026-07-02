@@ -516,3 +516,164 @@ async def test_final_transcript_no_translation_code_switched_populates_source_ru
     assert sd.target_texts is None
     assert sd.source_texts is not None
     assert "".join(sd.source_texts) == sd.text
+
+
+# ---------------------------------------------------------------------------
+# Per-word confidence / timing on `SpeechData.words`
+# ---------------------------------------------------------------------------
+
+
+def test_token_accumulator_groups_subword_tokens_into_words():
+    from livekit.plugins.soniox.stt import _TokenAccumulator
+
+    accumulator = _TokenAccumulator()
+    accumulator.update(
+        {"text": "My", "is_final": True, "confidence": 0.9, "start_ms": 0, "end_ms": 100}
+    )
+    accumulator.update(
+        {"text": " walk", "is_final": True, "confidence": 0.4, "start_ms": 100, "end_ms": 250}
+    )
+    accumulator.update(
+        {"text": "ing", "is_final": True, "confidence": 0.6, "start_ms": 250, "end_ms": 400}
+    )
+
+    words = accumulator.timed_words()
+    assert words is not None
+    assert [str(word) for word in words] == ["My", "walking"]
+    assert words[0].confidence == pytest.approx(0.9)
+    assert words[1].confidence == pytest.approx(0.5)  # mean of "walk" + "ing"
+    assert words[1].start_time == pytest.approx(0.1)
+    assert words[1].end_time == pytest.approx(0.4)
+
+
+def test_token_accumulator_words_apply_start_time_offset():
+    from livekit.plugins.soniox.stt import _TokenAccumulator
+
+    accumulator = _TokenAccumulator()
+    accumulator.update(
+        {"text": "hi", "is_final": True, "confidence": 0.8, "start_ms": 500, "end_ms": 700}
+    )
+
+    words = accumulator.timed_words(start_time_offset=10.0)
+    assert words is not None
+    assert words[0].start_time == pytest.approx(10.5)
+    assert words[0].end_time == pytest.approx(10.7)
+    assert words[0].start_time_offset == pytest.approx(10.0)
+
+
+def test_token_accumulator_unspaced_script_tokens_become_separate_words():
+    from livekit.plugins.soniox.stt import _TokenAccumulator
+
+    accumulator = _TokenAccumulator()
+    accumulator.update({"text": "你好", "is_final": True, "confidence": 0.9})
+    accumulator.update({"text": "世界", "is_final": True, "confidence": 0.7})
+
+    words = accumulator.timed_words()
+    assert words is not None
+    assert [str(word) for word in words] == ["你好", "世界"]
+    assert words[0].confidence == pytest.approx(0.9)
+    assert words[1].confidence == pytest.approx(0.7)
+
+
+def test_token_accumulator_word_without_confidence_is_not_given():
+    from livekit.agents.types import NOT_GIVEN
+    from livekit.plugins.soniox.stt import _TokenAccumulator
+
+    accumulator = _TokenAccumulator()
+    accumulator.update({"text": "hello", "is_final": True})
+
+    words = accumulator.timed_words()
+    assert words is not None
+    assert words[0].confidence is NOT_GIVEN
+    assert words[0].start_time is NOT_GIVEN
+    assert words[0].end_time is NOT_GIVEN
+
+
+def test_token_accumulator_reset_clears_words():
+    from livekit.plugins.soniox.stt import _TokenAccumulator
+
+    accumulator = _TokenAccumulator()
+    accumulator.update({"text": "hello world", "is_final": True, "confidence": 0.9})
+    accumulator.reset()
+
+    assert accumulator.timed_words() is None
+
+
+def test_merged_speech_data_concatenates_final_and_nonfinal_words():
+    from livekit.plugins.soniox.stt import _TokenAccumulator
+
+    final = _TokenAccumulator()
+    final.update({"text": "Hello", "is_final": True, "confidence": 0.9})
+    non_final = _TokenAccumulator()
+    non_final.update({"text": " wor", "is_final": False, "confidence": 0.5})
+
+    sd = final.merged_speech_data(non_final)
+    assert sd.words is not None
+    assert [str(word) for word in sd.words] == ["Hello", "wor"]
+
+
+async def test_final_transcript_carries_word_confidences():
+    """End-to-end: sub-word tokens with confidence produce `SpeechData.words`
+    grouped at whitespace boundaries, alongside the existing scalar mean."""
+    stream = _make_stream()
+
+    messages = [
+        {
+            "tokens": [
+                {
+                    "text": "Hel",
+                    "language": "en",
+                    "is_final": True,
+                    "confidence": 0.8,
+                    "start_ms": 0,
+                    "end_ms": 80,
+                },
+                {
+                    "text": "lo",
+                    "language": "en",
+                    "is_final": True,
+                    "confidence": 0.6,
+                    "start_ms": 80,
+                    "end_ms": 150,
+                },
+                {
+                    "text": " world.",
+                    "language": "en",
+                    "is_final": True,
+                    "confidence": 0.9,
+                    "start_ms": 150,
+                    "end_ms": 400,
+                },
+                END_TOKEN_FINAL,
+            ],
+            "total_audio_proc_ms": 500,
+        }
+    ]
+
+    events = await _drive_recv(stream, messages, expect_events=3)
+    final = next(e for e in events if e.type == SpeechEventType.FINAL_TRANSCRIPT)
+    sd = final.alternatives[0]
+
+    assert sd.text == "Hello world."
+    assert sd.confidence == pytest.approx((0.8 + 0.6 + 0.9) / 3)
+
+    assert sd.words is not None
+    assert [str(word) for word in sd.words] == ["Hello", "world."]
+    assert sd.words[0].confidence == pytest.approx(0.7)  # mean of "Hel" + "lo"
+    assert sd.words[1].confidence == pytest.approx(0.9)
+    assert sd.words[0].start_time == pytest.approx(0.0)
+    assert sd.words[0].end_time == pytest.approx(0.15)
+    assert sd.words[1].start_time == pytest.approx(0.15)
+    assert sd.words[1].end_time == pytest.approx(0.4)
+
+
+def test_token_accumulator_thai_tokens_become_separate_words():
+    from livekit.plugins.soniox.stt import _TokenAccumulator
+
+    accumulator = _TokenAccumulator()
+    accumulator.update({"text": "สวัสดี", "is_final": True, "confidence": 0.8})
+    accumulator.update({"text": "ครับ", "is_final": True, "confidence": 0.6})
+
+    words = accumulator.timed_words()
+    assert words is not None
+    assert [str(word) for word in words] == ["สวัสดี", "ครับ"]
