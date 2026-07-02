@@ -93,19 +93,22 @@ class _UploadGate:
     _DISABLED_MARKERS = ("data recording is disabled", "disabled by owner")
 
     def __init__(self) -> None:
+        self._lock = threading.Lock()
         self._disabled = False
 
     def reset(self) -> None:
-        self._disabled = False
+        with self._lock:
+            self._disabled = False
 
     @property
     def disabled(self) -> bool:
         return self._disabled
 
     def disable(self) -> None:
-        if self._disabled:
-            return
-        self._disabled = True
+        with self._lock:
+            if self._disabled:
+                return
+            self._disabled = True
         logger.warning(
             "LiveKit Cloud data recording is disabled for this project; "
             "skipping telemetry and recording uploads for this session"
@@ -232,8 +235,6 @@ def _setup_cloud_tracer(
     enable_traces: bool = True,
     enable_logs: bool = True,
 ) -> None:
-    # new session's telemetry begins here; re-arm the upload gate so a prior session's
-    # "disabled" state (the providers are process-global) doesn't carry over
     _upload_gate.reset()
 
     token_ttl = timedelta(hours=6)
