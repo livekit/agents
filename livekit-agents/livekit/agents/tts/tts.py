@@ -505,9 +505,9 @@ class SynthesizeStream(ABC):
                 pushed_duration = output_emitter.pushed_duration()
                 should_retry = (
                     e.retryable
-                    and pushed_duration == 0.0
                     and self._conn_options.max_retry > 0
                     and i < self._conn_options.max_retry
+                    and (pushed_duration == 0.0 or self._conn_options.tts_replay_on_partial)
                 )
 
                 if not should_retry:
