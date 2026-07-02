@@ -480,6 +480,7 @@ class SpeechStream(stt.SpeechStream):
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
         self._vad = vad_instance
+        self._speaking = False
 
     def update_options(
         self,
@@ -489,6 +490,18 @@ class SpeechStream(stt.SpeechStream):
         self._language = LanguageCode(language)
         self._pool.invalidate()
         self._reconnect_event.set()
+
+    def _start_speaking(self) -> None:
+        if self._speaking:
+            return
+        self._speaking = True
+        self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+
+    def _stop_speaking(self) -> None:
+        if not self._speaking:
+            return
+        self._speaking = False
+        self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
     @utils.log_exceptions(logger=logger)
     async def _run(self) -> None:
@@ -530,7 +543,10 @@ class SpeechStream(stt.SpeechStream):
         @utils.log_exceptions(logger=logger)
         async def vad_task(ws: aiohttp.ClientWebSocketResponse, vad_stream: vad.VADStream) -> None:
             async for ev in vad_stream:
-                if ev.type == vad.VADEventType.END_OF_SPEECH:
+                if ev.type == vad.VADEventType.START_OF_SPEECH:
+                    self._start_speaking()
+                elif ev.type == vad.VADEventType.END_OF_SPEECH:
+                    self._stop_speaking()
                     await ws.send_json({"type": "input_audio_buffer.commit"})
 
         @utils.log_exceptions(logger=logger)
@@ -570,12 +586,16 @@ class SpeechStream(stt.SpeechStream):
                         current_item_id = item_id
                         audio_start_ms = data.get("audio_start_ms", 0)
                         item_audio_timing[item_id] = {"start_ms": audio_start_ms}
+                        if self._vad is None:
+                            self._start_speaking()
 
                     elif msg_type == "input_audio_buffer.speech_stopped":
                         item_id = data.get("item_id", "")
                         audio_end_ms = data.get("audio_end_ms", 0)
                         if item_id in item_audio_timing:
                             item_audio_timing[item_id]["end_ms"] = audio_end_ms
+                        if self._vad is None:
+                            self._stop_speaking()
 
                     elif msg_type == "conversation.item.input_audio_transcription.delta":
                         delta = data.get("delta", "")
@@ -665,6 +685,8 @@ class SpeechStream(stt.SpeechStream):
 
         while True:
             closing_ws = False  # reset the flag
+            # a segment left open across the reconnect gap would fuse into the next utterance
+            self._stop_speaking()
             async with self._pool.connection(timeout=self._conn_options.timeout) as ws:
                 self._report_connection_acquired(
                     self._pool.last_acquire_time, self._pool.last_connection_reused
