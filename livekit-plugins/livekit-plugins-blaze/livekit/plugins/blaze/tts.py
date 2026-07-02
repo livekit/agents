@@ -52,7 +52,7 @@ from livekit.agents.utils import shortuuid
 from livekit.agents.utils.aio.channel import ChanClosed, ChanEmpty
 
 from ._config import BlazeConfig
-from ._utils import apply_normalization_rules
+from ._utils import apply_normalization_rules, effective_connect_timeout
 from .log import logger
 
 # Regex for splitting text at sentence boundaries.
@@ -474,7 +474,10 @@ class ChunkedStream(tts.ChunkedStream):
 
         try:
             async with httpx.AsyncClient(
-                timeout=httpx.Timeout(self._conn_options.timeout or tts_cfg._timeout, connect=5.0)
+                timeout=httpx.Timeout(
+                    effective_connect_timeout(self._conn_options, tts_cfg._timeout),
+                    connect=5.0,
+                )
             ) as client:
                 async with client.stream(
                     "POST",
@@ -607,7 +610,7 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
         request_id = shortuuid()
         turn_start = time.monotonic()
         tts_cfg = self._blaze_tts
-        idle_timeout = self._conn_options.timeout or tts_cfg._timeout
+        idle_timeout = effective_connect_timeout(self._conn_options, tts_cfg._timeout)
         session_deadline = turn_start + tts_cfg._stream_timeout
         max_ws_attempts = _WS_FAST_RECONNECT_ATTEMPTS
         configured_mime_type = {
@@ -659,6 +662,8 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
 
             segment_id = shortuuid()
             output_emitter.start_segment(segment_id=segment_id)
+            # Keep in sync with SynthesizeStream._main_task segment validation.
+            self._num_segments = output_emitter.num_segments
             stream_initialized = True
 
         batch_count = 0

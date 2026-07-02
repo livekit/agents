@@ -47,7 +47,7 @@ from livekit.agents.stt import StreamAdapter
 from livekit.agents.utils import AudioBuffer
 
 from ._config import BlazeConfig
-from ._utils import apply_normalization_rules, convert_pcm_to_wav
+from ._utils import apply_normalization_rules, convert_pcm_to_wav, effective_connect_timeout
 from .log import logger
 
 
@@ -270,7 +270,7 @@ class STT(stt.STT):
                 files=files,
                 params=params,
                 headers=headers,
-                timeout=conn_options.timeout if conn_options.timeout else self._timeout,
+                timeout=effective_connect_timeout(conn_options, self._timeout),
             )
         except httpx.TimeoutException as e:
             raise APITimeoutError(f"STT request timed out: {e}") from e

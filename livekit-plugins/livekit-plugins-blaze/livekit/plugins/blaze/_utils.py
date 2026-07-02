@@ -9,6 +9,20 @@ from __future__ import annotations
 import io
 import struct
 
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+
+
+def effective_connect_timeout(
+    conn_options: APIConnectOptions,
+    plugin_timeout: float,
+) -> float:
+    """Return the plugin timeout when default connect options are used."""
+    if not conn_options.timeout:
+        return plugin_timeout
+    if conn_options.timeout == DEFAULT_API_CONNECT_OPTIONS.timeout:
+        return plugin_timeout
+    return conn_options.timeout
+
 
 def convert_pcm_to_wav(
     pcm_data: bytes,
