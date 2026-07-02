@@ -979,6 +979,12 @@ class SpeechStream(stt.SpeechStream):
             params["type"] = "session.create"
             await ws.send_str(json.dumps(params))
         except aiohttp.ClientResponseError as e:
+            # NOTE: the gateway rejects a quota-exceeded connection pre-upgrade with a
+            # JSON 429 body, but aiohttp discards a failed-handshake response body, so we
+            # can't pass body= here. An STT quota error therefore stays a plain (retryable)
+            # APIStatusError rather than a typed APIQuotaExceededError — and without the
+            # body's `category` we couldn't safely tell terminal credit exhaustion from a
+            # transient rate limit anyway. Typing STT/TTS quota errors is future work.
             raise create_api_error_from_http(e.message, status=e.status) from e
         except asyncio.TimeoutError as e:
             raise APITimeoutError("LiveKit Inference STT connection timed out.") from e

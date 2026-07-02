@@ -90,6 +90,7 @@ session = AgentSession(
 
 - [`otel_trace.py`](./otel_trace.py) - OpenTelemetry (OTLP) integration for conversation tracing
 - [`error_callback.py`](./error_callback.py) - Error handling callback
+- [`quota_exceeded.py`](./quota_exceeded.py) - Surface inference quota/credit errors instead of going silent
 - [`session_close_callback.py`](./session_close_callback.py) - Session lifecycle management
 
 ## 📖 Additional Resources
