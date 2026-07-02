@@ -211,6 +211,12 @@ class LLM(llm.LLM):
         top_p: NotGivenOr[float] = NOT_GIVEN,
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
         max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
+        store: NotGivenOr[bool] = NOT_GIVEN,
+        metadata: NotGivenOr[dict[str, str]] = NOT_GIVEN,
+        prompt_cache_retention: NotGivenOr[PromptCacheRetention] = NOT_GIVEN,
+        extra_body: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        extra_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
+        extra_query: NotGivenOr[dict[str, str]] = NOT_GIVEN,
     ) -> LLM:
         """
         This automatically infers the following arguments from their corresponding environment variables if they are not provided:
@@ -220,6 +226,12 @@ class LLM(llm.LLM):
         - `azure_ad_token` from `AZURE_OPENAI_AD_TOKEN`
         - `api_version` from `OPENAI_API_VERSION`
         - `azure_endpoint` from `AZURE_OPENAI_ENDPOINT`
+
+        The request-tuning arguments (`store`, `metadata`, `prompt_cache_retention`,
+        `extra_body`, `extra_headers`, `extra_query`, ...) are forwarded unchanged to the
+        underlying chat-completions request, mirroring ``LLM.__init__``. They default to
+        ``NOT_GIVEN`` and are only sent when explicitly set. Use `extra_body` to pass
+        Azure-specific request fields such as ``data_sources`` (Azure OpenAI "On Your Data").
         """  # noqa: E501
 
         azure_client = openai.AsyncAzureOpenAI(
@@ -251,6 +263,12 @@ class LLM(llm.LLM):
             top_p=top_p,
             verbosity=verbosity,
             max_completion_tokens=max_completion_tokens,
+            store=store,
+            metadata=metadata,
+            prompt_cache_retention=prompt_cache_retention,
+            extra_body=extra_body,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
         )
         llm._owns_client = True
         return llm
@@ -966,6 +984,9 @@ class LLM(llm.LLM):
 
         if is_given(self._opts.metadata):
             extra["metadata"] = self._opts.metadata
+
+        if is_given(self._opts.store):
+            extra["store"] = self._opts.store
 
         if is_given(self._opts.user):
             extra["user"] = self._opts.user
