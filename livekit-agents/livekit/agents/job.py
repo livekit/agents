@@ -32,7 +32,7 @@ from urllib.parse import urlparse
 
 import aiohttp
 
-from livekit import api, rtc
+from livekit import api as lkapi, rtc
 from livekit.api.access_token import Claims
 from livekit.protocol import agent, models
 
@@ -394,7 +394,7 @@ class JobContext:
         return sr
 
     @functools.cached_property
-    def api(self) -> api.LiveKitAPI:
+    def api(self) -> lkapi.LiveKitAPI:
         """Returns an LiveKitAPI for making API calls to LiveKit.
 
         Credentials are sourced from environment variables if not provided explicitly.
@@ -402,7 +402,7 @@ class JobContext:
         LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET so this API is always
         usable inside job entrypoints.
         """
-        return api.LiveKitAPI(session=http_context.http_session())
+        return lkapi.LiveKitAPI(session=http_context.http_session())
 
     @property
     def proc(self) -> JobProcess:
@@ -621,23 +621,23 @@ class JobContext:
 
         task.add_done_callback(_on_done)
 
-    def delete_room(self, room_name: str | None = None) -> asyncio.Future[api.DeleteRoomResponse]:  # type: ignore
+    def delete_room(self, room_name: str | None = None) -> asyncio.Future[lkapi.DeleteRoomResponse]:  # type: ignore
         """Deletes the room and disconnects all participants."""
         if self.is_fake_job():
             logger.warning("job_ctx.delete_room() is not executed while in console mode")
-            fut = asyncio.Future[api.DeleteRoomResponse]()
-            fut.set_result(api.DeleteRoomResponse())
+            fut = asyncio.Future[lkapi.DeleteRoomResponse]()
+            fut.set_result(lkapi.DeleteRoomResponse())
             return fut
 
         async def _delete_room() -> None:
             try:
                 await self.api.room.delete_room(
-                    api.DeleteRoomRequest(room=room_name or self._room.name)
+                    lkapi.DeleteRoomRequest(room=room_name or self._room.name)
                 )
             except aiohttp.ServerDisconnectedError:
                 logger.warning("server disconnected while deleting room")
-            except api.TwirpError as e:
-                if e.code != api.TwirpErrorCode.NOT_FOUND:
+            except lkapi.TwirpError as e:
+                if e.code != lkapi.TwirpErrorCode.NOT_FOUND:
                     logger.warning(f"error while deleting room: {e}")
             except Exception:
                 logger.exception("unknown error while deleting room")
@@ -653,7 +653,7 @@ class JobContext:
         trunk_id: str,
         participant_identity: str,
         participant_name: NotGivenOr[str] = "SIP-participant",
-    ) -> asyncio.Future[api.SIPParticipantInfo]:  # type: ignore
+    ) -> asyncio.Future[lkapi.SIPParticipantInfo]:  # type: ignore
         """
         Add a SIP participant to the room.
 
@@ -670,13 +670,13 @@ class JobContext:
         """
         if self.is_fake_job():
             logger.warning("job_ctx.add_sip_participant() is not executed while in console mode")
-            fut = asyncio.Future[api.SIPParticipantInfo]()
-            fut.set_result(api.SIPParticipantInfo())
+            fut = asyncio.Future[lkapi.SIPParticipantInfo]()
+            fut.set_result(lkapi.SIPParticipantInfo())
             return fut
 
         task = asyncio.create_task(
             self.api.sip.create_sip_participant(
-                api.CreateSIPParticipantRequest(
+                lkapi.CreateSIPParticipantRequest(
                     room_name=self._room.name,
                     participant_identity=participant_identity,
                     sip_trunk_id=trunk_id,
@@ -693,7 +693,7 @@ class JobContext:
         participant: rtc.RemoteParticipant | str,
         transfer_to: str,
         play_dialtone: bool = False,
-    ) -> asyncio.Future[api.SIPParticipantInfo]:  # type: ignore
+    ) -> asyncio.Future[lkapi.SIPParticipantInfo]:  # type: ignore
         """Transfer a SIP participant to another number.
 
         Args:
@@ -714,8 +714,8 @@ class JobContext:
             logger.warning(
                 "job_ctx.transfer_sip_participant() is not executed while in console mode"
             )
-            fut = asyncio.Future[api.SIPParticipantInfo]()
-            fut.set_result(api.SIPParticipantInfo())
+            fut = asyncio.Future[lkapi.SIPParticipantInfo]()
+            fut.set_result(lkapi.SIPParticipantInfo())
             return fut
 
         if isinstance(participant, rtc.RemoteParticipant):
@@ -728,7 +728,7 @@ class JobContext:
 
         task = asyncio.create_task(
             self.api.sip.transfer_sip_participant(
-                api.TransferSIPParticipantRequest(
+                lkapi.TransferSIPParticipantRequest(
                     room_name=self._room.name,
                     participant_identity=participant_identity,
                     transfer_to=transfer_to,
@@ -828,7 +828,7 @@ class JobContext:
             task.add_done_callback(_on_done)
 
     def token_claims(self) -> Claims:
-        return api.TokenVerifier().verify(self._info.token, verify_signature=False)
+        return lkapi.TokenVerifier().verify(self._info.token, verify_signature=False)
 
 
 def _apply_auto_subscribe_opts(room: rtc.Room, auto_subscribe: AutoSubscribe) -> None:
