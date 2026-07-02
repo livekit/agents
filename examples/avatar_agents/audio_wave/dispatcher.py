@@ -14,6 +14,7 @@ logger = logging.getLogger("avatar-dispatcher")
 logging.basicConfig(level=logging.INFO)
 
 THIS_DIR = Path(__file__).parent.absolute()
+DEFAULT_HOST = "127.0.0.1"
 
 
 @dataclass
@@ -74,7 +75,7 @@ class WorkerLauncher:
             logger.info(f"Launched avatar worker for room: {room_name}")
         except Exception as e:
             logger.error(f"Failed to launch worker: {e}")
-            raise HTTPException(status_code=500, detail=str(e))  # noqa: B904
+            raise HTTPException(status_code=500, detail=str(e)) from e
 
     async def _monitor(self) -> None:
         while True:
@@ -110,10 +111,10 @@ class AvatarDispatcher:
             }
         except Exception as e:
             logger.error(f"Error handling launch request: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to launch worker: {str(e)}")  # noqa: B904
+            raise HTTPException(status_code=500, detail=f"Failed to launch worker: {str(e)}") from e
 
 
-def run_server(host: str = "0.0.0.0", port: int = 8089):
+def run_server(host: str = DEFAULT_HOST, port: int = 8089):
     dispatcher = AvatarDispatcher()
     uvicorn.run(dispatcher.app, host=host, port=port, log_level="info")
 
@@ -122,7 +123,14 @@ if __name__ == "__main__":
     from argparse import ArgumentParser
 
     parser = ArgumentParser()
-    parser.add_argument("--host", default="0.0.0.0", help="Host to run server on")
+    parser.add_argument(
+        "--host",
+        default=DEFAULT_HOST,
+        help=(
+            "Host to run server on. The default binds to localhost because "
+            "the dispatcher accepts LiveKit room tokens and starts worker processes."
+        ),
+    )
     parser.add_argument("--port", default=8089, help="Port to run server on")
     args = parser.parse_args()
     run_server(args.host, args.port)
