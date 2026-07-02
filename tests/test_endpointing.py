@@ -1,11 +1,7 @@
 import pytest
 
 from livekit.agents.utils.exp_filter import ExpFilter
-from livekit.agents.voice.endpointing import (
-    BaseEndpointing,
-    DynamicEndpointing,
-    create_endpointing,
-)
+from livekit.agents.voice.endpointing import DynamicEndpointing, create_endpointing
 
 pytestmark = pytest.mark.unit
 
@@ -563,68 +559,6 @@ class TestDynamicEndpointing:
         # so between_utterance_delay = 0 → no update
         assert ep._speaking is False
         assert ep._agent_speech_started_at is None
-
-
-class TestEndpointingDelayInterpolation:
-    """Test cases for DynamicEndpointing.endpointing_delay (EOT-score interpolation)."""
-
-    def test_probability_at_or_above_threshold_returns_min(self) -> None:
-        ep = DynamicEndpointing(min_delay=0.3, max_delay=1.0)
-        assert ep.endpointing_delay(probability=0.4, threshold=0.4) == pytest.approx(0.3)
-        assert ep.endpointing_delay(probability=0.9, threshold=0.4) == pytest.approx(0.3)
-
-    def test_probability_zero_returns_max(self) -> None:
-        ep = DynamicEndpointing(min_delay=0.3, max_delay=1.0)
-        assert ep.endpointing_delay(probability=0.0, threshold=0.4) == pytest.approx(1.0)
-
-    def test_midpoint_probability_interpolates(self) -> None:
-        ep = DynamicEndpointing(min_delay=0.3, max_delay=1.0)
-        # margin = (0.4 - 0.2) / 0.4 = 0.5 → 0.3 + 0.5 * (1.0 - 0.3) = 0.65
-        delay = ep.endpointing_delay(probability=0.2, threshold=0.4)
-        assert delay == pytest.approx(0.65, rel=1e-6)
-        assert ep.min_delay < delay < ep.max_delay
-
-    def test_missing_prediction_falls_back_to_min(self) -> None:
-        ep = DynamicEndpointing(min_delay=0.3, max_delay=1.0)
-        assert ep.endpointing_delay(probability=None, threshold=0.4) == pytest.approx(0.3)
-        assert ep.endpointing_delay(probability=0.2, threshold=None) == pytest.approx(0.3)
-        assert ep.endpointing_delay(probability=None, threshold=None) == pytest.approx(0.3)
-
-    def test_monotonically_decreasing_in_probability(self) -> None:
-        ep = DynamicEndpointing(min_delay=0.3, max_delay=1.0)
-        probs = [0.0, 0.1, 0.2, 0.3, 0.4]
-        delays = [ep.endpointing_delay(probability=p, threshold=0.4) for p in probs]
-        assert delays == sorted(delays, reverse=True)
-        assert all(ep.min_delay <= d <= ep.max_delay for d in delays)
-
-    def test_interpolation_uses_learned_min(self) -> None:
-        """The lower bound of the ramp tracks the learned min_delay, not the configured one."""
-        ep = DynamicEndpointing(min_delay=0.3, max_delay=1.0, alpha=0.5)
-        ep.on_end_of_speech(ended_at=100.0)
-        ep.on_start_of_speech(started_at=100.8)  # 0.8s pause
-        ep.on_end_of_speech(ended_at=101.0)
-        learned_min = ep.min_delay
-        assert learned_min > 0.3
-
-        assert ep.endpointing_delay(probability=0.9, threshold=0.4) == pytest.approx(learned_min)
-
-
-class TestBaseEndpointingDelay:
-    """Fixed mode keeps the binary min/max behavior."""
-
-    def test_binary_below_threshold_returns_max(self) -> None:
-        ep = BaseEndpointing(min_delay=0.5, max_delay=3.0)
-        assert ep.endpointing_delay(probability=0.1, threshold=0.4) == 3.0
-
-    def test_binary_at_or_above_threshold_returns_min(self) -> None:
-        ep = BaseEndpointing(min_delay=0.5, max_delay=3.0)
-        assert ep.endpointing_delay(probability=0.4, threshold=0.4) == 0.5
-        assert ep.endpointing_delay(probability=0.9, threshold=0.4) == 0.5
-
-    def test_binary_missing_prediction_returns_min(self) -> None:
-        ep = BaseEndpointing(min_delay=0.5, max_delay=3.0)
-        assert ep.endpointing_delay(probability=None, threshold=0.4) == 0.5
-        assert ep.endpointing_delay(probability=0.1, threshold=None) == 0.5
 
 
 class TestCreateEndpointing:

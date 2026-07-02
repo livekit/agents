@@ -92,15 +92,6 @@ def _make_full_recognition_for_eou() -> AudioRecognition:
     endpointing = MagicMock()
     endpointing.min_delay = 0.01
     endpointing.max_delay = 0.5  # long enough for the guard to fire mid-sleep
-
-    def _endpointing_delay(*, probability: float | None, threshold: float | None) -> float:
-        # mirror the binary fixed-mode behavior so timing-based tests stay stable;
-        # interpolation itself is covered in tests/test_endpointing.py
-        if probability is not None and threshold is not None and probability < threshold:
-            return endpointing.max_delay
-        return endpointing.min_delay
-
-    endpointing.endpointing_delay = MagicMock(side_effect=_endpointing_delay)
     ar._endpointing = endpointing
 
     ar._ensure_user_turn_span = MagicMock(  # type: ignore[method-assign]
@@ -635,23 +626,6 @@ class TestPredictionFutureLifecycle:
         ar._turn_detector_stream.flush.assert_called_once_with(reason="turn committed")
         assert ar._turn_detector_prediction_fut is None
         assert ar._turn_detector_flushed is True
-
-    async def test_endpointing_delay_receives_prediction(self) -> None:
-        """The endpointing delay is resolved from the predicted probability and
-        threshold (the interpolation input), not chosen by a binary comparison
-        in the recognizer."""
-        ar = _make_full_recognition_for_eou()
-        fut, _ = _resolved_prediction(0.2)  # below the 0.5 unlikely threshold
-        ar._turn_detector_prediction_fut = fut
-        chat_ctx = _make_chat_ctx_stub()
-
-        ar._run_eou_detection(chat_ctx, trigger="vad")
-        assert ar._end_of_turn_task is not None
-        await ar._end_of_turn_task
-
-        ar._endpointing.endpointing_delay.assert_called_once_with(
-            probability=pytest.approx(0.2), threshold=pytest.approx(0.5)
-        )
 
 
 class _FakeVad:
