@@ -630,7 +630,7 @@ async def _execute_tools_task(
     """
 
     from .agent import _set_activity_task_info
-    from .events import RunContext
+    from .events import FunctionToolsCalledEvent, RunContext
     from .run_result import _MockToolsContextVar
 
     def _tool_completed(out: ToolExecutionOutput) -> None:
@@ -652,6 +652,7 @@ async def _execute_tools_task(
     )
 
     tasks: list[asyncio.Task[Any]] = []
+    called_fnc_calls: list[llm.FunctionCall] = []
     try:
         async for fnc_call in function_stream:
             if tool_choice == "none":
@@ -663,6 +664,10 @@ async def _execute_tools_task(
                     },
                 )
                 continue
+
+            # mirror FunctionToolsExecutedEvent: exclude calls dropped before
+            # _tool_completed (i.e. tool_choice == "none"), include the rest.
+            called_fnc_calls.append(fnc_call)
 
             # TODO(theomonnom): assert other tool_choice values
 
@@ -835,6 +840,14 @@ async def _execute_tools_task(
                 )
                 _tool_completed(make_tool_output(fnc_call=fnc_call, output=None, exception=e))
                 continue
+
+        # the model finished emitting its tool calls for this generation; report them
+        # before their outputs are available (mirrors FunctionToolsExecutedEvent).
+        if called_fnc_calls:
+            session.emit(
+                "function_tools_called",
+                FunctionToolsCalledEvent(function_calls=called_fnc_calls),
+            )
 
         await asyncio.shield(asyncio.gather(*tasks, return_exceptions=True))
 

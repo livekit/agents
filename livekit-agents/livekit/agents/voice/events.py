@@ -298,6 +298,7 @@ EventTypes = Literal[
     "conversation_item_added",
     "agent_false_interruption",
     "overlapping_speech",
+    "function_tools_called",
     "function_tools_executed",
     "metrics_collected",
     "session_usage_updated",
@@ -410,6 +411,12 @@ class _TypeDiscriminator(BaseModel):
 class ConversationItemAddedEvent(BaseModel):
     type: Literal["conversation_item_added"] = "conversation_item_added"
     item: ChatMessage | AgentHandoff | _TypeDiscriminator
+    created_at: float = Field(default_factory=time.time)
+
+
+class FunctionToolsCalledEvent(BaseModel):
+    type: Literal["function_tools_called"] = "function_tools_called"
+    function_calls: list[FunctionCall]
     created_at: float = Field(default_factory=time.time)
 
 
@@ -586,6 +593,7 @@ AgentEvent = Annotated[
     | MetricsCollectedEvent
     | SessionUsageUpdatedEvent
     | ConversationItemAddedEvent
+    | FunctionToolsCalledEvent
     | FunctionToolsExecutedEvent
     | SpeechCreatedEvent
     | ToolExecutionUpdatedEvent
