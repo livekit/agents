@@ -338,3 +338,145 @@ async def test_selector_returns_noise_cancellation_options() -> None:
     assert stream._processor is None
 
     await stream.aclose()
+
+
+# -- stall detection tests ----------------------------------------------------
+
+
+class _StallingAudioStream:
+    """A mock audio stream that yields a few frames then blocks indefinitely,
+    simulating a loose microphone cable."""
+
+    def __init__(self, frame_count: int = 2) -> None:
+        self._frame_count = frame_count
+        self._yielded = 0
+        self._closed = False
+        self._stall_event = asyncio.Event()
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self._closed:
+            raise StopAsyncIteration
+        if self._yielded < self._frame_count:
+            self._yielded += 1
+            # yield control so the watchdog can be scheduled
+            await asyncio.sleep(0)
+            return SimpleNamespace(
+                frame=rtc.AudioFrame(
+                    data=b"\x00\x00" * 480,
+                    sample_rate=24000,
+                    num_channels=1,
+                    samples_per_channel=480,
+                )
+            )
+        # simulate stall: block until closed
+        await self._stall_event.wait()
+        raise StopAsyncIteration
+
+    async def aclose(self) -> None:
+        self._closed = True
+        self._stall_event.set()
+
+
+def _make_stalling_audio_input_stream(
+    room: _FakeRoom,
+    noise_cancellation=None,
+    stall_timeout: float = 0.5,
+) -> _ParticipantAudioInputStream:
+    return _ParticipantAudioInputStream(
+        room,
+        sample_rate=24000,
+        num_channels=1,
+        noise_cancellation=noise_cancellation,
+        auto_gain_control=False,
+        pre_connect_audio_handler=None,
+        stall_timeout=stall_timeout,
+    )
+
+
+@pytest.mark.asyncio
+async def test_stall_detection_and_recovery() -> None:
+    """When the audio stream stalls, the watchdog detects it and reopens the stream."""
+    room = _FakeRoom()
+    stream = _make_stalling_audio_input_stream(room, stall_timeout=0.3)
+    stream.set_participant("test-user")
+
+    track, publication, participant = _make_track_available_args()
+    # provide a track mock so recovery can reopen
+    publication.track = track
+
+    call_count = 0
+
+    def _make_stream(**kw):
+        nonlocal call_count
+        call_count += 1
+        # first call: stalling stream; second call: normal stream that completes
+        if call_count == 1:
+            return _StallingAudioStream(frame_count=2)
+        return _MockAudioStream()
+
+    with patch("livekit.rtc.AudioStream.from_track", side_effect=_make_stream):
+        stream._on_track_available(track, publication, participant)
+        # wait for the forward task to complete (stall + recovery + normal close)
+        await asyncio.wait_for(stream._forward_atask, timeout=5.0)
+
+    # _create_stream was called twice: initial + recovery
+    assert call_count == 2
+
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stall_detection_max_retries_exhausted() -> None:
+    """When every stream stalls, the task exits after max recovery attempts."""
+    room = _FakeRoom()
+    stream = _make_stalling_audio_input_stream(room, stall_timeout=0.3)
+    stream.set_participant("test-user")
+
+    track, publication, participant = _make_track_available_args()
+    publication.track = track
+
+    call_count = 0
+
+    def _make_stream(**kw):
+        nonlocal call_count
+        call_count += 1
+        return _StallingAudioStream(frame_count=2)
+
+    with patch("livekit.rtc.AudioStream.from_track", side_effect=_make_stream):
+        stream._on_track_available(track, publication, participant)
+        await asyncio.wait_for(stream._forward_atask, timeout=5.0)
+
+    # initial + 3 recovery attempts = 4 total
+    assert call_count == 4
+
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_no_stall_normal_stream() -> None:
+    """A stream that closes normally should not trigger stall detection."""
+    room = _FakeRoom()
+    stream = _make_stalling_audio_input_stream(room, stall_timeout=0.3)
+    stream.set_participant("test-user")
+
+    track, publication, participant = _make_track_available_args()
+    publication.track = track
+
+    call_count = 0
+
+    def _make_stream(**kw):
+        nonlocal call_count
+        call_count += 1
+        return _MockAudioStream()
+
+    with patch("livekit.rtc.AudioStream.from_track", side_effect=_make_stream):
+        stream._on_track_available(track, publication, participant)
+        await asyncio.wait_for(stream._forward_atask, timeout=5.0)
+
+    # only one call, no recovery
+    assert call_count == 1
+
+    await stream.aclose()
