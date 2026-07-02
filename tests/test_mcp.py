@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import anyio
+import asyncio
 import pytest
 
 pytest.importorskip("mcp")
@@ -78,6 +79,39 @@ async def test_list_tools_dead_connection_tears_down_and_raises():
         await server.list_tools()
 
     assert server.initialized is False
+
+
+async def test_initialize_waits_for_previous_dead_connection_cleanup():
+    server = lk_mcp.MCPServerStdio(command="unused", args=[])
+
+    task_started = asyncio.Event()
+    task_continue = asyncio.Event()
+
+    async def old_task() -> None:
+        task_started.set()
+        await task_continue.wait()
+
+    server._client = None
+    server._ready_fut = asyncio.get_running_loop().create_future()
+    server._ready_fut.set_result(None)
+    server._client_task = asyncio.create_task(old_task())
+
+    await task_started.wait()
+
+    async def fake_run_client(self, ready_fut: asyncio.Future[None]) -> None:
+        ready_fut.set_result(None)
+
+    server._run_client = fake_run_client.__get__(server, type(server))  # type: ignore[assignment]
+
+    initialize_task = asyncio.create_task(server.initialize())
+    await asyncio.sleep(0.01)
+    assert not initialize_task.done()
+
+    task_continue.set()
+    await initialize_task
+
+    assert server._client_task is not None
+    assert server._client_task.done()
 
 
 async def test_tool_error_result_still_propagates():

@@ -115,10 +115,19 @@ class MCPServer(ABC):
 
     async def initialize(self) -> None:
         if self._client_task and not self._client_task.done():
-            logger.warning("MCPServer is already initializing")
-            if self._ready_fut:
-                await self._ready_fut
-            return
+            if self._client is None and self._ready_fut is not None and self._ready_fut.done():
+                logger.debug(
+                    "MCPServer client task is unwinding after a dead connection; "
+                    "waiting for cleanup before reinitializing"
+                )
+                await self._client_task
+                self._client_task = None
+                self._ready_fut = None
+            else:
+                logger.warning("MCPServer is already initializing")
+                if self._ready_fut:
+                    await self._ready_fut
+                return
 
         self._ready_fut = ready_fut = asyncio.Future[None]()
         self._client_task = asyncio.create_task(
