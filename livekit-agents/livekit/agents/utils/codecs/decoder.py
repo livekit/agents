@@ -17,10 +17,12 @@ from __future__ import annotations
 import asyncio
 import enum
 import io
+import locale
 import struct
 import threading
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from typing import cast
 
 import av
@@ -31,6 +33,8 @@ from livekit import rtc
 from ...log import logger
 from .. import aio
 from ..audio import AudioByteStream
+
+_AV_LOCALE_LOCK = threading.Lock()
 
 
 def _mime_to_av_format(mime: str | None) -> str | None:
@@ -61,6 +65,25 @@ def _mime_to_av_format(mime: str | None) -> str | None:
         "audio/mp4": "mp4",
     }
     return _TABLE.get(mime)
+
+
+@contextmanager
+def _temporary_av_locale() -> Iterator[None]:
+    """Force a stable C locale while PyAV/FFmpeg decodes audio.
+
+    PyAV can surface locale-sensitive decode paths through FFmpeg. Some
+    non-ASCII locales trigger UnicodeDecodeError while pulling audio frames,
+    so we temporarily switch to the C locale around decode/resample work and
+    then restore the caller's locale.
+    """
+
+    with _AV_LOCALE_LOCK:
+        previous = locale.setlocale(locale.LC_ALL)
+        try:
+            locale.setlocale(locale.LC_ALL, "C")
+            yield
+        finally:
+            locale.setlocale(locale.LC_ALL, previous)
 
 
 class StreamBuffer:
@@ -412,54 +435,55 @@ class AudioStreamDecoder:
         container: av.container.InputContainer | None = None
         resampler: av.AudioResampler | None = None
         try:
-            # open container in low-latency streaming mode
-            container = av.open(
-                self._input_buf,
-                mode="r",
-                format=self._av_format,
-                buffer_size=256,
-                options={
-                    "probesize": "32",
-                    "analyzeduration": "0",
-                    "fflags": "nobuffer+flush_packets",
-                    "flags": "low_delay",
-                    "reorder_queue_size": "0",
-                    "max_delay": "0",
-                    "avioflags": "direct",
-                },
-            )
-            # explicitly disable internal buffering flags on the FFmpeg container
-            container.flags |= cast(
-                int, av.container.Flags.no_buffer.value | av.container.Flags.flush_packets.value
-            )
-
-            if len(container.streams.audio) == 0:
-                raise ValueError("no audio stream found")
-
-            audio_stream = container.streams.audio[0]
-
-            # Set up resampler only if needed
-            if self._sample_rate is not None or self._layout is not None:
-                resampler = av.AudioResampler(
-                    format="s16", layout=self._layout, rate=self._sample_rate
+            with _temporary_av_locale():
+                # open container in low-latency streaming mode
+                container = av.open(
+                    self._input_buf,
+                    mode="r",
+                    format=self._av_format,
+                    buffer_size=256,
+                    options={
+                        "probesize": "32",
+                        "analyzeduration": "0",
+                        "fflags": "nobuffer+flush_packets",
+                        "flags": "low_delay",
+                        "reorder_queue_size": "0",
+                        "max_delay": "0",
+                        "avioflags": "direct",
+                    },
+                )
+                # explicitly disable internal buffering flags on the FFmpeg container
+                container.flags |= cast(
+                    int, av.container.Flags.no_buffer.value | av.container.Flags.flush_packets.value
                 )
 
-            for frame in container.decode(audio_stream):
-                if self._closed:
-                    return
+                if len(container.streams.audio) == 0:
+                    raise ValueError("no audio stream found")
 
-                if resampler:
-                    frames = resampler.resample(frame)
-                else:
-                    frames = [frame]
+                audio_stream = container.streams.audio[0]
 
-                for f in frames:
-                    self._emit_av_frame(f)
+                # Set up resampler only if needed
+                if self._sample_rate is not None or self._layout is not None:
+                    resampler = av.AudioResampler(
+                        format="s16", layout=self._layout, rate=self._sample_rate
+                    )
 
-            # flush the resampler to get any remaining buffered samples
-            if resampler and not self._closed:
-                for f in resampler.resample(None):
-                    self._emit_av_frame(f)
+                for frame in container.decode(audio_stream):
+                    if self._closed:
+                        return
+
+                    if resampler:
+                        frames = resampler.resample(frame)
+                    else:
+                        frames = [frame]
+
+                    for f in frames:
+                        self._emit_av_frame(f)
+
+                # flush the resampler to get any remaining buffered samples
+                if resampler and not self._closed:
+                    for f in resampler.resample(None):
+                        self._emit_av_frame(f)
 
         except Exception:
             logger.exception("error decoding audio")

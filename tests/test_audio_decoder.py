@@ -4,12 +4,14 @@ import struct
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import sentinel
 
 import aiohttp
 import pytest
 
 from livekit.agents.stt import SpeechEventType
 from livekit.agents.utils.codecs import AudioStreamDecoder, StreamBuffer
+from livekit.agents.utils.codecs.decoder import _temporary_av_locale
 from livekit.plugins import deepgram
 
 from .utils import wer
@@ -216,6 +218,46 @@ def test_stream_buffer_reader_starts_before_writer():
         rf.result(timeout=10)
 
     assert bytes(received) == payload
+
+
+def test_temporary_av_locale_sets_and_restores(monkeypatch: pytest.MonkeyPatch):
+    calls: list[tuple[int, str | None]] = []
+
+    def fake_setlocale(category: int, value: str | None = None) -> str:
+        calls.append((category, value))
+        if value is None:
+            return "pl_PL.utf8"
+        return "ok"
+
+    monkeypatch.setattr("livekit.agents.utils.codecs.decoder.locale.setlocale", fake_setlocale)
+
+    with _temporary_av_locale():
+        pass
+
+    assert calls == [
+        (0, None),
+        (0, "C"),
+        (0, "pl_PL.utf8"),
+    ]
+
+
+def test_temporary_av_locale_restores_after_exception(monkeypatch: pytest.MonkeyPatch):
+    restored = sentinel.unset
+
+    def fake_setlocale(category: int, value: str | None = None) -> str:
+        nonlocal restored
+        if value is None:
+            return "de_DE.utf8"
+        restored = value
+        return "ok"
+
+    monkeypatch.setattr("livekit.agents.utils.codecs.decoder.locale.setlocale", fake_setlocale)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        with _temporary_av_locale():
+            raise RuntimeError("boom")
+
+    assert restored == "de_DE.utf8"
 
 
 def test_stream_buffer_end_input_with_pending_data():
