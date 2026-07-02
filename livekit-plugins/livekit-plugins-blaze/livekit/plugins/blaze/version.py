@@ -14,4 +14,4 @@
 
 """Version information for livekit-plugins-blaze."""
 
-__version__ = "1.6.3"
+__version__ = "1.6.6"
