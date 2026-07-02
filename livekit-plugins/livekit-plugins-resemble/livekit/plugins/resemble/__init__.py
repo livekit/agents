@@ -17,11 +17,53 @@
 See https://docs.livekit.io/agents/integrations/tts/resemble/ for more information.
 """
 
+from .detect import (
+    DetectionAction,
+    DetectionMonitor,
+    DetectionResult,
+    DetectionSecurity,
+    DetectionVerdict,
+    DetectTransport,
+    ResembleDetect,
+    RestDetectTransport,
+)
 from .models import TTSModels
+from .signal import (
+    ResembleSignal,
+    RestSignalTransport,
+    SignalAction,
+    SignalCategoryScore,
+    SignalModality,
+    SignalResult,
+    SignalTransport,
+    SignalVerdict,
+)
 from .tts import TTS, ChunkedStream, SynthesizeStream
 from .version import __version__
 
-__all__ = ["TTS", "TTSModels", "ChunkedStream", "SynthesizeStream", "__version__"]
+__all__ = [
+    "TTS",
+    "TTSModels",
+    "ChunkedStream",
+    "SynthesizeStream",
+    "ResembleDetect",
+    "DetectionMonitor",
+    "DetectionResult",
+    "DetectionVerdict",
+    "DetectionAction",
+    "DetectionSecurity",
+    "DetectTransport",
+    "RestDetectTransport",
+    "ResembleSignal",
+    "SignalResult",
+    "SignalCategoryScore",
+    "SignalVerdict",
+    "SignalModality",
+    "SignalAction",
+    "SignalTransport",
+    "RestSignalTransport",
+    "__version__",
+]
 
 from livekit.agents import Plugin
 
