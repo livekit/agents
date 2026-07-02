@@ -3,6 +3,8 @@ import pytest
 from livekit.agents.utils.exp_filter import ExpFilter
 from livekit.agents.voice.endpointing import DynamicEndpointing, create_endpointing
 
+pytestmark = pytest.mark.unit
+
 
 class TestExponentialMovingAverage:
     """Test cases for the ExponentialMovingAverage class."""

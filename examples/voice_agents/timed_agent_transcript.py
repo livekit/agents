@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli, inference, room_io
 from livekit.agents.types import TimedString
 from livekit.agents.voice.agent import ModelSettings
-from livekit.plugins import cartesia, silero
+from livekit.plugins import cartesia
 
 logger = logging.getLogger("my-worker")
 logger.setLevel(logging.INFO)
@@ -44,7 +44,6 @@ async def entrypoint(ctx: JobContext):
         stt=inference.STT("deepgram/nova-3"),
         llm=inference.LLM("google/gemini-2.5-flash"),
         tts=cartesia.TTS(),
-        vad=silero.VAD.load(),
         # enable TTS-aligned transcript, can be configured at the Agent level as well
         use_tts_aligned_transcript=True,
     )

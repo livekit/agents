@@ -6,6 +6,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+pytestmark = pytest.mark.plugin("gnani")
+
 
 def test_stt_requires_api_key():
     """STT constructor raises when no API key is provided."""

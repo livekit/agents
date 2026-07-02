@@ -31,7 +31,6 @@ from livekit.agents import (
 )
 from livekit.agents.beta.toolsets import ToolProxyToolset, ToolSearchToolset
 from livekit.agents.metrics.base import LLMMetrics
-from livekit.plugins import silero
 
 logger = logging.getLogger("tool-search-example")
 logger.setLevel(logging.INFO)
@@ -172,7 +171,6 @@ async def entrypoint(ctx: JobContext):
         llm=inference.LLM("openai/gpt-4.1-mini"),
         tts=inference.TTS("cartesia/sonic-3"),
         stt=inference.STT("deepgram/nova-3"),
-        vad=silero.VAD.load(),
     )
 
     # Track token usage to observe prompt caching behavior.

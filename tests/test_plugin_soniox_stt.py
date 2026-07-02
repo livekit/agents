@@ -26,6 +26,8 @@ from livekit.agents import APIStatusError
 from livekit.agents.language import LanguageCode
 from livekit.agents.stt import SpeechData, SpeechEventType
 
+pytestmark = pytest.mark.plugin("soniox")
+
 # ---------------------------------------------------------------------------
 # SpeechData.__post_init__: target_languages coercion
 # ---------------------------------------------------------------------------

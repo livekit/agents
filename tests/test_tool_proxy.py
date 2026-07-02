@@ -6,6 +6,8 @@ import pytest
 from livekit.agents.beta.toolsets.tool_proxy import ToolProxyToolset
 from livekit.agents.llm import ToolContext, ToolError, Toolset, function_tool
 
+pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
+
 
 @function_tool
 async def weather_tool(city: str) -> str:

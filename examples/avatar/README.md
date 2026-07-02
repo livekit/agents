@@ -1,19 +1,22 @@
 # LemonSlice Avatar
 
 A voice agent with a talking-head avatar you can swap mid-conversation.
-Pick a persona from the dropdown — an influencer, a cat, a fox, a music
-teacher, Marilyn Monroe — and the agent's face, voice, and personality
+Pick a persona from the dropdown — Leila, Jess, a software engineer, a
+cat, a fox — and the agent's face, voice, and personality
 all change without dropping the call.
 
 Try it in the [LiveKit Playground](https://agents.livekit.io/?example=avatar).
 
 ## What's in here
 
-- **15 personas** to choose from — each has its own face, voice, system
+- **9 personas** to choose from — each has its own face, voice, system
   prompt, and idle/speaking body-language hints.
 - **Live persona switching** — the dropdown fires a `set_avatar` RPC; a
   short hold tone plays while the avatar reconnects with the new face
   and voice.
+- **Hero motions** — for **Leila**, **Jess**, and **Mr Fox**, the LLM can
+  trigger wave, dance, or turn via tool calls (one motion at a time,
+  ~6 seconds each). They wave automatically when the session starts.
 - **LiveKit Inference** for STT + LLM (Deepgram Nova-3 + Gemini 3.5
   Flash), Cartesia for TTS, [LemonSlice](https://lemonslice.com) for
   the avatar video.
@@ -36,8 +39,7 @@ python agent.py dev
 ```
 
 Connect from any LiveKit client. The agent reads the starting persona
-from the job metadata; if no metadata is sent it defaults to the
-California influencer.
+from the job metadata; if no metadata is sent it defaults to Leila.
 
 ## Adding or editing personas
 
@@ -72,7 +74,8 @@ No reconnect, no page refresh — the same call, with a different face.
 
 ```
 agent.py        entry point + the set_avatar RPC
-personas.py     the 15 personas and the shared prompt rules
+actions.py      pose controller (opening wave + LLM tool motions)
+personas.py     the 9 personas and the shared prompt rules
 hold_music.py   the soft three-note "please wait" tone
 Dockerfile      for cloud deploys
 ```

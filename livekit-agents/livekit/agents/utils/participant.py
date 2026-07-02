@@ -117,10 +117,11 @@ async def wait_for_participant_attribute(
     room.on("connection_state_changed", _on_connection_state_changed)
 
     try:
-        # check after registering so an attribute set between check and subscribe
-        # cannot slip past
+        # defensive double check
         existing = room.remote_participants.get(identity)
-        if existing and existing.attributes.get(attribute) == value:
+        if existing is None:
+            raise RuntimeError(f"participant {identity!r} is not in the room")
+        if existing.attributes.get(attribute) == value:
             return
         await fut
     finally:

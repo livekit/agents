@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import math
 from collections.abc import Sequence
 from typing import Any
@@ -128,6 +129,17 @@ def to_turn_detection(
     return turn_detection
 
 
+_MAX_CALL_ID_LEN = 32
+
+
+def _shorten_call_id(call_id: str) -> str:
+    # OpenAI caps call_id at 32 chars; deterministically shorten longer ids (e.g. from another
+    # provider replayed after a fallback swap) so a call and its output still map to the same id
+    if len(call_id) <= _MAX_CALL_ID_LEN:
+        return call_id
+    return hashlib.sha256(call_id.encode()).hexdigest()[:_MAX_CALL_ID_LEN]
+
+
 def livekit_item_to_openai_item(item: llm.ChatItem) -> realtime.ConversationItem:
     conversation_item: realtime.ConversationItem
 
@@ -135,7 +147,7 @@ def livekit_item_to_openai_item(item: llm.ChatItem) -> realtime.ConversationItem
         conversation_item = realtime.RealtimeConversationItemFunctionCall(
             id=item.id,
             type="function_call",
-            call_id=item.call_id,
+            call_id=_shorten_call_id(item.call_id),
             name=item.name,
             arguments=item.arguments,
         )
@@ -144,11 +156,11 @@ def livekit_item_to_openai_item(item: llm.ChatItem) -> realtime.ConversationItem
         conversation_item = realtime.RealtimeConversationItemFunctionCallOutput(
             id=item.id,
             type="function_call_output",
-            call_id=item.call_id,
+            call_id=_shorten_call_id(item.call_id),
             output=item.output,
         )
         conversation_item.type = "function_call_output"
-        conversation_item.call_id = item.call_id
+        conversation_item.call_id = _shorten_call_id(item.call_id)
         conversation_item.output = item.output
 
     elif item.type == "message":

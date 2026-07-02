@@ -22,8 +22,19 @@ from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from enum import Flag, auto
-from typing import TYPE_CHECKING, Any, Generic, Literal, TypeGuard, TypeVar, overload
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    Generic,
+    Literal,
+    TypeGuard,
+    TypeVar,
+    get_type_hints,
+    overload,
+)
 
+from pydantic import Field
 from typing_extensions import NotRequired, ParamSpec, Required, Self, TypedDict
 
 from ..log import logger
@@ -141,6 +152,10 @@ class StopResponse(Exception):
 class ToolFlag(Flag):
     NONE = 0
     IGNORE_ON_ENTER = auto()
+    CANCELLABLE = auto()
+
+
+DuplicateMode = Literal["allow", "reject", "replace", "confirm"]
 
 
 @dataclass
@@ -148,6 +163,7 @@ class FunctionToolInfo:
     name: str
     description: str | None
     flags: ToolFlag
+    on_duplicate: DuplicateMode = "allow"
 
 
 class RawFunctionDescription(TypedDict):
@@ -171,6 +187,16 @@ class RawFunctionToolInfo:
     name: str
     raw_schema: dict[str, Any]
     flags: ToolFlag
+    on_duplicate: DuplicateMode = "allow"
+
+
+CONFIRM_DUPLICATE_PARAM = "lk_agents_confirm_duplicate"
+"""Schema parameter added when ``@function_tool(on_duplicate='confirm')``."""
+
+_CONFIRM_DUPLICATE_DESCRIPTION = (
+    "Set this to True to confirm you want to run a duplicate. "
+    "Only do this when user confirms the duplication is needed."
+)
 
 
 _InfoT = TypeVar("_InfoT", FunctionToolInfo, RawFunctionToolInfo)
@@ -239,6 +265,7 @@ def function_tool(
     *,
     raw_schema: RawFunctionDescription | dict[str, Any],
     flags: ToolFlag = ToolFlag.NONE,
+    on_duplicate: DuplicateMode = "allow",
 ) -> RawFunctionTool[_P, _R]: ...
 
 
@@ -248,6 +275,7 @@ def function_tool(
     *,
     raw_schema: RawFunctionDescription | dict[str, Any],
     flags: ToolFlag = ToolFlag.NONE,
+    on_duplicate: DuplicateMode = "allow",
 ) -> Callable[[Callable[_P, _R]], RawFunctionTool[_P, _R]]: ...
 
 
@@ -258,6 +286,7 @@ def function_tool(
     name: str | None = None,
     description: str | None = None,
     flags: ToolFlag = ToolFlag.NONE,
+    on_duplicate: DuplicateMode = "allow",
 ) -> FunctionTool[_P, _R]: ...
 
 
@@ -268,6 +297,7 @@ def function_tool(
     name: str | None = None,
     description: str | None = None,
     flags: ToolFlag = ToolFlag.NONE,
+    on_duplicate: DuplicateMode = "allow",
 ) -> Callable[[Callable[_P, _R]], FunctionTool[_P, _R]]: ...
 
 
@@ -278,11 +308,11 @@ def function_tool(
     description: str | None = None,
     raw_schema: RawFunctionDescription | dict[str, Any] | None = None,
     flags: ToolFlag = ToolFlag.NONE,
+    on_duplicate: DuplicateMode = "allow",
 ) -> (
     FunctionTool[_P, _R]
     | RawFunctionTool[_P, _R]
-    | Callable[[Callable[_P, _R]], FunctionTool[_P, _R]]
-    | Callable[[Callable[_P, _R]], RawFunctionTool[_P, _R]]
+    | Callable[[Callable[_P, _R]], FunctionTool[_P, _R] | RawFunctionTool[_P, _R]]
 ):
     def deco_raw(
         func: Callable[_P, _R],
@@ -296,28 +326,89 @@ def function_tool(
             # support empty parameters
             raise ValueError("raw function description must contain a parameters key")
 
+        schema = {**raw_schema}
+        if on_duplicate == "confirm":
+            schema["parameters"] = _inject_confirm_duplicate(schema["parameters"])
+
         info = RawFunctionToolInfo(
             name=raw_schema["name"],
-            raw_schema={**raw_schema},
+            raw_schema=schema,
             flags=flags,
+            on_duplicate=on_duplicate,
         )
         return RawFunctionTool(func, info)
 
     def deco_func(func: Callable[_P, _R]) -> FunctionTool[_P, _R]:
         from docstring_parser import parse_from_object
 
+        wrapped: Callable[..., Any] = func
+        if on_duplicate == "confirm":
+            wrapped = _wrap_with_confirm_duplicate(func)
+
         docstring = parse_from_object(func)
         info = FunctionToolInfo(
             name=name or func.__name__,
             description=description or docstring.description,
             flags=flags,
+            on_duplicate=on_duplicate,
         )
-        return FunctionTool(func, info)
+        return FunctionTool(wrapped, info)
 
     if f is not None:
         return deco_raw(f) if raw_schema is not None else deco_func(f)
-
     return deco_raw if raw_schema is not None else deco_func
+
+
+def _wrap_with_confirm_duplicate(func: Callable[..., Any]) -> Callable[..., Any]:
+    """Extend ``func``'s signature with a CONFIRM_DUPLICATE_PARAM kwarg, stripped
+    by the wrapper before delegating so direct calls with the original args still work."""
+    try:
+        resolved = get_type_hints(func, include_extras=True)
+    except Exception:
+        resolved = dict(getattr(func, "__annotations__", {}))
+
+    annotation = Annotated[
+        bool | None, Field(default=False, description=_CONFIRM_DUPLICATE_DESCRIPTION)
+    ]
+    new_annotations = {**resolved, CONFIRM_DUPLICATE_PARAM: annotation}
+
+    @functools.wraps(func)
+    async def wrapper(*args: Any, **kwargs: Any) -> Any:
+        kwargs.pop(CONFIRM_DUPLICATE_PARAM, None)
+        result = func(*args, **kwargs)
+        if asyncio.iscoroutine(result):
+            return await result
+        return result
+
+    sig = inspect.signature(func)
+    extra = inspect.Parameter(
+        CONFIRM_DUPLICATE_PARAM,
+        inspect.Parameter.KEYWORD_ONLY,
+        default=False,
+        annotation=annotation,
+    )
+    wrapper.__signature__ = sig.replace(parameters=[*sig.parameters.values(), extra])  # type: ignore[attr-defined]
+    # set both for PEP 649: __annotations__ for 3.10-3.13, __annotate__ for 3.14.
+    # __annotate__ must come last — assigning __annotations__ nulls it on 3.14.
+    wrapper.__annotations__ = new_annotations
+    wrapper.__annotate__ = lambda _format=1: dict(new_annotations)  # type: ignore[attr-defined]
+    return wrapper
+
+
+def _inject_confirm_duplicate(parameters: dict[str, Any]) -> dict[str, Any]:
+    """Add CONFIRM_DUPLICATE_PARAM to a raw JSON-schema (strict-mode conformant)."""
+    params = {**parameters}
+    properties = {**params.get("properties", {})}
+    properties[CONFIRM_DUPLICATE_PARAM] = {
+        "type": ["boolean", "null"],
+        "description": _CONFIRM_DUPLICATE_DESCRIPTION,
+    }
+    params["properties"] = properties
+    required = list(params.get("required", []))
+    if CONFIRM_DUPLICATE_PARAM not in required:
+        required.append(CONFIRM_DUPLICATE_PARAM)
+    params["required"] = required
+    return params
 
 
 def is_function_tool(f: Any) -> TypeGuard[FunctionTool]:
@@ -461,12 +552,20 @@ class ToolContext:
         return True
 
     def update_tools(self, tools: Sequence[Tool | Toolset]) -> None:
+        self._update_tools(tools)
+
+    def _update_tools(
+        self, tools: Sequence[Tool | Toolset], *, exclude: Sequence[Tool] = ()
+    ) -> None:
         self._tools = list(tools)
         self._fnc_tools_map: dict[str, FunctionTool | RawFunctionTool] = {}
         self._provider_tools: list[ProviderTool] = []
         self._tool_sets: list[Toolset] = []
 
         def add_tool(tool: Tool | Toolset) -> None:
+            if any(tool is e for e in exclude):
+                return
+
             if isinstance(tool, ProviderTool):
                 self._provider_tools.append(tool)
 
@@ -498,10 +597,25 @@ class ToolContext:
         for tool in itertools.chain(tools, find_function_tools(self)):
             add_tool(tool)
 
-        # https://developers.openai.com/cookbook/examples/prompt_caching101#example-1-caching-tools-and-multi-turn-conversations
-        # "When caching tools, it is important that the tool definitions and their order remain identical for them to be included in the prompt prefix."
-        self._fnc_tools_map = dict(sorted(self._fnc_tools_map.items()))
-        self._provider_tools.sort(key=lambda t: t.id)
+    def _sync_flattened(self, tools: Sequence[Tool]) -> None:
+        """Apply in-place edits of a ``flatten()`` list, preserving Toolset grouping.
+
+        Added tools become top-level entries; removed tools are dropped from the
+        flat lookup. A removed Toolset member stays in its toolset (membership and
+        lifecycle remain the toolset's) — it just stops being callable.
+        """
+        current = self.flatten()
+        current_ids = {id(t) for t in current}
+        tool_ids = {id(t) for t in tools}
+        if current_ids == tool_ids:
+            return
+
+        added = [t for t in tools if id(t) not in current_ids]
+        removed_ids = current_ids - tool_ids
+        removed = [c for c in current if id(c) in removed_ids]
+
+        structured = [t for t in self._tools if not any(t is r for r in removed)]
+        self._update_tools([*structured, *added], exclude=removed)
 
     def copy(self) -> ToolContext:
         return ToolContext(self._tools.copy())

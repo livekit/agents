@@ -38,8 +38,6 @@ from livekit.agents.evals import (
     task_completion_judge,
     tool_use_judge,
 )
-from livekit.plugins import silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 load_dotenv()
 
@@ -266,8 +264,6 @@ async def frontdesk_agent(ctx: JobContext):
         stt=inference.STT("deepgram/nova-3"),
         llm=inference.LLM("google/gemini-2.5-flash"),
         tts=inference.TTS("cartesia/sonic-3", voice="39b376fc-488e-4d0c-8b37-e00b72059fdd"),
-        turn_detection=MultilingualModel(),
-        vad=silero.VAD.load(),
         max_tool_steps=1,
     )
 

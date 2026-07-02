@@ -7,7 +7,6 @@ from livekit.agents import (
     AgentServer,
     AgentSession,
     JobContext,
-    JobProcess,
     MetricsCollectedEvent,
     RunContext,
     TurnHandlingOptions,
@@ -19,8 +18,6 @@ from livekit.agents import (
 )
 from livekit.agents.beta import EndCallTool
 from livekit.agents.llm import function_tool
-from livekit.plugins import silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 # uncomment to enable Krisp background voice/noise cancellation
 # from livekit.plugins import noise_cancellation
@@ -37,7 +34,7 @@ class MyAgent(Agent):
             "with that in mind keep your responses concise and to the point."
             "do not use emojis, asterisks, markdown, or other special characters in your responses."
             "You are curious and friendly, and have a sense of humor."
-            "you will speak english to the user",
+            "You will speak english to the user over voice.",
             tools=[EndCallTool()],
         )
 
@@ -71,13 +68,6 @@ class MyAgent(Agent):
 server = AgentServer()
 
 
-def prewarm(proc: JobProcess) -> None:
-    proc.userdata["vad"] = silero.VAD.load()
-
-
-server.setup_fnc = prewarm
-
-
 @server.rtc_session()
 async def entrypoint(ctx: JobContext) -> None:
     # each log entry will include these fields
@@ -94,32 +84,38 @@ async def entrypoint(ctx: JobContext) -> None:
         # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
         # See all available models as well as voice selections at https://docs.livekit.io/agents/models/tts/
         tts=inference.TTS("cartesia/sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"),
-        vad=ctx.proc.userdata["vad"],
         turn_handling=TurnHandlingOptions(
-            # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
-            # See more at https://docs.livekit.io/agents/build/turns
-            turn_detection=MultilingualModel(),
             interruption={
                 # sometimes background noise could interrupt the agent session, these are considered false positive interruptions
                 # when it's detected, you may resume the agent's speech
                 "resume_false_interruption": True,
                 "false_interruption_timeout": 1.0,
             },
+            # allow the LLM to generate a response while waiting for the end of turn
+            # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
+            preemptive_generation={"enabled": True, "max_retries": 3},
         ),
-        # allow the LLM to generate a response while waiting for the end of turn
-        # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
-        preemptive_generation=True,
         # blocks interruptions for a few seconds after the agent starts speaking to allow client to calibrate AEC
         aec_warmup_duration=3.0,
         tts_text_transforms=[
             "filter_emoji",
             "filter_markdown",
-            text_transforms.replace({"LiveKit": "<<ˈ|l|aɪ|v>> <<ˈ|k|ɪ|t>>"}),
+            text_transforms.replace({"LiveKit": "<<ˈ|l|aɪ|v|k|ɪ|t>>"}),
         ],
+        # automatically detect keyterms and apply them to the STT per user turn
+        keyterms_options={
+            "keyterms": ["LiveKit"],
+            "keyterm_detection": {
+                "enabled": True,
+                "turn_interval": 1,  # increase to reduce LLM API calls
+            },
+        },
     )
 
     @session.on("metrics_collected")
     def _on_metrics_collected(ev: MetricsCollectedEvent) -> None:
+        if ev.metrics.type == "stt_metrics":
+            return
         metrics.log_metrics(ev.metrics)
 
     async def log_usage():

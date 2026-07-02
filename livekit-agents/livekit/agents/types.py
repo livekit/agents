@@ -35,6 +35,12 @@ Indicates that the participant is a simulator for testing purposes.
 When set to "true", the agent will skip audio input/output processing.
 """
 
+ATTRIBUTE_SIMULATOR_DISPATCH = "lk.simulator.dispatch"
+"""
+The simulator participant's attribute carrying the run's protojson
+``SimulationDispatch``, read by ``JobContext.simulation_context()``.
+"""
+
 TOPIC_CHAT = "lk.chat"
 TOPIC_TRANSCRIPTION = "lk.transcription"
 

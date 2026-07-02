@@ -7,6 +7,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+pytestmark = pytest.mark.plugin("gradium")
+
 
 def test_stt_default_language():
     """STT defaults to English."""

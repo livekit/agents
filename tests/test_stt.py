@@ -35,6 +35,8 @@ from livekit.plugins import (
 
 from .utils import make_test_speech, wer
 
+pytestmark = pytest.mark.stt
+
 SAMPLE_RATE = 24000
 WER_THRESHOLD = 0.25
 MAX_RETRIES = 2

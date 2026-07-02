@@ -6,6 +6,8 @@ from unittest.mock import patch
 
 import pytest
 
+pytestmark = pytest.mark.plugin("gnani")
+
 
 def test_tts_requires_api_key():
     """TTS constructor raises when no API key is provided."""

@@ -74,6 +74,7 @@ class STTOptions:
     sample_rate: STTRealtimeSampleRates
     server_vad: NotGivenOr[VADOptions | None]
     keyterms: NotGivenOr[list[str]]
+    no_verbatim: bool
 
 
 class STT(stt.STT):
@@ -91,6 +92,7 @@ class STT(stt.STT):
         http_session: aiohttp.ClientSession | None = None,
         model_id: NotGivenOr[ElevenLabsSTTModels | str] = NOT_GIVEN,
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
+        no_verbatim: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of ElevenLabs STT.
@@ -112,6 +114,9 @@ class STT(stt.STT):
                 Each keyterm can contain at most 5 words and must be less than 50 characters.
                 Maximum of 100 keyterms. Only supported for Scribe v2 batch recognition
                 (not realtime streaming). Usage incurs additional costs.
+            no_verbatim (NotGivenOr[bool]): When True, the model removes filler words, false starts
+                and disfluencies from the transcript, producing cleaner output. Supported for both
+                Scribe v2 (batch) and Scribe v2 realtime. Default is False.
         """
 
         if is_given(use_realtime):
@@ -157,6 +162,7 @@ class STT(stt.STT):
             include_timestamps=include_timestamps,
             model_id=model_id,
             keyterms=keyterms,
+            no_verbatim=no_verbatim if is_given(no_verbatim) else False,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -195,6 +201,8 @@ class STT(stt.STT):
         if is_given(self._opts.keyterms):
             for keyterm in self._opts.keyterms:
                 form.add_field("keyterms", keyterm)
+        if self._opts.no_verbatim:
+            form.add_field("no_verbatim", "true")
 
         try:
             async with self._ensure_session().post(
@@ -280,6 +288,7 @@ class STT(stt.STT):
         tag_audio_events: NotGivenOr[bool] = NOT_GIVEN,
         server_vad: NotGivenOr[VADOptions] = NOT_GIVEN,
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
+        no_verbatim: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         if is_given(tag_audio_events):
             self._opts.tag_audio_events = tag_audio_events
@@ -290,8 +299,11 @@ class STT(stt.STT):
         if is_given(keyterms):
             self._opts.keyterms = keyterms
 
+        if is_given(no_verbatim):
+            self._opts.no_verbatim = no_verbatim
+
         for stream in self._streams:
-            stream.update_options(server_vad=server_vad)
+            stream.update_options(server_vad=server_vad, no_verbatim=no_verbatim)
 
     def stream(
         self,
@@ -337,9 +349,13 @@ class SpeechStream(stt.SpeechStream):
         self,
         *,
         server_vad: NotGivenOr[VADOptions] = NOT_GIVEN,
+        no_verbatim: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         if is_given(server_vad):
             self._opts.server_vad = server_vad
+            self._reconnect_event.set()
+        if is_given(no_verbatim):
+            self._opts.no_verbatim = no_verbatim
             self._reconnect_event.set()
 
     def _on_audio_duration_report(self, duration: float) -> None:
@@ -349,6 +365,10 @@ class SpeechStream(stt.SpeechStream):
             recognition_usage=stt.RecognitionUsage(audio_duration=duration),
         )
         self._event_ch.send_nowait(usage_event)
+
+    @property
+    def _server_vad(self) -> VADOptions | None:
+        return self._opts.server_vad if is_given(self._opts.server_vad) else None
 
     async def _run(self) -> None:
         """Run the streaming transcription session"""
@@ -481,7 +501,7 @@ class SpeechStream(stt.SpeechStream):
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         """Establish WebSocket connection to ElevenLabs Scribe v2 API"""
-        commit_strategy = "manual" if self._opts.server_vad is None else "vad"
+        commit_strategy = "vad" if self._server_vad is not None else "manual"
         params = [
             f"model_id={self._opts.model_id}",
             f"audio_format=pcm_{self._opts.sample_rate}",
@@ -491,7 +511,7 @@ class SpeechStream(stt.SpeechStream):
         if not self._language:
             params.append("include_language_detection=true")
 
-        if server_vad := self._opts.server_vad:
+        if (server_vad := self._server_vad) is not None:
             if (
                 vad_silence_threshold_secs := server_vad.get("vad_silence_threshold_secs")
             ) is not None:
@@ -508,6 +528,9 @@ class SpeechStream(stt.SpeechStream):
 
         if self._opts.include_timestamps:
             params.append("include_timestamps=true")
+
+        if self._opts.no_verbatim:
+            params.append("no_verbatim=true")
 
         query_string = "&".join(params)
 
@@ -596,6 +619,9 @@ class SpeechStream(stt.SpeechStream):
                     alternatives=[speech_data],
                 )
                 self._event_ch.send_nowait(final_event)
+                if self._server_vad is not None:
+                    self._event_ch.send_nowait(stt.SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
+                    self._speaking = False
             else:
                 # Empty commit signals end of speech segment (similar to Cartesia's is_final flag)
                 # This groups multiple committed transcripts into one speech segment

@@ -7,7 +7,7 @@ import json
 import re
 import types
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import (
     TYPE_CHECKING,
     Annotated,
@@ -565,7 +565,7 @@ def _prepare_function_arguments(
     else:
         raise ValueError(f"Unsupported function tool type: {type(fnc)}")
 
-    # inject RunContext (or subclasses like AsyncRunContext) if needed
+    # inject RunContext (or subclasses) if needed
     context_dict = {}
     for param_name, _ in signature.parameters.items():
         type_hint = type_hints[param_name]
@@ -600,8 +600,8 @@ def _is_optional_type(hint: Any) -> bool:
 
 def _shallow_model_dump(model: BaseModel, *, by_alias: bool = False) -> dict[str, Any]:
     result = {}
-    for name, field in model.__class__.model_fields.items():
-        key = field.alias if by_alias and field.alias else name
+    for name, field_info in model.__class__.model_fields.items():
+        key = field_info.alias if by_alias and field_info.alias else name
         result[key] = getattr(model, name)
     return result
 
@@ -652,6 +652,9 @@ class FunctionCallResult:
     fnc_call_out: FunctionCallOutput | None
     raw_output: Any
     raw_exception: BaseException | None
+    fnc_call_updates: list[tuple[FunctionCall, FunctionCallOutput]] = field(default_factory=list)
+    """Synthesized pairs from any ``ctx.update()`` calls during this standalone
+    execution. Empty unless the tool actually called ``ctx.update()``."""
 
 
 def make_function_call_output(
@@ -746,16 +749,21 @@ async def execute_function_call(
     function_tool = tool_ctx.function_tools.get(tool_call.name)
     if function_tool is None:
         logger.warning(f"unknown AI function `{tool_call.name}`")
+        # Name the available tools so the model can self-correct
+        msg = (
+            f"Unknown function: {tool_call.name} - available tools: "
+            f"{', '.join(tool_ctx.function_tools.keys())}"
+        )
         return FunctionCallResult(
             fnc_call=fnc_call,
             fnc_call_out=FunctionCallOutput(
                 name=tool_call.name,
                 call_id=tool_call.call_id,
-                output=f"Unknown function: {tool_call.name}",
+                output=msg,
                 is_error=True,
             ),
             raw_output=None,
-            raw_exception=ValueError(f"Unknown function: {tool_call.name}"),
+            raw_exception=ValueError(msg),
         )
 
     try:
@@ -770,7 +778,7 @@ async def execute_function_call(
         if asyncio.iscoroutine(result):
             result = await result
 
-        return make_function_call_output(fnc_call=fnc_call, output=result, exception=None)
+        out = make_function_call_output(fnc_call=fnc_call, output=result, exception=None)
 
     except Exception as e:
         if not isinstance(e, ToolError):
@@ -778,4 +786,9 @@ async def execute_function_call(
                 f"exception executing AI function `{tool_call.name}`",
                 extra={"call_id": tool_call.call_id, "arguments": tool_call.arguments},
             )
-        return make_function_call_output(fnc_call=fnc_call, output=None, exception=e)
+        out = make_function_call_output(fnc_call=fnc_call, output=None, exception=e)
+
+    # surface any ctx.update() calls so callers can inspect them
+    if call_ctx is not None and call_ctx._updates:
+        out.fnc_call_updates = list(call_ctx._updates)
+    return out

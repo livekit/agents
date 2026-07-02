@@ -41,7 +41,7 @@ from livekit.agents.voice.avatar import (
 from .log import logger
 
 if TYPE_CHECKING:
-    from bithuman import AsyncBithuman  # type: ignore
+    from bithuman import AsyncBithuman
 
 _logger.remove()
 _logger.add(sys.stdout, level="INFO")
@@ -295,7 +295,7 @@ class AvatarSession(BaseAvatarSession):
         )
         await self._avatar_runner.start()
 
-        agent_session.output.audio = audio_buffer
+        agent_session.output.replace_audio_tail(audio_buffer)
 
     async def _start_cloud(
         self,
@@ -349,10 +349,12 @@ class AvatarSession(BaseAvatarSession):
         logger.debug("starting avatar session")
         await self._start_cloud_agent(livekit_url, livekit_token, room.name)
 
-        agent_session.output.audio = DataStreamAudioOutput(
-            room=room,
-            destination_identity=self._avatar_participant_identity,
-            wait_playback_start=False,
+        agent_session.output.replace_audio_tail(
+            DataStreamAudioOutput(
+                room=room,
+                destination_identity=self._avatar_participant_identity,
+                wait_playback_start=False,
+            ),
         )
 
     async def _start_cloud_agent(

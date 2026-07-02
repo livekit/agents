@@ -10,6 +10,8 @@ from __future__ import annotations
 import asyncio
 import time
 
+import pytest
+
 from livekit.agents.llm import FunctionToolCall
 from livekit.agents.voice.amd.classifier import (
     AMDCategory,
@@ -18,6 +20,8 @@ from livekit.agents.voice.amd.classifier import (
 )
 
 from .fake_llm import FakeLLM, FakeLLMResponse
+
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
 
 def _make_classifier(

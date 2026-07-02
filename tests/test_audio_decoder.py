@@ -15,6 +15,10 @@ from livekit.agents.utils.misc import is_cloud
 
 from .utils import wer
 
+# Decodes audio on background threads / executors with blocking waits; it deadlocks when forced
+# to share one event loop with other tests.
+pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
+
 TEST_AUDIO_FILEPATH = os.path.join(os.path.dirname(__file__), "change-sophie.opus")
 
 
@@ -126,7 +130,7 @@ def test_stream_buffer_large_chunks():
     def reader():
         nonlocal received_size
         # allow writer to start first
-        time.sleep(1)
+        time.sleep(0.1)
         while True:
             chunk = buffer.read(8192)  # Read in 8KB chunks
             if not chunk:

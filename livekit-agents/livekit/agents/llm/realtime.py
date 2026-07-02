@@ -196,6 +196,15 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
         return self._realtime_model
 
     @property
+    def capabilities(self) -> RealtimeCapabilities:
+        """Capabilities of the session.
+
+        Defaults to the parent model's capabilities. Adapters that swap the underlying model
+        mid-session override this to report the currently active model's capabilities.
+        """
+        return self._realtime_model.capabilities
+
+    @property
     @abstractmethod
     def chat_ctx(self) -> ChatContext: ...
 
