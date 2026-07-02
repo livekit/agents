@@ -1396,10 +1396,12 @@ class AudioRecognition:
                             except Exception:
                                 logger.exception("Error predicting end of turn")
 
-                        endpointing_delay = self._endpointing.endpointing_delay(
-                            probability=end_of_turn_probability,
-                            threshold=unlikely_threshold,
-                        )
+                        if (
+                            end_of_turn_probability is not None
+                            and unlikely_threshold is not None
+                            and end_of_turn_probability < unlikely_threshold
+                        ):
+                            endpointing_delay = self._endpointing.max_delay
 
                         eou_span_attributes: dict[str, Any] = {
                             trace_types.ATTR_CHAT_CTX: json.dumps(

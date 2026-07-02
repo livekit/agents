@@ -33,11 +33,6 @@ class BaseEndpointing:
     def overlapping(self) -> bool:
         return self._overlapping
 
-    def endpointing_delay(self, *, probability: float | None, threshold: float | None) -> float:
-        if probability is not None and threshold is not None and probability < threshold:
-            return self.max_delay
-        return self.min_delay
-
     def on_start_of_speech(self, started_at: float, overlapping: bool = False) -> None:
         self._overlapping = overlapping
 
@@ -73,14 +68,8 @@ class DynamicEndpointing(BaseEndpointing):
         [utterance] [   pause   ] [immediate interruption] (<- this should be a false EOT, and min delay should cover this)
                         [agent speech interrupted]
 
-        ``max_delay`` is a fixed ceiling, not learned. The gap between a user
-        utterance and the agent's reply is system-determined (it includes LLM and
-        TTS latency) rather than a natural user statistic, so it carries no signal
-        worth learning from.
-
-        The actual per-turn delay is interpolated within ``[min_delay, max_delay]``
-        from the end-of-turn prediction; see :meth:`endpointing_delay`.
-        """
+        ``max_delay`` is a fixed ceiling, not learned. There is no natural "lower" max_delay to observe
+        in a session. It only clamps the learned ``min_delay`` from above."""
 
         super().__init__(min_delay=min_delay, max_delay=max_delay)
 
@@ -106,14 +95,6 @@ class DynamicEndpointing(BaseEndpointing):
     def max_delay(self) -> float:
         # fixed ceiling, clamped so a learned min_delay can never exceed it
         return max(self._max_delay, self.min_delay)
-
-    def endpointing_delay(self, *, probability: float | None, threshold: float | None) -> float:
-        """Interpolate the endpointing delay within ``[min_delay, max_delay]``."""
-        if probability is None or threshold is None or threshold <= 0:
-            return self.min_delay
-
-        margin = min(max((threshold - probability) / threshold, 0.0), 1.0)
-        return self.min_delay + margin * (self.max_delay - self.min_delay)
 
     @property
     def between_utterance_delay(self) -> float:
