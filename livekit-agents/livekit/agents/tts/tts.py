@@ -125,8 +125,14 @@ class TTS(
             buf = ""
             async for chunk in text_stream:
                 buf += chunk
-                if buf.rfind("<") > buf.rfind(">"):
-                    continue
+                # hold the buffer only for a *tag-shaped* trailing "<" (a partial tag
+                # arriving across chunks); a bare "<" as in "3 < 5" is plain text and
+                # must not stall the transcript until the next ">" or flush
+                last_open = buf.rfind("<")
+                if last_open > buf.rfind(">"):
+                    nxt = buf[last_open + 1 : last_open + 2]
+                    if not nxt or nxt == "/" or nxt.isalpha():
+                        continue
                 stripped, tags = self._split(buf)
                 buf = ""
                 if tags_out is not None:

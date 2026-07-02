@@ -11,7 +11,10 @@ from .tokenizer import SentenceStream, TokenData, WordStream
 # If the start and end indices are not available, we attempt to locate the token within the text using str.find.  # noqa: E501
 TokenizeCallable = Callable[[str], list[str] | list[tuple[str, int, int]]]
 
-_XML_TAG_RE = re.compile(r"<(/?)(\w+)[^>]*?(/?)\s*>")
+# the tag name must start with a letter so "<5>" / "<3 wins>" are not counted as
+# tags — this keeps the depth counter consistent with the letter-start tail check
+# in _has_unclosed_xml_tags (all TTS markup tags are letter-named)
+_XML_TAG_RE = re.compile(r"<(/?)([A-Za-z]\w*)[^>]*?(/?)\s*>")
 
 
 def _has_unclosed_xml_tags(text: str) -> bool:
@@ -19,11 +22,16 @@ def _has_unclosed_xml_tags(text: str) -> bool:
     if "<" not in text:
         return False
 
-    # incomplete tag at end: < without matching >
+    # incomplete tag at end: a tag-shaped "<" without a matching ">". Only "<"
+    # followed by a name start ("/" or a letter) is tag-shaped — a bare "<" as in
+    # "3 < 5" or "<3" is plain text and must not hold up streaming. Text ending
+    # exactly at "<" is treated as tag-shaped: the next chunk resolves it.
     last_open = text.rfind("<")
     last_close = text.rfind(">")
     if last_open > last_close:
-        return True
+        nxt = text[last_open + 1 : last_open + 2]
+        if not nxt or nxt == "/" or nxt.isalpha():
+            return True
 
     # unbalanced open/close pairs
     depth = 0
@@ -147,8 +155,15 @@ class BufferedTokenStream:
         min_ctx_len: int,
         max_token_len: int | None = None,
         retain_format: bool = False,
-        xml_aware: bool = True,
+        xml_aware: bool = False,
     ) -> None:
+        """
+        Args:
+            xml_aware: treat XML markup as atomic — never split a tag across tokens
+                and merge tag-only/unclosed spans forward. Only enable when the input
+                actually carries markup (e.g. expressive TTS): a stray "<" in plain
+                text can otherwise hold back streaming until flush.
+        """
         self._event_ch = aio.Chan[TokenData]()
         self._tokenize_fnc = _xml_wrap_tokenizer(tokenize_fnc) if xml_aware else tokenize_fnc
         self._min_ctx_len = min_ctx_len
@@ -276,12 +291,14 @@ class BufferedSentenceStream(BufferedTokenStream, SentenceStream):
         min_token_len: int,
         min_ctx_len: int,
         max_token_len: int | None = None,
+        xml_aware: bool = False,
     ) -> None:
         super().__init__(
             tokenize_fnc=tokenizer,
             min_token_len=min_token_len,
             min_ctx_len=min_ctx_len,
             max_token_len=max_token_len,
+            xml_aware=xml_aware,
         )
 
 

@@ -4,7 +4,7 @@ import asyncio
 import functools
 import json
 import time
-from collections.abc import AsyncIterable, Callable, Iterable, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
@@ -331,12 +331,37 @@ class _TTSGenerationData:
     ttfb: float | None = None
 
 
+async def _extract_spoken_text(
+    input: AsyncIterable[str | BaseModel], response_field_name: str | None
+) -> AsyncGenerator[str, None]:
+    """Normalize the LLM text stream to plain spoken text.
+
+    In structured-output mode each chunk is the (cumulative) parsed model whose
+    spoken text lives under `response_field_name`; we emit only the newly added
+    delta. Plain-str chunks pass through unchanged. Doing this here means the
+    `tts_node` (including user overrides) and the transcript only ever see `str`.
+    """
+    prev_response = ""
+    async for chunk in input:
+        if isinstance(chunk, BaseModel):
+            if not response_field_name:
+                continue
+            full_response = getattr(chunk, response_field_name, "") or ""
+            delta = full_response[len(prev_response) :]
+            prev_response = full_response
+            if delta:
+                yield delta
+        elif chunk:
+            yield chunk
+
+
 def perform_tts_inference(
     *,
     node: io.TTSNode,
     input: AsyncIterable[str | BaseModel],
     model_settings: ModelSettings,
     text_transforms: Sequence[TextTransforms] | None,
+    response_field_name: str | None = None,
     model: str | None = None,
     provider: str | None = None,
 ) -> tuple[asyncio.Task[bool], _TTSGenerationData]:
@@ -345,7 +370,16 @@ def perform_tts_inference(
     data = _TTSGenerationData(audio_ch=audio_ch, timed_texts_fut=timed_texts_fut)
 
     tts_task = asyncio.create_task(
-        _tts_inference_task(node, input, model_settings, data, text_transforms, model, provider)
+        _tts_inference_task(
+            node,
+            input,
+            model_settings,
+            data,
+            text_transforms,
+            response_field_name,
+            model,
+            provider,
+        )
     )
 
     def _inference_done(_: asyncio.Task[bool]) -> None:
@@ -367,6 +401,7 @@ async def _tts_inference_task(
     model_settings: ModelSettings,
     data: _TTSGenerationData,
     text_transforms: Sequence[TextTransforms] | None,
+    response_field_name: str | None = None,
     model: str | None = None,
     provider: str | None = None,
 ) -> bool:
@@ -377,13 +412,14 @@ async def _tts_inference_task(
         current_span.set_attribute(trace_types.ATTR_GEN_AI_PROVIDER_NAME, provider)
 
     audio_ch, timed_texts_fut = data.audio_ch, data.timed_texts_fut
+    # normalize to plain spoken text before anything downstream runs, so text
+    # transforms and the tts_node (including user overrides) never see a BaseModel.
+    text_input: AsyncIterable[str] = _extract_spoken_text(input, response_field_name)
     if text_transforms:
-        # _apply_text_transforms passes non-str chunks (structured-output BaseModel)
-        # through untouched, so this is safe regardless of output mode.
-        input = _apply_text_transforms(input, text_transforms)
+        text_input = _apply_text_transforms(text_input, text_transforms)
 
     start_time: float | None = None
-    input_tee = itertools.tee(input, 2)
+    input_tee = itertools.tee(text_input, 2)
 
     async def _get_start_time() -> None:
         nonlocal start_time

@@ -476,6 +476,9 @@ def sentence_tokenizer(provider: str, *, expressive: bool) -> tokenize.SentenceT
     return tokenize.blingfire.SentenceTokenizer(
         max_token_len=max_len,
         min_token_len=max_len if expressive else None,
+        # markup only exists in the stream when expressive is active; xml-aware
+        # tokenization would otherwise hold streaming on a stray "<" in plain text
+        xml_aware=expressive,
     )
 
 

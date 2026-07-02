@@ -295,7 +295,9 @@ class ExpressiveContent(BaseModel):
     markup: str
     """The message text including TTS markup, e.g. ``<expression value="..."/> Hi there``."""
     source: str
-    """Label of the TTS that was active when the markup was captured."""
+    """Markup dialect key (``tts.markup._provider_key()``) active when the markup was
+    captured, e.g. ``"cartesia"``. Markup is only restored into future turns while the
+    current TTS speaks the same dialect."""
 
 
 class ChatMessage(BaseModel):

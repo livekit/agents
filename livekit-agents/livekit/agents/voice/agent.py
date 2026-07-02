@@ -556,27 +556,37 @@ class Agent:
                     "`session.output.set_audio_enabled(False)`."
                 )
 
+            expressive_active = activity._resolve_expressive_options() is not None
             wrapped_tts = activity.tts
 
             if not activity.tts.capabilities.streaming:
                 wrapped_tts = tts.StreamAdapter(
                     tts=wrapped_tts,
-                    sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(retain_format=True),
+                    sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(
+                        retain_format=True,
+                        # markup only exists in the stream when expressive is active
+                        xml_aware=expressive_active,
+                    ),
                 )
-
-            response_field = agent._response_field_name
 
             # Mark whether expressive is active for this synthesis, synchronously
             # just before stream() snapshots it. Doing it here (the single synthesis
             # choke point for both generate_reply and say()) scopes it to this turn
             # rather than leaving stale state on the instance. The provider's chunk
             # defaults then drive the TTS's input tokenizer.
-            activity.tts._set_expressive(activity._resolve_expressive_options() is not None)
+            activity.tts._set_expressive(expressive_active)
+
+            response_field = agent._response_field_name
 
             conn_options = activity.session.conn_options.tts_conn_options
             async with wrapped_tts.stream(conn_options=conn_options) as stream:
 
                 async def _forward_input() -> None:
+                    # In the normal pipeline structured-output models are already reduced
+                    # to their spoken text upstream (generation._extract_spoken_text), so
+                    # `text` is plain str. We still handle BaseModel here to honor the
+                    # node's public `str | BaseModel` input type (e.g. if a caller drives
+                    # the node directly with structured-output chunks).
                     prev_response = ""
                     async for chunk in text:
                         if isinstance(chunk, str):

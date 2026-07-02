@@ -6,6 +6,8 @@ used in expressive mode (Cartesia, ElevenLabs, Inworld).
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from livekit.agents.tokenize.blingfire import SentenceTokenizer
@@ -81,7 +83,7 @@ class TestStripXmlTags:
 
 class TestBatchTokenizer:
     def setup_method(self) -> None:
-        self.tok = SentenceTokenizer(min_sentence_len=1)
+        self.tok = SentenceTokenizer(min_sentence_len=1, xml_aware=True)
 
     def test_expression_tags_between_sentences_split_correctly(self) -> None:
         """Regression: blingfire refuses to split when <expression .../> sits between
@@ -148,7 +150,7 @@ class TestBatchTokenizer:
 
 class TestStreamingTokenizer:
     def setup_method(self) -> None:
-        self.tok = SentenceTokenizer(min_sentence_len=1, stream_context_len=5)
+        self.tok = SentenceTokenizer(min_sentence_len=1, stream_context_len=5, xml_aware=True)
 
     @pytest.mark.asyncio
     async def test_tag_split_across_chunks(self) -> None:
@@ -226,3 +228,122 @@ class TestStreamingTokenizer:
         tokens = await _stream_tokenize(self.tok, text)
         _assert_wrapping_tag_intact(tokens, "spell")
         _assert_no_tag_only_sentences(tokens)
+
+
+# ===========================================================================
+# Plain text with "<" (false-positive guard)
+# ===========================================================================
+
+
+class TestPlainTextAngleBrackets:
+    """Regression: a stray "<" in plain text must not stall streaming.
+
+    `_has_unclosed_xml_tags` used to treat any "<" after the last ">" as an
+    unfinished tag; one "3 < 5" then held every following sentence until flush,
+    degrading streaming TTS to end-of-turn batching for the rest of the turn.
+    """
+
+    def test_bare_lt_is_not_a_tag(self) -> None:
+        from livekit.agents.tokenize.token_stream import _has_unclosed_xml_tags
+
+        assert not _has_unclosed_xml_tags("3 < 5.")
+        assert not _has_unclosed_xml_tags("i <3 you")
+        assert not _has_unclosed_xml_tags("price < 10 dollars")
+        # tag-shaped: must still hold
+        assert _has_unclosed_xml_tags("Hello <emo")
+        assert _has_unclosed_xml_tags("Hello <")  # the next chunk resolves it
+        assert _has_unclosed_xml_tags("<spell>abc")  # unclosed wrapping tag
+
+    def test_digit_named_pseudo_tags_are_not_counted(self) -> None:
+        # regression: the depth-counter regex must not treat "<5>" / "<3 wins>" as
+        # open tags, or a complete-but-digit-named pair would leave depth > 0 and
+        # stall streaming for the rest of the turn (the tail check already treats
+        # "<"+digit as plain text — the two predicates must agree)
+        from livekit.agents.tokenize.token_stream import _has_unclosed_xml_tags
+
+        assert not _has_unclosed_xml_tags("Rate this from <1> to <5> please.")
+        assert not _has_unclosed_xml_tags("Scores: <3 wins> today.")
+        # a real letter-named tag pair is still balanced
+        assert not _has_unclosed_xml_tags("<spell>abc</spell> done")
+
+    @pytest.mark.asyncio
+    async def test_digit_pseudo_tag_streams_with_xml_aware(self) -> None:
+        tok = SentenceTokenizer(min_sentence_len=1, stream_context_len=5, xml_aware=True)
+        stream = tok.stream()
+        stream.push_text("Rate this from <1> to <5>. And here is a second sentence to split.")
+        ev = await asyncio.wait_for(stream.__anext__(), timeout=1)
+        assert "<5>" in ev.token or "<1>" in ev.token
+        stream.end_input()
+
+    @pytest.mark.asyncio
+    async def test_bare_lt_streams_with_xml_aware(self) -> None:
+        tok = SentenceTokenizer(min_sentence_len=1, stream_context_len=5, xml_aware=True)
+        stream = tok.stream()
+        stream.push_text("Note that 3 < 5 holds. And here is a second sentence to tokenize.")
+        # the first sentence must be emitted without waiting for flush
+        ev = await asyncio.wait_for(stream.__anext__(), timeout=1)
+        assert "3 < 5" in ev.token
+        stream.end_input()
+
+    @pytest.mark.asyncio
+    async def test_tag_shaped_text_streams_when_not_xml_aware(self) -> None:
+        # the default tokenizer (non-expressive agents) applies no XML logic at
+        # all, so even tag-shaped plain text must stream sentence by sentence
+        tok = SentenceTokenizer(min_sentence_len=1, stream_context_len=5)
+        stream = tok.stream()
+        stream.push_text("Email me at <bob@example.com> please. Second sentence for the split.")
+        ev = await asyncio.wait_for(stream.__anext__(), timeout=1)
+        assert "bob@example.com" in ev.token
+        stream.end_input()
+
+
+# ===========================================================================
+# Markup.to_text_stream (transcript stripping)
+# ===========================================================================
+
+
+async def _achunks(items: list[str]):
+    for it in items:
+        yield it
+
+
+class TestToTextStreamBareLt:
+    """Regression: the transcript-strip path must not stall on a bare "<" either.
+
+    to_text_stream buffered on a naive `rfind("<") > rfind(">")` check, so a "<"
+    in prose (e.g. "3 < 5") froze every following transcript chunk of the segment
+    until a ">" arrived or the stream ended — the same stall fixed in the tokenizer.
+    """
+
+    def _markup(self):
+        from livekit.agents.tts.tts import TTS
+
+        class _DialectMarkup(TTS.Markup):
+            def _provider_key(self) -> str:
+                return "cartesia"
+
+        return _DialectMarkup(None)  # type: ignore[arg-type]  # _provider_key ignores tts
+
+    @pytest.mark.asyncio
+    async def test_bare_lt_does_not_hold_following_chunk(self) -> None:
+        out = [
+            c async for c in self._markup().to_text_stream(_achunks(["The value 3 < 5 ", "is true."]))
+        ]
+        # fixed: the first chunk is emitted incrementally (>= 2 items); the buggy
+        # version held everything and emitted a single item at end-of-stream
+        assert len(out) >= 2
+        assert "3 < 5" in out[0]
+        assert "".join(out).replace(" ", "") == "Thevalue3<5istrue."
+
+    @pytest.mark.asyncio
+    async def test_partial_tag_still_buffered(self) -> None:
+        # a genuinely partial tag split across chunks must still be held and stripped
+        out = [
+            c
+            async for c in self._markup().to_text_stream(
+                _achunks(["Hi <emo", 'tion value="happy"/> there'])
+            )
+        ]
+        joined = "".join(out)
+        assert "<emotion" not in joined
+        assert "Hi" in joined and "there" in joined

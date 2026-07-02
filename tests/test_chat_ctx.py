@@ -101,7 +101,7 @@ def test_expressive_content_serialization():
             ChatMessage(
                 role="assistant",
                 content=["Well, I suppose so."],
-                expressive_content=ExpressiveContent(markup=markup, source="inworld.TTS"),
+                expressive_content=ExpressiveContent(markup=markup, source="inworld"),
             ),
         ]
     )
@@ -113,14 +113,14 @@ def test_expressive_content_serialization():
 
     # opt-in to see the marked-up text
     items = chat_ctx.to_dict(exclude_expressive_content=False)["items"]
-    assert items[1]["expressive_content"] == {"markup": markup, "source": "inworld.TTS"}
+    assert items[1]["expressive_content"] == {"markup": markup, "source": "inworld"}
     assert items[1]["content"] == ["Well, I suppose so."]
 
     # round-trips when included
     restored = ChatContext.from_dict(chat_ctx.to_dict(exclude_expressive_content=False))
     msg = restored.items[1]
     assert isinstance(msg, ChatMessage)
-    assert msg.expressive_content == ExpressiveContent(markup=markup, source="inworld.TTS")
+    assert msg.expressive_content == ExpressiveContent(markup=markup, source="inworld")
 
 
 @skip_if_no_credentials()
