@@ -137,7 +137,7 @@ class SessionConnectOptions:
     llm_conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     tts_conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     max_unrecoverable_errors: int = 3
-    """Maximum number of consecutive unrecoverable errors from llm or tts."""
+    """Maximum number of consecutive unrecoverable errors from llm, stt, or tts."""
 
 
 @dataclass
@@ -444,6 +444,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         # unrecoverable error counts, reset after agent speaking
         self._llm_error_counts = 0
+        self._stt_error_counts = 0
         self._tts_error_counts = 0
 
         # aec warmup: disable interruptions while AEC warms up
@@ -1078,6 +1079,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._user_state = "listening"
             self._agent_state = "initializing"
             self._llm_error_counts = 0
+            self._stt_error_counts = 0
             self._tts_error_counts = 0
             self._root_span_context = None
 
@@ -1553,6 +1555,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._llm_error_counts += 1
             if self._llm_error_counts <= self.conn_options.max_unrecoverable_errors:
                 return
+        elif error.type == "stt_error":
+            self._stt_error_counts += 1
+            if self._stt_error_counts <= self.conn_options.max_unrecoverable_errors:
+                return
         elif error.type == "tts_error":
             self._tts_error_counts += 1
             if self._tts_error_counts <= self.conn_options.max_unrecoverable_errors:
@@ -1642,6 +1648,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         if state == "speaking":
             self._llm_error_counts = 0
+            self._stt_error_counts = 0
             self._tts_error_counts = 0
 
             if self._agent_speaking_span is None:
