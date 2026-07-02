@@ -95,9 +95,13 @@ class ToolConfiguration(BaseModel):
     tools: list[Tool]
 
 
+class Endpointing(BaseModel):
+    endpointingSensitivity: TURN_DETECTION | None = "MEDIUM"
+
+
 class SessionStart(BaseModel):
     inferenceConfiguration: InferenceConfiguration
-    endpointingSensitivity: TURN_DETECTION | None = "MEDIUM"
+    endpointing: Endpointing
 
 
 class InputTextContentStart(BaseModel):
@@ -374,7 +378,9 @@ class SonicEventBuilder:
                         topP=top_p,
                         temperature=temperature,
                     ),
-                    endpointingSensitivity=endpointing_sensitivity,
+                    endpointing=Endpointing(
+                        endpointingSensitivity=endpointing_sensitivity,
+                    ),
                 )
             )
         )
