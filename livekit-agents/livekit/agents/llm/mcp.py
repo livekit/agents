@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlparse
 
+import anyio
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 from typing_extensions import Self
 
@@ -26,6 +27,7 @@ try:
     from mcp.client.sse import sse_client
     from mcp.client.stdio import StdioServerParameters
     from mcp.client.streamable_http import GetSessionIdCallback, streamable_http_client
+    from mcp.shared.exceptions import McpError
     from mcp.shared.message import SessionMessage
 except ImportError as e:
     raise ImportError(
@@ -45,6 +47,18 @@ from .tool_context import (
 )
 
 MCPTool = RawFunctionTool
+
+
+def _is_connection_dead(exc: BaseException) -> bool:
+    """Whether *exc* indicates the MCP transport is gone (e.g. the server process died).
+
+    Once the underlying stdio/HTTP streams close, ``ClientSession`` raises a raw
+    ``anyio.ClosedResourceError`` (with an empty message) on every subsequent call, and an
+    in-flight request surfaces as ``McpError(CONNECTION_CLOSED)``.
+    """
+    if isinstance(exc, (anyio.ClosedResourceError, anyio.BrokenResourceError)):
+        return True
+    return isinstance(exc, McpError) and exc.error.code == mcp.types.CONNECTION_CLOSED
 
 
 @dataclass
@@ -131,6 +145,10 @@ class MCPServer(ABC):
         except BaseException as e:
             if not ready_fut.done():
                 ready_fut.set_exception(e)  # raising from `await initialize()`
+            elif _is_connection_dead(e):
+                # the transport died after startup (e.g. the server process exited);
+                # unwind quietly — the `finally` below tears the dead client down.
+                logger.debug("MCP client connection closed")
             else:
                 if isinstance(e, Exception):
                     logger.exception("MCP client connection failed with unexpected error")
@@ -139,6 +157,14 @@ class MCPServer(ABC):
             self._client = None
             self._lk_tools = None
             self._closing_ev.clear()
+
+    def _handle_dead_connection(self) -> None:
+        # the server process/transport is gone: flip `initialized` back to False and wake
+        # the parked `_run_client` so it unwinds and runs its cleanup.
+        self._client = None
+        self._lk_tools = None
+        self._cache_dirty = True
+        self._closing_ev.set()
 
     async def list_tools(self) -> list[MCPTool]:
         if self._client is None:
@@ -172,7 +198,20 @@ class MCPServer(ABC):
                     "Please check that the MCPServer is still running."
                 )
 
-            tool_result = await self._client.call_tool(name, raw_arguments)
+            try:
+                tool_result = await self._client.call_tool(name, raw_arguments)
+            except Exception as e:
+                # the MCP server process may have died mid-session; the transport then
+                # raises a raw anyio.ClosedResourceError (empty message) on every call.
+                # Fail loudly with a clear ToolError and tear the dead client down so
+                # `initialized` reports False instead of silently staying True.
+                if _is_connection_dead(e):
+                    self._handle_dead_connection()
+                    raise ToolError(
+                        "Tool invocation failed: internal service is unavailable. "
+                        "Please check that the MCPServer is still running."
+                    ) from None
+                raise
 
             if tool_result.isError:
                 error_str = "\n".join(
