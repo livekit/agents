@@ -295,6 +295,7 @@ EventTypes = Literal[
     "user_state_changed",
     "agent_state_changed",
     "user_input_transcribed",
+    "user_transcription_timeout",
     "conversation_item_added",
     "agent_false_interruption",
     "overlapping_speech",
@@ -334,6 +335,15 @@ class UserInputTranscribedEvent(BaseModel):
     """Provider-specific ID for the transcribed input item, when available."""
     speaker_id: str | None = None
     language: LanguageCode | None = None
+    created_at: float = Field(default_factory=time.time)
+
+
+class UserTranscriptionTimeoutEvent(BaseModel):
+    type: Literal["user_transcription_timeout"] = "user_transcription_timeout"
+    speech_duration: float
+    """Total VAD-detected speech (s) in the turn that produced no transcript."""
+    vad_speech_started_at: float
+    """When VAD first detected speech for this (untranscribed) turn."""
     created_at: float = Field(default_factory=time.time)
 
 
@@ -580,6 +590,7 @@ class CloseEvent(BaseModel):
 
 AgentEvent = Annotated[
     UserInputTranscribedEvent
+    | UserTranscriptionTimeoutEvent
     | UserStateChangedEvent
     | AgentStateChangedEvent
     | AgentFalseInterruptionEvent

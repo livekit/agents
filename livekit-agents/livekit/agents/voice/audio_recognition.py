@@ -133,6 +133,7 @@ class RecognitionHooks(Protocol):
     def on_end_of_speech(self, ev: vad.VADEvent | None) -> None: ...
     def on_interim_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None) -> None: ...
     def on_final_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None = None) -> None: ...
+    def on_transcription_timeout(self, *, speech_duration: float, turn_start: float) -> None: ...
     def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool: ...
     def on_eot_prediction(self, ev: EotPredictionEvent) -> None: ...
     def on_agent_backchannel_opportunity(self, ev: _AgentBackchannelOpportunityEvent) -> None: ...
@@ -283,6 +284,11 @@ class AudioRecognition:
         self._closing = asyncio.Event()
 
         self._vad_speech_started: bool = False
+
+        # transcription timeout: VAD heard speech but STT produced no transcript
+        self._transcription_timeout_handle: asyncio.TimerHandle | None = None
+        self._turn_speech_duration: float = 0.0
+        self._turn_transcript_received: bool = False
 
         # user turn limit tracking — accumulates across turns until agent speaks
         self._turn_tracker = _UserTurnTracker()
@@ -716,6 +722,8 @@ class AudioRecognition:
             self._backchannel_boundary_timer = None
             self.backchannel_boundary_callback = None
 
+        self._cancel_transcription_timeout()
+
     def update_stt(self, stt: io.STTNode | None, *, pipeline: _STTPipeline | None = None) -> None:
         self._stt = stt
         if pipeline is None and stt is not None:
@@ -734,6 +742,8 @@ class AudioRecognition:
             self._transcript_buffer.clear()
             self._ignore_user_transcript_until = NOT_GIVEN
         else:
+            self._cancel_transcription_timeout()
+
             if self._stt_consumer_atask is not None:
                 task = asyncio.create_task(aio.cancel_and_wait(self._stt_consumer_atask))
                 task.add_done_callback(lambda _: self._tasks.discard(task))
@@ -1068,6 +1078,8 @@ class AudioRecognition:
             if not transcript:
                 return
 
+            self._mark_turn_transcribed()
+
             self._hooks.on_final_transcript(
                 ev,
                 speaking=self._speaking
@@ -1140,6 +1152,8 @@ class AudioRecognition:
             if not transcript:
                 return
 
+            self._mark_turn_transcribed()
+
             logger.debug(
                 "received user preflight transcript",
                 extra={"user_transcript": transcript, "language": self._last_language},
@@ -1174,6 +1188,7 @@ class AudioRecognition:
                 else None,
             )
             self._audio_interim_transcript = ev.alternatives[0].text
+            # interim transcripts don't cancel the timeout: STT may drop them without a final
 
         elif ev.type == stt.SpeechEventType.END_OF_SPEECH and self._turn_detection_mode == "stt":
             with trace.use_span(self._ensure_user_turn_span()):
@@ -1235,6 +1250,8 @@ class AudioRecognition:
                 self._speech_start_time = speech_start_time
                 self._vad_speech_started = True
 
+            self._cancel_transcription_timeout()
+
             with trace.use_span(self._ensure_user_turn_span(start_time=speech_start_time)):
                 self._hooks.on_start_of_speech(ev, speech_start_time=speech_start_time)
 
@@ -1284,6 +1301,9 @@ class AudioRecognition:
             self._speaking = False
             self._user_speaking_event.clear()
             self._last_speaking_time = time.time() - ev.silence_duration - ev.inference_duration
+
+            if self._stt_pipeline is not None:
+                self._arm_transcription_timeout(ev.speech_duration)
 
             if self._vad_base_turn_detection or (
                 self._turn_detection_mode == "stt" and self._user_turn_committed
@@ -1580,6 +1600,9 @@ class AudioRecognition:
                 self._user_turn_span = None
                 self._user_turn_start = None
                 self._stt_request_ids = []
+                self._cancel_transcription_timeout()
+                self._turn_speech_duration = 0.0
+                self._turn_transcript_received = False
 
                 # clear the transcript if the user turn was committed
                 self._audio_transcript = ""
@@ -1771,6 +1794,42 @@ class AudioRecognition:
         finally:
             await aio.cancel_and_wait(forward_task)
             await stream.aclose()
+
+    # region: user transcription timeout
+    def _cancel_transcription_timeout(self) -> None:
+        if self._transcription_timeout_handle is not None:
+            self._transcription_timeout_handle.cancel()
+            self._transcription_timeout_handle = None
+
+    def _mark_turn_transcribed(self) -> None:
+        self._turn_transcript_received = True
+        self._cancel_transcription_timeout()
+
+    def _arm_transcription_timeout(self, speech_duration: float) -> None:
+        self._turn_speech_duration += speech_duration
+
+        timeout = self._session.options.transcription_timeout
+        if timeout is None or self._turn_transcript_received:
+            return
+
+        self._cancel_transcription_timeout()
+        self._transcription_timeout_handle = asyncio.get_running_loop().call_later(
+            timeout, self._on_transcription_timeout
+        )
+
+    def _on_transcription_timeout(self) -> None:
+        self._transcription_timeout_handle = None
+        if self._user_turn_start is None or self._turn_transcript_received:
+            return
+
+        if self._agent_speaking:
+            return
+
+        self._hooks.on_transcription_timeout(
+            speech_duration=self._turn_speech_duration, turn_start=self._user_turn_start
+        )
+
+    # endregion
 
     def _ensure_user_turn_span(self, start_time: float | None = None) -> trace.Span:
         if self._user_turn_span and self._user_turn_span.is_recording():

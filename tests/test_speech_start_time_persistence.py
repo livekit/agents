@@ -58,16 +58,23 @@ class TestUserTurnStartPersistence:
         audio_recognition._vad_base_turn_detection = False
         audio_recognition._turn_detection_mode = None
         audio_recognition._stt = None
+        audio_recognition._stt_pipeline = None
         audio_recognition._stt_model = None
         audio_recognition._stt_provider = None
         audio_recognition._audio_transcript = ""
+        audio_recognition._audio_interim_transcript = ""
         audio_recognition._last_speaking_time = None
+        # transcription timeout state touched by the SOS/EOS branches
+        audio_recognition._transcription_timeout_handle = None
+        audio_recognition._turn_speech_duration = 0.0
 
         # collaborators
         audio_recognition._hooks = MagicMock()
         audio_recognition._session = MagicMock()
         audio_recognition._session.amd = None
         audio_recognition._session._room_io = None
+        # disable the transcription timeout — these tests cover VAD state only
+        audio_recognition._session.options.transcription_timeout = None
 
         return audio_recognition
 
