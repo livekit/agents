@@ -618,7 +618,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             mime_type="audio/pcm",
         )
 
-        sent_tokenizer_stream = tokenize.basic.SentenceTokenizer().stream()
+        sent_tokenizer_stream = tokenize.blingfire.SentenceTokenizer().stream()
         input_sent_event = asyncio.Event()
 
         async def _input_task() -> None:
