@@ -44,7 +44,8 @@ _DISABLED_MSG = "project data recording is disabled by owner"
         (401, _status_proto(_DISABLED_MSG), True),
         # plain-text body (defensive: if the gateway ever returns text)
         (401, _DISABLED_MSG.encode(), True),
-        (403, b"data recording is disabled", True),
+        # cloud-observability only ever returns 401 for this, never 403
+        (403, _status_proto(_DISABLED_MSG), False),
         # wrong status code
         (200, _status_proto(_DISABLED_MSG), False),
         (500, _status_proto(_DISABLED_MSG), False),

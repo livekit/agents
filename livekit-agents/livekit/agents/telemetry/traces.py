@@ -117,7 +117,7 @@ class _UploadGate:
     @staticmethod
     def is_disabled_response(status_code: int, body: bytes) -> bool:
         """Return True if an upload response means recording is disabled by the project owner."""
-        if status_code not in (401, 403):
+        if status_code != 401:
             return False
         text = body.decode("utf-8", "ignore").lower()
         return any(marker in text for marker in _UploadGate._DISABLED_MARKERS)
