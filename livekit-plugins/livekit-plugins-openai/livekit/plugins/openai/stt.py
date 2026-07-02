@@ -685,8 +685,7 @@ class SpeechStream(stt.SpeechStream):
 
         while True:
             closing_ws = False  # reset the flag
-            # close any speech segment left open by a dropped or recycled connection;
-            # the new session re-detects ongoing speech and starts a fresh segment
+            # a segment left open across the reconnect gap would fuse into the next utterance
             self._stop_speaking()
             async with self._pool.connection(timeout=self._conn_options.timeout) as ws:
                 self._report_connection_acquired(
