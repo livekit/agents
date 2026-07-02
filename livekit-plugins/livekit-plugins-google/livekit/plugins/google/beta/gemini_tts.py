@@ -208,6 +208,13 @@ class ChunkedStream(tts.ChunkedStream):
                 config=config,
             )
 
+            # Capture Gemini text input token count and audio output token count for telemetry/cost tracking.
+            if response.usage_metadata:
+                self._set_token_usage(
+                    input_tokens=response.usage_metadata.prompt_token_count or 0,
+                    output_tokens=response.usage_metadata.candidates_token_count or 0,
+                )
+
             output_emitter.initialize(
                 request_id=utils.shortuuid(),
                 sample_rate=self._tts.sample_rate,
