@@ -75,11 +75,16 @@ STTs: list[Callable[[], stt.STT]] = [
 ] + [
     pytest.param(lambda: cartesia.STT(model="ink-whisper"), id="livekit.plugins.cartesia._legacy"),
     pytest.param(lambda: deepgram.STTv2(), id="livekit.plugins.deepgram.STTv2"),
-    pytest.param(lambda: openai.STT(use_realtime=True), id="livekit.plugins.openai.realtime"),
     pytest.param(
         lambda: gradium.STT(model_endpoint="wss://us.api.gradium.ai/api/speech/asr"),
         id="livekit.plugins.gradium.STT",
     ),
+]
+
+# entries whose recognize() path is identical to an existing STTs entry, so they only
+# add value to test_stream (openai realtime shares the REST path with openai.STT())
+STREAM_ONLY_STTs: list[Callable[[], stt.STT]] = [
+    pytest.param(lambda: openai.STT(use_realtime=True), id="livekit.plugins.openai.realtime"),
 ]
 
 
@@ -175,7 +180,7 @@ async def test_recognize(stt_factory: Callable[[], stt.STT], request):
 
 
 @pytest.mark.usefixtures("job_process")
-@pytest.mark.parametrize("stt_factory", STTs)
+@pytest.mark.parametrize("stt_factory", STTs + STREAM_ONLY_STTs)
 async def test_stream(stt_factory: Callable[[], STT], request):
     sample_rate = SAMPLE_RATE
     plugin_id = request.node.callspec.id.split("-")[0]
