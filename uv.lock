@@ -40,6 +40,7 @@ members = [
     "livekit-plugins-hamming",
     "livekit-plugins-hedra",
     "livekit-plugins-hume",
+    "livekit-plugins-inception",
     "livekit-plugins-inworld",
     "livekit-plugins-keyframe",
     "livekit-plugins-krisp",
@@ -2650,6 +2651,16 @@ requires-dist = [
     { name = "aiohttp", specifier = ">=3.8.0" },
     { name = "livekit-agents", editable = "livekit-agents" },
 ]
+
+[[package]]
+name = "livekit-plugins-inception"
+source = { editable = "livekit-plugins/livekit-plugins-inception" }
+dependencies = [
+    { name = "livekit-agents", extra = ["openai"] },
+]
+
+[package.metadata]
+requires-dist = [{ name = "livekit-agents", extras = ["openai"], editable = "livekit-agents" }]
 
 [[package]]
 name = "livekit-plugins-inworld"
