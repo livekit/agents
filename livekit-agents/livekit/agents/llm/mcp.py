@@ -173,7 +173,17 @@ class MCPServer(ABC):
         if not self._cache_dirty and self._lk_tools is not None:
             return self._lk_tools
 
-        tools = await self._client.list_tools()
+        try:
+            tools = await self._client.list_tools()
+        except Exception as e:
+            if _is_connection_dead(e):
+                self._handle_dead_connection()
+                raise RuntimeError(
+                    "MCPServer connection failed: internal service is unavailable. "
+                    "Please check that the MCPServer is still running."
+                ) from None
+            raise
+
         lk_tools = [
             self._make_function_tool(tool.name, tool.description, tool.inputSchema, tool.meta)
             for tool in tools.tools

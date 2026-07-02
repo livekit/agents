@@ -45,6 +45,13 @@ class _ErrorResultClient:
         )
 
 
+class _DeadListToolsClient:
+    """Fake ClientSession whose transport has died while listing tools."""
+
+    async def list_tools(self) -> object:
+        raise anyio.ClosedResourceError
+
+
 def _tool(server: lk_mcp.MCPServer):
     return server._make_function_tool("ping", None, {"type": "object", "properties": {}}, None)
 
@@ -58,6 +65,17 @@ async def test_dead_connection_fails_loudly_and_flips_initialized():
 
     with pytest.raises(ToolError):
         await _tool(server)(raw_arguments={})
+
+    assert server.initialized is False
+
+
+async def test_list_tools_dead_connection_tears_down_and_raises():
+    server = lk_mcp.MCPServerStdio(command="unused", args=[])
+    server._client = _DeadListToolsClient()  # type: ignore[assignment]
+    server._cache_dirty = True
+
+    with pytest.raises(RuntimeError, match="MCPServer connection failed"):
+        await server.list_tools()
 
     assert server.initialized is False
 
