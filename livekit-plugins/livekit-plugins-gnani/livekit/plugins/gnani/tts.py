@@ -1,3 +1,17 @@
+# Copyright 2025 LiveKit, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Text-to-Speech implementation for Gnani Vachana
 
 This module provides a TTS implementation that uses the Gnani Vachana API,
@@ -17,7 +31,7 @@ import base64
 import json
 import os
 from dataclasses import dataclass, replace
-from typing import Literal
+from typing import Any, Literal
 
 import aiohttp
 
@@ -48,6 +62,7 @@ SUPPORTED_VOICES: set[str] = {"Karan", "Simran", "Nara", "Riya", "Viraj", "Raju"
 
 GnaniTTSEncodings = Literal["linear_pcm", "oggopus"]
 GnaniTTSContainers = Literal["raw", "mp3", "wav", "mulaw", "ogg"]
+GnaniTTSBitrates = Literal["96k", "128k", "192k"]
 GnaniTTSSynthesizeMethod = Literal["rest", "sse", "websocket"]
 
 SUPPORTED_SAMPLE_RATES = (8000, 16000, 22050, 44100)
@@ -65,9 +80,25 @@ class GnaniTTSOptions:
     container: str = "wav"
     num_channels: int = 1
     sample_width: int = 2
+    bitrate: str | None = None
     base_url: str = GNANI_TTS_BASE_URL
-    language: str = "hi"
     synthesize_method: str = "rest"
+
+
+_DEPRECATED_TTS_KWARGS = frozenset(("language", "http_session"))
+
+
+def _check_deprecated_tts_args(kwargs: dict[str, Any], *, caller: str = "TTS.__init__") -> None:
+    """Warn about deprecated kwargs and raise on truly unknown ones."""
+    for name in _DEPRECATED_TTS_KWARGS:
+        if name in kwargs:
+            logger.warning(f"`{name}` is deprecated and no longer used")
+
+    unknown = set(kwargs) - _DEPRECATED_TTS_KWARGS
+    if unknown:
+        raise TypeError(
+            f"{caller}() got unexpected keyword argument(s): {', '.join(sorted(unknown))}"
+        )
 
 
 class TTS(tts.TTS):
@@ -84,7 +115,6 @@ class TTS(tts.TTS):
         container: Audio container format (raw, mp3, wav, mulaw, ogg).
         api_key: Gnani API key (falls back to GNANI_API_KEY env var).
         base_url: Vachana API base URL.
-        language: Language code for TTS (default: hi).
         synthesize_method: Synthesis mode — "rest", "sse", or "websocket".
     """
 
@@ -97,11 +127,14 @@ class TTS(tts.TTS):
         num_channels: int = 1,
         encoding: GnaniTTSEncodings | str = "linear_pcm",
         container: GnaniTTSContainers | str = "wav",
+        bitrate: GnaniTTSBitrates | str | None = None,
         api_key: str | None = None,
         base_url: str = GNANI_TTS_BASE_URL,
-        language: str = "hi",
         synthesize_method: GnaniTTSSynthesizeMethod = "rest",
+        **kwargs: Any,
     ) -> None:
+        _check_deprecated_tts_args(kwargs)
+
         if sample_rate not in SUPPORTED_SAMPLE_RATES:
             raise ValueError(
                 f"sample_rate must be one of {SUPPORTED_SAMPLE_RATES}, got {sample_rate}"
@@ -134,8 +167,8 @@ class TTS(tts.TTS):
             encoding=encoding,
             container=container,
             num_channels=num_channels,
+            bitrate=bitrate,
             base_url=base_url,
-            language=language,
             synthesize_method=synthesize_method,
         )
         self._session: aiohttp.ClientSession | None = None
@@ -172,8 +205,10 @@ class TTS(tts.TTS):
         *,
         voice: str | None = None,
         model: str | None = None,
-        language: str | None = None,
+        **kwargs: Any,
     ) -> None:
+        _check_deprecated_tts_args(kwargs, caller="TTS.update_options")
+
         if voice is not None:
             if voice not in SUPPORTED_VOICES:
                 raise ValueError(
@@ -183,8 +218,6 @@ class TTS(tts.TTS):
             self._opts.voice = voice
         if model is not None:
             self._opts.model = model
-        if language is not None:
-            self._opts.language = language
 
     async def aclose(self) -> None:
         pass
@@ -196,17 +229,20 @@ class TTS(tts.TTS):
 
 
 def _build_payload(opts: GnaniTTSOptions, text: str) -> dict:
+    audio_config: dict = {
+        "sample_rate": opts.sample_rate,
+        "encoding": opts.encoding,
+        "num_channels": opts.num_channels,
+        "sample_width": opts.sample_width,
+        "container": opts.container,
+    }
+    if opts.bitrate is not None:
+        audio_config["bitrate"] = opts.bitrate
     return {
         "text": text,
         "voice": opts.voice,
         "model": opts.model,
-        "audio_config": {
-            "sample_rate": opts.sample_rate,
-            "encoding": opts.encoding,
-            "num_channels": opts.num_channels,
-            "sample_width": opts.sample_width,
-            "container": opts.container,
-        },
+        "audio_config": audio_config,
     }
 
 
@@ -426,7 +462,6 @@ class WebSocketChunkedStream(tts.ChunkedStream):
                 close_timeout=10,
             ) as ws:
                 request_body = _build_payload(self._opts, self._input_text)
-                request_body["language"] = self._opts.language
                 await ws.send(json.dumps(request_body))
 
                 output_emitter.initialize(
@@ -538,7 +573,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                 close_timeout=10,
             ) as ws:
                 request_body = _build_payload(self._opts, full_text)
-                request_body["language"] = self._opts.language
                 await ws.send(json.dumps(request_body))
 
                 self._mark_started()

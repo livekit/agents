@@ -38,7 +38,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://gnani.ai"
-Documentation = "https://docs.inya.ai/vachana"
+Documentation = "https://docs.gnani.ai/"
 Repository = "https://github.com/Gnani-AI-Mintlify/livekit-plugins-gnani"
 Issues = "https://github.com/Gnani-AI-Mintlify/livekit-plugins-gnani/issues"
 
