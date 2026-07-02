@@ -61,6 +61,11 @@ lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
 Verbosity = Literal["low", "medium", "high"]
 PromptCacheRetention = Literal["in_memory", "24h"]
+# Provider-specific control over how reasoning/thinking tokens are returned.
+# Supported by OpenAI-compatible gateways such as xAI (Grok) and Cerebras for
+# reasoning models (e.g. gpt-oss). "hidden" drops the reasoning from the response
+# so it is never streamed to the TTS pipeline.
+ReasoningFormat = Literal["parsed", "raw", "hidden"]
 
 
 @dataclass
@@ -401,6 +406,7 @@ class LLM(llm.LLM):
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: ToolChoice = "auto",
         reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        reasoning_format: NotGivenOr[ReasoningFormat] = NOT_GIVEN,
         safety_identifier: NotGivenOr[str] = NOT_GIVEN,
         prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
@@ -410,12 +416,20 @@ class LLM(llm.LLM):
 
         ``api_key`` must be set to your XAI API key, either using the argument or by setting
         the ``XAI_API_KEY`` environmental variable.
+
+        ``reasoning_format`` controls how reasoning models (e.g. gpt-oss) return their
+        thinking tokens. Set it to ``"hidden"`` to keep the reasoning out of the streamed
+        response so it is never read aloud by the TTS pipeline.
         """
         api_key = api_key or os.environ.get("XAI_API_KEY")
         if api_key is None:
             raise ValueError(
                 "XAI API key is required, either as argument or set XAI_API_KEY environmental variable"  # noqa: E501
             )
+
+        extra_body: dict[str, Any] = {}
+        if is_given(reasoning_format):
+            extra_body["reasoning_format"] = reasoning_format
 
         return LLM(
             model=model,
@@ -431,6 +445,7 @@ class LLM(llm.LLM):
             safety_identifier=safety_identifier,
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
+            extra_body=extra_body or NOT_GIVEN,
         )
 
     @staticmethod

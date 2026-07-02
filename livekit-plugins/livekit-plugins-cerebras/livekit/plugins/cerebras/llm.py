@@ -33,6 +33,7 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 from livekit.plugins.openai import LLM as OpenAILLM
+from livekit.plugins.openai.llm import ReasoningFormat
 
 from .models import CerebrasChatModels
 
@@ -112,6 +113,7 @@ class LLM(OpenAILLM):
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        reasoning_format: NotGivenOr[ReasoningFormat] = NOT_GIVEN,
         safety_identifier: NotGivenOr[str] = NOT_GIVEN,
         prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
@@ -131,9 +133,17 @@ class LLM(OpenAILLM):
 
         When ``msgpack_encoding`` is True (default), request payloads are encoded with msgpack
         binary format instead of JSON.
+
+        ``reasoning_format`` controls how reasoning models (e.g. gpt-oss) return their thinking
+        tokens. Set it to ``"hidden"`` to keep the reasoning out of the streamed response so it
+        is never read aloud by the TTS pipeline.
         """
 
         cerebras_api_key = _get_api_key(api_key)
+
+        extra_body: dict[str, Any] = {}
+        if is_given(reasoning_format):
+            extra_body["reasoning_format"] = reasoning_format
 
         created_client = False
         if client is None and (gzip_compression or msgpack_encoding):
@@ -172,6 +182,7 @@ class LLM(OpenAILLM):
             top_p=top_p,
             timeout=timeout,
             max_retries=max_retries,
+            extra_body=extra_body or NOT_GIVEN,
             _strict_tool_schema=False,
         )
 
