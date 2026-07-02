@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import anyio
 import asyncio
+
+import anyio
 import pytest
 
 pytest.importorskip("mcp")
