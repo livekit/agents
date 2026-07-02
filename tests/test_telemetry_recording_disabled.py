@@ -83,6 +83,31 @@ def test_disable_uploads_warns_once_per_session(caplog):
     assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 2
 
 
+def test_disable_warns_once_under_concurrency(caplog):
+    """The span/log/metric exporters each run their own thread and share one gate; the first
+    401 can reach several of them at once, so the check-and-set in disable() must be atomic."""
+    import threading
+
+    assert not traces._upload_gate.disabled
+
+    start = threading.Event()
+
+    def _hammer() -> None:
+        start.wait()
+        traces._upload_gate.disable()
+
+    threads = [threading.Thread(target=_hammer) for _ in range(32)]
+    with caplog.at_level(logging.WARNING, logger="livekit.agents"):
+        for t in threads:
+            t.start()
+        start.set()
+        for t in threads:
+            t.join()
+
+    assert traces._upload_gate.disabled
+    assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 1
+
+
 class _FakeResponse:
     def __init__(self, status_code: int, content: bytes) -> None:
         self.status_code = status_code
