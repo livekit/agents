@@ -29,9 +29,16 @@ from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
     from .agent import Agent
+    from .agent_session import AgentSession
 
 
 lk_evals_verbose = int(os.getenv("LIVEKIT_EVALS_VERBOSE", 0))
+
+_OUTPUT_RETRY_PROMPT = (
+    "Plain text responses are not permitted, call the appropriate function "
+    "to provide your final output."
+)
+
 
 Run_T = TypeVar("Run_T")
 
@@ -66,12 +73,23 @@ RunEvent = ChatMessageEvent | FunctionCallEvent | FunctionCallOutputEvent | Agen
 
 
 class RunResult(Generic[Run_T]):
-    def __init__(self, *, user_input: str | None = None, output_type: type[Run_T] | None) -> None:
+    def __init__(
+        self,
+        *,
+        user_input: str | None = None,
+        output_type: type[Run_T] | None,
+        output_retries: int = 1,
+        output_retry_instructions: str | None = None,
+        session: AgentSession | None = None,
+    ) -> None:
         self._handles: set[SpeechHandle | asyncio.Task] = set()
 
         self._done_fut = asyncio.Future[None]()
         self._user_input = user_input
         self._output_type = output_type
+        self._output_retries = output_retries
+        self._output_retry_instructions = output_retry_instructions or _OUTPUT_RETRY_PROMPT
+        self._session = session
         self._recorded_items: list[RunEvent] = []
         self._final_output: Run_T | None = None
 
@@ -213,8 +231,14 @@ class RunResult(Generic[Run_T]):
             final_output = self.__last_speech_handle._maybe_run_final_output
             if not isinstance(final_output, BaseException):
                 if self._output_type and not isinstance(final_output, self._output_type):
+                    # only the no-output case is retryable: a completed task is
+                    # one-shot, so a wrong type cannot change on a retry
+                    if final_output is None and self._maybe_retry_output():
+                        return
+                    from .._exceptions import UnexpectedModelBehavior
+
                     self._done_fut.set_exception(
-                        RuntimeError(
+                        UnexpectedModelBehavior(
                             f"Expected output of type {self._output_type.__name__}, "
                             f"got {type(final_output).__name__}"
                         )
@@ -224,6 +248,30 @@ class RunResult(Generic[Run_T]):
                     self._done_fut.set_result(None)
             else:
                 self._done_fut.set_exception(final_output)
+
+    def _maybe_retry_output(self) -> bool:
+        """Re-prompt the model when the run ended without the expected output
+        type. Returns True when a retry was scheduled."""
+        if self._output_retries <= 0 or self._session is None:
+            return False
+        self._output_retries -= 1
+
+        from ..log import logger
+
+        try:
+            # generate_reply attaches the new handle to this run state (it is
+            # still the session's active run); instructions inject as a
+            # per-turn system message instead of a fake user message.
+            self._session.generate_reply(instructions=self._output_retry_instructions)
+        except Exception:
+            # an unhandled exception here would leave the run future
+            # unresolved; fall through to UnexpectedModelBehavior instead
+            return False
+        logger.warning(
+            "run ended without the expected output type, retrying",
+            extra={"output_type": self._output_type.__name__ if self._output_type else None},
+        )
+        return True
 
     def _find_insertion_index(self, *, created_at: float) -> int:
         """
