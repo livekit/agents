@@ -3247,6 +3247,7 @@ class AgentActivity(RecognitionHooks):
                 generation_ev = await self._rt_session.say(text)
             except llm.RealtimeError as e:
                 logger.error("failed to say text: %s", str(e))
+                speech_handle._mark_done(error=e)
                 return
 
             await self._realtime_generation_task(
@@ -3306,6 +3307,7 @@ class AgentActivity(RecognitionHooks):
                     " after tool execution" if tool_reply else "",
                     str(e),
                 )
+                speech_handle._mark_done(error=e)
                 self._session._update_agent_state("listening")
                 return
 

@@ -1732,3 +1732,114 @@ async def test_pipeline_multi_segment_interrupted() -> None:
     assert len(assistant_msgs) == 1
     assert assistant_msgs[0].interrupted is True
     assert "How are you?" not in (assistant_msgs[0].text_content or "")
+
+
+async def test_generate_reply_timeout_raises_realtime_error() -> None:
+    """
+    When a realtime model's generate_reply times out (RealtimeError), the error
+    should propagate through the SpeechHandle instead of being silently swallowed.
+
+    Regression test for https://github.com/livekit/agents/issues/6224
+    """
+    from livekit.agents.llm import RealtimeError
+    from livekit.agents.llm.realtime import (
+        GenerationCreatedEvent,
+        RealtimeCapabilities,
+        RealtimeModel,
+        RealtimeSession,
+    )
+
+    class _FakeRealtimeSession(RealtimeSession):
+        def __init__(self, model: RealtimeModel) -> None:
+            super().__init__(model)
+            self._chat_ctx = ChatContext()
+
+        @property
+        def chat_ctx(self) -> ChatContext:
+            return self._chat_ctx
+
+        @property
+        def tools(self):
+            from livekit.agents.llm import ToolContext
+            return ToolContext([])
+
+        async def update_instructions(self, instructions: str) -> None:
+            pass
+
+        async def update_chat_ctx(self, chat_ctx: ChatContext) -> None:
+            self._chat_ctx = chat_ctx
+
+        async def update_tools(self, tools) -> None:
+            pass
+
+        def update_options(self, **kwargs) -> None:
+            pass
+
+        def push_audio(self, frame) -> None:
+            pass
+
+        def push_video(self, frame) -> None:
+            pass
+
+        def generate_reply(self, **kwargs) -> asyncio.Future[GenerationCreatedEvent]:
+            fut: asyncio.Future[GenerationCreatedEvent] = asyncio.Future()
+            fut.set_exception(RealtimeError("generate_reply timed out."))
+            return fut
+
+        def commit_audio(self) -> None:
+            pass
+
+        def clear_audio(self) -> None:
+            pass
+
+        def interrupt(self) -> None:
+            pass
+
+        def truncate(self, **kwargs) -> None:
+            pass
+
+        async def aclose(self) -> None:
+            pass
+
+    class _FakeRealtimeModel(RealtimeModel):
+        def __init__(self) -> None:
+            super().__init__(
+                capabilities=RealtimeCapabilities(
+                    message_truncation=False,
+                    turn_detection=False,
+                    user_transcription=False,
+                    auto_tool_reply_generation=False,
+                    audio_output=False,
+                    manual_function_calls=False,
+                    mutable_chat_context=True,
+                    mutable_instructions=True,
+                    mutable_tools=True,
+                )
+            )
+
+        @property
+        def model(self) -> str:
+            return "fake-realtime"
+
+        @property
+        def provider(self) -> str:
+            return "fake"
+
+        def session(self) -> RealtimeSession:
+            return _FakeRealtimeSession(self)
+
+        async def aclose(self) -> None:
+            pass
+
+    session = create_session(FakeActions(), speed_factor=1.0)
+    # Replace the LLM with our fake realtime model
+    session._llm = _FakeRealtimeModel()
+
+    agent = MyAgent()
+
+    with pytest.raises(RealtimeError, match="generate_reply timed out"):
+        async with session:
+            await agent.start(session)
+            # generate_reply should raise RealtimeError instead of hanging
+            handle = session.generate_reply(instructions="say hello")
+            await handle
