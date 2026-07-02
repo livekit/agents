@@ -833,6 +833,8 @@ class RealtimeSession(
         self._input_resampler: rtc.AudioResampler | None = None
 
         self._instructions: str | None = None
+        # set on aclose; trailing server events are ignored while it's set
+        self._closing = False
         self._main_atask = asyncio.create_task(self._main_task(), name="RealtimeSession._main_task")
         self.send_event(self._create_session_update_event())
 
@@ -1056,6 +1058,10 @@ class RealtimeSession(
                     )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
+                    continue
+
+                if self._closing:
+                    # draining after aclose; the generation is already discarded
                     continue
 
                 event = json.loads(msg.data)
@@ -1664,6 +1670,7 @@ class RealtimeSession(
                     self.send_event(ev)
 
     async def aclose(self) -> None:
+        self._closing = True
         self._close_current_generation("session closed")
         self._msg_ch.close()
         await self._main_atask
