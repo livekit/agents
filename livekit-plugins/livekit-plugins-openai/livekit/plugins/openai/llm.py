@@ -65,7 +65,8 @@ PromptCacheRetention = Literal["in_memory", "24h"]
 
 @dataclass
 class _LLMOptions:
-    model: str | ChatModels
+    model: str | ChatModels | None
+    azure_deployment: str | None
     user: NotGivenOr[str]
     safety_identifier: NotGivenOr[str]
     prompt_cache_key: NotGivenOr[str]
@@ -89,7 +90,7 @@ class LLM(llm.LLM):
     def __init__(
         self,
         *,
-        model: str | ChatModels = "gpt-4.1",
+        model: str | ChatModels | None = "gpt-4.1",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         client: openai.AsyncClient | None = None,
@@ -131,6 +132,7 @@ class LLM(llm.LLM):
 
         self._opts = _LLMOptions(
             model=model,
+            azure_deployment=None,
             user=user,
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
@@ -181,7 +183,11 @@ class LLM(llm.LLM):
 
     @property
     def model(self) -> str:
-        return self._opts.model
+        return self._opts.model or self._opts.azure_deployment or "unknown"
+
+    @property
+    def azure_deployment(self) -> str | None:
+        return self._opts.azure_deployment
 
     @property
     def provider(self) -> str:
@@ -190,7 +196,7 @@ class LLM(llm.LLM):
     @staticmethod
     def with_azure(
         *,
-        model: str | ChatModels = "gpt-4o",
+        model: str | ChatModels | None = None,
         azure_endpoint: str | None = None,
         azure_deployment: str | None = None,
         api_version: str | None = None,
@@ -252,6 +258,7 @@ class LLM(llm.LLM):
             verbosity=verbosity,
             max_completion_tokens=max_completion_tokens,
         )
+        llm._opts.azure_deployment = azure_deployment
         llm._owns_client = True
         return llm
 
