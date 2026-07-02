@@ -177,7 +177,21 @@ class FallbackLLMStream(LLMStream):
                 ),
             ) as stream:
                 should_set_current = not check_recovery
-                async for chunk in stream:
+                stream_iter = stream.__aiter__()
+                try:
+                    first_chunk = await asyncio.wait_for(
+                        stream_iter.__anext__(),
+                        timeout=self._fallback_adapter._attempt_timeout,
+                    )
+                except StopAsyncIteration:
+                    return
+
+                if should_set_current:
+                    should_set_current = False
+                    self._current_stream = stream
+                yield first_chunk
+
+                async for chunk in stream_iter:
                     if should_set_current:
                         should_set_current = False
                         self._current_stream = stream
