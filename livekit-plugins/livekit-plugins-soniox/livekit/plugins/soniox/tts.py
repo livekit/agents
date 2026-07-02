@@ -294,7 +294,12 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         try:
             await waiter
-        except APIStatusError:
+        except APIStatusError as e:
+            # 408 timeout may indicate a degraded connection. Mark it
+            # non-current so the framework retry creates a fresh one
+            # instead of reusing the same broken connection.
+            if e.status_code == 408:
+                connection.mark_non_current()
             raise
         except Exception as e:
             raise APIConnectionError() from e
