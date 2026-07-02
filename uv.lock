@@ -62,6 +62,7 @@ members = [
     "livekit-plugins-respeecher",
     "livekit-plugins-rime",
     "livekit-plugins-rtzr",
+    "livekit-plugins-rumik",
     "livekit-plugins-runway",
     "livekit-plugins-sarvam",
     "livekit-plugins-silero",
@@ -2931,6 +2932,20 @@ requires-dist = [
     { name = "aiohttp", specifier = ">=3.9.0" },
     { name = "httpx", specifier = ">=0.24.0" },
     { name = "livekit-agents", editable = "livekit-agents" },
+]
+
+[[package]]
+name = "livekit-plugins-rumik"
+source = { editable = "livekit-plugins/livekit-plugins-rumik" }
+dependencies = [
+    { name = "livekit-agents", extra = ["codecs"] },
+    { name = "numpy" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
+    { name = "numpy", specifier = ">=1.26" },
 ]
 
 [[package]]
