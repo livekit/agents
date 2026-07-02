@@ -1543,6 +1543,17 @@ def _run_console(
 
         c._validate_device_or_raise(input_device=input_device, output_device=output_device)
 
+        # Snapshot and restore tty settings, so we don't leave the terminal with echo disabled.
+        tty_fd: int | None = None
+        tty_settings: Any = None
+        try:
+            import termios
+
+            tty_fd = sys.stdin.fileno()
+            tty_settings = termios.tcgetattr(tty_fd)
+        except Exception:
+            tty_fd = None
+
         exit_triggered = False
 
         def _on_worker_shutdown() -> None:
@@ -1587,6 +1598,13 @@ def _run_console(
         finally:
             console_worker.shutdown()
             console_worker.join()
+            if tty_fd is not None:
+                try:
+                    import termios
+
+                    termios.tcsetattr(tty_fd, termios.TCSADRAIN, tty_settings)
+                except Exception:
+                    pass
 
     except (CLIError, ValueError) as e:
         c.print(" ")
