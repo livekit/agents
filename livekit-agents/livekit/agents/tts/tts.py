@@ -511,6 +511,25 @@ class SynthesizeStream(ABC):
                 )
 
                 if not should_retry:
+                    if pushed_duration > 0.0 and e.retryable:
+                        # Retryable error (408/429) mid-stream — the user already
+                        # heard some audio.  Crashing the stream is worse than a
+                        # partial utterance, so end the segment gracefully and
+                        # let the already-sent audio be used.
+                        logger.warning(
+                            "TTS failed after partial audio was already sent to the user, "
+                            "ending segment gracefully.",
+                            extra={
+                                "tts": self._tts._label,
+                                "streamed": True,
+                                "pushed_duration": pushed_duration,
+                            },
+                        )
+                        self._emit_error(e, recoverable=True)
+                        output_emitter.end_input()
+                        await output_emitter.join()
+                        return
+
                     if pushed_duration > 0.0:
                         logger.error(
                             "TTS failed after partial audio was already sent to the user, skip retrying.",
