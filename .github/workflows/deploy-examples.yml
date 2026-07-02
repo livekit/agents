@@ -91,6 +91,15 @@ jobs:
           REPO = "git+https://github.com/livekit/agents.git"
           REPO_ROOT = Path(os.environ["GITHUB_WORKSPACE"])
 
+          # Packages we deliberately keep on PyPI even though they live in the
+          # repo. A git install builds from a fresh clone, and these ship a
+          # git-LFS binary that's required at runtime — but GitHub refuses
+          # *anonymous* LFS fetches for this repo, so pip's clone can't
+          # materialize it (the smudge fails / leaves a broken pointer). The
+          # published wheel bundles the real file, so PyPI is the reliable
+          # source. silero: its VAD onnx, loaded on every session.
+          PYPI_ONLY = {"livekit-plugins-silero"}
+
           # The package name (and optional [extras]) at the start of a
           # requirement, e.g. "livekit-agents[evals]>=1.5.7".
           REQUIREMENT = re.compile(r"^(?P<name>[A-Za-z0-9._-]+)(?P<extras>\[.*\])?")
@@ -114,10 +123,13 @@ jobs:
               """Repoint an in-repo requirement at the deployed git ref.
 
               External requirements, comments and blanks pass through
-              untouched (the regex doesn't match a leading '#' or '').
+              untouched (the regex doesn't match a leading '#' or ''), as do
+              the PYPI_ONLY packages above.
               """
               match = REQUIREMENT.match(line.strip())
-              path = monorepo_path(match["name"]) if match else None
+              if not match or match["name"] in PYPI_ONLY:
+                  return line
+              path = monorepo_path(match["name"])
               if path is None:
                   return line
               return f"{match['name']}{match['extras'] or ''} @ {REPO}@{REF}#subdirectory={path}"
