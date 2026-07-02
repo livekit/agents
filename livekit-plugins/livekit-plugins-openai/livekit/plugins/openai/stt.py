@@ -492,7 +492,7 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event.set()
 
     def _start_speaking(self) -> None:
-        # duplicates happen, e.g. a reconnect mid-speech re-detects the onset
+        # keep START/END strictly alternating even if a source double-fires
         if self._speaking:
             return
         self._speaking = True
@@ -686,6 +686,9 @@ class SpeechStream(stt.SpeechStream):
 
         while True:
             closing_ws = False  # reset the flag
+            # close any speech segment left open by a dropped or recycled connection;
+            # the new session re-detects ongoing speech and starts a fresh segment
+            self._stop_speaking()
             async with self._pool.connection(timeout=self._conn_options.timeout) as ws:
                 self._report_connection_acquired(
                     self._pool.last_acquire_time, self._pool.last_connection_reused
