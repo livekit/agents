@@ -492,7 +492,6 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event.set()
 
     def _start_speaking(self) -> None:
-        # keep START/END strictly alternating even if a source double-fires
         if self._speaking:
             return
         self._speaking = True
