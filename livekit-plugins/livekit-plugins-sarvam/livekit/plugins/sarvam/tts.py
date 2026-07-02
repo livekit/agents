@@ -546,7 +546,7 @@ class TTS(tts.TTS):
             )
 
         # Initialize word tokenizer for streaming
-        word_tokenizer = tokenize.blingfire.SentenceTokenizer()
+        word_tokenizer = tokenize.basic.SentenceTokenizer()
 
         self._opts = SarvamTTSOptions(
             target_language_code=LanguageCode(target_language_code),
@@ -1002,8 +1002,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                     if word_stream is None:
                         tokenizer_instance: tokenize.tokenizer.SentenceTokenizer
                         if self._opts.word_tokenizer is None:
-                            # Fallback to blingfire tokenizer if none provided
-                            tokenizer_instance = tokenize.blingfire.SentenceTokenizer()
+                            # Fallback to basic tokenizer if none provided
+                            tokenizer_instance = tokenize.basic.SentenceTokenizer()
                         else:
                             tokenizer_instance = self._opts.word_tokenizer
                         word_stream = tokenizer_instance.stream()
