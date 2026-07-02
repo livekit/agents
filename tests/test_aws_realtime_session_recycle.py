@@ -6,6 +6,8 @@ import pytest
 
 from livekit.plugins.aws.experimental.realtime.realtime_model import RealtimeModel, RealtimeSession
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.fixture
 async def aws_realtime_session(monkeypatch: pytest.MonkeyPatch):
