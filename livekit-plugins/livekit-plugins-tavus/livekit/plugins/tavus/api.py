@@ -1,6 +1,5 @@
 import asyncio
 import os
-import warnings
 from typing import Any
 
 import aiohttp
@@ -36,11 +35,7 @@ def _coalesce_with_deprecated(
 ) -> NotGivenOr[str]:
     # Prefer the new arg; fall back to the deprecated alias and warn only when it's used.
     if deprecated_value and not new_value:
-        warnings.warn(
-            f"`{deprecated_name}` is deprecated, use `{new_name}` instead",
-            DeprecationWarning,
-            stacklevel=3,
-        )
+        logger.warning(f"`{deprecated_name}` is deprecated, use `{new_name}` instead")
     return new_value or deprecated_value
 
 
@@ -48,11 +43,7 @@ def _deprecated_env(deprecated_name: str, new_name: str) -> str | None:
     # Read a deprecated env var, warning if it's set so callers migrate to `new_name`.
     value = os.getenv(deprecated_name)
     if value:
-        warnings.warn(
-            f"`{deprecated_name}` is deprecated, use `{new_name}` instead",
-            DeprecationWarning,
-            stacklevel=3,
-        )
+        logger.warning(f"`{deprecated_name}` is deprecated, use `{new_name}` instead")
     return value
 
 
@@ -154,11 +145,7 @@ class TavusAPI:
         extra_payload: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> str:
         # Deprecated: use create_pal(). Kept on the legacy /v2/personas endpoint.
-        warnings.warn(
-            "`create_persona` is deprecated, use `create_pal` instead",
-            DeprecationWarning,
-            stacklevel=2,
-        )
+        logger.warning("`create_persona` is deprecated, use `create_pal` instead")
         name = name or utils.shortuuid("lk_persona_")
 
         payload = {
