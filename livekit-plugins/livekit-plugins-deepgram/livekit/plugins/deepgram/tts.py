@@ -383,7 +383,13 @@ class SynthesizeStream(tts.SynthesizeStream):
                     elif mtype in ("Error", "error"):
                         raise APIError(message="Deepgram TTS returned error", body=resp)
                     elif mtype == "Metadata":
-                        pass
+                        request_id = resp.get("request_id")
+                        if request_id:
+                            # Expose Deepgram's server-assigned request id on the
+                            # tts_request_run span so users can correlate traces with
+                            # Deepgram's server-side logs for debugging. Deduped
+                            # internally, so calling on every Metadata frame is fine.
+                            output_emitter._note_provider_request_id(request_id)
                     else:
                         logger.warning("Unknown Deepgram message type: %s", resp)
 
