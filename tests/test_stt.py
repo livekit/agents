@@ -75,6 +75,7 @@ STTs: list[Callable[[], stt.STT]] = [
 ] + [
     pytest.param(lambda: cartesia.STT(model="ink-whisper"), id="livekit.plugins.cartesia._legacy"),
     pytest.param(lambda: deepgram.STTv2(), id="livekit.plugins.deepgram.STTv2"),
+    pytest.param(lambda: openai.STT(use_realtime=True), id="livekit.plugins.openai.realtime"),
     pytest.param(
         lambda: gradium.STT(model_endpoint="wss://us.api.gradium.ai/api/speech/asr"),
         id="livekit.plugins.gradium.STT",
@@ -211,6 +212,7 @@ async def test_stream(stt_factory: Callable[[], STT], request):
                     recv_start, recv_end = False, True
                     start_time = time.time()
                     got_final_transcript = False
+                    sos_count, final_count = 0, 0
 
                     async for event in stream:
                         if event.type == agents.stt.SpeechEventType.START_OF_SPEECH:
@@ -220,6 +222,7 @@ async def test_stream(stt_factory: Callable[[], STT], request):
                             assert not recv_start
                             recv_end = False
                             recv_start = True
+                            sos_count += 1
                             continue
 
                         if event.type == agents.stt.SpeechEventType.FINAL_TRANSCRIPT:
@@ -232,6 +235,7 @@ async def test_stream(stt_factory: Callable[[], STT], request):
                                 assert language is not None
                                 assert language.lower().startswith("en")
                             got_final_transcript = True
+                            final_count += 1
                             # Some providers don't send END_OF_SPEECH, break after final transcript
                             if state["closing"]:
                                 break
@@ -240,7 +244,8 @@ async def test_stream(stt_factory: Callable[[], STT], request):
                             recv_start = False
                             recv_end = True
                             await asyncio.sleep(1)
-                            if state["closing"]:
+                            # some providers emit END_OF_SPEECH before the segment's final transcript
+                            if state["closing"] and final_count >= sos_count:
                                 break
 
                     dt = time.time() - start_time
