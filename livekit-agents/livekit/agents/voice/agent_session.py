@@ -96,6 +96,8 @@ class RunOutputOptions(TypedDict, total=False):
             output_type=MyOutput,
             output_options={"max_retries": 2, "retry_instructions": "Call submit_result."},
         )
+
+    Pass ``output_options=None`` to disable the retry behavior.
     """
 
     max_retries: int
@@ -611,12 +613,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         user_input: str,
         input_modality: Literal["text", "audio"] = "text",
         output_type: type[Run_T] | None = None,
-        output_options: RunOutputOptions | None = None,
+        output_options: NotGivenOr[RunOutputOptions | None] = NOT_GIVEN,
     ) -> RunResult[Run_T]:
         if self._global_run_state is not None and not self._global_run_state.done():
             raise RuntimeError("nested runs are not supported")
 
-        output_options = output_options or RunOutputOptions()
+        if not is_given(output_options):
+            output_options = RunOutputOptions()
+        elif output_options is None:
+            output_options = RunOutputOptions(max_retries=0)
         run_state = RunResult(
             user_input=user_input,
             output_type=output_type,
