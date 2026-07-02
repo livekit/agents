@@ -29,9 +29,10 @@ from livekit.agents import (
 )
 from livekit.agents.llm import FunctionToolCall, InputTranscriptionCompleted
 from livekit.agents.llm.chat_context import ChatContext, ChatMessage
-from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
+from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType, STTError
 from livekit.agents.utils import aio
 from livekit.agents.voice.agent_activity import AgentActivity
+from livekit.agents.voice.agent_session import SessionConnectOptions
 from livekit.agents.voice.audio_recognition import AudioRecognition, _EndOfTurnInfo
 from livekit.agents.voice.endpointing import BaseEndpointing
 from livekit.agents.voice.events import FunctionToolsExecutedEvent
@@ -912,6 +913,38 @@ async def test_interruption_detection_error_is_not_session_error() -> None:
 
         assert error_events == []
         fallback.assert_called_once_with(unrecoverable)
+    finally:
+        await _close_test_session(session)
+
+
+async def test_stt_errors_use_session_tolerance_before_closing() -> None:
+    session = create_session(
+        FakeActions(),
+        extra_kwargs={"conn_options": SessionConnectOptions(max_unrecoverable_errors=1)},
+    )
+
+    try:
+        session._on_error(
+            STTError(
+                timestamp=time.time(),
+                label="test-stt",
+                error=RuntimeError("first"),
+                recoverable=False,
+            )
+        )
+
+        assert session._closing_task is None
+
+        session._on_error(
+            STTError(
+                timestamp=time.time(),
+                label="test-stt",
+                error=RuntimeError("second"),
+                recoverable=False,
+            )
+        )
+
+        assert session._closing_task is not None
     finally:
         await _close_test_session(session)
 
