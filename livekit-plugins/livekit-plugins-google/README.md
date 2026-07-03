@@ -36,9 +36,9 @@ And these on Vertex AI:
 ### Gemini 3.1 compatibility
 
 Gemini 3.1 Live does not allow system instructions to be changed after the
-session has started. Calls such as `AgentSession.update_instructions()` and
-`session.generate_reply(instructions=...)` will throw an error for
-`gemini-3.1-flash-live-preview`.
+session has started. `AgentSession.update_instructions()` is ignored for
+`gemini-3.1-flash-live-preview`, while
+`session.generate_reply(instructions=...)` will throw an error.
 
 For dynamic behavior with Gemini 3.1, a new session must be created with the
 updated instructions. For turn-specific context, consider including the extra context in
