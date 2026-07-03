@@ -78,6 +78,7 @@ class _STTOptions:
     turn_detection: SessionTurnDetection
     prompt: NotGivenOr[str] = NOT_GIVEN
     noise_reduction_type: NotGivenOr[str] = NOT_GIVEN
+    temperature: NotGivenOr[float] = NOT_GIVEN
 
 
 class STT(stt.STT):
@@ -90,6 +91,7 @@ class STT(stt.STT):
         prompt: NotGivenOr[str] = NOT_GIVEN,
         turn_detection: NotGivenOr[SessionTurnDetection] = NOT_GIVEN,
         noise_reduction_type: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         client: openai.AsyncClient | None = None,
@@ -109,6 +111,8 @@ class STT(stt.STT):
                 Ignored for `gpt-realtime-whisper`, which does not support server-side turn detection.
             noise_reduction_type: Type of noise reduction to apply. "near_field" or "far_field"
                 This isn't needed when using LiveKit's noise cancellation.
+            temperature: Sampling temperature between 0 and 1. Lower values make the
+                transcription more deterministic. Not supported for realtime transcription.
             base_url: Custom base URL for OpenAI API.
             api_key: Your OpenAI API key. If not provided, will use the OPENAI_API_KEY environment variable.
             client: Optional pre-configured OpenAI AsyncClient instance.
@@ -119,6 +123,13 @@ class STT(stt.STT):
                 settings. Pass `vad=None` to opt out of the auto-load and drive
                 `input_audio_buffer.commit` yourself.
         """  # noqa: E501
+
+        if use_realtime and is_given(temperature):
+            logger.warning(
+                "temperature is not supported for realtime transcription; "
+                "ignoring the provided value"
+            )
+            temperature = NOT_GIVEN
 
         whisper_realtime = use_realtime and _is_whisper_realtime(model)
         if whisper_realtime:
@@ -160,6 +171,7 @@ class STT(stt.STT):
             model=model,
             prompt=prompt,
             turn_detection=turn_detection,
+            temperature=temperature,
         )
         if is_given(noise_reduction_type):
             self._opts.noise_reduction_type = noise_reduction_type
@@ -212,6 +224,7 @@ class STT(stt.STT):
         prompt: NotGivenOr[str] = NOT_GIVEN,
         turn_detection: NotGivenOr[SessionTurnDetection] = NOT_GIVEN,
         noise_reduction_type: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
         azure_endpoint: str | None = None,
         azure_deployment: str | None = None,
         api_version: str | None = None,
@@ -260,6 +273,7 @@ class STT(stt.STT):
             prompt=prompt,
             turn_detection=turn_detection,
             noise_reduction_type=noise_reduction_type,
+            temperature=temperature,
             client=azure_client,
             use_realtime=use_realtime,
             vad=vad,
@@ -323,6 +337,7 @@ class STT(stt.STT):
         prompt: NotGivenOr[str] = NOT_GIVEN,
         turn_detection: NotGivenOr[SessionTurnDetection] = NOT_GIVEN,
         noise_reduction_type: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         """
         Update the options for the speech stream. Most options are updated at the
@@ -335,6 +350,7 @@ class STT(stt.STT):
             prompt: Optional text prompt to guide the transcription. Only supported for whisper-1.
             turn_detection: When using realtime, this controls how model detects the user is done speaking.
             noise_reduction_type: Type of noise reduction to apply. "near_field" or "far_field"
+            temperature: Sampling temperature between 0 and 1. Not supported for realtime transcription.
         """  # noqa: E501
         if is_given(model):
             self._opts.model = model
@@ -349,6 +365,14 @@ class STT(stt.STT):
             self._opts.turn_detection = turn_detection
         if is_given(noise_reduction_type):
             self._opts.noise_reduction_type = noise_reduction_type
+        if is_given(temperature):
+            if self.capabilities.streaming:
+                logger.warning(
+                    "temperature is not supported for realtime transcription; "
+                    "ignoring the provided value"
+                )
+            else:
+                self._opts.temperature = temperature
 
         for stream in self._streams:
             if is_given(language):
@@ -442,6 +466,9 @@ class STT(stt.STT):
                 language=self._opts.language.language if self._opts.language else "",
                 prompt=prompt,
                 response_format=format,
+                temperature=self._opts.temperature
+                if is_given(self._opts.temperature)
+                else openai.omit,
                 timeout=httpx.Timeout(30, connect=conn_options.timeout),
             )
 
