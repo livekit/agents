@@ -665,7 +665,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                 # re-normalize at sentence level: tags split across input chunks
                 # aren't caught by the per-chunk normalize in _input_task
                 converted = self._tts.markup.convert(self._tts.markup.normalize(ev.token))
-                logger.debug("[TTS→API] %s", converted)
                 token_pkt["transcript"] = converted + " "
                 generation_config: dict[str, Any] = {}
                 if self._opts.voice:
@@ -678,7 +677,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                 token_pkt["extra"] = self._opts.extra_kwargs if self._opts.extra_kwargs else {}
                 self._mark_started()
                 payload = json.dumps(token_pkt)
-                logger.debug("[TTS→gateway] %s", payload)
                 await ws.send_str(payload)
                 input_sent_event.set()
 
