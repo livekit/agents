@@ -192,6 +192,36 @@ async def test_events_and_metrics() -> None:
     check_timestamp(metrics_events[2].metrics.audio_duration, 2.0, speed_factor=speed)
 
 
+async def test_tts_node_ttfb_excludes_upstream_latency() -> None:
+    # the LLM stream stays open for its full duration and the fake TTS only starts
+    # synthesizing once its input is flushed. tts_node_ttfb must anchor on the text
+    # being handed to the TTS provider (~2.0s in), not on the first LLM token (~0.1s in),
+    # otherwise the LLM streaming time is misattributed to the TTS
+    speed = 1
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Hello, how are you?", stt_delay=0.2)
+    actions.add_llm("I'm doing well, thank you!", ttft=0.1, duration=2.0)
+    actions.add_tts(1.0, ttfb=0.2, duration=0.3)
+
+    session = create_session(actions, speed_factor=speed)
+    agent = MyAgent()
+
+    conversation_events: list[ConversationItemAddedEvent] = []
+    session.on("conversation_item_added", conversation_events.append)
+
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    assistant_messages = [
+        ev.item
+        for ev in conversation_events
+        if ev.item.type == "message" and ev.item.role == "assistant"
+    ]
+    assert len(assistant_messages) == 1
+    metrics = assistant_messages[0].metrics
+    assert "tts_node_ttfb" in metrics
+    check_timestamp(metrics["tts_node_ttfb"], 0.2, speed_factor=speed)
+
+
 async def test_tool_call() -> None:
     speed = 1
     actions = FakeActions()

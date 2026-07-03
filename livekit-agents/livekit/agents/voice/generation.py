@@ -24,7 +24,12 @@ from ..llm import (
 from ..llm.chat_context import Instructions
 from ..log import logger
 from ..telemetry import trace_types, tracer
-from ..types import USERDATA_TIMED_TRANSCRIPT, FlushSentinel, NotGivenOr
+from ..types import (
+    USERDATA_TIMED_TRANSCRIPT,
+    USERDATA_TTS_STARTED_TIME,
+    FlushSentinel,
+    NotGivenOr,
+)
 from ..utils import aio
 from ..utils.aio import itertools
 from . import io
@@ -347,9 +352,17 @@ async def _tts_inference_task(
 
         audio_duration = 0.0
         async for audio_frame in tts_node:
-            if start_time is not None and data.ttfb is None:
-                data.ttfb = time.perf_counter() - start_time
-                current_span.set_attribute(trace_types.ATTR_RESPONSE_TTFB, data.ttfb)
+            if data.ttfb is None:
+                # the framework TTS streams attach the time the text was first sent to the
+                # provider; without it (custom tts_node), fall back to the arrival of the
+                # first input token, which also counts any text buffering (e.g. sentence
+                # tokenization) as TTFB
+                anchor: float | None = audio_frame.userdata.get(
+                    USERDATA_TTS_STARTED_TIME, start_time
+                )
+                if anchor is not None:
+                    data.ttfb = time.perf_counter() - anchor
+                    current_span.set_attribute(trace_types.ATTR_RESPONSE_TTFB, data.ttfb)
 
             for text in audio_frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, []):
                 if isinstance(text, io.TimedString):
