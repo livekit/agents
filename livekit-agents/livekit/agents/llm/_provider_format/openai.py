@@ -236,8 +236,7 @@ def to_responses_fnc_ctx(
     schemas: list[dict[str, Any]] = []
     for tool in tool_ctx.flatten():
         if isinstance(tool, llm.RawFunctionTool):
-            schema = tool.info.raw_schema
-            schema["type"] = "function"
+            schema = {**tool.info.raw_schema, "type": "function"}
             schemas.append(schema)
         elif isinstance(tool, llm.FunctionTool):
             schema = llm.utils.build_legacy_openai_schema(tool, internally_tagged=True)
