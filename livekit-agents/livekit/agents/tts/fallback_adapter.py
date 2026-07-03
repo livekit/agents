@@ -12,7 +12,12 @@ from livekit import rtc
 from .. import utils
 from .._exceptions import APIConnectionError
 from ..log import logger
-from ..types import DEFAULT_API_CONNECT_OPTIONS, USERDATA_TIMED_TRANSCRIPT, APIConnectOptions
+from ..types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    USERDATA_TIMED_TRANSCRIPT,
+    USERDATA_TTS_STARTED_TIME,
+    APIConnectOptions,
+)
 from ..utils import aio
 from .stream_adapter import StreamAdapter
 from .tts import (
@@ -398,6 +403,14 @@ class FallbackSynthesizeStream(SynthesizeStream):
                                 USERDATA_TIMED_TRANSCRIPT
                             ):
                                 output_emitter.push_timed_transcript(texts)
+
+                            # we re-emit new frames through our own AudioEmitter, so carry over
+                            # the time the active TTS first sent text to its provider;
+                            # __anext__ stamps it onto the outgoing frames
+                            if started_time := synthesized_audio.frame.userdata.get(
+                                USERDATA_TTS_STARTED_TIME
+                            ):
+                                self._started_time = started_time
 
                             if resampler is not None:
                                 for resampled_frame in resampler.push(synthesized_audio.frame):

@@ -9,6 +9,7 @@ from livekit import rtc
 from livekit.agents import APIConnectionError, APIConnectOptions, APIError, utils
 from livekit.agents.tts import TTS, AvailabilityChangedEvent, FallbackAdapter
 from livekit.agents.tts.tts import SynthesizedAudio, SynthesizeStream
+from livekit.agents.types import USERDATA_TTS_STARTED_TIME
 from livekit.agents.utils.aio.channel import ChanEmpty
 
 from .fake_tts import FakeTTS
@@ -138,6 +139,28 @@ async def test_tts_stream_fallback() -> None:
         assert fake2.stream_ch.recv_nowait()
 
     assert not fallback_adapter.availability_changed_ch(fake1).recv_nowait().available
+
+    await fallback_adapter.aclose()
+
+
+async def test_tts_stream_started_time_propagated() -> None:
+    # the fallback adapter re-emits new frames, so the tts started time stamped by the
+    # underlying stream (used for ttfb attribution) must be carried over
+    fake1 = FakeTTS(fake_exception=APIConnectionError("fake1 failed"))
+    fake2 = FakeTTS(fake_audio_duration=5.0)
+
+    fallback_adapter = FallbackAdapterTester([fake1, fake2])
+
+    async with fallback_adapter.stream() as stream:
+        stream.push_text("hello test")
+        stream.end_input()
+
+        frames: list[SynthesizedAudio] = []
+        async for data in stream:
+            frames.append(data)
+
+    assert frames
+    assert all(USERDATA_TTS_STARTED_TIME in f.frame.userdata for f in frames)
 
     await fallback_adapter.aclose()
 
