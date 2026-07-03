@@ -125,11 +125,13 @@ class AvatarSession:
         # Register turn taking event handlers
         self._register_turn_taking_events(agent_session)
 
-        agent_session.output.audio = DataStreamAudioOutput(
-            room=room,
-            destination_identity=self._avatar_participant_identity,
-            sample_rate=SAMPLE_RATE,
-            wait_remote_track=rtc.TrackKind.KIND_VIDEO,
+        agent_session.output.replace_audio_tail(
+            DataStreamAudioOutput(
+                room=room,
+                destination_identity=self._avatar_participant_identity,
+                sample_rate=SAMPLE_RATE,
+                wait_remote_track=rtc.TrackKind.KIND_VIDEO,
+            ),
         )
 
     async def _request_remote_avatar_to_join(self, livekit_url: str, livekit_token: str) -> None:
@@ -173,6 +175,9 @@ class AvatarSession:
                     return
 
             except Exception as e:
+                if isinstance(e, APIStatusError) and not e.retryable:
+                    raise
+
                 if isinstance(e, APIConnectionError):
                     logger.warning("failed to call avaluma avatar api", extra={"error": str(e)})
                 else:
