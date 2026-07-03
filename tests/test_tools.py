@@ -189,6 +189,23 @@ class TestToolContext:
         ctx2 = ctx1.copy()
         assert ctx1 == ctx2
 
+    def test_openai_responses_raw_schema_does_not_mutate_tool_schema(self):
+        ctx = ToolContext([raw_tool_1])
+        raw_schema = raw_tool_1.info.raw_schema.copy()
+
+        responses_tools = ctx.parse_function_tools("openai.responses")
+
+        assert responses_tools[0]["type"] == "function"
+        assert raw_tool_1.info.raw_schema == raw_schema
+        assert "type" not in raw_tool_1.info.raw_schema
+
+        chat_tools = ctx.parse_function_tools("openai")
+        assert chat_tools[0] == {
+            "type": "function",
+            "function": raw_tool_1.info.raw_schema,
+        }
+        assert "type" not in chat_tools[0]["function"]
+
     def test_update_tools_changes_equality(self):
         ctx1 = ToolContext([mock_tool_1])
         ctx2 = ToolContext([mock_tool_1])
