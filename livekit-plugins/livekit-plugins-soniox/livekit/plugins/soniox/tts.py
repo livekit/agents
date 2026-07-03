@@ -41,7 +41,7 @@ from .log import logger
 
 WEBSOCKET_URL = "wss://tts-rt.soniox.com/tts-websocket"
 NUM_CHANNELS = 1
-DEFAULT_MODEL = "tts-rt-v1-preview"
+DEFAULT_MODEL = "tts-rt-v1"
 DEFAULT_LANGUAGE = "en"
 DEFAULT_VOICE = "Maya"
 DEFAULT_AUDIO_FORMAT = "pcm_s16le"
@@ -80,12 +80,12 @@ class TTS(tts.TTS):
         api_key: str | None = None,
         websocket_url: str = WEBSOCKET_URL,
         http_session: aiohttp.ClientSession | None = None,
-        return_timestamps: bool = False,
+        return_timestamps: bool = True,
     ) -> None:
         """Initialize instance of Soniox Text-to-Speech API service.
 
         Args:
-            model (str): Soniox TTS model to use. Defaults to "tts-rt-v1-preview".
+            model (str): Soniox TTS model to use. Defaults to "tts-rt-v1".
             language (str): Language code (e.g., "en", "es", "fr"). Defaults to "en".
             voice (str): Voice name (e.g. "Maya") or a cloned-voice UUID. Defaults to "Maya".
             speed (float): Speech rate multiplier 0.7-1.3; None uses the server default.
@@ -95,7 +95,7 @@ class TTS(tts.TTS):
             api_key (str): Soniox API key. If not provided, will look for SONIOX_API_KEY env variable.
             websocket_url (str): Base WebSocket URL for Soniox TTS API.
             http_session (aiohttp.ClientSession): Optional aiohttp.ClientSession to use for requests.
-            return_timestamps (bool): Emit word-timestamped transcript deltas. Defaults to False.
+            return_timestamps (bool): Emit word-timestamped transcript deltas. Defaults to True.
         """
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True, aligned_transcript=return_timestamps),
@@ -326,7 +326,7 @@ class _TTSOptions:
     bitrate: int | None
     websocket_url: str
     api_key: str
-    return_timestamps: bool = False
+    return_timestamps: bool = True
 
 
 @dataclass
