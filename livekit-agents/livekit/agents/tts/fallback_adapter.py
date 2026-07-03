@@ -12,12 +12,7 @@ from livekit import rtc
 from .. import utils
 from .._exceptions import APIConnectionError
 from ..log import logger
-from ..types import (
-    DEFAULT_API_CONNECT_OPTIONS,
-    USERDATA_TIMED_TRANSCRIPT,
-    USERDATA_TTS_STARTED_TIME,
-    APIConnectOptions,
-)
+from ..types import DEFAULT_API_CONNECT_OPTIONS, USERDATA_TIMED_TRANSCRIPT, APIConnectOptions
 from ..utils import aio
 from .stream_adapter import StreamAdapter
 from .tts import (
@@ -237,14 +232,6 @@ class FallbackChunkedStream(ChunkedStream):
                         if texts := synthesized_audio.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT):
                             output_emitter.push_timed_transcript(texts)
 
-                        # we re-emit new frames through our own AudioEmitter, so carry over
-                        # the started time of the TTS that is actually producing audio;
-                        # our creation time would include time spent on failed attempts
-                        if started_time := synthesized_audio.frame.userdata.get(
-                            USERDATA_TTS_STARTED_TIME
-                        ):
-                            self._started_time = started_time
-
                         if resampler is not None:
                             for rf in resampler.push(synthesized_audio.frame):
                                 output_emitter.push(rf.data.tobytes())
@@ -321,9 +308,17 @@ class FallbackSynthesizeStream(SynthesizeStream):
 
         input_task = asyncio.create_task(_forward_input_task())
 
+        def _capture_started_time() -> None:
+            # ttfb measures the fallback adapter as a whole: anchor on the first time a
+            # sentence was handed to any underlying TTS — even one that failed before
+            # emitting audio — and never overwrite it when falling back to another TTS
+            if not recovering and not self._started_time and stream._started_time:
+                self._started_time = stream._started_time
+
         try:
             async with stream:
                 async for audio in stream:
+                    _capture_started_time()
                     yield audio
         except Exception as e:
             if recovering:
@@ -341,6 +336,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
             )
             raise
         finally:
+            _capture_started_time()
             await utils.aio.cancel_and_wait(input_task)
 
     async def _run(self, output_emitter: AudioEmitter) -> None:
@@ -411,14 +407,6 @@ class FallbackSynthesizeStream(SynthesizeStream):
                                 USERDATA_TIMED_TRANSCRIPT
                             ):
                                 output_emitter.push_timed_transcript(texts)
-
-                            # we re-emit new frames through our own AudioEmitter, so carry over
-                            # the time the active TTS first sent text to its provider;
-                            # __anext__ stamps it onto the outgoing frames
-                            if started_time := synthesized_audio.frame.userdata.get(
-                                USERDATA_TTS_STARTED_TIME
-                            ):
-                                self._started_time = started_time
 
                             if resampler is not None:
                                 for resampled_frame in resampler.push(synthesized_audio.frame):

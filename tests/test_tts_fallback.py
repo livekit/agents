@@ -144,15 +144,19 @@ async def test_tts_stream_fallback() -> None:
     await fallback_adapter.aclose()
 
 
-async def test_tts_stream_started_time_propagated() -> None:
-    # the fallback adapter re-emits new frames, so the tts started time stamped by the
-    # underlying stream (used for ttfb attribution) must be carried over
-    fake1 = FakeTTS(fake_exception=APIConnectionError("fake1 failed"))
+async def test_tts_stream_ttfb_includes_failover_time() -> None:
+    # the fallback adapter is measured as a single TTS node: ttfb anchors on the first
+    # time a sentence was handed to any underlying TTS and is kept when falling back,
+    # so time spent failing over counts towards ttfb
+    fake1 = FakeTTS(fake_timeout=0.5, fake_exception=APIConnectionError("fake1 failed"))
     fake2 = FakeTTS(fake_audio_duration=5.0)
 
     fallback_adapter = FallbackAdapterTester([fake1, fake2])
 
-    async with fallback_adapter.stream() as stream:
+    async with fallback_adapter.stream(
+        conn_options=APIConnectOptions(timeout=10.0, max_retry=0, retry_interval=0.1)
+    ) as stream:
+        start = time.perf_counter()
         stream.push_text("hello test")
         stream.end_input()
 
@@ -161,14 +165,21 @@ async def test_tts_stream_started_time_propagated() -> None:
             frames.append(data)
 
     assert frames
-    assert all(USERDATA_TTS_STARTED_TIME in f.frame.userdata for f in frames)
+    started_times = {f.frame.userdata.get(USERDATA_TTS_STARTED_TIME) for f in frames}
+    assert len(started_times) == 1, "all frames should carry the same started time"
+    started_time = started_times.pop()
+    assert started_time is not None
+    # fake1 receives the sentence 0.5s in (after its fake connection delay) and fails
+    # without audio after two attempts (~1.1s); the anchor must stay on fake1's first
+    # attempt rather than moving to fake2's
+    assert started_time == pytest.approx(start + 0.5, abs=0.1)
 
     await fallback_adapter.aclose()
 
 
-async def test_tts_chunked_started_time_propagated() -> None:
-    # after a failover, the started time stamped on outgoing frames must reflect the
-    # TTS that actually produced audio, not include the time spent on the failed attempt
+async def test_tts_chunked_ttfb_includes_failover_time() -> None:
+    # same as above for the chunked path: the ChunkedStream base stamps its creation time
+    # (when the full text was submitted), which must not be overridden on failover
     fake1 = FakeTTS(fake_timeout=10.0)  # always times out
     fake2 = FakeTTS(fake_audio_duration=5.0)
 
@@ -188,9 +199,7 @@ async def test_tts_chunked_started_time_propagated() -> None:
     assert len(started_times) == 1, "all frames should carry the same started time"
     started_time = started_times.pop()
     assert started_time is not None
-    # fake1 burns 2 attempts of 0.5s timeout (+ 0.1s retry interval) before the fallback
-    # switches to fake2; the stamped time must anchor on fake2, not our creation time
-    assert started_time >= start + 1.0
+    assert started_time == pytest.approx(start, abs=0.1)
 
     await fallback_adapter.aclose()
 
