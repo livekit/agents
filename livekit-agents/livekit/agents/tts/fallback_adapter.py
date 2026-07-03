@@ -237,6 +237,14 @@ class FallbackChunkedStream(ChunkedStream):
                         if texts := synthesized_audio.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT):
                             output_emitter.push_timed_transcript(texts)
 
+                        # we re-emit new frames through our own AudioEmitter, so carry over
+                        # the started time of the TTS that is actually producing audio;
+                        # our creation time would include time spent on failed attempts
+                        if started_time := synthesized_audio.frame.userdata.get(
+                            USERDATA_TTS_STARTED_TIME
+                        ):
+                            self._started_time = started_time
+
                         if resampler is not None:
                             for rf in resampler.push(synthesized_audio.frame):
                                 output_emitter.push(rf.data.tobytes())

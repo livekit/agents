@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 
 import pytest
 
@@ -161,6 +162,35 @@ async def test_tts_stream_started_time_propagated() -> None:
 
     assert frames
     assert all(USERDATA_TTS_STARTED_TIME in f.frame.userdata for f in frames)
+
+    await fallback_adapter.aclose()
+
+
+async def test_tts_chunked_started_time_propagated() -> None:
+    # after a failover, the started time stamped on outgoing frames must reflect the
+    # TTS that actually produced audio, not include the time spent on the failed attempt
+    fake1 = FakeTTS(fake_timeout=10.0)  # always times out
+    fake2 = FakeTTS(fake_audio_duration=5.0)
+
+    fallback_adapter = FallbackAdapterTester([fake1, fake2])
+
+    start = time.perf_counter()
+    async with fallback_adapter.synthesize(
+        "hello test",
+        conn_options=APIConnectOptions(timeout=0.5, max_retry=0, retry_interval=0.1),
+    ) as stream:
+        frames: list[SynthesizedAudio] = []
+        async for data in stream:
+            frames.append(data)
+
+    assert frames
+    started_times = {f.frame.userdata.get(USERDATA_TTS_STARTED_TIME) for f in frames}
+    assert len(started_times) == 1, "all frames should carry the same started time"
+    started_time = started_times.pop()
+    assert started_time is not None
+    # fake1 burns 2 attempts of 0.5s timeout (+ 0.1s retry interval) before the fallback
+    # switches to fake2; the stamped time must anchor on fake2, not our creation time
+    assert started_time >= start + 1.0
 
     await fallback_adapter.aclose()
 
