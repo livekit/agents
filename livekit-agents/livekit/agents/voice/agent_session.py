@@ -1053,6 +1053,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._forward_audio_atask is not None:
                 await utils.aio.cancel_and_wait(self._forward_audio_atask)
 
+            if self._forward_video_atask is not None:
+                await utils.aio.cancel_and_wait(self._forward_video_atask)
+
             if self._recorder_io:
                 await self._recorder_io.aclose()
 
