@@ -9,7 +9,7 @@ import pytest
 from livekit.agents.voice.events import AgentStateChangedEvent, UserStateChangedEvent
 from livekit.agents.voice.filler_scheduler import _FillerScheduler
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
 
 class _FakeSpeechHandle:
@@ -72,6 +72,10 @@ class _FakeSession:
     def on(self, event: str, callback: Any) -> Any:
         self._listeners.setdefault(event, []).append(callback)
         return callback
+
+    def emit(self, event: str, ev: Any) -> None:
+        for cb in list(self._listeners.get(event, [])):
+            cb(ev)
 
     def off(self, event: str, callback: Any) -> None:
         if callback in self._listeners.get(event, []):

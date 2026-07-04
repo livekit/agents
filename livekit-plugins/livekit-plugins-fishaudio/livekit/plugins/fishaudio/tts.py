@@ -25,7 +25,7 @@ from .log import logger
 from .models import LatencyMode, OutputFormat, TTSModels
 from .version import __version__
 
-DEFAULT_MODEL: TTSModels = "s2-pro"
+DEFAULT_MODEL: TTSModels = "s2.1-pro"
 DEFAULT_VOICE_ID = "933563129e564b19a115bedd57b7406a"
 DEFAULT_BASE_URL = "https://api.fish.audio"
 NUM_CHANNELS = 1
@@ -51,6 +51,8 @@ class _TTSOptions:
     api_key: str
     latency_mode: LatencyMode
     chunk_length: int
+    speed: NotGivenOr[float]
+    volume: NotGivenOr[float]
 
     def get_http_url(self, path: str) -> str:
         return f"{self.base_url}{path}"
@@ -71,6 +73,8 @@ class TTS(tts.TTS):
         base_url: NotGivenOr[str] = NOT_GIVEN,
         latency_mode: LatencyMode = "balanced",
         chunk_length: int = 100,
+        speed: NotGivenOr[float] = NOT_GIVEN,
+        volume: NotGivenOr[float] = NOT_GIVEN,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
@@ -82,7 +86,7 @@ class TTS(tts.TTS):
 
         Args:
             api_key (NotGivenOr[str]): Fish Audio API key. Reads ``FISH_API_KEY`` if unset.
-            model (TTSModels | str): TTS model to use. Defaults to ``"s2-pro"``.
+            model (TTSModels | str): TTS model to use. Defaults to ``"s2.1-pro"``.
             voice_id (NotGivenOr[str]): Voice model ID. Fish Audio's API refers to this
                 as ``reference_id``; it's the same value either way.
             output_format (OutputFormat): Audio output format. Defaults to ``"wav"``.
@@ -94,6 +98,12 @@ class TTS(tts.TTS):
                 (100–300). With sentence-level flushing this is only hit by sentences longer
                 than ``chunk_length``; otherwise audio is produced when each sentence is
                 flushed. Defaults to 100.
+            speed (NotGivenOr[float]): Speaking rate multiplier (Fish ``prosody.speed``).
+                ``1.0`` is normal; below 1.0 is slower, above is faster. Unset uses the
+                voice's natural pace.
+            volume (NotGivenOr[float]): Loudness adjustment in decibels (Fish
+                ``prosody.volume``). ``0`` is the voice's natural level. Unset leaves it
+                unchanged.
             tokenizer (tokenize.SentenceTokenizer): Sentence tokenizer used to detect
                 sentence boundaries. Defaults to ``tokenize.blingfire.SentenceTokenizer()``.
             http_session (aiohttp.ClientSession | None): Optional aiohttp session.
@@ -133,6 +143,8 @@ class TTS(tts.TTS):
             api_key=fish_api_key,
             latency_mode=latency_mode,
             chunk_length=chunk_length,
+            speed=speed,
+            volume=volume,
         )
 
         self._session = http_session
@@ -178,6 +190,8 @@ class TTS(tts.TTS):
         voice_id: NotGivenOr[str] = NOT_GIVEN,
         latency_mode: NotGivenOr[LatencyMode] = NOT_GIVEN,
         chunk_length: NotGivenOr[int] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
+        volume: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if is_given(model):
             self._opts.model = model
@@ -189,6 +203,10 @@ class TTS(tts.TTS):
             if not 100 <= chunk_length <= 300:
                 raise ValueError("chunk_length must be between 100 and 300")
             self._opts.chunk_length = chunk_length
+        if is_given(speed):
+            self._opts.speed = speed
+        if is_given(volume):
+            self._opts.volume = volume
 
     def synthesize(
         self,
@@ -218,6 +236,15 @@ def _build_tts_request(opts: _TTSOptions, *, text: str = "") -> dict[str, Any]:
     # server doesn't fall back to its own (larger) defaults — in particular the
     # docs default of `chunk_length=300` produces large bursts that leave audible
     # gaps between Fish's chunk boundaries.
+    # `prosody` stays None unless the caller set speed/volume, so the default
+    # request is byte-for-byte unchanged.
+    prosody: dict[str, float] | None = None
+    if is_given(opts.speed) or is_given(opts.volume):
+        prosody = {}
+        if is_given(opts.speed):
+            prosody["speed"] = opts.speed
+        if is_given(opts.volume):
+            prosody["volume"] = opts.volume
     return {
         "text": text,
         "chunk_length": opts.chunk_length,
@@ -231,7 +258,7 @@ def _build_tts_request(opts: _TTSOptions, *, text: str = "") -> dict[str, Any]:
         "reference_id": opts.voice_id if is_given(opts.voice_id) else None,
         "normalize": True,
         "latency": opts.latency_mode,
-        "prosody": None,
+        "prosody": prosody,
         "top_p": 0.7,
         "temperature": 0.7,
     }

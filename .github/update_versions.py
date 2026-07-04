@@ -1,14 +1,11 @@
 import pathlib
 import re
-import yaml
 import click
 from packaging.version import Version
 import colorama
-from typing import Dict, Tuple, List
+from typing import Dict
 
 colorama.init()
-
-BUMP_ORDER: Dict[str, int] = {"patch": 0, "minor": 1, "major": 2}
 
 
 def _iter_plugin_dirs(plugins_root: pathlib.Path) -> list[pathlib.Path]:
@@ -33,44 +30,6 @@ def _read_pypi_name(pdir: pathlib.Path) -> str:
 
 def _esc(*codes: int) -> str:
     return "\033[" + ";".join(str(c) for c in codes) + "m"
-
-def parse_changeset_file(path: pathlib.Path) -> Tuple[Dict[str, str], str]:
-    """Parse a changeset file of the form:
-    
-        ---
-        some_yaml_bumps
-        ---
-        changelog text
-    """
-    text = path.read_text()
-    parts = text.split("---", 2)
-    if len(parts) < 3:
-        raise ValueError(f"Invalid changeset file format in {path}")
-    
-    yaml_part = parts[1].strip()
-    changelog_part = parts[2].strip()
-    data = yaml.safe_load(yaml_part)
-    return data, changelog_part
-
-def load_changesets(dir: pathlib.Path) -> Dict[str, Tuple[str, List[str]]]:
-    agg: Dict[str, Tuple[str, List[str]]] = {}
-    if not dir.is_dir():
-        raise ValueError(f"{dir} is not a directory or does not exist.")
-    
-    for file in dir.glob("*"):
-        if not file.is_file():
-            continue
-        data, changelog = parse_changeset_file(file)
-        for pkg, bump_type in data.items():
-            if pkg not in agg:
-                agg[pkg] = (bump_type, [changelog])
-            else:
-                cur_bump, changelogs = agg[pkg]
-                if BUMP_ORDER[bump_type] > BUMP_ORDER[cur_bump]:
-                    cur_bump = bump_type
-                changelogs.append(changelog)
-                agg[pkg] = (cur_bump, changelogs)
-    return agg
 
 def read_version(f: pathlib.Path) -> str:
     """Read __version__ = \"X.Y.Z\" from a Python file."""
@@ -161,46 +120,7 @@ def update_agents_pyproject_optional_dependencies(plugin_versions: Dict[str, str
         agents_pyproject.write_text(new_text)
         print("Updated livekit-agents/pyproject.toml optional-dependencies")
 
-def update_versions(changesets: Dict[str, Tuple[str, List[str]]]) -> None:
-    agents_ver = pathlib.Path("livekit-agents/livekit/agents/version.py")
-    plugins_root = pathlib.Path("livekit-plugins")
-
-    new_agents_version = None
-    plugin_versions = {}
-
-    if agents_ver.exists() and "livekit-agents" in changesets:
-        bump_type, _ = changesets["livekit-agents"]
-        cur = read_version(agents_ver)
-        new = bump_version(cur, bump_type)
-        print(f"livekit-agents: {_esc(31)}{cur}{_esc(0)} -> {_esc(32)}{new}{_esc(0)}")
-        write_new_version(agents_ver, new)
-        new_agents_version = new
-    else:
-        print("Warning: No version.py or no bump info for livekit-agents.")
-
-    for pdir in _iter_plugin_dirs(plugins_root):
-        vf = pdir / "livekit" / "plugins" / pdir.name.split("livekit-plugins-")[1].replace("-", "_") / "version.py"
-        pypi_name = _read_pypi_name(pdir)
-        if vf.exists():
-            if pdir.name in changesets:
-                bump_type, _ = changesets[pdir.name]
-                cur = read_version(vf)
-                new = bump_version(cur, bump_type)
-                print(f"{pypi_name}: {_esc(31)}{cur}{_esc(0)} -> {_esc(32)}{new}{_esc(0)}")
-                write_new_version(vf, new)
-                plugin_versions[pypi_name] = new
-            else:
-                print(f"Warning: Found version.py for {pypi_name}, but no bump info in next-release.")
-        else:
-            print(f"Warning: version.py not found for {pypi_name} at {vf}")
-
-    if new_agents_version:
-        update_plugins_pyproject_agents_version(new_agents_version)
-
-    if plugin_versions:
-        update_agents_pyproject_optional_dependencies(plugin_versions)
-
-def update_versions_ignore_changesets(bump_type: str) -> None:
+def update_versions(bump_type: str) -> None:
     agents_ver = pathlib.Path("livekit-agents/livekit/agents/version.py")
     plugins_root = pathlib.Path("livekit-plugins")
     
@@ -276,34 +196,22 @@ def update_prerelease(prerelease_type: str) -> None:
     help="Pre-release type. Use 'none' for normal bump, or 'rc'/'dev' for pre-release."
 )
 @click.option(
-    "--ignore-changesets",
-    is_flag=True,
-    default=False,
-    help="Ignore changeset files and bump all packages using a uniform bump type."
-)
-@click.option(
     "--bump-type",
     type=click.Choice(["patch", "minor", "major", "release"]),
     default="patch",
-    help="Type of version bump to apply when ignoring changesets. Use 'release' to strip pre-release suffixes. Defaults to patch."
+    help="Type of version bump to apply to every package. Use 'release' to strip pre-release suffixes. Defaults to patch."
 )
-def bump(pre: str, ignore_changesets: bool, bump_type: str) -> None:
+def bump(pre: str, bump_type: str) -> None:
     """
     Single command to do either normal or pre-release bumps.
 
-    For a normal release (with --pre=none), by default the script uses changesets from
-    .github/next-release to determine per-package bump types. Use --ignore-changesets to ignore
-    the changesets and bump every package with the specified --bump-type.
-    
-    For pre-release bumps (--pre=rc or --pre=dev), it updates the current versions to a new RC or DEV version.
-    In both cases, plugin pyproject.toml references for 'livekit-agents' will be updated if that version changes.
+    For a normal release (with --pre=none), every package is bumped with the specified
+    --bump-type. For pre-release bumps (--pre=rc or --pre=dev), it updates the current
+    versions to a new RC or DEV version. In both cases, plugin pyproject.toml references
+    for 'livekit-agents' will be updated if that version changes.
     """
     if pre == "none":
-        if ignore_changesets:
-            update_versions_ignore_changesets(bump_type)
-        else:
-            changesets = load_changesets(pathlib.Path(".github/next-release"))
-            update_versions(changesets)
+        update_versions(bump_type)
     else:
         update_prerelease(pre)
 

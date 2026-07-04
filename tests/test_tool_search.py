@@ -10,7 +10,7 @@ from livekit.agents.beta.toolsets.tool_search import (
 )
 from livekit.agents.llm import Tool, ToolContext, Toolset, function_tool
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
 
 
 @function_tool

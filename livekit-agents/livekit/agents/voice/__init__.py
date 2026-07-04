@@ -14,10 +14,17 @@ from .events import (
     RunContext,
     SessionUsageUpdatedEvent,
     SpeechCreatedEvent,
+    ToolCallEnded,
+    ToolCallStarted,
+    ToolCallUpdated,
+    ToolExecutionUpdatedEvent,
+    ToolReplyUpdated,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
     UserTurnExceededEvent,
 )
+from .keyterm_detection import KeytermDetectionOptions, KeytermsOptions
+from .remote_session import RemoteSession
 from .room_io import (
     _ParticipantAudioOutput,
     _ParticipantStreamTranscriptionOutput,
@@ -48,7 +55,15 @@ __all__ = [
     "AgentStateChangedEvent",
     "FunctionToolsExecutedEvent",
     "AgentFalseInterruptionEvent",
+    "RemoteSession",
+    "ToolExecutionUpdatedEvent",
+    "ToolCallStarted",
+    "ToolCallUpdated",
+    "ToolCallEnded",
+    "ToolReplyUpdated",
     "UserTurnExceededEvent",
+    "KeytermsOptions",
+    "KeytermDetectionOptions",
     "TranscriptSynchronizer",
     "io",
     "room_io",

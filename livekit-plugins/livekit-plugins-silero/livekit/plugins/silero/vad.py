@@ -71,7 +71,7 @@ class VAD(agents.vad.VAD):
         deactivation_threshold: NotGivenOr[float] = NOT_GIVEN,
         # deprecated
         padding_duration: NotGivenOr[float] = NOT_GIVEN,
-    ) -> VAD:
+    ) -> agents.vad.VAD:
         """
         Load and initialize the Silero VAD model.
 
@@ -220,6 +220,10 @@ class VAD(agents.vad.VAD):
                 activation_threshold=activation_threshold,
                 deactivation_threshold=deactivation_threshold,
             )
+
+    @property
+    def min_silence_duration(self) -> float | None:
+        return self._opts.min_silence_duration
 
 
 class VADStream(agents.vad.VADStream):

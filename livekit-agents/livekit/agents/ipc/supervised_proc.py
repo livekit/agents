@@ -128,6 +128,7 @@ class SupervisedProc(ABC):
         self._last_memory_warn_time: float = 0.0
         self._last_memory_warn_mb: float = 0.0
 
+        self._start_atask: asyncio.Task[None] | None = None
         self._supervise_atask: asyncio.Task[None] | None = None
         self._closing = False
         self._kill_sent = False
@@ -181,7 +182,9 @@ class SupervisedProc(ABC):
         if self._closing:
             raise RuntimeError("process is closed")
 
-        await asyncio.shield(self._start())
+        # keep a handle so aclose() can await an abandoned (cancelled) start()
+        self._start_atask = asyncio.create_task(self._start())
+        await asyncio.shield(self._start_atask)
 
     async def _start(self) -> None:
         def _add_proc_ctx_log(record: logging.LogRecord) -> None:
@@ -304,7 +307,16 @@ class SupervisedProc(ABC):
 
     async def aclose(self) -> None:
         """attempt to gracefully close the supervised process"""
+        if self._start_atask is not None and not self._start_atask.done():
+            # start() may have been cancelled mid-shield; wait so the started check can't race
+            await asyncio.wait([self._start_atask])
+
         if not self.started:
+            return
+
+        if not self._initialize_fut.done():
+            # never initialized: the child can't ack a graceful shutdown yet, kill it instead
+            await self.kill()
             return
 
         self._closing = True
@@ -347,6 +359,11 @@ class SupervisedProc(ABC):
             raise RuntimeError("process not started")
 
         self._closing = True
+        if not self._initialize_fut.done():
+            # unblock the supervise task waiting on this future
+            self._initialize_fut.set_exception(
+                RuntimeError("process killed before initialization completed")
+            )
         await self._send_dump_signal()
         await self._send_kill_signal()
 
@@ -420,7 +437,19 @@ class SupervisedProc(ABC):
         main_task = asyncio.create_task(self._main_task(ipc_ch))
         read_ipc_task = asyncio.create_task(self._read_ipc_task(ipc_ch, pong_timeout))
         ping_task = asyncio.create_task(self._ping_pong_task(pong_timeout))
-        read_ipc_task.add_done_callback(lambda _: ipc_ch.close())
+
+        def _on_read_ipc_done(_: asyncio.Task[None]) -> None:
+            ipc_ch.close()
+            # the read task is the sole reader of the IPC channel; once it ends, the
+            # process is gone (channel closed) or being torn down (cancelled). resolve
+            # the shutdown futures here so aclose() never waits the full close_timeout
+            # for an ack that can't arrive.
+            if not self._shutdown_ack_fut.done():
+                self._shutdown_ack_fut.set_result(None)
+            if not self._shutting_down_fut.done():
+                self._shutting_down_fut.set_result(None)
+
+        read_ipc_task.add_done_callback(_on_read_ipc_done)
 
         memory_monitor_task: asyncio.Task[None] | None = None
         if self._opts.memory_limit_mb > 0 or self._opts.memory_warn_mb > 0:
@@ -479,12 +508,6 @@ class SupervisedProc(ABC):
                 )
 
             ipc_ch.send_nowait(msg)
-
-        # resolve pending futures when the channel closes (process exited)
-        if not self._shutdown_ack_fut.done():
-            self._shutdown_ack_fut.set_result(None)
-        if not self._shutting_down_fut.done():
-            self._shutting_down_fut.set_result(None)
 
     @log_exceptions(logger=logger)
     async def _ping_pong_task(self, pong_timeout: aio.Sleep) -> None:
@@ -591,9 +614,9 @@ class SupervisedProc(ABC):
                     return
 
                 logger.warning(
-                    "Failed to get memory info for process",
+                    "failed to get memory info for process: %s",
+                    e,
                     extra=self.logging_extra(),
-                    exc_info=e,
                 )
                 # don't bother rechecking if we cannot get process info
                 return

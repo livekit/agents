@@ -5,7 +5,7 @@ from livekit.agents.tokenize import basic, blingfire
 from livekit.agents.tokenize._basic_paragraph import split_paragraphs
 from livekit.plugins import nltk
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
 
 # Download the punkt tokenizer, will only download if not already present
 nltk.NltkPlugin().download_files()

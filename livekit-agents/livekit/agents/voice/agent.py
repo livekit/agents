@@ -869,6 +869,10 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         ):
             blocked_tasks.append(old_activity._on_enter_task)
 
+        # register before any await so a concurrent drain (e.g. session close)
+        # won't wait for tasks blocked on this handoff
+        old_activity._add_drain_blocked_tasks(blocked_tasks)
+
         if (
             task_info.function_call
             and isinstance(old_activity.llm, RealtimeModel)
@@ -948,7 +952,11 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 except BaseException:
                     logger.exception("error in on_enter task of agent %s", self.id)
 
-            if session.current_agent != self:
+            if session._closing and self._activity is None:
+                # the activity never started (session closing), skip the handoff;
+                # the close path owns the previous activity
+                pass
+            elif session.current_agent != self:
                 logger.warning(
                     f"{self.__class__.__name__} completed, but the agent has changed in the meantime. "
                     "Ignoring handoff to the previous agent, likely due to `AgentSession.update_agent` being invoked."

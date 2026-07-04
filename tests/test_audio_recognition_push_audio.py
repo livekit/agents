@@ -23,12 +23,14 @@ def _make_frame(byte: int = 0x11, samples: int = 160, sample_rate: int = 16000) 
 def _make_recognition() -> AudioRecognition:
     """Build an AudioRecognition stub with just the attributes ``push_audio`` reads."""
     ar = object.__new__(AudioRecognition)
-    ar._input_started_at = None  # type: ignore[attr-defined]
     ar._sample_rate = None  # type: ignore[attr-defined]
     ar._stt_pipeline = MagicMock()  # type: ignore[attr-defined]
+    # the input anchor lives on the pipeline (see _STTPipeline.input_started_at)
+    ar._stt_pipeline.input_started_at = None  # type: ignore[attr-defined]
     ar._vad_ch = MagicMock()  # type: ignore[attr-defined]
     ar._interruption_ch = MagicMock()  # type: ignore[attr-defined]
     ar._session = MagicMock()  # type: ignore[attr-defined]
+    ar._turn_detector_stream = None  # type: ignore[attr-defined]
     return ar
 
 

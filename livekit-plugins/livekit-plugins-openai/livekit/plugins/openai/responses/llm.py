@@ -187,7 +187,7 @@ class LLM(llm.LLM):
         super().__init__()
 
         if not is_given(reasoning) and _supports_reasoning_effort(model):
-            if model.removeprefix("openai.") in ["gpt-5.1", "gpt-5.2", "gpt-5.4"]:
+            if model.removeprefix("openai.") in ["gpt-5.1", "gpt-5.2", "gpt-5.4", "gpt-5.4-mini"]:
                 reasoning = Reasoning(effort="none")
             else:
                 reasoning = Reasoning(effort="minimal")

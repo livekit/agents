@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 
 import pytest
 
@@ -9,11 +10,12 @@ from livekit import rtc
 from livekit.agents import APIConnectionError, APIConnectOptions, APIError, utils
 from livekit.agents.tts import TTS, AvailabilityChangedEvent, FallbackAdapter
 from livekit.agents.tts.tts import SynthesizedAudio, SynthesizeStream
+from livekit.agents.types import USERDATA_TTS_STARTED_TIME
 from livekit.agents.utils.aio.channel import ChanEmpty
 
 from .fake_tts import FakeTTS
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
 
 class FallbackAdapterTester(FallbackAdapter):
@@ -138,6 +140,66 @@ async def test_tts_stream_fallback() -> None:
         assert fake2.stream_ch.recv_nowait()
 
     assert not fallback_adapter.availability_changed_ch(fake1).recv_nowait().available
+
+    await fallback_adapter.aclose()
+
+
+async def test_tts_stream_ttfb_includes_failover_time() -> None:
+    # the fallback adapter is measured as a single TTS node: ttfb anchors on the first
+    # time a sentence was handed to any underlying TTS and is kept when falling back,
+    # so time spent failing over counts towards ttfb
+    fake1 = FakeTTS(fake_timeout=0.5, fake_exception=APIConnectionError("fake1 failed"))
+    fake2 = FakeTTS(fake_audio_duration=5.0)
+
+    fallback_adapter = FallbackAdapterTester([fake1, fake2])
+
+    async with fallback_adapter.stream(
+        conn_options=APIConnectOptions(timeout=10.0, max_retry=0, retry_interval=0.1)
+    ) as stream:
+        start = time.perf_counter()
+        stream.push_text("hello test")
+        stream.end_input()
+
+        frames: list[SynthesizedAudio] = []
+        async for data in stream:
+            frames.append(data)
+
+    assert frames
+    started_times = {f.frame.userdata.get(USERDATA_TTS_STARTED_TIME) for f in frames}
+    assert len(started_times) == 1, "all frames should carry the same started time"
+    started_time = started_times.pop()
+    assert started_time is not None
+    # fake1 receives the sentence 0.5s in (after its fake connection delay) and fails
+    # without audio after two attempts (~1.1s); the anchor must stay on fake1's first
+    # attempt rather than moving to fake2's
+    assert started_time == pytest.approx(start + 0.5, abs=0.1)
+
+    await fallback_adapter.aclose()
+
+
+async def test_tts_chunked_ttfb_includes_failover_time() -> None:
+    # same as above for the chunked path: the ChunkedStream base stamps its creation time
+    # (when the full text was submitted), which must not be overridden on failover
+    fake1 = FakeTTS(fake_timeout=10.0)  # always times out
+    fake2 = FakeTTS(fake_audio_duration=5.0)
+
+    fallback_adapter = FallbackAdapterTester([fake1, fake2])
+
+    start = time.perf_counter()
+    async with fallback_adapter.synthesize(
+        "hello test",
+        conn_options=APIConnectOptions(timeout=0.5, max_retry=0, retry_interval=0.1),
+    ) as stream:
+        frames: list[SynthesizedAudio] = []
+        async for data in stream:
+            frames.append(data)
+
+    assert frames
+    started_times = {f.frame.userdata.get(USERDATA_TTS_STARTED_TIME) for f in frames}
+    assert len(started_times) == 1, "all frames should carry the same started time"
+    started_time = started_times.pop()
+    assert started_time is not None
+    assert started_time == pytest.approx(start, abs=0.1)
 
     await fallback_adapter.aclose()
 

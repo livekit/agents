@@ -48,28 +48,40 @@ def create_tools_config(
     return gemini_tools
 
 
+def create_function_response(
+    output: llm.FunctionCallOutput,
+    *,
+    vertexai: bool = False,
+    tool_response_scheduling: NotGivenOr[types.FunctionResponseScheduling] = NOT_GIVEN,
+) -> types.FunctionResponse:
+    res = types.FunctionResponse(
+        name=output.name,
+        response={"error": output.output} if output.is_error else {"output": output.output},
+    )
+    if is_given(tool_response_scheduling):
+        # vertexai currently doesn't support the scheduling parameter, gemini api defaults to idle
+        # it's the user's responsibility to avoid this parameter when using vertexai
+        res.scheduling = tool_response_scheduling
+    if not vertexai:
+        # vertexai does not support id in FunctionResponse
+        # see: https://github.com/googleapis/python-genai/blob/85e00bc/google/genai/_live_converters.py#L1435
+        res.id = output.call_id
+    return res
+
+
 def get_tool_results_for_realtime(
     chat_ctx: llm.ChatContext,
     *,
     vertexai: bool = False,
     tool_response_scheduling: NotGivenOr[types.FunctionResponseScheduling] = NOT_GIVEN,
 ) -> types.LiveClientToolResponse | None:
-    function_responses: list[types.FunctionResponse] = []
-    for msg in chat_ctx.items:
-        if msg.type == "function_call_output":
-            res = types.FunctionResponse(
-                name=msg.name,
-                response={"output": msg.output},
-            )
-            if is_given(tool_response_scheduling):
-                # vertexai currently doesn't support the scheduling parameter, gemini api defaults to idle
-                # it's the user's responsibility to avoid this parameter when using vertexai
-                res.scheduling = tool_response_scheduling
-            if not vertexai:
-                # vertexai does not support id in FunctionResponse
-                # see: https://github.com/googleapis/python-genai/blob/85e00bc/google/genai/_live_converters.py#L1435
-                res.id = msg.call_id
-            function_responses.append(res)
+    function_responses = [
+        create_function_response(
+            msg, vertexai=vertexai, tool_response_scheduling=tool_response_scheduling
+        )
+        for msg in chat_ctx.items
+        if msg.type == "function_call_output"
+    ]
     return (
         types.LiveClientToolResponse(function_responses=function_responses)
         if function_responses

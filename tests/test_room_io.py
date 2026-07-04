@@ -16,7 +16,7 @@ from livekit.agents.voice.room_io._output import _ParticipantTranscriptionOutput
 from livekit.agents.voice.room_io.room_io import RoomIO
 from livekit.agents.voice.room_io.types import NoiseCancellationParams
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
 # -- helpers ------------------------------------------------------------------
 
@@ -153,13 +153,11 @@ async def test_participant_input_stream_aclose_unregisters_track_unpublished() -
 
     assert room.listener_count("track_subscribed") == 1
     assert room.listener_count("track_unpublished") == 1
-    assert room.listener_count("token_refreshed") == 1
 
     await stream.aclose()
 
     assert room.listener_count("track_subscribed") == 0
     assert room.listener_count("track_unpublished") == 0
-    assert room.listener_count("token_refreshed") == 0
 
 
 @pytest.mark.asyncio
@@ -249,16 +247,12 @@ async def test_direct_processor_lifecycle() -> None:
 
         assert stream._processor is processor
         assert processor.close_calls == 0
-        assert len(processor.stream_info_calls) == 1
-        assert len(processor.credentials_calls) == 1
 
         # track switch — processor must survive
         stream._on_track_available(track2, pub2, participant)
 
         assert stream._processor is processor
         assert processor.close_calls == 0
-        assert len(processor.stream_info_calls) == 2
-        assert len(processor.credentials_calls) == 2
 
     # final teardown closes the processor exactly once
     await stream.aclose()
@@ -290,8 +284,6 @@ async def test_selector_processor_lifecycle() -> None:
 
         assert len(processors) == 1
         assert stream._processor is processors[0]
-        assert len(processors[0].stream_info_calls) == 1
-        assert len(processors[0].credentials_calls) == 1
 
         # track switch — old processor closed, new one receives lifecycle calls
         stream._on_track_available(track2, pub2, participant)
@@ -299,8 +291,6 @@ async def test_selector_processor_lifecycle() -> None:
     assert len(processors) == 2
     assert processors[0].close_calls == 1
     assert stream._processor is processors[1]
-    assert len(processors[1].stream_info_calls) == 1
-    assert len(processors[1].credentials_calls) == 1
 
     # final teardown closes the active processor
     await stream.aclose()
@@ -309,8 +299,7 @@ async def test_selector_processor_lifecycle() -> None:
 
 @pytest.mark.asyncio
 async def test_selector_processor_track_disappears() -> None:
-    """When a track vanishes with no replacement, the selector-created processor
-    is closed and subsequent token refreshes don't touch it."""
+    """When a track vanishes with no replacement, the selector-created processor is closed."""
     room = _FakeRoom()
     processor = _MockFrameProcessor()
     stream = _make_audio_input_stream(room, noise_cancellation=lambda _params: processor)
@@ -322,20 +311,12 @@ async def test_selector_processor_track_disappears() -> None:
         stream._on_track_available(track, publication, participant)
 
     assert stream._processor is processor
-    assert len(processor.credentials_calls) == 1
 
     # track unpublished with no replacement
     stream._on_track_unavailable(publication, participant)
 
     assert processor.close_calls == 1
     assert stream._processor is None
-
-    # token refresh must not reach the closed processor
-    room._token = "refreshed-token"
-    room._server_url = "wss://refreshed.livekit.cloud"
-    stream._on_token_refreshed()
-
-    assert len(processor.credentials_calls) == 1
 
     await stream.aclose()
 

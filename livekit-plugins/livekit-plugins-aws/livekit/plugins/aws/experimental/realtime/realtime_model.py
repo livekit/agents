@@ -69,11 +69,22 @@ MAX_MESSAGE_SIZE = 1024
 MAX_MESSAGES = 40
 DEFAULT_MAX_SESSION_RESTART_ATTEMPTS = 3
 DEFAULT_MAX_SESSION_RESTART_DELAY = 10
+RECOVERABLE_VALIDATION_ERROR_MESSAGES = (
+    "InternalErrorCode=531::RST_STREAM closed stream. HTTP/2 error code: NO_ERROR",
+    "System instability detected. Please retry your request.",
+)
 # Session recycling: restart before 8-min AWS limit or credential expiry
 # Override with LK_SESSION_MAX_DURATION env var for testing (e.g., "60" for 1 minute)
 MAX_SESSION_DURATION_SECONDS = int(os.getenv("LK_SESSION_MAX_DURATION", 6 * 60))
 CREDENTIAL_EXPIRY_BUFFER_SECONDS = 3 * 60  # Restart 3 min before credential expiry
 BARGE_IN_SIGNAL = '{ "interrupted" : true }'  # Nova Sonic's barge-in detection signal
+
+
+def _is_recoverable_validation_error(exc: object) -> bool:
+    message = getattr(exc, "message", str(exc))
+    return any(text in message for text in RECOVERABLE_VALIDATION_ERROR_MESSAGES)
+
+
 DEFAULT_SYSTEM_PROMPT = (
     "Your name is Sonic, and you are a friendly and enthusiastic voice assistant. "
     "You love helping people and having natural conversations. "
@@ -500,6 +511,7 @@ class RealtimeSession(  # noqa: F811
         self._event_builder = seb(
             prompt_name=str(uuid.uuid4()),
             audio_content_name=str(uuid.uuid4()),
+            model=self._realtime_model._model,
         )
         self._input_resampler: rtc.AudioResampler | None = None
         self._bstream = utils.audio.AudioByteStream(
@@ -741,6 +753,7 @@ class RealtimeSession(  # noqa: F811
         self._event_builder = seb(
             prompt_name=str(uuid.uuid4()),
             audio_content_name=str(uuid.uuid4()),
+            model=self._realtime_model._model,
         )
         self._tool_results_ch = utils.aio.Chan[dict[str, str]]()
         self._audio_input_chan = utils.aio.Chan[bytes]()
@@ -1528,11 +1541,10 @@ class RealtimeSession(  # noqa: F811
                     self._close_current_generation()
                     raise
                 except ValidationException as ve:
-                    # there is a 3min no-activity (e.g. silence) timeout on the stream, after which the stream is closed  # noqa: E501
-                    if (
-                        "InternalErrorCode=531::RST_STREAM closed stream. HTTP/2 error code: NO_ERROR"  # noqa: E501
-                        in ve.message
-                    ):
+                    # Some Bedrock ValidationException messages represent transient stream
+                    # failures. Recover by restarting the Sonic session instead of tearing
+                    # down the LiveKit session.
+                    if _is_recoverable_validation_error(ve):
                         logger.warning(f"Validation error: {ve}\nAttempting to recover...")
                         await self._restart_session(ve)
                     elif "Tool Response parsing error" in ve.message:

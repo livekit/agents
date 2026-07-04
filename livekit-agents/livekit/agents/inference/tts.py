@@ -182,6 +182,8 @@ class RimeOptions(TypedDict, total=False):
 class InworldOptions(TypedDict, total=False):
     speaking_rate: float  # range >0.5, <=1.5
     temperature: float  # range 0-2
+    # inworld-tts-2 only; temperature is ignored on that model, use this to steer variation
+    delivery_mode: Literal["DELIVERY_MODE_UNSPECIFIED", "STABLE", "BALANCED", "CREATIVE"]
     timestamp_type: Literal["TIMESTAMP_TYPE_UNSPECIFIED", "WORD", "CHARACTER"]
     apply_text_normalization: Literal["APPLY_TEXT_NORMALIZATION_UNSPECIFIED", "ON", "OFF"]
 
@@ -616,7 +618,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             mime_type="audio/pcm",
         )
 
-        sent_tokenizer_stream = tokenize.basic.SentenceTokenizer().stream()
+        sent_tokenizer_stream = tokenize.blingfire.SentenceTokenizer().stream()
         input_sent_event = asyncio.Event()
 
         async def _input_task() -> None:

@@ -25,10 +25,11 @@ import json
 import logging
 import os
 import platform
+import time
 import weakref
 from dataclasses import dataclass
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import urlencode
 
 import aiohttp
@@ -52,6 +53,7 @@ from livekit.agents.utils.misc import is_given
 from .log import logger
 
 USER_AGENT = f"Livekit/{livekit_version} Python/{platform.python_version()}"
+EOS_FALLBACK_TIMEOUT = 1.0
 
 # Sarvam API details
 SARVAM_STT_BASE_URL = "https://api.sarvam.ai/speech-to-text"
@@ -917,6 +919,14 @@ class SpeechStream(stt.SpeechStream):
         )
         self._should_flush = False  # Flag to trigger flush
 
+        self._utterance_speech_start_wall: float | None = None
+        self._pending_final_data: dict[str, Any] | None = None
+        self._pending_eos = False
+        self._eos_fallback_task: asyncio.Task[None] | None = None
+        self._eos_fallback_timeout = EOS_FALLBACK_TIMEOUT
+        self._final_received_for_utterance = False
+        self._eos_emitted_for_utterance = False
+
         # Task management for cleanup
         self._audio_task: asyncio.Task | None = None
         self._message_task: asyncio.Task | None = None
@@ -970,6 +980,96 @@ class SpeechStream(stt.SpeechStream):
         if request_id:
             self._server_request_id = str(request_id)
 
+    def _positive_time(self, value: object) -> float | None:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        if value <= 0:
+            return None
+        # Shift into the stream timeline so the value survives reconnects: the base
+        # class advances start_time_offset by the session start -> audio start delay.
+        return float(value) + self.start_time_offset
+
+    def _reset_utterance_state(self) -> None:
+        self._cancel_eos_fallback()
+        self._pending_final_data = None
+        self._pending_eos = False
+        self._utterance_speech_start_wall = time.time()
+        self._final_received_for_utterance = False
+        self._eos_emitted_for_utterance = False
+
+    def _cancel_eos_fallback(self) -> asyncio.Task[None] | None:
+        current_task = asyncio.current_task()
+        fallback_task = self._eos_fallback_task
+        self._eos_fallback_task = None
+        if fallback_task and fallback_task is not current_task and not fallback_task.done():
+            fallback_task.cancel()
+            return fallback_task
+        return None
+
+    def _send_final_transcript(self, transcript_data: dict[str, Any]) -> bool:
+        transcript_text = transcript_data.get("transcript", "")
+        if not transcript_text:
+            return False
+
+        language = LanguageCode(transcript_data.get("language_code", ""))
+        request_id = transcript_data.get("request_id") or self._server_request_id or ""
+        # Streaming reports timing via speech_start/speech_end (the batch
+        # `timestamps` array is not sent over the socket). When absent, end_time
+        # is 0.0 and the pipeline falls back to wall-clock for EOU timing.
+        speech_data = stt.SpeechData(
+            language=language,
+            text=transcript_text,
+            start_time=self._positive_time(transcript_data.get("speech_start")) or 0.0,
+            end_time=self._positive_time(transcript_data.get("speech_end")) or 0.0,
+            confidence=_extract_confidence(transcript_data, self._logger),
+        )
+        self._event_ch.send_nowait(
+            stt.SpeechEvent(
+                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                request_id=request_id,
+                alternatives=[speech_data],
+            )
+        )
+        return True
+
+    def _try_commit_utterance(self) -> None:
+        # Flush in order: FINAL_TRANSCRIPT first, then END_OF_SPEECH.
+        if self._pending_final_data is None or self._eos_emitted_for_utterance:
+            return
+
+        committed_data = self._pending_final_data
+        if self._send_final_transcript(committed_data):
+            self._logger.debug("Sarvam STT utterance committed", extra=self._build_log_context())
+            self._emit_end_of_speech()
+            self._pending_final_data = None
+
+    def _emit_end_of_speech(self) -> None:
+        if self._eos_emitted_for_utterance:
+            return
+
+        self._cancel_eos_fallback()
+
+        # Bare END_OF_SPEECH (no alternatives), like other plugins' EOS events. The
+        # speech-end timing lives on the FINAL_TRANSCRIPT's end_time, not here.
+        self._event_ch.send_nowait(
+            stt.SpeechEvent(
+                type=stt.SpeechEventType.END_OF_SPEECH,
+                request_id=self._server_request_id or "",
+            )
+        )
+        self._eos_emitted_for_utterance = True
+        self._pending_eos = False
+
+    async def _emit_pending_eos_after_timeout(self) -> None:
+        try:
+            timeout = self._eos_fallback_timeout
+            if timeout > 0:
+                await asyncio.sleep(timeout)
+            if self._pending_eos and not self._eos_emitted_for_utterance:
+                self._emit_end_of_speech()
+        except asyncio.CancelledError:
+            raise
+
     async def aclose(self) -> None:
         """Close the stream and clean up resources."""
         self._logger.debug("Starting stream cleanup", extra=self._build_log_context())
@@ -983,6 +1083,9 @@ class SpeechStream(stt.SpeechStream):
             tasks_to_cancel.append(self._audio_task)
         if self._message_task and not self._message_task.done():
             tasks_to_cancel.append(self._message_task)
+        fallback_task = self._cancel_eos_fallback()
+        if fallback_task is not None:
+            tasks_to_cancel.append(fallback_task)
 
         if tasks_to_cancel:
             try:
@@ -1206,6 +1309,9 @@ class SpeechStream(stt.SpeechStream):
         finally:
             # Clean up tasks
             all_tasks = tasks + [reconnect_task]
+            fallback_task = self._cancel_eos_fallback()
+            if fallback_task is not None:
+                all_tasks.append(fallback_task)
             await utils.aio.cancel_and_wait(*all_tasks)
 
             # Close WebSocket
@@ -1472,7 +1578,6 @@ class SpeechStream(stt.SpeechStream):
         """Handle transcription result messages."""
         transcript_data = data.get("data", {})
         transcript_text = transcript_data.get("transcript", "")
-        language = LanguageCode(transcript_data.get("language_code", ""))
         self._maybe_set_server_request_id(transcript_data)
         # Prefer the per-message request_id from the server; fall back to the
         # session-wide server request_id captured from an earlier message.
@@ -1498,22 +1603,13 @@ class SpeechStream(stt.SpeechStream):
             )
             self._event_ch.send_nowait(usage_event)
 
-            # Create speech data
-            speech_data = stt.SpeechData(
-                language=language,
-                text=transcript_text,
-                start_time=transcript_data.get("speech_start", 0.0),
-                end_time=transcript_data.get("speech_end", 0.0),
-                confidence=_extract_confidence(transcript_data, self._logger),
-            )
-
-            # Create final transcript event with request_id
-            speech_event = stt.SpeechEvent(
-                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                request_id=request_id,
-                alternatives=[speech_data],
-            )
-            self._event_ch.send_nowait(speech_event)
+            if self._pending_eos:
+                self._pending_final_data = transcript_data
+                self._final_received_for_utterance = True
+                self._try_commit_utterance()
+            else:
+                if self._send_final_transcript(transcript_data):
+                    self._final_received_for_utterance = True
 
             self._logger.debug(
                 "Transcript processed successfully",
@@ -1521,7 +1617,6 @@ class SpeechStream(stt.SpeechStream):
                     **self._build_log_context(),
                     "text_length": len(transcript_text),
                     "language": self._opts.language,
-                    "confidence": speech_data.confidence,
                 },
             )
 
@@ -1557,16 +1652,30 @@ class SpeechStream(stt.SpeechStream):
         try:
             if signal_type == "START_SPEECH":
                 if not self._speaking:
+                    self._reset_utterance_state()
                     self._speaking = True
-                    start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
+                    start_event = stt.SpeechEvent(
+                        type=stt.SpeechEventType.START_OF_SPEECH,
+                        request_id=self._server_request_id or "",
+                        speech_start_time=self._utterance_speech_start_wall,
+                    )
                     self._event_ch.send_nowait(start_event)
                     self._logger.debug("Speech started", extra=self._build_log_context())
 
             elif signal_type == "END_SPEECH":
                 if self._speaking:
                     self._speaking = False
-                    end_event = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-                    self._event_ch.send_nowait(end_event)
+                    self._pending_eos = True
+                    self._try_commit_utterance()
+                    if not self._eos_emitted_for_utterance and self._pending_final_data is None:
+                        if self._final_received_for_utterance:
+                            self._emit_end_of_speech()
+                        elif self._eos_fallback_task is None or self._eos_fallback_task.done():
+                            # Give Sarvam a short grace period to deliver the
+                            # final transcript so LiveKit sees FINAL before EOS.
+                            self._eos_fallback_task = asyncio.create_task(
+                                self._emit_pending_eos_after_timeout()
+                            )
 
                     # Set flag to trigger flush when Sarvam detects end of speech
                     self._should_flush = True

@@ -29,7 +29,7 @@ import pytest
 from livekit.agents.vad import VADEvent, VADEventType
 from livekit.agents.voice.audio_recognition import AudioRecognition
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
 
 class TestUserTurnStartPersistence:
@@ -46,6 +46,8 @@ class TestUserTurnStartPersistence:
         # _speaking is a property backed by this event (set == silent/not speaking)
         audio_recognition._user_silence_ev = asyncio.Event()
         audio_recognition._speaking = False
+        audio_recognition._agent_speaking = False
+        audio_recognition._turn_detector_stream = None
         audio_recognition._end_of_turn_task = None
         audio_recognition._user_turn_span = None
         audio_recognition._user_turn_start = None

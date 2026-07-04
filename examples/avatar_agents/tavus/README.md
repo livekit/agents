@@ -9,7 +9,7 @@ This example demonstrates how to create a animated avatar using [Tavus](https://
 ```bash
 # Tavus Config
 export TAVUS_API_KEY="..."
-export TAVUS_REPLICA_ID="..."
+export TAVUS_FACE_ID="..."
 
 # OpenAI config (or other models, tts, stt)
 export OPENAI_API_KEY="..."
