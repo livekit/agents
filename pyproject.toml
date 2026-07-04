@@ -78,7 +78,6 @@ livekit-plugins-did = { workspace = true }
 members = ["livekit-plugins/*", "livekit-agents"]
 exclude = [
     "livekit-plugins/community",
-    "livekit-plugins/livekit-blingfire",
     "livekit-plugins/livekit-blockguard",
     "livekit-plugins/livekit-durable",
 ]
