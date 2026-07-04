@@ -15,7 +15,7 @@ import pytest
 from livekit.agents import APIConnectOptions
 from livekit.plugins.xai import tts as xai_tts
 
-pytestmark = [pytest.mark.unit, pytest.mark.plugin("xai")]
+pytestmark = pytest.mark.plugin("xai")
 
 
 class _FakeWebSocket:
