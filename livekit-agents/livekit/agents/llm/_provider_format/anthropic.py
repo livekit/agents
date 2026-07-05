@@ -7,7 +7,11 @@ from typing import Any
 
 from livekit.agents import llm
 
-from .utils import convert_mid_conversation_instructions, group_tool_calls
+from .utils import (
+    convert_mid_conversation_instructions,
+    group_tool_calls,
+    parse_tool_call_arguments,
+)
 
 
 @dataclass
@@ -65,7 +69,7 @@ def to_chat_ctx(
                     "id": msg.call_id,
                     "type": "tool_use",
                     "name": msg.name,
-                    "input": json.loads(msg.arguments or "{}"),
+                    "input": parse_tool_call_arguments(msg),
                 }
             )
         elif msg.type == "function_call_output":
