@@ -34,12 +34,7 @@ from ..metrics import (
 )
 from ..telemetry import otel_metrics, trace_types, tracer, utils as trace_utils
 from ..tokenize.basic import split_words
-from ..types import (
-    ATTRIBUTE_TRANSCRIPTION_EXPRESSION,
-    NOT_GIVEN,
-    FlushSentinel,
-    NotGivenOr,
-)
+from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils.misc import is_given
 from ._utils import _set_participant_attributes
 from .agent import (
@@ -101,7 +96,6 @@ from .turn import (
 
 if TYPE_CHECKING:
     from ..llm import mcp
-    from ..tts._provider_format import ExpressiveTag
     from .agent_session import AgentSession, ExpressiveOptions
 
 
@@ -2500,44 +2494,6 @@ class AgentActivity(RecognitionHooks):
             if text.strip():
                 chat_ctx.add_message(role="system", content=text)
 
-    def _restore_expressive_content(self, chat_ctx: llm.ChatContext) -> None:
-        """Swap assistant message content for the marked-up text on the per-turn copy.
-
-        Chat history stores clean text (``content``) with the original marked-up text
-        preserved on ``expressive_content``. Re-injecting the markup lets the LLM see
-        its own past expressive style instead of being few-shotted by a tag-free
-        history. The items are shared with the persistent chat context, so swapped
-        messages are replaced with copies rather than mutated.
-
-        Markup is only restored for messages captured under the same markup dialect
-        (matched by ``markup._provider_key()``): tag vocabularies differ between
-        providers, so after a TTS handoff another provider's tags would teach the
-        LLM the wrong vocabulary. The TTS label can't be used here — inference.TTS
-        shares one label across all providers.
-        """
-        if self.tts is None:
-            return
-
-        current_key = self.tts.markup._provider_key()
-        if not current_key:
-            return
-
-        items = chat_ctx.items
-        for i, item in enumerate(items):
-            if (
-                item.type == "message"
-                and item.role == "assistant"
-                and item.expressive_content is not None
-                and item.expressive_content.source == current_key
-            ):
-                copied = item.model_copy()
-                # expressive_content.markup is the full text of the message; non-text
-                # content (images/audio) is preserved as-is
-                copied.content = [item.expressive_content.markup] + [
-                    c for c in item.content if not isinstance(c, str)
-                ]
-                items[i] = copied
-
     def _on_pipeline_reply_done(self, _: asyncio.Task[None]) -> None:
         if not self._speech_q and (not self._current_speech or self._current_speech.done()):
             self._session._update_agent_state("listening")
@@ -2875,10 +2831,6 @@ class AgentActivity(RecognitionHooks):
         _expr_opts = self._resolve_expressive_options()
         if _expr_opts is not None:
             self._inject_expressive_instructions(chat_ctx, _expr_opts, speech_handle)
-            # only restore markup when the current TTS understands it; after a handoff
-            # to a TTS without markup support, old tags would leak through unconverted
-            if self.tts and self.tts.markup.llm_instructions():
-                self._restore_expressive_content(chat_ctx)
 
         # TODO(theomonnom): since pause is closing STT/LLM/TTS, we have issues for SpeechHandle still in queue  # noqa: E501
         # I should implement a retry mechanism?
@@ -2929,13 +2881,6 @@ class AgentActivity(RecognitionHooks):
             tts: _TTSGenerationData | None = None  # audio + timed transcript, when enabled
 
         segment_ch = utils.aio.Chan[_SpeechSegment]()
-
-        # Spoken LLM text with TTS markup intact, accumulated across all segments (for
-        # structured output this is the extracted response-field text, which still
-        # carries the markup). The transcript path strips markup before it reaches
-        # forwarded_text (see _read_segment_text), so this is the only place the
-        # marked-up text survives for expressive_content / _restore_expressive_content.
-        assistant_llm_text_parts: list[str] = []
 
         @utils.log_exceptions(logger=logger)
         async def _produce_segments() -> None:
@@ -3000,7 +2945,6 @@ class AgentActivity(RecognitionHooks):
                         continue
                     if current is None:
                         current = await _start_segment()
-                    assistant_llm_text_parts.append(text)
                     current.text.send_nowait(text)
                     if tts_text is not None:
                         tts_text.send_nowait(text)
@@ -3063,67 +3007,17 @@ class AgentActivity(RecognitionHooks):
 
         reply_started_at = time.time()
 
-        # In expressive mode the LLM emits markup the TTS interprets as audio directives,
-        # so strip it from the user-visible transcript and surface the expression as
-        # `lk.expression` instead (the markup must not leak into the transcript).
-        _strip_markup = self.tts is not None and self._resolve_expressive_options() is not None
-
-        # Snapshot the markup dialect at generation start: the LLM's tags belong to
-        # this dialect, so a mid-turn provider switch (update_options(model=...)
-        # during playout) must not re-key the captured markup to the new provider.
-        _expressive_dialect = self.tts.markup._provider_key() if _strip_markup and self.tts else ""
-
         response_field = self._agent._response_field_name
 
-        async def _read_segment_text(
-            segment_text: AsyncIterable[str | BaseModel],
-        ) -> AsyncIterable[str]:
-            # In structured-output mode the chunks are cumulative parsed models; pull the
-            # spoken-text delta out of `response_field` (same normalization the tts_node
-            # gets via generation._extract_spoken_text) so the transcript isn't empty.
-            # markup stripping also collects the tags it removes into expressive_tags
-            # (single pass), so we can surface them as transcription attributes
-            expressive_tags: list[ExpressiveTag] = []
-            source: AsyncIterable[str] = _extract_spoken_text(segment_text, response_field)
-            if _strip_markup and self.tts:
-                source = self.tts.markup.to_text_stream(source, tags_out=expressive_tags)
-
-            def _publish_expressive_tags() -> None:
-                # surface the segment's expression on the transcription so the frontend
-                # can react to e.g. [speak happy]. We capture only the delivery/emotion
-                # ("expression" for Inworld/ElevenLabs v3, "emotion" for Cartesia) and
-                # take the first (leading) one, since it sets the segment's delivery. The
-                # value is a JSON object ({"value": ...}) so the shape can gain fields
-                # later without breaking parsers.
-                if text_output is None:
-                    return
-                expression = next(
-                    (t["value"] for t in expressive_tags if t["type"] in ("expression", "emotion")),
-                    None,
-                )
-                if expression is None:
-                    return
-                text_output.set_segment_attributes(
-                    {
-                        ATTRIBUTE_TRANSCRIPTION_EXPRESSION: json.dumps(
-                            {"value": expression}, separators=(",", ":")
-                        )
-                    }
-                )
-
-            published = False
-            async for chunk in source:
-                # publish before the first chunk opens the segment writer, so the
-                # expression lands on the segment's opening header (the frontend gets it
-                # at segment start). by here to_text_stream has collected the leading tag.
-                if not published:
-                    _publish_expressive_tags()
-                    published = True
-                yield chunk
-
-            # refresh on the flush trailer in case the leading expression was only
-            # collected after the header was sent
-            _publish_expressive_tags()
+        # In expressive mode the LLM emits markup the TTS interprets as audio directives.
+        # The raw text (markup intact) flows into chat history and the tts_node; the
+        # transcript forwarder (generation.perform_text_forwarding) strips it from the room
+        # transcript and surfaces the leading expression as the lk.expression attribute.
+        _transcript_markup = (
+            self.tts.markup
+            if self.tts is not None and self._resolve_expressive_options() is not None
+            else None
+        )
 
         started_speaking_at: float | None = None
         stopped_speaking_at: float | None = None
@@ -3240,7 +3134,9 @@ class AgentActivity(RecognitionHooks):
                 transcript = timed_texts
                 read_transcript_from_tts = True
 
-            tr_node = self._agent.transcription_node(_read_segment_text(transcript), model_settings)
+            tr_node = self._agent.transcription_node(
+                _extract_spoken_text(transcript, response_field), model_settings
+            )
             text_source = await tr_node if asyncio.iscoroutine(tr_node) else tr_node
             audio_source = segment.tts.audio_ch if segment.tts else None
 
@@ -3251,6 +3147,7 @@ class AgentActivity(RecognitionHooks):
                 audio_source=audio_source,
                 text_source=text_source,
                 on_first_frame=_on_first_frame,
+                transcript_markup=_transcript_markup,
             )
             segment_outputs.append(out)
             if speech_handle.interrupted:
@@ -3308,25 +3205,9 @@ class AgentActivity(RecognitionHooks):
             )
 
         if forwarded_text:
-            # When expressive injected markup instructions into the LLM context,
-            # preserve the agent's own marked-up text on the message so future LLM
-            # turns can see its expressive style (_restore_expressive_content).
-            # forwarded_text is already markup-free here (the transcript stream is
-            # stripped in _read_segment_text), so the markup is recovered from the
-            # raw LLM output captured in assistant_llm_text_parts instead. Skip on
-            # interruption: the raw text covers the full reply, not just the spoken
-            # portion, so it wouldn't line up with the (partial) stored content.
-            expressive_text: str | None = None
-            expressive_source: str | None = None
-            if _strip_markup and self.tts and not speech_handle.interrupted:
-                raw_text = "".join(assistant_llm_text_parts)
-                if raw_text and self.tts.markup.to_text(raw_text) != raw_text:
-                    expressive_text = raw_text
-                    # keyed by the markup dialect snapshotted at generation start, not
-                    # the TTS label (inference.TTS shares one label across providers)
-                    # nor the live key (a mid-turn provider switch would mis-key it)
-                    expressive_source = _expressive_dialect
-
+            # forwarded_text carries the raw LLM output including any expressive markup
+            # (the transcript forwarder strips it only for the room transcript), so the
+            # markup lives directly on the stored assistant message.
             extra_kwargs: dict = {}
             if llm_gen_data.generated_extra:
                 extra_kwargs["extra"] = llm_gen_data.generated_extra
@@ -3341,10 +3222,6 @@ class AgentActivity(RecognitionHooks):
             )
             if llm_gen_data.llm_output is not None:
                 msg.llm_output = llm_gen_data.llm_output
-            if expressive_text is not None and expressive_source is not None:
-                msg.expressive_content = llm.ExpressiveContent(
-                    markup=expressive_text, source=expressive_source
-                )
             self._agent._chat_ctx.insert(msg)
             self._session._conversation_item_added(msg)
             speech_handle._item_added([msg])

@@ -271,7 +271,9 @@ class _ParticipantLegacyTranscriptionOutput:
         await self._publish_transcription(self._current_id, self._pushed_text, final=False)
 
     @utils.log_exceptions(logger=logger)
-    def flush(self) -> None:
+    def flush(self, attributes: Mapping[str, str] | None = None) -> None:
+        # attributes (e.g. lk.expression) are ignored: the deprecated rtc Transcription
+        # API has no attribute channel; the stream-based output carries them instead.
         if self._participant_identity is None or self._track_id is None or not self._capturing:
             return
 
@@ -279,11 +281,6 @@ class _ParticipantLegacyTranscriptionOutput:
             self._publish_transcription(self._current_id, self._pushed_text, final=True)
         )
         self._reset_state()
-
-    def set_segment_attributes(self, attributes: Mapping[str, str]) -> None:
-        # the deprecated rtc Transcription API has no attribute channel; ignored here
-        # (the stream-based output carries the attributes instead).
-        pass
 
     async def aclose(self) -> None:
         if self._closed:
@@ -371,10 +368,6 @@ class _ParticipantStreamTranscriptionOutput:
         self._track_id: str | None = None
         self._participant_identity: str | None = None
         self._additional_attributes = attributes or {}
-        # per-segment attributes set during the current segment (e.g. stripped voice
-        # tags), merged into the segment's final attributes on flush, then cleared.
-        self._pending_segment_attributes: dict[str, str] = {}
-
         self._writer: rtc.TextStreamWriter | None = None
         self._json_format = json_format
 
@@ -426,11 +419,6 @@ class _ParticipantStreamTranscriptionOutput:
         for key, val in self._additional_attributes.items():
             if key not in attributes:
                 attributes[key] = val
-
-        # carry per-segment attributes (e.g. expressive tags) on the opening header
-        # so the frontend gets them at segment start; the flush trailer refreshes them
-        for key, val in self._pending_segment_attributes.items():
-            attributes.setdefault(key, val)
 
         return await self._room.local_participant.stream_text(
             topic=TOPIC_TRANSCRIPTION,
@@ -502,22 +490,16 @@ class _ParticipantStreamTranscriptionOutput:
         except Exception as e:
             logger.warning("failed to publish agent transcription to room: %s", e)
 
-    def set_segment_attributes(self, attributes: Mapping[str, str]) -> None:
-        self._pending_segment_attributes.update(attributes)
-
-    def flush(self) -> None:
-        # only ride along on a segment that has captured text — don't emit an extra
-        # empty transcription just to carry tags (keeps lk.transcription cadence intact)
+    def flush(self, attributes: Mapping[str, str] | None = None) -> None:
+        # attributes (e.g. lk.expression) ride along on the segment's closing header;
+        # only emit on a segment that captured text (keeps lk.transcription cadence intact)
         if self._participant_identity is None or not self._capturing:
-            self._pending_segment_attributes = {}
             return
 
         self._capturing = False
         curr_writer = self._writer
         self._writer = None
-        extra_attributes = self._pending_segment_attributes
-        self._pending_segment_attributes = {}
-        self._flush_atask = asyncio.create_task(self._flush_task(curr_writer, extra_attributes))
+        self._flush_atask = asyncio.create_task(self._flush_task(curr_writer, dict(attributes or {})))
 
     async def aclose(self) -> None:
         if self._closed:
@@ -598,19 +580,12 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
         if self.next_in_chain:
             await self.next_in_chain.capture_text(text)
 
-    def set_segment_attributes(self, attributes: Mapping[str, str]) -> None:
-        for sink in self.__outputs:
-            sink.set_segment_attributes(attributes)
-
-        if self.next_in_chain:
-            self.next_in_chain.set_segment_attributes(attributes)
-
-    def flush(self) -> None:
+    def flush(self, attributes: Mapping[str, str] | None = None) -> None:
         for source in self.__outputs:
-            source.flush()
+            source.flush(attributes)
 
         if self.next_in_chain:
-            self.next_in_chain.flush()
+            self.next_in_chain.flush(attributes)
 
     async def aclose(self) -> None:
         if self.__closed:

@@ -401,19 +401,13 @@ class TextOutput(ABC):
         """Capture a text segment (Used by the output of LLM nodes)"""
 
     @abstractmethod
-    def flush(self) -> None:
-        """Mark the current text segment as complete (e.g LLM generation is complete)"""
+    def flush(self, attributes: Mapping[str, str] | None = None) -> None:
+        """Mark the current text segment as complete (e.g LLM generation is complete).
 
-    def set_segment_attributes(self, attributes: Mapping[str, str]) -> None:
-        """Attach extra attributes to the current (in-progress) output segment.
-
-        Used to surface side-channel metadata — e.g. expressive tags stripped
-        from the transcript — that should ride along with the segment on its next
-        flush. The base implementation forwards to the chained output; outputs that
-        publish to a transport (e.g. RoomIO transcription) override this to apply them.
+        ``attributes`` are side-channel metadata (e.g. the ``lk.expression`` expressive
+        tag) to attach to the segment as it closes; outputs that publish to a transport
+        (e.g. RoomIO transcription) apply them, others ignore them.
         """
-        if self.next_in_chain:
-            self.next_in_chain.set_segment_attributes(attributes)
 
     def on_attached(self) -> None:
         if self.next_in_chain:

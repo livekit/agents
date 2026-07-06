@@ -282,34 +282,11 @@ class MetricsReport(TypedDict, total=False):
     stt_metadata: MetricsMetadata
 
 
-class ExpressiveContent(BaseModel):
-    """An assistant message's text with its TTS expressive markup intact.
-
-    ``ChatMessage.content`` always holds the clean, tag-free transcript text; this
-    holds the marked-up version (e.g. ``<expression value="..."/>`` tags) plus the
-    TTS that produced it. The framework re-injects the markup into future LLM turns
-    so the model sees its own expressive style — but only while the same TTS is in
-    use, since tag vocabularies differ between providers.
-    """
-
-    markup: str
-    """The message text including TTS markup, e.g. ``<expression value="..."/> Hi there``."""
-    source: str
-    """Markup dialect key (``tts.markup._provider_key()``) active when the markup was
-    captured, e.g. ``"cartesia"``. Markup is only restored into future turns while the
-    current TTS speaks the same dialect."""
-
-
 class ChatMessage(BaseModel):
     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
     type: Literal["message"] = "message"
     role: ChatRole
     content: list[ChatContent]
-    expressive_content: ExpressiveContent | None = None
-    """The assistant text with TTS expressive markup intact (see
-    :class:`ExpressiveContent`). Set only on assistant messages generated while
-    expressive was enabled and the reply actually contained markup; ``None``
-    otherwise (including interrupted turns). ``content`` always holds the clean text."""
     interrupted: bool = False
     transcript_confidence: float | None = None
     extra: dict[str, Any] = Field(default_factory=dict)
@@ -602,7 +579,6 @@ class ChatContext:
         exclude_function_call: bool = False,
         exclude_metrics: bool = False,
         exclude_config_update: bool = False,
-        exclude_expressive_content: bool = True,
     ) -> dict[str, Any]:
         items: list[ChatItem] = []
         for item in self.items:
@@ -629,8 +605,6 @@ class ChatContext:
             exclude_fields.add("created_at")
         if exclude_metrics:
             exclude_fields.add("metrics")
-        if exclude_expressive_content:
-            exclude_fields.add("expressive_content")
 
         return {
             "items": [

@@ -26,7 +26,12 @@ from ..llm import (
 from ..llm.chat_context import Instructions
 from ..log import logger
 from ..telemetry import trace_types, tracer
-from ..types import USERDATA_TIMED_TRANSCRIPT, FlushSentinel, NotGivenOr
+from ..types import (
+    ATTRIBUTE_TRANSCRIPTION_EXPRESSION,
+    USERDATA_TIMED_TRANSCRIPT,
+    FlushSentinel,
+    NotGivenOr,
+)
 from ..utils import aio
 from ..utils.aio import itertools
 from . import io
@@ -35,6 +40,8 @@ from .tool_executor import _build_executor_map
 from .transcription.text_transforms import _apply_text_transforms
 
 if TYPE_CHECKING:
+    from ..tts import TTS
+    from ..tts._provider_format import ExpressiveTag
     from .agent import Agent, ModelSettings
     from .agent_session import AgentSession
     from .transcription.text_transforms import TextTransforms
@@ -464,11 +471,28 @@ class _TextOutput:
     first_text_fut: asyncio.Future[None]
 
 
+def _expression_attributes(tags: list[ExpressiveTag]) -> dict[str, str] | None:
+    """Build the ``lk.expression`` segment attribute from stripped markup tags.
+
+    Surfaces the segment's leading delivery/emotion (``expression`` for Inworld/xAI,
+    ``emotion`` for Cartesia) as ``{"value": ...}`` so the frontend can react to it.
+    """
+    expression = next((t["value"] for t in tags if t["type"] in ("expression", "emotion")), None)
+    if expression is None:
+        return None
+    return {
+        ATTRIBUTE_TRANSCRIPTION_EXPRESSION: json.dumps({"value": expression}, separators=(",", ":"))
+    }
+
+
 def perform_text_forwarding(
-    *, text_output: io.TextOutput | None, source: AsyncIterable[str]
+    *,
+    text_output: io.TextOutput | None,
+    source: AsyncIterable[str],
+    markup: TTS.Markup | None = None,
 ) -> tuple[asyncio.Task[None], _TextOutput]:
     out = _TextOutput(text="", first_text_fut=asyncio.Future())
-    task = asyncio.create_task(_text_forwarding_task(text_output, source, out))
+    task = asyncio.create_task(_text_forwarding_task(text_output, source, out, markup))
     return task, out
 
 
@@ -477,21 +501,33 @@ async def _text_forwarding_task(
     text_output: io.TextOutput | None,
     source: AsyncIterable[str],
     out: _TextOutput,
+    markup: TTS.Markup | None = None,
 ) -> None:
-    try:
+    # out.text keeps the raw LLM text (markup intact) for chat history; the transcript
+    # forwarded to the room is stripped here (markup is a TTS audio directive, not text),
+    # and the stripped tags are surfaced as the segment's lk.expression attribute on flush.
+    tags: list[ExpressiveTag] = []
+
+    async def _accumulate_raw() -> AsyncGenerator[str, None]:
         async for delta in source:
             out.text += delta
-            if text_output is not None:
-                await text_output.capture_text(delta)
-
             if not out.first_text_fut.done():
                 out.first_text_fut.set_result(None)
+            yield delta
+
+    display: AsyncIterable[str] = (
+        markup.to_text_stream(_accumulate_raw(), tags_out=tags) if markup else _accumulate_raw()
+    )
+    try:
+        async for chunk in display:
+            if text_output is not None and chunk:
+                await text_output.capture_text(chunk)
     finally:
         if isinstance(source, _ACloseable):
             await source.aclose()
 
         if text_output is not None:
-            text_output.flush()
+            text_output.flush(_expression_attributes(tags))
 
 
 @dataclass
@@ -604,6 +640,7 @@ async def forward_generation(
     audio_source: AsyncIterable[rtc.AudioFrame] | None,
     text_source: AsyncIterable[str] | None,
     on_first_frame: Callable[[asyncio.Future[Any], _AudioOutput | None], None],
+    transcript_markup: TTS.Markup | None = None,
 ) -> _ForwardOutput:
     """Forward one segment's audio/text to the outputs, then wait for its playout.
 
@@ -627,7 +664,7 @@ async def forward_generation(
         text_out: _TextOutput | None = None
         if text_source is not None:
             forward_text_task, text_out = perform_text_forwarding(
-                text_output=text_output, source=text_source
+                text_output=text_output, source=text_source, markup=transcript_markup
             )
             forward_tasks.append(forward_text_task)
             out.text_out = text_out

@@ -91,38 +91,6 @@ def test_chat_ctx_can_be_serialized_and_deserialized_with_defaults():
     assert chat_ctx.is_equivalent(ChatContext.from_dict(chat_ctx.to_dict()))
 
 
-def test_expressive_content_serialization():
-    from livekit.agents.llm import ChatContext, ChatMessage, ExpressiveContent
-
-    markup = 'Well, <expression value="sigh"/> I suppose so.'
-    chat_ctx = ChatContext(
-        [
-            ChatMessage(role="user", content=["Hello"]),
-            ChatMessage(
-                role="assistant",
-                content=["Well, I suppose so."],
-                expressive_content=ExpressiveContent(markup=markup, source="inworld"),
-            ),
-        ]
-    )
-
-    # excluded by default: the serialized view is clean
-    items = chat_ctx.to_dict()["items"]
-    assert "expressive_content" not in items[1]
-    assert items[1]["content"] == ["Well, I suppose so."]
-
-    # opt-in to see the marked-up text
-    items = chat_ctx.to_dict(exclude_expressive_content=False)["items"]
-    assert items[1]["expressive_content"] == {"markup": markup, "source": "inworld"}
-    assert items[1]["content"] == ["Well, I suppose so."]
-
-    # round-trips when included
-    restored = ChatContext.from_dict(chat_ctx.to_dict(exclude_expressive_content=False))
-    msg = restored.items[1]
-    assert isinstance(msg, ChatMessage)
-    assert msg.expressive_content == ExpressiveContent(markup=markup, source="inworld")
-
-
 @skip_if_no_credentials()
 async def test_summarize():
     from livekit.agents import ChatContext
