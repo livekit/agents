@@ -18,6 +18,16 @@ from .events import (
     UserStateChangedEvent,
     UserTurnExceededEvent,
 )
+from .redaction import (
+    NoopRedactor,
+    RedactedEntity,
+    RedactionContext,
+    RedactionOptions,
+    RedactionResult,
+    RedactionSink,
+    Redactor,
+    RegexRedactor,
+)
 from .remote_session import RemoteSession
 from .room_io import (
     _ParticipantAudioOutput,
@@ -51,6 +61,14 @@ __all__ = [
     "AgentFalseInterruptionEvent",
     "RemoteSession",
     "UserTurnExceededEvent",
+    "Redactor",
+    "RedactionOptions",
+    "RedactionSink",
+    "RedactionContext",
+    "RedactionResult",
+    "RedactedEntity",
+    "NoopRedactor",
+    "RegexRedactor",
     "TranscriptSynchronizer",
     "io",
     "room_io",

@@ -80,6 +80,7 @@ from .generation import (
     remove_instructions,
     update_instructions,
 )
+from .redaction import RedactionSink, redact_chat_ctx
 from .speech_handle import DEFAULT_INPUT_DETAILS, InputDetails, SpeechHandle
 from .tool_executor import _resolve_async_tool_options, _ToolExecutor
 from .turn import (
@@ -493,6 +494,13 @@ class AgentActivity(RecognitionHooks):
             # for realtime LLM, we assume the server will remove unvalid tool messages
             await self.update_chat_ctx(self._agent._chat_ctx.copy(tools=tools))
 
+    async def _redact_for_llm_egress(self, chat_ctx: llm.ChatContext) -> llm.ChatContext:
+        """Return a redacted copy of chat_ctx when the LLM redaction sink is enabled."""
+        redaction = self._session.options.redaction
+        if redaction is None or RedactionSink.LLM not in redaction.sinks:
+            return chat_ctx
+        return await redact_chat_ctx(chat_ctx, redaction, sink=RedactionSink.LLM)
+
     async def update_chat_ctx(
         self, chat_ctx: llm.ChatContext, *, exclude_invalid_function_calls: bool = True
     ) -> None:
@@ -501,7 +509,7 @@ class AgentActivity(RecognitionHooks):
 
         if self._rt_session is not None:
             remove_instructions(chat_ctx)
-            await self._rt_session.update_chat_ctx(chat_ctx)
+            await self._rt_session.update_chat_ctx(await self._redact_for_llm_egress(chat_ctx))
         else:
             update_instructions(
                 chat_ctx, instructions=self._agent.instructions, add_if_missing=True
@@ -2696,6 +2704,10 @@ class AgentActivity(RecognitionHooks):
         # apply the correct variant of the instructions for the turn's input modality
         apply_instructions_modality(chat_ctx, modality=speech_handle.input_details.modality)
 
+        # redact a copy of the full context at the LLM egress boundary; placed before
+        # the llm_node call so overridden llm_node implementations are covered too
+        chat_ctx = await self._redact_for_llm_egress(chat_ctx)
+
         # TODO(theomonnom): since pause is closing STT/LLM/TTS, we have issues for SpeechHandle still in queue  # noqa: E501
         # I should implement a retry mechanism?
 
@@ -3210,7 +3222,7 @@ class AgentActivity(RecognitionHooks):
         if user_input is not None:
             chat_ctx = self._rt_session.chat_ctx.copy()
             msg = chat_ctx.add_message(role="user", content=user_input)
-            await self._rt_session.update_chat_ctx(chat_ctx)
+            await self._rt_session.update_chat_ctx(await self._redact_for_llm_egress(chat_ctx))
             self._agent._chat_ctx._upsert_item(msg)
             self._session._conversation_item_added(msg)
 
@@ -3636,7 +3648,9 @@ class AgentActivity(RecognitionHooks):
         # them, or message_outputs entries left in "skipped")
         if speech_handle.interrupted and any_skipped and self.llm.capabilities.mutable_chat_context:
             try:
-                await self._rt_session.update_chat_ctx(self._agent._chat_ctx)
+                await self._rt_session.update_chat_ctx(
+                    await self._redact_for_llm_egress(self._agent._chat_ctx)
+                )
             except llm.RealtimeError as e:
                 logger.warning(
                     "failed to sync chat context to remove never-played messages",
@@ -3757,7 +3771,9 @@ class AgentActivity(RecognitionHooks):
                 chat_ctx = self._rt_session.chat_ctx.copy()
                 chat_ctx.items.extend(new_fnc_outputs)
                 try:
-                    await self._rt_session.update_chat_ctx(chat_ctx)
+                    await self._rt_session.update_chat_ctx(
+                        await self._redact_for_llm_egress(chat_ctx)
+                    )
                 except llm.RealtimeError as e:
                     logger.warning(
                         "failed to update chat context before generating the function calls results",  # noqa: E501
