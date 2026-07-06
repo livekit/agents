@@ -538,6 +538,29 @@ def test_truncate_multiple_instructions():
     assert ctx.items[0].content == ["first"]
 
 
+# --- remove tests ---
+
+
+def test_remove_by_id():
+    ctx = _make_ctx("system", "user", "assistant")
+    target = ctx.items[1]
+    ctx.remove(target.id)
+    assert ctx.get_by_id(target.id) is None
+
+
+def test_remove_by_item():
+    ctx = _make_ctx("user", "assistant", "user")
+    target = ctx.items[0]
+    ctx.remove(target)
+    assert len(ctx.items) == 2
+
+
+def test_remove_nonexistent_raises():
+    ctx = _make_ctx("user", "assistant")
+    with pytest.raises(ValueError):
+        ctx.remove("nonexistent_id")
+
+
 def test_instructions_serialization():
     """Instructions is resolved to str before storage in ChatMessage content."""
     from livekit.agents.llm import ChatContext, ChatMessage

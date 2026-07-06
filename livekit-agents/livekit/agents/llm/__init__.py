@@ -38,6 +38,10 @@ from .realtime import (
     RealtimeSessionReconnectedEvent,
     RemoteItemAddedEvent,
 )
+from .realtime_fallback_adapter import (
+    RealtimeAvailabilityChangedEvent,
+    RealtimeModelFallbackAdapter,
+)
 from .response_field import Response, ResponseField
 from .tool_context import (
     FunctionTool,
@@ -80,6 +84,8 @@ __all__ = [
     "CompletionUsage",
     "FallbackAdapter",
     "AvailabilityChangedEvent",
+    "RealtimeModelFallbackAdapter",
+    "RealtimeAvailabilityChangedEvent",
     "ToolChoice",
     "Tool",
     "Toolset",

@@ -20,7 +20,12 @@ from .._exceptions import APIError, APIStatusError
 from ..log import logger
 from ..metrics import TTSMetrics
 from ..telemetry import trace_types, tracer, utils as telemetry_utils
-from ..types import DEFAULT_API_CONNECT_OPTIONS, USERDATA_TIMED_TRANSCRIPT, APIConnectOptions
+from ..types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    USERDATA_TIMED_TRANSCRIPT,
+    USERDATA_TTS_STARTED_TIME,
+    APIConnectOptions,
+)
 from ..utils import aio, audio, codecs, log_exceptions, shortuuid
 
 if TYPE_CHECKING:
@@ -306,6 +311,8 @@ class ChunkedStream(ABC):
         self._input_text = input_text
         self._tts = tts
         self._conn_options = conn_options
+        # the full text is submitted to the provider at creation time
+        self._started_time: float = time.perf_counter()
         self._event_ch = aio.Chan[SynthesizedAudio]()
         self._input_tokens = 0
         self._output_tokens = 0
@@ -481,6 +488,7 @@ class ChunkedStream(ABC):
 
             raise StopAsyncIteration from None
 
+        val.frame.userdata[USERDATA_TTS_STARTED_TIME] = self._started_time
         return val
 
     def __aiter__(self) -> AsyncIterator[SynthesizedAudio]:
@@ -819,6 +827,10 @@ class SynthesizeStream(ABC):
 
             raise StopAsyncIteration from None
 
+        # _started_time is 0 until _mark_started() (first text sent to the provider);
+        # it is also reset to 0 between segments after metrics are emitted
+        if self._started_time:
+            val.frame.userdata[USERDATA_TTS_STARTED_TIME] = self._started_time
         return val
 
     def __aiter__(self) -> AsyncIterator[SynthesizedAudio]:

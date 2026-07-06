@@ -58,6 +58,13 @@ USERDATA_TIMED_TRANSCRIPT = "lk.timed_transcripts"
 The key for the timed transcripts in the audio frame userdata.
 """
 
+USERDATA_TTS_STARTED_TIME = "lk.tts_started_time"
+"""
+The key for the time (``time.perf_counter()``) at which the synthesized text was first
+sent to the TTS provider, attached to the audio frame userdata. Used to compute TTFB
+without attributing upstream (e.g. LLM streaming) latency to the TTS.
+"""
+
 
 _T = TypeVar("_T")
 

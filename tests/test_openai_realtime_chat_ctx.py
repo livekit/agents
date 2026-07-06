@@ -114,3 +114,31 @@ def test_response_done_handles_string_status_details(monkeypatch) -> None:
     debug.assert_called_once()
     assert debug.call_args.args[3] == "incomplete"
     assert debug.call_args.args[4] is None
+
+
+def test_long_call_id_is_shortened_consistently() -> None:
+    # a foreign provider's call_id (e.g. Gemini) can exceed OpenAI's 32-char limit; the call and
+    # its output must map to the same shortened id so they still pair on OpenAI's side
+    from livekit.plugins.openai.realtime.utils import livekit_item_to_openai_item
+
+    call_id = "function-call-0123456789abcdef0123456789ab"  # 42 chars
+    assert len(call_id) > 32
+
+    call = livekit_item_to_openai_item(
+        llm.FunctionCall(id="item_1", call_id=call_id, name="get_weather", arguments="{}")
+    )
+    output = livekit_item_to_openai_item(
+        llm.FunctionCallOutput(id="item_2", call_id=call_id, output="sunny", is_error=False)
+    )
+
+    assert len(call.call_id) <= 32
+    assert call.call_id == output.call_id
+
+
+def test_short_call_id_is_unchanged() -> None:
+    from livekit.plugins.openai.realtime.utils import livekit_item_to_openai_item
+
+    call = livekit_item_to_openai_item(
+        llm.FunctionCall(id="item_1", call_id="call_abc", name="get_weather", arguments="{}")
+    )
+    assert call.call_id == "call_abc"

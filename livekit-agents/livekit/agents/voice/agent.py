@@ -955,6 +955,12 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         # won't wait for tasks blocked on this handoff
         old_activity._add_drain_blocked_tasks(blocked_tasks)
 
+        # watch the blocked tasks so an active run won't complete mid-handoff
+        # (the parent speech may predate the run, e.g. created in on_enter)
+        if (run_state := session._global_run_state) and not run_state.done():
+            for task in blocked_tasks:
+                run_state._watch_handle(task)
+
         if (
             task_info.function_call
             and isinstance(old_activity.llm, RealtimeModel)

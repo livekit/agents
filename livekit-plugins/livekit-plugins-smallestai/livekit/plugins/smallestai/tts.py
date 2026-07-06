@@ -35,6 +35,7 @@ from livekit.agents import (
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
+from livekit.agents.voice.io import TimedString
 
 from .models import TTSEncoding, TTSModels
 from .version import __version__
@@ -53,6 +54,7 @@ class _TTSOptions:
     speed: float
     language: LanguageCode
     output_format: TTSEncoding | str
+    word_timestamps: bool
     base_url: str
     ws_url: str
 
@@ -68,6 +70,7 @@ class TTS(tts.TTS):
         speed: float = 1.0,
         language: str = "en",
         output_format: TTSEncoding | str = "pcm",
+        word_timestamps: bool = False,
         base_url: str = SMALLEST_BASE_URL,
         ws_url: str = SMALLEST_WS_URL,
         http_session: aiohttp.ClientSession | None = None,
@@ -90,12 +93,20 @@ class TTS(tts.TTS):
                 detection and code-switching. Pro supports "en", "hi", and "auto" only.
             output_format: Output format for HTTP synthesize() calls ("pcm", "mp3", "wav",
                 "ulaw", "alaw"). WebSocket streaming always returns PCM.
+            word_timestamps: Request per-word timing events from the server and emit them
+                as timed transcript entries alongside audio. Applies to WebSocket streaming
+                only; HTTP synthesize() returns raw audio without word events. Disabled by
+                default. Supported on base-queue English + Hindi voices (meher, devansh,
+                kartik, maithili, liam, avery); other voices silently emit no word events.
             base_url: Base URL for the Smallest AI HTTP API.
             ws_url: WebSocket URL for low-latency streaming synthesis.
             http_session: An existing aiohttp ClientSession to use.
         """
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=True),
+            capabilities=tts.TTSCapabilities(
+                streaming=True,
+                aligned_transcript=word_timestamps,
+            ),
             sample_rate=sample_rate,
             num_channels=NUM_CHANNELS,
         )
@@ -118,6 +129,7 @@ class TTS(tts.TTS):
             speed=speed,
             language=LanguageCode(language),
             output_format=output_format,
+            word_timestamps=word_timestamps,
             base_url=base_url,
             ws_url=ws_url,
         )
@@ -167,6 +179,7 @@ class TTS(tts.TTS):
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
         output_format: NotGivenOr[TTSEncoding | str] = NOT_GIVEN,
+        word_timestamps: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         """Update TTS options."""
         if is_given(model):
@@ -181,6 +194,9 @@ class TTS(tts.TTS):
             self._opts.language = LanguageCode(language)
         if is_given(output_format):
             self._opts.output_format = output_format
+        if is_given(word_timestamps):
+            self._opts.word_timestamps = word_timestamps
+            self._capabilities.aligned_transcript = word_timestamps
 
     def synthesize(
         self,
@@ -307,6 +323,9 @@ class SynthesizeStream(tts.SynthesizeStream):
             else self._opts.language,
         }
 
+        if self._opts.word_timestamps:
+            payload["word_timestamps"] = True
+
         async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
             self._acquire_time = self._tts._pool.last_acquire_time
             self._connection_reused = self._tts._pool.last_connection_reused
@@ -337,6 +356,15 @@ class SynthesizeStream(tts.SynthesizeStream):
                     audio_b64 = event.get("data", {}).get("audio")
                     if audio_b64:
                         output_emitter.push(base64.b64decode(audio_b64))
+                elif status == "word_timestamp":
+                    data = event.get("data", {})
+                    word = data.get("word")
+                    start = data.get("start")
+                    end = data.get("end")
+                    if word is not None and start is not None and end is not None:
+                        output_emitter.push_timed_transcript(
+                            TimedString(text=word, start_time=start, end_time=end)
+                        )
                 elif status == "complete":
                     output_emitter.end_segment()
                     break

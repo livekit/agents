@@ -44,6 +44,11 @@ from .events import (
     ErrorEvent,
     FunctionToolsExecutedEvent,
     SessionUsageUpdatedEvent,
+    ToolCallEnded,
+    ToolCallStarted,
+    ToolCallUpdated,
+    ToolExecutionUpdatedEvent,
+    ToolReplyUpdated,
     UserInputTranscribedEvent,
     UserState,
     UserStateChangedEvent,
@@ -252,6 +257,19 @@ _METRICS_FIELDS = (
     "e2e_latency",
 )
 
+_TOOL_CALL_STATUS_MAP: dict[str, agent_pb.ToolCallStatus] = {
+    "done": agent_pb.TC_DONE,
+    "error": agent_pb.TC_ERROR,
+    "cancelled": agent_pb.TC_CANCELLED,
+}
+
+_TOOL_REPLY_STATUS_MAP: dict[str, agent_pb.ToolReplyStatus] = {
+    "scheduled": agent_pb.TR_SCHEDULED,
+    "completed": agent_pb.TR_COMPLETED,
+    "interrupted": agent_pb.TR_INTERRUPTED,
+    "skipped": agent_pb.TR_SKIPPED,
+}
+
 _AMD_CATEGORY_MAP: dict[AMDCategory, agent_pb.AmdCategory] = {
     AMDCategory.HUMAN: agent_pb.AmdCategory.AMD_HUMAN,
     AMDCategory.MACHINE_IVR: agent_pb.AmdCategory.AMD_MACHINE_IVR,
@@ -373,6 +391,7 @@ class SessionHost:
             session.on("conversation_item_added", self._on_conversation_item_added)
             session.on("user_input_transcribed", self._on_user_input_transcribed)
             session.on("function_tools_executed", self._on_function_tools_executed)
+            session.on("tool_execution_updated", self._on_tool_execution_updated)
             session.on("session_usage_updated", self._on_session_usage_updated)
             session.on("overlapping_speech", self._on_overlapping_speech)
             session.on("error", self._on_error)
@@ -397,6 +416,7 @@ class SessionHost:
             self._session.off("conversation_item_added", self._on_conversation_item_added)
             self._session.off("user_input_transcribed", self._on_user_input_transcribed)
             self._session.off("function_tools_executed", self._on_function_tools_executed)
+            self._session.off("tool_execution_updated", self._on_tool_execution_updated)
             self._session.off("session_usage_updated", self._on_session_usage_updated)
             self._session.off("overlapping_speech", self._on_overlapping_speech)
             self._session.off("error", self._on_error)
@@ -514,6 +534,54 @@ class SessionHost:
                     function_call_outputs=pb_outputs,
                 )
             )
+        )
+
+    def _on_tool_execution_updated(self, event: ToolExecutionUpdatedEvent) -> None:
+        pb = agent_pb.AgentSessionEvent.ToolExecutionUpdated
+        updated: agent_pb.AgentSessionEvent.ToolExecutionUpdated
+        if isinstance(event.update, ToolCallStarted):
+            fc = event.update.function_call
+            updated = pb(
+                started=pb.Started(
+                    function_call=agent_pb.FunctionCall(
+                        id=fc.id,
+                        call_id=fc.call_id,
+                        name=fc.name,
+                        arguments=fc.arguments,
+                    )
+                )
+            )
+        elif isinstance(event.update, ToolCallUpdated):
+            updated = pb(
+                call_updated=pb.CallUpdated(
+                    id=event.update.id,
+                    call_id=event.update.call_id,
+                    message=event.update.message,
+                )
+            )
+        elif isinstance(event.update, ToolCallEnded):
+            ended = pb.Ended(
+                id=event.update.id,
+                call_id=event.update.call_id,
+                status=_TOOL_CALL_STATUS_MAP[event.update.status],
+            )
+            if event.update.message is not None:
+                ended.message = event.update.message
+            updated = pb(ended=ended)
+        elif isinstance(event.update, ToolReplyUpdated):
+            updated = pb(
+                reply_updated=pb.ReplyUpdated(
+                    update_ids=event.update.update_ids,
+                    status=_TOOL_REPLY_STATUS_MAP[event.update.status],
+                    speech_id=event.update.speech_id,
+                )
+            )
+        else:
+            return
+
+        self._send_event(
+            agent_pb.AgentSessionEvent(tool_execution_updated=updated),
+            created_at=event.created_at,
         )
 
     def _on_overlapping_speech(self, event: OverlappingSpeechEvent) -> None:
@@ -939,6 +1007,7 @@ RemoteSessionEventTypes = Literal[
     "conversation_item_added",
     "user_input_transcribed",
     "function_tools_executed",
+    "tool_execution_updated",
     "session_usage_updated",
     "error",
 ]

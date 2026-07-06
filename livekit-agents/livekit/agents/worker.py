@@ -61,6 +61,7 @@ UPDATE_STATUS_INTERVAL = 2.5
 UPDATE_LOAD_INTERVAL = 0.5
 HEARTBEAT_INTERVAL = 30
 WORKER_PROTOCOL_VERSION = 1
+DRAIN_TIMEOUT = 3600  # 1hr
 
 
 def _default_setup_fnc(proc: JobProcess) -> Any:
@@ -201,7 +202,7 @@ class ServerOptions:
     Defaults to 0 (disabled).
     """  # noqa: E501
 
-    drain_timeout: int = 1800
+    drain_timeout: int = DRAIN_TIMEOUT
     """Number of seconds to wait for current jobs to finish upon receiving TERM or INT signal."""
     num_idle_processes: int | ServerEnvOption[int] = ServerEnvOption(
         dev_default=0, prod_default=min(math.ceil(get_cpu_monitor().cpu_count()), 4)
@@ -306,7 +307,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         load_threshold: float | ServerEnvOption[float] = _default_load_threshold,
         job_memory_warn_mb: float = 1000,
         job_memory_limit_mb: float = 0,
-        drain_timeout: int = 1800,
+        drain_timeout: int = DRAIN_TIMEOUT,
         num_idle_processes: int | ServerEnvOption[int] = _default_num_idle_processes,
         shutdown_process_timeout: float = 10.0,
         session_end_timeout: float = 300.0,
