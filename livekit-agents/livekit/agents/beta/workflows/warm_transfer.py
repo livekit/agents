@@ -519,7 +519,7 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
 
         try:
             await self._wait_for_human_agent(room=room, identity=identity)
-        except Exception:
+        except BaseException:
             # we gave up waiting; cancel the still-ringing call so it doesn't linger
             with contextlib.suppress(Exception):
                 await asyncio.to_thread(client.calls(call.sid).update, status="canceled")
