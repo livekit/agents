@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import io
+import json
 import os
 from typing import Any
 
 import aiohttp
+from PIL import Image
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -75,6 +78,7 @@ class LemonSliceAPI:
         livekit_session_id: str,
         agent_id: NotGivenOr[str] = NOT_GIVEN,
         agent_image_url: NotGivenOr[str] = NOT_GIVEN,
+        agent_image: NotGivenOr[Image.Image] = NOT_GIVEN,
         agent_prompt: NotGivenOr[str] = NOT_GIVEN,
         agent_idle_prompt: NotGivenOr[str] = NOT_GIVEN,
         idle_timeout: NotGivenOr[int] = NOT_GIVEN,
@@ -89,6 +93,8 @@ class LemonSliceAPI:
             livekit_session_id: LiveKit room session ID (room SID).
             agent_id: The ID of the LemonSlice agent to add to the session.
             agent_image_url: The URL of the image to use as the agent's avatar.
+            agent_image: A PIL image to upload and use as the agent's avatar. Sent to
+                    LemonSlice as a multipart image upload.
             agent_prompt: A prompt that subtly influences the avatar's movements and expressions while responding.
             agent_idle_prompt: A prompt that subtly influences the avatar's movements and expressions while idle.
             idle_timeout: The idle timeout, in seconds.
@@ -97,11 +103,15 @@ class LemonSliceAPI:
         Returns:
             The unique session ID for the LemonSlice agent session.
         """
-        if not utils.is_given(agent_id) and not utils.is_given(agent_image_url):
-            raise LemonSliceException("Missing agent_id or agent_image_url")
-
-        if utils.is_given(agent_id) and utils.is_given(agent_image_url):
-            raise LemonSliceException("Only one of agent_id or agent_image_url can be provided")
+        given_sources = [
+            source for source in (agent_id, agent_image_url, agent_image) if utils.is_given(source)
+        ]
+        if len(given_sources) == 0:
+            raise LemonSliceException("Missing one of agent_id, agent_image_url or agent_image")
+        if len(given_sources) > 1:
+            raise LemonSliceException(
+                "Only one of agent_id, agent_image_url or agent_image can be provided"
+            )
 
         payload: dict[str, Any] = {
             "transport_type": "livekit",
@@ -111,6 +121,8 @@ class LemonSliceAPI:
                 "livekit_session_id": livekit_session_id,
             },
         }
+
+        image_bytes: bytes | None = None
 
         if utils.is_given(agent_id):
             payload["agent_id"] = agent_id
@@ -124,8 +136,10 @@ class LemonSliceAPI:
             payload["idle_timeout"] = idle_timeout
         if utils.is_given(extra_payload):
             payload.update(extra_payload)
+        if utils.is_given(agent_image):
+            image_bytes = _encode_image(agent_image)
 
-        response_data = await self._post(payload)
+        response_data = await self._post(payload, image_bytes=image_bytes)
         session_id = response_data["session_id"]
         logger.debug(f"LemonSlice Session ID = {session_id}")
         return session_id  # type: ignore
@@ -187,12 +201,20 @@ class LemonSliceAPI:
             url=url,
         )
 
-    async def _post(self, payload: dict[str, Any], *, url: str | None = None) -> dict[str, Any]:
+    async def _post(
+        self,
+        payload: dict[str, Any],
+        *,
+        url: str | None = None,
+        image_bytes: bytes | None = None,
+    ) -> dict[str, Any]:
         """
         Make a POST request to the LemonSlice API with retry logic.
 
         Args:
-            payload: JSON payload for the request
+            payload: JSON payload for the request.
+            url: Optional URL override.
+            image_bytes: Optional PNG-encoded image.
 
         Returns:
             Response data as a dictionary
@@ -204,14 +226,30 @@ class LemonSliceAPI:
         try:
             for i in range(self._conn_options.max_retry + 1):
                 try:
+                    headers = {"X-API-Key": self._api_key}
+                    request_kwargs: dict[str, Any]
+                    if image_bytes is not None:
+                        form = aiohttp.FormData()
+                        form.add_field(
+                            "payload", json.dumps(payload), content_type="application/json"
+                        )
+                        # Upload the image using multipart
+                        form.add_field(
+                            "image",
+                            image_bytes,
+                            filename="image.png",
+                            content_type="image/png",
+                        )
+                        request_kwargs = {"data": form}
+                    else:
+                        headers["Content-Type"] = "application/json"
+                        request_kwargs = {"json": payload}
+
                     async with session.post(
                         url or self._api_url,
-                        headers={
-                            "Content-Type": "application/json",
-                            "X-API-Key": self._api_key,
-                        },
-                        json=payload,
+                        headers=headers,
                         timeout=aiohttp.ClientTimeout(sock_connect=self._conn_options.timeout),
+                        **request_kwargs,
                     ) as response:
                         if not response.ok:
                             text = await response.text()
@@ -244,3 +282,10 @@ class LemonSliceAPI:
                 await session.close()
 
         raise APIConnectionError("Failed to call LemonSlice API after all retries")
+
+
+def _encode_image(image: Image.Image) -> bytes:
+    """Encode a PIL image as PNG bytes for a multipart upload."""
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
