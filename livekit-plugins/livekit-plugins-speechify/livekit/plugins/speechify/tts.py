@@ -22,6 +22,7 @@ from dataclasses import dataclass, replace
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     tokenize,
@@ -37,6 +38,7 @@ from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TimedString
 from speechify.client import AsyncSpeechify
 from speechify.core.api_error import ApiError
+from speechify.types.get_voice import GetVoice
 
 from .models import TTSModels
 
@@ -135,6 +137,11 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Speechify"
 
+    async def list_voices(self) -> list[GetVoice]:
+        """List the voices available for the configured Speechify account."""
+        voices: list[GetVoice] = await self._client.voices.list()
+        return voices
+
     def update_options(
         self,
         *,
@@ -214,6 +221,8 @@ def _timed_transcript(speech_marks: object, offset: float) -> list[TimedString]:
 
 
 def _raise_from(e: Exception) -> None:
+    if isinstance(e, APIError):
+        raise e
     if isinstance(e, ApiError):
         raise APIStatusError(
             message=str(e.body) if e.body is not None else "Speechify API error",
