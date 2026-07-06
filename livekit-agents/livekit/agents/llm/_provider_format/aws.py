@@ -9,6 +9,13 @@ from livekit.agents import llm
 
 from .utils import convert_mid_conversation_instructions, group_tool_calls
 
+_AWS_IMAGE_FORMATS = {
+    "image/jpeg": "jpeg",
+    "image/png": "png",
+    "image/gif": "gif",
+    "image/webp": "webp",
+}
+
 
 @dataclass
 class BedrockFormatData:
@@ -95,12 +102,23 @@ def _build_image(image: llm.ImageContent) -> dict:
     if img.external_url:
         raise ValueError("external_url is not supported by AWS Bedrock.")
 
+    assert img.data_bytes is not None
     return {
         "image": {
-            "format": "jpeg",
+            "format": _image_format(img.mime_type),
             "source": {"bytes": img.data_bytes},
         }
     }
+
+
+def _image_format(mime_type: str | None) -> str:
+    if not mime_type:
+        return "jpeg"
+
+    try:
+        return _AWS_IMAGE_FORMATS[mime_type]
+    except KeyError:
+        raise ValueError(f"Unsupported mime_type {mime_type} for AWS Bedrock images") from None
 
 
 def to_fnc_ctx(tool_ctx: llm.ToolContext) -> list[dict[str, Any]]:
