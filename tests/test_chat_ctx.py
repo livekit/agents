@@ -1,3 +1,4 @@
+import base64
 import os
 from typing import Any
 
@@ -15,6 +16,8 @@ from livekit.agents.types import (
 from .fake_llm import FakeLLM, FakeLLMResponse
 
 pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
+
+_IMAGE_BYTES = b"fake image bytes"
 
 
 def ai_function1(a: int, b: str = "default") -> None:
@@ -77,6 +80,45 @@ def test_dict():
     print(chat_ctx.to_dict())
     print(chat_ctx.items)
     print(ChatContext.from_dict(chat_ctx.to_dict()).items)
+
+
+@pytest.mark.parametrize(
+    ("mime_type", "expected_format"),
+    [
+        ("image/jpeg", "jpeg"),
+        ("image/png", "png"),
+        ("image/gif", "gif"),
+        ("image/webp", "webp"),
+    ],
+)
+def test_aws_image_content_uses_serialized_image_format(mime_type: str, expected_format: str):
+    from livekit.agents.llm import ChatContext, ImageContent
+
+    encoded = base64.b64encode(_IMAGE_BYTES).decode("utf-8")
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(
+        role="user",
+        content=[ImageContent(image=f"data:{mime_type};base64,{encoded}")],
+    )
+
+    messages, _ = chat_ctx.to_provider_format(format="aws")
+
+    image = messages[0]["content"][0]["image"]
+    assert image["format"] == expected_format
+    assert image["source"]["bytes"] == _IMAGE_BYTES
+
+
+def test_aws_image_content_rejects_external_urls():
+    from livekit.agents.llm import ChatContext, ImageContent
+
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(
+        role="user",
+        content=[ImageContent(image="https://example.com/image.png", mime_type="image/png")],
+    )
+
+    with pytest.raises(ValueError, match="external_url is not supported by AWS Bedrock"):
+        chat_ctx.to_provider_format(format="aws")
 
 
 def test_chat_ctx_can_be_serialized_and_deserialized_with_defaults():
