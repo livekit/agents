@@ -18,6 +18,7 @@ TTSModels = Literal[
     "simba-english",
     "simba-multilingual",
     "simba-3.0",
+    "simba-3.2",
 ]
 
 VoiceType = Literal["shared", "personal"]

@@ -40,7 +40,8 @@ from speechify.core.api_error import ApiError
 
 from .models import TTSModels
 
-DEFAULT_VOICE_ID = "jack"
+DEFAULT_VOICE_ID = "dominic_32"
+DEFAULT_MODEL: TTSModels = "simba-3.2"
 SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
 AUDIO_FORMAT = "pcm"
@@ -61,7 +62,7 @@ class TTS(tts.TTS):
         self,
         *,
         voice_id: str = DEFAULT_VOICE_ID,
-        model: NotGivenOr[TTSModels] = NOT_GIVEN,
+        model: TTSModels = DEFAULT_MODEL,
         language: NotGivenOr[str] = NOT_GIVEN,
         loudness_normalization: NotGivenOr[bool] = NOT_GIVEN,
         text_normalization: NotGivenOr[bool] = NOT_GIVEN,
@@ -79,10 +80,12 @@ class TTS(tts.TTS):
         near-streaming time-to-first-audio.
 
         Args:
-            voice_id: Id of the voice to synthesize with. See the Speechify
-                ``/v1/voices`` endpoint for the available voices.
+            voice_id: Id of the voice to synthesize with. The voice must support
+                the chosen ``model`` (see the ``/v1/voices`` endpoint). Defaults
+                to ``dominic_32``.
             model: Synthesis model. One of ``simba-english``,
-                ``simba-multilingual`` or ``simba-3.0``.
+                ``simba-multilingual``, ``simba-3.0`` or ``simba-3.2``. Defaults
+                to ``simba-3.2``.
             language: BCP-47 language code of the input (e.g. ``en-US``).
             loudness_normalization: Normalize output loudness to a standard
                 level. Increases latency slightly when enabled.
