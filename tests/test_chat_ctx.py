@@ -719,3 +719,69 @@ def test_responses_assistant_phase_absent_when_not_set():
     assistant_items = [item for item in items if item.get("role") == "assistant"]
     assert assistant_items
     assert all("phase" not in item for item in assistant_items)
+
+
+def test_aws_inject_trailing_user_message_appends_when_last_is_assistant():
+    """A trailing assistant message gets a dummy user appended when the flag is on."""
+    from livekit.agents.llm import ChatContext
+
+    ctx = ChatContext.empty()
+    ctx.add_message(role="user", content="hello")
+    ctx.add_message(role="assistant", content="hi there")
+
+    messages, _ = ctx.to_provider_format(format="aws", inject_trailing_user_message=True)
+    assert messages[-1]["role"] == "user"
+    # Original last assistant turn is preserved; a new user turn is appended.
+    assert len(messages) == 3
+    assert messages[1]["role"] == "assistant"
+    assert messages[2]["content"] == [{"text": " "}]
+
+
+def test_aws_inject_trailing_user_message_default_off_keeps_assistant_last():
+    """By default, a trailing assistant message is left in place (backward compatible)."""
+    from livekit.agents.llm import ChatContext
+
+    ctx = ChatContext.empty()
+    ctx.add_message(role="user", content="hello")
+    ctx.add_message(role="assistant", content="hi there")
+
+    messages, _ = ctx.to_provider_format(format="aws")
+    assert messages[-1]["role"] == "assistant"
+    assert len(messages) == 2
+
+
+def test_aws_inject_trailing_user_message_idempotent_when_last_is_user():
+    """When the message list already ends with a user turn, no extra user is appended."""
+    from livekit.agents.llm import ChatContext
+
+    ctx = ChatContext.empty()
+    ctx.add_message(role="user", content="hello")
+    ctx.add_message(role="assistant", content="hi")
+    ctx.add_message(role="user", content="follow-up")
+
+    messages, _ = ctx.to_provider_format(format="aws", inject_trailing_user_message=True)
+    assert messages[-1]["role"] == "user"
+    # No extra dummy turn — the existing user turn satisfies the requirement.
+    assert len(messages) == 3
+    assert messages[-1]["content"] == [{"text": "follow-up"}]
+
+
+def test_aws_model_disables_prefill_matches_inference_profiles():
+    """The Bedrock model-ID gate matches plain IDs, snapshots, and inference profiles."""
+    from livekit.plugins.aws.llm import _model_disables_prefill
+
+    # Affected models (Claude 4.5+/Opus 4.6+) — every shape Bedrock emits.
+    assert _model_disables_prefill("claude-sonnet-4-6")
+    assert _model_disables_prefill("anthropic.claude-sonnet-4-5-20250929-v1:0")
+    assert _model_disables_prefill("global.anthropic.claude-sonnet-4-6")
+    assert _model_disables_prefill("us.anthropic.claude-opus-4-7-v1:0")
+    assert _model_disables_prefill("eu.anthropic.claude-opus-4-6-v1:0")
+
+    # Unaffected models — older Claude, Nova, Llama, Mistral, and empties.
+    assert not _model_disables_prefill("anthropic.claude-3-5-sonnet-20241022-v2:0")
+    assert not _model_disables_prefill("anthropic.claude-sonnet-4-20250514-v1:0")
+    assert not _model_disables_prefill("amazon.nova-2-lite-v1:0")
+    assert not _model_disables_prefill("meta.llama3-70b-instruct-v1:0")
+    assert not _model_disables_prefill("mistral.mistral-large-2407-v1:0")
+    assert not _model_disables_prefill("")
+    assert not _model_disables_prefill(None)
