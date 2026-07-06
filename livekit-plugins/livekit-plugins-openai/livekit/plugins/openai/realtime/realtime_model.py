@@ -124,6 +124,12 @@ DEFAULT_VOICE = "marin"
 
 lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
+# ws_conn.close() sends a CLOSE frame then waits for the peer's CLOSE frame. Well-behaved
+# servers complete the handshake in well under a second, but OpenAI's Realtime server never
+# sends a CLOSE frame (it drops the connection with an EOF), so this caps the otherwise
+# unbounded wait that would stall RealtimeSession.aclose()
+_WS_CLOSE_TIMEOUT = 5.0
+
 # Azure OpenAI Realtime API uses old-style (beta) event names.
 # This mapping normalizes them to the current OpenAI GA event names
 # so the handler code only deals with one set of names.
@@ -1010,6 +1016,17 @@ class RealtimeSession(
     async def _run_ws(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
         closing = False
 
+        async def _close_ws() -> None:
+            try:
+                await asyncio.wait_for(ws_conn.close(), timeout=_WS_CLOSE_TIMEOUT)
+            except asyncio.TimeoutError:
+                # the server didn't complete the close handshake; cancelling close()
+                # makes aiohttp drop the underlying connection, so just log and move on
+                logger.debug(
+                    f"{self._realtime_model._provider_label} didn't complete the WebSocket "
+                    "close handshake, dropping the connection"
+                )
+
         @utils.log_exceptions(logger=logger)
         async def _send_task() -> None:
             nonlocal closing
@@ -1038,7 +1055,7 @@ class RealtimeSession(
                     logger.exception("failed to send event")
 
             closing = True
-            await ws_conn.close()
+            await _close_ws()
 
         @utils.log_exceptions(logger=logger)
         async def _recv_task() -> None:
@@ -1180,7 +1197,7 @@ class RealtimeSession(
 
         finally:
             await utils.aio.cancel_and_wait(*tasks)
-            await ws_conn.close()
+            await _close_ws()
 
     def _wrap_session_update(
         self, event_id: str, session: RealtimeSessionCreateRequest
