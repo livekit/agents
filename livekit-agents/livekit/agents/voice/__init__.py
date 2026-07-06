@@ -21,6 +21,7 @@ from .events import (
     ToolReplyUpdated,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
+    UserTranscriptionTimeoutEvent,
     UserTurnExceededEvent,
 )
 from .keyterm_detection import KeytermDetectionOptions, KeytermsOptions
@@ -52,6 +53,7 @@ __all__ = [
     "CloseEvent",
     "CloseReason",
     "UserStateChangedEvent",
+    "UserTranscriptionTimeoutEvent",
     "AgentStateChangedEvent",
     "FunctionToolsExecutedEvent",
     "AgentFalseInterruptionEvent",

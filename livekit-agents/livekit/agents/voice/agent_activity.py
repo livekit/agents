@@ -62,6 +62,7 @@ from .events import (
     SessionUsageUpdatedEvent,
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
+    UserTranscriptionTimeoutEvent,
     UserTurnExceededEvent,
     _AgentBackchannelOpportunityEvent,
 )
@@ -1951,6 +1952,15 @@ class AgentActivity(RecognitionHooks):
 
         if self._paused_speech:
             self._start_false_interruption_timer(self._paused_speech.timeout)
+
+    def on_transcription_timeout(self, *, speech_duration: float, turn_start: float) -> None:
+        self._session.emit(
+            "user_transcription_timeout",
+            UserTranscriptionTimeoutEvent(
+                speech_duration=speech_duration,
+                vad_speech_started_at=turn_start,
+            ),
+        )
 
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None:
         if self._turn_detection in ("manual", "realtime_llm"):
