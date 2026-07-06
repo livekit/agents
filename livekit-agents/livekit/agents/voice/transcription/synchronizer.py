@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import itertools
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -13,6 +13,7 @@ from livekit import rtc
 
 from ... import tokenize, utils
 from ...log import logger
+from ...tts._provider_format import split_all_markup
 from ...types import NOT_GIVEN, NotGivenOr, TimedString
 from ...utils import is_given
 from .. import io
@@ -163,8 +164,6 @@ class _SegmentSynchronizerImpl:
 
         self._playback_completed = False
         self._interrupted = False
-        # segment attributes (e.g. lk.expression) applied when flushing to next_in_chain
-        self._segment_attributes: dict[str, str] = {}
 
     @property
     def id(self) -> str:
@@ -245,7 +244,7 @@ class _SegmentSynchronizerImpl:
         self._text_data.word_stream.push_text(text)
         self._text_data.pushed_text += text
 
-    def end_text_input(self, attributes: Mapping[str, str] | None = None) -> None:
+    def end_text_input(self) -> None:
         if self.closed:
             logger.warning(
                 "_SegmentSynchronizerImpl.end_text_input called after close",
@@ -253,8 +252,6 @@ class _SegmentSynchronizerImpl:
             )
             return
 
-        if attributes:
-            self._segment_attributes.update(attributes)
         self._text_data.done = True
         self._text_data.word_stream.end_input()
 
@@ -293,7 +290,10 @@ class _SegmentSynchronizerImpl:
         if not self._text_data.done or not self._audio_data.done:
             return
 
-        pushed_hyphens = len(self._calc_hyphens(self._text_data.pushed_text))
+        # pushed_text carries the raw LLM markup (the room output strips it downstream);
+        # pace against the visible text only so expressive tags don't inflate the speed
+        clean_pushed_text, _ = split_all_markup(self._text_data.pushed_text)
+        pushed_hyphens = len(self._calc_hyphens(clean_pushed_text))
         # hyphens per second
         if self._audio_data.pushed_duration > 0:
             self._speed = pushed_hyphens / self._audio_data.pushed_duration
@@ -345,7 +345,7 @@ class _SegmentSynchronizerImpl:
                     await self._next_in_chain.capture_text(text)
         finally:
             if self._next_in_chain:
-                self._next_in_chain.flush(self._segment_attributes or None)
+                self._next_in_chain.flush()
 
     @utils.log_exceptions(logger=logger)
     async def _speaking_rate_task(self) -> None:
@@ -380,7 +380,11 @@ class _SegmentSynchronizerImpl:
                 )
                 continue
 
-            word_hyphens = len(self._opts.hyphenate_word(word))
+            # forward the raw token (the room output strips markup and surfaces the
+            # expression downstream), but pace against the visible text only so a
+            # markup-only token adds no delay
+            clean_word, _ = split_all_markup(word)
+            word_hyphens = len(self._opts.hyphenate_word(clean_word)) if clean_word else 0
             elapsed = time.time() - self._start_wall_time - self._paused_duration
 
             d_hyphens = 0
@@ -761,19 +765,17 @@ class _SyncedTextOutput(io.TextOutput):
 
         self._synchronizer._impl.push_text(text)
 
-    def flush(self, attributes: Mapping[str, str] | None = None) -> None:
+    def flush(self) -> None:
         if not self._synchronizer.enabled:  # passthrough text if the synchronizer is disabled
             if self.next_in_chain:
-                self.next_in_chain.flush(attributes)
+                self.next_in_chain.flush()
             return
 
         if not self._capturing:
             return
 
         self._capturing = False
-        # attributes (e.g. lk.expression) are carried through the re-timed segment and
-        # applied when the impl flushes to next_in_chain
-        self._synchronizer._impl.end_text_input(attributes)
+        self._synchronizer._impl.end_text_input()
 
     def on_attached(self) -> None:
         super().on_attached()

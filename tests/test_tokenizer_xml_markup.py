@@ -473,3 +473,63 @@ class TestToTextStreamBareLt:
         joined = "".join(out)
         assert "<emotion" not in joined
         assert "Hi" in joined and "there" in joined
+
+
+# ===========================================================================
+# Universal transcript stripping (provider-agnostic, used by the transcript sinks)
+# ===========================================================================
+
+
+class TestUniversalMarkupStrip:
+    """The transcript sinks strip downstream without knowing the provider, so they remove
+    the union of every provider's tags. See split_all_markup / TranscriptMarkupStripper."""
+
+    def test_split_all_markup_across_providers(self) -> None:
+        from livekit.agents.tts._provider_format import split_all_markup
+
+        # Cartesia <emotion>, Inworld/xAI <expression>/<sound>, and bracket tags all strip
+        # regardless of which provider produced them
+        clean, tags = split_all_markup(
+            '<emotion value="happy"/>Hi <expression value="warm"/>there '
+            '<sound value="giggle"/>[pause] friend'
+        )
+        assert clean == "Hi there  friend"
+        types = [(t["type"], t["value"]) for t in tags]
+        assert ("emotion", "happy") in types
+        assert ("expression", "warm") in types
+        assert ("sound", "giggle") in types
+        assert ("", "pause") in types
+
+    def test_expression_attribute_shape(self) -> None:
+        from livekit.agents.tts._provider_format import expression_attribute, split_all_markup
+
+        _, tags = split_all_markup('<emotion value="sad"/>oh no')
+        attr = expression_attribute(tags)
+        assert attr == {"lk.expression": '{"value":"sad"}'}
+
+        # no expression/emotion tag -> no attribute (bracket sounds don't count)
+        _, tags = split_all_markup("[pause]hi")
+        assert expression_attribute(tags) is None
+
+    def test_streaming_stripper_holds_partial_tags(self) -> None:
+        from livekit.agents.tts._provider_format import TranscriptMarkupStripper
+
+        s = TranscriptMarkupStripper()
+        # a tag split across pushes is held until it closes, never emitted half-stripped
+        out = s.push("Hi <emo")
+        out += s.push('tion value="happy"/> the')
+        out += s.push("re")
+        out += s.flush()
+        assert "<emotion" not in out
+        assert out.replace(" ", "") == "Hithere"
+        assert s.expression_attribute() == {"lk.expression": '{"value":"happy"}'}
+
+    def test_streaming_stripper_bare_lt_not_stalled(self) -> None:
+        from livekit.agents.tts._provider_format import TranscriptMarkupStripper
+
+        s = TranscriptMarkupStripper()
+        # a bare "<" in prose must not freeze the following chunk
+        first = s.push("The value 3 < 5 ")
+        assert "3 < 5" in first
+        rest = s.push("is true.") + s.flush()
+        assert (first + rest).replace(" ", "") == "Thevalue3<5istrue."

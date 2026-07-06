@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Mapping
 
 from livekit import rtc
 from livekit.agents import utils
@@ -152,7 +151,7 @@ class FakeTextOutput(TextOutput):
     async def capture_text(self, text: str) -> None:
         self._pushed_text += text
 
-    def flush(self, attributes: Mapping[str, str] | None = None) -> None:
+    def flush(self) -> None:
         self._messages.append(self._pushed_text)
         print(self._pushed_text)
         self._pushed_text = ""

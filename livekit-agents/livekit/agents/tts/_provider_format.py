@@ -15,10 +15,12 @@ Provider docs:
 
 from __future__ import annotations
 
+import json
 import re
 from typing import TYPE_CHECKING, TypedDict
 
 from ..llm.chat_context import Instructions
+from ..types import ATTRIBUTE_TRANSCRIPTION_EXPRESSION
 from .markup_utils import convert_expression_tags, extract_and_strip
 
 
@@ -689,6 +691,92 @@ def extract_markup(provider: str, text: str) -> list[ExpressiveTag]:
     providers without markup support.
     """
     return split_markup(provider, text)[1]
+
+
+# Union of every provider's XML tag names — used by the transcript sinks to strip markup
+# without knowing which provider produced it (see :class:`TranscriptMarkupStripper`).
+_ALL_MARKUP_TAGS: list[str] = sorted({tag for tags, _ in _PROVIDER_MARKUP.values() for tag in tags})
+
+
+def split_all_markup(text: str) -> tuple[str, list[ExpressiveTag]]:
+    """Strip the union of every provider's expressive markup (provider-agnostic).
+
+    The transcript sinks strip downstream, where the originating TTS/provider is no
+    longer in scope, so they remove every provider's tags (XML + square brackets) at
+    once. These tag shapes never appear in real spoken text — the LLM only emits them
+    as audio directives — so a universal strip is safe.
+    """
+    clean, raw_tags = extract_and_strip(text, xml_tags=_ALL_MARKUP_TAGS, brackets=True)
+    return clean, [{"type": tag, "value": value} for tag, value in raw_tags]
+
+
+def expression_attribute(tags: list[ExpressiveTag]) -> dict[str, str] | None:
+    """Build the ``lk.expression`` transcription attribute from stripped markup tags.
+
+    Surfaces a segment's leading delivery/emotion (``expression`` for Inworld/xAI,
+    ``emotion`` for Cartesia) as ``{"value": ...}`` so the frontend can react to it.
+    Returns ``None`` when no such tag was present.
+    """
+    expression = next((t["value"] for t in tags if t["type"] in ("expression", "emotion")), None)
+    if expression is None:
+        return None
+    return {
+        ATTRIBUTE_TRANSCRIPTION_EXPRESSION: json.dumps({"value": expression}, separators=(",", ":"))
+    }
+
+
+class TranscriptMarkupStripper:
+    """Stateful, provider-agnostic markup stripper for one transcript segment.
+
+    Fed text chunk-by-chunk, it returns the user-visible text and accumulates the
+    stripped tags. A tag-shaped trailing fragment (a partial ``<...`` or ``[...``
+    arriving split across chunks) is held back until it closes, so a tag straddling a
+    chunk boundary is never emitted half-stripped. Shared by the transcript sinks (room
+    output + transcript synchronizer) so stripping and expression extraction stay
+    identical across them.
+    """
+
+    def __init__(self) -> None:
+        self._buf = ""
+        self._tags: list[ExpressiveTag] = []
+
+    def _has_open_tag(self) -> bool:
+        # hold a tag-shaped trailing "<" (partial XML tag) so "3 < 5" isn't stalled, and
+        # any unclosed "[" (bracket tags have no such ambiguity)
+        last_lt = self._buf.rfind("<")
+        if last_lt > self._buf.rfind(">"):
+            nxt = self._buf[last_lt + 1 : last_lt + 2]
+            if not nxt or nxt == "/" or nxt.isalpha():
+                return True
+        return self._buf.rfind("[") > self._buf.rfind("]")
+
+    def push(self, text: str) -> str:
+        """Feed a chunk; return the clean text ready to emit (may be empty)."""
+        self._buf += text
+        if self._has_open_tag():
+            return ""
+        clean, tags = split_all_markup(self._buf)
+        self._buf = ""
+        self._tags.extend(tags)
+        return clean
+
+    def flush(self) -> str:
+        """Drain any buffered text at segment end; return the remaining clean text."""
+        if not self._buf:
+            return ""
+        clean, tags = split_all_markup(self._buf)
+        self._buf = ""
+        self._tags.extend(tags)
+        return clean
+
+    @property
+    def tags(self) -> list[ExpressiveTag]:
+        """The markup tags stripped so far, in document order."""
+        return self._tags
+
+    def expression_attribute(self) -> dict[str, str] | None:
+        """The ``lk.expression`` attribute for the tags stripped so far, if any."""
+        return expression_attribute(self._tags)
 
 
 _SELF_CLOSING_TAGS: dict[str, list[str]] = {

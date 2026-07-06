@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from collections.abc import Mapping
 
 from google.protobuf.json_format import MessageToDict
 
@@ -12,6 +11,12 @@ from livekit.protocol.agent_pb import agent_session as agent_pb
 
 from ... import utils
 from ...log import logger
+from ...tts._provider_format import (
+    ExpressiveTag,
+    TranscriptMarkupStripper,
+    expression_attribute,
+    split_all_markup,
+)
 from ...types import (
     ATTRIBUTE_PUBLISH_ON_BEHALF,
     ATTRIBUTE_TRANSCRIPTION_FINAL,
@@ -268,17 +273,21 @@ class _ParticipantLegacyTranscriptionOutput:
         else:
             self._pushed_text = text
 
-        await self._publish_transcription(self._current_id, self._pushed_text, final=False)
+        # _pushed_text keeps the raw text (markup intact); publish the visible text only.
+        # Stripping the whole accumulation each time avoids partial-tag edge cases; the
+        # expression is dropped here — the deprecated rtc Transcription API has no
+        # attribute channel (the stream-based output carries lk.expression instead).
+        clean_text, _ = split_all_markup(self._pushed_text)
+        await self._publish_transcription(self._current_id, clean_text, final=False)
 
     @utils.log_exceptions(logger=logger)
-    def flush(self, attributes: Mapping[str, str] | None = None) -> None:
-        # attributes (e.g. lk.expression) are ignored: the deprecated rtc Transcription
-        # API has no attribute channel; the stream-based output carries them instead.
+    def flush(self) -> None:
         if self._participant_identity is None or self._track_id is None or not self._capturing:
             return
 
+        clean_text, _ = split_all_markup(self._pushed_text)
         self._flush_task = asyncio.create_task(
-            self._publish_transcription(self._current_id, self._pushed_text, final=True)
+            self._publish_transcription(self._current_id, clean_text, final=True)
         )
         self._reset_state()
 
@@ -402,6 +411,28 @@ class _ParticipantStreamTranscriptionOutput:
         self._current_id = utils.shortuuid("SG_")
         self._capturing = False
         self._latest_text = ""
+        # per-segment markup stripping: delta streams strip incrementally (buffering a tag
+        # split across chunks); non-delta streams re-strip the full text each time and keep
+        # the latest tags here for the expression attribute (see TranscriptMarkupStripper)
+        self._stripper = TranscriptMarkupStripper()
+        self._segment_tags: list[ExpressiveTag] = []
+
+    def _encode(self, clean_text: str, timing_src: str | None = None) -> str:
+        """Wrap visible text for the wire (JSON TimedString when json_format, else raw)."""
+        if not self._json_format:
+            return clean_text
+
+        ts_pb = agent_pb.TimedString(text=clean_text)
+        if isinstance(timing_src, TimedString):
+            if utils.is_given(timing_src.start_time):
+                ts_pb.start_time = timing_src.start_time
+            if utils.is_given(timing_src.end_time):
+                ts_pb.end_time = timing_src.end_time
+            if utils.is_given(timing_src.confidence):
+                ts_pb.confidence = timing_src.confidence
+            if utils.is_given(timing_src.start_time_offset):
+                ts_pb.start_time_offset = timing_src.start_time_offset
+        return json.dumps(MessageToDict(ts_pb, preserving_proto_field_name=True)) + "\n"
 
     async def _create_text_writer(
         self, attributes: dict[str, str] | None = None
@@ -438,20 +469,18 @@ class _ParticipantStreamTranscriptionOutput:
             self._reset_state()
             self._capturing = True
 
-        if self._json_format:
-            ts_pb = agent_pb.TimedString(text=str(text))
-            if isinstance(text, TimedString):
-                if utils.is_given(text.start_time):
-                    ts_pb.start_time = text.start_time
-                if utils.is_given(text.end_time):
-                    ts_pb.end_time = text.end_time
-                if utils.is_given(text.confidence):
-                    ts_pb.confidence = text.confidence
-                if utils.is_given(text.start_time_offset):
-                    ts_pb.start_time_offset = text.start_time_offset
-            text = json.dumps(MessageToDict(ts_pb, preserving_proto_field_name=True)) + "\n"
+        # the raw text (expressive markup intact) arrives here; publish only the visible
+        # text. Skip a chunk that strips to nothing (a partial tag still buffering, or a
+        # markup-only token) so the transcript cadence isn't disturbed.
+        if self._is_delta_stream:
+            clean_text = self._stripper.push(text)
+        else:
+            clean_text, self._segment_tags = split_all_markup(text)
+        if not clean_text:
+            return
 
-        self._latest_text = text
+        payload = self._encode(clean_text, text)
+        self._latest_text = payload
 
         try:
             if self._room.isconnected():
@@ -459,10 +488,10 @@ class _ParticipantStreamTranscriptionOutput:
                     if self._writer is None:
                         self._writer = await self._create_text_writer()
 
-                    await self._writer.write(text)
+                    await self._writer.write(payload)
                 else:  # always create a new writer
                     tmp_writer = await self._create_text_writer()
-                    await tmp_writer.write(text)
+                    await tmp_writer.write(payload)
                     await tmp_writer.aclose()
         except Exception as e:
             logger.warning("failed to publish agent transcription to room: %s", e)
@@ -471,6 +500,7 @@ class _ParticipantStreamTranscriptionOutput:
         self,
         writer: rtc.TextStreamWriter | None,
         extra_attributes: dict[str, str] | None = None,
+        pending_text: str = "",
     ) -> None:
         attributes = {ATTRIBUTE_TRANSCRIPTION_FINAL: "true"}
         if self._track_id:
@@ -482,6 +512,8 @@ class _ParticipantStreamTranscriptionOutput:
             if self._room.isconnected():
                 if self._is_delta_stream:
                     if writer:
+                        if pending_text:  # visible text left in the strip buffer
+                            await writer.write(pending_text)
                         await writer.aclose(attributes=attributes)
                 else:
                     tmp_writer = await self._create_text_writer(attributes=attributes)
@@ -490,17 +522,27 @@ class _ParticipantStreamTranscriptionOutput:
         except Exception as e:
             logger.warning("failed to publish agent transcription to room: %s", e)
 
-    def flush(self, attributes: Mapping[str, str] | None = None) -> None:
-        # attributes (e.g. lk.expression) ride along on the segment's closing header;
-        # only emit on a segment that captured text (keeps lk.transcription cadence intact)
+    def flush(self) -> None:
+        # only emit on a segment that captured text (keeps lk.transcription cadence intact).
+        # The leading expression the sinks stripped rides along on the closing header as the
+        # lk.expression attribute.
         if self._participant_identity is None or not self._capturing:
             return
 
         self._capturing = False
         curr_writer = self._writer
         self._writer = None
+
+        if self._is_delta_stream:
+            remaining = self._stripper.flush()
+            tags = self._stripper.tags
+        else:
+            remaining = ""
+            tags = self._segment_tags
+
+        pending_text = self._encode(remaining) if remaining else ""
         self._flush_atask = asyncio.create_task(
-            self._flush_task(curr_writer, dict(attributes or {}))
+            self._flush_task(curr_writer, expression_attribute(tags), pending_text)
         )
 
     async def aclose(self) -> None:
@@ -582,12 +624,12 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
         if self.next_in_chain:
             await self.next_in_chain.capture_text(text)
 
-    def flush(self, attributes: Mapping[str, str] | None = None) -> None:
+    def flush(self) -> None:
         for source in self.__outputs:
-            source.flush(attributes)
+            source.flush()
 
         if self.next_in_chain:
-            self.next_in_chain.flush(attributes)
+            self.next_in_chain.flush()
 
     async def aclose(self) -> None:
         if self.__closed:

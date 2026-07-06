@@ -3020,14 +3020,8 @@ class AgentActivity(RecognitionHooks):
 
         # In expressive mode the LLM emits markup the TTS interprets as audio directives.
         # The raw text (markup intact) flows into chat history and the tts_node; the
-        # transcript forwarder (generation.perform_text_forwarding) strips it from the room
-        # transcript and surfaces the leading expression as the lk.expression attribute.
-        _transcript_markup = (
-            self.tts.markup
-            if self.tts is not None and self._resolve_expressive_options() is not None
-            else None
-        )
-
+        # transcript sinks strip it from the room transcript downstream and surface the
+        # leading expression as the lk.expression attribute (see TranscriptMarkupStripper).
         started_speaking_at: float | None = None
         stopped_speaking_at: float | None = None
         started_forwarding_at: float | None = None
@@ -3156,7 +3150,6 @@ class AgentActivity(RecognitionHooks):
                 audio_source=audio_source,
                 text_source=text_source,
                 on_first_frame=_on_first_frame,
-                transcript_markup=_transcript_markup,
             )
             segment_outputs.append(out)
             if speech_handle.interrupted:

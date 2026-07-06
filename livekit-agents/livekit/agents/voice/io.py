@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Literal
 
@@ -401,13 +401,8 @@ class TextOutput(ABC):
         """Capture a text segment (Used by the output of LLM nodes)"""
 
     @abstractmethod
-    def flush(self, attributes: Mapping[str, str] | None = None) -> None:
-        """Mark the current text segment as complete (e.g LLM generation is complete).
-
-        ``attributes`` are side-channel metadata (e.g. the ``lk.expression`` expressive
-        tag) to attach to the segment as it closes; outputs that publish to a transport
-        (e.g. RoomIO transcription) apply them, others ignore them.
-        """
+    def flush(self) -> None:
+        """Mark the current text segment as complete (e.g LLM generation is complete)."""
 
     def on_attached(self) -> None:
         if self.next_in_chain:
