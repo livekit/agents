@@ -489,7 +489,13 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
         self, *, room_name: str, identity: str, room: rtc.Room
     ) -> None:
         # optional dep; keep SIP path import-free
-        from twilio.rest import Client  # type: ignore
+        try:
+            from twilio.rest import Client  # type: ignore
+        except ImportError as e:
+            raise ImportError(
+                "The 'twilio' package is required for Twilio connector warm transfer "
+                "but is not installed. To fix this, run: pip install twilio"
+            ) from e
 
         job_ctx = get_job_context()
         resp = await job_ctx.api.connector.connect_twilio_call(
