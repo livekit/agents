@@ -14,25 +14,25 @@
 
 """Speechify plugin for LiveKit Agents
 
-See https://docs.livekit.io/agents/integrations/tts/speechify/ for more information.
+Provides Speechify text-to-speech for LiveKit voice agents. See
+https://docs.speechify.ai for API details.
 """
-
-from .models import TTSEncoding, TTSModels
-from .tts import DEFAULT_VOICE_ID, TTS, Voice
-from .version import __version__
-
-__all__ = [
-    "TTS",
-    "Voice",
-    "TTSEncoding",
-    "TTSModels",
-    "DEFAULT_VOICE_ID",
-    "__version__",
-]
 
 from livekit.agents import Plugin
 
 from .log import logger
+from .models import TTSModels
+from .tts import DEFAULT_VOICE_ID, TTS, ChunkedStream, SynthesizeStream
+from .version import __version__
+
+__all__ = [
+    "TTS",
+    "ChunkedStream",
+    "SynthesizeStream",
+    "TTSModels",
+    "DEFAULT_VOICE_ID",
+    "__version__",
+]
 
 
 class SpeechifyPlugin(Plugin):
@@ -42,7 +42,6 @@ class SpeechifyPlugin(Plugin):
 
 Plugin.register_plugin(SpeechifyPlugin())
 
-# Cleanup docs of unexported modules
 _module = dir()
 NOT_IN_ALL = [m for m in _module if m not in __all__]
 

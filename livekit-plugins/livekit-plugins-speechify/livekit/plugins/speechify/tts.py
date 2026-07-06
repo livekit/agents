@@ -1,4 +1,4 @@
-# Copyright 2023 LiveKit, Inc.
+# Copyright 2024 Speechify, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,17 +15,16 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import os
 from dataclasses import dataclass, replace
-
-import aiohttp
 
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
-    APIError,
     APIStatusError,
     APITimeoutError,
+    tokenize,
     tts,
     utils,
 )
@@ -35,114 +34,95 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
+from livekit.agents.voice.io import TimedString
+from speechify.client import AsyncSpeechify
+from speechify.core.api_error import ApiError
 
-from .models import Gender, TTSEncoding, TTSModels, VoiceType
-
-_DefaultEncoding: TTSEncoding = "ogg_24000"
-
-
-def _sample_rate_from_encoding(output_encoding: TTSEncoding) -> int:
-    split = output_encoding.split("_")
-    return int(split[1])
-
-
-def _audio_format_from_encoding(encoding: TTSEncoding) -> str:
-    split = encoding.split("_")
-    return split[0]
-
+from .models import TTSModels
 
 DEFAULT_VOICE_ID = "jack"
-API_BASE_URL_V1 = "https://api.sws.speechify.com/v1"
-AUTHORIZATION_HEADER = "Authorization"
-CALLER_HEADER = "x-caller"
-
-
-@dataclass
-class Voice:
-    id: str
-    type: VoiceType
-    display_name: str
-    gender: Gender
-    avatar_image: str | None
-    models: list[TTSModels]
-    locale: str
+SAMPLE_RATE = 24000
+NUM_CHANNELS = 1
+AUDIO_FORMAT = "pcm"
+MIME_TYPE = "audio/pcm"
 
 
 @dataclass
 class _TTSOptions:
-    base_url: NotGivenOr[str]
-    token: str
     voice_id: str
-    encoding: TTSEncoding
-    language: NotGivenOr[str]
     model: NotGivenOr[TTSModels]
+    language: NotGivenOr[str]
     loudness_normalization: NotGivenOr[bool]
     text_normalization: NotGivenOr[bool]
-    follow_redirects: bool
-    sample_rate: int
 
 
 class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        voice_id: NotGivenOr[str] = DEFAULT_VOICE_ID,
-        encoding: NotGivenOr[TTSEncoding] = NOT_GIVEN,
+        voice_id: str = DEFAULT_VOICE_ID,
         model: NotGivenOr[TTSModels] = NOT_GIVEN,
-        base_url: NotGivenOr[str] = NOT_GIVEN,
-        api_key: NotGivenOr[str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
         loudness_normalization: NotGivenOr[bool] = NOT_GIVEN,
         text_normalization: NotGivenOr[bool] = NOT_GIVEN,
-        http_session: aiohttp.ClientSession | None = None,
-        follow_redirects: bool = True,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        client: AsyncSpeechify | None = None,
     ) -> None:
-        """
-        Create a new instance of Speechify TTS.
+        """Create a new instance of Speechify TTS.
+
+        Synthesis uses the Speechify ``/audio/speech`` endpoint, which returns
+        raw PCM (24 kHz mono) together with word-level speech marks. ``stream()``
+        splits input into sentences and issues one request per sentence, emitting
+        audio and aligned word timestamps as each sentence completes for
+        near-streaming time-to-first-audio.
 
         Args:
-            voice_id (NotGivenOr[str]): Voice ID. Defaults to `cliff`.
-            encoding (NotGivenOr[TTSEncoding]): Audio encoding to use. Optional. Defaults to `wav_48000`.
-            model (NotGivenOr[TTSModels]): TTS model to use. Optional.
-            base_url (NotGivenOr[str]): Custom base URL for the API. Optional.
-            api_key (NotGivenOr[str]): Speechify API key. Can be set via argument or `SPEECHIFY_API_KEY` environment variable
-            language (NotGivenOr[str]): Language code for the TTS model. Optional.
-            loudness_normalization (NotGivenOr[bool]): Whether to normalize the loudness of the audio. Optional.
-            text_normalization (NotGivenOr[bool]): Whether to normalize the text. Optional.
-            http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
-            follow_redirects (bool): Whether to follow redirects in HTTP requests. Defaults to True.
-        """  # noqa: E501
-
-        if not is_given(encoding):
-            encoding = _DefaultEncoding
-
+            voice_id: Id of the voice to synthesize with. See the Speechify
+                ``/v1/voices`` endpoint for the available voices.
+            model: Synthesis model. One of ``simba-english``,
+                ``simba-multilingual`` or ``simba-3.0``.
+            language: BCP-47 language code of the input (e.g. ``en-US``).
+            loudness_normalization: Normalize output loudness to a standard
+                level. Increases latency slightly when enabled.
+            text_normalization: Expand numbers, dates, etc. into words before
+                synthesis. Increases latency slightly when enabled.
+            api_key: Speechify API key. Falls back to the ``SPEECHIFY_API_KEY``
+                environment variable.
+            base_url: Override the Speechify API base URL.
+            tokenizer: Sentence tokenizer used to chunk input in ``stream()``.
+            client: A preconfigured ``AsyncSpeechify`` client. When provided,
+                ``api_key`` and ``base_url`` are ignored.
+        """
         super().__init__(
-            capabilities=tts.TTSCapabilities(
-                streaming=False,
-            ),
-            sample_rate=_sample_rate_from_encoding(encoding),
-            num_channels=1,
+            capabilities=tts.TTSCapabilities(streaming=True, aligned_transcript=True),
+            sample_rate=SAMPLE_RATE,
+            num_channels=NUM_CHANNELS,
         )
 
-        speechify_token = api_key if is_given(api_key) else os.environ.get("SPEECHIFY_API_KEY")
-        if not (speechify_token):
-            raise ValueError(
-                "Speechify API key is required, either as argument or set SPEECHIFY_API_KEY environment variable"  # noqa: E501
+        if client is not None:
+            self._client = client
+        else:
+            token = api_key if is_given(api_key) else os.environ.get("SPEECHIFY_API_KEY")
+            if not token:
+                raise ValueError(
+                    "Speechify API key is required, either as the api_key argument "
+                    "or via the SPEECHIFY_API_KEY environment variable"
+                )
+            self._client = AsyncSpeechify(
+                api_key=token,
+                base_url=base_url if is_given(base_url) else None,
             )
 
+        self._tokenizer = tokenizer if is_given(tokenizer) else tokenize.basic.SentenceTokenizer()
         self._opts = _TTSOptions(
+            voice_id=voice_id,
             model=model,
-            voice_id=voice_id or DEFAULT_VOICE_ID,
             language=language,
-            base_url=base_url if is_given(base_url) else API_BASE_URL_V1,
-            token=speechify_token,
-            follow_redirects=follow_redirects,
-            encoding=encoding,
-            sample_rate=_sample_rate_from_encoding(encoding),
             loudness_normalization=loudness_normalization,
             text_normalization=text_normalization,
         )
-        self._session = http_session
 
     @property
     def model(self) -> str:
@@ -151,18 +131,6 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Speechify"
-
-    def _ensure_session(self) -> aiohttp.ClientSession:
-        if not self._session:
-            self._session = utils.http_context.http_session()
-
-        return self._session
-
-    async def list_voices(self) -> list[Voice]:
-        async with self._ensure_session().get(
-            f"{self._opts.base_url}/voices", headers=_get_headers(self._opts.token)
-        ) as resp:
-            return await resp.json()  # type: ignore
 
     def update_options(
         self,
@@ -173,16 +141,10 @@ class TTS(tts.TTS):
         loudness_normalization: NotGivenOr[bool] = NOT_GIVEN,
         text_normalization: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
-        """
-        Args:
-            voice_id (NotGivenOr[str]): Voice ID.
-            model (NotGivenOr[TTSModels | str]): TTS model to use.
-            language (NotGivenOr[str]): Language code for the TTS model.
-        """
-        if is_given(model):
-            self._opts.model = model
         if is_given(voice_id):
             self._opts.voice_id = voice_id
+        if is_given(model):
+            self._opts.model = model
         if is_given(language):
             self._opts.language = language
         if is_given(loudness_normalization):
@@ -198,95 +160,149 @@ class TTS(tts.TTS):
     ) -> ChunkedStream:
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
+    def stream(
+        self,
+        *,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> SynthesizeStream:
+        return SynthesizeStream(tts=self, conn_options=conn_options)
+
+
+def _request_kwargs(text: str, opts: _TTSOptions) -> dict[str, object]:
+    options: dict[str, bool] = {}
+    if is_given(opts.loudness_normalization):
+        options["loudness_normalization"] = opts.loudness_normalization
+    if is_given(opts.text_normalization):
+        options["text_normalization"] = opts.text_normalization
+
+    kwargs: dict[str, object] = {
+        "audio_format": AUDIO_FORMAT,
+        "input": text,
+        "voice_id": opts.voice_id,
+    }
+    if is_given(opts.model):
+        kwargs["model"] = opts.model
+    if is_given(opts.language):
+        kwargs["language"] = opts.language
+    if options:
+        kwargs["options"] = options
+    return kwargs
+
+
+def _timed_transcript(speech_marks: object, offset: float) -> list[TimedString]:
+    chunks = getattr(speech_marks, "chunks", None)
+    if not chunks:
+        return []
+    out: list[TimedString] = []
+    for chunk in chunks:
+        value = getattr(chunk, "value", None)
+        start = getattr(chunk, "start_time", None)
+        if value is None or start is None:
+            continue
+        end = getattr(chunk, "end_time", None)
+        out.append(
+            TimedString(
+                text=value,
+                start_time=start / 1000 + offset,
+                end_time=(end / 1000 + offset) if end is not None else NOT_GIVEN,
+            )
+        )
+    return out
+
+
+def _raise_from(e: Exception) -> None:
+    if isinstance(e, ApiError):
+        raise APIStatusError(
+            message=str(e.body) if e.body is not None else "Speechify API error",
+            status_code=e.status_code or -1,
+            request_id=None,
+            body=None,
+        ) from None
+    if isinstance(e, asyncio.TimeoutError):
+        raise APITimeoutError() from None
+    raise APIConnectionError() from e
+
 
 class ChunkedStream(tts.ChunkedStream):
-    """Synthesize using the chunked api endpoint"""
-
     def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        data = {
-            "input": self._input_text,
-            "voice_id": self._opts.voice_id,
-            "language": self._opts.language if is_given(self._opts.language) else None,
-            "model": self._opts.model if is_given(self._opts.model) else None,
-            "audio_format": _audio_format_from_encoding(self._opts.encoding),
-            "options": {
-                "loudness_normalization": self._opts.loudness_normalization
-                if is_given(self._opts.loudness_normalization)
-                else None,
-                "text_normalization": self._opts.text_normalization
-                if is_given(self._opts.text_normalization)
-                else None,
-            },
-        }
-
         try:
-            async with self._tts._ensure_session().post(
-                _synthesize_url(self._opts),
-                headers=_get_headers(self._opts.token, encoding=self._opts.encoding),
-                json=data,
-                timeout=aiohttp.ClientTimeout(connect=self._conn_options.timeout, total=30),
-            ) as resp:
-                resp.raise_for_status()
-
-                if not resp.content_type.startswith("audio/"):
-                    content = await resp.text()
-                    raise APIError(message="Speechify returned non-audio data", body=content)
-
-                output_emitter.initialize(
-                    request_id=utils.shortuuid(),
-                    sample_rate=self._opts.sample_rate,
-                    num_channels=1,
-                    mime_type=f"audio/{_audio_format_from_encoding(self._opts.encoding)}",
-                )
-
-                async for chunk, _ in resp.content.iter_chunks():
-                    output_emitter.push(chunk)
-
-                output_emitter.flush()
-
-        except asyncio.TimeoutError:
-            raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message,
-                status_code=e.status,
-                request_id=None,
-                body=None,
-            ) from None
+            response = await self._tts._client.audio.speech(
+                **_request_kwargs(self._input_text, self._opts),
+                request_options={"timeout_in_seconds": int(self._conn_options.timeout)},
+            )
+            output_emitter.initialize(
+                request_id=utils.shortuuid(),
+                sample_rate=SAMPLE_RATE,
+                num_channels=NUM_CHANNELS,
+                mime_type=MIME_TYPE,
+            )
+            timed = _timed_transcript(response.speech_marks, 0.0)
+            if timed:
+                output_emitter.push_timed_transcript(timed)
+            output_emitter.push(base64.b64decode(response.audio_data))
+            output_emitter.flush()
         except Exception as e:
-            raise APIConnectionError() from e
+            _raise_from(e)
 
 
-def _synthesize_url(opts: _TTSOptions) -> str:
-    """Construct the Speechify stream URL."""
-    return f"{opts.base_url}/audio/stream"
+class SynthesizeStream(tts.SynthesizeStream):
+    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
+        super().__init__(tts=tts, conn_options=conn_options)
+        self._tts: TTS = tts
+        self._opts = replace(tts._opts)
 
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        request_id = utils.shortuuid()
+        output_emitter.initialize(
+            request_id=request_id,
+            sample_rate=SAMPLE_RATE,
+            num_channels=NUM_CHANNELS,
+            mime_type=MIME_TYPE,
+            stream=True,
+        )
+        output_emitter.start_segment(segment_id=request_id)
 
-def _get_headers(token: str, *, encoding: TTSEncoding | None = None) -> dict[str, str]:
-    """Construct the headers for the Speechify API."""
-    headers = {
-        AUTHORIZATION_HEADER: f"Bearer {token}" if not token.startswith("Bearer ") else token
-    }
+        sent_stream = self._tts._tokenizer.stream()
 
-    if encoding:
-        accept = ""
-        format = _audio_format_from_encoding(encoding)
-        if format == "ogg":
-            accept = "audio/ogg"
-        elif format == "mp3":
-            accept = "audio/mpeg"
-        elif format == "aac":
-            accept = "audio/aac"
+        async def _forward_input() -> None:
+            async for data in self._input_ch:
+                if isinstance(data, self._FlushSentinel):
+                    sent_stream.flush()
+                    continue
+                sent_stream.push_text(data)
+            sent_stream.end_input()
 
-        # docs does not specify mime type for wav
-        # https://docs.sws.speechify.com/v1/api-reference/api-reference/tts/audio/stream
+        async def _synthesize() -> None:
+            offset = 0.0
+            async for ev in sent_stream:
+                if not (text := ev.token.strip()):
+                    continue
+                response = await self._tts._client.audio.speech(
+                    **_request_kwargs(text, self._opts),
+                    request_options={"timeout_in_seconds": int(self._conn_options.timeout)},
+                )
+                audio = base64.b64decode(response.audio_data)
+                timed = _timed_transcript(response.speech_marks, offset)
+                if timed:
+                    output_emitter.push_timed_transcript(timed)
+                output_emitter.push(audio)
+                offset += len(audio) / (2 * SAMPLE_RATE * NUM_CHANNELS)
 
-        if accept:
-            headers["Accept"] = accept
-    headers[CALLER_HEADER] = "livekit"
-    return headers
+            output_emitter.end_segment()
+
+        tasks = [
+            asyncio.create_task(_forward_input()),
+            asyncio.create_task(_synthesize()),
+        ]
+        try:
+            await asyncio.gather(*tasks)
+        except Exception as e:
+            _raise_from(e)
+        finally:
+            await sent_stream.aclose()
+            await utils.aio.cancel_and_wait(*tasks)
