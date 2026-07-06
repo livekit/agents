@@ -210,14 +210,19 @@ Examples:
   <expression value="whisper softly"/> Don't tell anyone, but I think we got the BETTER deal.
   <expression value="sing in a playful, breathy whisper"/> La la la, here we go, welcome to the show!"""
 
-# xAI Grok TTS speech tags. The inline sounds/pauses and the prosody/style wrapping
-# tags are verbatim from the xAI docs
-# (https://docs.x.ai/developers/rest-api-reference/inference/voice). The emotion
-# wrapping tags (<happy>..</happy>) aren't in the public tag list but are supported in
-# practice, so we expose them too and encourage nesting a prosody tag inside an emotion
-# tag to shape delivery. Only wrapping tags need explicit XML stripping (_XAI_TAGS);
-# inline [..] tags are stripped generically by the brackets=True flag in
-# _PROVIDER_MARKUP.
+# xAI Grok TTS speech tags. The prosody/style wrapping tags and inline sounds/pauses are
+# from the xAI docs (https://docs.x.ai/developers/rest-api-reference/inference/voice). The
+# emotion wrapping tags (<happy>..</happy>) aren't in the public tag list but are supported
+# in practice, so we expose them too and encourage nesting a prosody tag inside an emotion
+# tag to shape delivery.
+#
+# The LLM is instructed to write EVERY tag as XML (angle brackets) so the transcript
+# stripper's "<" guard handles them cleanly and they never leak (see the earlier
+# bracket-leak bug). Modeled on Inworld: inline sounds use <sound value="NAME"/> and pauses
+# use <break time="..."/>. convert_markup rewrites those to xAI's native brackets for the
+# TTS — <sound value="X"/> -> [X] (reusing Inworld's conversion) and <break> -> [pause] or
+# [long-pause] by duration. Emotion/prosody stay angle-bracketed (native). All tags are
+# stripped from the transcript via _XAI_TAGS.
 _XAI_EMOTIONS = [
     "happy",
     "sad",
@@ -233,8 +238,6 @@ _XAI_EMOTIONS = [
     "nervous",
 ]
 _XAI_INLINE = [
-    "pause",
-    "long-pause",
     "breath",
     "inhale",
     "exhale",
@@ -263,9 +266,23 @@ _XAI_WRAPPING = [
     "singing",  # actually sung
     "laugh-speak",  # talk through a laugh
 ]
-# emotion tags first so a fixed-point strip peels the outer emotion before the inner
-# prosody tag (order is cosmetic — stripping iterates either way)
-_XAI_TAGS = _XAI_EMOTIONS + _XAI_WRAPPING
+# all tags are XML in the transcript, so all are stripped. inline sounds are the single
+# "sound" tag (<sound value="NAME"/>, _XAI_INLINE lists the NAMEs), and pauses use
+# "break" (<break time="..."/>), both modeled on Inworld.
+_XAI_TAGS = _XAI_EMOTIONS + _XAI_WRAPPING + ["sound", "break"]
+
+# xAI has two pause levels ([pause], [long-pause]); map an Inworld-style <break time="X"/>
+# to the longer one past ~1s. This is the only per-provider bit convert_markup needs.
+_XAI_BREAK_RE = re.compile(r'<break\s+time="([^"]*)"\s*/?>')
+
+
+def _xai_break_to_bracket(match: re.Match[str]) -> str:
+    raw = match.group(1).strip().lower()
+    try:
+        secs = float(raw[:-2]) / 1000 if raw.endswith("ms") else float(raw.rstrip("s"))
+    except ValueError:
+        secs = 0.0
+    return "[long-pause]" if secs >= 1.0 else "[pause]"
 
 _XAI_LLM_INSTRUCTIONS = (
     """\
@@ -282,24 +299,26 @@ com"). Read phone numbers digit by digit, separating the digits with spaces so e
 voiced (e.g. (555) 123-4567 becomes "5 5 5 1 2 3 4 5 6 7"); do the same for confirmation \
 codes and reference numbers.
 
-You have three kinds of speech tags for lifelike, expressive delivery. Reach for them \
+You have several kinds of speech tags for lifelike, expressive delivery. Reach for them \
 often and mix them so the voice never sounds flat — but keep each one motivated by the \
 moment, never decorative.
 
-1. Inline sound tags - self-contained; drop them at the exact point where the sound happens:
-   [pause] brief pause    [long-pause] longer, dramatic pause
-   [breath] audible breath    [inhale] sharp intake    [exhale] breath out
-   [sigh] a sigh    [laugh] laughter    [chuckle] soft laugh    [giggle] light giggle
-   [cry] crying    [tsk] a disapproving tsk    [tongue-click] a tongue click
-   [lip-smack] a lip smack    [hum-tune] humming a tune
+1. Inline sounds - self-closing; drop one at the exact point where the sound happens. One \
+tag, the value is the sound name:
+   """
+    + ", ".join(f'<sound value="{s}"/>' for s in _XAI_INLINE)
+    + """
 
-2. Emotion tags - wrap a phrase or sentence to color its feeling. The tag name IS the \
+2. Pauses - insert a beat where you want one:
+   <break time="500ms"/> a brief pause    <break time="1s"/> a longer, dramatic pause
+
+3. Emotion tags - wrap a phrase or sentence to color its feeling. The tag name IS the \
 emotion:
    """
     + ", ".join(f"<{e}>...</{e}>" for e in _XAI_EMOTIONS)
     + """
 
-3. Prosody & style tags - wrap the exact words they affect to shape HOW it's said:
+4. Prosody & style tags - wrap the exact words they affect to shape HOW it's said:
    Volume:    <soft>...</soft> quieter        <loud>...</loud> louder
    Intensity: <build-intensity>...</build-intensity> ramp up    <decrease-intensity>...</decrease-intensity> ease off
    Pitch:     <higher-pitch>...</higher-pitch>    <lower-pitch>...</lower-pitch>
@@ -317,14 +336,14 @@ sound alike, and drop in an inline sound where real feeling spills out.
 To stress a word, wrap it in <emphasis>...</emphasis> — do NOT write it in all-caps, \
 which is read out as individual letters (so "HI" becomes "H. I."). Keep normal \
 capitalization. Punctuation still shapes delivery — commas and periods create natural \
-pauses, so reach for [pause]/[long-pause] only when you want a beat beyond what the \
+pauses, so reach for a <break time="500ms"/> only when you want a beat beyond what the \
 punctuation gives.
 
 Examples:
-  <excited>So I walked in and [pause] there it was!</excited> [laugh] I honestly could not believe it! <whisper>It was a secret the whole time.</whisper>
-  <happy><build-intensity>This is going to be so good</build-intensity></happy> — <loud>I can't wait!</loud> [chuckle]
-  <sympathetic><soft>Hey.</soft> [sigh] <lower-pitch>I know it's been a rough week.</lower-pitch></sympathetic> I'm right here.
-  <playful><laugh-speak>You did not just say that</laugh-speak></playful> [giggle] okay, <fast>tell me everything.</fast>"""
+  <excited>So I walked in and <break time="500ms"/> there it was!</excited> <sound value="laugh"/> I honestly could not believe it! <whisper>It was a secret the whole time.</whisper>
+  <happy><build-intensity>This is going to be so good</build-intensity></happy> — <loud>I can't wait!</loud> <sound value="chuckle"/>
+  <sympathetic><soft>Hey.</soft> <sound value="sigh"/> <lower-pitch>I know it's been a rough week.</lower-pitch></sympathetic> I'm right here.
+  <playful><laugh-speak>You did not just say that</laugh-speak></playful> <sound value="giggle"/> okay, <fast>tell me everything.</fast>"""
 )
 
 
@@ -714,8 +733,9 @@ _PROVIDER_MARKUP: dict[str, tuple[list[str], bool]] = {
     "elevenlabs": (_ELEVENLABS_TAGS, False),
     "elevenlabs_v3": (_ELEVENLABS_V3_TAGS, True),
     "inworld": (_INWORLD_TAGS, True),
-    # xAI mixes wrapping XML tags (whisper/emphasis/slow) with inline [..] tags
-    "xai": (_XAI_TAGS, True),
+    # xAI's LLM writes every tag as XML (inline sounds/pauses converted to [..] only for
+    # the TTS in convert_markup), so the transcript never contains brackets to strip
+    "xai": (_XAI_TAGS, False),
 }
 
 
@@ -773,7 +793,12 @@ def normalize_markup(provider: str, text: str) -> str:
 
 def convert_markup(provider: str, text: str) -> str:
     """Convert framework-standard markup to a provider's native syntax."""
-    if provider in ("elevenlabs_v3", "inworld"):
+    if provider in ("elevenlabs_v3", "inworld", "xai"):
+        # <sound value="X"/> -> [X] (and <expression value="X"/> -> [X]); for xAI this
+        # turns inline sounds into its native brackets while emotion/prosody stay <..>
         text = convert_expression_tags(text)
-    # <break> is passed through unchanged: Inworld accepts it as native SSML.
+    if provider == "xai":
+        # xAI has no <break>; map it to its native [pause]/[long-pause]
+        text = _XAI_BREAK_RE.sub(_xai_break_to_bracket, text)
+    # <break> is otherwise passed through unchanged: Inworld accepts it as native SSML.
     return text
