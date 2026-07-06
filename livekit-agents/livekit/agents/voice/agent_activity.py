@@ -2757,14 +2757,13 @@ class AgentActivity(RecognitionHooks):
 
         def _on_llm_task_done(task: asyncio.Task[bool]) -> None:
             # Surface a genuine LLM failure (not interruption/cancellation) so it
-            # propagates through the SpeechHandle to RunResult (i.e. session.run()).
-            # RunResult._mark_done() raises ``_maybe_run_final_output`` when it is a
-            # BaseException; this also retrieves the task exception (no "never
+            # propagates through SpeechHandle.exception() and RunResult (i.e.
+            # session.run()); this also retrieves the task exception (no "never
             # retrieved" warning).
             if task.cancelled():
                 return
             if (exc := task.exception()) is not None:
-                speech_handle._maybe_run_final_output = exc
+                speech_handle._error = exc
 
         llm_task.add_done_callback(_on_llm_task_done)
 
@@ -3247,6 +3246,7 @@ class AgentActivity(RecognitionHooks):
                 generation_ev = await self._rt_session.say(text)
             except llm.RealtimeError as e:
                 logger.error("failed to say text: %s", str(e))
+                speech_handle._mark_done(error=e)
                 return
 
             await self._realtime_generation_task(
@@ -3306,6 +3306,7 @@ class AgentActivity(RecognitionHooks):
                     " after tool execution" if tool_reply else "",
                     str(e),
                 )
+                speech_handle._mark_done(error=e)
                 self._session._update_agent_state("listening")
                 return
 
