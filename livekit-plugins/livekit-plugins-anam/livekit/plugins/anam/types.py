@@ -5,6 +5,8 @@ from dataclasses import dataclass
 class DirectorNotes:
     """Per-session director-notes overrides forwarded to Anam.
 
+    For a full list of available style presets, see https://anam.ai/docs/personas/director-notes
+
     Mirrors the ``directorNotes`` field of the Anam persona config. Every field
     is optional; unset (``None``) fields are omitted from the request so Anam
     falls back to the avatar model / cue defaults.
