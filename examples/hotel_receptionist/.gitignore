@@ -3,3 +3,4 @@ fake_data/hotel.db-shm
 fake_data/hotel.db-wal
 __pycache__/
 .env.local
+livekit.toml

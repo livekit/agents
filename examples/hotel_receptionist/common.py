@@ -31,9 +31,9 @@ class Userdata:
 
 
 def _speak_code(code: str) -> str:
-    # Spell character by character, with "-" spoken as the single word "dash" -
-    # NOT spelled D, A, S, H (that reads as four more code characters).
-    return ", ".join("dash" if c == "-" else c for c in code.upper())
+    # Hand the raw code to the TTS - its own parser reads alphanumeric codes
+    # correctly; we don't pre-spell it character by character.
+    return code.upper()
 
 
 def _count_caller_turns(chat_ctx: llm.ChatContext) -> int:
