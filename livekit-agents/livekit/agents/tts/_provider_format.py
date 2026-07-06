@@ -7,7 +7,6 @@ per provider.
 Provider docs:
 - Cartesia: https://docs.cartesia.ai/build-with-cartesia/sonic-3/ssml-tags
 - Cartesia: https://docs.cartesia.ai/build-with-cartesia/sonic-3/volume-speed-emotion
-- ElevenLabs: https://elevenlabs.io/docs/overview/capabilities/text-to-speech/best-practices
 - Inworld: https://docs.inworld.ai/tts/capabilities/steering
 - Inworld: https://docs.inworld.ai/tts/best-practices/prompting-for-tts-2
 - xAI: https://docs.x.ai/developers/model-capabilities/audio/text-to-speech
@@ -79,68 +78,6 @@ Examples:
   <emotion value="curious"/> Really? <break time="500ms"/> <emotion value="excited"/> Tell me more!
   <emotion value="calm"/> Sure, that's <spell>jdoe</spell> at gmail dot com, and your callback number is 555-123-4567?
   Your code is <spell>A7X9</spell>. <break time="1s"/> <emotion value="calm"/> Got it?"""
-
-_ELEVENLABS_TAGS = ["break", "phoneme"]
-
-_ELEVENLABS_LLM_INSTRUCTIONS = """\
-Expand all numbers, symbols, and abbreviations into spoken form \
-(e.g. $42.50 to forty-two dollars and fifty cents, Dr. to Doctor).
-
-Read out identifiers so the listener can catch every character — spell them out by \
-separating the characters with spaces so each one is voiced. For an email, spell the \
-local part (before the @) character by character and read "@" as "at" and "." as "dot" \
-(e.g. j.doe@... becomes "j dot d o e at ..."). Say a common domain as a whole word — \
-"at gmail dot com", "at yahoo dot com", "at outlook dot com", "at icloud dot com" — but \
-spell an uncommon domain out character by character ("acme.com" becomes "at a c m e dot \
-com"). Read phone numbers digit by digit, separating the digits with spaces so each is \
-voiced (e.g. (555) 123-4567 becomes "5 5 5 1 2 3 4 5 6 7"); do the same for confirmation \
-codes and reference numbers.
-
-You can use two self-closing XML tags:
-
-1. Pauses - insert silence when appropriate (max 3 seconds).
-   <break time="1.5s"/>
-
-2. Pronunciation - override how a word is spoken (one word per tag).
-   <phoneme alphabet="cmu-arpabet" ph="PHONEMES">word</phoneme>
-
-Examples:
-  Hold on. <break time="1.5s"/> Alright, I've got it.
-  Say <phoneme alphabet="cmu-arpabet" ph="M AE1 D IH0 S AH0 N">Madison</phoneme>."""
-
-_ELEVENLABS_V3_TAGS = ["expression"]
-
-_ELEVENLABS_V3_LLM_INSTRUCTIONS = """\
-Expand all numbers, symbols, and abbreviations into spoken form \
-(e.g. $42.50 to forty-two dollars and fifty cents, Dr. to Doctor).
-
-Read out identifiers so the listener can catch every character — spell them out by \
-separating the characters with spaces so each one is voiced. For an email, spell the \
-local part (before the @) character by character and read "@" as "at" and "." as "dot" \
-(e.g. j.doe@... becomes "j dot d o e at ..."). Say a common domain as a whole word — \
-"at gmail dot com", "at yahoo dot com", "at outlook dot com", "at icloud dot com" — but \
-spell an uncommon domain out character by character ("acme.com" becomes "at a c m e dot \
-com"). Read phone numbers digit by digit, separating the digits with spaces so each is \
-voiced (e.g. (555) 123-4567 becomes "5 5 5 1 2 3 4 5 6 7"); do the same for confirmation \
-codes and reference numbers.
-
-You have one self-closing XML tag for vocal delivery. Place before EVERY sentence.
-  <expression value="EXPRESSION"/>
-
-Delivery styles: excited, happy, sad, angry, annoyed, sarcastic, curious, \
-surprised, thoughtful, mischievously, appalled, muttering.
-
-Non-verbal sounds: laughs, chuckles, whispers, sighs, crying, exhales, \
-inhales deeply, clears throat, snorts, short pause, long pause.
-
-Use CAPITALIZATION for emphasis on key words.
-
-Examples:
-  <expression value="excited"/> I can't BELIEVE we did it! <expression value="laughs"/> <expression value="happy"/> That's so awesome!
-  <expression value="sad"/> I'm really sorry about that. <expression value="sighs"/> <expression value="thoughtful"/> Let me see what I can do.
-  <expression value="whispers"/> Don't tell anyone. <expression value="curious"/> But did you hear what happened?
-  <expression value="angry"/> That's NOT acceptable. <expression value="sarcastic"/> Oh sure, because that worked so well last time.
-  <expression value="chuckles"/> That's a good one. <expression value="happy"/> You always make me laugh."""
 
 _INWORLD_TAGS = ["expression", "sound", "break"]
 
@@ -283,6 +220,7 @@ def _xai_break_to_bracket(match: re.Match[str]) -> str:
     except ValueError:
         secs = 0.0
     return "[long-pause]" if secs >= 1.0 else "[pause]"
+
 
 _XAI_LLM_INSTRUCTIONS = (
     """\
@@ -716,10 +654,6 @@ def llm_instructions(provider: str) -> str | None:
     """Return LLM instruction text for a TTS provider."""
     if provider == "cartesia":
         return _CARTESIA_LLM_INSTRUCTIONS
-    elif provider == "elevenlabs":
-        return _ELEVENLABS_LLM_INSTRUCTIONS
-    elif provider == "elevenlabs_v3":
-        return _ELEVENLABS_V3_LLM_INSTRUCTIONS
     elif provider == "inworld":
         return _INWORLD_LLM_INSTRUCTIONS
     elif provider == "xai":
@@ -730,8 +664,6 @@ def llm_instructions(provider: str) -> str | None:
 # Per-provider markup spec: (xml tag names, whether square-bracket tags are used).
 _PROVIDER_MARKUP: dict[str, tuple[list[str], bool]] = {
     "cartesia": (_CARTESIA_TAGS, False),
-    "elevenlabs": (_ELEVENLABS_TAGS, False),
-    "elevenlabs_v3": (_ELEVENLABS_V3_TAGS, True),
     "inworld": (_INWORLD_TAGS, True),
     # xAI's LLM writes every tag as XML (inline sounds/pauses converted to [..] only for
     # the TTS in convert_markup), so the transcript never contains brackets to strip
@@ -772,8 +704,6 @@ def extract_markup(provider: str, text: str) -> list[ExpressiveTag]:
 
 _SELF_CLOSING_TAGS: dict[str, list[str]] = {
     "cartesia": ["emotion", "speed", "volume", "break"],
-    "elevenlabs": ["break", "phoneme"],
-    "elevenlabs_v3": ["expression"],
     "inworld": ["expression", "sound", "break"],
 }
 
@@ -793,7 +723,7 @@ def normalize_markup(provider: str, text: str) -> str:
 
 def convert_markup(provider: str, text: str) -> str:
     """Convert framework-standard markup to a provider's native syntax."""
-    if provider in ("elevenlabs_v3", "inworld", "xai"):
+    if provider in ("inworld", "xai"):
         # <sound value="X"/> -> [X] (and <expression value="X"/> -> [X]); for xAI this
         # turns inline sounds into its native brackets while emotion/prosody stay <..>
         text = convert_expression_tags(text)

@@ -211,14 +211,6 @@ class TTS(tts.TTS):
         self.__current_connection: _Connection | None = None
         self._connection_lock = asyncio.Lock()
 
-    class Markup(tts.TTS.Markup):
-        # markup delegation lives in the base class, keyed on _provider_key()
-        def _provider_key(self) -> str:
-            model = self._tts.model if hasattr(self._tts, "model") else ""
-            if "v3" in model or "eleven_v3" in model:
-                return "elevenlabs_v3"
-            return "elevenlabs"
-
     @property
     def model(self) -> str:
         return self._opts.model
