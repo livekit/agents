@@ -282,6 +282,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             async for ev in sent_stream:
                 if not (text := ev.token.strip()):
                     continue
+                self._mark_started()
                 response = await self._tts._client.audio.speech(
                     **_request_kwargs(text, self._opts),
                     request_options={"timeout_in_seconds": int(self._conn_options.timeout)},
