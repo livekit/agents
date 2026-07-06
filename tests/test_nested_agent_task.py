@@ -74,6 +74,84 @@ async def test_nested_agent_task_no_deadlock():
         assert second_result is not None
 
 
+class SimpleTask(AgentTask):
+    """A task that needs a user turn to complete (user must trigger 'finish')."""
+
+    def __init__(self) -> None:
+        super().__init__(instructions="simple task")
+
+    async def on_enter(self) -> None:
+        self.session.generate_reply(instructions="task_greeting")
+
+    @function_tool
+    async def finish(self, ctx: RunContext) -> str:
+        """Called to complete the task."""
+        self.complete(None)
+        return "done"
+
+
+class EnterHandoffAgent(Agent):
+    """Agent whose on_enter reply calls a tool that awaits an AgentTask.
+
+    The on_enter speech predates any session.run(), so the run doesn't watch it.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(instructions="root agent")
+
+    async def on_enter(self) -> None:
+        await self.session.generate_reply(instructions="enter_greeting")
+
+    @function_tool
+    async def start_task(self, ctx: RunContext) -> str:
+        """Transitions into SimpleTask."""
+        await SimpleTask()
+        return "task completed"
+
+
+@pytest.mark.asyncio
+async def test_handoff_from_pre_run_speech():
+    """A handoff triggered by a speech created before session.run() (e.g. in
+    on_enter) must keep the run alive until the new activity has started;
+    otherwise the next run() races the transition and gets rejected."""
+    llm = FakeLLM(
+        fake_responses=[
+            # on_enter generate_reply(instructions="enter_greeting") -> calls start_task;
+            # slow enough that run(user_input="hi") starts before the tool call lands
+            FakeLLMResponse(
+                input="enter_greeting",
+                content="",
+                ttft=1.0,
+                duration=1.0,
+                tool_calls=[FunctionToolCall(name="start_task", arguments="{}", call_id="call_1")],
+            ),
+            # user says "hi" while the handoff is in flight; this is the only
+            # speech the first run watches
+            FakeLLMResponse(input="hi", content="hello!", ttft=1.0, duration=2.0),
+            # SimpleTask on_enter greeting
+            FakeLLMResponse(input="task_greeting", content="hello from task", ttft=0, duration=0),
+            # user says "bye" -> LLM calls finish
+            FakeLLMResponse(
+                input="bye",
+                content="",
+                ttft=0,
+                duration=0,
+                tool_calls=[FunctionToolCall(name="finish", arguments="{}", call_id="call_2")],
+            ),
+            # after start_task tool output, LLM responds
+            FakeLLMResponse(input="task completed", content="all done", ttft=0, duration=0),
+        ]
+    )
+    async with AgentSession(llm=llm) as sess:
+        await sess.start(EnterHandoffAgent())
+
+        await asyncio.wait_for(sess.run(user_input="hi"), timeout=5.0)
+        assert isinstance(sess.current_agent, SimpleTask)
+
+        await asyncio.wait_for(sess.run(user_input="bye"), timeout=5.0)
+        assert isinstance(sess.current_agent, EnterHandoffAgent)
+
+
 def _build_fake_llm() -> FakeLLM:
     return FakeLLM(
         fake_responses=[
