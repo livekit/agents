@@ -352,11 +352,15 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         )
 
         # dial the human agent
-        await self._originate_human_agent(
-            room_name=human_agent_room_name,
-            identity=self._human_agent_identity,
-            room=room,
-        )
+        try:
+            await self._originate_human_agent(
+                room_name=human_agent_room_name,
+                identity=self._human_agent_identity,
+                room=room,
+            )
+        except Exception:
+            human_agent_sess.shutdown()
+            raise
 
         return human_agent_sess
 
@@ -500,14 +504,20 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
         )
 
         client = Client(self._twilio_account_sid, self._twilio_auth_token)
-        await asyncio.to_thread(
+        call = await asyncio.to_thread(
             client.calls.create,
             to=self._phone_number,
             from_=self._twilio_from_number,
             twiml=twiml,
         )
 
-        await self._wait_for_human_agent(room=room, identity=identity)
+        try:
+            await self._wait_for_human_agent(room=room, identity=identity)
+        except Exception:
+            # we gave up waiting; cancel the still-ringing call so it doesn't linger
+            with contextlib.suppress(Exception):
+                await asyncio.to_thread(client.calls(call.sid).update, status="canceled")
+            raise
 
     async def _wait_for_human_agent(self, *, room: rtc.Room, identity: str) -> None:
         # the connector publishes the supervisor's track only after the call is answered
