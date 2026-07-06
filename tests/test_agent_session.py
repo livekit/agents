@@ -4,7 +4,8 @@ import asyncio
 import logging
 import time
 from collections.abc import AsyncIterable
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
+from typing import cast
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
@@ -33,7 +34,7 @@ from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
 from livekit.agents.utils import aio
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.audio_recognition import AudioRecognition, _EndOfTurnInfo
-from livekit.agents.voice.endpointing import BaseEndpointing
+from livekit.agents.voice.endpointing import BaseEndpointing, create_endpointing
 from livekit.agents.voice.events import FunctionToolsExecutedEvent
 from livekit.agents.voice.io import PlaybackFinishedEvent
 
@@ -1762,3 +1763,1324 @@ async def test_pipeline_multi_segment_interrupted() -> None:
     assert len(assistant_msgs) == 1
     assert assistant_msgs[0].interrupted is True
     assert "How are you?" not in (assistant_msgs[0].text_content or "")
+
+
+async def test_update_options_stt_swaps_session_and_rewires_activity() -> None:
+    """update_options(stt=...) replaces the session STT and rewires the live pipeline."""
+    from livekit.agents.voice.agent_session import AgentSession
+    from livekit.agents.voice.audio_recognition import AudioRecognition
+
+    from .fake_stt import FakeSTT
+
+    old_stt = FakeSTT()
+    new_stt = FakeSTT()
+    session = AgentSession(stt=old_stt)
+    try:
+        agent = MyAgent()
+        activity = AgentActivity(agent, session)
+
+        # construct an AudioRecognition directly with stt=None and don't call start()
+        # — we only need it as a vehicle for the spy on update_stt. The session and
+        # activity are wired by hand; the test does not run the full session.start()
+        # lifecycle (which would also spin up the segment synchronizer and leak its
+        # background tasks if no real audio is pushed).
+        audio_recognition = AudioRecognition(
+            session,
+            hooks=activity,
+            stt=None,
+            vad=None,
+            using_default_vad=False,
+            interruption_detection=None,
+            endpointing=create_endpointing(activity.endpointing_opts),
+            turn_detection=None,
+            stt_model=None,
+            stt_provider=None,
+        )
+        activity._audio_recognition = audio_recognition
+        session._activity = activity
+        session._agent = agent
+
+        # spy on audio_recognition.update_stt without actually running the original —
+        # we only want to verify the call signature. Running the original would spin
+        # up an _STTPipeline consumer task that, without a real agent activity
+        # context, raises and leaks.
+        update_stt_calls: list[tuple[object, dict]] = []
+
+        def spy_update_stt(stt_node, **kwargs):  # type: ignore[no-untyped-def]
+            update_stt_calls.append((stt_node, kwargs))
+
+        audio_recognition.update_stt = spy_update_stt  # type: ignore[method-assign]
+
+        session.update_options(stt=new_stt)
+
+        assert session._stt is new_stt
+        # activity.stt resolves through the agent (no own STT) to the session
+        assert activity.stt is new_stt
+        # the audio_recognition.update_stt pipeline hook was triggered with the
+        # agent's bound stt_node (same wiring activity.__init__ uses).
+        # Bound methods are not stable across attribute access, so compare via
+        # the underlying function and instance instead.
+        assert len(update_stt_calls) == 1
+        forwarded_node, forwarded_kwargs = update_stt_calls[0]
+        forwarded_method = cast(MethodType, forwarded_node)
+        assert forwarded_method.__self__ is agent
+        assert forwarded_method.__func__ is MyAgent.stt_node
+        assert forwarded_kwargs == {}
+        # sanity: old_stt and new_stt are different objects
+        assert old_stt is not new_stt
+    finally:
+        await session.aclose()
+
+
+async def test_update_options_tts_swaps_session_and_agent_resolves_to_new_tts() -> None:
+    """update_options(tts=...) replaces the session TTS; no pipeline restart needed."""
+    from livekit.agents.voice.agent_session import AgentSession
+
+    from .fake_tts import FakeTTS
+
+    old_tts = FakeTTS()
+    new_tts = FakeTTS()
+    session = AgentSession(tts=old_tts)
+    try:
+        agent = MyAgent()
+        activity = AgentActivity(agent, session)
+        session._activity = activity
+        session._agent = agent
+
+        assert session._tts is old_tts
+
+        session.update_options(tts=new_tts)
+
+        assert session._tts is new_tts
+        # activity.tts reads through the agent (no own TTS) to the session
+        assert activity.tts is new_tts
+        assert old_tts is not new_tts
+    finally:
+        await session.aclose()
+
+
+async def test_update_options_does_not_overwrite_agent_stt() -> None:
+    """If the agent was constructed with its own STT, the swap does NOT overwrite it.
+
+    update_options only manages session-owned state. Agent-bound STT is the
+    agent's private configuration; the existing activity.stt resolution order
+    (agent.stt if present, else session.stt) keeps using the agent's value.
+    Callers who want to redirect agent-owned STT should use update_agent.
+    """
+    from livekit.agents.voice.agent_session import AgentSession
+
+    from .fake_stt import FakeSTT
+
+    agent_stt = FakeSTT()
+    new_stt = FakeSTT()
+    session = AgentSession()
+    try:
+        agent = MyAgent()
+        agent._stt = agent_stt  # bypass the constructor's NotGivenOr normalization
+        activity = AgentActivity(agent, session)
+        session._activity = activity
+        session._agent = agent
+
+        # activity prefers agent.stt over session.stt
+        assert activity.stt is agent_stt
+
+        session.update_options(stt=new_stt)
+
+        # session-level STT was updated
+        assert session._stt is new_stt
+        # agent-level STT is preserved — update_options does not cross the boundary
+        assert agent._stt is agent_stt
+        # activity.stt still resolves to the agent's STT, not the new session STT
+        assert activity.stt is agent_stt
+    finally:
+        await session.aclose()
+
+
+async def test_update_options_stt_none_disables_pipeline() -> None:
+    """update_options(stt=None) disables STT and clears the audio_recognition pipeline."""
+    from livekit.agents.voice.agent_session import AgentSession
+    from livekit.agents.voice.audio_recognition import AudioRecognition
+
+    from .fake_stt import FakeSTT
+
+    session = AgentSession(stt=FakeSTT())
+    try:
+        agent = MyAgent()
+        activity = AgentActivity(agent, session)
+
+        audio_recognition = AudioRecognition(
+            session,
+            hooks=activity,
+            stt=None,
+            vad=None,
+            using_default_vad=False,
+            interruption_detection=None,
+            endpointing=create_endpointing(activity.endpointing_opts),
+            turn_detection=None,
+            stt_model=None,
+            stt_provider=None,
+        )
+        activity._audio_recognition = audio_recognition
+        session._activity = activity
+        session._agent = agent
+
+        # spy on update_stt without invoking the original — see comment in
+        # test_update_options_stt_swaps_session_and_rewires_activity for why
+        update_stt_calls: list[object] = []
+
+        def spy_update_stt(stt_node, **kwargs):  # type: ignore[no-untyped-def]
+            update_stt_calls.append(stt_node)
+
+        audio_recognition.update_stt = spy_update_stt  # type: ignore[method-assign]
+
+        session.update_options(stt=None)
+
+        assert session._stt is None
+        # activity.stt falls back through the agent (no own STT) to the session — now None
+        assert activity.stt is None
+        # update_stt was called with None to disable the pipeline
+        assert len(update_stt_calls) == 1
+        assert update_stt_calls[0] is None
+    finally:
+        await session.aclose()
+
+
+async def test_update_options_stt_unchanged_when_not_provided() -> None:
+    """Calling update_options without stt/tts leaves both alone."""
+    from livekit.agents.voice.agent_session import AgentSession
+    from livekit.agents.voice.audio_recognition import AudioRecognition
+
+    from .fake_stt import FakeSTT
+    from .fake_tts import FakeTTS
+
+    original_stt = FakeSTT()
+    original_tts = FakeTTS()
+    session = AgentSession(stt=original_stt, tts=original_tts)
+    try:
+        agent = MyAgent()
+        activity = AgentActivity(agent, session)
+
+        audio_recognition = AudioRecognition(
+            session,
+            hooks=activity,
+            stt=None,
+            vad=None,
+            using_default_vad=False,
+            interruption_detection=None,
+            endpointing=create_endpointing(activity.endpointing_opts),
+            turn_detection=None,
+            stt_model=None,
+            stt_provider=None,
+        )
+        activity._audio_recognition = audio_recognition
+        session._activity = activity
+        session._agent = agent
+
+        update_stt_calls: list[object] = []
+
+        def spy_update_stt(stt_node, **kwargs):  # type: ignore[no-untyped-def]
+            update_stt_calls.append(stt_node)
+
+        audio_recognition.update_stt = spy_update_stt  # type: ignore[method-assign]
+
+        session.update_options(
+            endpointing_opts={"mode": "fixed", "min_delay": 0.2, "max_delay": 1.0}
+        )
+
+        # untouched: STT/TTS unchanged, audio_recognition.update_stt NOT called
+        assert session._stt is original_stt
+        assert session._tts is original_tts
+        assert update_stt_calls == []
+    finally:
+        await session.aclose()
+
+
+async def test_update_options_directly_on_activity_swaps_state() -> None:
+    """Calling update_options on the activity directly must mirror the swap onto
+    session._stt / agent._stt, not just rewire the audio_recognition pipeline.
+
+    Regression test for the asymmetry flagged by Devin Review on PR #6235:
+    if a caller bypasses AgentSession.update_options and goes straight to the
+    activity, activity.stt must still resolve to the new STT instance on the
+    next read. Otherwise the live STT pipeline restarts but the per-call
+    lookup inside stt_node keeps using the OLD STT — so no actual swap
+    happens for callers that take this path.
+    """
+    from livekit.agents.voice.agent_session import AgentSession
+    from livekit.agents.voice.audio_recognition import AudioRecognition
+
+    from .fake_stt import FakeSTT
+    from .fake_tts import FakeTTS
+
+    old_stt = FakeSTT()
+    old_tts = FakeTTS()
+    new_stt = FakeSTT()
+    new_tts = FakeTTS()
+    session = AgentSession(stt=old_stt, tts=old_tts)
+    try:
+        agent = MyAgent()
+        activity = AgentActivity(agent, session)
+
+        audio_recognition = AudioRecognition(
+            session,
+            hooks=activity,
+            stt=None,
+            vad=None,
+            using_default_vad=False,
+            interruption_detection=None,
+            endpointing=create_endpointing(activity.endpointing_opts),
+            turn_detection=None,
+            stt_model=None,
+            stt_provider=None,
+        )
+        activity._audio_recognition = audio_recognition
+        session._activity = activity
+        session._agent = agent
+
+        # spy on update_stt without invoking the original — running it would spin
+        # up an _STTPipeline consumer task that, without a real agent activity
+        # context, raises and leaks (see Agent.default.stt_node)
+        def spy_update_stt(stt_node, **kwargs):  # type: ignore[no-untyped-def]
+            pass
+
+        audio_recognition.update_stt = spy_update_stt  # type: ignore[method-assign]
+
+        # sanity: before the swap, all three reads agree on the OLD instances
+        assert session._stt is old_stt
+        assert session._tts is old_tts
+        assert activity.stt is old_stt
+        assert activity.tts is old_tts
+
+        # call update_options on the ACTIVITY directly — bypass the session
+        activity.update_options(stt=new_stt, tts=new_tts)
+
+        # every read must reflect the new instances, even though we never went
+        # through AgentSession.update_options
+        assert session._stt is new_stt
+        assert session._tts is new_tts
+        assert activity.stt is new_stt
+        assert activity.tts is new_tts
+        # and the agent-level mirror held (or didn't) depending on whether the
+        # agent was constructed with its own STT — here it wasn't, so the
+        # branch is a no-op
+        assert agent._stt is new_stt or agent._stt is NOT_GIVEN
+    finally:
+        await session.aclose()
+
+
+async def test_update_options_directly_on_activity_with_agent_bound_stt() -> None:
+    """When the agent has its own STT, calling activity.update_options directly
+    must NOT overwrite the agent's STT — only session-level state is updated.
+    """
+    from livekit.agents.voice.agent_session import AgentSession
+    from livekit.agents.voice.audio_recognition import AudioRecognition
+
+    from .fake_stt import FakeSTT
+
+    agent_stt = FakeSTT()
+    new_stt = FakeSTT()
+    session = AgentSession()
+    try:
+        agent = MyAgent()
+        agent._stt = agent_stt  # bypass the constructor's NotGivenOr normalization
+        activity = AgentActivity(agent, session)
+
+        audio_recognition = AudioRecognition(
+            session,
+            hooks=activity,
+            stt=None,
+            vad=None,
+            using_default_vad=False,
+            interruption_detection=None,
+            endpointing=create_endpointing(activity.endpointing_opts),
+            turn_detection=None,
+            stt_model=None,
+            stt_provider=None,
+        )
+        activity._audio_recognition = audio_recognition
+        session._activity = activity
+        session._agent = agent
+
+        # spy on update_stt without invoking the original — see comment above
+        def spy_update_stt(stt_node, **kwargs):  # type: ignore[no-untyped-def]
+            pass
+
+        audio_recognition.update_stt = spy_update_stt  # type: ignore[method-assign]
+
+        # activity prefers agent.stt over session.stt
+        assert activity.stt is agent_stt
+
+        # direct call on the activity
+        activity.update_options(stt=new_stt)
+
+        # session is updated; agent's STT is preserved (no boundary crossing)
+        assert session._stt is new_stt
+        assert agent._stt is agent_stt
+        # activity.stt still resolves to the agent's STT
+        assert activity.stt is agent_stt
+    finally:
+        await session.aclose()
+
+
+async def test_update_options_prewarms_new_stt_and_tts() -> None:
+    """Swapping STT/TTS via update_options must call .prewarm() on the new
+    instances so providers that eagerly open connections (e.g. Sarvam TTS)
+    don't pay first-call latency on the first synthesis after a swap.
+
+    Regression for the prewarm gap flagged by Devin Review on PR #6235.
+    """
+    from livekit.agents.voice.agent_session import AgentSession
+    from livekit.agents.voice.audio_recognition import AudioRecognition
+
+    from .fake_stt import FakeSTT
+    from .fake_tts import FakeTTS
+
+    prewarm_stt_calls: list[FakeSTT] = []
+    prewarm_tts_calls: list[FakeTTS] = []
+
+    class PrewarmSTT(FakeSTT):
+        def prewarm(self) -> None:
+            prewarm_stt_calls.append(self)
+
+    class PrewarmTTS(FakeTTS):
+        def prewarm(self) -> None:
+            prewarm_tts_calls.append(self)
+
+    old_stt = PrewarmSTT()
+    old_tts = PrewarmTTS()
+    new_stt = PrewarmSTT()
+    new_tts = PrewarmTTS()
+
+    session = AgentSession(stt=old_stt, tts=old_tts)
+    try:
+        agent = MyAgent()
+        activity = AgentActivity(agent, session)
+
+        audio_recognition = AudioRecognition(
+            session,
+            hooks=activity,
+            stt=None,
+            vad=None,
+            using_default_vad=False,
+            interruption_detection=None,
+            endpointing=create_endpointing(activity.endpointing_opts),
+            turn_detection=None,
+            stt_model=None,
+            stt_provider=None,
+        )
+        activity._audio_recognition = audio_recognition
+        session._activity = activity
+        session._agent = agent
+
+        # spy on update_stt without invoking the original — see comment above
+        def spy_update_stt(stt_node, **kwargs):  # type: ignore[no-untyped-def]
+            pass
+
+        audio_recognition.update_stt = spy_update_stt  # type: ignore[method-assign]
+
+        # baseline: nothing prewarmed yet
+        assert prewarm_stt_calls == []
+        assert prewarm_tts_calls == []
+
+        session.update_options(stt=new_stt, tts=new_tts)
+
+        # the new instances must be prewarmed — once each, after the swap
+        assert prewarm_stt_calls == [new_stt]
+        assert prewarm_tts_calls == [new_tts]
+        # the old instances must NOT be prewarmed (only the new ones go through prewarm)
+        assert old_stt not in prewarm_stt_calls
+        assert old_tts not in prewarm_tts_calls
+    finally:
+        await session.aclose()
+
+
+async def test_update_options_prewarm_skipped_when_stt_none() -> None:
+    """Passing stt=None to update_options disables STT and must NOT call
+    prewarm() (which would AttributeError on None).
+    """
+    from livekit.agents.voice.agent_session import AgentSession
+    from livekit.agents.voice.audio_recognition import AudioRecognition
+
+    from .fake_stt import FakeSTT
+
+    prewarm_stt_calls: list[FakeSTT] = []
+
+    class PrewarmSTT(FakeSTT):
+        def prewarm(self) -> None:
+            prewarm_stt_calls.append(self)
+
+    session = AgentSession(stt=PrewarmSTT())
+    try:
+        agent = MyAgent()
+        activity = AgentActivity(agent, session)
+
+        audio_recognition = AudioRecognition(
+            session,
+            hooks=activity,
+            stt=None,
+            vad=None,
+            using_default_vad=False,
+            interruption_detection=None,
+            endpointing=create_endpointing(activity.endpointing_opts),
+            turn_detection=None,
+            stt_model=None,
+            stt_provider=None,
+        )
+        activity._audio_recognition = audio_recognition
+        session._activity = activity
+        session._agent = agent
+
+        # spy on update_stt to avoid spawning a real _stt_pump consumer task
+        def spy_update_stt(stt_node, **kwargs):  # type: ignore[no-untyped-def]
+            pass
+
+        audio_recognition.update_stt = spy_update_stt  # type: ignore[method-assign]
+
+        # disable STT — None disables, must skip prewarm
+        session.update_options(stt=None)
+
+        assert prewarm_stt_calls == []
+    finally:
+        await session.aclose()
+
+
+async def test_update_options_does_not_rewire_pipeline_when_agent_owns_stt() -> None:
+    """When the agent was constructed with its own STT, the session-level swap
+    must NOT trigger audio_recognition.update_stt.
+
+    The pipeline restart would tear down the in-progress stream, clear the
+    transcript buffer, and reset interruption state — all for no functional
+    change, since activity.stt still resolves to agent._stt (unchanged).
+
+    Regression for the unnecessary-pipeline-restart gap flagged by Devin
+    Review on PR #6235.
+    """
+    from unittest.mock import patch
+
+    from livekit.agents.voice.agent_session import AgentSession
+    from livekit.agents.voice.audio_recognition import AudioRecognition
+
+    from .fake_stt import FakeSTT
+
+    agent_stt = FakeSTT()
+    new_stt = FakeSTT()
+    session = AgentSession(stt=FakeSTT())  # different from agent_stt so the
+    # session-level swap is observable on session._stt
+    try:
+        agent = MyAgent()
+        agent._stt = agent_stt  # agent owns its STT
+        activity = AgentActivity(agent, session)
+
+        audio_recognition = AudioRecognition(
+            session,
+            hooks=activity,
+            stt=None,
+            vad=None,
+            using_default_vad=False,
+            interruption_detection=None,
+            endpointing=create_endpointing(activity.endpointing_opts),
+            turn_detection=None,
+            stt_model=None,
+            stt_provider=None,
+        )
+        activity._audio_recognition = audio_recognition
+        session._activity = activity
+        session._agent = agent
+
+        update_stt_calls: list[object] = []
+
+        def spy_update_stt(stt_node, **kwargs):  # type: ignore[no-untyped-def]
+            update_stt_calls.append(stt_node)
+
+        audio_recognition.update_stt = spy_update_stt  # type: ignore[method-assign]
+
+        # sanity: activity.stt resolves to the agent's STT
+        assert activity.stt is agent_stt
+
+        # the silent-failure path now logs a warning when caller provides
+        # a non-None STT but the agent-bound contract shadows it
+        with patch("livekit.agents.voice.agent_activity.logger") as mock_logger:
+            session.update_options(stt=new_stt)
+
+        # session-level STT was updated (state changed)
+        assert session._stt is new_stt
+        # but the pipeline was NOT rewired — agent's STT is still in effect
+        assert update_stt_calls == []
+        # and activity.stt still resolves to the agent's STT (unchanged)
+        assert activity.stt is agent_stt
+        # and a warning was logged to surface the silent failure
+        assert mock_logger.warning.called
+        warning_msg = str(mock_logger.warning.call_args)
+        assert "no-op" in warning_msg
+    finally:
+        await session.aclose()
+
+
+async def test_update_options_warns_when_agent_stt_is_explicit_none() -> None:
+    """When the agent is constructed with stt=None (explicit disable), the
+    session-level swap is silently a no-op — but the caller clearly intended
+    to set STT. A warning must fire.
+
+    Devin Review on PR #6235: is_given(None) is True, so this is the same
+    code path as a non-None agent STT. The warning helps the caller realize
+    they need update_agent or omit the stt kwarg on the agent.
+    """
+    from unittest.mock import patch
+
+    from livekit.agents.voice.agent_session import AgentSession
+    from livekit.agents.voice.audio_recognition import AudioRecognition
+
+    from .fake_stt import FakeSTT
+
+    new_stt = FakeSTT()
+    session = AgentSession(stt=FakeSTT())  # session-level STT exists
+    try:
+        agent = MyAgent()
+        agent._stt = None  # agent explicitly opted out of STT
+        activity = AgentActivity(agent, session)
+
+        audio_recognition = AudioRecognition(
+            session,
+            hooks=activity,
+            stt=None,
+            vad=None,
+            using_default_vad=False,
+            interruption_detection=None,
+            endpointing=create_endpointing(activity.endpointing_opts),
+            turn_detection=None,
+            stt_model=None,
+            stt_provider=None,
+        )
+        activity._audio_recognition = audio_recognition
+        session._activity = activity
+        session._agent = agent
+
+        update_stt_calls: list[object] = []
+
+        def spy_update_stt(stt_node, **kwargs):  # type: ignore[no-untyped-def]
+            update_stt_calls.append(stt_node)
+
+        audio_recognition.update_stt = spy_update_stt  # type: ignore[method-assign]
+
+        # sanity: activity.stt resolves to the agent's explicit None
+        assert activity.stt is None
+
+        with patch("livekit.agents.voice.agent_activity.logger") as mock_logger:
+            session.update_options(stt=new_stt)
+
+        # session-level STT was updated
+        assert session._stt is new_stt
+        # but the pipeline was NOT rewired — agent's explicit None still wins
+        assert update_stt_calls == []
+        # and activity.stt still resolves to the agent's None
+        assert activity.stt is None
+        # and a warning was logged so the caller knows the swap was silently blocked
+        assert mock_logger.warning.called
+        warning_msg = str(mock_logger.warning.call_args)
+        assert "no-op" in warning_msg
+    finally:
+        await session.aclose()
+
+
+async def test_update_options_no_warning_when_agent_has_no_stt() -> None:
+    """When the agent has no STT of its own (default), the session-level swap
+    must rewire the pipeline cleanly without any warning — this is the
+    common path that exercises the actual fix.
+    """
+    from unittest.mock import patch
+
+    from livekit.agents.voice.agent_session import AgentSession
+    from livekit.agents.voice.audio_recognition import AudioRecognition
+
+    from .fake_stt import FakeSTT
+
+    old_stt = FakeSTT()
+    new_stt = FakeSTT()
+    session = AgentSession(stt=old_stt)
+    try:
+        agent = MyAgent()  # no stt kwarg → agent does not own its STT
+        activity = AgentActivity(agent, session)
+
+        audio_recognition = AudioRecognition(
+            session,
+            hooks=activity,
+            stt=None,
+            vad=None,
+            using_default_vad=False,
+            interruption_detection=None,
+            endpointing=create_endpointing(activity.endpointing_opts),
+            turn_detection=None,
+            stt_model=None,
+            stt_provider=None,
+        )
+        activity._audio_recognition = audio_recognition
+        session._activity = activity
+        session._agent = agent
+
+        update_stt_calls: list[object] = []
+
+        def spy_update_stt(stt_node, **kwargs):  # type: ignore[no-untyped-def]
+            update_stt_calls.append(stt_node)
+
+        audio_recognition.update_stt = spy_update_stt  # type: ignore[method-assign]
+
+        # the common path is silent — no warning
+        with patch("livekit.agents.voice.agent_activity.logger") as mock_logger:
+            session.update_options(stt=new_stt)
+
+        # swap took effect through the activity
+        assert session._stt is new_stt
+        assert activity.stt is new_stt
+        # and the pipeline was rewired (no agent-stt to block it)
+        assert len(update_stt_calls) == 1
+        # the contract: no warning on the common path
+        assert not mock_logger.warning.called
+    finally:
+        await session.aclose()
+
+
+async def test_update_options_tts_warns_and_skips_prewarm_when_agent_owns_tts() -> None:
+    """Mirror of test_update_options_does_not_rewire_pipeline_when_agent_owns_stt
+    but for TTS. When the agent is constructed with its own TTS, the session
+    swap must log a warning AND skip prewarm on the unused new TTS instance.
+
+    Devin Review on PR #6235: TTS branch was missing the symmetric warning
+    and the symmetric prewarm-skip. TTS has no pipeline to restart, but the
+    unused-instance waste (e.g. Sarvam TTS opening a WebSocket from pool) is
+    the same shape as the STT bug.
+    """
+    from unittest.mock import patch
+
+    from livekit.agents.voice.agent_session import AgentSession
+    from livekit.agents.voice.audio_recognition import AudioRecognition
+
+    from .fake_tts import FakeTTS
+
+    agent_tts = FakeTTS()
+    new_tts = FakeTTS()
+    session = AgentSession(tts=FakeTTS())
+    try:
+        agent = MyAgent()
+        agent._tts = agent_tts  # agent owns its TTS
+        activity = AgentActivity(agent, session)
+
+        # AudioRecognition is required because AgentActivity.__init__ references
+        # it; we don't exercise the STT path here.
+        audio_recognition = AudioRecognition(
+            session,
+            hooks=activity,
+            stt=None,
+            vad=None,
+            using_default_vad=False,
+            interruption_detection=None,
+            endpointing=create_endpointing(activity.endpointing_opts),
+            turn_detection=None,
+            stt_model=None,
+            stt_provider=None,
+        )
+        activity._audio_recognition = audio_recognition
+        session._activity = activity
+        session._agent = agent
+
+        # Spy on prewarm() of the new TTS — must NOT be called when the agent
+        # owns TTS (the new instance will never be used).
+        new_tts_prewarm_calls: list[FakeTTS] = []
+        original_prewarm = new_tts.prewarm
+
+        def prewarm_spy() -> None:
+            new_tts_prewarm_calls.append(new_tts)
+
+        new_tts.prewarm = prewarm_spy  # type: ignore[method-assign]
+
+        # sanity: activity.tts resolves to the agent's TTS
+        assert activity.tts is agent_tts
+
+        with patch("livekit.agents.voice.agent_activity.logger") as mock_logger:
+            session.update_options(tts=new_tts)
+
+        # session-level TTS was updated (state changed)
+        assert session._tts is new_tts
+        # activity.tts still resolves to the agent's TTS (unchanged)
+        assert activity.tts is agent_tts
+        # prewarm was NOT called on the unused new instance
+        assert new_tts_prewarm_calls == []
+        # and a warning was logged to surface the silent failure
+        assert mock_logger.warning.called
+        warning_msg = str(mock_logger.warning.call_args)
+        assert "no-op" in warning_msg
+        assert "tts" in warning_msg.lower()
+
+        new_tts.prewarm = original_prewarm  # type: ignore[method-assign]
+    finally:
+        await session.aclose()
+
+
+async def test_update_options_stt_none_with_agent_bound_stt_does_not_tear_down_pipeline() -> None:
+    """Devin Review on PR #6235 — pipeline-teardown bug.
+
+    When the agent was constructed with its own STT and the caller passes
+    stt=None via session.update_options, the rewire path must NOT tear
+    down the pipeline. activity.stt resolves to agent._stt (still valid),
+    so a destructive update_stt(None) would silently stop speech recognition
+    for the rest of the session.
+
+    Before the fix: agent_owns_stt=True + resolved_stt=None fell through
+    the elif and called self._audio_recognition.update_stt(None), which
+    cancels the consumer task and tears down the pipeline.
+    After the fix: agent_owns_stt alone is the guard condition, so any
+    agent-bound STT path skips the rewire — no matter what value the
+    caller passes.
+    """
+    from unittest.mock import patch
+
+    from livekit.agents.voice.agent_session import AgentSession
+    from livekit.agents.voice.audio_recognition import AudioRecognition
+
+    from .fake_stt import FakeSTT
+
+    agent_stt = FakeSTT()
+    session = AgentSession(stt=FakeSTT())
+    try:
+        agent = MyAgent()
+        agent._stt = agent_stt  # agent owns its STT
+        activity = AgentActivity(agent, session)
+
+        audio_recognition = AudioRecognition(
+            session,
+            hooks=activity,
+            stt=None,
+            vad=None,
+            using_default_vad=False,
+            interruption_detection=None,
+            endpointing=create_endpointing(activity.endpointing_opts),
+            turn_detection=None,
+            stt_model=None,
+            stt_provider=None,
+        )
+        activity._audio_recognition = audio_recognition
+        session._activity = activity
+        session._agent = agent
+
+        update_stt_calls: list[object] = []
+
+        def spy_update_stt(stt_node, **kwargs):  # type: ignore[no-untyped-def]
+            update_stt_calls.append(stt_node)
+
+        audio_recognition.update_stt = spy_update_stt  # type: ignore[method-assign]
+
+        # sanity: activity.stt resolves to the agent's STT
+        assert activity.stt is agent_stt
+
+        # the dangerous path: caller passes stt=None, agent owns its STT
+        with patch("livekit.agents.voice.agent_activity.logger") as mock_logger:
+            session.update_options(stt=None)
+
+        # session-level STT was set to None (state changed)
+        assert session._stt is None
+        # CRITICAL: pipeline must NOT be torn down. update_stt(None) must NOT be called.
+        # If it were, speech recognition would silently stop since activity.stt
+        # still resolves to the agent's STT — which is the original bug.
+        assert update_stt_calls == []
+        # activity.stt still resolves to the agent's STT (unchanged)
+        assert activity.stt is agent_stt
+        # no warning here — caller is disabling STT, agent wins, that's
+        # consistent with the resolution order. Warning only fires when
+        # caller passes a non-None STT (the "you tried to set" case).
+        assert not mock_logger.warning.called
+    finally:
+        await session.aclose()
+
+
+async def test_update_options_stt_migrates_metrics_collected_and_error_listeners() -> None:
+    """Devin Review on PR #6235 — listener migration on STT swap.
+
+    After a runtime STT swap, the metrics_collected and error event
+    listeners must be moved from the old instance to the new one. Without
+    this, the new instance never emits those events (silently dropping
+    metrics and error forwarding) and the old instance retains orphaned
+    listeners (preventing GC).
+
+    Verified by patching .on() and .off() on the test instances to track
+    calls. After update_options(stt=new_stt):
+      - new_stt has both listeners attached
+      - old_stt has both listeners detached
+    """
+    from livekit.agents.voice.agent_session import AgentSession
+    from livekit.agents.voice.audio_recognition import AudioRecognition
+
+    from .fake_stt import FakeSTT
+
+    old_stt = FakeSTT()
+    new_stt = FakeSTT()
+    session = AgentSession(stt=old_stt)
+    try:
+        agent = MyAgent()
+        activity = AgentActivity(agent, session)
+
+        audio_recognition = AudioRecognition(
+            session,
+            hooks=activity,
+            stt=None,
+            vad=None,
+            using_default_vad=False,
+            interruption_detection=None,
+            endpointing=create_endpointing(activity.endpointing_opts),
+            turn_detection=None,
+            stt_model=None,
+            stt_provider=None,
+        )
+        activity._audio_recognition = audio_recognition
+        session._activity = activity
+        session._agent = agent
+
+        # Spy on update_stt with a no-op so we don't accidentally spawn an
+        # _STTPipeline consumer task under a manually-wired audio_recognition
+        # that doesn't have a real agent activity context.
+        def spy_update_stt(stt_node, **kwargs):  # type: ignore[no-untyped-def]
+            pass
+
+        audio_recognition.update_stt = spy_update_stt  # type: ignore[method-assign]
+
+        # Spy on .on() / .off() calls per instance — track which events /
+        # callbacks are attached to which STT.
+        def make_tracker(instance: FakeSTT) -> tuple[list[str], list[str], list[str]]:
+            on_log: list[str] = []
+            off_log: list[str] = []
+            cb_log: list[str] = []
+
+            original_on = instance.on
+            original_off = instance.off
+
+            def tracked_on(event, callback=None, **kwargs):  # type: ignore[no-untyped-def]
+                on_log.append(event)
+                cb_log.append(repr(callback))
+                return original_on(event, callback, **kwargs)
+
+            def tracked_off(event, callback=None, **kwargs):  # type: ignore[no-untyped-def]
+                off_log.append(event)
+                return original_off(event, callback, **kwargs)
+
+            instance.on = tracked_on  # type: ignore[method-assign]
+            instance.off = tracked_off  # type: ignore[method-assign]
+            return on_log, off_log, cb_log
+
+        old_on, old_off, old_cb = make_tracker(old_stt)
+        new_on, new_off, new_cb = make_tracker(new_stt)
+
+        # Baseline: nothing attached yet
+        assert old_on == []
+        assert old_off == []
+        assert new_on == []
+        assert new_off == []
+
+        session.update_options(stt=new_stt)
+
+        # The new instance must have metrics_collected and error listeners attached
+        assert "metrics_collected" in new_on
+        assert "error" in new_on
+        # The old instance must have the listeners detached
+        assert "metrics_collected" in old_off
+        assert "error" in old_off
+        # The old instance must NOT have new listeners attached by the swap
+        assert "metrics_collected" not in old_on
+        assert "error" not in old_on
+        # Sanity: the callbacks should be the activity's own handlers
+        assert any(repr(activity._on_metrics_collected) in c for c in new_cb)
+        assert any(repr(activity._on_error) in c for c in new_cb)
+    finally:
+        await session.aclose()
+
+
+async def test_update_options_tts_migrates_metrics_collected_and_error_listeners() -> None:
+    """Mirror of test_update_options_stt_migrates_metrics_collected_and_error_listeners
+    but for TTS. The TTS swap path must also migrate event listeners.
+
+    Devin Review on PR #6235.
+    """
+    from livekit.agents.voice.agent_session import AgentSession
+    from livekit.agents.voice.audio_recognition import AudioRecognition
+
+    from .fake_tts import FakeTTS
+
+    old_tts = FakeTTS()
+    new_tts = FakeTTS()
+    session = AgentSession(tts=old_tts)
+    try:
+        agent = MyAgent()
+        activity = AgentActivity(agent, session)
+
+        audio_recognition = AudioRecognition(
+            session,
+            hooks=activity,
+            stt=None,
+            vad=None,
+            using_default_vad=False,
+            interruption_detection=None,
+            endpointing=create_endpointing(activity.endpointing_opts),
+            turn_detection=None,
+            stt_model=None,
+            stt_provider=None,
+        )
+        activity._audio_recognition = audio_recognition
+        session._activity = activity
+        session._agent = agent
+
+        # See STT-migration test for why this no-op spy is needed.
+        def spy_update_stt(stt_node, **kwargs):  # type: ignore[no-untyped-def]
+            pass
+
+        audio_recognition.update_stt = spy_update_stt  # type: ignore[method-assign]
+
+        def make_tracker(instance: FakeTTS) -> tuple[list[str], list[str], list[str]]:
+            on_log: list[str] = []
+            off_log: list[str] = []
+            cb_log: list[str] = []
+
+            original_on = instance.on
+            original_off = instance.off
+
+            def tracked_on(event, callback=None, **kwargs):  # type: ignore[no-untyped-def]
+                on_log.append(event)
+                cb_log.append(repr(callback))
+                return original_on(event, callback, **kwargs)
+
+            def tracked_off(event, callback=None, **kwargs):  # type: ignore[no-untyped-def]
+                off_log.append(event)
+                return original_off(event, callback, **kwargs)
+
+            instance.on = tracked_on  # type: ignore[method-assign]
+            instance.off = tracked_off  # type: ignore[method-assign]
+            return on_log, off_log, cb_log
+
+        old_on, old_off, old_cb = make_tracker(old_tts)
+        new_on, new_off, new_cb = make_tracker(new_tts)
+
+        # Baseline
+        assert old_on == []
+        assert new_on == []
+
+        session.update_options(tts=new_tts)
+
+        # new has both, old has both detached
+        assert "metrics_collected" in new_on
+        assert "error" in new_on
+        assert "metrics_collected" in old_off
+        assert "error" in old_off
+        # Old does not have new listeners attached
+        assert "metrics_collected" not in old_on
+        assert "error" not in old_on
+        # Callbacks should be the activity's handlers
+        assert any(repr(activity._on_metrics_collected) in c for c in new_cb)
+        assert any(repr(activity._on_error) in c for c in new_cb)
+    finally:
+        await session.aclose()
+
+
+async def test_update_options_no_listener_swap_when_agent_owns_stt() -> None:
+    """When the agent owns its STT, the swap is a no-op so listeners
+    must NOT be migrated. Devin's prompt: 'This listener management should
+    be skipped in the agent_owns_stt / agent_owns_tts branches where the
+    effective instance doesn't actually change.'
+    """
+    from unittest.mock import patch
+
+    from livekit.agents.voice.agent_session import AgentSession
+    from livekit.agents.voice.audio_recognition import AudioRecognition
+
+    from .fake_stt import FakeSTT
+
+    agent_stt = FakeSTT()
+    new_stt = FakeSTT()
+    session = AgentSession(stt=FakeSTT())
+    try:
+        agent = MyAgent()
+        agent._stt = agent_stt
+        activity = AgentActivity(agent, session)
+
+        audio_recognition = AudioRecognition(
+            session,
+            hooks=activity,
+            stt=None,
+            vad=None,
+            using_default_vad=False,
+            interruption_detection=None,
+            endpointing=create_endpointing(activity.endpointing_opts),
+            turn_detection=None,
+            stt_model=None,
+            stt_provider=None,
+        )
+        activity._audio_recognition = audio_recognition
+        session._activity = activity
+        session._agent = agent
+
+        # See STT-migration test for why this no-op spy is needed.
+        def spy_update_stt(stt_node, **kwargs):  # type: ignore[no-untyped-def]
+            pass
+
+        audio_recognition.update_stt = spy_update_stt  # type: ignore[method-assign]
+
+        # Track .on() and .off() on the new instance — must NOT be called
+        # because the agent-bound contract shadows the swap entirely.
+        new_on: list[str] = []
+        new_off: list[str] = []
+        original_on = new_stt.on
+        original_off = new_stt.off
+
+        def tracked_on(event, callback=None, **kwargs):  # type: ignore[no-untyped-def]
+            new_on.append(event)
+            return original_on(event, callback, **kwargs)
+
+        def tracked_off(event, callback=None, **kwargs):  # type: ignore[no-untyped-def]
+            new_off.append(event)
+            return original_off(event, callback, **kwargs)
+
+        new_stt.on = tracked_on  # type: ignore[method-assign]
+        new_stt.off = tracked_off  # type: ignore[method-assign]
+
+        with patch("livekit.agents.voice.agent_activity.logger") as mock_logger:
+            session.update_options(stt=new_stt)
+
+        # agent-bound path: warning fires, but listeners are not migrated
+        assert mock_logger.warning.called
+        assert new_on == []
+        assert new_off == []
+    finally:
+        await session.aclose()
+
+
+async def test_update_options_tts_none_with_agent_bound_tts_does_not_double_attach() -> None:
+    """Devin Review on PR #6235 — TTS double-attach regression test.
+
+    When the agent is constructed with its own TTS and the caller passes
+    tts=None, the listener migration must NOT run. _start_session already
+    attached listeners at startup, and re-attaching them via the common-
+    path migration would double-deliver every metrics_collected/error
+    event AND leak one set of listeners that _stop_session never cleans
+    up (since _stop_session only detaches from the current instance).
+
+    The symmetric STT equivalent is test_update_options_stt_none_with_
+    agent_bound_stt_does_not_tear_down_pipeline.
+    """
+    from unittest.mock import patch
+
+    from livekit.agents.voice.agent_session import AgentSession
+    from livekit.agents.voice.audio_recognition import AudioRecognition
+
+    from .fake_tts import FakeTTS
+
+    agent_tts = FakeTTS()
+    session = AgentSession(tts=FakeTTS())
+    try:
+        agent = MyAgent()
+        agent._tts = agent_tts  # agent owns its TTS
+        activity = AgentActivity(agent, session)
+
+        audio_recognition = AudioRecognition(
+            session,
+            hooks=activity,
+            stt=None,
+            vad=None,
+            using_default_vad=False,
+            interruption_detection=None,
+            endpointing=create_endpointing(activity.endpointing_opts),
+            turn_detection=None,
+            stt_model=None,
+            stt_provider=None,
+        )
+        activity._audio_recognition = audio_recognition
+        session._activity = activity
+        session._agent = agent
+
+        # no-op spy on update_stt
+        def spy_update_stt(stt_node, **kwargs):  # type: ignore[no-untyped-def]
+            pass
+
+        audio_recognition.update_stt = spy_update_stt  # type: ignore[method-assign]
+
+        # sanity: activity.tts resolves to the agent's TTS
+        assert activity.tts is agent_tts
+
+        # track .on() and .off() on the agent's TTS — must NOT be called
+        # because the agent-bound contract shadows the swap entirely.
+        agent_on: list[str] = []
+        agent_off: list[str] = []
+        original_on = agent_tts.on
+        original_off = agent_tts.off
+
+        def tracked_on(event, callback=None, **kwargs):  # type: ignore[no-untyped-def]
+            agent_on.append(event)
+            return original_on(event, callback, **kwargs)
+
+        def tracked_off(event, callback=None, **kwargs):  # type: ignore[no-untyped-def]
+            agent_off.append(event)
+            return original_off(event, callback, **kwargs)
+
+        agent_tts.on = tracked_on  # type: ignore[method-assign]
+        agent_tts.off = tracked_off  # type: ignore[method-assign]
+
+        # the dangerous path: caller passes tts=None, agent owns its TTS
+        with patch("livekit.agents.voice.agent_activity.logger") as mock_logger:
+            session.update_options(tts=None)
+
+        # session-level TTS was set to None (state changed)
+        assert session._tts is None
+        # activity.tts still resolves to the agent's TTS (unchanged)
+        assert activity.tts is agent_tts
+        # CRITICAL: no listener migration. agent_tts is the SAME instance as
+        # before the swap, and _start_session already attached listeners at
+        # startup. Re-attaching would double-deliver every event AND leak
+        # one set that _stop_session never cleans up.
+        assert agent_on == []
+        assert agent_off == []
+        # no warning here — caller is disabling TTS, agent wins, consistent.
+        assert not mock_logger.warning.called
+    finally:
+        await session.aclose()
+
+
+async def test_update_options_pre_start_writes_session_state() -> None:
+    """Devin Review on PR #6235 — pre-start swap.
+
+    When session.update_options is called BEFORE session.start(agent, room),
+    there's no activity yet. The swap must still write to session._stt /
+    session._tts so the next start() picks up the swapped values.
+
+    Without the else-branch write in AgentSession.update_options, the swap
+    would silently drop and the new STT/TTS would be lost.
+    """
+    from livekit.agents.voice.agent_session import AgentSession
+
+    from .fake_stt import FakeSTT
+    from .fake_tts import FakeTTS
+
+    old_stt = FakeSTT()
+    new_stt = FakeSTT()
+    old_tts = FakeTTS()
+    new_tts = FakeTTS()
+    session = AgentSession(stt=old_stt, tts=old_tts)
+    try:
+        # No activity attached (pre-start). Calling update_options should not crash.
+        session.update_options(stt=new_stt, tts=new_tts)
+
+        # session-level state was updated even though no activity exists
+        assert session._stt is new_stt
+        assert session._tts is new_tts
+    finally:
+        await session.aclose()
+
+
+async def test_update_options_stt_none_tears_down_existing_pipeline() -> None:
+    """Devin Review on PR #6235 — verify that update_stt(None) actually tears
+    down the existing pipeline and consumer task.
+
+    Devin flagged a worry that update_stt(None) only sets self._stt = None
+    without awaiting the teardown of the existing _stt_pipeline /
+    _stt_consumer_atask. This test exercises the real AudioRecognition
+    code (not a spy) to verify both fields are scheduled for cleanup.
+
+    AudioRecognition.update_stt(None) at audio_recognition.py:725-736
+    cancels and awaits the consumer task, schedules an aclose() on the
+    pipeline, and sets both references to None synchronously. The actual
+    aclose runs asynchronously, but the references are cleared so no
+    further events will flow from the old pipeline.
+    """
+    from livekit.agents.voice.agent_session import AgentSession
+    from livekit.agents.voice.audio_recognition import AudioRecognition
+
+    from .fake_stt import FakeSTT
+
+    initial_stt = FakeSTT()
+    session = AgentSession(stt=initial_stt)
+    try:
+        agent = MyAgent()
+        activity = AgentActivity(agent, session)
+
+        audio_recognition = AudioRecognition(
+            session,
+            hooks=activity,
+            stt=initial_stt,
+            vad=None,
+            using_default_vad=False,
+            interruption_detection=None,
+            endpointing=create_endpointing(activity.endpointing_opts),
+            turn_detection=None,
+            stt_model=None,
+            stt_provider=None,
+        )
+        activity._audio_recognition = audio_recognition
+        session._activity = activity
+        session._agent = agent
+
+        # Simulate an active STT pipeline — set the fields AudioRecognition
+        # would normally populate once the pipeline has started.
+        audio_recognition._stt = initial_stt
+        # We don't construct a real _STTPipeline here (requires real audio
+        # frames), but the teardown code is symmetric: it cancels both the
+        # pipeline and the consumer task. The consumer-task branch is the
+        # one we can test deterministically here.
+        cancel_calls: list[None] = []
+        done_callbacks: list = []
+
+        class _FakeConsumerTask:
+            """Stand-in for the real asyncio.Task used as _stt_consumer_atask.
+
+            The teardown code at audio_recognition.py:725-730 calls
+            aio.cancel_and_wait(consumer_atask), which translates to
+            `task.cancel()`, `task.add_done_callback(cb)`, and
+            `task.remove_done_callback(cb)`. We track cancel() and the
+            callbacks so the test verifies the cancel was scheduled.
+
+            Implementing add_done_callback / remove_done_callback with the
+            real asyncio.Future machinery would be heavy. Instead we have
+            the callbacks complete immediately so the awaiter path doesn't
+            hang in the test.
+            """
+
+            def cancel(self) -> bool:
+                cancel_calls.append(None)
+                # Mark all registered callbacks as done so cancel_and_wait's
+                # awaiter resolves and the teardown task can complete.
+                for cb in done_callbacks:
+                    cb(None)
+                return True
+
+            def add_done_callback(self, cb):  # type: ignore[no-untyped-def]
+                done_callbacks.append(cb)
+
+            def remove_done_callback(self, cb):  # type: ignore[no-untyped-def]
+                if cb in done_callbacks:
+                    done_callbacks.remove(cb)
+
+            def __await__(self):  # make it awaitable so cancel_and_wait can await it
+                async def _coro():
+                    if False:
+                        yield
+
+                return _coro().__await__()
+
+        consumer = _FakeConsumerTask()
+        audio_recognition._stt_consumer_atask = consumer  # type: ignore[assignment]
+        audio_recognition._tasks = set()
+
+        # Now call the real update_stt(None). The teardown branch should:
+        #   - synchronously set self._stt = None
+        #   - synchronously set self._stt_consumer_atask = None
+        #   - schedule cancel_and_wait on the consumer task (fires cancel()
+        #     and add_done_callback())
+        audio_recognition.update_stt(None)
+
+        # Synchronously-cleared references
+        assert audio_recognition._stt is None
+        assert audio_recognition._stt_consumer_atask is None
+
+        # Let the scheduled teardown task run. The consumer task's cancel()
+        # is invoked via aio.cancel_and_wait, which is itself scheduled as
+        # an asyncio task. Devin flagged that the teardown might never run;
+        # awaiting asyncio.sleep(0) yields the loop once so the scheduled
+        # task has a chance to execute. The assertion below confirms cancel()
+        # was actually called on the consumer task, proving the teardown path
+        # in audio_recognition.py:725-736 fires.
+        await asyncio.sleep(0)
+        assert len(cancel_calls) == 1
+    finally:
+        await session.aclose()

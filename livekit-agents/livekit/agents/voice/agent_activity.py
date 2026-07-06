@@ -514,6 +514,8 @@ class AgentActivity(RecognitionHooks):
         self,
         *,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
+        stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
+        tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         endpointing_opts: NotGivenOr[EndpointingOptions] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         # deprecated
@@ -555,6 +557,156 @@ class AgentActivity(RecognitionHooks):
                 "manual",
                 "realtime_llm",
             )
+
+        if is_given(stt):
+            # Mirror the swap onto session._stt so activity.stt resolves to the new
+            # instance on the next read. AgentSession.update_options already does this
+            # before calling here, so this is normally a no-op — but it keeps the contract
+            # symmetric for callers that invoke update_options on the activity directly.
+            # We deliberately do NOT touch agent._stt; that is user-owned agent config
+            # and the existing activity.stt resolution order prefers it when present.
+            resolved_stt = stt if stt is not None else None
+            # Capture the *prior* session-level STT before mutating it. We read the raw
+            # session attribute (NOT self.stt) because self.stt resolves through the
+            # agent-bound chain too — on the agent-bound path self.stt returns agent._stt,
+            # but we only reach this point on the common path. Reading the raw attribute
+            # makes the captured reference the exact instance being replaced.
+            # AgentSession.update_options writes self._session._stt AFTER calling us
+            # when _activity is None, so this capture correctly sees the prior value
+            # in both cases (when _activity is set, AgentSession doesn't pre-write
+            # — letting us do the write + migration atomically).
+            old_stt = self._session._stt
+            self._session._stt = resolved_stt
+            # When the agent was constructed with its own STT, activity.stt resolves
+            # to agent._stt (unchanged by this swap, per the agent-bound contract),
+            # so the pipeline would just restart with the exact same STT instance —
+            # tearing down the in-progress stream and losing buffered transcription
+            # for no functional change. When the agent does not own its STT, the
+            # session swap changes the effective STT and a rewire ensures the next
+            # utterance picks up the new instance.
+            agent_owns_stt = self._agent is not None and is_given(self._agent.stt)
+            if agent_owns_stt:
+                # Agent owns its STT — session-level swap is silently shadowed by
+                # the activity.stt resolution order regardless of whether the caller
+                # passes a non-None STT or None. Skip the pipeline rewire entirely:
+                # - For non-None resolved_stt: the rewire would either no-op (if the
+                #   caller passed the same STT instance the agent already has) or
+                #   restart the pipeline with no functional change since
+                #   activity.stt still resolves to agent._stt — losing buffered
+                #   transcription and tearing down the in-progress stream.
+                # - For resolved_stt=None: the rewire would call update_stt(None)
+                #   which cancels the consumer task and tears down the pipeline
+                #   even though the agent's STT is still configured and should
+                #   keep the pipeline running. Speech recognition would silently
+                #   stop for the rest of the session.
+                if resolved_stt is not None:
+                    logger.warning(
+                        "AgentSession.update_options(stt=...) is a no-op because the "
+                        "current agent was constructed with its own stt (%r); "
+                        "activity.stt will continue to resolve to the agent's value. "
+                        "Use session.update_agent(...) or construct the agent "
+                        "without an explicit stt to redirect the session swap.",
+                        self._agent.stt,
+                    )
+            elif self._audio_recognition is not None:
+                self._audio_recognition.update_stt(
+                    self._agent.stt_node if resolved_stt is not None else None
+                )
+                # Prewarm the new STT instance so providers that eagerly open
+                # connections don't pay first-call latency after a swap. Only
+                # called on the safe branch above; the agent-bound case skipped
+                # prewarm to avoid opening connections that will never be used.
+                # Base-class prewarm() is a no-op, so this is a free call for
+                # the common case.
+                if resolved_stt is not None:
+                    resolved_stt.prewarm()
+                # Migrate metrics/error event listeners from old to new STT.
+                # _start_session (lines ~906-908) attaches metrics_collected/error
+                # listeners to whichever STT instance is current at start time,
+                # and _stop_session (lines ~1188-1190) detaches from whichever
+                # instance is current at teardown time. After a runtime swap,
+                # the new instance never had listeners attached (silently dropping
+                # metrics and error events), while the old instance retained
+                # orphaned listeners (preventing GC and routing stale events).
+                # We close that gap here on the common-path branch — the only
+                # branch where the effective STT actually changes. Listener
+                # migration is a no-op when the old and new instances are the
+                # same object.
+                from .. import stt as _stt_module  # local re-import to get the
+
+                # module reference; the `stt` parameter on update_options shadows
+                # the module-level name inside this function body.
+                new_stt = self.stt  # reads through the updated session._stt
+                if isinstance(old_stt, _stt_module.STT) and new_stt is not old_stt:
+                    old_stt.off("metrics_collected", self._on_metrics_collected)
+                    old_stt.off("error", self._on_error)
+                if isinstance(new_stt, _stt_module.STT) and new_stt is not old_stt:
+                    new_stt.on("metrics_collected", self._on_metrics_collected)
+                    new_stt.on("error", self._on_error)
+
+        if is_given(tts):
+            # No TTS pipeline to restart: tts_node reads activity.tts fresh on every
+            # synthesis call, so the session swap takes effect on the next synthesis
+            # without rewiring. The session mirror (line below) keeps the resolution
+            # order consistent when callers bypass the session entry point and call
+            # update_options on the activity directly. As with STT, we deliberately
+            # do NOT touch agent._tts; agent-bound TTS keeps precedence.
+            resolved_tts = tts if tts is not None else None
+            # Capture the *prior* session-level TTS before mutating session._tts.
+            # See the STT branch above for the rationale (raw session attribute
+            # instead of self.tts to avoid the agent-bound resolution).
+            old_tts = self._session._tts
+            self._session._tts = resolved_tts
+            # Mirror the STT branch: when the agent owns its own TTS, session-level
+            # swaps are silently shadowed by the agent-bound value on the next read.
+            # Warn so callers know they need update_agent(...) or to omit the tts
+            # kwarg on the agent, and skip prewarm() so providers like Sarvam TTS
+            # that eagerly open WebSockets don't waste resources on an instance that
+            # will never be used.
+            agent_owns_tts = self._agent is not None and is_given(self._agent.tts)
+            if agent_owns_tts:
+                # Mirror the STT branch: when the agent owns its own TTS,
+                # session-level swap is silently shadowed by the agent-bound value
+                # on the next read regardless of whether the caller passes a
+                # non-None TTS or None. Skip prewarm, listener migration, and
+                # everything else — the agent-bound contract means there's no
+                # actual swap. The warning only fires on the "you tried to set"
+                # case (caller passed a non-None TTS).
+                # Devin Review on PR #6235: this also closes the
+                # double-attach bug — _start_session attaches listeners on the
+                # agent-bound TTS, and previously update_options would call
+                # .on() again when agent_owns_tts=True and resolved_tts=None,
+                # leaking listeners that never get cleaned up.
+                if resolved_tts is not None:
+                    logger.warning(
+                        "AgentSession.update_options(tts=...) is a no-op because the "
+                        "current agent was constructed with its own tts (%r); "
+                        "activity.tts will continue to resolve to the agent's value. "
+                        "Use session.update_agent(...) or construct the agent "
+                        "without an explicit tts to redirect the session swap.",
+                        self._agent.tts,
+                    )
+            else:
+                # Common path: prewarm and migrate listeners. Listener migration
+                # is what _start_session does for the initial TTS — _stop_session
+                # symmetrically detaches from the current instance at teardown.
+                # Without this, swapping TTS at runtime would silently drop
+                # metrics_collected/error events from the new instance and leave
+                # orphaned listeners on the old one. Mirrors the STT listener
+                # migration above.
+                if resolved_tts is not None:
+                    resolved_tts.prewarm()
+                from .. import tts as _tts_module  # local re-import to get the
+
+                # module reference; the `tts` parameter on update_options shadows
+                # the module-level name inside this function body.
+                new_tts = self.tts  # reads through the updated session._tts
+                if isinstance(old_tts, _tts_module.TTS) and new_tts is not old_tts:
+                    old_tts.off("metrics_collected", self._on_metrics_collected)
+                    old_tts.off("error", self._on_error)
+                if isinstance(new_tts, _tts_module.TTS) and new_tts is not old_tts:
+                    new_tts.on("metrics_collected", self._on_metrics_collected)
+                    new_tts.on("error", self._on_error)
 
         if self._audio_recognition:
             self._audio_recognition.update_options(

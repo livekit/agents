@@ -1106,6 +1106,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def update_options(
         self,
         *,
+        stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
+        tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         endpointing_opts: NotGivenOr[EndpointingOptions] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
@@ -1117,6 +1119,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         Update the options for the agent session.
 
         Args:
+            stt (NotGivenOr[stt.STT | None], optional): Replace the speech-to-text component.
+                The live recognition pipeline is rewired immediately; the new language/model
+                takes effect from the next speech segment. If the current agent was
+                constructed with its own STT, it continues to take precedence via the
+                existing ``activity.stt`` resolution order — use ``session.update_agent``
+                or construct the agent without its own STT to redirect fully.
+            tts (NotGivenOr[tts.TTS | None], optional): Replace the text-to-speech component.
+                Takes effect from the next synthesis call — no pipeline restart required.
+                Agent-bound TTS behaves the same way as agent-bound STT.
             endpointing_opts (NotGivenOr[EndpointingOptions], optional): Endpointing options.
             turn_detection (NotGivenOr[TurnDetectionMode | None], optional): Strategy for deciding
                 when the user has finished speaking. ``None`` reverts to automatic selection.
@@ -1124,6 +1135,19 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 to the STT. Auto-detected keyterms are left untouched.
             min_endpointing_delay: Deprecated, use ``endpointing_opts`` instead.
             max_endpointing_delay: Deprecated, use ``endpointing_opts`` instead.
+
+        Note:
+            ``stt`` and ``tts`` are also module names imported at the top of this file. Inside
+            this method they are rebound to the parameter values; the module references are
+            not used in the method body, so no aliasing is required.
+
+        Note:
+            The framework does not take ownership of STT/TTS instances passed in. The previous
+            instances are *not* closed automatically — the caller is responsible for managing
+            their lifecycle (consistent with how ``AgentSession``'s constructor treats the
+            initial ``stt`` and ``tts`` arguments). If you want the old instances closed
+            after a swap, call ``await old_stt.aclose()`` (and likewise for TTS) yourself
+            once the swap is complete.
         """
         if is_given(keyterms):
             self._keyterm_detector.set_static_keyterms(keyterms)
@@ -1155,13 +1179,29 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if is_given(turn_detection):
             self._turn_detection = turn_detection
 
+        # When _activity is set, delegate to it for pipeline rewire + listener
+        # migration. Regardless of the activity path, the session MUST write
+        # self._stt/self._tts explicitly so the two paths (with/without activity)
+        # stay consistent.stay in sync. The activity writes to self._session._stt for its own
+        # internal needs, but the session owns the public state.
         if self._activity is not None:
             self._activity.update_options(
+                stt=stt,
+                tts=tts,
                 endpointing_opts=(
                     self._opts.endpointing if is_given(endpointing_opts) else NOT_GIVEN
                 ),
                 turn_detection=turn_detection,
             )
+
+        # Explicitly update session-level state so callers reading session._stt
+        # or session._tts get the swapped values immediately. This also covers
+        # the pre-start case (_activity is None) where no activity exists to
+        # do the write.
+        if is_given(stt):
+            self._stt = stt
+        if is_given(tts):
+            self._tts = tts
 
     async def _start_ivr_detection(self, transcript: str | None = None) -> None:
         """Start IVR detection on this session.
