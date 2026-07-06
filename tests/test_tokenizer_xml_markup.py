@@ -170,7 +170,9 @@ class TestXaiDialect:
     def test_convert_inline_sounds_and_pauses_to_brackets(self) -> None:
         from livekit.agents.tts import _provider_format as pf
 
-        raw = '<sound value="laugh"/> <break time="500ms"/> <break time="2s"/> <whisper>hi</whisper>'
+        raw = (
+            '<sound value="laugh"/> <break time="500ms"/> <break time="2s"/> <whisper>hi</whisper>'
+        )
         # <sound value="X"/> -> [X]; <break> -> [pause] (<1s) or [long-pause] (>=1s);
         # emotion/prosody stay angle-bracketed, and normalize is a no-op for xAI
         assert pf.convert_markup("xai", raw) == "[laugh] [pause] [long-pause] <whisper>hi</whisper>"
@@ -440,7 +442,8 @@ class TestToTextStreamBareLt:
     @pytest.mark.asyncio
     async def test_bare_lt_does_not_hold_following_chunk(self) -> None:
         out = [
-            c async for c in self._markup().to_text_stream(_achunks(["The value 3 < 5 ", "is true."]))
+            c
+            async for c in self._markup().to_text_stream(_achunks(["The value 3 < 5 ", "is true."]))
         ]
         # fixed: the first chunk is emitted incrementally (>= 2 items); the buggy
         # version held everything and emitted a single item at end-of-stream

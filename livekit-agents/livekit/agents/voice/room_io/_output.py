@@ -499,7 +499,9 @@ class _ParticipantStreamTranscriptionOutput:
         self._capturing = False
         curr_writer = self._writer
         self._writer = None
-        self._flush_atask = asyncio.create_task(self._flush_task(curr_writer, dict(attributes or {})))
+        self._flush_atask = asyncio.create_task(
+            self._flush_task(curr_writer, dict(attributes or {}))
+        )
 
     async def aclose(self) -> None:
         if self._closed:
