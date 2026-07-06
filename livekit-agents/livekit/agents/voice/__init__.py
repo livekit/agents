@@ -33,6 +33,16 @@ from .keyterm_detection import (
     KeytermsOptions,
     STTContextOptions,
 )
+from .redaction import (
+    NoopRedactor,
+    RedactedEntity,
+    RedactionContext,
+    RedactionOptions,
+    RedactionResult,
+    RedactionSink,
+    Redactor,
+    RegexRedactor,
+)
 from .remote_session import RemoteSession
 from .room_io import (
     _ParticipantAudioOutput,
@@ -76,6 +86,14 @@ __all__ = [
     "KeytermsOptions",
     "KeytermDetectionOptions",
     "STTContextOptions",
+    "Redactor",
+    "RedactionOptions",
+    "RedactionSink",
+    "RedactionContext",
+    "RedactionResult",
+    "RedactedEntity",
+    "NoopRedactor",
+    "RegexRedactor",
     "TranscriptSynchronizer",
     "io",
     "room_io",
