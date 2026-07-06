@@ -122,10 +122,20 @@ class TestXaiDialect:
     def test_every_documented_tag_is_strippable(self) -> None:
         from livekit.agents.tts import _provider_format as pf
 
-        # every emotion AND prosody tag the instructions offer must be in _XAI_TAGS,
+        # every prosody/style tag the instructions offer must be in _XAI_TAGS,
         # or it would leak into the user-visible transcript
-        for tag in pf._XAI_EMOTIONS + pf._XAI_WRAPPING:
+        for tag in pf._XAI_WRAPPING:
             assert f"<{tag}>" in pf._XAI_LLM_INSTRUCTIONS, f"{tag} not documented"
+            assert tag in pf._XAI_TAGS
+            clean, _ = pf.split_markup("xai", f"<{tag}>hello there</{tag}>")
+            assert clean.strip() == "hello there", f"{tag} not stripped: {clean!r}"
+
+    def test_emotion_tags_stripped_though_unprompted(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        # emotion tags are no longer instructed, but stay in _XAI_TAGS so a stray one is
+        # stripped from the transcript rather than leaking to the user
+        for tag in pf._XAI_EMOTIONS:
             assert tag in pf._XAI_TAGS
             clean, _ = pf.split_markup("xai", f"<{tag}>hello there</{tag}>")
             assert clean.strip() == "hello there", f"{tag} not stripped: {clean!r}"

@@ -149,17 +149,17 @@ Examples:
 
 # xAI Grok TTS speech tags. The prosody/style wrapping tags and inline sounds/pauses are
 # from the xAI docs (https://docs.x.ai/developers/rest-api-reference/inference/voice). The
-# emotion wrapping tags (<happy>..</happy>) aren't in the public tag list but are supported
-# in practice, so we expose them too and encourage nesting a prosody tag inside an emotion
-# tag to shape delivery.
+# emotion wrapping tags (<happy>..</happy>) aren't instructed anymore — the LLM shapes
+# delivery through prosody/style and inline sounds instead — but they stay in _XAI_TAGS so a
+# stray emotion tag is still stripped from the transcript rather than leaking.
 #
 # The LLM is instructed to write EVERY tag as XML (angle brackets) so the transcript
 # stripper's "<" guard handles them cleanly and they never leak (see the earlier
 # bracket-leak bug). Modeled on Inworld: inline sounds use <sound value="NAME"/> and pauses
 # use <break time="..."/>. convert_markup rewrites those to xAI's native brackets for the
 # TTS — <sound value="X"/> -> [X] (reusing Inworld's conversion) and <break> -> [pause] or
-# [long-pause] by duration. Emotion/prosody stay angle-bracketed (native). All tags are
-# stripped from the transcript via _XAI_TAGS.
+# [long-pause] by duration. Prosody stays angle-bracketed (native). All tags are stripped
+# from the transcript via _XAI_TAGS.
 _XAI_EMOTIONS = [
     "happy",
     "sad",
@@ -250,13 +250,7 @@ tag, the value is the sound name:
 2. Pauses - insert a beat where you want one:
    <break time="500ms"/> a brief pause    <break time="1s"/> a longer, dramatic pause
 
-3. Emotion tags - wrap a phrase or sentence to color its feeling. The tag name IS the \
-emotion:
-   """
-    + ", ".join(f"<{e}>...</{e}>" for e in _XAI_EMOTIONS)
-    + """
-
-4. Prosody & style tags - wrap the exact words they affect to shape HOW it's said:
+3. Prosody & style tags - wrap the exact words they affect to shape HOW it's said:
    Volume:    <soft>...</soft> quieter        <loud>...</loud> louder
    Intensity: <build-intensity>...</build-intensity> ramp up    <decrease-intensity>...</decrease-intensity> ease off
    Pitch:     <higher-pitch>...</higher-pitch>    <lower-pitch>...</lower-pitch>
@@ -265,11 +259,10 @@ emotion:
 <sing-song>...</sing-song> playful lilt    <singing>...</singing> actually sung    \
 <laugh-speak>...</laugh-speak> talk through a laugh
 
-Get creative by NESTING a prosody tag inside an emotion tag to shape both the feeling \
-and the delivery of the same words — e.g. <excited><loud><higher-pitch>no way, that's \
-amazing!</higher-pitch></loud></excited>, or <sad><soft><lower-pitch>I really wish I \
-could.</lower-pitch></soft></sad>. Vary the emotion and the prosody every turn so no two \
-sound alike, and drop in an inline sound where real feeling spills out.
+Get creative by NESTING prosody & style tags to shape the delivery of the same words — \
+e.g. <loud><higher-pitch>no way, that's amazing!</higher-pitch></loud>, or \
+<soft><lower-pitch>I really wish I could.</lower-pitch></soft>. Vary the prosody every turn \
+so no two sound alike, and drop in an inline sound where real feeling spills out.
 
 To stress a word, wrap it in <emphasis>...</emphasis> — do NOT write it in all-caps, \
 which is read out as individual letters (so "HI" becomes "H. I."). Keep normal \
@@ -278,10 +271,10 @@ pauses, so reach for a <break time="500ms"/> only when you want a beat beyond wh
 punctuation gives.
 
 Examples:
-  <excited>So I walked in and <break time="500ms"/> there it was!</excited> <sound value="laugh"/> I honestly could not believe it! <whisper>It was a secret the whole time.</whisper>
-  <happy><build-intensity>This is going to be so good</build-intensity></happy> — <loud>I can't wait!</loud> <sound value="chuckle"/>
-  <sympathetic><soft>Hey.</soft> <sound value="sigh"/> <lower-pitch>I know it's been a rough week.</lower-pitch></sympathetic> I'm right here.
-  <playful><laugh-speak>You did not just say that</laugh-speak></playful> <sound value="giggle"/> okay, <fast>tell me everything.</fast>"""
+  So I walked in and <break time="500ms"/> there it was! <sound value="laugh"/> I honestly could not believe it! <whisper>It was a secret the whole time.</whisper>
+  <build-intensity>This is going to be so good</build-intensity> — <loud>I can't wait!</loud> <sound value="chuckle"/>
+  <soft>Hey.</soft> <sound value="sigh"/> <lower-pitch>I know it's been a rough week.</lower-pitch> I'm right here.
+  <laugh-speak>You did not just say that</laugh-speak> <sound value="giggle"/> okay, <fast>tell me everything.</fast>"""
 )
 
 
@@ -523,8 +516,8 @@ _CARTESIA_CASUAL: ExpressiveOptions = {
 
 
 # --- xAI Grok-specific expressive preset bodies ---
-# xAI shapes delivery with emotion tags (<happy>..) — best nested with a prosody tag to
-# set both feeling and delivery — plus prosody tags for volume (<soft>/<loud>),
+# xAI shapes delivery with prosody & style tags — best nested to carry both feeling and
+# delivery in the same words — for volume (<soft>/<loud>),
 # intensity (<build-intensity>/<decrease-intensity>), pitch (<higher-pitch>/
 # <lower-pitch>), speed (<slow>/<fast>), stress (<emphasis>, never all-caps — xAI spells
 # those out letter by letter), and vocal style (<whisper>/<sing-song>/<laugh-speak>),
@@ -538,21 +531,19 @@ _XAI_CUSTOMER_SERVICE: ExpressiveOptions = {
         "Make the person feel heard and looked after, whatever they've come with — a quick "
         "question, a billing problem, or something sensitive and stressful. Use the formatting "
         "tags below to shape your delivery:\n\n" + _XAI_LLM_INSTRUCTIONS + "\n\nGuidelines:\n"
-        "- Open with an emotion tag that fits the moment and de-escalate; never match anger with "
-        "anger. Map the moment to it — frustrated or distressed customer: <sympathetic>...</"
-        "sympathetic>; confused, anxious, or worried: <calm>...</calm>; reassuring them you can fix "
-        "it: <confident>...</confident>; pleased or resolved: <happy>...</happy>. For a fuller read, "
-        "nest a prosody tag inside — e.g. <calm><slow>let's take this one step at a time</slow></"
-        "calm> or <sympathetic><soft>I'm really sorry</soft></sympathetic>. Keep a gentle, unhurried "
-        "baseline, and rotate emotions — don't reuse the same one two turns in a row.\n"
+        "- Shape each turn to fit the moment and de-escalate; never match anger with anger. Lean on "
+        "pacing and prosody — <slow>...</slow> and <soft>...</soft> to steady a frustrated, confused, "
+        "or anxious customer, a settled <lower-pitch>...</lower-pitch> for reassurance, and a "
+        "brighter, fuller delivery once things are resolved. Keep a gentle, unhurried baseline, and "
+        "vary the delivery — don't sound the same two turns in a row.\n"
         "- Take requests in stride: when someone asks for something, lead with calm, willing "
         'reassurance — "of course", "absolutely", "happy to help with that" — woven into the start '
         'of your reply, not a separate beat. Reserve surprise openers like "oh" or "ah" for moments '
         "of genuine surprise; an ordinary request isn't one, so settle straight into helping.\n"
-        "- Soften for anything sensitive: when sharing bad news, a problem, or a charge, wrap it in "
-        "<sympathetic>...</sympathetic> and ease the delivery — <soft>lower the volume</soft> with "
-        "<lower-pitch>a settled pitch</lower-pitch>, or <whisper>go quieter still</whisper> for the "
-        "hardest part — then give a brief [pause] after hard information so it can land. A [sigh] or "
+        "- Soften for anything sensitive: when sharing bad news, a problem, or a charge, ease the "
+        "delivery — <soft>lower the volume</soft> with <lower-pitch>a settled pitch</lower-pitch>, "
+        "or <whisper>go quieter still</whisper> for the hardest part — then give a brief [pause] "
+        "after hard information so it can land. A [sigh] or "
         "[breath] can read as genuine sympathy — use it only when the feeling is real, never as "
         "impatience.\n"
         "- Enunciate what matters: for dates, times, amounts, confirmation numbers, doses, and "
@@ -581,16 +572,14 @@ _XAI_CASUAL: ExpressiveOptions = {
         "genuinely warm or vulnerable. Use the formatting tags below to shape your delivery:\n\n"
         + _XAI_LLM_INSTRUCTIONS
         + "\n\nGuidelines:\n"
-        "- Be genuinely emotive, not performed. Open with an emotion tag that mirrors AND amplifies "
-        "the user's energy, and rotate it constantly — excited, happy, curious, surprised, playful, "
-        "sarcastic (dry/deadpan), sad (vulnerable), angry (annoyed), nervous. Never reuse the same "
-        "one two turns in a row, and skip performative warmth — react honestly instead.\n"
-        "- Get creative: NEST a prosody tag inside the emotion so the same words carry both the "
-        "feeling and the delivery — <excited><loud><higher-pitch>no way, that's amazing</higher-"
-        "pitch></loud></excited> (thrilled), <sad><soft><lower-pitch>man, that's rough</lower-pitch>"
-        "</soft></sad> (down), <playful><sing-song>guess who was right</sing-song></playful> "
-        "(teasing), <sarcastic><slow>oh, fantastic</slow></sarcastic> (dry), <surprised><build-"
-        "intensity>wait wait wait</build-intensity></surprised> (ramping up). Come back down after a "
+        "- Be genuinely emotive, not performed — shape each turn with prosody & style tags that "
+        "mirror AND amplify the user's energy, and vary them constantly. Skip performative warmth — "
+        "react honestly instead.\n"
+        "- Get creative: NEST prosody & style tags so the same words carry the feeling — "
+        "<loud><higher-pitch>no way, that's amazing</higher-pitch></loud> (thrilled), "
+        "<soft><lower-pitch>man, that's rough</lower-pitch></soft> (down), "
+        "<sing-song>guess who was right</sing-song> (teasing), <slow>oh, fantastic</slow> (dry), "
+        "<build-intensity>wait wait wait</build-intensity> (ramping up). Come back down after a "
         "big moment with <decrease-intensity>...</decrease-intensity>.\n"
         "- Let real feeling also land through inline sounds — motivated, not reflexive, so most turns "
         "have none: [chuckle] or [giggle] at something genuinely funny (keep a full [laugh] rare), "
