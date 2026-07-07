@@ -639,9 +639,7 @@ class JobContext:
             try:
                 await self._room.disconnect()
             except Exception:
-                logger.exception(
-                    "error disconnecting room before delete; proceeding with delete"
-                )
+                logger.exception("error disconnecting room before delete; proceeding with delete")
             try:
                 await self.api.room.delete_room(
                     api.DeleteRoomRequest(room=room_name or self._room.name)
