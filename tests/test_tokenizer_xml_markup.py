@@ -184,11 +184,19 @@ class TestXaiDialect:
             '<sound value="laugh"/> <break time="500ms"/> <break time="2s"/> <whisper>hi</whisper>'
         )
         # <sound value="X"/> -> [X]; <break> -> [pause] (<1s) or [long-pause] (>=1s);
-        # emotion/prosody stay angle-bracketed, and normalize is a no-op for xAI
+        # emotion/prosody stay angle-bracketed, and normalize leaves well-formed tags alone
         assert pf.convert_markup("xai", raw) == "[laugh] [pause] [long-pause] <whisper>hi</whisper>"
         assert pf.normalize_markup("xai", raw) == raw
+        # normalize repairs a sound/break tag the LLM forgot to self-close
+        assert (
+            pf.normalize_markup("xai", '<sound value="laugh"> <break time="1s">')
+            == '<sound value="laugh"/> <break time="1s"/>'
+        )
 
     def test_presets_registered_for_xai(self) -> None:
+        import re
+
+        from livekit.agents.tts import _provider_format as pf
         from livekit.agents.voice import presets
         from livekit.agents.voice.agent_session import DEFAULT_EXPRESSIVE_OPTIONS
 
@@ -199,6 +207,10 @@ class TestXaiDialect:
             body = opts["tts_instructions_template"].common
             # tuned body, not the agnostic default (which has no xai tag reference)
             assert "<whisper>" in body
+            # presets must instruct XML only — a bracket example would teach the LLM
+            # to emit brackets, which the transcript stripper doesn't guard against
+            bracket_re = rf"\[(?:{'|'.join(pf._XAI_INLINE)}|pause|long-pause)\]"
+            assert not re.search(bracket_re, body)
 
 
 # ===========================================================================
