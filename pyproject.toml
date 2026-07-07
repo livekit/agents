@@ -32,7 +32,6 @@ livekit-plugins-hamming = { workspace = true }
 livekit-plugins-hume = { workspace = true }
 livekit-plugins-inworld = { workspace = true }
 livekit-plugins-krisp = { workspace = true }
-livekit-plugins-krisp-internal = { path = "../plugin-krisp-viva-internal/target/packages/python", editable = true } # TODO remove this after pypi publish
 livekit-plugins-keyframe = { workspace = true }
 livekit-plugins-langchain = { workspace = true }
 livekit-plugins-lemonslice = { workspace = true }
@@ -160,7 +159,12 @@ filterwarnings = [
     # alternative that returns a default loop for unmarked tests without erroring.
     "ignore:Overriding the \"event_loop_policy\" fixture is deprecated:Warning",
 ]
-addopts = ["--import-mode=importlib", "--ignore=examples", "-p", "tests.concurrency"]
+addopts = [
+    "--import-mode=importlib",
+    "--ignore=examples",
+    "-p",
+    "tests.concurrency",
+]
 pythonpath = ["."]
 testpaths = ["tests"]
 markers = [
