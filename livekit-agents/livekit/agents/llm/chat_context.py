@@ -307,7 +307,7 @@ class ChatMessage(BaseModel):
         return "\n".join(text_parts)
 
     @property
-    def stripped_text_content(self) -> str | None:
+    def plain_text_content(self) -> str | None:
         """
         Returns a string of all text content without any expressive tags in the message.
 
@@ -782,9 +782,7 @@ class ChatContext:
                     continue
 
                 # strip markup from assistant turns only; user turns stay raw
-                content = (
-                    item.stripped_text_content if item.role == "assistant" else item.text_content
-                )
+                content = item.plain_text_content if item.role == "assistant" else item.text_content
                 if (content or "").strip():
                     to_summarize.append(item)
             elif isinstance(item, (FunctionCall, FunctionCallOutput)):
@@ -799,7 +797,7 @@ class ChatContext:
             if isinstance(m, (FunctionCall, FunctionCallOutput)):
                 contents.append(_function_call_item_to_message(m).text_content or "")
             else:
-                content = m.stripped_text_content if m.role == "assistant" else m.text_content
+                content = m.plain_text_content if m.role == "assistant" else m.text_content
                 contents.append(to_xml(m.role, (content or "").strip()))
 
         source_text = "\n".join(contents).strip()
