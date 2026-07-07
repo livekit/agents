@@ -2790,10 +2790,9 @@ class AgentActivity(RecognitionHooks):
     ) -> None:
         from .agent import ModelSettings
 
-        # commit the tool messages that triggered this reply before any interruption
-        # gate: the tools already executed, and discarding their results on
-        # interruption makes the next LLM inference re-issue the same calls (see #3702).
-        # ChatContext.insert orders by `created_at`, so ordering is unchanged.
+        # commit before any interruption gate: the tools already executed, and
+        # discarding their results makes the next inference re-issue the same calls
+        # (see #3702). insert() orders by created_at, so ordering is unaffected.
         if _previous_tools_messages:
             self._agent._chat_ctx.insert(_previous_tools_messages)
             self._session._tool_items_added(_previous_tools_messages)
@@ -3224,13 +3223,11 @@ class AgentActivity(RecognitionHooks):
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(exe_task)
 
-            # cancel_and_wait lets in-flight tool tasks run to completion, so
-            # tool_output.output may hold completed results. Commit them before
-            # returning: the tool reply turn is never scheduled here, and dropping
-            # them makes the next LLM inference re-execute the same tools (see #3702).
-            # Agent handoffs are excluded: the handoff is not applied on an
-            # interrupted speech, and recording its call as completed would prevent
-            # the LLM from retrying it.
+            # cancel_and_wait lets in-flight tool tasks finish, so tool_output.output
+            # may hold completed results; commit them or the next inference re-executes
+            # the same tools (see #3702). Handoffs are excluded: an interrupted handoff
+            # is not applied, and recording it as completed would prevent the LLM from
+            # retrying it.
             interrupted_calls: list[llm.FunctionCall] = []
             interrupted_fnc_outputs: list[llm.FunctionCallOutput] = []
             for sanitized_out in tool_output.output:
@@ -3844,13 +3841,11 @@ class AgentActivity(RecognitionHooks):
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(exe_task)
 
-            # cancel_and_wait lets in-flight tool tasks run to completion, so
-            # tool_output.output may hold completed results. Commit them before
-            # returning so the next inference doesn't re-execute the same tools
-            # (see #3702). The fnc_call itself is already in the chat context,
-            # added by _tool_execution_started_cb. Agent handoffs are excluded:
-            # the handoff is not applied on an interrupted speech, and recording
-            # its call as completed would prevent the LLM from retrying it.
+            # commit completed tool results, as in the pipeline path (see #3702);
+            # only the outputs, the fnc_call is already added by
+            # _tool_execution_started_cb. Handoffs are excluded: an interrupted
+            # handoff is not applied, and recording it as completed would prevent
+            # the LLM from retrying it.
             interrupted_fnc_outputs: list[llm.FunctionCallOutput] = []
             for sanitized_out in tool_output.output:
                 if sanitized_out.fnc_call_out is not None and sanitized_out.agent_task is None:
@@ -3859,9 +3854,8 @@ class AgentActivity(RecognitionHooks):
                     self._session._tool_items_added([sanitized_out.fnc_call_out])
 
             if len(interrupted_fnc_outputs) > 0:
-                # the realtime session generates from its server-side conversation
-                # state: push the outputs so it doesn't see a dangling function
-                # call and re-issue it
+                # generation is driven by the server-side conversation state: push the
+                # outputs so the server doesn't keep a dangling call and re-issue it
                 chat_ctx = self._rt_session.chat_ctx.copy()
                 chat_ctx.items.extend(interrupted_fnc_outputs)
                 try:
