@@ -43,6 +43,7 @@ class FakeTTS(TTS):
         fake_timeout: float | None = None,
         fake_audio_duration: float | None = None,
         fake_exception: Exception | None = None,
+        fake_exception_count: int | None = None,
         fake_responses: list[FakeTTSResponse] | None = None,
     ) -> None:
         super().__init__(
@@ -54,6 +55,8 @@ class FakeTTS(TTS):
         self._fake_timeout = fake_timeout
         self._fake_audio_duration = fake_audio_duration
         self._fake_exception = fake_exception
+        # None means raise fake_exception on every attempt
+        self._fake_exception_count = fake_exception_count
         self._fake_response_map: dict[str, FakeTTSResponse] = {}
         if fake_responses is not None:
             for response in fake_responses:
@@ -77,6 +80,19 @@ class FakeTTS(TTS):
 
         if utils.is_given(fake_exception):
             self._fake_exception = fake_exception
+
+    def _consume_fake_exception(self) -> Exception | None:
+        if self._fake_exception is None:
+            return None
+
+        if self._fake_exception_count is None:
+            return self._fake_exception
+
+        if self._fake_exception_count <= 0:
+            return None
+
+        self._fake_exception_count -= 1
+        return self._fake_exception
 
     @property
     def synthesize_ch(self) -> utils.aio.ChanReceiver[FakeChunkedStream]:
@@ -156,9 +172,12 @@ class FakeChunkedStream(ChunkedStream):
                 num_samples = min(self._tts.sample_rate // 100, max_samples - pushed_samples)
                 output_emitter.push(b"\x00\x00" * num_samples)
                 pushed_samples += num_samples
+                # yield control so the emitter delivers audio downstream, like a
+                # real provider awaiting on the network between chunks
+                await asyncio.sleep(0)
 
-        if self._tts._fake_exception is not None:
-            raise self._tts._fake_exception
+        if (exc := self._tts._consume_fake_exception()) is not None:
+            raise exc
 
         output_emitter.flush()
 
@@ -243,5 +262,5 @@ class FakeSynthesizeStream(SynthesizeStream):
 
             output_emitter.flush()
 
-        if self._tts._fake_exception is not None:
-            raise self._tts._fake_exception
+        if (exc := self._tts._consume_fake_exception()) is not None:
+            raise exc

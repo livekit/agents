@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import itertools
 import logging
 import os
 import pathlib
@@ -17,7 +18,14 @@ import pytest
 from dotenv import load_dotenv
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIError, APITimeoutError, inference, tts
+from livekit.agents import (
+    APIConnectionError,
+    APIConnectOptions,
+    APIError,
+    APITimeoutError,
+    inference,
+    tts,
+)
 from livekit.agents.utils import AudioBuffer, aio
 from livekit.plugins import (
     aws,
@@ -269,6 +277,19 @@ async def _do_synthesis(tts_v: tts.TTS, segment: str, *, conn_options: APIConnec
     tts_stream = tts_v.synthesize(text=segment, conn_options=conn_options)
     audio_events = [event async for event in tts_stream]
 
+    request_ids = [event.request_id for event in audio_events]
+    assert all(request_ids), "expected all frames to have a request_id"
+
+    # a transient mid-synthesis failure may retry under a fresh request_id; frames
+    # from different attempts must not interleave, and only the last attempt is a
+    # complete synthesis
+    unique_ids = list(dict.fromkeys(request_ids))
+    contiguous_ids = [rid for rid, _ in itertools.groupby(request_ids)]
+    assert contiguous_ids == unique_ids, (
+        f"expected request_ids to not interleave between attempts, got {request_ids}"
+    )
+    audio_events = [event for event in audio_events if event.request_id == unique_ids[-1]]
+
     assert all(not event.is_final for event in audio_events[:-1]), (
         "expected all audio events to be non-final"
     )
@@ -283,12 +304,6 @@ async def _do_synthesis(tts_v: tts.TTS, segment: str, *, conn_options: APIConnec
     assert audio_events[-1].is_final, "expected last audio event to be final"
     assert 0 < audio_events[-1].frame.duration < 0.25, (
         f"expected last frame to not be empty, got {audio_events[-1].frame.duration}"
-    )
-
-    first_id = audio_events[0].request_id
-    assert first_id, "expected to have a request_id"
-    assert all(e.request_id == first_id for e in audio_events), (
-        "expected all frames to have the same request_id, "
     )
 
     frames = [event.frame for event in audio_events]
@@ -405,6 +420,51 @@ async def test_tts_synthesize_error_propagation():
             )
     finally:
         await tts.aclose()
+
+
+async def test_tts_synthesize_retry_after_partial_audio():
+    tts_v = FakeTTS(
+        fake_audio_duration=1.0,
+        fake_exception=APIConnectionError("connection dropped mid-stream"),
+        fake_exception_count=1,
+    )
+
+    error_events = EventCollector(tts_v, "error")
+    metrics_collected_events = EventCollector(tts_v, "metrics_collected")
+    try:
+        stream = tts_v.synthesize(
+            "fake_text", conn_options=APIConnectOptions(max_retry=3, timeout=0.5)
+        )
+        audio_events = [ev async for ev in stream]
+
+        assert stream.attempt == 2, f"expected 1 retry, got {stream.attempt} attempts"
+        assert error_events.count == 1, f"expected 1 error event, got {error_events.count}"
+        assert error_events.events[0][0][0].recoverable is True, (
+            "expected the error to be recoverable"
+        )
+
+        # the retry restarts the synthesis under a fresh request_id; frames already
+        # delivered by the failed attempt keep the old one
+        request_ids = [ev.request_id for ev in audio_events]
+        assert len(set(request_ids)) == 2, f"expected 2 request_ids, got {set(request_ids)}"
+        retry_start = request_ids.index(request_ids[-1])
+        assert all(rid == request_ids[0] for rid in request_ids[:retry_start]), (
+            "expected request_ids to not interleave between attempts"
+        )
+
+        retry_events = audio_events[retry_start:]
+        assert retry_events[-1].is_final, "expected last audio event to be final"
+        retry_duration = sum(ev.frame.duration for ev in retry_events)
+        assert abs(retry_duration - 1.0) < 0.1, (
+            f"expected the retry to resynthesize the full audio, got {retry_duration:.2f}s"
+        )
+
+        await stream.aclose()  # settles the metrics task
+        assert metrics_collected_events.count == 1, (
+            f"expected 1 metrics collected event, got {metrics_collected_events.count}"
+        )
+    finally:
+        await tts_v.aclose()
 
 
 STREAM_TTS = [
