@@ -3,7 +3,6 @@ from .agent import Agent, AgentTask, ModelSettings
 from .agent_session import (
     AgentSession,
     RecordingOptions,
-    RunOutputOptions,
     VoiceActivityVideoSampler,
 )
 from .events import (
@@ -29,6 +28,7 @@ from .room_io import (
     _ParticipantStreamTranscriptionOutput,
     _ParticipantTranscriptionOutput,
 )
+from .run_result import RunOutputOptions
 from .speech_handle import SpeechHandle
 from .transcription import TranscriptSynchronizer, text_transforms
 

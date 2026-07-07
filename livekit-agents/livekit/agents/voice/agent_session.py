@@ -63,7 +63,7 @@ from .events import (
 from .ivr import IVRActivity
 from .recorder_io import RecorderIO
 from .remote_session import RoomSessionTransport, SessionHost, SessionTransport
-from .run_result import RunResult
+from .run_result import RunOutputOptions, RunResult
 from .speech_handle import InputDetails, SpeechHandle
 from .tool_executor import ToolHandlingOptions, _resolve_async_tool_options
 from .turn import (
@@ -84,27 +84,6 @@ if TYPE_CHECKING:
     from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
     from .transcription.text_transforms import TextTransforms
-
-
-class RunOutputOptions(TypedDict, total=False):
-    """Structured-output behavior for :meth:`AgentSession.run`.
-
-    Can be passed as a plain dict::
-
-        sess.run(
-            user_input=...,
-            output_type=MyOutput,
-            output_options={"max_retries": 2, "retry_instructions": "Call submit_result."},
-        )
-
-    Pass ``output_options=None`` to disable the retry behavior.
-    """
-
-    max_retries: int
-    """Re-prompts when a run ends without its ``output_type``, before raising
-    UnexpectedModelBehavior. Defaults to ``2``."""
-    retry_instructions: str
-    """Override the built-in retry prompt."""
 
 
 class RecordingOptions(TypedDict, total=False):
@@ -618,15 +597,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._global_run_state is not None and not self._global_run_state.done():
             raise RuntimeError("nested runs are not supported")
 
-        if not is_given(output_options):
-            output_options = RunOutputOptions()
-        elif output_options is None:
-            output_options = RunOutputOptions(max_retries=0)
         run_state = RunResult(
             user_input=user_input,
             output_type=output_type,
-            output_retries=output_options.get("max_retries", 2),
-            output_retry_instructions=output_options.get("retry_instructions"),
+            output_options=output_options,
             session=self,
         )
         self._global_run_state = run_state

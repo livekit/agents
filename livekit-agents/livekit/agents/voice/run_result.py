@@ -6,6 +6,7 @@ import contextvars
 import functools
 import json
 import os
+import weakref
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -19,6 +20,7 @@ from typing import (
 )
 
 from opentelemetry import trace
+from typing_extensions import TypedDict
 
 from .. import llm
 from ..llm import function_tool, utils as llm_utils
@@ -38,6 +40,27 @@ _OUTPUT_RETRY_PROMPT = (
     "Plain text responses are not permitted, call the appropriate function "
     "to provide your final output."
 )
+
+
+class RunOutputOptions(TypedDict, total=False):
+    """Structured-output behavior for :meth:`AgentSession.run`.
+
+    Can be passed as a plain dict::
+
+        sess.run(
+            user_input=...,
+            output_type=MyOutput,
+            output_options={"max_retries": 2, "retry_instructions": "Call submit_result."},
+        )
+
+    Pass ``output_options=None`` to disable the retry behavior.
+    """
+
+    max_retries: int
+    """Re-prompts when a run ends without its ``output_type``, before raising
+    UnexpectedModelBehavior. Defaults to ``2``."""
+    retry_instructions: str
+    """Override the built-in retry prompt."""
 
 
 Run_T = TypeVar("Run_T")
@@ -78,17 +101,23 @@ class RunResult(Generic[Run_T]):
         *,
         user_input: str | None = None,
         output_type: type[Run_T] | None,
-        output_retries: int = 1,
-        output_retry_instructions: str | None = None,
+        output_options: NotGivenOr[RunOutputOptions | None] = NOT_GIVEN,
         session: AgentSession | None = None,
     ) -> None:
         self._handles: set[SpeechHandle | asyncio.Task] = set()
 
+        if not is_given(output_options):
+            output_options = RunOutputOptions()
+        elif output_options is None:
+            output_options = RunOutputOptions(max_retries=0)
+
         self._done_fut = asyncio.Future[None]()
         self._user_input = user_input
         self._output_type = output_type
-        self._output_retries = output_retries
-        self._output_retry_instructions = output_retry_instructions or _OUTPUT_RETRY_PROMPT
+        self._output_retries = output_options.get("max_retries", 2)
+        self._output_retry_instructions = output_options.get(
+            "retry_instructions", _OUTPUT_RETRY_PROMPT
+        )
         self._session = session
         self._recorded_items: list[RunEvent] = []
         self._final_output: Run_T | None = None
@@ -1084,17 +1113,53 @@ class AgentHandoffAssert:
 if TYPE_CHECKING:
     MockTools = dict[type[Agent], dict[str, Callable]]
 _MockToolsContextVar = contextvars.ContextVar["MockTools"]("agents_mock_tools")
+_SessionMockTools: weakref.WeakKeyDictionary[AgentSession, MockTools] = weakref.WeakKeyDictionary()
+
+
+@overload
+def mock_tools(
+    agent: type[Agent], mocks: dict[str, Callable]
+) -> contextlib.AbstractContextManager[None]: ...
+
+
+@overload
+def mock_tools(
+    agent: type[Agent], mocks: dict[str, Callable], *, session: AgentSession
+) -> None: ...
+
+
+def mock_tools(
+    agent: type[Agent], mocks: dict[str, Callable], *, session: AgentSession | None = None
+) -> contextlib.AbstractContextManager[None] | None:
+    """Assign a set of mock tool callables to a specific Agent type.
+
+    Mocks intercept tool *execution* only; the LLM keeps seeing the real tool
+    schemas. A mock may declare any subset of the real tool's parameters
+    (extra arguments are dropped when it is invoked).
+
+    Without ``session``, returns a context manager scoping the mocks to the
+    current context (intended for tests):
+
+        with mock_tools(MyAgentClass, {"tool_name": mock_fn}):
+            # inside this block, MyAgentClass will see the given mocks
+
+    With ``session``, ``mocks`` becomes the mock set for the Agent type on that
+    session, effective immediately and for the session's lifetime:
+
+        mock_tools(MyAgentClass, {"tool_name": mock_fn}, session=session)
+
+    Call it again to replace the mock set, or pass ``{}`` to remove all mocks
+    for the Agent type. When both forms are active, the context-manager mocks
+    take precedence over the session ones.
+    """
+    if session is not None:
+        _SessionMockTools.setdefault(session, {})[agent] = dict(mocks)
+        return None
+    return _mock_tools_ctx(agent, mocks)
 
 
 @contextmanager
-def mock_tools(agent: type[Agent], mocks: dict[str, Callable]) -> Generator[None, None, None]:
-    """
-    Temporarily assign a set of mock tool callables to a specific Agent type within the current context.
-
-    Usage:
-        with mock_tools(MyAgentClass, {"tool_name": mock_fn}):
-            # inside this block, MyAgentClass will see the given mocks
-    """  # noqa: E501
+def _mock_tools_ctx(agent: type[Agent], mocks: dict[str, Callable]) -> Generator[None, None, None]:
     current = _MockToolsContextVar.get({})
     updated = {**current, agent: mocks}  # create a new dict
     token = _MockToolsContextVar.set(updated)
