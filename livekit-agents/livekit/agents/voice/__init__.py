@@ -36,12 +36,14 @@ from .room_io import (
     _ParticipantStreamTranscriptionOutput,
     _ParticipantTranscriptionOutput,
 )
+from .run_result import RunOutputOptions
 from .speech_handle import SpeechHandle
 from .transcription import TranscriptSynchronizer, text_transforms
 
 __all__ = [
     "AgentSession",
     "RecordingOptions",
+    "RunOutputOptions",
     "VoiceActivityVideoSampler",
     "Agent",
     "ModelSettings",
