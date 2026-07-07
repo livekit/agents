@@ -2790,9 +2790,8 @@ class AgentActivity(RecognitionHooks):
     ) -> None:
         from .agent import ModelSettings
 
-        # commit before any interruption gate: the tools already executed, and
-        # discarding their results makes the next inference re-issue the same calls
-        # (see #3702). insert() orders by created_at, so ordering is unaffected.
+        # commit before any interruption gate: dropping already-executed tool
+        # results makes the next inference re-issue the calls (see #3702)
         if _previous_tools_messages:
             self._agent._chat_ctx.insert(_previous_tools_messages)
             self._session._tool_items_added(_previous_tools_messages)
@@ -3223,11 +3222,9 @@ class AgentActivity(RecognitionHooks):
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(exe_task)
 
-            # cancel_and_wait lets in-flight tool tasks finish, so tool_output.output
-            # may hold completed results; commit them or the next inference re-executes
-            # the same tools (see #3702). Handoffs are excluded: an interrupted handoff
-            # is not applied, and recording it as completed would prevent the LLM from
-            # retrying it.
+            # cancel_and_wait lets in-flight tools finish; commit their results or the
+            # next inference re-executes them (see #3702). handoffs are excluded: they
+            # aren't applied when interrupted, and recording them would suppress the retry
             interrupted_calls: list[llm.FunctionCall] = []
             interrupted_fnc_outputs: list[llm.FunctionCallOutput] = []
             for sanitized_out in tool_output.output:
@@ -3841,11 +3838,8 @@ class AgentActivity(RecognitionHooks):
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(exe_task)
 
-            # commit completed tool results, as in the pipeline path (see #3702);
-            # only the outputs, the fnc_call is already added by
-            # _tool_execution_started_cb. Handoffs are excluded: an interrupted
-            # handoff is not applied, and recording it as completed would prevent
-            # the LLM from retrying it.
+            # as in the pipeline path (see #3702), but only the outputs: the fnc_call
+            # is already added by _tool_execution_started_cb
             interrupted_fnc_outputs: list[llm.FunctionCallOutput] = []
             for sanitized_out in tool_output.output:
                 if sanitized_out.fnc_call_out is not None and sanitized_out.agent_task is None:
@@ -3854,8 +3848,7 @@ class AgentActivity(RecognitionHooks):
                     self._session._tool_items_added([sanitized_out.fnc_call_out])
 
             if len(interrupted_fnc_outputs) > 0:
-                # generation is driven by the server-side conversation state: push the
-                # outputs so the server doesn't keep a dangling call and re-issue it
+                # without this the server-side state keeps a dangling call and can re-issue it
                 chat_ctx = self._rt_session.chat_ctx.copy()
                 chat_ctx.items.extend(interrupted_fnc_outputs)
                 try:
