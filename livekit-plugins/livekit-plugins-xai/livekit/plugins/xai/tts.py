@@ -109,6 +109,12 @@ class TTS(tts.TTS):
 
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
+        self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
+            connect_cb=self._connect_pooled_ws,
+            close_cb=self._close_pooled_ws,
+            max_session_duration=3600,
+            mark_refreshed_on_get=False,
+        )
 
     class Markup(tts.TTS.Markup):
         # markup delegation lives in the base class, keyed on _provider_key()
@@ -159,6 +165,12 @@ class TTS(tts.TTS):
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         await ws.close()
 
+    async def _connect_pooled_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+        return await self._connect_ws(timeout, self._opts)
+
+    async def _close_pooled_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        await self._close_ws(ws)
+
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()
@@ -183,6 +195,14 @@ class TTS(tts.TTS):
             speed (float, optional): Speaking-rate multiplier for the generated audio.
             text_normalization (bool, optional): Whether to normalize text before synthesis.
         """  # noqa: E501
+        connection_options_before = (
+            self._opts.voice,
+            self._opts.language,
+            self._opts.optimize_streaming_latency,
+            self._opts.speed,
+            self._opts.text_normalization,
+        )
+
         self._opts.voice = voice or self._opts.voice
         self._opts.language = language or self._opts.language
         if is_given(optimize_streaming_latency):
@@ -191,6 +211,19 @@ class TTS(tts.TTS):
             self._opts.speed = speed
         if is_given(text_normalization):
             self._opts.text_normalization = text_normalization
+
+        connection_options_after = (
+            self._opts.voice,
+            self._opts.language,
+            self._opts.optimize_streaming_latency,
+            self._opts.speed,
+            self._opts.text_normalization,
+        )
+        if connection_options_after != connection_options_before:
+            self._pool.invalidate()
+
+    def prewarm(self) -> None:
+        self._pool.prewarm()
 
     def synthesize(
         self,
@@ -212,6 +245,7 @@ class TTS(tts.TTS):
             await stream.aclose()
 
         self._streams.clear()
+        await self._pool.aclose()
 
 
 class SynthesizeStream(tts.SynthesizeStream):
@@ -328,13 +362,14 @@ class SynthesizeStream(tts.SynthesizeStream):
                 else:
                     logger.warning("Unexpected xAI message %s", data)
 
-        ws = await self._tts._connect_ws(self._conn_options.timeout, self._opts)
-        tasks = [
-            asyncio.create_task(_send_task(ws)),
-            asyncio.create_task(_recv_task(ws)),
-        ]
-        try:
-            await asyncio.gather(*tasks)
-        finally:
-            await utils.aio.gracefully_cancel(*tasks)
-            await self._tts._close_ws(ws)
+        async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+            self._acquire_time = self._tts._pool.last_acquire_time
+            self._connection_reused = self._tts._pool.last_connection_reused
+            tasks = [
+                asyncio.create_task(_send_task(ws)),
+                asyncio.create_task(_recv_task(ws)),
+            ]
+            try:
+                await asyncio.gather(*tasks)
+            finally:
+                await utils.aio.gracefully_cancel(*tasks)
