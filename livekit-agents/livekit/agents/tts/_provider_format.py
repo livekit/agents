@@ -523,8 +523,9 @@ _CARTESIA_CASUAL: ExpressiveOptions = {
 # intensity (<build-intensity>/<decrease-intensity>), pitch (<higher-pitch>/
 # <lower-pitch>), speed (<slow>/<fast>), stress (<emphasis>, never all-caps — xAI spells
 # those out letter by letter), and vocal style (<whisper>/<sing-song>/<laugh-speak>),
-# plus inline sounds/pauses ([sigh], [chuckle], [tsk], [lip-smack], [pause], ...). Keyed
-# by (provider, preset) in the registry in `voice/presets.py`; self-contained.
+# plus inline sounds/pauses written as XML (<sound value="sigh"/>, <sound value="chuckle"/>,
+# <break time="500ms"/>, ...) and converted to xAI's native brackets in convert_markup.
+# Keyed by (provider, preset) in the registry in `voice/presets.py`; self-contained.
 
 _XAI_CUSTOMER_SERVICE: ExpressiveOptions = {
     "tts_instructions_template": Instructions(
@@ -544,10 +545,10 @@ _XAI_CUSTOMER_SERVICE: ExpressiveOptions = {
         "of genuine surprise; an ordinary request isn't one, so settle straight into helping.\n"
         "- Soften for anything sensitive: when sharing bad news, a problem, or a charge, ease the "
         "delivery — <soft>lower the volume</soft> with <lower-pitch>a settled pitch</lower-pitch>, "
-        "or <whisper>go quieter still</whisper> for the hardest part — then give a brief [pause] "
-        "after hard information so it can land. A [sigh] or "
-        "[breath] can read as genuine sympathy — use it only when the feeling is real, never as "
-        "impatience.\n"
+        "or <whisper>go quieter still</whisper> for the hardest part — then give a brief "
+        '<break time="500ms"/> after hard information so it can land. A <sound value="sigh"/> or '
+        '<sound value="breath"/> can read as genuine sympathy — use it only when the feeling is '
+        "real, never as impatience.\n"
         "- Enunciate what matters: for dates, times, amounts, confirmation numbers, doses, and "
         "steps, wrap the detail in <slow>...</slow> so the customer can catch and note it, and read "
         "codes character by character (spelled out with spaces) so each one lands.\n"
@@ -584,13 +585,16 @@ _XAI_CASUAL: ExpressiveOptions = {
         "<build-intensity>wait wait wait</build-intensity> (ramping up). Come back down after a "
         "big moment with <decrease-intensity>...</decrease-intensity>.\n"
         "- Let real feeling also land through inline sounds — motivated, not reflexive, so most turns "
-        "have none: [chuckle] or [giggle] at something genuinely funny (keep a full [laugh] rare), "
-        "[sigh] when commiserating, a quick [breath] or [inhale] before a big reaction, [tsk] for "
-        "mock-disapproval or 'aw man', a [lip-smack] or [tongue-click] as a tiny beat of thought, "
-        "[hum-tune] when you're playful. Use <laugh-speak>...</laugh-speak> to talk through a laugh. "
+        'have none: <sound value="chuckle"/> or <sound value="giggle"/> at something genuinely funny '
+        '(keep a full <sound value="laugh"/> rare), <sound value="sigh"/> when commiserating, a quick '
+        '<sound value="breath"/> or <sound value="inhale"/> before a big reaction, <sound value="tsk"/> '
+        "for mock-disapproval or 'aw man', a <sound value=\"lip-smack\"/> or "
+        '<sound value="tongue-click"/> as a tiny beat of thought, <sound value="hum-tune"/> when '
+        "you're playful. Use <laugh-speak>...</laugh-speak> to talk through a laugh. "
         "Never repeat the same sound twice in a row.\n"
-        "- Pace with punctuation, trailing ellipses (...) when you drift or hesitate, and inline "
-        "pauses. Use exclamation points for real enthusiasm, and <emphasis>...</emphasis> to punch "
+        "- Pace with punctuation, trailing ellipses (...) when you drift or hesitate, and an inline "
+        '<break time="500ms"/> for a deliberate beat. Use exclamation points for real enthusiasm, '
+        "and <emphasis>...</emphasis> to punch "
         "a single word (e.g. that is <emphasis>so</emphasis> good) — never all-caps, which xAI "
         "reads out letter by letter.\n"
         "- Sound like a real mouth talking: sprinkle in natural speech texture — fillers (um, uh), "
@@ -782,6 +786,7 @@ class TranscriptMarkupStripper:
 _SELF_CLOSING_TAGS: dict[str, list[str]] = {
     "cartesia": ["emotion", "speed", "volume", "break"],
     "inworld": ["expression", "sound", "break"],
+    "xai": ["sound", "break"],
 }
 
 
