@@ -40,6 +40,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import AudioBuffer, is_given
+from livekit.agents.voice.events import ConversationItemAddedEvent
 from livekit.agents.voice.io import TimedString
 
 from .log import logger
@@ -59,6 +60,7 @@ class STTOptions:
         "universal-3-5-pro",
     ] = "universal-3-5-pro"
     language_detection: NotGivenOr[bool] = NOT_GIVEN
+    language_code: NotGivenOr[str] = NOT_GIVEN
     end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN
     min_turn_silence: NotGivenOr[int] = NOT_GIVEN
     max_turn_silence: NotGivenOr[int] = NOT_GIVEN
@@ -101,6 +103,7 @@ class STT(stt.STT):
             "universal-3-5-pro",
         ] = "universal-3-5-pro",
         language_detection: NotGivenOr[bool] = NOT_GIVEN,
+        language_code: NotGivenOr[str] = NOT_GIVEN,
         end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
         min_turn_silence: NotGivenOr[int] = NOT_GIVEN,
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
@@ -111,6 +114,7 @@ class STT(stt.STT):
         prompt: NotGivenOr[str] = NOT_GIVEN,
         agent_context: NotGivenOr[str] = NOT_GIVEN,
         previous_context_n_turns: NotGivenOr[int] = NOT_GIVEN,
+        agent_context_carryover: bool = False,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         speaker_labels: NotGivenOr[bool] = NOT_GIVEN,
         max_speakers: NotGivenOr[int] = NOT_GIVEN,
@@ -134,6 +138,13 @@ class STT(stt.STT):
                 0 and 1 that determines how sensitive the VAD is. Lower values make the VAD
                 more sensitive (detects quieter speech). Higher values make it less sensitive.
                 Defaults to 0.4.
+            language_code: Steer transcription toward a specific language (e.g. 'en', 'es',
+                'fr'). Accepts any common format ('en', 'en-US', 'english'); it is normalized
+                to a bare ISO 639-1 code before being sent. When set, the model is biased
+                toward this language instead of automatically detecting/code-switching across
+                the supported languages. Leave unset to use the model's default multilingual
+                behavior. Only supported with the Universal-3 Pro family models. Set at
+                construction (connect) time only.
             min_turn_silence: Minimum silence in ms before a confident end-of-turn is finalized.
             min_end_of_turn_silence_when_confident: Deprecated. Use min_turn_silence instead.
             continuous_partials: Whether to emit additional partial transcripts during long
@@ -159,6 +170,11 @@ class STT(stt.STT):
                 entirely; leave unset to use the server default (recommended). Range 0–100.
                 Only supported with the Universal-3 Pro family models. Set at construction
                 (connect) time only; it cannot be changed via `update_options`.
+            agent_context_carryover: When the model supports it, let an ``AgentSession`` push each
+                assistant reply into ``agent_context`` so it is carried into the model's
+                conversation context. Defaults to False; set True to enable. Prior user turns are
+                carried automatically by the model regardless of this flag. Ignored on models
+                without context support.
             voice_focus: Voice Focus isolates the primary voice and suppresses background
                 noise (chatter, keyboard clicks, fan hum, room echo) before the audio reaches
                 the model. Use 'near-field' for headsets, handsets, and close-talking
@@ -180,6 +196,14 @@ class STT(stt.STT):
                 Leave unset to use the server default. Only supported with the Universal-3 Pro
                 family models. Set at construction (connect) time only.
         """
+        # agent_context carryover is only available on the u3-rt-pro family
+        # ("u3-pro" is normalized to "u3-rt-pro" below) and is opt-in via the user
+        supports_carryover = model in _U3_PRO_MODELS or model == "u3-pro"
+        if agent_context_carryover and not supports_carryover:
+            logger.warning(
+                "agent_context_carryover is enabled but model %r does not support it; ignoring",
+                model,
+            )
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
@@ -187,6 +211,8 @@ class STT(stt.STT):
                 aligned_transcript="word",
                 offline_recognize=False,
                 diarization=is_given(speaker_labels) and speaker_labels is True,
+                keyterms=True,
+                chat_context=agent_context_carryover and supports_carryover,
             ),
         )
         if model == "u3-pro":
@@ -204,6 +230,7 @@ class STT(stt.STT):
                 "voice_focus": voice_focus,
                 "voice_focus_threshold": voice_focus_threshold,
                 "mode": mode,
+                "language_code": language_code,
             }
             for _param_name, _param_value in _u3_pro_only_params.items():
                 if is_given(_param_value):
@@ -244,12 +271,19 @@ class STT(stt.STT):
         if not is_given(min_turn_silence) and not is_given(mode):
             min_turn_silence = 100
 
+        # Normalize to a bare ISO 639-1 code (e.g. "es-ES" / "Spanish" -> "es"),
+        # the form AssemblyAI's language steering expects.
+        normalized_language_code: NotGivenOr[str] = NOT_GIVEN
+        if is_given(language_code):
+            normalized_language_code = LanguageCode(language_code).language
+
         self._opts = STTOptions(
             sample_rate=sample_rate,
             buffer_size_seconds=buffer_size_seconds,
             encoding=encoding,
             speech_model=model,
             language_detection=language_detection,
+            language_code=normalized_language_code,
             end_of_turn_confidence_threshold=end_of_turn_confidence_threshold,
             min_turn_silence=min_turn_silence,
             max_turn_silence=max_turn_silence,
@@ -269,6 +303,9 @@ class STT(stt.STT):
             mode=mode,
         )
         self._session = http_session
+        # user keyterms; _opts.keyterms_prompt holds the effective set (user + session)
+        self._user_keyterms: list[str] = list(keyterms_prompt or [])
+        self._session_keyterms: list[str] = []
         self._streams = weakref.WeakSet[SpeechStream]()
 
     @property
@@ -349,6 +386,9 @@ class STT(stt.STT):
         if is_given(agent_context):
             self._opts.agent_context = agent_context
         if is_given(keyterms_prompt):
+            self._user_keyterms = list(keyterms_prompt)
+            # re-merge with the active session keyterms so a user update doesn't drop them
+            keyterms_prompt = list(dict.fromkeys([*self._user_keyterms, *self._session_keyterms]))
             self._opts.keyterms_prompt = keyterms_prompt
         if is_given(vad_threshold):
             self._opts.vad_threshold = vad_threshold
@@ -370,6 +410,24 @@ class STT(stt.STT):
                 continuous_partials=continuous_partials,
                 interruption_delay=interruption_delay,
             )
+
+    def _update_session_keyterms(self, keyterms: list[str]) -> None:
+        if keyterms == self._session_keyterms:
+            return
+        self._session_keyterms = list(keyterms)
+        merged = list(dict.fromkeys([*self._user_keyterms, *keyterms]))
+        self._opts.keyterms_prompt = merged
+        # applied live via the stream's UpdateConfiguration (no reconnect)
+        for stream in self._streams:
+            stream.update_options(keyterms_prompt=merged)
+
+    def _push_conversation_item(self, ev: ConversationItemAddedEvent) -> None:
+        if (
+            (chat_item := ev.item).type == "message"
+            and chat_item.role == "assistant"
+            and chat_item.text_content
+        ):
+            self.update_options(agent_context=chat_item.text_content)
 
 
 class SpeechStream(stt.SpeechStream):
@@ -661,7 +719,7 @@ class SpeechStream(stt.SpeechStream):
             "min_turn_silence": min_silence,
             "max_turn_silence": max_silence,
             "keyterms_prompt": json.dumps(self._opts.keyterms_prompt)
-            if is_given(self._opts.keyterms_prompt)
+            if self._opts.keyterms_prompt
             else None,
             "language_detection": self._opts.language_detection
             if is_given(self._opts.language_detection)
@@ -669,6 +727,9 @@ class SpeechStream(stt.SpeechStream):
             if "multilingual" in self._opts.speech_model
             or self._opts.speech_model in _U3_PRO_MODELS
             else False,
+            "language_code": self._opts.language_code
+            if is_given(self._opts.language_code)
+            else None,
             "prompt": self._opts.prompt if is_given(self._opts.prompt) else None,
             "agent_context": self._opts.agent_context
             if is_given(self._opts.agent_context)

@@ -32,6 +32,7 @@ def _new_stream(*, server_vad=NOT_GIVEN) -> elevenlabs_stt.SpeechStream:
         server_vad=server_vad,
         keyterms=NOT_GIVEN,
         no_verbatim=False,
+        enable_logging=True,
     )
     stream._language = None
     stream._event_ch = _EventSink()
@@ -123,3 +124,37 @@ def test_update_options_forwards_no_verbatim_to_active_streams() -> None:
     instance._streams.add(fake)
     instance.update_options(no_verbatim=True)
     assert captured.get("no_verbatim") is True
+
+
+def test_enable_logging_defaults_to_true() -> None:
+    assert _stt()._opts.enable_logging is True
+
+
+def test_enable_logging_can_be_disabled() -> None:
+    assert _stt(enable_logging=False)._opts.enable_logging is False
+
+
+@pytest.mark.parametrize(("enable_logging", "expected"), [(True, "true"), (False, "false")])
+async def test_connect_ws_includes_enable_logging(enable_logging: bool, expected: str) -> None:
+    # enable_logging is a WebSocket query param. Verify it is forwarded to the
+    # realtime connect URL with the expected lowercase boolean string.
+    stream = _new_stream()
+    stream._opts.enable_logging = enable_logging
+
+    class _ConnOptions:
+        timeout = 5.0
+
+    stream._conn_options = _ConnOptions()
+
+    captured: dict[str, object] = {}
+
+    class _FakeSession:
+        async def ws_connect(self, url: str, **kwargs: object) -> object:
+            captured["url"] = url
+            return object()
+
+    stream._session = _FakeSession()
+
+    await stream._connect_ws()
+
+    assert f"enable_logging={expected}" in captured["url"]

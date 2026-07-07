@@ -196,6 +196,46 @@ def _diarization_enabled(extra_kwargs: dict[str, Any] | None) -> bool:
     return False
 
 
+def _keyterms_extra_for_model(
+    model: NotGivenOr[str],
+    *,
+    extra_kwargs: dict[str, Any] | None = None,
+    session_keyterms: list[str] | None = None,
+) -> dict[str, Any] | None:
+    """Return the provider's keyterm ``extra`` entry: user keyterms (from ``extra_kwargs``)
+    merged with the framework ``session_keyterms``.
+
+    None if the model has no keyterm prompting, so ``_keyterms_extra_for_model(model) is not
+    None`` is also the capability check.
+    """
+    if not (is_given(model) and isinstance(model, str)):
+        return None
+
+    extra_kwargs = extra_kwargs or {}
+    session_keyterms = session_keyterms or []
+
+    if model.startswith("speechmatics/"):
+        # keep existing entries as-is (they may carry sounds_like etc.); append new session terms
+        existing = list(extra_kwargs.get("additional_vocab", []))
+        seen = {v["content"] for v in existing}
+        additions = set(session_keyterms) - seen
+        return {"additional_vocab": existing + [{"content": term} for term in additions]}
+
+    key: str | None = None
+    if model.startswith("deepgram/"):
+        key = "keyterm"
+    elif model.startswith("assemblyai/"):
+        key = "keyterms_prompt"
+
+    if key is None:
+        return None
+    # deepgram's keyterm may be a bare string; wrap it so it isn't splat char-by-char
+    existing = extra_kwargs.get(key, [])
+    if isinstance(existing, str):
+        existing = [existing]
+    return {key: list(dict.fromkeys([*existing, *session_keyterms]))}
+
+
 STTLanguages = Literal["multi", "en", "de", "es", "fr", "ja", "pt", "zh", "hi"]
 
 
@@ -516,6 +556,7 @@ class STT(stt.STT):
                 diarization=diarization_enabled,
                 aligned_transcript="word",
                 offline_recognize=False,
+                keyterms=_keyterms_extra_for_model(model) is not None,
             ),
         )
 
@@ -559,6 +600,7 @@ class STT(stt.STT):
 
         self._session = http_session
         self._vad = vad
+        self._session_keyterms: list[str] = []  # framework-managed; merged into extra_kwargs
         self._streams = weakref.WeakSet[SpeechStream]()
 
     @classmethod
@@ -633,6 +675,10 @@ class STT(stt.STT):
 
             self._opts.model = model
             self._vad = _resolve_vad_for_model(model, self._vad)
+            self._capabilities = replace(
+                self._capabilities,
+                keyterms=_keyterms_extra_for_model(self._opts.model) is not None,
+            )
         if is_given(language):
             self._opts.language = LanguageCode(language)
         if is_given(extra):
@@ -641,9 +687,36 @@ class STT(stt.STT):
                 self._capabilities,
                 diarization=_diarization_enabled(self._opts.extra_kwargs),
             )
+            # re-merge the active session keyterms so a user extra update doesn't drop them
+            keyterm_extra = _keyterms_extra_for_model(
+                self._opts.model,
+                extra_kwargs=self._opts.extra_kwargs,
+                session_keyterms=self._session_keyterms,
+            )
+            if keyterm_extra is not None:
+                extra = {**extra, **keyterm_extra}
 
         for stream in self._streams:
             stream.update_options(model=model, language=language, extra=extra)
+
+    def _update_session_keyterms(self, keyterms: list[str]) -> None:
+        if keyterms == self._session_keyterms:
+            return
+        keyterm_extra = _keyterms_extra_for_model(
+            self._opts.model, extra_kwargs=self._opts.extra_kwargs, session_keyterms=keyterms
+        )
+        if keyterm_extra is None:
+            super()._update_session_keyterms(keyterms)  # warn-and-skip for unsupported models
+            return
+
+        self._session_keyterms = list(keyterms)
+        # inference applies extra live via session.update; defer to END_OF_SPEECH since the
+        # gateway may reconnect upstream when the keyterms change
+        for stream in self._streams:
+            if stream._speaking:
+                stream._pending_extra = keyterm_extra
+            else:
+                stream.update_options(extra=keyterm_extra)
 
     def _sanitize_options(
         self, *, language: NotGivenOr[STTLanguages | str] = NOT_GIVEN
@@ -673,6 +746,9 @@ class SpeechStream(stt.SpeechStream):
         self._request_id = str(utils.shortuuid("stt_request_"))
 
         self._speaking = False
+        # keyterm extra set while the user is speaking; applied at END_OF_SPEECH (latest wins).
+        # inference applies live, but the gateway may reconnect upstream, so defer to a calm moment.
+        self._pending_extra: dict[str, Any] | None = None
         self._speech_duration: float = 0
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._vad: vad.VAD | None = vad_instance
@@ -696,6 +772,7 @@ class SpeechStream(stt.SpeechStream):
             self._opts.language = LanguageCode(language)
         if is_given(extra):
             self._opts.extra_kwargs.update(extra)
+            self._pending_extra = None
 
         has_update = is_given(model) or is_given(language) or is_given(extra)
         if has_update and self._ws is not None and not self._ws.closed:
@@ -711,6 +788,11 @@ class SpeechStream(stt.SpeechStream):
                 "settings": settings,
             }
             asyncio.ensure_future(self._send_session_update(update_msg))
+
+    def _on_end_of_speech(self) -> None:
+        if self._pending_extra is not None:
+            self.update_options(extra=self._pending_extra)
+            self._pending_extra = None
 
     async def _send_session_update(self, msg: dict[str, Any]) -> None:
         try:
@@ -846,7 +928,18 @@ class SpeechStream(stt.SpeechStream):
             "settings": {
                 "sample_rate": str(self._opts.sample_rate),
                 "encoding": self._opts.encoding,
-                "extra": self._opts.extra_kwargs,
+                # merge the framework session keyterms into the user's extra_kwargs keyterm key
+                "extra": {
+                    **self._opts.extra_kwargs,
+                    **(
+                        _keyterms_extra_for_model(
+                            self._opts.model,
+                            extra_kwargs=self._opts.extra_kwargs,
+                            session_keyterms=self._stt._session_keyterms,
+                        )
+                        or {}
+                    ),
+                },
             },
         }
 
@@ -973,6 +1066,7 @@ class SpeechStream(stt.SpeechStream):
                 self._speaking = False
                 end_event = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                 self._event_ch.send_nowait(end_event)
+                self._on_end_of_speech()
         else:
             event = stt.SpeechEvent(
                 type=stt.SpeechEventType.INTERIM_TRANSCRIPT,

@@ -1783,7 +1783,7 @@ wheels = [
 
 [[package]]
 name = "livekit"
-version = "1.1.12"
+version = "1.1.13"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiofiles" },
@@ -1791,13 +1791,13 @@ dependencies = [
     { name = "protobuf" },
     { name = "types-protobuf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/fa/2c/3e8412615a2f4b9abdd1dec54138f8810b58e1e5c366443c098d52ef1957/livekit-1.1.12.tar.gz", hash = "sha256:a8e3aa59a7299b136a2a5442f90a9c8a5a8188afe94ffeeb85873d6ceaabf939", size = 369150, upload-time = "2026-06-24T19:50:49.651Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/8d/92/dcd4f295913533ddd0d48153cc28f1358d550bea651460bd895256981c4d/livekit-1.1.13.tar.gz", hash = "sha256:aa2bd89cf0c2ebcaa71a240275964c23900a0422a2a3d43d274e88a211a0ecfc", size = 370211, upload-time = "2026-06-30T11:54:00.321Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/39/6f/b2a1486f9f217043dbf52ed93bf6a77febd4d86615b02cddd7758a225f52/livekit-1.1.12-py3-none-macosx_10_15_x86_64.whl", hash = "sha256:7fe82d7f2ef76ef6f7d856581f4519c2870fcffe3c33a8b2e74315d7c0bbdadc", size = 10140961, upload-time = "2026-06-24T19:50:38.69Z" },
-    { url = "https://files.pythonhosted.org/packages/fb/de/656428ad72ce5b6911be2f084ead1e9c3b04d46015981de7e94177628a8d/livekit-1.1.12-py3-none-macosx_11_0_arm64.whl", hash = "sha256:3c33d6b6df872447d3295443eb4886b84b6d6045ce8b3627504ee840ddf908fb", size = 8965085, upload-time = "2026-06-24T19:50:40.945Z" },
-    { url = "https://files.pythonhosted.org/packages/8c/ce/572f3f15571625ee9f99f103f2a13503797ed80636d70ce0dd58034e5e1d/livekit-1.1.12-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:0f452415ec4c7c789bd99bc098dc19710f49249993b13335e5741de50fa423dc", size = 9974856, upload-time = "2026-06-24T19:50:43.329Z" },
-    { url = "https://files.pythonhosted.org/packages/db/d7/5a798f8ef40889c8236a05d1a3985a77114c2c8f4584ac118987d6f8d9d5/livekit-1.1.12-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:19611fb5fa6bd1e6366acc7526aecab1c8fa2afe9e579f73d34df575c667aa53", size = 11359455, upload-time = "2026-06-24T19:50:45.654Z" },
-    { url = "https://files.pythonhosted.org/packages/1d/45/f28e25888babc83a43769f428545c9ee781366a0ef22b4b479318c0f95bc/livekit-1.1.12-py3-none-win_amd64.whl", hash = "sha256:4e81a366a6c7a83b435d9de15760da70d4c13748b61eb8d5f000c9d279c8a39e", size = 10710076, upload-time = "2026-06-24T19:50:47.663Z" },
+    { url = "https://files.pythonhosted.org/packages/9d/bd/15100217109595aedbb9bcfdfc1c77513c0f44940d72644d16b611476941/livekit-1.1.13-py3-none-macosx_10_15_x86_64.whl", hash = "sha256:2a19b023de9a573fe5da629e3ee514f2962c87e1afec95a6b19bbbdb6ea8f703", size = 10147642, upload-time = "2026-06-30T11:53:48.781Z" },
+    { url = "https://files.pythonhosted.org/packages/97/dd/4f001a9c5ccde361a53437a09bc04dc9cad8003c6711c2bcc0734e18e626/livekit-1.1.13-py3-none-macosx_11_0_arm64.whl", hash = "sha256:90b6796e0c4515bc1e8a1e109a40b88d82c36b12452b7ae01fe35be7ee8357ba", size = 8968740, upload-time = "2026-06-30T11:53:51.223Z" },
+    { url = "https://files.pythonhosted.org/packages/26/1a/7e97a45a4b6e10ce3a4e9938e3d3fa0a6512a6557f5990685eab4f6e88d1/livekit-1.1.13-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:43779c0f3bb27589cd517d60c442c674c2f967a97db158829a533974a29a3997", size = 9980507, upload-time = "2026-06-30T11:53:53.349Z" },
+    { url = "https://files.pythonhosted.org/packages/e3/9d/389bbdf39ccd2c464a4749ba7be1584dea608518c32a5ddbc511db6b0cf7/livekit-1.1.13-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:f4e83f0e272f4b2e9cc39dbefd7bb23b75bd8c105478d867c2869254ca4e149a", size = 11367692, upload-time = "2026-06-30T11:53:55.409Z" },
+    { url = "https://files.pythonhosted.org/packages/da/ce/a3d3e0566dbd2586c325240d44afec6d44421eb794bcf8dbaca15463a7b7/livekit-1.1.13-py3-none-win_amd64.whl", hash = "sha256:22dff7a39cb3d590a4757e20d3ce5d326ab882350386f5070f45cbd6d9ccf839", size = 10717013, upload-time = "2026-06-30T11:53:57.701Z" },
 ]
 
 [[package]]
@@ -2060,8 +2060,8 @@ requires-dist = [
     { name = "docstring-parser", specifier = ">=0.16" },
     { name = "eval-type-backport" },
     { name = "json-repair", specifier = "==0.59.10" },
-    { name = "livekit", specifier = "==1.1.12" },
-    { name = "livekit-api", specifier = ">=1.0.7,<2" },
+    { name = "livekit", specifier = "==1.1.13" },
+    { name = "livekit-api", specifier = ">=1.1.1,<2" },
     { name = "livekit-blingfire", specifier = "~=1.1,<2" },
     { name = "livekit-local-inference", specifier = ">=0.2.6" },
     { name = "livekit-plugins-anam", marker = "extra == 'anam'", editable = "livekit-plugins/livekit-plugins-anam" },
@@ -2157,7 +2157,7 @@ provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "av
 
 [[package]]
 name = "livekit-api"
-version = "1.1.0"
+version = "1.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -2166,9 +2166,9 @@ dependencies = [
     { name = "pyjwt" },
     { name = "types-protobuf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b5/0a/ad3cce124e608c056d6390244ec4dd18c8a4b5f055693a95831da2119af7/livekit_api-1.1.0.tar.gz", hash = "sha256:f94c000534d3a9b506e6aed2f35eb88db1b23bdea33bb322f0144c4e9f73934e", size = 16649, upload-time = "2025-12-02T19:37:11.452Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f8/03/00e0ec173f247e1f7ea63cb5591d5680a64c7a74ea4d5d558e5aed6cc399/livekit_api-1.1.1.tar.gz", hash = "sha256:70c7b80eecbc297b40756ebd76e4f52d00b0348fb7d212a21c1f69cc57fd9c83", size = 15196, upload-time = "2026-06-24T01:36:19.686Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d3/b9/8d8515e3e0e629ab07d399cf858b8fc7e0a02bbf6384a6592b285264b4b9/livekit_api-1.1.0-py3-none-any.whl", hash = "sha256:bfc1c2c65392eb3f580a2c28108269f0e79873f053578a677eee7bb1de8aa8fb", size = 19620, upload-time = "2025-12-02T19:37:10.075Z" },
+    { url = "https://files.pythonhosted.org/packages/1e/c0/d5f3ff74ab5db2d06f173801ec934885d11a754b9fb9ad768c8ede0a6c89/livekit_api-1.1.1-py3-none-any.whl", hash = "sha256:ce8c327676c366e66cf68782934368dd0ba92b9d48f578275227e255c890fe88", size = 19471, upload-time = "2026-06-24T01:36:18.42Z" },
 ]
 
 [[package]]

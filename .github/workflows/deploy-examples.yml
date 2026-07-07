@@ -22,9 +22,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        example: [healthcare, survey, frontdesk, drive-thru, inference, avatar]
+        example: [healthcare, survey, frontdesk, drive-thru, inference, avatar, hotel_receptionist]
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           ref: ${{ inputs.ref || github.ref }}
           # Fetch Git-LFS assets (e.g. examples/drive-thru/bg_noise.mp3) so the

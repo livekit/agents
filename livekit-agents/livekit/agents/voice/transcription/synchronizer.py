@@ -13,6 +13,7 @@ from livekit import rtc
 
 from ... import tokenize, utils
 from ...log import logger
+from ...tts._provider_format import split_all_markup
 from ...types import NOT_GIVEN, NotGivenOr, TimedString
 from ...utils import is_given
 from .. import io
@@ -289,7 +290,10 @@ class _SegmentSynchronizerImpl:
         if not self._text_data.done or not self._audio_data.done:
             return
 
-        pushed_hyphens = len(self._calc_hyphens(self._text_data.pushed_text))
+        # pushed_text carries the raw LLM markup (the room output strips it downstream);
+        # pace against the visible text only so expressive tags don't inflate the speed
+        clean_pushed_text, _ = split_all_markup(self._text_data.pushed_text)
+        pushed_hyphens = len(self._calc_hyphens(clean_pushed_text))
         # hyphens per second
         if self._audio_data.pushed_duration > 0:
             self._speed = pushed_hyphens / self._audio_data.pushed_duration
@@ -376,7 +380,11 @@ class _SegmentSynchronizerImpl:
                 )
                 continue
 
-            word_hyphens = len(self._opts.hyphenate_word(word))
+            # forward the raw token (the room output strips markup and surfaces the
+            # expression downstream), but pace against the visible text only so a
+            # markup-only token adds no delay
+            clean_word, _ = split_all_markup(word)
+            word_hyphens = len(self._opts.hyphenate_word(clean_word)) if clean_word else 0
             elapsed = time.time() - self._start_wall_time - self._paused_duration
 
             d_hyphens = 0

@@ -186,6 +186,9 @@ class RunContext(Generic[Userdata_T]):
         for s in self._filler_schedulers:
             s.reset_dwell()
 
+        # events carry the raw message, before the LLM-facing template wraps it
+        raw_message = message if isinstance(message, str) else str(message)
+
         if isinstance(message, str):
             if template is None:
                 if self._executor is not None:
@@ -213,7 +216,18 @@ class RunContext(Generic[Userdata_T]):
         self._updates.append(pair)
 
         if self._executor is None:
-            return  # standalone — nothing else to do
+            return  # standalone — no executor, so no tool lifecycle to report
+
+        self._session.emit(
+            "tool_execution_updated",
+            ToolExecutionUpdatedEvent(
+                update=ToolCallUpdated(
+                    id=pair[0].call_id,
+                    call_id=self.function_call.call_id,
+                    message=raw_message,
+                )
+            ),
+        )
 
         assert self._first_update_fut is not None
         if not self._first_update_fut.done():
@@ -288,6 +302,7 @@ EventTypes = Literal[
     "metrics_collected",
     "session_usage_updated",
     "speech_created",
+    "tool_execution_updated",
     "error",
     "close",
     "debug_message",
@@ -455,6 +470,60 @@ class SpeechCreatedEvent(BaseModel):
     created_at: float = Field(default_factory=time.time)
 
 
+class ToolCallStarted(BaseModel):
+    """A function tool call was dispatched."""
+
+    type: Literal["tool_call_started"] = "tool_call_started"
+    function_call: FunctionCall
+
+
+class ToolCallUpdated(BaseModel):
+    """A progress update emitted via ``ctx.update()`` while a tool call runs."""
+
+    type: Literal["tool_call_updated"] = "tool_call_updated"
+    id: str
+    """Entry id: ``call_id`` inline, ``{call_id}_update_N`` when deferred."""
+    call_id: str
+    message: str
+
+
+class ToolCallEnded(BaseModel):
+    """A tool call's single terminal entry."""
+
+    type: Literal["tool_call_ended"] = "tool_call_ended"
+    id: str
+    """Entry id: ``call_id`` inline, ``{call_id}_final`` when deferred."""
+    call_id: str
+    message: str | None = None
+    """Result or error text; None when there is nothing to voice."""
+    status: Literal["done", "error", "cancelled"]
+
+
+class ToolReplyUpdated(BaseModel):
+    """Lifecycle of the deferred reply that voices buffered tool updates: ``scheduled``
+    when queued, then ``completed`` / ``interrupted`` / ``skipped``. One reply may cover
+    several calls; an inline first update never gets one."""
+
+    type: Literal["tool_reply_updated"] = "tool_reply_updated"
+    update_ids: list[str]
+    """``ToolCallUpdated.id`` values this reply covers."""
+    status: Literal["scheduled", "completed", "interrupted", "skipped"]
+    speech_id: str
+    """Id of the reply speech; ``speech_created`` carries its handle."""
+
+
+class ToolExecutionUpdatedEvent(BaseModel):
+    """One flat tool-lifecycle update. Discriminate on ``update.type``: ``tool_call_started``
+    → ``tool_call_updated`` → ``tool_call_ended`` → ``tool_reply_updated``."""
+
+    type: Literal["tool_execution_updated"] = "tool_execution_updated"
+    update: Annotated[
+        ToolCallStarted | ToolCallUpdated | ToolCallEnded | ToolReplyUpdated,
+        Field(discriminator="type"),
+    ]
+    created_at: float = Field(default_factory=time.time)
+
+
 class UserTurnExceededEvent(BaseModel):
     type: Literal["user_turn_exceeded"] = "user_turn_exceeded"
     transcript: str
@@ -519,6 +588,7 @@ AgentEvent = Annotated[
     | ConversationItemAddedEvent
     | FunctionToolsExecutedEvent
     | SpeechCreatedEvent
+    | ToolExecutionUpdatedEvent
     | ErrorEvent
     | CloseEvent
     | OverlappingSpeechEvent,
