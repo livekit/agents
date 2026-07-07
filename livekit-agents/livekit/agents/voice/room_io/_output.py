@@ -16,6 +16,7 @@ from ...tts._provider_format import (
     TranscriptMarkupStripper,
     expression_attribute,
     split_all_markup,
+    strip_all_markup,
 )
 from ...types import (
     ATTRIBUTE_PUBLISH_ON_BEHALF,
@@ -277,7 +278,7 @@ class _ParticipantLegacyTranscriptionOutput:
         # Stripping the whole accumulation each time avoids partial-tag edge cases; the
         # expression is dropped here — the deprecated rtc Transcription API has no
         # attribute channel (the stream-based output carries lk.expression instead).
-        clean_text, _ = split_all_markup(self._pushed_text)
+        clean_text = strip_all_markup(self._pushed_text)
         await self._publish_transcription(self._current_id, clean_text, final=False)
 
     @utils.log_exceptions(logger=logger)
@@ -285,7 +286,7 @@ class _ParticipantLegacyTranscriptionOutput:
         if self._participant_identity is None or self._track_id is None or not self._capturing:
             return
 
-        clean_text, _ = split_all_markup(self._pushed_text)
+        clean_text = strip_all_markup(self._pushed_text)
         self._flush_task = asyncio.create_task(
             self._publish_transcription(self._current_id, clean_text, final=True)
         )

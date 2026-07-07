@@ -296,16 +296,16 @@ class ChatMessage(BaseModel):
 
     @property
     def text_content(self) -> str | None:
-        """The message text without any expressive tags. Text items are joined by a newline.
+        """The message text without expressive markup tags. Text items are joined by a newline.
         Use :attr:`raw_text_content` for the original tagged text.
         """
         raw = self.raw_text_content
         if raw is None:
             return None
 
-        from ..tts._provider_format import split_all_markup
+        from ..tts._provider_format import strip_all_markup
 
-        return split_all_markup(raw)[0]
+        return strip_all_markup(raw)
 
     @property
     def raw_text_content(self) -> str | None:
@@ -618,10 +618,10 @@ class ChatContext:
                 if exclude_audio:
                     item.content = [c for c in item.content if not isinstance(c, AudioContent)]
                 if strip_markup:
-                    from ..tts._provider_format import split_all_markup
+                    from ..tts._provider_format import strip_all_markup
 
                     item.content = [
-                        split_all_markup(c)[0] if isinstance(c, str) else c for c in item.content
+                        strip_all_markup(c) if isinstance(c, str) else c for c in item.content
                     ]
 
             items.append(item)

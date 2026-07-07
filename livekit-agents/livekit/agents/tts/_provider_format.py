@@ -710,6 +710,11 @@ def split_all_markup(text: str) -> tuple[str, list[ExpressiveTag]]:
     return clean, [{"type": tag, "value": value} for tag, value in raw_tags]
 
 
+def strip_all_markup(text: str) -> str:
+    """:func:`split_all_markup` returning only the clean text (tags discarded)."""
+    return split_all_markup(text)[0]
+
+
 def expression_attribute(tags: list[ExpressiveTag]) -> dict[str, str] | None:
     """Build the ``lk.expression`` transcription attribute from stripped markup tags.
 

@@ -967,7 +967,7 @@ class ChatMessageAssert:
         __tracebackhide__ = True
 
         current_span = trace.get_current_span()
-        msg_content = self._event.item.text_content
+        msg_content = self._event.item.raw_text_content
 
         current_span.set_attribute(trace_types.ATTR_GEN_AI_OPERATION_NAME, "judge")
         current_span.set_attribute(trace_types.ATTR_GEN_AI_REQUEST_MODEL, llm_v.model)
