@@ -13,7 +13,7 @@ from livekit import rtc
 
 from ... import tokenize, utils
 from ...log import logger
-from ...tts._provider_format import TranscriptMarkupStripper, split_all_markup
+from ...tts._provider_format import TranscriptMarkupStripper, strip_all_markup
 from ...types import NOT_GIVEN, NotGivenOr, TimedString
 from ...utils import is_given
 from .. import io
@@ -298,7 +298,7 @@ class _SegmentSynchronizerImpl:
 
         # pushed_text carries the raw LLM markup (the room output strips it downstream);
         # pace against the visible text only so expressive tags don't inflate the speed
-        clean_pushed_text, _ = split_all_markup(self._text_data.pushed_text)
+        clean_pushed_text = strip_all_markup(self._text_data.pushed_text)
         pushed_hyphens = len(self._calc_hyphens(clean_pushed_text))
         # hyphens per second
         if self._audio_data.pushed_duration > 0:

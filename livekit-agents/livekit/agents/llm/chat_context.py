@@ -306,6 +306,21 @@ class ChatMessage(BaseModel):
             return None
         return "\n".join(text_parts)
 
+    @property
+    def plain_text_content(self) -> str | None:
+        """
+        Returns a string of all text content without any expressive tags in the message.
+
+        Multiple text content items will be joined by a newline.
+        """
+        raw = self.text_content
+        if raw is None:
+            return None
+
+        from ..tts._provider_format import strip_all_markup
+
+        return strip_all_markup(raw)
+
 
 ChatContent: TypeAlias = ImageContent | AudioContent | str
 
@@ -587,6 +602,7 @@ class ChatContext:
         exclude_function_call: bool = False,
         exclude_metrics: bool = False,
         exclude_config_update: bool = False,
+        strip_markup: bool = False,
     ) -> dict[str, Any]:
         items: list[ChatItem] = []
         for item in self.items:
@@ -605,6 +621,13 @@ class ChatContext:
                     item.content = [c for c in item.content if not isinstance(c, ImageContent)]
                 if exclude_audio:
                     item.content = [c for c in item.content if not isinstance(c, AudioContent)]
+                # only strip expressive tags in assistant messages
+                if strip_markup and item.role == "assistant":
+                    from ..tts._provider_format import strip_all_markup
+
+                    item.content = [
+                        strip_all_markup(c) if isinstance(c, str) else c for c in item.content
+                    ]
 
             items.append(item)
 
@@ -758,8 +781,9 @@ class ChatContext:
                 if item.extra.get("is_summary") is True:  # avoid making summary of summaries
                     continue
 
-                text = (item.text_content or "").strip()
-                if text:
+                # strip markup from assistant turns only; user turns stay raw
+                content = item.plain_text_content if item.role == "assistant" else item.text_content
+                if (content or "").strip():
                     to_summarize.append(item)
             elif isinstance(item, (FunctionCall, FunctionCallOutput)):
                 to_summarize.append(item)
@@ -773,7 +797,8 @@ class ChatContext:
             if isinstance(m, (FunctionCall, FunctionCallOutput)):
                 contents.append(_function_call_item_to_message(m).text_content or "")
             else:
-                contents.append(to_xml(m.role, (m.text_content or "").strip()))
+                content = m.plain_text_content if m.role == "assistant" else m.text_content
+                contents.append(to_xml(m.role, (content or "").strip()))
 
         source_text = "\n".join(contents).strip()
 

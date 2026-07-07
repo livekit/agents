@@ -75,7 +75,9 @@ class MultilingualModel(EOUModelBase):
         ).truncate(max_items=MAX_HISTORY_TURNS)
 
         ctx = get_job_context()
-        request = messages.to_dict(exclude_image=True, exclude_audio=True, exclude_timestamp=True)
+        request = messages.to_dict(
+            exclude_image=True, exclude_audio=True, exclude_timestamp=True, strip_markup=True
+        )
         request["jobId"] = ctx.job.id
         request["workerId"] = ctx.worker_id
         agent_id = os.getenv("LIVEKIT_AGENT_ID")
