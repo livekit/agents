@@ -174,11 +174,13 @@ class _KrispLicenseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         # Adaptive frame-size buffering: krisp processes fixed-size chunks
         # (``frame_duration_ms`` worth of samples), but input frames may arrive
         # at any size. Incoming samples accumulate in ``_in_buf``, are processed
-        # one whole chunk at a time, and the results queue in ``_out_buf`` so
-        # each call can emit exactly as many samples as it received (zero-padded
-        # during the brief warm-up before the first full chunk is ready).
+        # one whole chunk at a time, and the results queue in ``_out_buf``. Each
+        # call emits whatever processed audio is ready (never zero-padded
+        # mid-stream — see ``_process``); the only silence is a one-time warm-up
+        # prefix before the first full chunk exists, tracked by ``_warming_up``.
         self._in_buf: np.ndarray = np.empty(0, dtype=np.int16)
         self._out_buf: np.ndarray = np.empty(0, dtype=np.int16)
+        self._warming_up = True
 
         try:
             self._module = _KrispLicenseSDKManager.acquire(license_key)
@@ -293,17 +295,29 @@ class _KrispLicenseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
 
             self._out_buf = np.concatenate([self._out_buf, *processed])
 
-        # Emit exactly as many samples as we received this call. Before the
-        # first full chunk is ready the deficit is zero-padded; samples in and
-        # out stay balanced over time, so there is no drift.
+        # Emit the processed audio that is ready, keeping any surplus buffered
+        # for the next call. We never insert silence *between* real audio:
+        # zero-padding a momentary deficit (which recurs whenever the input
+        # frame size isn't a multiple of the chunk size) shows up as audible
+        # gaps once frames are concatenated downstream. The frame size is
+        # allowed to float instead — downstream handles variable-length frames.
         n = frame.samples_per_channel
-        if len(self._out_buf) >= n:
-            out = self._out_buf[:n]
-            self._out_buf = self._out_buf[n:].copy()
+        avail = len(self._out_buf)
+        if avail > 0:
+            k = min(n, avail)
+            out = self._out_buf[:k]
+            self._out_buf = self._out_buf[k:].copy()
+            self._warming_up = False
+        elif self._warming_up:
+            # No processed audio yet. Emit a short silence prefix so the stream
+            # starts on time. This only happens before the first full chunk is
+            # ready — i.e. ahead of any real audio — so it opens no interior gap.
+            out = np.zeros(n, dtype=np.int16)
         else:
-            padding = np.zeros(n - len(self._out_buf), dtype=np.int16)
-            out = np.concatenate((padding, self._out_buf))
-            self._out_buf = np.empty(0, dtype=np.int16)
+            # Post-warm-up starvation (input framed much finer than the chunk
+            # size): emit an empty frame rather than injecting silence. The
+            # buffered input catches up on a subsequent call.
+            out = np.empty(0, dtype=np.int16)
 
         return rtc.AudioFrame(
             data=out.tobytes(),
@@ -338,6 +352,7 @@ class _KrispLicenseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
             self._session = None
         self._in_buf = np.empty(0, dtype=np.int16)
         self._out_buf = np.empty(0, dtype=np.int16)
+        self._warming_up = True
         logger.debug("Krisp frame processor session closed")
 
     def __del__(self) -> None:
