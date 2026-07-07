@@ -11,6 +11,7 @@ Provider docs:
 - Inworld: https://docs.inworld.ai/tts/best-practices/prompting-for-tts-2
 - xAI: https://docs.x.ai/developers/model-capabilities/audio/text-to-speech
 - xAI: https://docs.x.ai/developers/model-capabilities/audio/voice
+- Fish Audio: https://docs.fish.audio/developer-guide/core-features/emotions
 """
 
 from __future__ import annotations
@@ -21,7 +22,13 @@ from typing import TYPE_CHECKING, TypedDict
 
 from ..llm.chat_context import Instructions
 from ..types import ATTRIBUTE_TRANSCRIPTION_EXPRESSION
-from .markup_utils import convert_expression_tags, extract_and_strip
+from .markup_utils import (
+    _EXPRESSION_RE,
+    _ORPHAN_CLOSE_RE,
+    _SOUND_RE,
+    convert_expression_tags,
+    extract_and_strip,
+)
 
 
 class ExpressiveTag(TypedDict):
@@ -40,6 +47,80 @@ class ExpressiveTag(TypedDict):
 if TYPE_CHECKING:
     from .. import tokenize
     from ..voice.agent_session import ExpressiveOptions
+
+
+# --- Fish Audio markup conversion ---------------------------------------------
+# Fish-specific variants of the abstract-markup converters, kept here with the rest
+# of the Fish provider-format logic. They reuse the shared expression/sound regexes
+# from markup_utils; the break/emphasis patterns are Fish-only and live here.
+_BREAK_TIME_RE = re.compile(r'<break\s+time="([^"]*)"\s*/>')
+_EMPHASIS_RE = re.compile(r"<emphasis(?:\s[^>]*)?>([^<]*)</emphasis>", re.IGNORECASE)
+
+
+def convert_expression_to_fish(text: str) -> str:
+    """Fish-specific variant of `convert_expression_tags`.
+
+    Same shape handling, but each ``<expression>`` value is intensified with a leading
+    "very" so the emotion lands harder in Fish's audio, e.g.
+    ``<expression value="regretful"/>foo`` → ``[very regretful]foo``. ``<sound>`` values
+    pass through unchanged (``[laughing]``), and an already-"very" value isn't doubled.
+    """
+
+    def _expr(m: re.Match[str]) -> str:
+        value = m.group(1).strip()
+        if value and not value.lower().startswith("very "):
+            value = f"very {value}"
+        content = m.group(2)
+        return f"[{value}]{content}" if content is not None else f"[{value}]"
+
+    def _sound(m: re.Match[str]) -> str:
+        value = m.group(1)
+        content = m.group(2)
+        return f"[{value}]{content}" if content is not None else f"[{value}]"
+
+    text = _EXPRESSION_RE.sub(_expr, text)
+    text = _SOUND_RE.sub(_sound, text)
+    text = _ORPHAN_CLOSE_RE.sub("", text)
+    return text
+
+
+def _break_seconds(value: str) -> float | None:
+    """Parse a break duration like ``500ms``, ``1s``, or ``1.5`` into seconds."""
+    value = value.strip().lower()
+    try:
+        if value.endswith("ms"):
+            return float(value[:-2]) / 1000.0
+        if value.endswith("s"):
+            return float(value[:-1])
+        return float(value)
+    except ValueError:
+        return None
+
+
+def convert_break_to_fish(text: str) -> str:
+    """Replace ``<break time="..."/>`` tags with Fish Audio's native pause markers.
+
+    Fish Audio exposes two pause primitives, ``[break]`` and ``[long-break]``; map
+    any pause of roughly a second or longer to the longer marker.
+    """
+
+    def _sub(m: re.Match[str]) -> str:
+        seconds = _break_seconds(m.group(1))
+        return "[long-break]" if seconds is not None and seconds >= 1.0 else "[break]"
+
+    return _BREAK_TIME_RE.sub(_sub, text)
+
+
+def convert_emphasis_to_fish(text: str) -> str:
+    """Convert ``<emphasis>word</emphasis>`` wrappers to Fish Audio's ``[emphasis] word``.
+
+    Fish exposes ``[emphasis]`` as an inline marker that stresses the word that
+    immediately follows it. The framework wraps the emphasized word in XML so the
+    same syntax stays consistent with the other tags; this rewrites the pair into
+    Fish's prefix-marker form.
+    """
+    return _EMPHASIS_RE.sub(lambda m: f"[emphasis] {m.group(1).strip()}", text)
+
 
 _CARTESIA_TAGS = ["emotion", "speed", "volume", "break", "spell"]
 
@@ -279,6 +360,53 @@ Examples:
   <laugh-speak>You did not just say that</laugh-speak> <sound value="giggle"/> okay, <fast>tell me everything.</fast>"""
 )
 
+_FISHAUDIO_TAGS = ["expression", "sound", "break", "emphasis"]
+
+_FISHAUDIO_LLM_INSTRUCTIONS = """\
+Four XML tags shape delivery:
+
+1. <expression value="EMOTION"/> sets how a sentence sounds. Place it at the START of a \
+sentence, and add another when the feeling shifts.
+
+Possible values for EMOTION:
+- regretful
+- hopeful
+- happy
+- excited
+- curious
+- surprised
+- sad
+- empathetic
+- sarcastic
+
+2. <sound value="SOUND"/> plays a non-verbal sound.
+
+Possible values for SOUND:
+- clear throat
+- laughing
+
+3. <break time="500ms"/> or <break time="2s"/> inserts a silence
+
+4. <emphasis>WORD</emphasis> stresses a single word
+
+PUNCTUATION (applies to every reply you speak aloud):
+- write for the EAR, not the page.
+- Do NOT use em dashes or en dashes (the long horizontal dash punctuation) anywhere in your spoken text.
+- In their place use a comma or a period for a short beat, or a <break time="500ms"/> tag for a real pause.
+- Also avoid semicolons, colons mid-sentence, and parenthetical asides.
+
+Examples:
+- <expression value="curious"/> Um, uh... really? <break time="500ms"/> <expression value="sad"/> Well, I'm really sorry to hear that.
+- <expression value="regretful"/> I really wish I'd, um, called sooner. <expression value="hopeful"/> But I'm here now if, if you want to talk.
+- <expression value="excited"/>That's hilarious! <sound value="laughing"/><expression value="happy"/> You always, like, lighten the mood.
+- <expression value="sad"/> Oh, my goodness <sound value="clear throat"/> <break time="2s"/> that's a real shame.
+- <expression value="empathetic"/><sound value="clear throat"/> That sounds like a <emphasis>really</emphasis> difficult experience.
+- <expression value="surprised"/> What?! No way! I, I'm flabbergasted! <break time="500ms"/> <expression value="sarcastic"/> Fair play I guess.
+- <expression value="sad" /> I can't believe something so horrible could happen. <expression value="sad" /> And on Christmas eve, too.
+
+Each sentence should have an <expression value="EMOTION" /> tag. Either the same (if you want the emotion to be continued), or a new one.
+"""
+
 
 # --- Inworld-specific expressive preset bodies ---
 # These bundle Inworld tag instructions + domain-specific delivery guidelines, keyed
@@ -428,6 +556,115 @@ _INWORLD_CASUAL: ExpressiveOptions = {
         '(e.g. "that is SO good") — the user sees the transcript.\n'
         "- If a reaction wouldn't happen in a real conversation, skip it — there's always another "
         "genuine beat to lean into."
+    ),
+}
+
+
+# --- Fish Audio (s2) expressive preset bodies ---
+# Fish uses discrete emotion words placed at the start of a sentence (one primary
+# emotion per sentence, up to three combined). These bundle the Fish tag reference
+# with domain-specific guidance and are selected for the s2 model via the registry
+# in `voice/presets.py` (see the public `presets.*` markers).
+
+_FISHAUDIO_CUSTOMER_SERVICE: ExpressiveOptions = {
+    "tts_instructions_template": Instructions(
+        "Speak like a warm, caring support agent who genuinely wants to help.\n\n "
+        + _FISHAUDIO_LLM_INSTRUCTIONS
+        + "\n\nGuidelines:\n"
+        "- Lead each sentence with one primary emotion that fits the moment. "
+        "Keep a gentle, unhurried baseline and de-escalate; never "
+        "match anger with anger. Rotate emotions and don't reuse the same one two turns in a row.\n"
+        '- Do not open replies with "oh" (or "ah", "ooh", "well"). Leading with a surprise '
+        "interjection reads as caught off guard and undercuts a calm, capable agent. Take requests "
+        'in stride: begin with the help itself or a warm confirmation like "of course", '
+        '"absolutely", or "happy to help with that", never with an interjection.\n'
+        "- Soften for anything sensitive: when sharing bad news, a problem, a charge, or anything "
+        'that might worry the customer, use a <expression value="empathetic"/> with genuine care, '
+        'and give a brief <break time="2s"/> after hard information so it can land.\n'
+        "- Enunciate what matters: for dates, times, amounts, confirmation numbers, doses, and "
+        "steps, slow down with breaks so the customer can catch and note them, "
+        "and read digits and codes a touch slower than prose.\n"
+        "- Sound human and caring, not corporate: use contractions (it's, you're, I'll, we've) and "
+        'warm acknowledgments ("of course", "I understand", "take your time", "that\'s completely '
+        'understandable"), but keep fillers (um, uh) rare. A support agent should sound composed, '
+        "not hesitant.\n"
+        "- Pace with punctuation and the occasional break between steps. Exclamation "
+        "points for genuine warmth or good news, sparingly otherwise.\n"
+        "- Stay grounded: this is a support interaction, so "
+        "keep it professional, caring, and "
+        "on-task.\n"
+        "- If the customer switches languages, respond in that language immediately and stay there "
+        "until they switch back, but keep the expression and sound tag values in English.\n"
+        "- Remember that your output will be voiced aloud and it should sound like a real, natural, expressive person."
+    ),
+    "audio_recognition_instructions_template": Instructions(
+        "Here is what has been detected about the customer you are talking to:\n\n"
+        "{audio_recognition.llm_instructions}\n\n"
+        "Meet them where they are: empathy if frustrated, gentler and slower if distressed or "
+        "anxious, concise if rushed, more clarity and pauses if confused or struggling to follow."
+    ),
+}
+
+_FISHAUDIO_CASUAL: ExpressiveOptions = {
+    "tts_instructions_template": Instructions(
+        "Speak like a real person mid-conversation with a friend. You are present, reactive, "
+        "opinionated, and unscripted: you think out loud, react in the moment, and talk the way "
+        "people talk, not the way they write. A little natural hesitation is fine, but your warmth "
+        "comes mostly from TONE, contractions, and genuine reactions, not from stammering. Your "
+        "baseline is bright and cheery, so start there and let the moment pull you off it. Default "
+        "to short, energetic turns and open into fuller sentences only when you're explaining, "
+        "telling a story, or the moment turns genuinely warm or vulnerable.\n\n"
+        + _FISHAUDIO_LLM_INSTRUCTIONS
+        + "\n\nGuidelines:\n"
+        "- Lead each sentence with one primary emotion that "
+        "matches the moment and mirrors AND amplifies the user's energy. "
+        "Show your full expressive range by quickly changing emotions. Do NOT keep falling back on "
+        '"happy" and "curious"; those can get boring.\n'
+        "- DISFLUENCY QUOTA (hard rule, applies to EVERY reply): each reply MUST contain a MINIMUM "
+        "of ONE and a MAXIMUM of THREE disfluencies. Never zero, never more than three. "
+        "Disfluencies are: fillers (um, uh, hmm), hedges (kind of, I mean, I guess), openers (oh, "
+        'well, so), repeated-word restarts ("I, I think"), and mid-word stutters ("y-yeah", '
+        '"b-because"). Of your one to three, AT MOST ONE may be a stutter or a restart, and most '
+        "replies should have none; never two stutters in one reply and never stutter the same word "
+        "twice. Your human feel comes mostly from tone, contractions, and real reactions, so keep "
+        "these light and varied, never mechanical and never the same tic twice in a row. In a "
+        "genuinely sad or heavy moment still include one, but make it a gentle hesitation (a soft "
+        "um, a pause) rather than a laugh or a stutter.\n"
+        "- LAUGH and clear your throat OFTEN. Non-verbal sounds are central to casual delivery, "
+        'not a garnish. Reach for <sound value="laughing"/> at anything even mildly funny, fun, '
+        "awkward, or warm, and laugh mid-sentence or while you agree, not only at "
+        'jokes; use <sound value="clear throat"/> when you shift gears, stall, or gather a '
+        "thought. Almost every turn should carry at least one sound, and livelier turns two.\n"
+        "- Texture to match (each reply below lands one to three disfluencies, never more than one "
+        "stutter, and the sad one uses a gentle hesitation instead of a laugh or stutter, and note "
+        "the complete absence of em dashes):\n"
+        '  <expression value="happy"/> Oh, ha, <sound value="laughing"/> yeah, I totally get it. '
+        '<expression value="excited"/> It\'s kind of like, you just wanna loosen up a little, '
+        "right?\n"
+        '  <expression value="curious"/> Wait, so, hold on. <sound value="clear throat"/> You '
+        'mean the, uh, pacing felt a little off? <expression value="happy"/> Heh, okay, fair.\n'
+        '  <expression value="excited"/> Dude, <sound value="laughing"/> that\'s actually '
+        "hilarious. I, I did not see that one coming.\n"
+        '  <expression value="empathetic"/> Oh no. <break time="500ms"/> I\'m, um, really sorry, '
+        "that sounds genuinely hard.\n"
+        '- Always use contractions to keep the tone casual, so say "I\'m" not "I am", "we\'ll" not '
+        '"we will", "it\'s" not "it is", "you\'re" not "you are", "I\'d" not "I would", '
+        '"can\'t" not "cannot". Full, uncontracted forms read stiff and formal; reserve them only '
+        "for rare deliberate emphasis.\n"
+        '- Insert <break time="500ms"/> or <break time="2s"/> between emotional shifts and '
+        "at moments that want a real beat of silence. The tag is an actual pause in the audio, "
+        "which punctuation and ellipses can't produce.\n"
+        "- Use <emphasis>word</emphasis> to punch up a sentence (e.g. That is <emphasis>so</emphasis> unfair).\n"
+        "- If the user switches languages, respond in that language immediately and stay there until "
+        "they switch back, but keep the expression and sound tag values in English.\n"
+        "- If the user switches tones to a sad topic, immediately mirror them and do not laugh, "
+        'but instead be sad and use breaks and <sound value="clear throat"/>.'
+    ),
+    "audio_recognition_instructions_template": Instructions(
+        "Here is what has been detected about the person you are talking to:\n\n"
+        "{audio_recognition.llm_instructions}\n\n"
+        "Match their energy and conversational style, and let it move you, so get excited with them, "
+        "soften when they do, tease when they tease, react honestly to how they sound."
     ),
 }
 
@@ -649,6 +886,8 @@ def llm_instructions(provider: str) -> str | None:
         return _INWORLD_LLM_INSTRUCTIONS
     elif provider == "xai":
         return _XAI_LLM_INSTRUCTIONS
+    elif provider == "fishaudio":
+        return _FISHAUDIO_LLM_INSTRUCTIONS
     return None
 
 
@@ -659,6 +898,9 @@ _PROVIDER_MARKUP: dict[str, tuple[list[str], bool]] = {
     # xAI's LLM writes every tag as XML (inline sounds/pauses converted to [..] only for
     # the TTS in convert_markup), so the transcript never contains brackets to strip
     "xai": (_XAI_TAGS, False),
+    # Fish's LLM writes XML tags; convert_markup rewrites them to Fish's native [..]
+    # markers for the TTS, so strip both XML and any brackets from the transcript
+    "fishaudio": (_FISHAUDIO_TAGS, True),
 }
 
 
@@ -782,6 +1024,7 @@ class TranscriptMarkupStripper:
 _SELF_CLOSING_TAGS: dict[str, list[str]] = {
     "cartesia": ["emotion", "speed", "volume", "break"],
     "inworld": ["expression", "sound", "break"],
+    "fishaudio": ["expression", "sound", "break"],
 }
 
 
@@ -807,5 +1050,12 @@ def convert_markup(provider: str, text: str) -> str:
     if provider == "xai":
         # xAI has no <break>; map it to its native [pause]/[long-pause]
         text = _XAI_BREAK_RE.sub(_xai_break_to_bracket, text)
+    if provider == "fishaudio":
+        # Like convert_expression_tags but intensifies <expression> values with "very".
+        text = convert_expression_to_fish(text)
+        # Fish Audio has native pause markers; map <break> to [break]/[long-break].
+        text = convert_break_to_fish(text)
+        # Fish's per-word emphasis marker: <emphasis>word</emphasis> → [emphasis] word.
+        text = convert_emphasis_to_fish(text)
     # <break> is otherwise passed through unchanged: Inworld accepts it as native SSML.
     return text

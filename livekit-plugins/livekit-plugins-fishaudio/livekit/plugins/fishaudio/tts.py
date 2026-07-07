@@ -158,6 +158,13 @@ class TTS(tts.TTS):
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
+    class Markup(tts.TTS.Markup):
+        # markup delegation lives in the base class, keyed on _provider_key()
+        def _provider_key(self) -> str:
+            # only the S2 model understands Fish Audio's emotion/voice tags; other
+            # models get no markup so the tags aren't injected, converted, or stripped
+            return "fishaudio" if "s2" in self._tts.model else ""
+
     @property
     def model(self) -> TTSModels | str:
         return self._opts.model
@@ -273,7 +280,10 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        payload = _build_tts_request(self._opts, text=self._input_text)
+        # convert framework-standard markup (e.g. <expression value="happy"/>) into
+        # Fish Audio's native bracket syntax ([happy]); a no-op when expressive is off
+        text = self._tts.markup.convert(self._tts.markup.normalize(self._input_text))
+        payload = _build_tts_request(self._opts, text=text)
 
         try:
             async with self._tts._ensure_session().post(
@@ -394,7 +404,9 @@ class SynthesizeStream(tts.SynthesizeStream):
             await ws.send_bytes(msgpack.packb(start_msg, use_bin_type=True))
 
             async for ev in sent_stream:
-                sentence = ev.token
+                # convert framework markup (e.g. <expression value="happy"/>) to Fish
+                # Audio's native bracket syntax ([happy]); a no-op when expressive is off
+                sentence = self._tts.markup.convert(self._tts.markup.normalize(ev.token))
                 if not sentence:
                     continue
                 await ws.send_bytes(
