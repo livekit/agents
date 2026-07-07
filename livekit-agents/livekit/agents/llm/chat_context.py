@@ -296,26 +296,30 @@ class ChatMessage(BaseModel):
 
     @property
     def text_content(self) -> str | None:
-        """The message text without expressive markup tags. Text items are joined by a newline.
-        Use :attr:`raw_text_content` for the original tagged text.
         """
-        raw = self.raw_text_content
+        Returns a string of all text content in the message.
+
+        Multiple text content items will be joined by a newline.
+        """
+        text_parts = [c for c in self.content if isinstance(c, str)]
+        if not text_parts:
+            return None
+        return "\n".join(text_parts)
+
+    @property
+    def stripped_text_content(self) -> str | None:
+        """
+        Returns a string of all text content without any expressive tags in the message.
+
+        Multiple text content items will be joined by a newline.
+        """
+        raw = self.text_content
         if raw is None:
             return None
 
         from ..tts._provider_format import strip_all_markup
 
         return strip_all_markup(raw)
-
-    @property
-    def raw_text_content(self) -> str | None:
-        """The message text with expressive TTS markup tags. Text items are joined by a newline.
-        Use :attr:`text_content` for the untagged text.
-        """
-        text_parts = [c for c in self.content if isinstance(c, str)]
-        if not text_parts:
-            return None
-        return "\n".join(text_parts)
 
 
 ChatContent: TypeAlias = ImageContent | AudioContent | str
@@ -617,7 +621,9 @@ class ChatContext:
                     item.content = [c for c in item.content if not isinstance(c, ImageContent)]
                 if exclude_audio:
                     item.content = [c for c in item.content if not isinstance(c, AudioContent)]
-                if strip_markup:
+                # only assistant turns carry expressive markup; stripping other roles would drop
+                # whole bracketed spans of real text (e.g. a user's "route [66]" -> "route ")
+                if strip_markup and item.role == "assistant":
                     from ..tts._provider_format import strip_all_markup
 
                     item.content = [
@@ -776,8 +782,11 @@ class ChatContext:
                 if item.extra.get("is_summary") is True:  # avoid making summary of summaries
                     continue
 
-                text = (item.text_content or "").strip()
-                if text:
+                # strip markup from assistant turns only; user turns stay raw
+                content = (
+                    item.stripped_text_content if item.role == "assistant" else item.text_content
+                )
+                if (content or "").strip():
                     to_summarize.append(item)
             elif isinstance(item, (FunctionCall, FunctionCallOutput)):
                 to_summarize.append(item)
@@ -791,7 +800,8 @@ class ChatContext:
             if isinstance(m, (FunctionCall, FunctionCallOutput)):
                 contents.append(_function_call_item_to_message(m).text_content or "")
             else:
-                contents.append(to_xml(m.role, (m.text_content or "").strip()))
+                content = m.stripped_text_content if m.role == "assistant" else m.text_content
+                contents.append(to_xml(m.role, (content or "").strip()))
 
         source_text = "\n".join(contents).strip()
 

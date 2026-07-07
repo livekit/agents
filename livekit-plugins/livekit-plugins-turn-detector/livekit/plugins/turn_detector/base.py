@@ -268,7 +268,9 @@ class EOUModelBase(ABC):
             if msg.role not in ("user", "assistant"):
                 continue
 
-            text_content = msg.text_content
+            text_content = (
+                msg.stripped_text_content if msg.role == "assistant" else msg.text_content
+            )
             if text_content:
                 messages.append(
                     {
