@@ -110,6 +110,11 @@ class TTS(tts.TTS):
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
+    class Markup(tts.TTS.Markup):
+        # markup delegation lives in the base class, keyed on _provider_key()
+        def _provider_key(self) -> str:
+            return "xai"
+
     @property
     def model(self) -> str:
         return "unknown"

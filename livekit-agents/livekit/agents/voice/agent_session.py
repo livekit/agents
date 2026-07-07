@@ -84,6 +84,7 @@ if TYPE_CHECKING:
     from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput
     from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
+    from .presets import Preset
     from .transcription.text_transforms import TextTransforms
 
 
@@ -140,6 +141,36 @@ class SessionConnectOptions:
     """Maximum number of consecutive unrecoverable errors from llm or tts."""
 
 
+class ExpressiveOptions(TypedDict, total=False):
+    """Configuration for the expressive pipeline.
+
+    Controls how TTS markup instructions are injected into the LLM when expressive is
+    enabled. All keys are optional; common shapes:
+
+    - ``{"preset": Preset.CASUAL}`` — a domain preset, resolved to the active
+      TTS provider's tuned tags (see ``voice.presets``). Prefer the ``presets.*`` constants.
+    - ``{"preset": ..., "tts_instructions_append": "..."}`` — a preset plus your own
+      rules appended after it resolves.
+    - ``{"tts_instructions_template": "..."}`` — a fully custom prompt.
+
+    Any explicit template overrides the corresponding part of the resolved preset; unset
+    parts fall back to the resolved preset (or the provider-agnostic default).
+    """
+
+    preset: Preset
+    tts_instructions_template: Instructions | str
+    tts_instructions_append: str
+
+
+DEFAULT_EXPRESSIVE_OPTIONS: ExpressiveOptions = ExpressiveOptions(
+    tts_instructions_template=Instructions(
+        "You can control how you speak using the following formatting tags. "
+        "Use them when appropriate to make your speech more expressive and natural:\n\n"
+        "{tts.markup.llm_instructions}"
+    ),
+)
+
+
 @dataclass
 class AgentSessionOptions:
     turn_handling: TurnHandlingOptions
@@ -154,6 +185,7 @@ class AgentSessionOptions:
     ivr_detection: bool
     aec_warmup_duration: float | None
     session_close_transcript_timeout: float
+    expressive: bool | ExpressiveOptions
 
     @property
     def endpointing(self) -> EndpointingOptions:
@@ -242,6 +274,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
         min_consecutive_speech_delay: float = 0.0,
+        # Expressive
+        expressive: bool | ExpressiveOptions = False,
         # Misc settings
         userdata: NotGivenOr[Userdata_T] = NOT_GIVEN,
         video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
@@ -403,6 +437,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             ),
             aec_warmup_duration=aec_warmup_duration,
             session_close_transcript_timeout=session_close_transcript_timeout,
+            expressive=expressive,
         )
         self._conn_options = conn_options or SessionConnectOptions()
         self._started = False
@@ -1034,7 +1069,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     and (audio_recognition := activity._audio_recognition) is not None
                 ):
                     # wait for the user transcript to be committed
-                    audio_recognition.commit_user_turn(
+                    audio_recognition._commit_user_turn(
                         audio_detached=True,
                         transcript_timeout=self._opts.session_close_transcript_timeout,
                     )

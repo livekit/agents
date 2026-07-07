@@ -797,7 +797,7 @@ async def test_backchannel_boundary_suppresses_start_boundary_backchannel() -> N
     )
 
     try:
-        recognition.on_start_of_agent_speech(started_at=time.time())
+        recognition._on_start_of_agent_speech(started_at=time.time())
         # backchannels during the cooldown are dropped (they are a no-op anyway,
         # but this guards against the gate firing on `on_interruption`)
         await recognition._on_overlap_speech_event(_backchannel_event())
@@ -838,7 +838,7 @@ async def test_stt_eos_resets_active_vad_stream_without_restarting_vad() -> None
     recognition._vad_stream = resettable_stream
 
     try:
-        with patch.object(recognition, "update_vad") as update_vad:
+        with patch.object(recognition, "_update_vad") as update_vad:
             await recognition._on_stt_event(SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
 
         resettable_stream.flush.assert_called_once_with()
@@ -858,7 +858,7 @@ async def test_stt_eos_falls_back_to_update_vad_when_no_active_stream() -> None:
     recognition._vad_stream = None
 
     try:
-        with patch.object(recognition, "update_vad") as update_vad:
+        with patch.object(recognition, "_update_vad") as update_vad:
             await recognition._on_stt_event(SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
 
         update_vad.assert_called_once_with(recognition._vad)
@@ -893,9 +893,9 @@ async def test_backchannel_boundary_releases_end_boundary_transcript() -> None:
     try:
         # the agent speaks for a couple of seconds so the held transcript still lands
         # after the agent-speech start (the lower bound of the ignore window)
-        recognition.on_start_of_agent_speech(started_at=time.time() - 2.0)
+        recognition._on_start_of_agent_speech(started_at=time.time() - 2.0)
         speech_ended_at = time.time()
-        recognition.on_end_of_agent_speech(ignore_user_transcript_until=speech_ended_at)
+        recognition._on_end_of_agent_speech(ignore_user_transcript_until=speech_ended_at)
 
         assert not recognition._should_hold_stt_event(
             _final_transcript_event(
@@ -974,7 +974,7 @@ async def test_vad_fallback_uses_next_vad_inference_event(
     try:
         activity._fallback_to_vad_interruption(error)
 
-        audio_recognition.update_interruption_detection.assert_called_once_with(None)
+        audio_recognition._update_interruption_detection.assert_called_once_with(None)
         current_speech.interrupt.assert_not_called()
         assert activity._interruption_detection_enabled is False
         assert activity._interruption_by_audio_activity_enabled is True

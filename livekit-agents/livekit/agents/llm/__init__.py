@@ -42,6 +42,7 @@ from .realtime_fallback_adapter import (
     RealtimeAvailabilityChangedEvent,
     RealtimeModelFallbackAdapter,
 )
+from .response_field import Response, ResponseField
 from .tool_context import (
     FunctionTool,
     ProviderTool,
@@ -116,6 +117,8 @@ __all__ = [
     "RealtimeSessionRestoredEvent",
     "LLMError",
     "RemoteItemAddedEvent",
+    "Response",
+    "ResponseField",
 ]
 
 # Cleanup docs of unexported modules

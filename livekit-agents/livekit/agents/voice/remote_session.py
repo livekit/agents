@@ -24,6 +24,7 @@ from ..llm import (
     RawFunctionTool,
     Toolset,
 )
+from ..llm.chat_context import Instructions
 from ..log import logger
 from ..metrics import (
     AgentSessionUsage,
@@ -344,7 +345,7 @@ def _chat_item_to_proto(item: llm.ChatItem) -> agent_pb.ChatContext.ChatItem:
         return agent_pb.ChatContext.ChatItem(
             agent_config_update=agent_pb.AgentConfigUpdate(
                 id=item.id,
-                instructions=item.instructions,
+                instructions=str(item.instructions) if item.instructions is not None else None,
                 tools_added=item.tools_added or [],
                 tools_removed=item.tools_removed or [],
             )
@@ -707,12 +708,19 @@ class SessionHost:
         elif req.HasField("get_agent_info"):
             agent = self._session.current_agent
             items = [_chat_item_to_proto(item) for item in agent.chat_ctx.items]
+            # collapse modality variants for the report; audio-first matches the
+            # update_instructions default for voice sessions
+            agent_instructions = (
+                agent.instructions.render(modality="audio")
+                if isinstance(agent.instructions, Instructions)
+                else agent.instructions
+            )
             resp = agent_pb.AgentSessionMessage(
                 response=agent_pb.SessionResponse(
                     request_id=req.request_id,
                     get_agent_info=agent_pb.SessionResponse.GetAgentInfoResponse(
                         id=agent.id,
-                        instructions=agent.instructions,
+                        instructions=agent_instructions,
                         tools=_tool_names(agent.tools),
                         chat_ctx=items,
                     ),
