@@ -2790,6 +2790,14 @@ class AgentActivity(RecognitionHooks):
     ) -> None:
         from .agent import ModelSettings
 
+        # commit the tool messages that triggered this reply before any interruption
+        # gate: the tools already executed, and discarding their results on
+        # interruption makes the next LLM inference re-issue the same calls (see #3702).
+        # ChatContext.insert orders by `created_at`, so ordering is unchanged.
+        if _previous_tools_messages:
+            self._agent._chat_ctx.insert(_previous_tools_messages)
+            self._session._tool_items_added(_previous_tools_messages)
+
         current_span = trace.get_current_span(context=speech_handle._agent_turn_context)
         current_span.set_attribute(trace_types.ATTR_SPEECH_ID, speech_handle.id)
         if instructions is not None:
@@ -3163,11 +3171,6 @@ class AgentActivity(RecognitionHooks):
 
         current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, speech_handle.interrupted)
 
-        # add the tools messages that triggers this reply to the chat context
-        if _previous_tools_messages:
-            self._agent._chat_ctx.insert(_previous_tools_messages)
-            self._session._tool_items_added(_previous_tools_messages)
-
         forwarded_text = "".join(out.forwarded_text for out in segment_outputs)
         if speech_handle.interrupted:
             # forward_generation already cleared the buffer and waited for playout
@@ -3220,6 +3223,24 @@ class AgentActivity(RecognitionHooks):
 
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(exe_task)
+
+            # cancel_and_wait lets in-flight tool tasks run to completion, so
+            # tool_output.output may hold completed results. Commit them before
+            # returning: the tool reply turn is never scheduled here, and dropping
+            # them makes the next LLM inference re-execute the same tools (see #3702).
+            # Agent handoffs are excluded: the handoff is not applied on an
+            # interrupted speech, and recording its call as completed would prevent
+            # the LLM from retrying it.
+            interrupted_calls: list[llm.FunctionCall] = []
+            interrupted_fnc_outputs: list[llm.FunctionCallOutput] = []
+            for sanitized_out in tool_output.output:
+                if sanitized_out.fnc_call_out is not None and sanitized_out.agent_task is None:
+                    interrupted_calls.append(sanitized_out.fnc_call)
+                    interrupted_fnc_outputs.append(sanitized_out.fnc_call_out)
+
+            if interrupted_tool_messages := interrupted_calls + interrupted_fnc_outputs:
+                self._agent._chat_ctx.insert(interrupted_tool_messages)
+                self._session._tool_items_added(interrupted_tool_messages)
             return
 
         # wait for the tool execution to complete
@@ -3822,6 +3843,34 @@ class AgentActivity(RecognitionHooks):
 
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(exe_task)
+
+            # cancel_and_wait lets in-flight tool tasks run to completion, so
+            # tool_output.output may hold completed results. Commit them before
+            # returning so the next inference doesn't re-execute the same tools
+            # (see #3702). The fnc_call itself is already in the chat context,
+            # added by _tool_execution_started_cb. Agent handoffs are excluded:
+            # the handoff is not applied on an interrupted speech, and recording
+            # its call as completed would prevent the LLM from retrying it.
+            interrupted_fnc_outputs: list[llm.FunctionCallOutput] = []
+            for sanitized_out in tool_output.output:
+                if sanitized_out.fnc_call_out is not None and sanitized_out.agent_task is None:
+                    interrupted_fnc_outputs.append(sanitized_out.fnc_call_out)
+                    self._agent._chat_ctx._upsert_item(sanitized_out.fnc_call_out)
+                    self._session._tool_items_added([sanitized_out.fnc_call_out])
+
+            if len(interrupted_fnc_outputs) > 0:
+                # the realtime session generates from its server-side conversation
+                # state: push the outputs so it doesn't see a dangling function
+                # call and re-issue it
+                chat_ctx = self._rt_session.chat_ctx.copy()
+                chat_ctx.items.extend(interrupted_fnc_outputs)
+                try:
+                    await self._rt_session.update_chat_ctx(chat_ctx)
+                except llm.RealtimeError as e:
+                    logger.warning(
+                        "failed to update chat context with the interrupted function calls results",
+                        extra={"error": str(e)},
+                    )
             return
 
         # wait for the tool execution to complete
