@@ -93,7 +93,10 @@ class TestXaiDialect:
         instr = pf.llm_instructions("xai")
         # non-None is what the expressive gate keys on
         assert instr is not None
-        assert '<sound value="laugh"/>' in instr and "<whisper>" in instr
+        # this branch instructs the unified expr dialect; convert_markup lowers it to
+        # xAI's native syntax (see tests/test_expr_markup.py)
+        assert '<expr type="sound" label="laugh"/>' in instr
+        assert '<expr type="prosody" label="' in instr
 
     def test_split_markup_strips_inline_keeps_wrapping_inner(self) -> None:
         from livekit.agents.tts import _provider_format as pf
@@ -122,10 +125,10 @@ class TestXaiDialect:
     def test_every_documented_tag_is_strippable(self) -> None:
         from livekit.agents.tts import _provider_format as pf
 
-        # every prosody/style tag the instructions offer must be in _XAI_TAGS,
-        # or it would leak into the user-visible transcript
+        # every prosody label the expr instructions offer must be in _XAI_TAGS,
+        # or a hallucinated native form would leak into the user-visible transcript
         for tag in pf._XAI_WRAPPING:
-            assert f"<{tag}>" in pf._XAI_LLM_INSTRUCTIONS, f"{tag} not documented"
+            assert tag in pf._XAI_EXPR_LLM_INSTRUCTIONS, f"{tag} not documented"
             assert tag in pf._XAI_TAGS
             clean, _ = pf.split_markup("xai", f"<{tag}>hello there</{tag}>")
             assert clean.strip() == "hello there", f"{tag} not stripped: {clean!r}"
@@ -143,11 +146,11 @@ class TestXaiDialect:
     def test_documented_inline_tags_present(self) -> None:
         from livekit.agents.tts import _provider_format as pf
 
-        # nonverbals from xAI's docs, incl. the ones the user called out; documented as
-        # <sound value="NAME"/> (converted to [NAME] for the TTS in convert_markup)
+        # nonverbals from xAI's docs, incl. the ones the user called out; documented in
+        # the expr sound-label vocabulary (lowered to [NAME] for the TTS in convert_markup)
         for name in ("tsk", "lip-smack", "tongue-click", "chuckle", "giggle", "hum-tune"):
             assert name in pf._XAI_INLINE
-            assert f'<sound value="{name}"/>' in pf._XAI_LLM_INSTRUCTIONS
+            assert name in pf._XAI_EXPR_LLM_INSTRUCTIONS
 
     def test_pitch_volume_intensity_speed_present(self) -> None:
         from livekit.agents.tts import _provider_format as pf
@@ -197,8 +200,8 @@ class TestXaiDialect:
                 preset, provider_key="xai", default=DEFAULT_EXPRESSIVE_OPTIONS
             )
             body = opts["tts_instructions_template"].common
-            # tuned body, not the agnostic default (which has no xai tag reference)
-            assert "<whisper>" in body
+            # tuned body, not the agnostic default (which has no xai marker reference)
+            assert '<expr type="prosody" label="whisper">' in body
 
 
 # ===========================================================================
