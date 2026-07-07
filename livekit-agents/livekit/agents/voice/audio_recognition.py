@@ -1453,6 +1453,7 @@ class AudioRecognition:
                                     exclude_image=True,
                                     exclude_timestamp=True,
                                     exclude_metrics=True,
+                                    strip_markup=True,
                                 )
                             ),
                             trace_types.ATTR_EOU_DELAY: endpointing_delay,

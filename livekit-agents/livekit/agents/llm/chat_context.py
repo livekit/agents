@@ -296,10 +296,21 @@ class ChatMessage(BaseModel):
 
     @property
     def text_content(self) -> str | None:
+        """The message text without any expressive tags. Text items are joined by a newline.
+        Use :attr:`raw_text_content` for the original tagged text.
         """
-        Returns a string of all text content in the message.
+        raw = self.raw_text_content
+        if raw is None:
+            return None
 
-        Multiple text content items will be joined by a newline.
+        from ..tts._provider_format import split_all_markup
+
+        return split_all_markup(raw)[0]
+
+    @property
+    def raw_text_content(self) -> str | None:
+        """The message text with expressive TTS markup tags. Text items are joined by a newline.
+        Use :attr:`text_content` for the untagged text.
         """
         text_parts = [c for c in self.content if isinstance(c, str)]
         if not text_parts:
@@ -587,6 +598,7 @@ class ChatContext:
         exclude_function_call: bool = False,
         exclude_metrics: bool = False,
         exclude_config_update: bool = False,
+        strip_markup: bool = False,
     ) -> dict[str, Any]:
         items: list[ChatItem] = []
         for item in self.items:
@@ -605,6 +617,12 @@ class ChatContext:
                     item.content = [c for c in item.content if not isinstance(c, ImageContent)]
                 if exclude_audio:
                     item.content = [c for c in item.content if not isinstance(c, AudioContent)]
+                if strip_markup:
+                    from ..tts._provider_format import split_all_markup
+
+                    item.content = [
+                        split_all_markup(c)[0] if isinstance(c, str) else c for c in item.content
+                    ]
 
             items.append(item)
 
