@@ -248,7 +248,10 @@ class LemonSliceAPI:
                     async with session.post(
                         url or self._api_url,
                         headers=headers,
-                        timeout=aiohttp.ClientTimeout(sock_connect=self._conn_options.timeout),
+                        timeout=aiohttp.ClientTimeout(
+                            total=30.0,
+                            sock_connect=self._conn_options.timeout,
+                        ),
                         **request_kwargs,
                     ) as response:
                         if not response.ok:
