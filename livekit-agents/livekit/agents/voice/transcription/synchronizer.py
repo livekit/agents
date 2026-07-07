@@ -13,7 +13,7 @@ from livekit import rtc
 
 from ... import tokenize, utils
 from ...log import logger
-from ...tts._provider_format import TranscriptMarkupStripper, split_all_markup
+from ...tts._provider_format import TranscriptMarkupStripper, strip_all_markup
 from ...types import NOT_GIVEN, NotGivenOr, TimedString
 from ...utils import is_given
 from .. import io
