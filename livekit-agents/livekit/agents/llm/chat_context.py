@@ -621,8 +621,7 @@ class ChatContext:
                     item.content = [c for c in item.content if not isinstance(c, ImageContent)]
                 if exclude_audio:
                     item.content = [c for c in item.content if not isinstance(c, AudioContent)]
-                # only assistant turns carry expressive markup; stripping other roles would drop
-                # whole bracketed spans of real text (e.g. a user's "route [66]" -> "route ")
+                # only strip expressive tags in assistant messages
                 if strip_markup and item.role == "assistant":
                     from ..tts._provider_format import strip_all_markup
 
