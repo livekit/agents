@@ -239,6 +239,24 @@ class Agent:
 
         await self._activity.update_instructions(instructions)
 
+    def update_expressive(
+        self, expressive: bool | ExpressiveOptions | NotGivenOr[bool | ExpressiveOptions]
+    ) -> None:
+        """Change the agent's expressive setting at runtime.
+
+        The new value is picked up on the next reply: ``AgentActivity`` re-resolves the
+        active expressive options (against the current TTS provider) for every generation,
+        so switching a preset — e.g. ``update_expressive(presets.CASUAL)`` — takes effect
+        from the agent's next turn. Pass ``False`` to disable expressive, ``True`` for the
+        provider default, or ``NOT_GIVEN`` to fall back to the session's setting.
+
+        Args:
+            expressive: ``True``/``False`` to toggle, an :class:`ExpressiveOptions`
+                (e.g. a ``presets.*`` constant) to select a preset, or ``NOT_GIVEN`` to
+                inherit the :class:`AgentSession` setting.
+        """
+        self._expressive = expressive
+
     async def update_tools(self, tools: list[llm.Tool | llm.Toolset]) -> None:
         """
         Updates the agent's available function tools.
