@@ -739,7 +739,7 @@ class JobContext:
         self._track_pending_task(task, name="transfer_sip_participant")
         return task
 
-    def shutdown(self, reason: str = "") -> None:
+    def shutdown(self, reason: str = "user requested") -> None:
         self._on_shutdown(reason)
 
     def add_participant_entrypoint(

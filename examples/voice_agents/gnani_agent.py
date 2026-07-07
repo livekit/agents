@@ -15,16 +15,16 @@ from livekit.agents import (
     AgentServer,
     AgentSession,
     JobContext,
-    JobProcess,
     MetricsCollectedEvent,
     RunContext,
     TurnHandlingOptions,
     cli,
+    inference,
     metrics,
     room_io,
 )
 from livekit.agents.llm import function_tool
-from livekit.plugins import gnani, groq, silero
+from livekit.plugins import gnani, groq
 
 logger = logging.getLogger("gnani-agent")
 
@@ -68,13 +68,6 @@ class GnaniTestAgent(Agent):
 server = AgentServer()
 
 
-def prewarm(proc: JobProcess) -> None:
-    proc.userdata["vad"] = silero.VAD.load()
-
-
-server.setup_fnc = prewarm
-
-
 @server.rtc_session()
 async def entrypoint(ctx: JobContext) -> None:
     ctx.log_context_fields = {
@@ -85,7 +78,7 @@ async def entrypoint(ctx: JobContext) -> None:
         stt=gnani.STT(language="en-IN"),
         llm=groq.LLM(model="llama-3.1-8b-instant"),
         tts=gnani.TTS(voice="Karan"),
-        vad=ctx.proc.userdata["vad"],
+        vad=inference.VAD(),
         turn_handling=TurnHandlingOptions(
             interruption={
                 "resume_false_interruption": True,

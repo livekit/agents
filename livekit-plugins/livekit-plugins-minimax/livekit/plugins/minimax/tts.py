@@ -212,7 +212,7 @@ class TTS(tts.TTS):
             timbre (int | None, optional): Corresponds to the "Nasal/Crisp" slider on the official page. Range: [-100, 100].
             sample_rate (TTSSampleRate, optional): The audio sample rate in Hz. Defaults to 24000.
             bitrate (TTSBitRate, optional): The audio bitrate in kbps. Defaults to 128000.
-            tokenizer (NotGivenOr[tokenize.SentenceTokenizer], optional): The sentence tokenizer to use. Defaults to `livekit.agents.tokenize.basic.SentenceTokenizer`.
+            tokenizer (NotGivenOr[tokenize.SentenceTokenizer], optional): The sentence tokenizer to use. Defaults to `livekit.agents.tokenize.blingfire.SentenceTokenizer`.
             text_pacing (tts.SentenceStreamPacer | bool, optional): Enable text pacing for sentence-level timing control. Defaults to False.
             api_key (str | None, optional): The Minimax API key. Defaults to None.
             base_url (NotGivenOr[str], optional): The base URL for the Minimax API. Defaults to NOT_GIVEN.
@@ -252,7 +252,7 @@ class TTS(tts.TTS):
             )
 
         self._sentence_tokenizer = (
-            tokenizer if utils.is_given(tokenizer) else tokenize.basic.SentenceTokenizer()
+            tokenizer if utils.is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
         )
 
         self._stream_pacer: tts.SentenceStreamPacer | None = None

@@ -189,6 +189,23 @@ class TestToolContext:
         ctx2 = ctx1.copy()
         assert ctx1 == ctx2
 
+    def test_openai_responses_raw_schema_does_not_mutate_tool_schema(self):
+        ctx = ToolContext([raw_tool_1])
+        raw_schema = raw_tool_1.info.raw_schema.copy()
+
+        responses_tools = ctx.parse_function_tools("openai.responses")
+
+        assert responses_tools[0]["type"] == "function"
+        assert raw_tool_1.info.raw_schema == raw_schema
+        assert "type" not in raw_tool_1.info.raw_schema
+
+        chat_tools = ctx.parse_function_tools("openai")
+        assert chat_tools[0] == {
+            "type": "function",
+            "function": raw_tool_1.info.raw_schema,
+        }
+        assert "type" not in chat_tools[0]["function"]
+
     def test_update_tools_changes_equality(self):
         ctx1 = ToolContext([mock_tool_1])
         ctx2 = ToolContext([mock_tool_1])
@@ -1505,3 +1522,372 @@ class TestAgentSessionWaitForIdle:
         session = AgentSession()
         with pytest.raises(RuntimeError, match="no active AgentActivity"):
             _asyncio.get_event_loop().run_until_complete(session.wait_for_idle())
+
+
+# --- tool status events ---------------------------------------------------------
+
+
+def _emitted_items(session: Any) -> list[Any]:
+    """Updates carried by tool_execution_updated events emitted on a mocked session."""
+    from livekit.agents.voice.events import ToolExecutionUpdatedEvent
+
+    items = []
+    for call in session.emit.call_args_list:
+        name, ev = call.args
+        if name == "tool_execution_updated":
+            assert isinstance(ev, ToolExecutionUpdatedEvent)
+            items.append(ev.update)
+    return items
+
+
+async def _drain_executor(executor: Any) -> None:
+    """Yield until in-flight tool tasks settle, so their terminal events are emitted."""
+    import asyncio as _asyncio
+
+    while executor.has_running_tasks:
+        await _asyncio.sleep(0)
+
+
+def _make_fake_speech():
+    """A SpeechHandle stand-in that lets tests fire the done callbacks manually."""
+    from unittest.mock import MagicMock
+
+    from livekit.agents.voice import SpeechHandle
+
+    speech = MagicMock(spec=SpeechHandle)
+    speech.id = "speech_1"
+    speech.interrupted = False
+    speech.chat_items = ["said something"]
+    callbacks: list[Any] = []
+    speech.add_done_callback.side_effect = callbacks.append
+    speech.fire_done = lambda: [cb(speech) for cb in list(callbacks)]
+    return speech
+
+
+def _make_reply_session(speech: Any) -> Any:
+    """A session mock with just enough surface for _enqueue_reply/_deliver_reply."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from livekit.agents.llm import ChatContext
+
+    session = MagicMock()
+    agent = MagicMock()
+    agent.chat_ctx = ChatContext.empty()
+    agent.update_chat_ctx = AsyncMock()
+    session.current_agent = agent
+    session._global_run_state = None
+    activity = MagicMock()
+    activity.agent = agent
+    session.wait_for_idle = AsyncMock(return_value=activity)
+    session.generate_reply = MagicMock(return_value=speech)
+    return session
+
+
+def _make_run_context_with_session(session: Any, call_id: str, name: str):
+    from unittest.mock import MagicMock
+
+    from livekit.agents.llm import FunctionCall
+    from livekit.agents.voice.events import RunContext
+
+    speech_handle = MagicMock()
+    speech_handle.num_steps = 1
+    speech_handle.allow_interruptions = True
+    return RunContext(
+        session=session,
+        speech_handle=speech_handle,
+        function_call=FunctionCall(call_id=call_id, name=name, arguments="{}"),
+    )
+
+
+class TestToolCallEvents:
+    """tool_execution_updated emission across the executor lifecycle."""
+
+    pytestmark = pytest.mark.usefixtures("_clear_running_tasks")
+
+    @pytest.mark.asyncio
+    async def test_sync_tool_started_then_done(self):
+        from livekit.agents.voice.events import ToolCallEnded, ToolCallStarted
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        @function_tool
+        async def quick_tool() -> str:
+            """q"""
+            return "ok"
+
+        executor = _ToolExecutor()
+        run_ctx = _make_run_context(call_id="c1", name="quick_tool")
+        result = await executor.execute(tool=quick_tool, run_ctx=run_ctx, raw_arguments={})
+        assert result == "ok"
+        await _drain_executor(executor)
+
+        items = _emitted_items(run_ctx.session)
+        assert isinstance(items[0], ToolCallStarted)
+        assert items[0].function_call.call_id == "c1"
+        assert items[1] == ToolCallEnded(id="c1", call_id="c1", message="ok", status="done")
+
+    @pytest.mark.asyncio
+    async def test_error_before_update_uses_plain_call_id(self):
+        from livekit.agents.voice.events import ToolCallEnded, ToolCallStarted
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        @function_tool
+        async def boom() -> str:
+            """b"""
+            raise RuntimeError("nope")
+
+        executor = _ToolExecutor()
+        run_ctx = _make_run_context(call_id="c2", name="boom")
+        with pytest.raises(RuntimeError, match="nope"):
+            await executor.execute(tool=boom, run_ctx=run_ctx, raw_arguments={})
+        await _drain_executor(executor)
+
+        items = _emitted_items(run_ctx.session)
+        assert isinstance(items[0], ToolCallStarted)
+        assert items[1] == ToolCallEnded(id="c2", call_id="c2", message="nope", status="error")
+
+    @pytest.mark.asyncio
+    async def test_cancelled_tool(self):
+        import asyncio as _asyncio
+
+        from livekit.agents.voice.events import ToolCallEnded
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        running = _asyncio.Event()
+
+        @function_tool(flags=ToolFlag.CANCELLABLE)
+        async def long_tool() -> str:
+            """l"""
+            running.set()
+            await _asyncio.sleep(3600)
+            return "never"
+
+        executor = _ToolExecutor()
+        run_ctx = _make_run_context(call_id="c3", name="long_tool")
+        exec_task = _asyncio.create_task(
+            executor.execute(tool=long_tool, run_ctx=run_ctx, raw_arguments={})
+        )
+        await running.wait()
+        assert await executor.cancel("c3")
+        assert await exec_task is None
+
+        items = _emitted_items(run_ctx.session)
+        assert items[-1] == ToolCallEnded(id="c3", call_id="c3", message=None, status="cancelled")
+
+    @pytest.mark.asyncio
+    async def test_cancel_before_first_step_releases_dispatch(self):
+        """A cancel landing before the exe task ever runs must still resolve
+        execute() and report the cancellation (the handler never gets to run)."""
+        import asyncio as _asyncio
+
+        from livekit.agents.voice.events import ToolCallEnded
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        @function_tool(flags=ToolFlag.CANCELLABLE)
+        async def long_tool() -> str:
+            """l"""
+            await _asyncio.sleep(3600)
+            return "never"
+
+        executor = _ToolExecutor()
+        run_ctx = _make_run_context(call_id="c3b", name="long_tool")
+        exec_task = _asyncio.create_task(
+            executor.execute(tool=long_tool, run_ctx=run_ctx, raw_arguments={})
+        )
+        # registration happens synchronously inside execute(); the exe task has not
+        # run a single step yet when cancel() fires
+        while "c3b" not in executor._running_tasks:
+            await _asyncio.sleep(0)
+        assert await executor.cancel("c3b")
+        assert await _asyncio.wait_for(exec_task, timeout=5) is None
+
+        items = _emitted_items(run_ctx.session)
+        assert items[-1] == ToolCallEnded(id="c3b", call_id="c3b", message=None, status="cancelled")
+
+    @pytest.mark.asyncio
+    async def test_internal_tools_tracked(self):
+        from livekit.agents.voice.events import ToolCallEnded, ToolCallStarted
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        @function_tool(name="lk_agents_test_tool")
+        async def internal_tool() -> str:
+            """i"""
+            return "ok"
+
+        executor = _ToolExecutor()
+        run_ctx = _make_run_context(call_id="c4", name="lk_agents_test_tool")
+        await executor.execute(tool=internal_tool, run_ctx=run_ctx, raw_arguments={})
+        await _drain_executor(executor)
+
+        items = _emitted_items(run_ctx.session)
+        assert isinstance(items[0], ToolCallStarted)
+        assert items[1] == ToolCallEnded(id="c4", call_id="c4", message="ok", status="done")
+
+    @pytest.mark.asyncio
+    async def test_updates_and_deferred_result_with_reply_lifecycle(self):
+        from livekit.agents.voice.events import (
+            RunContext,
+            ToolCallEnded,
+            ToolCallStarted,
+            ToolCallUpdated,
+            ToolReplyUpdated,
+        )
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        @function_tool
+        async def progress_tool(ctx: RunContext) -> str:
+            """p"""
+            await ctx.update("step one")
+            await ctx.update("step two")
+            return "all done"
+
+        import asyncio as _asyncio
+
+        speech = _make_fake_speech()
+        session = _make_reply_session(speech)
+        # hold the session busy until the tool has buffered everything, so the
+        # deferred reply coalesces the second update and the final result
+        idle_event = _asyncio.Event()
+        activity = session.wait_for_idle.return_value
+
+        async def _wait_for_idle():
+            await idle_event.wait()
+            return activity
+
+        session.wait_for_idle = _wait_for_idle
+
+        executor = _ToolExecutor()
+        run_ctx = _make_run_context_with_session(session, call_id="c5", name="progress_tool")
+
+        first = await executor.execute(tool=progress_tool, run_ctx=run_ctx, raw_arguments={})
+        assert "step one" in first
+        while executor.has_running_tasks:
+            await _asyncio.sleep(0)
+        idle_event.set()
+        assert executor._reply_task is not None
+        await executor._reply_task
+
+        items = _emitted_items(session)
+        assert isinstance(items[0], ToolCallStarted)
+        # first update is inline (plain call_id), the second is buffered
+        assert items[1] == ToolCallUpdated(id="c5", call_id="c5", message="step one")
+        assert items[2] == ToolCallUpdated(id="c5_update_1", call_id="c5", message="step two")
+        # the final return is deferred through the coalescer
+        assert items[3] == ToolCallEnded(
+            id="c5_final", call_id="c5", message="all done", status="done"
+        )
+        # the deferred reply covering the buffered ids was scheduled
+        reply = items[4]
+        assert isinstance(reply, ToolReplyUpdated)
+        assert reply.status == "scheduled"
+        assert reply.update_ids == ["c5_update_1", "c5_final"]
+
+        speech.fire_done()
+        completed = _emitted_items(session)[-1]
+        assert isinstance(completed, ToolReplyUpdated)
+        assert completed.status == "completed"
+        assert completed.update_ids == ["c5_update_1", "c5_final"]
+
+    @pytest.mark.asyncio
+    async def test_interrupted_and_skipped_reply_outcomes(self):
+        from livekit.agents.voice.events import RunContext, ToolReplyUpdated
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        @function_tool
+        async def progress_tool(ctx: RunContext) -> str:
+            """p"""
+            await ctx.update("working")
+            return "done"
+
+        for interrupted, chat_items, expected in [
+            (True, ["partial"], "interrupted"),
+            (False, [], "skipped"),
+        ]:
+            speech = _make_fake_speech()
+            speech.interrupted = interrupted
+            speech.chat_items = chat_items
+            session = _make_reply_session(speech)
+            executor = _ToolExecutor()
+            run_ctx = _make_run_context_with_session(session, call_id="c6", name="progress_tool")
+
+            await executor.execute(tool=progress_tool, run_ctx=run_ctx, raw_arguments={})
+            while executor._reply_task is None:
+                import asyncio as _asyncio
+
+                await _asyncio.sleep(0)
+            await executor._reply_task
+
+            speech.fire_done()
+            last = _emitted_items(session)[-1]
+            assert isinstance(last, ToolReplyUpdated)
+            assert last.status == expected
+
+    @pytest.mark.asyncio
+    async def test_error_after_update_is_deferred_with_final_id(self):
+        from livekit.agents.voice.events import RunContext, ToolCallEnded
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        @function_tool
+        async def update_then_boom(ctx: RunContext) -> str:
+            """u"""
+            await ctx.update("starting")
+            raise RuntimeError("late failure")
+
+        speech = _make_fake_speech()
+        session = _make_reply_session(speech)
+        executor = _ToolExecutor()
+        run_ctx = _make_run_context_with_session(session, call_id="c7", name="update_then_boom")
+
+        await executor.execute(tool=update_then_boom, run_ctx=run_ctx, raw_arguments={})
+        while executor._reply_task is None:
+            import asyncio as _asyncio
+
+            await _asyncio.sleep(0)
+        await executor._reply_task
+
+        items = _emitted_items(session)
+        terminal = next(i for i in items if isinstance(i, ToolCallEnded))
+        assert terminal == ToolCallEnded(
+            id="c7_final", call_id="c7", message="late failure", status="error"
+        )
+
+    @pytest.mark.asyncio
+    async def test_reply_spans_multiple_executions(self):
+        import asyncio as _asyncio
+
+        from livekit.agents.voice.events import RunContext, ToolReplyUpdated
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        @function_tool
+        async def progress_tool(ctx: RunContext) -> str:
+            """p"""
+            await ctx.update("working")
+            return "done"
+
+        speech = _make_fake_speech()
+        session = _make_reply_session(speech)
+        # hold the session busy until both executions have buffered their results
+        idle_event = _asyncio.Event()
+        activity = session.wait_for_idle.return_value
+
+        async def _wait_for_idle():
+            await idle_event.wait()
+            return activity
+
+        session.wait_for_idle = _wait_for_idle
+
+        executor = _ToolExecutor()
+        ctx_a = _make_run_context_with_session(session, call_id="a", name="progress_tool")
+        ctx_b = _make_run_context_with_session(session, call_id="b", name="progress_tool")
+
+        await executor.execute(tool=progress_tool, run_ctx=ctx_a, raw_arguments={})
+        await executor.execute(tool=progress_tool, run_ctx=ctx_b, raw_arguments={})
+        while executor.has_running_tasks:
+            await _asyncio.sleep(0)
+        idle_event.set()
+        assert executor._reply_task is not None
+        await executor._reply_task
+
+        scheduled = [i for i in _emitted_items(session) if isinstance(i, ToolReplyUpdated)]
+        assert len(scheduled) == 1
+        assert scheduled[0].status == "scheduled"
+        assert set(scheduled[0].update_ids) == {"a_final", "b_final"}

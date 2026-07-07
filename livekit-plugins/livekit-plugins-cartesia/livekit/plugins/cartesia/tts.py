@@ -198,6 +198,11 @@ class TTS(tts.TTS):
                     " or all languages with `preview` models"
                 )
 
+    class Markup(tts.TTS.Markup):
+        # markup delegation lives in the base class, keyed on _provider_key()
+        def _provider_key(self) -> str:
+            return "cartesia"
+
     @property
     def model(self) -> str:
         return self._opts.model

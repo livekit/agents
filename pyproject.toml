@@ -45,6 +45,7 @@ livekit-plugins-nltk = { workspace = true }
 livekit-plugins-nvidia = { workspace = true }
 livekit-plugins-openai = { workspace = true }
 livekit-plugins-perplexity = { workspace = true }
+livekit-plugins-protoface = { workspace = true }
 livekit-plugins-resemble = { workspace = true }
 livekit-plugins-respeecher = { workspace = true }
 livekit-plugins-rime = { workspace = true }
@@ -163,6 +164,7 @@ pythonpath = ["."]
 testpaths = ["tests"]
 markers = [
     "unit: fast tests with no external providers (select with --unit)",
+    "audio_eot: hermetic audio end-of-turn / turn-detection tests (select with --audio_eot)",
     "plugin(name): provider integration test for `name` (select with --plugin [name])",
     "realtime(name): realtime-model test, optionally for provider `name` (--realtime [name])",
     "stt(name): speech-to-text test, optionally for provider `name` (--stt [name])",
@@ -222,6 +224,11 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = "speechmatics.*"
 follow_untyped_imports = true
+
+[[tool.mypy.overrides]]
+module = "bithuman.*"
+follow_untyped_imports = true
+ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "livekit.plugins"

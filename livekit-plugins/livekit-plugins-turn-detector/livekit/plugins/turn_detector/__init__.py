@@ -15,7 +15,13 @@
 """Contextually-aware turn detection for LiveKit Agents
 
 See https://docs.livekit.io/agents/build/turns/turn-detector/ for more information.
+
+.. deprecated::
+    This plugin is deprecated and will be removed in a future release. Use
+    ``livekit.agents.inference.TurnDetector`` instead.
 """
+
+import warnings
 
 from livekit.agents import Plugin
 
@@ -25,6 +31,13 @@ from .multilingual import _EUORunnerMultilingual
 from .version import __version__
 
 __all__ = ["english", "multilingual", "__version__"]
+
+warnings.warn(
+    "`livekit.plugins.turn_detector` is deprecated and will be removed in a "
+    "future release. Use `livekit.agents.inference.TurnDetector` instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 Plugin.register_plugin(EOUPlugin(_EUORunnerEn))
 Plugin.register_plugin(EOUPlugin(_EUORunnerMultilingual))

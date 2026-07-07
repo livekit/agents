@@ -308,9 +308,17 @@ class FallbackSynthesizeStream(SynthesizeStream):
 
         input_task = asyncio.create_task(_forward_input_task())
 
+        def _capture_started_time() -> None:
+            # ttfb measures the fallback adapter as a whole: anchor on the first time a
+            # sentence was handed to any underlying TTS — even one that failed before
+            # emitting audio — and never overwrite it when falling back to another TTS
+            if not recovering and not self._started_time and stream._started_time:
+                self._started_time = stream._started_time
+
         try:
             async with stream:
                 async for audio in stream:
+                    _capture_started_time()
                     yield audio
         except Exception as e:
             if recovering:
@@ -328,6 +336,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
             )
             raise
         finally:
+            _capture_started_time()
             await utils.aio.cancel_and_wait(input_task)
 
     async def _run(self, output_emitter: AudioEmitter) -> None:
