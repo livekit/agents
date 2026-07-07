@@ -37,8 +37,8 @@ if TYPE_CHECKING:
 lk_evals_verbose = int(os.getenv("LIVEKIT_EVALS_VERBOSE", 0))
 
 _OUTPUT_RETRY_PROMPT = (
-    "Plain text responses are not permitted, call the appropriate function "
-    "to provide your final output."
+    "You have not provided the final output yet. Call the appropriate function "
+    "to do so; a plain text response alone is not enough."
 )
 
 
