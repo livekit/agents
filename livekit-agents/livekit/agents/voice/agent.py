@@ -7,8 +7,6 @@ from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Generator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 
-from pydantic import BaseModel
-
 from livekit import rtc
 
 from .. import inference, llm, stt, tokenize, tts, utils, vad
@@ -39,29 +37,6 @@ class ModelSettings:
 
 
 class Agent:
-    llm_output_format: type[BaseModel] | None = None
-    """Class-level Pydantic model for structured LLM output. One field must be
-    annotated with ``llm.Response`` (the spoken text routed to TTS). Other fields
-    are structured metadata available on ``ChatMessage.llm_output``."""
-
-    def __init_subclass__(cls, **kwargs: Any) -> None:
-        super().__init_subclass__(**kwargs)
-        fmt = cls.__dict__.get("llm_output_format")
-        if fmt is None:
-            return
-
-        from ..llm.response_field import find_response_field
-
-        find_response_field(fmt)
-        for name, field_info in fmt.model_fields.items():
-            if field_info.is_required():
-                raise TypeError(
-                    f"{cls.__name__}.llm_output_format: field '{name}' on "
-                    f"{fmt.__name__} must have a default value "
-                    f'(e.g. `{name}: str | None = None` or `{name}: llm.Response = ""`). '
-                    f"All fields need defaults for streaming partial parsing."
-                )
-
     def __init__(
         self,
         *,
@@ -150,13 +125,6 @@ class Agent:
                 "and will be removed in a future version. Use `MCPToolset` instead."
             )
         self._expressive = expressive
-
-        self._response_field_name: str | None = None
-        if self.llm_output_format is not None:
-            from ..llm.response_field import find_response_field
-
-            self._response_field_name = find_response_field(self.llm_output_format)
-
         self._activity: AgentActivity | None = None
 
     @property
@@ -426,7 +394,7 @@ class Agent:
         return Agent.default.transcription_node(self, text, model_settings)
 
     def tts_node(
-        self, text: AsyncIterable[str | BaseModel], model_settings: ModelSettings
+        self, text: AsyncIterable[str], model_settings: ModelSettings
     ) -> (
         AsyncIterable[rtc.AudioFrame]
         | Coroutine[Any, Any, AsyncIterable[rtc.AudioFrame]]
@@ -545,7 +513,7 @@ class Agent:
         @staticmethod
         async def tts_node(
             agent: Agent,
-            text: AsyncIterable[str | BaseModel],
+            text: AsyncIterable[str],
             model_settings: ModelSettings,
         ) -> AsyncGenerator[rtc.AudioFrame, None]:
             """Default implementation for `Agent.tts_node`"""
@@ -576,27 +544,12 @@ class Agent:
             # defaults then drive the TTS's input tokenizer.
             activity.tts._set_expressive(expressive_active)
 
-            response_field = agent._response_field_name
-
             conn_options = activity.session.conn_options.tts_conn_options
             async with wrapped_tts.stream(conn_options=conn_options) as stream:
 
                 async def _forward_input() -> None:
-                    # In the normal pipeline structured-output models are already reduced
-                    # to their spoken text upstream (generation._extract_spoken_text), so
-                    # `text` is plain str. We still handle BaseModel here to honor the
-                    # node's public `str | BaseModel` input type (e.g. if a caller drives
-                    # the node directly with structured-output chunks).
-                    prev_response = ""
                     async for chunk in text:
-                        if isinstance(chunk, str):
-                            stream.push_text(chunk)
-                        elif isinstance(chunk, BaseModel) and response_field:
-                            full_response = getattr(chunk, response_field, "") or ""
-                            delta = full_response[len(prev_response) :]
-                            if delta:
-                                stream.push_text(delta)
-                            prev_response = full_response
+                        stream.push_text(chunk)
 
                     stream.end_input()
 

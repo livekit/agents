@@ -290,8 +290,6 @@ class ChatMessage(BaseModel):
     interrupted: bool = False
     transcript_confidence: float | None = None
     extra: dict[str, Any] = Field(default_factory=dict)
-    llm_output: BaseModel | None = Field(default=None, exclude=True)
-    """Parsed structured output from the LLM when ``llm_output_format`` is set on the Agent."""
     metrics: MetricsReport = Field(default_factory=lambda: MetricsReport())
     created_at: float = Field(default_factory=time.time)
     hash: bytes | None = Field(default=None, deprecated="hash is deprecated")

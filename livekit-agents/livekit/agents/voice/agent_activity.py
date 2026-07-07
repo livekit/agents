@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
 from opentelemetry import context as otel_context, trace
-from pydantic import BaseModel
 
 from livekit import rtc
 from livekit.agents.llm.realtime import MessageGeneration
@@ -69,7 +68,6 @@ from .events import (
 from .generation import (
     ToolExecutionOutput,
     _AudioOutput,
-    _extract_spoken_text,
     _ForwardOutput,
     _inject_running_tool_calls,
     _strip_running_tool_calls,
@@ -2862,8 +2860,6 @@ class AgentActivity(RecognitionHooks):
             model_settings=model_settings,
             model=self.llm.model if self.llm else None,
             provider=self.llm.provider if self.llm else None,
-            llm_output_format=self._agent.llm_output_format,
-            response_field_name=self._agent._response_field_name,
         )
         tasks.append(llm_task)
 
@@ -2883,10 +2879,7 @@ class AgentActivity(RecognitionHooks):
         # without a FlushSentinel there is a single (continuous) segment
         @dataclass
         class _SpeechSegment:
-            # spoken text for this segment (structured-output models are already
-            # reduced to their response-field text in _produce_segments); the channel
-            # type still admits BaseModel for direct callers of the downstream nodes
-            text: utils.aio.Chan[str | BaseModel]
+            text: utils.aio.Chan[str]  # spoken text for this segment
             tts: _TTSGenerationData | None = None  # audio + timed transcript, when enabled
 
         segment_ch = utils.aio.Chan[_SpeechSegment]()
@@ -2895,7 +2888,7 @@ class AgentActivity(RecognitionHooks):
         async def _produce_segments() -> None:
             await llm_gen_data.started_fut  # keep the tts span under the llm span
             current: _SpeechSegment | None = None
-            tts_text: utils.aio.Chan[str | BaseModel] | None = None
+            tts_text: utils.aio.Chan[str] | None = None
             prev_tts_task: asyncio.Task[bool] | None = None
 
             async def _start_segment() -> _SpeechSegment:
@@ -2907,18 +2900,17 @@ class AgentActivity(RecognitionHooks):
                 if audio_output is not None:
                     if prev_tts_task is not None:
                         await prev_tts_task
-                    tts_text = utils.aio.Chan[str | BaseModel]()
+                    tts_text = utils.aio.Chan[str]()
                     prev_tts_task, tts_data = perform_tts_inference(
                         node=self._agent.tts_node,
                         input=tts_text,
                         model_settings=model_settings,
                         text_transforms=self._session.options.tts_text_transforms,
-                        response_field_name=self._agent._response_field_name,
                         model=self.tts.model if self.tts else None,
                         provider=self.tts.provider if self.tts else None,
                     )
                     tasks.append(prev_tts_task)
-                seg = _SpeechSegment(text=utils.aio.Chan[str | BaseModel](), tts=tts_data)
+                seg = _SpeechSegment(text=utils.aio.Chan[str](), tts=tts_data)
                 segment_ch.send_nowait(seg)
                 return seg
 
@@ -2930,26 +2922,12 @@ class AgentActivity(RecognitionHooks):
                     tts_text.close()  # let this segment's TTS inference finish
                 current, tts_text = None, None
 
-            # structured-output chunks are the *cumulative* parsed model; reduce them
-            # to the incremental spoken text with a single turn-level baseline so
-            # segments (split on FlushSentinel) never replay earlier text and both the
-            # transcript and markup capture below see plain str. Non-structured str
-            # chunks pass through unchanged.
-            response_field = self._agent._response_field_name
-            prev_response = ""
             try:
                 async for chunk in llm_gen_data.text_ch:
                     if isinstance(chunk, FlushSentinel):
                         _end_segment()
                         continue
-                    if isinstance(chunk, BaseModel):
-                        if not response_field:
-                            continue
-                        full_response = getattr(chunk, response_field, "") or ""
-                        text = full_response[len(prev_response) :]
-                        prev_response = full_response
-                    else:
-                        text = chunk
+                    text = chunk
                     if not text:
                         continue
                     if current is None:
@@ -3015,8 +2993,6 @@ class AgentActivity(RecognitionHooks):
             return
 
         reply_started_at = time.time()
-
-        response_field = self._agent._response_field_name
 
         # In expressive mode the LLM emits markup the TTS interprets as audio directives.
         # The raw text (markup intact) flows into chat history and the tts_node; the
@@ -3128,7 +3104,7 @@ class AgentActivity(RecognitionHooks):
             if first_tts_gen_data is None:
                 first_tts_gen_data = segment.tts
 
-            transcript: AsyncIterable[str | BaseModel] = segment.text
+            transcript: AsyncIterable[str] = segment.text
             if (
                 segment.tts is not None
                 and use_aligned_transcript
@@ -3137,9 +3113,7 @@ class AgentActivity(RecognitionHooks):
                 transcript = timed_texts
                 read_transcript_from_tts = True
 
-            tr_node = self._agent.transcription_node(
-                _extract_spoken_text(transcript, response_field), model_settings
-            )
+            tr_node = self._agent.transcription_node(transcript, model_settings)
             text_source = await tr_node if asyncio.iscoroutine(tr_node) else tr_node
             audio_source = segment.tts.audio_ch if segment.tts else None
 
@@ -3222,8 +3196,6 @@ class AgentActivity(RecognitionHooks):
                 metrics=assistant_metrics,
                 **extra_kwargs,
             )
-            if llm_gen_data.llm_output is not None:
-                msg.llm_output = llm_gen_data.llm_output
             self._agent._chat_ctx.insert(msg)
             self._session._conversation_item_added(msg)
             speech_handle._item_added([msg])

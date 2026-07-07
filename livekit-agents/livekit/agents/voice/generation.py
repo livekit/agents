@@ -4,13 +4,11 @@ import asyncio
 import functools
 import json
 import time
-from collections.abc import AsyncGenerator, AsyncIterable, Callable, Iterable, Sequence
+from collections.abc import AsyncIterable, Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 from opentelemetry import trace
-from pydantic import BaseModel, ValidationError
-from pydantic_core import from_json
 
 from livekit import rtc
 
@@ -52,7 +50,7 @@ class _ACloseable(Protocol):
 
 @dataclass
 class _LLMGenerationData:
-    text_ch: aio.Chan[str | FlushSentinel | BaseModel]
+    text_ch: aio.Chan[str | FlushSentinel]
     function_ch: aio.Chan[llm.FunctionCall]
     generated_text: str = ""
     generated_functions: list[llm.FunctionCall] = field(default_factory=list)
@@ -60,7 +58,6 @@ class _LLMGenerationData:
     id: str = field(default_factory=lambda: utils.shortuuid("item_"))
     started_fut: asyncio.Future[None] = field(default_factory=asyncio.Future)
     ttft: float | None = None
-    llm_output: BaseModel | None = None
 
 
 # output for an injected in-progress tool call, phrased so the model waits instead of
@@ -131,24 +128,12 @@ def perform_llm_inference(
     model_settings: ModelSettings,
     model: str | None = None,
     provider: str | None = None,
-    llm_output_format: type[BaseModel] | None = None,
-    response_field_name: str | None = None,
 ) -> tuple[asyncio.Task[bool], _LLMGenerationData]:
-    text_ch = aio.Chan[str | FlushSentinel | BaseModel]()
+    text_ch = aio.Chan[str | FlushSentinel]()
     function_ch = aio.Chan[llm.FunctionCall]()
     data = _LLMGenerationData(text_ch=text_ch, function_ch=function_ch)
     llm_task = asyncio.create_task(
-        _llm_inference_task(
-            node,
-            chat_ctx,
-            tool_ctx,
-            model_settings,
-            data,
-            model,
-            provider,
-            llm_output_format=llm_output_format,
-            response_field_name=response_field_name,
-        )
+        _llm_inference_task(node, chat_ctx, tool_ctx, model_settings, data, model, provider)
     )
     llm_task.add_done_callback(lambda _: text_ch.close())
     llm_task.add_done_callback(lambda _: function_ch.close())
@@ -172,8 +157,6 @@ async def _llm_inference_task(
     data: _LLMGenerationData,
     model: str | None = None,
     provider: str | None = None,
-    llm_output_format: type[BaseModel] | None = None,
-    response_field_name: str | None = None,
 ) -> bool:
     start_time = time.perf_counter()
     current_span = trace.get_current_span()
@@ -221,10 +204,6 @@ async def _llm_inference_task(
 
     if not isinstance(llm_node, AsyncIterable):
         return False
-
-    # state for structured output parsing
-    json_buffer = ""
-    prev_response_text = ""
 
     # forward llm stream to output channels
     try:
@@ -280,34 +259,11 @@ async def _llm_inference_task(
 
             # route text content to output channels
             if content:
-                if llm_output_format and response_field_name:
-                    json_buffer += content
-                    parsed = _try_partial_parse(json_buffer, llm_output_format)
-                    if parsed:
-                        new_response = getattr(parsed, response_field_name, "") or ""
-                        delta = new_response[len(prev_response_text) :]
-                        if delta:
-                            data.generated_text += delta
-                            text_ch.send_nowait(parsed)
-                        prev_response_text = new_response
-                else:
-                    data.generated_text += content
-                    text_ch.send_nowait(content)
+                data.generated_text += content
+                text_ch.send_nowait(content)
     finally:
         if isinstance(llm_node, _ACloseable):
             await llm_node.aclose()
-
-    # final strict parse for structured output
-    if llm_output_format and json_buffer:
-        try:
-            data.llm_output = llm_output_format.model_validate_json(json_buffer)
-            response_text = getattr(data.llm_output, response_field_name or "", "") or ""
-            final_delta = response_text[len(prev_response_text) :]
-            if final_delta:
-                data.generated_text += final_delta
-                text_ch.send_nowait(data.llm_output)
-        except ValidationError:
-            logger.warning("failed to parse final structured output", extra={"buffer": json_buffer})
 
     current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, data.generated_text)
     current_span.set_attribute(
@@ -321,14 +277,6 @@ async def _llm_inference_task(
     return True
 
 
-def _try_partial_parse(json_buffer: str, model: type[BaseModel]) -> BaseModel | None:
-    try:
-        partial_data = from_json(json_buffer.encode(), allow_partial=True)
-        return model.model_validate(partial_data)
-    except Exception:
-        return None
-
-
 @dataclass
 class _TTSGenerationData:
     audio_ch: aio.Chan[rtc.AudioFrame]
@@ -336,37 +284,12 @@ class _TTSGenerationData:
     ttfb: float | None = None
 
 
-async def _extract_spoken_text(
-    input: AsyncIterable[str | BaseModel], response_field_name: str | None
-) -> AsyncGenerator[str, None]:
-    """Normalize the LLM text stream to plain spoken text.
-
-    In structured-output mode each chunk is the (cumulative) parsed model whose
-    spoken text lives under `response_field_name`; we emit only the newly added
-    delta. Plain-str chunks pass through unchanged. Doing this here means the
-    `tts_node` (including user overrides) and the transcript only ever see `str`.
-    """
-    prev_response = ""
-    async for chunk in input:
-        if isinstance(chunk, BaseModel):
-            if not response_field_name:
-                continue
-            full_response = getattr(chunk, response_field_name, "") or ""
-            delta = full_response[len(prev_response) :]
-            prev_response = full_response
-            if delta:
-                yield delta
-        elif chunk:
-            yield chunk
-
-
 def perform_tts_inference(
     *,
     node: io.TTSNode,
-    input: AsyncIterable[str | BaseModel],
+    input: AsyncIterable[str],
     model_settings: ModelSettings,
     text_transforms: Sequence[TextTransforms] | None,
-    response_field_name: str | None = None,
     model: str | None = None,
     provider: str | None = None,
 ) -> tuple[asyncio.Task[bool], _TTSGenerationData]:
@@ -375,16 +298,7 @@ def perform_tts_inference(
     data = _TTSGenerationData(audio_ch=audio_ch, timed_texts_fut=timed_texts_fut)
 
     tts_task = asyncio.create_task(
-        _tts_inference_task(
-            node,
-            input,
-            model_settings,
-            data,
-            text_transforms,
-            response_field_name,
-            model,
-            provider,
-        )
+        _tts_inference_task(node, input, model_settings, data, text_transforms, model, provider)
     )
 
     def _inference_done(_: asyncio.Task[bool]) -> None:
@@ -402,11 +316,10 @@ def perform_tts_inference(
 @tracer.start_as_current_span("tts_node")
 async def _tts_inference_task(
     node: io.TTSNode,
-    input: AsyncIterable[str | BaseModel],
+    input: AsyncIterable[str],
     model_settings: ModelSettings,
     data: _TTSGenerationData,
     text_transforms: Sequence[TextTransforms] | None,
-    response_field_name: str | None = None,
     model: str | None = None,
     provider: str | None = None,
 ) -> bool:
@@ -417,14 +330,11 @@ async def _tts_inference_task(
         current_span.set_attribute(trace_types.ATTR_GEN_AI_PROVIDER_NAME, provider)
 
     audio_ch, timed_texts_fut = data.audio_ch, data.timed_texts_fut
-    # normalize to plain spoken text before anything downstream runs, so text
-    # transforms and the tts_node (including user overrides) never see a BaseModel.
-    text_input: AsyncIterable[str] = _extract_spoken_text(input, response_field_name)
     if text_transforms:
-        text_input = _apply_text_transforms(text_input, text_transforms)
+        input = _apply_text_transforms(input, text_transforms)
 
     start_time: float | None = None
-    input_tee = itertools.tee(text_input, 2)
+    input_tee = itertools.tee(input, 2)
 
     async def _get_start_time() -> None:
         nonlocal start_time
