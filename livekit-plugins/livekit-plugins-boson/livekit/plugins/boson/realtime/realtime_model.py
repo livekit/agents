@@ -319,9 +319,10 @@ class RealtimeSession(openai_rt.RealtimeSession):
             self._recv_loop(ws_conn), name="BosonRealtimeSession._recv_loop"
         )
         send_task = asyncio.create_task(_send_task(), name="BosonRealtimeSession._send_loop")
+        pending: set[asyncio.Task[None]] = {recv_task, send_task}
         try:
             done, pending = await asyncio.wait(
-                [recv_task, send_task],
+                pending,
                 return_when=asyncio.FIRST_COMPLETED,
             )
             for task in done:
@@ -584,7 +585,7 @@ class RealtimeSession(openai_rt.RealtimeSession):
         logger.debug("Boson RealtimeModel does not support video input yet; frame ignored.")
 
     def commit_audio(self) -> None:
-        if self._pushed_duration_s <= 0:
+        if self._pushed_duration_s <= 0.1:
             return
         self.send_event(
             {"type": "input_audio_buffer.commit", "event_id": utils.shortuuid("audio_commit_")}

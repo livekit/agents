@@ -899,6 +899,51 @@ async def test_boson_realtime_chat_ctx_audio_content_uses_transcript(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_boson_realtime_commit_audio_skips_short_buffers(monkeypatch):
+    monkeypatch.setattr(realtime.RealtimeSession, "_run", _idle_run)
+
+    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
+    session = model.session()
+    try:
+        await session._msg_ch.recv()  # initial session.update
+
+        session._pushed_duration_s = 0.05
+        session.commit_audio()
+        assert session._msg_ch.empty()
+        assert session._pushed_duration_s == 0.05
+
+        session._pushed_duration_s = 0.11
+        session.commit_audio()
+        commit_event = await session._msg_ch.recv()
+        assert commit_event["type"] == "input_audio_buffer.commit"
+        assert session._pushed_duration_s == 0.0
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.asyncio
+async def test_boson_realtime_run_ws_cancellation_preserves_cancelled_error(monkeypatch):
+    monkeypatch.setattr(realtime.RealtimeSession, "_run", _idle_run)
+
+    ws = _FakeWebSocket()
+    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
+    session = model.session()
+    run_task = asyncio.create_task(session._run_ws(ws))
+    try:
+        await asyncio.sleep(0)
+        run_task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await run_task
+    finally:
+        run_task.cancel()
+        await asyncio.gather(run_task, return_exceptions=True)
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.asyncio
 async def test_boson_realtime_websocket_close_fails_pending_generate_reply():
     ws = _FakeWebSocket()
     model = realtime.RealtimeModel(
