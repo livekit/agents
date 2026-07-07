@@ -249,7 +249,7 @@ class LemonSliceAPI:
                         url or self._api_url,
                         headers=headers,
                         timeout=aiohttp.ClientTimeout(
-                            total=30.0,
+                            total=60.0,
                             sock_connect=self._conn_options.timeout,
                         ),
                         **request_kwargs,
