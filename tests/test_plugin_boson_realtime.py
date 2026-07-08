@@ -788,12 +788,76 @@ async def test_boson_realtime_discarded_response_keeps_active_generation_streams
         # targets the active response, not the discarded one
         assert not active_generation.message_ch.closed
         assert not active_generation.function_ch.closed
+        assert session._current_generation is active_generation
         assert session._current_response_id == "resp_active"
 
         # the base cancelled the stale response by id
         cancel_event = await session._msg_ch.recv()
         assert cancel_event["type"] == "response.cancel"
         assert cancel_event["response_id"] == "resp_stale"
+
+        # the stale response's terminal event must not close the active
+        # generation either
+        _server_event(
+            session,
+            {
+                "type": "response.done",
+                "response": {"id": "resp_stale", "status": "cancelled", "usage": None},
+            },
+        )
+        assert not active_generation.message_ch.closed
+        assert session._current_generation is active_generation
+        assert session._current_response_id == "resp_active"
+
+        # the active response still completes normally afterwards
+        _server_event(
+            session,
+            {
+                "type": "response.done",
+                "response": {"id": "resp_active", "status": "completed", "usage": None},
+            },
+        )
+        assert session._current_generation is None
+        assert session._current_response_id is None
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.asyncio
+async def test_boson_realtime_discarded_response_without_active_generation_is_skipped(monkeypatch):
+    # With no generation in progress, the base discard marker must stay in the
+    # slot so the stale response's trailing events are eaten.
+    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+
+    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
+    session = model.session()
+    try:
+        await session._msg_ch.recv()  # initial session.update
+        session._discarded_event_ids.add("evt_stale")
+
+        _server_event(
+            session,
+            {
+                "type": "response.created",
+                "response": {
+                    "id": "resp_stale",
+                    "status": "in_progress",
+                    "metadata": {"client_event_id": "evt_stale"},
+                },
+            },
+        )
+        assert session._current_generation is not None  # the discard marker
+        assert session._current_response_id is None
+
+        _server_event(
+            session,
+            {
+                "type": "response.done",
+                "response": {"id": "resp_stale", "status": "cancelled", "usage": None},
+            },
+        )
+        assert session._current_generation is None
     finally:
         await session.aclose()
         await model.aclose()
