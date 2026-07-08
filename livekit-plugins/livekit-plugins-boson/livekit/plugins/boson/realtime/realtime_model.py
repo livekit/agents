@@ -603,6 +603,17 @@ class RealtimeSession(openai_rt.RealtimeSession):
         )
 
     def _handle_response_created(self, event: ResponseCreatedEvent) -> None:
+        client_event_id: str | None = None
+        if isinstance(event.response.metadata, dict):
+            client_event_id = event.response.metadata.get("client_event_id")
+        if client_event_id and client_event_id in self._discarded_event_ids:
+            # A response that timed out or was interrupted before the server
+            # created it: the base handler cancels and discards it without
+            # touching any in-progress generation, so don't close the current
+            # one or track the stale response id here.
+            super()._handle_response_created(event)
+            return
+
         if self._current_generation is not None:
             self._close_current_generation("new response created before previous response.done")
         self._current_response_id = event.response.id
