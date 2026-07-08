@@ -486,7 +486,7 @@ class ChunkedStream(tts.ChunkedStream):
 
                 if not resp.content_type.startswith("audio"):
                     content = await resp.text()
-                    logger.error("Rime returned non-audio data: %s", content)
+                    logger.error("Rime returned non-audio data", extra={"lk.pii.data": content})
                     return
 
                 output_emitter.initialize(

@@ -694,7 +694,9 @@ class STT(stt.STT):
                     )
 
                 response_json = await res.json()
-                self._logger.debug(f"Sarvam API response: {response_json}")
+                self._logger.debug(
+                    "Sarvam API response received", extra={"lk.pii.response_json": response_json}
+                )
 
                 transcript_text = response_json.get("transcript", "")
                 request_id = response_json.get("request_id", "")
@@ -1149,7 +1151,7 @@ class SpeechStream(stt.SpeechStream):
 
         self._logger.info(
             "Options updated, triggering reconnection",
-            extra={**self._build_log_context(), "prompt": prompt},
+            extra={**self._build_log_context(), "lk.pii.prompt": prompt},
         )
         self._reconnect_event.set()
 
@@ -1160,7 +1162,7 @@ class SpeechStream(stt.SpeechStream):
             await ws.send_str(json.dumps(config_message))
             self._logger.debug(
                 "Sent initial config for saaras model",
-                extra={**self._build_log_context(), "prompt": self._opts.prompt},
+                extra={**self._build_log_context(), "lk.pii.prompt": self._opts.prompt},
             )
         except Exception as e:
             self._logger.error(
@@ -1445,7 +1447,7 @@ class SpeechStream(stt.SpeechStream):
                             "Invalid JSON received from WebSocket",
                             extra={
                                 **self._build_log_context(),
-                                "raw_data": msg.data,
+                                "lk.pii.raw_data": msg.data,
                                 "error": str(e),
                             },
                         )
@@ -1537,7 +1539,7 @@ class SpeechStream(stt.SpeechStream):
             if not msg_type:
                 self._logger.warning(
                     "Received message without type field",
-                    extra={**self._build_log_context(), "data": data},
+                    extra={**self._build_log_context(), "lk.pii.data": data},
                 )
                 return
 
@@ -1555,13 +1557,13 @@ class SpeechStream(stt.SpeechStream):
             else:
                 self._logger.debug(
                     f"Unknown message type: {msg_type}",
-                    extra={**self._build_log_context(), "data": data},
+                    extra={**self._build_log_context(), "lk.pii.data": data},
                 )
 
         except KeyError as e:
             self._logger.warning(
                 f"Missing required field in message: {e}",
-                extra={**self._build_log_context(), "data": data},
+                extra={**self._build_log_context(), "lk.pii.data": data},
             )
         except (APIStatusError, APIConnectionError):
             # Let API errors propagate without re-wrapping
@@ -1569,7 +1571,7 @@ class SpeechStream(stt.SpeechStream):
         except Exception as e:
             self._logger.error(
                 f"Unexpected error handling message: {e}",
-                extra={**self._build_log_context(), "data": data},
+                extra={**self._build_log_context(), "lk.pii.data": data},
                 exc_info=True,
             )
             raise APIStatusError(f"Message processing error: {e}") from e
@@ -1625,7 +1627,7 @@ class SpeechStream(stt.SpeechStream):
                 f"Error processing transcript data: {e}",
                 extra={
                     **self._build_log_context(),
-                    "transcript_data": transcript_data,
+                    "lk.pii.transcript_data": transcript_data,
                 },
                 exc_info=True,
             )
@@ -1640,7 +1642,7 @@ class SpeechStream(stt.SpeechStream):
         if not signal_type:
             self._logger.warning(
                 "VAD event missing signal_type",
-                extra={**self._build_log_context(), "event_data": event_data},
+                extra={**self._build_log_context(), "lk.pii.event_data": event_data},
             )
             return
 
@@ -1692,7 +1694,7 @@ class SpeechStream(stt.SpeechStream):
         except Exception as e:
             self._logger.error(
                 f"Error processing VAD event: {e}",
-                extra={**self._build_log_context(), "event_data": event_data},
+                extra={**self._build_log_context(), "lk.pii.event_data": event_data},
                 exc_info=True,
             )
             raise
@@ -1716,7 +1718,7 @@ class SpeechStream(stt.SpeechStream):
                 **self._build_log_context(),
                 "error_code": error_code,
                 "error_info": error_info,
-                "raw_message": data,
+                "lk.pii.raw_message": data,
             },
         )
 

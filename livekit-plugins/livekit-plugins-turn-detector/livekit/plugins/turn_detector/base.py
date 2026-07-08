@@ -286,5 +286,8 @@ class EOUModelBase(ABC):
         assert result is not None, "end_of_utterance prediction should always returns a result"
 
         result_json: dict[str, Any] = json.loads(result.decode())
-        logger.debug("eou prediction", extra=result_json)
+        log_extra = {**result_json}
+        if "input" in log_extra:
+            log_extra["lk.pii.input"] = log_extra.pop("input")
+        logger.debug("eou prediction", extra=log_extra)
         return result_json["eou_probability"]  # type: ignore

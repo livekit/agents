@@ -828,7 +828,7 @@ class SpeechStream(stt.RecognizeStream):
 
         # Log all other messages
         else:
-            logger.debug(f"{event} -> {message}")
+            logger.debug(f"unhandled message: {event}", extra={"lk.pii.message": message})
 
     def _handle_partial_segment(self, message: dict[str, Any]) -> None:
         """Handle AddPartialSegment events."""
