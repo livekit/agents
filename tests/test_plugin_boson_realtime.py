@@ -751,6 +751,55 @@ async def test_boson_realtime_new_response_closes_previous_generation(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_boson_realtime_discarded_response_keeps_active_generation_streams(monkeypatch):
+    # A response that timed out before the server created it must be discarded
+    # without cutting off the streams of a newer in-progress generation.
+    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+
+    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
+    session = model.session()
+    try:
+        await session._msg_ch.recv()  # initial session.update
+        session._discarded_event_ids.add("evt_stale")
+
+        _server_event(
+            session,
+            {
+                "type": "response.created",
+                "response": {"id": "resp_active", "status": "in_progress"},
+            },
+        )
+        active_generation = session._current_generation
+        assert active_generation is not None
+
+        _server_event(
+            session,
+            {
+                "type": "response.created",
+                "response": {
+                    "id": "resp_stale",
+                    "status": "in_progress",
+                    "metadata": {"client_event_id": "evt_stale"},
+                },
+            },
+        )
+
+        # the active generation's streams stay open and interrupt() still
+        # targets the active response, not the discarded one
+        assert not active_generation.message_ch.closed
+        assert not active_generation.function_ch.closed
+        assert session._current_response_id == "resp_active"
+
+        # the base cancelled the stale response by id
+        cancel_event = await session._msg_ch.recv()
+        assert cancel_event["type"] == "response.cancel"
+        assert cancel_event["response_id"] == "resp_stale"
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.asyncio
 async def test_boson_realtime_remote_items_are_not_recreated(monkeypatch):
     monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
 
