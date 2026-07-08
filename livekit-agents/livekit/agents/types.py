@@ -7,6 +7,15 @@ from pydantic_core import CoreSchema, core_schema
 ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID = "lk.segment_id"
 ATTRIBUTE_TRANSCRIPTION_TRACK_ID = "lk.transcribed_track_id"
 ATTRIBUTE_TRANSCRIPTION_FINAL = "lk.transcription_final"
+ATTRIBUTE_TRANSCRIPTION_EXPRESSION = "lk.expression"
+"""
+The expression (delivery/emotion) the agent used for a transcription segment, surfaced so
+the frontend can react to it, when expressive markup is stripped from the transcript. The
+value is a JSON object ``{"value": ...}`` carrying the segment's leading expression — the
+``<expression>`` tag for Inworld/ElevenLabs v3 or the ``<emotion>`` tag for Cartesia, e.g.
+``{"value": "speak happy"}``. A JSON object (rather than a bare string) so the shape can
+gain fields later without breaking parsers.
+"""
 ATTRIBUTE_PUBLISH_ON_BEHALF = "lk.publish_on_behalf"
 """
 The identity of the agent participant that an avatar worker is publishing on behalf of.
@@ -35,12 +44,25 @@ Indicates that the participant is a simulator for testing purposes.
 When set to "true", the agent will skip audio input/output processing.
 """
 
+ATTRIBUTE_SIMULATOR_DISPATCH = "lk.simulator.dispatch"
+"""
+The simulator participant's attribute carrying the run's protojson
+``SimulationDispatch``, read by ``JobContext.simulation_context()``.
+"""
+
 TOPIC_CHAT = "lk.chat"
 TOPIC_TRANSCRIPTION = "lk.transcription"
 
 USERDATA_TIMED_TRANSCRIPT = "lk.timed_transcripts"
 """
 The key for the timed transcripts in the audio frame userdata.
+"""
+
+USERDATA_TTS_STARTED_TIME = "lk.tts_started_time"
+"""
+The key for the time (``time.perf_counter()``) at which the synthesized text was first
+sent to the TTS provider, attached to the audio frame userdata. Used to compute TTFB
+without attributing upstream (e.g. LLM streaming) latency to the TTS.
 """
 
 
@@ -113,13 +135,27 @@ DEFAULT_API_CONNECT_OPTIONS = APIConnectOptions()
 
 
 class TimedString(str):
-    """A string with optional start and end timestamps for word-level alignment."""
+    """A string with optional start and end timestamps for word-level alignment.
+
+    Attributes:
+        start_time: Word start time in seconds (NOT_GIVEN when unavailable).
+        end_time: Word end time in seconds (NOT_GIVEN when unavailable).
+        confidence: Per-word confidence score (NOT_GIVEN when unavailable).
+        start_time_offset: Offset in seconds relative to the start of the audio
+            input stream or session. Used by STT plugins to align words against
+            the session timeline (NOT_GIVEN when unavailable).
+        speaker_id: Speaker identifier when the provider supports diarization.
+            Uses ``str | None`` rather than ``NotGivenOr[str]`` because the
+            absence of a speaker is a routine, expected case across all
+            providers — not a "not given" boundary condition — and downstream
+            consumers gate on ``speaker_id is None`` rather than ``is_given``.
+    """
 
     start_time: NotGivenOr[float]
     end_time: NotGivenOr[float]
     confidence: NotGivenOr[float]
     start_time_offset: NotGivenOr[float]
-    # offset relative to the start of the audio input stream or session in seconds, used in STT plugins
+    speaker_id: str | None
 
     def __new__(
         cls,
@@ -128,10 +164,12 @@ class TimedString(str):
         end_time: NotGivenOr[float] = NOT_GIVEN,
         confidence: NotGivenOr[float] = NOT_GIVEN,
         start_time_offset: NotGivenOr[float] = NOT_GIVEN,
+        speaker_id: str | None = None,
     ) -> "TimedString":
         obj = super().__new__(cls, text)
         obj.start_time = start_time
         obj.end_time = end_time
         obj.confidence = confidence
         obj.start_time_offset = start_time_offset
+        obj.speaker_id = speaker_id
         return obj

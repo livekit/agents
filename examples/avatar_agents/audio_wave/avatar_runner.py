@@ -20,6 +20,7 @@ from livekit.agents.voice.avatar import (
     DataStreamAudioReceiver,
     VideoGenerator,
 )
+from livekit.agents.voice.remote_session import TOPIC_SESSION_MESSAGES
 
 sys.path.insert(0, str(Path(__file__).parent))
 from wave_viz import WaveformVisualizer
@@ -164,7 +165,12 @@ async def main(api_url: str, api_token: str):
         # ignore transcription from the room
         pass
 
+    def on_session_messages_received(reader: rtc.ByteStreamReader, participant_identity: str):
+        # ignore session messages from the room
+        pass
+
     room.register_text_stream_handler(TOPIC_TRANSCRIPTION, on_transcription_received)
+    room.register_byte_stream_handler(TOPIC_SESSION_MESSAGES, on_session_messages_received)
 
     should_stop = asyncio.Event()
 

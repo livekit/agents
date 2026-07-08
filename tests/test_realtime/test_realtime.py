@@ -15,6 +15,8 @@ from livekit import rtc
 from livekit.agents import RunContext, function_tool, llm, utils
 from livekit.plugins import openai, xai
 
+pytestmark = pytest.mark.realtime
+
 TESTS_DIR = Path(__file__).parent
 SAMPLE_RATE = 24000
 
@@ -226,18 +228,20 @@ async def test_vad_speech_events(rt_session: llm.RealtimeSession):
 @pytest.mark.parametrize("rt_session", REALTIME_MODELS, indirect=True)
 async def test_input_audio_transcription(rt_session: llm.RealtimeSession):
     transcripts: list[str] = []
-    transcript_received = asyncio.Event()
+    final_received = asyncio.Event()
 
     def on_transcript(ev: llm.InputTranscriptionCompleted):
         transcripts.append(ev.transcript)
-        transcript_received.set()
+        if ev.is_final:
+            final_received.set()
 
     rt_session.on("input_audio_transcription_completed", on_transcript)
     await _push_speech(rt_session, "weather_question")
     rt_session.commit_audio()
 
-    await asyncio.wait_for(transcript_received.wait(), timeout=15)
-    full = " ".join(transcripts).lower()
+    await asyncio.wait_for(final_received.wait(), timeout=15)
+    assert transcripts, "no transcript received"
+    full = transcripts[-1].lower()
     assert "weather" in full or "paris" in full
 
 
@@ -310,6 +314,28 @@ async def test_interrupt(rt_session: llm.RealtimeSession):
             break
         break
     assert got_chunk
+
+
+@pytest.mark.parametrize("rt_session", OPENAI_AND_AZURE, indirect=True)
+async def test_generate_reply_cancellation(rt_session: llm.RealtimeSession):
+    """Cancelling the generate_reply future before response.created arrives
+    should cancel the in-flight response server-side so a subsequent
+    generate_reply does not conflict with an active response."""
+    fut = rt_session.generate_reply(
+        instructions="Write a very long essay about the history of computing."
+    )
+    fut.cancel()
+    assert fut.cancelled()
+
+    # Brief wait so the response.cancel reaches the server before the next call.
+    await asyncio.sleep(1.0)
+
+    gen_ev = await asyncio.wait_for(
+        rt_session.generate_reply(instructions="Say exactly: pineapple"),
+        timeout=15,
+    )
+    text = await asyncio.wait_for(_collect_text(gen_ev), timeout=15)
+    assert "pineapple" in text.lower()
 
 
 # -- Function tools --

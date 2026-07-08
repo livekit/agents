@@ -6,6 +6,8 @@ from livekit.plugins.google.llm import (
     _requires_thought_signatures,
 )
 
+pytestmark = pytest.mark.unit
+
 
 class TestGeminiModelDetection:
     """Tests for Gemini model detection helper functions."""

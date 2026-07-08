@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -33,8 +34,7 @@ from livekit.agents import (
     function_tool,
     inference,
 )
-from livekit.plugins import silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
+from livekit.agents.voice import UserStateChangedEvent, presets
 
 load_dotenv()
 
@@ -379,6 +379,62 @@ class DriveThruAgent(Agent):
         return "\n".join(item.model_dump_json() for item in items)
 
 
+def _find(items: list[MenuItem], id: str, size=None) -> MenuItem | None:
+    found = find_items_by_id(items, id, size)
+    return found[0] if found else None
+
+
+def format_cart(userdata: Userdata) -> str:
+    """Render the current order as markdown for the playground card.
+
+    Returns an empty string when the cart is empty, which signals the
+    UI to hide the card. The card itself already shows "Current order"
+    in its title bar, so the body skips a heading and goes straight to
+    the line items.
+    """
+    if not userdata.order.items:
+        return ""
+    lines: list[str] = []
+    total = 0.0
+    for item in userdata.order.items.values():
+        if isinstance(item, OrderedCombo):
+            meal = _find(userdata.combo_items, item.meal_id)
+            drink = _find(userdata.drink_items, item.drink_id, item.drink_size)
+            extras = [f"fries {item.fries_size}"]
+            if drink:
+                extras.append(f"{drink.name} ({item.drink_size})")
+            if item.sauce_id:
+                sauce = _find(userdata.sauce_items, item.sauce_id)
+                if sauce:
+                    extras.append(sauce.name)
+            name = meal.name if meal else item.meal_id
+            price = meal.price if meal else 0.0
+        elif isinstance(item, OrderedHappy):
+            meal = _find(userdata.happy_items, item.meal_id)
+            drink = _find(userdata.drink_items, item.drink_id, item.drink_size)
+            extras = []
+            if drink:
+                extras.append(f"{drink.name} ({item.drink_size})")
+            if item.sauce_id:
+                sauce = _find(userdata.sauce_items, item.sauce_id)
+                if sauce:
+                    extras.append(sauce.name)
+            name = meal.name if meal else item.meal_id
+            price = meal.price if meal else 0.0
+        else:
+            assert isinstance(item, OrderedRegular)
+            reg = _find(userdata.regular_items, item.item_id, item.size)
+            name = reg.name if reg else item.item_id
+            price = reg.price if reg else 0.0
+            extras = [f"size {item.size}"] if item.size else []
+        total += price
+        extras_str = f" · {', '.join(extras)}" if extras else ""
+        lines.append(f"- **{name}**{extras_str} · [[${price:.2f}]]")
+    lines.append("")
+    lines.append(f"**Total · [[${total:.2f}]]**")
+    return "\n".join(lines)
+
+
 async def new_userdata() -> Userdata:
     fake_db = FakeDB()
     drink_items = await fake_db.list_drinks()
@@ -428,11 +484,17 @@ async def drive_thru_agent(ctx: JobContext) -> None:
                 ],
             },
         ),
-        llm=inference.LLM("openai/gpt-5-mini"),
-        tts=inference.TTS("cartesia/sonic-3", voice="f786b574-daa5-4673-aa0c-cbe3e8534c02"),
-        turn_detection=MultilingualModel(),
-        vad=silero.VAD.load(),
+        llm=inference.LLM("google/gemma-4-31b-it"),
+        tts=inference.TTS(
+            "inworld/inworld-tts-2",
+            voice="Sarah",
+            extra_kwargs={"delivery_mode": "CREATIVE", "speaking_rate": 1.1},
+        ),
+        expressive=presets.CUSTOMER_SERVICE,
         max_tool_steps=10,
+        # Flip user_state to "away" after 10s of mutual silence so we can
+        # check whether they're still there (default is 15s).
+        user_away_timeout=10.0,
     )
 
     background_audio = BackgroundAudioPlayer(
@@ -441,6 +503,76 @@ async def drive_thru_agent(ctx: JobContext) -> None:
             volume=1.0,
         ),
     )
+
+    # Push the cart as markdown to the playground's cart view
+    # whenever it changes. Coalesced + serialized: rapid changes
+    # (e.g. batch-remove that pops items one at a time) collapse
+    # into a single trailing push of the *latest* cart state, so
+    # an empty-cart payload can't get reordered behind a stale
+    # mid-state push. Fire-and-forget at the call site — the
+    # function tool that mutated the order shouldn't block on the
+    # RPC round-trip.
+    push_pending = False
+    push_running = False
+
+    async def _push_to(identity: str, payload: str) -> None:
+        try:
+            await ctx.room.local_participant.perform_rpc(
+                destination_identity=identity,
+                method="set_cart_content",
+                payload=payload,
+            )
+        except Exception:
+            logger.exception("cart push to %s failed", identity)
+
+    async def _push_runner() -> None:
+        nonlocal push_pending, push_running
+        push_running = True
+        try:
+            while push_pending:
+                push_pending = False
+                payload = format_cart(userdata)
+                logger.info("push_cart: %d chars", len(payload))
+                peers = list(ctx.room.remote_participants.values())
+                if not peers:
+                    continue
+                await asyncio.gather(
+                    *(_push_to(p.identity, payload) for p in peers),
+                    return_exceptions=True,
+                )
+        finally:
+            push_running = False
+
+    async def push_cart() -> None:
+        nonlocal push_pending
+        push_pending = True
+        if push_running:
+            return
+        asyncio.create_task(_push_runner())
+
+    userdata.order.on_change = push_cart
+
+    idle_task: asyncio.Task[None] | None = None
+
+    async def _nudge_while_idle() -> None:
+        # Nudge every 10s until the user speaks again — speaking flips
+        # user_state out of "away", which cancels this task below.
+        while True:
+            logger.info("user idle — checking if they're still there")
+            await session.generate_reply(
+                instructions="The user has been idle, see if they're still there"
+            )
+            await asyncio.sleep(10)
+
+    @session.on("user_state_changed")
+    def _on_user_state_changed(ev: UserStateChangedEvent) -> None:
+        nonlocal idle_task
+        if ev.new_state == "away":
+            if idle_task is None or idle_task.done():
+                idle_task = asyncio.create_task(_nudge_while_idle())
+        elif idle_task is not None:
+            idle_task.cancel()
+            idle_task = None
 
     await session.start(agent=DriveThruAgent(userdata=userdata), room=ctx.room)
     await background_audio.start(room=ctx.room, agent_session=session)

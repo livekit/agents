@@ -58,6 +58,7 @@ class STTOptions:
     eot_timeout_ms: NotGivenOr[int] = NOT_GIVEN
     mip_opt_out: bool = False
     tags: NotGivenOr[list[str]] = NOT_GIVEN
+    language_hint: NotGivenOr[list[str]] = NOT_GIVEN
 
 
 class STTv2(stt.STT):
@@ -71,6 +72,7 @@ class STTv2(stt.STT):
         eot_timeout_ms: NotGivenOr[int] = NOT_GIVEN,
         keyterm: NotGivenOr[str | list[str]] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
+        language_hint: NotGivenOr[list[str]] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = "wss://api.deepgram.com/v2/listen",
@@ -88,6 +90,7 @@ class STTv2(stt.STT):
             eot_timeout_ms: The timeout for end of speech detection. Defaults to 3000.
             keyterm: str or list of str of key terms to improve recognition accuracy. Defaults to None.
             tags: List of tags to add to the requests for usage reporting. Defaults to NOT_GIVEN.
+            language_hint: List of str of language hints to bias the model for improved accuracy. Only usable with `flux-general-multi`. Defaults to NOT_GIVEN.
             api_key: Your Deepgram API key. If not provided, will look for DEEPGRAM_API_KEY environment variable.
             http_session: Optional aiohttp ClientSession to use for requests.
             base_url: The base URL for Deepgram API. Defaults to "https://api.deepgram.com/v1/listen".
@@ -107,6 +110,7 @@ class STTv2(stt.STT):
                 interim_results=True,
                 aligned_transcript="word",
                 offline_recognize=False,
+                keyterms=True,
             )
         )
 
@@ -128,18 +132,29 @@ class STTv2(stt.STT):
                     f"eager_eot_threshold ({eager_eot_threshold}) must be less than or equal to eot_threshold "
                     f"({effective_eot}); increase eot_threshold (max 0.9) to use a higher eager value"
                 )
+        if language_hint and model != "flux-general-multi":
+            logger.warning(
+                "`language_hint` is only supported by `flux-general-multi` and will be ignored for model '%s'",
+                model,
+            )
 
         self._opts = STTOptions(
             model=model,
             sample_rate=sample_rate,
-            keyterm=keyterm if is_given(keyterm) else [],
+            keyterm=([keyterm] if isinstance(keyterm, str) else list(keyterm))
+            if is_given(keyterm)
+            else [],
             mip_opt_out=mip_opt_out,
             tags=_validate_tags(tags) if is_given(tags) else [],
+            language_hint=language_hint if is_given(language_hint) else [],
             eager_eot_threshold=eager_eot_threshold,
             eot_threshold=eot_threshold,
             eot_timeout_ms=eot_timeout_ms,
             endpoint_url=base_url,
         )
+        # user keyterms; _opts.keyterm holds the effective set (user + session)
+        self._user_keyterm: list[str] = list(self._opts.keyterm)
+        self._session_keyterms: list[str] = []
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStreamv2]()
 
@@ -196,6 +211,7 @@ class STTv2(stt.STT):
         keyterm: NotGivenOr[str | list[str]] = NOT_GIVEN,
         mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
+        language_hint: NotGivenOr[list[str]] = NOT_GIVEN,
         endpoint_url: NotGivenOr[str] = NOT_GIVEN,
         # deprecated
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
@@ -226,11 +242,20 @@ class STTv2(stt.STT):
             )
             keyterm = keyterms
         if is_given(keyterm):
+            self._user_keyterm = [keyterm] if isinstance(keyterm, str) else list(keyterm)
+            keyterm = list(dict.fromkeys([*self._user_keyterm, *self._session_keyterms]))
             self._opts.keyterm = keyterm
         if is_given(mip_opt_out):
             self._opts.mip_opt_out = mip_opt_out
         if is_given(tags):
             self._opts.tags = _validate_tags(tags)
+        if is_given(language_hint):
+            self._opts.language_hint = language_hint
+            if language_hint and self._opts.model != "flux-general-multi":
+                logger.warning(
+                    "`language_hint` is only supported by `flux-general-multi` and will be ignored for model '%s'",
+                    self._opts.model,
+                )
         if is_given(endpoint_url):
             self._opts.endpoint_url = endpoint_url
         if is_given(eager_eot_threshold):
@@ -246,8 +271,19 @@ class STTv2(stt.STT):
                 mip_opt_out=mip_opt_out,
                 endpoint_url=endpoint_url,
                 tags=tags,
+                language_hint=language_hint,
                 eager_eot_threshold=eager_eot_threshold,
             )
+
+    def _update_session_keyterms(self, keyterms: list[str]) -> None:
+        if keyterms == self._session_keyterms:
+            return
+        self._session_keyterms = list(keyterms)
+        merged = list(dict.fromkeys([*self._user_keyterm, *keyterms]))
+        self._opts.keyterm = merged
+        for stream in self._streams:
+            # tuned in-band, safe to apply mid-utterance
+            stream.update_options(keyterm=merged)
 
 
 class SpeechStreamv2(stt.SpeechStream):
@@ -278,6 +314,9 @@ class SpeechStreamv2(stt.SpeechStream):
 
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
+        # active connection for in-band Configure updates; None while disconnected
+        self._ws: aiohttp.ClientWebSocketResponse | None = None
+        self._reconfigure_atask: asyncio.Task[None] | None = None
 
     def update_options(
         self,
@@ -289,6 +328,7 @@ class SpeechStreamv2(stt.SpeechStream):
         keyterm: NotGivenOr[str | list[str]] = NOT_GIVEN,
         mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
+        language_hint: NotGivenOr[list[str]] = NOT_GIVEN,
         endpoint_url: NotGivenOr[str] = NOT_GIVEN,
         eager_eot_threshold: NotGivenOr[float] = NOT_GIVEN,
         # deprecated
@@ -313,12 +353,62 @@ class SpeechStreamv2(stt.SpeechStream):
             self._opts.mip_opt_out = mip_opt_out
         if is_given(tags):
             self._opts.tags = _validate_tags(tags)
+        if is_given(language_hint):
+            self._opts.language_hint = language_hint
         if is_given(endpoint_url):
             self._opts.endpoint_url = endpoint_url
         if is_given(eager_eot_threshold):
             self._opts.eager_eot_threshold = eager_eot_threshold
 
-        self._reconnect_event.set()
+        # these only take effect on a fresh connection
+        needs_reconnect = any(
+            is_given(opt) for opt in (model, sample_rate, mip_opt_out, tags, endpoint_url)
+        )
+        if needs_reconnect:
+            # reconnect carries the latest options
+            self._reconnect_event.set()
+            return
+
+        # send only changed fields; Flux keeps omitted ones unchanged
+        # https://developers.deepgram.com/docs/flux/configure
+        thresholds: dict[str, Any] = {}
+        if is_given(eager_eot_threshold):
+            thresholds["eager_eot_threshold"] = eager_eot_threshold
+        if is_given(eot_threshold):
+            thresholds["eot_threshold"] = eot_threshold
+        if is_given(eot_timeout_ms):
+            thresholds["eot_timeout_ms"] = eot_timeout_ms
+
+        changed_options: dict[str, Any] = {}
+        if thresholds:
+            changed_options["thresholds"] = thresholds
+        if is_given(keyterm):
+            # keyterms replaces the whole list, so send the full effective set
+            changed_options["keyterms"] = self._opts.keyterm
+        if is_given(language_hint):
+            changed_options["language_hints"] = self._opts.language_hint
+
+        if changed_options:
+            # chain off the previous send so deltas reach the server in order
+            self._reconfigure_atask = asyncio.create_task(
+                self._send_configure(changed_options, self._reconfigure_atask)
+            )
+
+    async def _send_configure(
+        self, options: dict[str, Any], prev: asyncio.Task[None] | None
+    ) -> None:
+        if prev is not None:
+            await asyncio.gather(prev, return_exceptions=True)
+
+        ws = self._ws
+        if ws is None or ws.closed:
+            # not connected; next connection carries the latest options
+            return
+        try:
+            await ws.send_str(json.dumps({"type": "Configure", **options}))
+        except Exception:
+            # closing; next connection carries the latest options
+            logger.debug("failed to send Configure to deepgram")
 
     async def _run(self) -> None:
         closing_ws = False
@@ -403,6 +493,8 @@ class SpeechStreamv2(stt.SpeechStream):
         while True:
             try:
                 ws = await self._connect_ws()
+                # expose the connection for in-band Configure updates
+                self._ws = ws
                 tasks = [
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
@@ -430,6 +522,10 @@ class SpeechStreamv2(stt.SpeechStream):
                     tasks_group.cancel()
                     tasks_group.exception()  # retrieve the exception
             finally:
+                self._ws = None
+                if self._reconfigure_atask is not None:
+                    await utils.aio.gracefully_cancel(self._reconfigure_atask)
+                    self._reconfigure_atask = None
                 if ws is not None:
                     await ws.close()
 
@@ -455,6 +551,9 @@ class SpeechStreamv2(stt.SpeechStream):
 
         if self._opts.tags:
             live_config["tag"] = self._opts.tags
+
+        if self._opts.language_hint:
+            live_config["language_hint"] = self._opts.language_hint
 
         try:
             ws = await asyncio.wait_for(
@@ -544,6 +643,12 @@ class SpeechStreamv2(stt.SpeechStream):
                 end_event = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                 self._event_ch.send_nowait(end_event)
 
+        elif data["type"] == "ConfigureSuccess":
+            logger.debug("deepgram applied Configure update", extra={"data": data})
+
+        elif data["type"] == "ConfigureFailure":
+            logger.warning("deepgram rejected Configure update", extra={"data": data})
+
         elif data["type"] == "Error":
             logger.warning("deepgram sent an error", extra={"data": data})
             desc = data.get("description") or "unknown error from deepgram"
@@ -560,12 +665,18 @@ def _parse_transcription(
         return []
     confidence = sum(word["confidence"] for word in words) / len(words) if words else 0
 
+    detected_languages = data.get("languages") or []
+    primary_language = (
+        LanguageCode(detected_languages[0]) if detected_languages else LanguageCode(language)
+    )
+
     sd = stt.SpeechData(
-        language=LanguageCode(language),
+        language=primary_language,
         start_time=data.get("audio_window_start", 0) + start_time_offset,
         end_time=data.get("audio_window_end", 0) + start_time_offset,
         confidence=confidence,
         text=transcript or "",
+        source_languages=[LanguageCode(lang) for lang in detected_languages] or None,
         words=[
             TimedString(
                 text=word.get("word", ""),

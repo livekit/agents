@@ -1,6 +1,6 @@
 import re
-from collections.abc import AsyncIterable, Callable, Sequence
-from typing import Literal
+from collections.abc import AsyncGenerator, AsyncIterable, Callable, Sequence
+from typing import Any, Literal
 
 from .filters import filter_emoji, filter_markdown
 
@@ -15,20 +15,51 @@ _BUILTIN_TRANSFORMS: dict[str, Callable[[AsyncIterable[str]], AsyncIterable[str]
 
 
 def _apply_text_transforms(
-    text: AsyncIterable[str], transforms: Sequence[TextTransforms]
-) -> AsyncIterable[str]:
+    text: AsyncIterable[Any], transforms: Sequence[TextTransforms]
+) -> AsyncIterable[Any]:
+    # Resolve + validate eagerly so a bad transform name raises at call time.
+    resolved: list[Callable[[AsyncIterable[str]], AsyncIterable[str]]] = []
     for transform in transforms:
         if isinstance(transform, str):
             if transform not in _BUILTIN_TRANSFORMS:
                 raise ValueError(
                     f"Invalid transform: {transform}, available transforms: {_BUILTIN_TRANSFORMS.keys()}"
                 )
-            text = _BUILTIN_TRANSFORMS[transform](text)
+            resolved.append(_BUILTIN_TRANSFORMS[transform])
         elif callable(transform):
-            text = transform(text)
+            resolved.append(transform)
         else:
             raise ValueError(f"Invalid transform: {transform}, must be a string or callable")
-    return text
+
+    async def _gen() -> AsyncGenerator[Any, None]:
+        aiter = text.__aiter__()
+        try:
+            first = await aiter.__anext__()
+        except StopAsyncIteration:
+            return
+
+        async def _rechained() -> AsyncGenerator[Any, None]:
+            yield first
+            async for chunk in aiter:
+                yield chunk
+
+        # The transforms are str-only and stateful (they buffer across chunks). A
+        # stream carrying non-str chunks — e.g. structured-output BaseModel deltas —
+        # is passed through untouched; the producer emits homogeneous streams
+        # (all-str plain text, or all-BaseModel structured output), so the first
+        # chunk's type decides the whole stream.
+        if not isinstance(first, str):
+            async for chunk in _rechained():
+                yield chunk
+            return
+
+        stream: AsyncIterable[str] = _rechained()
+        for fn in resolved:
+            stream = fn(stream)
+        async for chunk in stream:
+            yield chunk
+
+    return _gen()
 
 
 def replace(

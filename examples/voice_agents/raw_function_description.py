@@ -11,7 +11,7 @@ from livekit.agents import (
     cli,
     function_tool,
 )
-from livekit.plugins import openai, silero  # noqa: F401
+from livekit.plugins import openai  # noqa: F401
 
 # This demo defines an agent using a raw function tool to open predefined gates via enum input.
 # When using raw function tools, compatibility across LLM providers is not guaranteed,
@@ -72,7 +72,7 @@ async def entrypoint(ctx: JobContext):
         # stt=openai.STT(),
         # llm=openai.LLM(),
         # tts=openai.TTS(),
-        # vad=silero.VAD.load(),
+        # vad=inference.VAD(model="silero"),
         llm=openai.realtime.RealtimeModel()
     )
     await session.start(RawFunctionAgent(), room=ctx.room)

@@ -40,10 +40,10 @@ WORKDIR /home/appuser
 COPY requirements.txt .
 RUN python -m pip install --user --no-cache-dir -r requirements.txt
 
-COPY . .
-
 # ensure that any dependent models are downloaded at build-time
-RUN python myagent.py download-files
+RUN python -m livekit.agents download-files
+
+COPY . .
 
 # Run the application.
 ENTRYPOINT ["python", "myagent.py"]

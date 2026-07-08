@@ -35,119 +35,117 @@ if TYPE_CHECKING:
     from ..llm import LLM, Tool, Toolset
 
 
-class Instructions(str):
-    """Instructions that adapt based on the user's input modality (audio vs. text).
+class Instructions:
+    """Instructions with optional modality-specific additions.
 
-    ``str(self)`` is what providers see when treating this as a plain string.
-    By default it equals the ``audio`` variant; after :meth:`as_modality` it
-    equals the chosen variant.
+    Construction::
 
-    ``_audio_variant`` and ``_text_variant`` are always preserved so
-    :meth:`as_modality` can be called again for a different modality (e.g.,
-    when the same ``ChatContext`` is reused across tool-call turns).
+        # Simple — same instructions for all modalities
+        Instructions("You are a helpful assistant.")
+
+        # With modality-specific additions
+        Instructions(
+            "You are a helpful assistant.",
+            audio="Keep responses short for voice.",
+            text="Use markdown formatting.",
+        )
+
+    Rendering::
+
+        instr.render()                              # → common text
+        instr.render(modality="audio")               # → common + audio addition
+        instr.render(modality="text", name="Alex")   # → common + text, with {name} filled
     """
 
-    _audio_variant: str
-    _text_variant: str | None
+    def __init__(
+        self,
+        common: str = "",
+        *,
+        audio: str | None = None,
+        text: str | None = None,
+    ) -> None:
+        self.common = common
+        self.audio = audio
+        self.text = text
 
-    def __new__(
-        cls, audio: str, *, text: str | None = None, _represent: str | None = None
-    ) -> Instructions:
-        """Create an Instructions object.
+    def render(
+        self,
+        *,
+        modality: Literal["audio", "text"] | None = None,
+        data: dict[str, object] | None = None,
+    ) -> str:
+        """Render instructions to a plain string.
 
         Args:
-            audio: The audio (voice) variant.
-            text: The text variant.  Falls back to ``audio`` when omitted.
+            modality: If given, appends the modality-specific addition to the common text.
+            data: Template variables to fill. Missing placeholders log a warning
+                and are replaced with empty strings.
         """
-        instance = super().__new__(cls, _represent if _represent is not None else audio)
-        instance._audio_variant = audio
-        instance._text_variant = text
-        return instance
+        parts = [self.common]
+        if modality is not None:
+            addition = self.audio if modality == "audio" else self.text
+            if addition:
+                parts.append(addition)
 
-    @property
-    def audio(self) -> str:
-        """The audio (voice) variant of the instructions."""
-        return self._audio_variant
+        result = "\n\n".join(p for p in parts if p)
 
-    @property
-    def text(self) -> str:
-        """The text variant of the instructions.
+        if data:
+            result = utils.misc.safe_render(result, data)
 
-        Falls back to the audio variant when no text variant was provided.
+        return result
+
+    @staticmethod
+    def resolve_template(template: str, **kwargs: object) -> Instructions:
+        """Fill a template string, producing an ``Instructions`` with modality variants.
+
+        If any kwarg value is an ``Instructions`` object, its ``common``/``audio``/``text``
+        parts are substituted into the matching variant of the result. This is used by
+        workflow tasks to build modality-aware instructions from a single template.
         """
-        return self._text_variant if self._text_variant is not None else self._audio_variant
-
-    def as_modality(self, modality: Literal["audio", "text"]) -> Instructions:
-        """Return a copy whose ``str`` value is the correct variant for *modality*.
-
-        Both ``_audio_variant`` and ``_text_variant`` are preserved so this can
-        be called again for a different modality (e.g. across tool-call turns).
-        """
-        return Instructions(
-            audio=self._audio_variant,
-            text=self._text_variant,
-            _represent=self.audio if modality == "audio" else self.text,
-        )
-
-    def __add__(self, other: object) -> Instructions:
-        """Concatenate, propagating both variants and the current str value."""
-        if isinstance(other, Instructions):
-            has_text = self._text_variant is not None or other._text_variant is not None
+        any_instructions = any(isinstance(v, Instructions) for v in kwargs.values())
+        if any_instructions:
+            common_kw: dict[str, object] = {
+                k: str(v) if isinstance(v, Instructions) else v for k, v in kwargs.items()
+            }
+            audio_kw: dict[str, object] = {
+                # an explicit "" removes the section; only None falls back to common
+                k: (v.audio if v.audio is not None else str(v))
+                if isinstance(v, Instructions)
+                else v
+                for k, v in kwargs.items()
+            }
+            text_kw: dict[str, object] = {
+                k: (v.text if v.text is not None else str(v)) if isinstance(v, Instructions) else v
+                for k, v in kwargs.items()
+            }
             return Instructions(
-                audio=self.audio + other.audio,
-                text=(self.text + other.text) if has_text else None,
-                _represent=str(self) + str(other),
+                common=utils.misc.safe_render(template, common_kw),
+                audio=utils.misc.safe_render(template, audio_kw),
+                text=utils.misc.safe_render(template, text_kw),
             )
-        if isinstance(other, str):
-            return Instructions(
-                audio=self.audio + other,
-                text=(self._text_variant + other) if self._text_variant is not None else None,
-                _represent=str(self) + other,
-            )
-        raise TypeError(f"Cannot add Instructions and {type(other)}")
+        else:
+            rendered = utils.misc.safe_render(template, kwargs)
+            return Instructions(common=rendered)
 
-    def __radd__(self, other: object) -> Instructions:
-        """Support ``plain_str + Instructions``, propagating both variants."""
-        if isinstance(other, str):
-            return Instructions(
-                audio=other + self.audio,
-                text=(other + self._text_variant) if self._text_variant is not None else None,
-                _represent=other + str(self),
-            )
-        raise TypeError(f"Cannot add {type(other)} and Instructions")
+    def __str__(self) -> str:
+        return self.common
 
     def __repr__(self) -> str:
-        return f"Instructions({str(self)!r})"
+        return f"Instructions({self.common!r})"
 
-    @classmethod
-    def __get_pydantic_core_schema__(cls, source_type: Any, handler: Any) -> Any:
-        from pydantic_core import core_schema
+    def __hash__(self) -> int:
+        return hash((self.common, self.audio, self.text))
 
-        def validate_python(v: Any) -> Instructions:
-            if isinstance(v, Instructions):
-                return v
-            if isinstance(v, dict) and v.get("type") == "instructions":
-                return cls(v["audio"], text=v.get("text"))
-            raise ValueError(f"Cannot convert {type(v)!r} to Instructions")
-
-        def validate_json(v: Any) -> Instructions:
-            if isinstance(v, dict) and v.get("type") == "instructions":
-                return cls(v["audio"], text=v.get("text"))
-            raise ValueError(f"Cannot convert {type(v)!r} to Instructions")
-
-        def serialize(v: Instructions) -> dict[str, Any]:
-            d: dict[str, Any] = {"type": "instructions", "audio": v.audio}
-            if v._text_variant is not None:
-                d["text"] = v._text_variant
-            return d
-
-        return core_schema.json_or_python_schema(
-            python_schema=core_schema.no_info_plain_validator_function(validate_python),
-            json_schema=core_schema.no_info_plain_validator_function(validate_json),
-            serialization=core_schema.plain_serializer_function_ser_schema(
-                serialize, info_arg=False
-            ),
-        )
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, Instructions):
+            return (
+                self.common == other.common
+                and self.audio == other.audio
+                and self.text == other.text
+            )
+        if isinstance(other, str):
+            return self.common == other
+        return NotImplemented
 
 
 class ImageContent(BaseModel):
@@ -263,6 +261,16 @@ class MetricsReport(TypedDict, total=False):
     Assistant `ChatMessage` only
     """
 
+    playback_latency: float
+    """Delay between forwarding the first audio frame and the `AudioOutput` reporting
+    playback started. Near-zero for the default room output (self-reported when the frame
+    is pushed to the track, so it doesn't account for network delivery to the client);
+    meaningful when a remote avatar worker is in the chain and reports playback via
+    the `lk.playback_started` RPC.
+
+    Assistant `ChatMessage` only
+    """
+
     e2e_latency: float
     """Time from when the user finished speaking to when the agent began responding
 
@@ -298,8 +306,23 @@ class ChatMessage(BaseModel):
             return None
         return "\n".join(text_parts)
 
+    @property
+    def plain_text_content(self) -> str | None:
+        """
+        Returns a string of all text content without any expressive tags in the message.
 
-ChatContent: TypeAlias = ImageContent | AudioContent | Instructions | str
+        Multiple text content items will be joined by a newline.
+        """
+        raw = self.text_content
+        if raw is None:
+            return None
+
+        from ..tts._provider_format import strip_all_markup
+
+        return strip_all_markup(raw)
+
+
+ChatContent: TypeAlias = ImageContent | AudioContent | str
 
 
 class FunctionCall(BaseModel):
@@ -340,7 +363,7 @@ class AgentConfigUpdate(BaseModel):
     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
     type: Literal["agent_config_update"] = Field(default="agent_config_update")
 
-    instructions: Instructions | str | None = None
+    instructions: str | None = None
     tools_added: list[str] | None = None
     tools_removed: list[str] | None = None
 
@@ -399,7 +422,9 @@ class ChatContext:
         if is_given(extra):
             kwargs["extra"] = extra
 
-        if isinstance(content, str):
+        if isinstance(content, Instructions):
+            message = ChatMessage(role=role, content=[str(content)], **kwargs)
+        elif isinstance(content, str):
             message = ChatMessage(role=role, content=[content], **kwargs)
         else:
             message = ChatMessage(role=role, content=content, **kwargs)
@@ -418,6 +443,16 @@ class ChatContext:
         for _item in items:
             idx = self.find_insertion_index(created_at=_item.created_at)
             self._items.insert(idx, _item)
+
+    def remove(self, item: ChatItem | str) -> None:
+        """Remove the first item from the chat context by ChatItem or item ID.
+
+        Raises ValueError if the item/ID is not found.
+        """
+        idx = self.index_by_id(item.id if not isinstance(item, str) else item)
+        if idx is None:
+            raise ValueError(f"Item not found: {item!r}")
+        self._items.pop(idx)
 
     def get_by_id(self, item_id: str) -> ChatItem | None:
         return next((item for item in self.items if item.id == item_id), None)
@@ -567,6 +602,7 @@ class ChatContext:
         exclude_function_call: bool = False,
         exclude_metrics: bool = False,
         exclude_config_update: bool = False,
+        strip_markup: bool = False,
     ) -> dict[str, Any]:
         items: list[ChatItem] = []
         for item in self.items:
@@ -585,6 +621,13 @@ class ChatContext:
                     item.content = [c for c in item.content if not isinstance(c, ImageContent)]
                 if exclude_audio:
                     item.content = [c for c in item.content if not isinstance(c, AudioContent)]
+                # only strip expressive tags in assistant messages
+                if strip_markup and item.role == "assistant":
+                    from ..tts._provider_format import strip_all_markup
+
+                    item.content = [
+                        strip_all_markup(c) if isinstance(c, str) else c for c in item.content
+                    ]
 
             items.append(item)
 
@@ -635,8 +678,8 @@ class ChatContext:
 
     @overload
     def to_provider_format(
-        self, format: Literal["mistralai"], *, inject_dummy_user_message: bool = True
-    ) -> tuple[list[dict], Literal[None]]: ...
+        self, format: Literal["mistralai"]
+    ) -> tuple[list[dict], _provider_format.mistralai.MistralFormatData]: ...
 
     @overload
     def to_provider_format(self, format: str, **kwargs: Any) -> tuple[list[dict], Any]: ...
@@ -670,7 +713,7 @@ class ChatContext:
         elif format == "anthropic":
             return _provider_format.anthropic.to_chat_ctx(self, **kwargs)
         elif format == "mistralai":
-            return _provider_format.mistralai.to_chat_ctx(self, **kwargs)
+            return _provider_format.mistralai.to_conversations_ctx(self)
         else:
             raise ValueError(f"Unsupported provider format: {format}")
 
@@ -738,8 +781,9 @@ class ChatContext:
                 if item.extra.get("is_summary") is True:  # avoid making summary of summaries
                     continue
 
-                text = (item.text_content or "").strip()
-                if text:
+                # strip markup from assistant turns only; user turns stay raw
+                content = item.plain_text_content if item.role == "assistant" else item.text_content
+                if (content or "").strip():
                     to_summarize.append(item)
             elif isinstance(item, (FunctionCall, FunctionCallOutput)):
                 to_summarize.append(item)
@@ -753,7 +797,8 @@ class ChatContext:
             if isinstance(m, (FunctionCall, FunctionCallOutput)):
                 contents.append(_function_call_item_to_message(m).text_content or "")
             else:
-                contents.append(to_xml(m.role, (m.text_content or "").strip()))
+                content = m.plain_text_content if m.role == "assistant" else m.text_content
+                contents.append(to_xml(m.role, (content or "").strip()))
 
         source_text = "\n".join(contents).strip()
 
@@ -829,6 +874,13 @@ class ChatContext:
         item_adapter = TypeAdapter(list[ChatItem])
         items = item_adapter.validate_python(data["items"])
         return cls(items)
+
+    def to_proto(self) -> agent_pb.agent_session.ChatContext:
+        from ..voice.remote_session import _chat_item_to_proto
+
+        return agent_pb.agent_session.ChatContext(
+            items=[_chat_item_to_proto(item) for item in self.items]
+        )
 
     @property
     def readonly(self) -> bool:

@@ -32,6 +32,7 @@ class LLM(openai.responses.LLM):
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         timeout: httpx.Timeout | None = None,
         reasoning: NotGivenOr[Reasoning] = NOT_GIVEN,
+        max_output_tokens: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
         """
         This automatically infers the following arguments from their corresponding environment variables if they are not provided:
@@ -68,6 +69,7 @@ class LLM(openai.responses.LLM):
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
             reasoning=reasoning,
+            max_output_tokens=max_output_tokens,
         )
         self._azure_client = azure_client
 

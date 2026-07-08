@@ -13,12 +13,17 @@ from livekit import rtc
 
 from ... import tokenize, utils
 from ...log import logger
-from ...types import NOT_GIVEN, NotGivenOr
+from ...tts._provider_format import TranscriptMarkupStripper, strip_all_markup
+from ...types import NOT_GIVEN, NotGivenOr, TimedString
 from ...utils import is_given
 from .. import io
 from ._speaking_rate import SpeakingRateDetector, SpeakingRateStream
 
 STANDARD_SPEECH_RATE = 3.83  # hyphens (syllables) per second
+
+# max time aclose() waits for the forwarding/speaking-rate tasks to drain before
+# cancelling them, so a stalled downstream output can't deadlock segment rotation
+_SEGMENT_ACLOSE_TIMEOUT = 5.0
 
 
 @dataclass
@@ -132,8 +137,15 @@ class _SegmentSynchronizerImpl:
 
     def __init__(self, options: _TextSyncOptions, *, next_in_chain: io.TextOutput | None) -> None:
         self._opts = options
+        self._id = utils.shortuuid("SSI_")  # to correlate warnings to a specific impl
         self._text_data = _TextData(word_stream=self._opts.word_tokenizer.stream())
         self._audio_data = _AudioData(sr_stream=self._opts.speaking_rate_detector.stream())
+
+        # paces against the visible text only; stateful because a markup tag with
+        # spaces in its attributes (e.g. <expr type="expression" label="warm surprise"/>)
+        # is shredded across word tokens and a per-token strip can't recognize the
+        # fragments — each would otherwise be paced as if it were spoken
+        self._pacing_stripper = TranscriptMarkupStripper()
 
         self._next_in_chain = next_in_chain
         self._start_wall_time: float | None = None
@@ -148,7 +160,7 @@ class _SegmentSynchronizerImpl:
         self._speed_on_speaking_unit: float | None = None  # hyphens per speaking unit
         # a speaking unit is defined by the speaking rate estimation method, it's a relative unit
 
-        self._out_ch = utils.aio.Chan[str]()
+        self._out_ch = utils.aio.Chan[TimedString]()
         self._close_future = asyncio.Future[None]()
 
         self._main_atask = asyncio.create_task(self._main_task())
@@ -158,6 +170,10 @@ class _SegmentSynchronizerImpl:
 
         self._playback_completed = False
         self._interrupted = False
+
+    @property
+    def id(self) -> str:
+        return self._id
 
     @property
     def closed(self) -> bool:
@@ -171,23 +187,41 @@ class _SegmentSynchronizerImpl:
     def text_input_ended(self) -> bool:
         return self._text_data.done
 
-    def push_audio(self, frame: rtc.AudioFrame) -> None:
+    def on_playback_started(self, start_time: float) -> None:
         if self.closed:
-            logger.warning("_SegmentSynchronizerImpl.push_audio called after close")
+            logger.warning(
+                "_SegmentSynchronizerImpl.on_playback_started called after close",
+                extra={"impl_id": self._id},
+            )
             return
 
-        # the first audio frame we receive marks the start of the sync
-        # see `TranscriptSynchronizer` docstring
-        if self._start_wall_time is None and frame.duration > 0:
-            self._start_wall_time = time.time()
-            self._start_fut.set()
+        if self._start_fut.is_set():
+            logger.warning(
+                "_SegmentSynchronizerImpl.on_playback_started called after start_fut is set",
+                extra={"impl_id": self._id},
+            )
+            return
+
+        self._start_wall_time = start_time
+        self._start_fut.set()
+
+    def push_audio(self, frame: rtc.AudioFrame) -> None:
+        if self.closed:
+            logger.warning(
+                "_SegmentSynchronizerImpl.push_audio called after close",
+                extra={"impl_id": self._id},
+            )
+            return
 
         self._audio_data.sr_stream.push_frame(frame)
         self._audio_data.pushed_duration += frame.duration
 
     def end_audio_input(self) -> None:
         if self.closed:
-            logger.warning("_SegmentSynchronizerImpl.end_audio_input called after close")
+            logger.warning(
+                "_SegmentSynchronizerImpl.end_audio_input called after close",
+                extra={"impl_id": self._id},
+            )
             return
 
         self._audio_data.done = True
@@ -196,7 +230,9 @@ class _SegmentSynchronizerImpl:
 
     def push_text(self, text: str) -> None:
         if self.closed:
-            logger.warning("_SegmentSynchronizerImpl.push_text called after close")
+            logger.warning(
+                "_SegmentSynchronizerImpl.push_text called after close", extra={"impl_id": self._id}
+            )
             return
 
         start_time, end_time = None, None
@@ -216,7 +252,10 @@ class _SegmentSynchronizerImpl:
 
     def end_text_input(self) -> None:
         if self.closed:
-            logger.warning("_SegmentSynchronizerImpl.end_text_input called after close")
+            logger.warning(
+                "_SegmentSynchronizerImpl.end_text_input called after close",
+                extra={"impl_id": self._id},
+            )
             return
 
         self._text_data.done = True
@@ -226,7 +265,9 @@ class _SegmentSynchronizerImpl:
 
     def pause(self) -> None:
         if self.closed:
-            logger.warning("_SegmentSynchronizerImpl.pause called after close")
+            logger.warning(
+                "_SegmentSynchronizerImpl.pause called after close", extra={"impl_id": self._id}
+            )
             return
 
         if self._paused_wall_time is None:
@@ -235,7 +276,9 @@ class _SegmentSynchronizerImpl:
 
     def resume(self) -> None:
         if self.closed:
-            logger.warning("_SegmentSynchronizerImpl.resume called after close")
+            logger.warning(
+                "_SegmentSynchronizerImpl.resume called after close", extra={"impl_id": self._id}
+            )
             return
 
         if self._paused_wall_time is not None:
@@ -253,7 +296,10 @@ class _SegmentSynchronizerImpl:
         if not self._text_data.done or not self._audio_data.done:
             return
 
-        pushed_hyphens = len(self._calc_hyphens(self._text_data.pushed_text))
+        # pushed_text carries the raw LLM markup (the room output strips it downstream);
+        # pace against the visible text only so expressive tags don't inflate the speed
+        clean_pushed_text = strip_all_markup(self._text_data.pushed_text)
+        pushed_hyphens = len(self._calc_hyphens(clean_pushed_text))
         # hyphens per second
         if self._audio_data.pushed_duration > 0:
             self._speed = pushed_hyphens / self._audio_data.pushed_duration
@@ -267,14 +313,21 @@ class _SegmentSynchronizerImpl:
 
     def mark_playback_finished(self, *, playback_position: float, interrupted: bool) -> None:
         if self.closed:
-            logger.warning("_SegmentSynchronizerImpl.playback_finished called after close")
+            logger.warning(
+                "_SegmentSynchronizerImpl.playback_finished called after close",
+                extra={"impl_id": self._id},
+            )
             return
 
         self._interrupted = interrupted
         if not self._text_data.done or not self._audio_data.done:
             logger.warning(
                 "_SegmentSynchronizerImpl.playback_finished called before text/audio input is done",
-                extra={"text_done": self._text_data.done, "audio_done": self._audio_data.done},
+                extra={
+                    "impl_id": self._id,
+                    "text_done": self._text_data.done,
+                    "audio_done": self._audio_data.done,
+                },
             )
             return
 
@@ -328,10 +381,17 @@ class _SegmentSynchronizerImpl:
                 return
 
             if self._playback_completed:
-                self._out_ch.send_nowait(word)
+                self._out_ch.send_nowait(
+                    TimedString(word, end_time=time.time() - self._start_wall_time)
+                )
                 continue
 
-            word_hyphens = len(self._opts.hyphenate_word(word))
+            # forward the raw token (the room output strips markup and surfaces the
+            # expression downstream), but pace against the visible text only so markup
+            # adds no delay. The stripper holds back an unclosed tag across tokens and
+            # releases the clean text once it completes.
+            clean_word = self._pacing_stripper.push(word)
+            word_hyphens = len(self._calc_hyphens(clean_word)) if clean_word.strip() else 0
             elapsed = time.time() - self._start_wall_time - self._paused_duration
 
             d_hyphens = 0
@@ -361,7 +421,9 @@ class _SegmentSynchronizerImpl:
                 delay = 0
 
             await self._sleep_if_not_closed(delay / 2.0)
-            self._out_ch.send_nowait(word)
+            self._out_ch.send_nowait(
+                TimedString(word, end_time=time.time() - self._start_wall_time)
+            )
             await self._sleep_if_not_closed(delay / 2.0)
 
             self._text_data.forwarded_hyphens += word_hyphens
@@ -384,12 +446,25 @@ class _SegmentSynchronizerImpl:
             return
 
         self._close_future.set_result(None)
+        if self._start_wall_time is None:
+            # avoid assertion error in _main_task if playback completed
+            self._start_wall_time = time.time()
         self._start_fut.set()  # avoid deadlock of main_task in case it never started
         self._output_enabled_ev.set()
         await self._text_data.word_stream.aclose()
         await self._audio_data.sr_stream.aclose()
-        await self._capture_atask
-        await self._speaking_rate_atask
+
+        # bound the drain of the forwarding/speaking-rate tasks
+        _, pending = await asyncio.wait(
+            [self._capture_atask, self._speaking_rate_atask],
+            timeout=_SEGMENT_ACLOSE_TIMEOUT,
+        )
+        if pending:
+            logger.warning(
+                "_SegmentSynchronizerImpl.aclose timed out draining tasks, cancelling them",
+                extra={"impl_id": self._id},
+            )
+            await utils.aio.cancel_and_wait(*pending)
 
 
 class TranscriptSynchronizer:
@@ -397,7 +472,7 @@ class TranscriptSynchronizer:
     Synchronizes text with audio playback timing.
 
     This class is responsible for synchronizing text with audio playback timing.
-    It currently assumes that the first push_audio is starting the audio playback of a segment.
+    It starts sending transcription when AudioOutput.on_playback_started is called.
     """
 
     def __init__(
@@ -431,6 +506,10 @@ class TranscriptSynchronizer:
         # track pause state at the synchronizer level to apply to new impls after rotation
         self._paused = False
 
+        # warn once per enabled cycle when only one of audio/text is detached; reset when
+        # the synchronizer transitions back to enabled
+        self._warned_asymmetric_detach = False
+
         # initial segment/first segment, recreated for each new segment
         self._impl = _SegmentSynchronizerImpl(options=self._opts, next_in_chain=next_in_chain_text)
         self._rotate_segment_atask: asyncio.Task[None] | None = None
@@ -457,6 +536,8 @@ class TranscriptSynchronizer:
             return
 
         self._enabled = enabled
+        if enabled:
+            self._warned_asymmetric_detach = False
         if not self._rotate_segment_atask or self._rotate_segment_atask.done():
             # avoid calling rotate_segment twice when closing the session during agent speaking
             # first time when speech interrupted, second time here when output detached
@@ -481,15 +562,19 @@ class TranscriptSynchronizer:
             with contextlib.suppress(Exception):
                 await old_task
 
+        old_impl = self._impl
         try:
-            await self._impl.aclose()
+            await old_impl.aclose()
         except Exception:
-            logger.exception("failed to close segment synchronizer impl during rotation")
+            logger.exception(
+                "failed to close segment synchronizer impl during rotation",
+                extra={"impl_id": old_impl.id},
+            )
 
         # always create a new impl even if aclose() failed, to avoid leaving
         # self._impl pointing to a closed impl which causes the agent to get stuck
         self._impl = _SegmentSynchronizerImpl(
-            options=self._opts, next_in_chain=self._text_output._next_in_chain
+            options=self._opts, next_in_chain=self._text_output.next_in_chain
         )
 
         # apply the current pause state to the new impl
@@ -501,7 +586,10 @@ class TranscriptSynchronizer:
             return
 
         if self._rotate_segment_atask and not self._rotate_segment_atask.done():
-            logger.warning("rotate_segment called while previous segment is still being rotated")
+            logger.warning(
+                "rotate_segment called while previous segment is still being rotated",
+                extra={"impl_id": self._impl.id},
+            )
 
         self._rotate_segment_atask = asyncio.create_task(
             self._rotate_segment_task(self._rotate_segment_atask)
@@ -524,29 +612,46 @@ class _SyncedAudioOutput(io.AudioOutput):
         super().__init__(
             label="TranscriptSynchronizer",
             next_in_chain=next_in_chain,
-            sample_rate=next_in_chain.sample_rate,
             capabilities=io.AudioOutputCapabilities(pause=True),
         )
-        self._next_in_chain: io.AudioOutput = next_in_chain  # redefined for better typing
         self._synchronizer = synchronizer
         self._pushed_duration: float = 0.0
+
+    @property
+    def sample_rate(self) -> int | None:
+        if self._sample_rate is not None:
+            return self._sample_rate
+        return self.next_in_chain.sample_rate if self.next_in_chain else None
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         # using barrier() on capture should be sufficient, flush() must not be called if
         # capture_frame isn't completed
         await self._synchronizer.barrier()
 
-        await self._next_in_chain.capture_frame(frame)  # passthrough audio
+        if self.next_in_chain:
+            await self.next_in_chain.capture_frame(frame)  # passthrough audio
         await super().capture_frame(frame)
         self._pushed_duration += frame.duration
 
         if not self._synchronizer.enabled:
+            if (
+                self._synchronizer._audio_attached
+                and not self._synchronizer._text_attached
+                and not self._synchronizer._warned_asymmetric_detach
+            ):
+                self._synchronizer._warned_asymmetric_detach = True
+                logger.warning(
+                    "TranscriptSynchronizer text output was detached while audio output is "
+                    "still active; transcription sync is disabled. This usually means "
+                    "session.output.transcription was replaced after AgentSession.start()."
+                )
             return
 
         if self._synchronizer._impl.audio_input_ended:
             # this should not happen if `on_playback_finished` is called after each flush
             logger.warning(
-                "_SegmentSynchronizerImpl audio marked as ended in capture audio, rotating segment"
+                "_SegmentSynchronizerImpl audio marked as ended in capture audio, rotating segment",
+                extra={"impl_id": self._synchronizer._impl.id},
             )
             self._synchronizer.rotate_segment()
             await self._synchronizer.barrier()
@@ -555,7 +660,8 @@ class _SyncedAudioOutput(io.AudioOutput):
 
     def flush(self) -> None:
         super().flush()
-        self._next_in_chain.flush()
+        if self.next_in_chain:
+            self.next_in_chain.flush()
 
         if not self._synchronizer.enabled:
             return
@@ -568,9 +674,15 @@ class _SyncedAudioOutput(io.AudioOutput):
         self._synchronizer._impl.end_audio_input()
 
     def clear_buffer(self) -> None:
-        self._next_in_chain.clear_buffer()
+        if self.next_in_chain:
+            self.next_in_chain.clear_buffer()
 
     # this is going to be automatically called by the next_in_chain
+    def on_playback_started(self, *, created_at: float) -> None:
+        super().on_playback_started(created_at=created_at)
+        if self._synchronizer.enabled:
+            self._synchronizer._impl.on_playback_started(start_time=created_at)
+
     def on_playback_finished(
         self,
         *,
@@ -626,7 +738,6 @@ class _SyncedTextOutput(io.TextOutput):
         self, synchronizer: TranscriptSynchronizer, *, next_in_chain: io.TextOutput | None
     ) -> None:
         super().__init__(label="TranscriptSynchronizer", next_in_chain=next_in_chain)
-        self._next_in_chain: io.TextOutput | None = next_in_chain
         self._synchronizer = synchronizer
         self._capturing = False
 
@@ -634,15 +745,27 @@ class _SyncedTextOutput(io.TextOutput):
         await self._synchronizer.barrier()
 
         if not self._synchronizer.enabled:  # passthrough text if the synchronizer is disabled
-            if self._next_in_chain:
-                await self._next_in_chain.capture_text(text)
+            if (
+                self._synchronizer._text_attached
+                and not self._synchronizer._audio_attached
+                and not self._synchronizer._warned_asymmetric_detach
+            ):
+                self._synchronizer._warned_asymmetric_detach = True
+                logger.warning(
+                    "TranscriptSynchronizer audio output was detached while text output is "
+                    "still active; transcription sync is disabled. This usually means "
+                    "session.output.audio was replaced after AgentSession.start()."
+                )
+            if self.next_in_chain:
+                await self.next_in_chain.capture_text(text)
             return
 
         self._capturing = True
         if self._synchronizer._impl.text_input_ended:
             # this should not happen if `on_playback_finished` is called after each flush
             logger.warning(
-                "_SegmentSynchronizerImpl text marked as ended in capture text, rotating segment"
+                "_SegmentSynchronizerImpl text marked as ended in capture text, rotating segment",
+                extra={"impl_id": self._synchronizer._impl.id},
             )
             self._synchronizer.rotate_segment()
             await self._synchronizer.barrier()
@@ -651,8 +774,8 @@ class _SyncedTextOutput(io.TextOutput):
 
     def flush(self) -> None:
         if not self._synchronizer.enabled:  # passthrough text if the synchronizer is disabled
-            if self._next_in_chain:
-                self._next_in_chain.flush()
+            if self.next_in_chain:
+                self.next_in_chain.flush()
             return
 
         if not self._capturing:

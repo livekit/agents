@@ -56,7 +56,7 @@ from livekit.agents import (
     room_io,
 )
 from livekit.agents.llm import function_tool
-from livekit.plugins import aws, silero
+from livekit.plugins import aws
 
 load_dotenv()
 
@@ -64,7 +64,7 @@ g = DDGS()
 
 
 @function_tool
-async def get_weather(city: str, units: str = "fahrenheit") -> dict[str, int | str] | ToolError:
+async def get_weather(city: str, units: str = "fahrenheit") -> dict[str, int | str]:
     """
     Retrieve the current weather for a city.
 
@@ -90,7 +90,7 @@ async def get_weather(city: str, units: str = "fahrenheit") -> dict[str, int | s
                 "humidity": weather.humidity,
             }
     except Exception as e:
-        return ToolError(f"Error getting weather for {city}: {e}")
+        raise ToolError(f"Error getting weather for {city}: {e}") from e
 
 
 @function_tool
@@ -112,7 +112,7 @@ async def search_web(query: str, max_results: int = 1) -> dict[str, Any]:
     try:
         results = g.text(query, max_results=max_results)
     except Exception as e:
-        return ToolError(f"Error searching the web: {e}")
+        raise ToolError(f"Error searching the web: {e}") from e
     d = {str(i): res for i, res in enumerate(results)}
     for v in d.values():
         v["url"] = v.pop("href")
@@ -120,7 +120,7 @@ async def search_web(query: str, max_results: int = 1) -> dict[str, Any]:
 
 
 @function_tool
-async def tell_joke(category: str = "Any") -> dict[str, Any] | ToolError:
+async def tell_joke(category: str = "Any") -> dict[str, Any]:
     """
     Tell a joke that pertains to the category of the user's request. Just choose a Pun category if they don't specify
 
@@ -152,7 +152,7 @@ async def tell_joke(category: str = "Any") -> dict[str, Any] | ToolError:
         else:
             return {"setup": joke["setup"], "delivery": joke["delivery"]}
     except Exception as e:
-        return ToolError(f"Error getting joke: {e}")
+        raise ToolError(f"Error getting joke: {e}") from e
 
 
 class Assistant(Agent):
@@ -221,7 +221,6 @@ async def entrypoint(ctx: agents.JobContext):
                     stt=aws.STT(),
                     llm=aws.LLM(),
                     tts=aws.TTS(),
-                    vad=silero.VAD.load(),
                 )
             else:
                 print("⚡ Using REALTIME mode: Nova Sonic 2.0")

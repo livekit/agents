@@ -13,7 +13,6 @@ from livekit.agents import (
     inference,
 )
 from livekit.agents.llm import function_tool
-from livekit.plugins import silero
 
 logger = logging.getLogger("get-email-agent")
 
@@ -40,7 +39,14 @@ class MyAgent(Agent):
     async def register_for_event(self, context: RunContext):
         "Start the registration process for the event."
 
-        email_result = await beta.workflows.GetEmailTask()
+        email_result = await beta.workflows.GetEmailTask(
+            instructions=beta.workflows.WorkflowInstructions(
+                persona=(
+                    "You are capturing the email address of the user for the event registration. "
+                    "You are only a single step in a broader system responsible solely for capturing an email address."
+                )
+            )
+        )
         email_address = email_result.email_address
 
         logger.info(f"User's email address: {email_address}")
@@ -54,7 +60,6 @@ server = AgentServer()
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
-        vad=silero.VAD.load(),
         llm=inference.LLM("openai/gpt-4.1-mini"),
         stt=inference.STT("deepgram/nova-3"),
         tts=inference.TTS("cartesia/sonic-3"),

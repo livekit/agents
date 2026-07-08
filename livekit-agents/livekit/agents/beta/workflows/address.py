@@ -7,55 +7,16 @@ from typing import TYPE_CHECKING, Any
 from ... import llm, stt, tts, vad
 from ...llm.chat_context import Instructions
 from ...llm.tool_context import ToolError, ToolFlag, function_tool
+from ...log import logger
 from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given
 from ...voice.agent import AgentTask
 from ...voice.events import RunContext
+from .utils import WorkflowInstructions
 
 if TYPE_CHECKING:
     from ...voice.agent import Agent, _AgentState
     from ...voice.turn import TurnDetectionMode
-
-
-_BASE_INSTRUCTIONS = """
-You are only a single step in a broader system, responsible solely for capturing an address.
-You will be handling addresses from any country.
-{modality_specific}
-Call `update_address` at the first opportunity whenever you form a new hypothesis about the address. (before asking any questions or providing any answers.)
-Don't invent new addresses, stick strictly to what the user said.
-{confirmation_instructions}
-If the address is unclear or invalid, or it takes too much back-and-forth, prompt for it in parts in this order: street address, unit number if applicable, locality, and country.
-Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary.
-Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called.\
-{extra_instructions}
-"""
-
-_AUDIO_SPECIFIC = """
-Expect that users will say address in different formats with fields filled like:
-- 'street_address': '450 SOUTH MAIN ST', 'unit_number': 'FLOOR 2', 'locality': 'SALT LAKE CITY UT 84101', 'country': 'UNITED STATES',
-- 'street_address': '123 MAPLE STREET', 'unit_number': 'APARTMENT 10', 'locality': 'OTTAWA ON K1A 0B1', 'country': 'CANADA',
-- 'street_address': 'GUOMAO JIE 3 HAO, CHAOYANG QU', 'unit_number': 'GUOMAO DA SHA 18 LOU 101 SHI', 'locality': 'BEIJING SHI 100000', 'country': 'CHINA',
-- 'street_address': '5 RUE DE L'ANCIENNE COMÉDIE', 'unit_number': 'APP C4', 'locality': '75006 PARIS', 'country': 'FRANCE',
-- 'street_address': 'PLOT 10, NEHRU ROAD', 'unit_number': 'OFFICE 403, 4TH FLOOR', 'locality': 'VILE PARLE (E), MUMBAI MAHARASHTRA 400099', 'country': 'INDIA',
-Normalize common spoken patterns silently:
-- Convert words like 'dash' and 'apostrophe' into symbols: `-`, `'`.
-- Convert spelled out numbers like 'six' and 'seven' into numerals: `6`, `7`.
-- Recognize patterns where users speak their address field followed by spelling: e.g., 'guomao g u o m a o'.
-- Filter out filler words or hesitations.
-- Recognize when there may be accents on certain letters if explicitly said or common in the location specified. Be sure to verify the correct accents if existent.
-Don't mention corrections. Treat inputs as possibly imperfect but fix them silently.
-When reading a numerical ordinal suffix (st, nd, rd, th), the number must be verbally expanded into its full, correctly pronounced word form.
-Do not read the number and the suffix letters separately.
-Confirm postal codes by reading them out digit-by-digit as a sequence of single numbers. Do not read them as cardinal numbers.
-For example, read 90210 as 'nine zero two one zero.'
-Avoid using bullet points and parenthese in any responses.
-Spell out the address letter-by-letter when applicable, such as street names and provinces, especially when the user spells it out initially.
-"""
-
-_TEXT_SPECIFIC = """
-Expect users to type their address directly.
-If the address looks almost correct but has minor issues (e.g. missing country or postal code), prompt for clarification.
-"""
 
 
 @dataclass
@@ -66,7 +27,8 @@ class GetAddressResult:
 class GetAddressTask(AgentTask[GetAddressResult]):
     def __init__(
         self,
-        extra_instructions: str = "",
+        *,
+        instructions: NotGivenOr[WorkflowInstructions | Instructions | str] = NOT_GIVEN,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
@@ -76,39 +38,46 @@ class GetAddressTask(AgentTask[GetAddressResult]):
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         require_confirmation: NotGivenOr[bool] = NOT_GIVEN,
-        *,
+        require_explicit_ask: bool = False,
         setup_fnc: Callable[[Agent], None] | None = None,
+        # deprecated
+        extra_instructions: str = "",
     ) -> None:
         self._init_kwargs = {
-            "extra_instructions": extra_instructions,
+            "instructions": instructions,
             "allow_interruptions": allow_interruptions,
             "require_confirmation": require_confirmation,
+            "require_explicit_ask": require_explicit_ask,
+            "extra_instructions": extra_instructions,
         }
-        confirmation_instructions = (
-            "Call `confirm_address` after the user confirmed the address is correct."
-        )
-        extra = extra_instructions if extra_instructions else ""
+
+        if not is_given(instructions):
+            instructions = WorkflowInstructions(persona=PERSONA, extra=extra_instructions)
+        elif extra_instructions:
+            logger.warning("`extra_instructions` will be ignored when `instructions` is provided")
+
+        if isinstance(instructions, WorkflowInstructions):
+            instructions = instructions.resolve(
+                template=INSTRUCTIONS_TEMPLATE,
+                default_persona=PERSONA,
+                _modality_specific=Instructions(audio=AUDIO_SPECIFIC, text=TEXT_SPECIFIC),
+                _confirmation=Instructions(
+                    # confirmation is enabled by default for audio, disabled by default for text
+                    audio=CONFIRMATION_INSTRUCTION if require_confirmation is not False else "",
+                    text=CONFIRMATION_INSTRUCTION if require_confirmation is True else "",
+                ),
+            )
+
+        assert isinstance(instructions, (str, Instructions))  # for type checking
+        self._current_address = ""
+        self._require_confirmation = require_confirmation
+        self._require_explicit_ask = require_explicit_ask
 
         super().__init__(
-            instructions=Instructions(
-                _BASE_INSTRUCTIONS.format(
-                    modality_specific=_AUDIO_SPECIFIC,
-                    confirmation_instructions=(
-                        confirmation_instructions if require_confirmation is not False else ""
-                    ),
-                    extra_instructions=extra,
-                ),
-                text=_BASE_INSTRUCTIONS.format(
-                    modality_specific=_TEXT_SPECIFIC,
-                    confirmation_instructions=(
-                        confirmation_instructions if require_confirmation is True else ""
-                    ),
-                    extra_instructions=extra,
-                ),
-            ),
+            instructions=instructions,
             chat_ctx=chat_ctx,
             turn_detection=turn_detection,
-            tools=tools or [],
+            tools=[*(tools or []), self._build_update_address_tool()],
             stt=stt,
             vad=vad,
             llm=llm,
@@ -116,9 +85,6 @@ class GetAddressTask(AgentTask[GetAddressResult]):
             allow_interruptions=allow_interruptions,
             setup_fnc=setup_fnc,
         )
-
-        self._current_address = ""
-        self._require_confirmation = require_confirmation
 
     def export_init_kwargs(self) -> dict[str, Any]:
         return self._init_kwargs
@@ -135,18 +101,41 @@ class GetAddressTask(AgentTask[GetAddressResult]):
     async def on_enter(self) -> None:
         self.session.generate_reply(instructions="Ask the user to provide their address.")
 
-    @function_tool()
-    async def update_address(
-        self, street_address: str, unit_number: str, locality: str, country: str, ctx: RunContext
-    ) -> str | None:
-        """Update the address provided by the user.
+    def _build_update_address_tool(self) -> llm.FunctionTool:
+        # Built dynamically so we can apply IGNORE_ON_ENTER per-instance
+        # based on require_explicit_ask.
+        flags = ToolFlag.IGNORE_ON_ENTER if self._require_explicit_ask else ToolFlag.NONE
 
-        Args:
-            street_address (str): Dependent on country, may include fields like house number, street name, block, or district
-            unit_number (str): The unit number, for example Floor 1 or Apartment 12. If there is no unit number, return ''
-            locality (str): Dependent on country, may include fields like city, zip code, or province
-            country (str): The country the user lives in spelled out fully
-        """
+        @function_tool(flags=flags)
+        async def update_address(
+            street_address: str,
+            unit_number: str,
+            locality: str,
+            country: str,
+            ctx: RunContext,
+        ) -> str | None:
+            """Update the address provided by the user.
+
+            Args:
+                street_address (str): Dependent on country, may include fields like house number, street name, block, or district
+                unit_number (str): The unit number, for example Floor 1 or Apartment 12. If there is no unit number, return ''
+                locality (str): Dependent on country, may include fields like city, zip code, or province
+                country (str): The country the user lives in spelled out fully
+            """
+            return await self._update_address_impl(
+                street_address, unit_number, locality, country, ctx
+            )
+
+        return update_address
+
+    async def _update_address_impl(
+        self,
+        street_address: str,
+        unit_number: str,
+        locality: str,
+        country: str,
+        ctx: RunContext,
+    ) -> str | None:
         address_fields = (
             [street_address, unit_number, locality, country]
             if unit_number.strip()
@@ -202,3 +191,55 @@ class GetAddressTask(AgentTask[GetAddressResult]):
         if is_given(self._require_confirmation):
             return self._require_confirmation
         return ctx.speech_handle.input_details.modality == "audio"
+
+
+# instructions
+PERSONA = (
+    "You are only a single step in a broader system, responsible solely for capturing an address."
+)
+
+AUDIO_SPECIFIC = """\
+You will be handling addresses from any country.
+Expect that users will say address in different formats with fields filled like:
+- 'street_address': '450 SOUTH MAIN ST', 'unit_number': 'FLOOR 2', 'locality': 'SALT LAKE CITY UT 84101', 'country': 'UNITED STATES',
+- 'street_address': '123 MAPLE STREET', 'unit_number': 'APARTMENT 10', 'locality': 'OTTAWA ON K1A 0B1', 'country': 'CANADA',
+- 'street_address': 'GUOMAO JIE 3 HAO, CHAOYANG QU', 'unit_number': 'GUOMAO DA SHA 18 LOU 101 SHI', 'locality': 'BEIJING SHI 100000', 'country': 'CHINA',
+- 'street_address': '5 RUE DE L\u2019ANCIENNE COM\u00c9DIE', 'unit_number': 'APP C4', 'locality': '75006 PARIS', 'country': 'FRANCE',
+- 'street_address': 'PLOT 10, NEHRU ROAD', 'unit_number': 'OFFICE 403, 4TH FLOOR', 'locality': 'VILE PARLE (E), MUMBAI MAHARASHTRA 400099', 'country': 'INDIA',
+Normalize common spoken patterns silently:
+- Convert words like 'dash' and 'apostrophe' into symbols: `-`, `'`.
+- Convert spelled out numbers like 'six' and 'seven' into numerals: `6`, `7`.
+- Recognize patterns where users speak their address field followed by spelling: e.g., 'guomao g u o m a o'.
+- Filter out filler words or hesitations.
+- Recognize when there may be accents on certain letters if explicitly said or common in the location specified. Be sure to verify the correct accents if existent.
+Don't mention corrections. Treat inputs as possibly imperfect but fix them silently.
+When reading a numerical ordinal suffix (st, nd, rd, th), the number must be verbally expanded into its full, correctly pronounced word form.
+Do not read the number and the suffix letters separately.
+Confirm postal codes by reading them out digit-by-digit as a sequence of single numbers. Do not read them as cardinal numbers.
+For example, read 90210 as 'nine zero two one zero.'
+Avoid using bullet points and parenthese in any responses.
+Spell out the address letter-by-letter when applicable, such as street names and provinces, especially when the user spells it out initially."""
+
+TEXT_SPECIFIC = """\
+You will be handling addresses from any country.
+Expect users to type their address directly.
+If the address looks almost correct but has minor issues (e.g. missing country or postal code), prompt for clarification."""
+
+CONFIRMATION_INSTRUCTION = """\
+Call `confirm_address` after the user confirmed the address is correct."""
+
+INSTRUCTIONS_TEMPLATE = """\
+{persona}
+
+{_modality_specific}
+
+Call `update_address` at the first opportunity whenever you form a new hypothesis about the address. (before asking any questions or providing any answers.)
+Don't invent new addresses, stick strictly to what the user said.
+{_confirmation}
+If the address is unclear or invalid, or it takes too much back-and-forth, prompt for it in parts in this order: street address, unit number if applicable, locality, and country.
+
+Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary.
+Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called.
+
+{extra}
+"""

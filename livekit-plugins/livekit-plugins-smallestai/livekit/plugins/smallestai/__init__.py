@@ -14,13 +14,14 @@
 
 """Smallest AI plugin for LiveKit Agents
 
-See https://docs.livekit.io/agents/integrations/tts/smallestai/ for more information.
+See https://docs.livekit.io/agents/integrations/smallestai/ for more information.
 """
 
-from .tts import TTS, ChunkedStream
-from .version import __version__
+from .stt import STT as STT, SpeechStream as SpeechStream
+from .tts import TTS as TTS, ChunkedStream as ChunkedStream
+from .version import __version__ as __version__
 
-__all__ = ["TTS", "ChunkedStream", "__version__"]
+__all__ = ["STT", "SpeechStream", "TTS", "ChunkedStream", "__version__"]
 
 from livekit.agents import Plugin
 

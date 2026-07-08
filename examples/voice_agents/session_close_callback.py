@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 
 from livekit.agents import Agent, AgentServer, AgentSession, CloseEvent, JobContext, cli
 from livekit.agents.beta.tools import EndCallTool
-from livekit.plugins import google, silero  # noqa: F401
+from livekit.plugins import google  # noqa: F401
 
 logger = logging.getLogger("my-worker")
 logger.setLevel(logging.INFO)
@@ -42,9 +42,7 @@ server = AgentServer()
 
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
-    session = AgentSession(
-        vad=silero.VAD.load(),
-    )
+    session = AgentSession()
 
     await session.start(agent=MyAgent(), room=ctx.room)
 

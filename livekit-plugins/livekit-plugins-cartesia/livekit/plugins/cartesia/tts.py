@@ -198,6 +198,11 @@ class TTS(tts.TTS):
                     " or all languages with `preview` models"
                 )
 
+    class Markup(tts.TTS.Markup):
+        # markup delegation lives in the base class, keyed on _provider_key()
+        def _provider_key(self) -> str:
+            return "cartesia"
+
     @property
     def model(self) -> str:
         return self._opts.model
@@ -208,11 +213,16 @@ class TTS(tts.TTS):
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
-        url = self._opts.get_ws_url(
-            f"/tts/websocket?api_key={self._opts.api_key}&cartesia_version={self._opts.api_version}"
-        )
+        url = self._opts.get_ws_url(f"/tts/websocket?cartesia_version={self._opts.api_version}")
         ws = await asyncio.wait_for(
-            session.ws_connect(url, headers={"User-Agent": USER_AGENT}), timeout
+            session.ws_connect(
+                url,
+                headers={
+                    "User-Agent": USER_AGENT,
+                    API_AUTH_HEADER: self._opts.api_key,
+                },
+            ),
+            timeout,
         )
         c_request_id = ws._response.headers.get(REQUEST_ID_HEADER)
         logger.debug(

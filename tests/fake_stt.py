@@ -30,7 +30,7 @@ class FakeUserSpeech(BaseModel):
     type: Literal["user_speech"] = "user_speech"
     start_time: float
     end_time: float
-    transcript: str
+    transcript: str  # empty string fires VAD SOS/EOS only — no STT events
     stt_delay: float
 
     def speed_up(self, factor: float) -> FakeUserSpeech:
@@ -213,6 +213,14 @@ class FakeRecognizeStream(RecognizeStream):
             return time.perf_counter() - start_time
 
         for fake_speech in self._stt._fake_user_speeches:
+            if not fake_speech.transcript:
+                # empty transcript: VAD SOS/EOS fire but STT emits nothing — still
+                # advance the clock past this speech so subsequent speeches (and the
+                # done signal) are timed correctly relative to it.
+                final_transcript_time = fake_speech.end_time + fake_speech.stt_delay
+                if curr_time() < final_transcript_time:
+                    await asyncio.sleep(final_transcript_time - curr_time())
+                continue
             interim_transcript_time = fake_speech.end_time + fake_speech.stt_delay * 0.5
             if curr_time() < interim_transcript_time:
                 await asyncio.sleep(interim_transcript_time - curr_time())

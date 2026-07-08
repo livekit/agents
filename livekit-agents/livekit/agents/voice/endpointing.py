@@ -290,6 +290,7 @@ class DynamicEndpointing(BaseEndpointing):
         *,
         min_delay: NotGivenOr[float] = NOT_GIVEN,
         max_delay: NotGivenOr[float] = NOT_GIVEN,
+        alpha: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if is_given(min_delay):
             self._min_delay = min_delay
@@ -301,6 +302,10 @@ class DynamicEndpointing(BaseEndpointing):
             self._turn_pause.reset(initial=self._max_delay, max_val=self._max_delay)
             self._utterance_pause.reset(max_val=self._max_delay)
 
+        if is_given(alpha):
+            self._utterance_pause.reset(alpha=alpha)
+            self._turn_pause.reset(alpha=alpha)
+
 
 def create_endpointing(options: EndpointingOptions) -> BaseEndpointing:
     match options.get("mode", "fixed"):
@@ -308,6 +313,7 @@ def create_endpointing(options: EndpointingOptions) -> BaseEndpointing:
             return DynamicEndpointing(
                 min_delay=options["min_delay"],
                 max_delay=options["max_delay"],
+                alpha=options["alpha"],
             )
         case _:
             return BaseEndpointing(

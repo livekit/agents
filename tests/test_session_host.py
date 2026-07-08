@@ -32,6 +32,8 @@ from livekit.agents.voice.remote_session import (
 )
 from livekit.protocol.agent_pb import agent_session as agent_pb
 
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
+
 # ---------------------------------------------------------------------------
 # In-memory transport for testing
 # ---------------------------------------------------------------------------
@@ -276,7 +278,7 @@ class TestSessionHostEvents:
     def test_register_session(self, transport: InMemoryTransport, mock_session: MagicMock) -> None:
         host = SessionHost(transport)
         host.register_session(mock_session)
-        assert mock_session.on.call_count == 8
+        assert mock_session.on.call_count == 10
 
     @pytest.mark.asyncio
     async def test_agent_state_changed(self, transport: InMemoryTransport) -> None:
@@ -320,6 +322,75 @@ class TestSessionHostEvents:
         msg = transport.sent[0]
         assert msg.event.user_state_changed.old_state == agent_pb.US_LISTENING
         assert msg.event.user_state_changed.new_state == agent_pb.US_SPEAKING
+
+        await host.aclose()
+
+    @pytest.mark.asyncio
+    async def test_tool_execution_updated(self, transport: InMemoryTransport) -> None:
+        from livekit.agents.llm import FunctionCall
+        from livekit.agents.voice.events import (
+            ToolCallEnded,
+            ToolCallStarted,
+            ToolCallUpdated,
+            ToolExecutionUpdatedEvent,
+            ToolReplyUpdated,
+        )
+
+        host = SessionHost(transport)
+        await host.start()
+
+        host._on_tool_execution_updated(
+            ToolExecutionUpdatedEvent(
+                update=ToolCallStarted(
+                    function_call=FunctionCall(call_id="c1", name="my_tool", arguments="{}")
+                )
+            )
+        )
+        host._on_tool_execution_updated(
+            ToolExecutionUpdatedEvent(
+                update=ToolCallUpdated(id="c1_update_1", call_id="c1", message="working")
+            )
+        )
+        host._on_tool_execution_updated(
+            ToolExecutionUpdatedEvent(
+                update=ToolCallEnded(id="c1_final", call_id="c1", message="result", status="done")
+            )
+        )
+        host._on_tool_execution_updated(
+            ToolExecutionUpdatedEvent(
+                update=ToolReplyUpdated(
+                    update_ids=["c1_update_1", "c1_final"],
+                    status="completed",
+                    speech_id="speech_1",
+                )
+            )
+        )
+        await asyncio.sleep(0.1)
+
+        assert len(transport.sent) == 4
+        started = transport.sent[0].event.tool_execution_updated
+        assert started.WhichOneof("update") == "started"
+        assert started.started.function_call.call_id == "c1"
+        assert started.started.function_call.name == "my_tool"
+
+        call_updated = transport.sent[1].event.tool_execution_updated
+        assert call_updated.WhichOneof("update") == "call_updated"
+        assert call_updated.call_updated.id == "c1_update_1"
+        assert call_updated.call_updated.call_id == "c1"
+        assert call_updated.call_updated.message == "working"
+
+        ended = transport.sent[2].event.tool_execution_updated
+        assert ended.WhichOneof("update") == "ended"
+        assert ended.ended.id == "c1_final"
+        assert ended.ended.call_id == "c1"
+        assert ended.ended.message == "result"
+        assert ended.ended.status == agent_pb.TC_DONE
+
+        reply_updated = transport.sent[3].event.tool_execution_updated
+        assert reply_updated.WhichOneof("update") == "reply_updated"
+        assert list(reply_updated.reply_updated.update_ids) == ["c1_update_1", "c1_final"]
+        assert reply_updated.reply_updated.status == agent_pb.TR_COMPLETED
+        assert reply_updated.reply_updated.speech_id == "speech_1"
 
         await host.aclose()
 
@@ -444,7 +515,7 @@ class TestSessionHostRequests:
         options.interruption = MagicMock(__iter__=lambda s: iter([]))
         options.max_tool_steps = 5
         options.user_away_timeout = 30
-        options.preemptive_generation = False
+        options.preemptive_generation = {"enabled": False}
         options.min_consecutive_speech_delay = 0.5
         options.use_tts_aligned_transcript = True
         options.ivr_detection = False
@@ -589,4 +660,4 @@ class TestSessionHostRequests:
         host.register_session(session)
         await host.start()
         await host.aclose()
-        assert session.off.call_count == 8
+        assert session.off.call_count == 10

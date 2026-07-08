@@ -22,12 +22,14 @@ from __future__ import annotations
 import asyncio
 import enum
 import json
+import logging
 import os
 import platform
+import time
 import weakref
 from dataclasses import dataclass
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import urlencode
 
 import aiohttp
@@ -51,6 +53,7 @@ from livekit.agents.utils.misc import is_given
 from .log import logger
 
 USER_AGENT = f"Livekit/{livekit_version} Python/{platform.python_version()}"
+EOS_FALLBACK_TIMEOUT = 1.0
 
 # Sarvam API details
 SARVAM_STT_BASE_URL = "https://api.sarvam.ai/speech-to-text"
@@ -124,6 +127,7 @@ class ModelConfig:
         supports_prompt: Whether the model accepts prompt parameter.
         supports_mode: Whether the model accepts mode parameter.
         supports_language: Whether the model accepts language parameter.
+        supports_vad_params: Whether the model accepts fine-grained VAD parameters.
         default_language: Default language code (None = auto-detect).
         default_mode: Default mode (None = not applicable).
         use_translate_endpoint: Whether to use speech_to_text_translate_streaming endpoint.
@@ -134,6 +138,7 @@ class ModelConfig:
     supports_prompt: bool
     supports_mode: bool
     supports_language: bool
+    supports_vad_params: bool
     default_language: str | None
     default_mode: str | None
     use_translate_endpoint: bool
@@ -146,6 +151,7 @@ MODEL_CONFIGS: dict[str, ModelConfig] = {
         supports_prompt=False,
         supports_mode=False,
         supports_language=True,
+        supports_vad_params=False,
         default_language="unknown",
         default_mode=None,
         use_translate_endpoint=False,
@@ -156,6 +162,7 @@ MODEL_CONFIGS: dict[str, ModelConfig] = {
         supports_prompt=True,
         supports_mode=False,
         supports_language=False,
+        supports_vad_params=False,
         default_language=None,
         default_mode=None,
         use_translate_endpoint=True,
@@ -166,6 +173,7 @@ MODEL_CONFIGS: dict[str, ModelConfig] = {
         supports_prompt=True,
         supports_mode=True,
         supports_language=True,
+        supports_vad_params=True,
         default_language="en-IN",
         default_mode="transcribe",
         use_translate_endpoint=False,
@@ -253,6 +261,14 @@ def _model_supports_mode(model: str) -> bool:
     return False
 
 
+def _model_supports_vad_params(model: str) -> bool:
+    """Check whether the model supports fine-grained VAD parameters."""
+    model_config = _get_model_config(model)
+    if model_config:
+        return model_config.supports_vad_params
+    return False
+
+
 class ConnectionState(enum.Enum):
     """WebSocket connection states."""
 
@@ -287,6 +303,16 @@ class SarvamSTTOptions:
     sample_rate: int = 16000
     flush_signal: bool | None = None
     input_audio_codec: str | None = None
+    positive_speech_threshold: float | None = None
+    negative_speech_threshold: float | None = None
+    min_speech_frames: int | None = None
+    first_turn_min_speech_frames: int | None = None
+    negative_frames_count: int | None = None
+    negative_frames_window: int | None = None
+    start_speech_volume_threshold: float | None = None
+    interrupt_min_speech_frames: int | None = None
+    pre_speech_pad_frames: int | None = None
+    num_initial_ignored_frames: int | None = None
 
     def __post_init__(self) -> None:
         """Set URLs based on model if not explicitly provided."""
@@ -318,6 +344,32 @@ def _get_urls_for_model(model: str) -> tuple[str, str]:
     if model_config and model_config.use_translate_endpoint:
         return SARVAM_STT_TRANSLATE_BASE_URL, SARVAM_STT_TRANSLATE_STREAMING_URL
     return SARVAM_STT_BASE_URL, SARVAM_STT_STREAMING_URL
+
+
+def _extract_confidence(
+    payload: dict,
+    instance_logger: logging.Logger,
+) -> float:
+    """Read Sarvam's ``language_probability`` from a response payload.
+
+    Returns the value as a float when present and numeric. Falls back to
+    ``1.0`` when the field is absent, ``None``, or has an unexpected type
+    (defensive — the field is documented for the REST endpoint but not
+    explicitly for streaming, so contract drift is logged for visibility).
+    """
+    value = payload.get("language_probability")
+    # bool is a subclass of int — exclude explicitly so that an accidental
+    # JSON `false` doesn't silently become ``confidence=0.0``. Same pattern
+    # as livekit-plugins-slng/.../stt.py.
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    if value is not None:
+        instance_logger.debug(
+            "Unexpected language_probability type: %s (value=%r); falling back to confidence=1.0",
+            type(value).__name__,
+            value,
+        )
+    return 1.0
 
 
 def _calculate_audio_duration(
@@ -359,6 +411,28 @@ def _build_websocket_url(base_url: str, opts: SarvamSTTOptions) -> str:
         params["mode"] = opts.mode
     if opts.input_audio_codec:
         params["input_audio_codec"] = opts.input_audio_codec
+
+    if _model_supports_vad_params(opts.model):
+        if opts.positive_speech_threshold is not None:
+            params["positive_speech_threshold"] = str(opts.positive_speech_threshold)
+        if opts.negative_speech_threshold is not None:
+            params["negative_speech_threshold"] = str(opts.negative_speech_threshold)
+        if opts.min_speech_frames is not None:
+            params["min_speech_frames"] = str(opts.min_speech_frames)
+        if opts.first_turn_min_speech_frames is not None:
+            params["first_turn_min_speech_frames"] = str(opts.first_turn_min_speech_frames)
+        if opts.negative_frames_count is not None:
+            params["negative_frames_count"] = str(opts.negative_frames_count)
+        if opts.negative_frames_window is not None:
+            params["negative_frames_window"] = str(opts.negative_frames_window)
+        if opts.start_speech_volume_threshold is not None:
+            params["start_speech_volume_threshold"] = str(opts.start_speech_volume_threshold)
+        if opts.interrupt_min_speech_frames is not None:
+            params["interrupt_min_speech_frames"] = str(opts.interrupt_min_speech_frames)
+        if opts.pre_speech_pad_frames is not None:
+            params["pre_speech_pad_frames"] = str(opts.pre_speech_pad_frames)
+        if opts.num_initial_ignored_frames is not None:
+            params["num_initial_ignored_frames"] = str(opts.num_initial_ignored_frames)
 
     return f"{base_url}?{urlencode(params)}"
 
@@ -425,6 +499,16 @@ class STT(stt.STT):
         sample_rate: int = 16000,
         flush_signal: bool | None = None,
         input_audio_codec: str | None = None,
+        positive_speech_threshold: float | None = None,
+        negative_speech_threshold: float | None = None,
+        min_speech_frames: int | None = None,
+        first_turn_min_speech_frames: int | None = None,
+        negative_frames_count: int | None = None,
+        negative_frames_window: int | None = None,
+        start_speech_volume_threshold: float | None = None,
+        interrupt_min_speech_frames: int | None = None,
+        pre_speech_pad_frames: int | None = None,
+        num_initial_ignored_frames: int | None = None,
     ) -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -453,6 +537,16 @@ class STT(stt.STT):
             sample_rate=sample_rate,
             flush_signal=flush_signal,
             input_audio_codec=input_audio_codec,
+            positive_speech_threshold=positive_speech_threshold,
+            negative_speech_threshold=negative_speech_threshold,
+            min_speech_frames=min_speech_frames,
+            first_turn_min_speech_frames=first_turn_min_speech_frames,
+            negative_frames_count=negative_frames_count,
+            negative_frames_window=negative_frames_window,
+            start_speech_volume_threshold=start_speech_volume_threshold,
+            interrupt_min_speech_frames=interrupt_min_speech_frames,
+            pre_speech_pad_frames=pre_speech_pad_frames,
+            num_initial_ignored_frames=num_initial_ignored_frames,
         )
         self._session = http_session
         self._logger = logger.getChild(self.__class__.__name__)
@@ -633,7 +727,7 @@ class STT(stt.STT):
                         text=transcript_text,
                         start_time=start_time,
                         end_time=end_time,
-                        confidence=1.0,  # Sarvam doesn't provide confidence score in this response
+                        confidence=_extract_confidence(response_json, self._logger),
                     )
                 ]
 
@@ -668,6 +762,16 @@ class STT(stt.STT):
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
         flush_signal: NotGivenOr[bool] = NOT_GIVEN,
         input_audio_codec: NotGivenOr[str] = NOT_GIVEN,
+        positive_speech_threshold: NotGivenOr[float] = NOT_GIVEN,
+        negative_speech_threshold: NotGivenOr[float] = NOT_GIVEN,
+        min_speech_frames: NotGivenOr[int] = NOT_GIVEN,
+        first_turn_min_speech_frames: NotGivenOr[int] = NOT_GIVEN,
+        negative_frames_count: NotGivenOr[int] = NOT_GIVEN,
+        negative_frames_window: NotGivenOr[int] = NOT_GIVEN,
+        start_speech_volume_threshold: NotGivenOr[float] = NOT_GIVEN,
+        interrupt_min_speech_frames: NotGivenOr[int] = NOT_GIVEN,
+        pre_speech_pad_frames: NotGivenOr[int] = NOT_GIVEN,
+        num_initial_ignored_frames: NotGivenOr[int] = NOT_GIVEN,
     ) -> SpeechStream:
         """Create a streaming transcription session."""
         opts_language, opts_model, opts_mode = self._resolve_opts(
@@ -689,6 +793,54 @@ class STT(stt.STT):
         opts_input_codec = (
             input_audio_codec if is_given(input_audio_codec) else self._opts.input_audio_codec
         )
+        opts_positive_speech = (
+            positive_speech_threshold
+            if is_given(positive_speech_threshold)
+            else self._opts.positive_speech_threshold
+        )
+        opts_negative_speech = (
+            negative_speech_threshold
+            if is_given(negative_speech_threshold)
+            else self._opts.negative_speech_threshold
+        )
+        opts_min_speech = (
+            min_speech_frames if is_given(min_speech_frames) else self._opts.min_speech_frames
+        )
+        opts_first_turn = (
+            first_turn_min_speech_frames
+            if is_given(first_turn_min_speech_frames)
+            else self._opts.first_turn_min_speech_frames
+        )
+        opts_neg_count = (
+            negative_frames_count
+            if is_given(negative_frames_count)
+            else self._opts.negative_frames_count
+        )
+        opts_neg_window = (
+            negative_frames_window
+            if is_given(negative_frames_window)
+            else self._opts.negative_frames_window
+        )
+        opts_vol_threshold = (
+            start_speech_volume_threshold
+            if is_given(start_speech_volume_threshold)
+            else self._opts.start_speech_volume_threshold
+        )
+        opts_interrupt = (
+            interrupt_min_speech_frames
+            if is_given(interrupt_min_speech_frames)
+            else self._opts.interrupt_min_speech_frames
+        )
+        opts_pre_pad = (
+            pre_speech_pad_frames
+            if is_given(pre_speech_pad_frames)
+            else self._opts.pre_speech_pad_frames
+        )
+        opts_initial_ignored = (
+            num_initial_ignored_frames
+            if is_given(num_initial_ignored_frames)
+            else self._opts.num_initial_ignored_frames
+        )
         single_attempt_conn_options = self._single_attempt_conn_options(conn_options)
 
         # Create options for the stream
@@ -702,6 +854,16 @@ class STT(stt.STT):
             sample_rate=opts_sample_rate,
             flush_signal=opts_flush_signal,
             input_audio_codec=opts_input_codec,
+            positive_speech_threshold=opts_positive_speech,
+            negative_speech_threshold=opts_negative_speech,
+            min_speech_frames=opts_min_speech,
+            first_turn_min_speech_frames=opts_first_turn,
+            negative_frames_count=opts_neg_count,
+            negative_frames_window=opts_neg_window,
+            start_speech_volume_threshold=opts_vol_threshold,
+            interrupt_min_speech_frames=opts_interrupt,
+            pre_speech_pad_frames=opts_pre_pad,
+            num_initial_ignored_frames=opts_initial_ignored,
         )
 
         # Create a fresh session for this stream to avoid conflicts
@@ -757,6 +919,14 @@ class SpeechStream(stt.SpeechStream):
         )
         self._should_flush = False  # Flag to trigger flush
 
+        self._utterance_speech_start_wall: float | None = None
+        self._pending_final_data: dict[str, Any] | None = None
+        self._pending_eos = False
+        self._eos_fallback_task: asyncio.Task[None] | None = None
+        self._eos_fallback_timeout = EOS_FALLBACK_TIMEOUT
+        self._final_received_for_utterance = False
+        self._eos_emitted_for_utterance = False
+
         # Task management for cleanup
         self._audio_task: asyncio.Task | None = None
         self._message_task: asyncio.Task | None = None
@@ -810,6 +980,96 @@ class SpeechStream(stt.SpeechStream):
         if request_id:
             self._server_request_id = str(request_id)
 
+    def _positive_time(self, value: object) -> float | None:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        if value <= 0:
+            return None
+        # Shift into the stream timeline so the value survives reconnects: the base
+        # class advances start_time_offset by the session start -> audio start delay.
+        return float(value) + self.start_time_offset
+
+    def _reset_utterance_state(self) -> None:
+        self._cancel_eos_fallback()
+        self._pending_final_data = None
+        self._pending_eos = False
+        self._utterance_speech_start_wall = time.time()
+        self._final_received_for_utterance = False
+        self._eos_emitted_for_utterance = False
+
+    def _cancel_eos_fallback(self) -> asyncio.Task[None] | None:
+        current_task = asyncio.current_task()
+        fallback_task = self._eos_fallback_task
+        self._eos_fallback_task = None
+        if fallback_task and fallback_task is not current_task and not fallback_task.done():
+            fallback_task.cancel()
+            return fallback_task
+        return None
+
+    def _send_final_transcript(self, transcript_data: dict[str, Any]) -> bool:
+        transcript_text = transcript_data.get("transcript", "")
+        if not transcript_text:
+            return False
+
+        language = LanguageCode(transcript_data.get("language_code", ""))
+        request_id = transcript_data.get("request_id") or self._server_request_id or ""
+        # Streaming reports timing via speech_start/speech_end (the batch
+        # `timestamps` array is not sent over the socket). When absent, end_time
+        # is 0.0 and the pipeline falls back to wall-clock for EOU timing.
+        speech_data = stt.SpeechData(
+            language=language,
+            text=transcript_text,
+            start_time=self._positive_time(transcript_data.get("speech_start")) or 0.0,
+            end_time=self._positive_time(transcript_data.get("speech_end")) or 0.0,
+            confidence=_extract_confidence(transcript_data, self._logger),
+        )
+        self._event_ch.send_nowait(
+            stt.SpeechEvent(
+                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                request_id=request_id,
+                alternatives=[speech_data],
+            )
+        )
+        return True
+
+    def _try_commit_utterance(self) -> None:
+        # Flush in order: FINAL_TRANSCRIPT first, then END_OF_SPEECH.
+        if self._pending_final_data is None or self._eos_emitted_for_utterance:
+            return
+
+        committed_data = self._pending_final_data
+        if self._send_final_transcript(committed_data):
+            self._logger.debug("Sarvam STT utterance committed", extra=self._build_log_context())
+            self._emit_end_of_speech()
+            self._pending_final_data = None
+
+    def _emit_end_of_speech(self) -> None:
+        if self._eos_emitted_for_utterance:
+            return
+
+        self._cancel_eos_fallback()
+
+        # Bare END_OF_SPEECH (no alternatives), like other plugins' EOS events. The
+        # speech-end timing lives on the FINAL_TRANSCRIPT's end_time, not here.
+        self._event_ch.send_nowait(
+            stt.SpeechEvent(
+                type=stt.SpeechEventType.END_OF_SPEECH,
+                request_id=self._server_request_id or "",
+            )
+        )
+        self._eos_emitted_for_utterance = True
+        self._pending_eos = False
+
+    async def _emit_pending_eos_after_timeout(self) -> None:
+        try:
+            timeout = self._eos_fallback_timeout
+            if timeout > 0:
+                await asyncio.sleep(timeout)
+            if self._pending_eos and not self._eos_emitted_for_utterance:
+                self._emit_end_of_speech()
+        except asyncio.CancelledError:
+            raise
+
     async def aclose(self) -> None:
         """Close the stream and clean up resources."""
         self._logger.debug("Starting stream cleanup", extra=self._build_log_context())
@@ -823,6 +1083,9 @@ class SpeechStream(stt.SpeechStream):
             tasks_to_cancel.append(self._audio_task)
         if self._message_task and not self._message_task.done():
             tasks_to_cancel.append(self._message_task)
+        fallback_task = self._cancel_eos_fallback()
+        if fallback_task is not None:
+            tasks_to_cancel.append(fallback_task)
 
         if tasks_to_cancel:
             try:
@@ -1046,6 +1309,9 @@ class SpeechStream(stt.SpeechStream):
         finally:
             # Clean up tasks
             all_tasks = tasks + [reconnect_task]
+            fallback_task = self._cancel_eos_fallback()
+            if fallback_task is not None:
+                all_tasks.append(fallback_task)
             await utils.aio.cancel_and_wait(*all_tasks)
 
             # Close WebSocket
@@ -1312,9 +1578,10 @@ class SpeechStream(stt.SpeechStream):
         """Handle transcription result messages."""
         transcript_data = data.get("data", {})
         transcript_text = transcript_data.get("transcript", "")
-        language = LanguageCode(transcript_data.get("language_code", ""))
-        request_id = transcript_data.get("request_id", "")
         self._maybe_set_server_request_id(transcript_data)
+        # Prefer the per-message request_id from the server; fall back to the
+        # session-wide server request_id captured from an earlier message.
+        request_id = transcript_data.get("request_id") or self._server_request_id or ""
 
         if not transcript_text:
             self._logger.debug("Received empty transcript", extra=self._build_log_context())
@@ -1323,34 +1590,26 @@ class SpeechStream(stt.SpeechStream):
         try:
             # Create usage event with proper metrics extraction
             metrics = transcript_data.get("metrics", {})
-            request_data = {
-                "original_id": request_id,
-                "processing_latency": metrics.get("processing_latency", 0.0),
-            }
+            # request_data = {
+            #     "original_id": request_id,
+            #     "processing_latency": metrics.get("processing_latency", 0.0),
+            # }
             usage_event = stt.SpeechEvent(
                 type=stt.SpeechEventType.RECOGNITION_USAGE,
-                request_id=json.dumps(request_data),
+                request_id=request_id,
                 recognition_usage=stt.RecognitionUsage(
                     audio_duration=metrics.get("audio_duration", 0.0),
                 ),
             )
             self._event_ch.send_nowait(usage_event)
 
-            # Create speech data
-            speech_data = stt.SpeechData(
-                language=language,
-                text=transcript_text,
-                start_time=transcript_data.get("speech_start", 0.0),
-                end_time=transcript_data.get("speech_end", 0.0),
-            )
-
-            # Create final transcript event with request_id
-            speech_event = stt.SpeechEvent(
-                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                request_id=request_id,
-                alternatives=[speech_data],
-            )
-            self._event_ch.send_nowait(speech_event)
+            if self._pending_eos:
+                self._pending_final_data = transcript_data
+                self._final_received_for_utterance = True
+                self._try_commit_utterance()
+            else:
+                if self._send_final_transcript(transcript_data):
+                    self._final_received_for_utterance = True
 
             self._logger.debug(
                 "Transcript processed successfully",
@@ -1358,7 +1617,6 @@ class SpeechStream(stt.SpeechStream):
                     **self._build_log_context(),
                     "text_length": len(transcript_text),
                     "language": self._opts.language,
-                    "confidence": speech_data.confidence,
                 },
             )
 
@@ -1394,16 +1652,30 @@ class SpeechStream(stt.SpeechStream):
         try:
             if signal_type == "START_SPEECH":
                 if not self._speaking:
+                    self._reset_utterance_state()
                     self._speaking = True
-                    start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
+                    start_event = stt.SpeechEvent(
+                        type=stt.SpeechEventType.START_OF_SPEECH,
+                        request_id=self._server_request_id or "",
+                        speech_start_time=self._utterance_speech_start_wall,
+                    )
                     self._event_ch.send_nowait(start_event)
                     self._logger.debug("Speech started", extra=self._build_log_context())
 
             elif signal_type == "END_SPEECH":
                 if self._speaking:
                     self._speaking = False
-                    end_event = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-                    self._event_ch.send_nowait(end_event)
+                    self._pending_eos = True
+                    self._try_commit_utterance()
+                    if not self._eos_emitted_for_utterance and self._pending_final_data is None:
+                        if self._final_received_for_utterance:
+                            self._emit_end_of_speech()
+                        elif self._eos_fallback_task is None or self._eos_fallback_task.done():
+                            # Give Sarvam a short grace period to deliver the
+                            # final transcript so LiveKit sees FINAL before EOS.
+                            self._eos_fallback_task = asyncio.create_task(
+                                self._emit_pending_eos_after_timeout()
+                            )
 
                     # Set flag to trigger flush when Sarvam detects end of speech
                     self._should_flush = True

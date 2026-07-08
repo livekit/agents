@@ -8,8 +8,10 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
+import numpy as np
 import pytest
 
+from livekit import rtc
 from livekit.agents import Agent, AgentSession
 from livekit.agents.telemetry.traces import _upload_session_report
 from livekit.agents.voice.agent_session import (
@@ -17,12 +19,15 @@ from livekit.agents.voice.agent_session import (
     _RECORDING_ALL_ON,
     RecordingOptions,
 )
+from livekit.agents.voice.recorder_io.recorder_io import _split_frame
 
 from .fake_io import FakeAudioInput, FakeAudioOutput, FakeTextOutput
 from .fake_llm import FakeLLM
 from .fake_stt import FakeSTT
 from .fake_tts import FakeTTS
 from .fake_vad import FakeVAD
+
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -119,6 +124,7 @@ def _make_mock_tagger(
 def _make_mock_http() -> MagicMock:
     """Create a mock aiohttp.ClientSession with async post."""
     mock_resp = AsyncMock()
+    mock_resp.status = 200
     mock_resp.raise_for_status = MagicMock()
     mock_http = MagicMock(spec=aiohttp.ClientSession)
     mock_post_cm = AsyncMock()
@@ -414,3 +420,60 @@ async def test_recorder_io_not_created_when_audio_false() -> None:
 
     assert session._recorder_io is None
     await _cleanup(session)
+
+
+# ---------------------------------------------------------------------------
+# Group 5: _split_frame (encode-path helper)
+# ---------------------------------------------------------------------------
+
+
+def _ramp_frame(num_samples: int, num_channels: int, sample_rate: int = 24000) -> rtc.AudioFrame:
+    """A frame whose samples are a monotonic ramp, so splits can be checked for alignment."""
+    arr = np.arange(num_samples * num_channels, dtype=np.int16)
+    return rtc.AudioFrame(
+        data=arr.tobytes(),
+        num_channels=num_channels,
+        samples_per_channel=num_samples,
+        sample_rate=sample_rate,
+    )
+
+
+@pytest.mark.parametrize("num_channels", [1, 2])
+@pytest.mark.parametrize("fraction", [0.25, 0.5, 0.75])
+def test_split_frame_is_consistent_and_lossless(num_channels: int, fraction: float) -> None:
+    """`rtc.AudioFrame.data` is a memoryview of int16 *samples*, not bytes.
+
+    A split must keep each half's data length in sync with its samples_per_channel and
+    must neither drop nor duplicate samples. This guards the regression where the helper
+    indexed the buffer in bytes and produced corrupt frames on interrupted/paused playback.
+    """
+    n = 240
+    frame = _ramp_frame(n, num_channels)
+    left, right = _split_frame(frame, frame.duration * fraction)
+
+    # each half is internally consistent
+    assert len(left.data) == left.samples_per_channel * left.num_channels
+    assert len(right.data) == right.samples_per_channel * right.num_channels
+
+    # no samples lost or duplicated across the split
+    assert left.samples_per_channel + right.samples_per_channel == n
+    recon = np.concatenate(
+        [
+            np.frombuffer(bytes(left.data), dtype=np.int16),
+            np.frombuffer(bytes(right.data), dtype=np.int16),
+        ]
+    )
+    assert np.array_equal(recon, np.arange(n * num_channels, dtype=np.int16))
+
+
+def test_split_frame_boundaries() -> None:
+    """Splitting at or beyond the edges returns an empty half and the original."""
+    frame = _ramp_frame(100, 1)
+
+    empty, whole = _split_frame(frame, 0.0)
+    assert empty.samples_per_channel == 0 and len(empty.data) == 0
+    assert whole.samples_per_channel == 100
+
+    whole2, empty2 = _split_frame(frame, frame.duration * 2)
+    assert whole2.samples_per_channel == 100
+    assert empty2.samples_per_channel == 0 and len(empty2.data) == 0

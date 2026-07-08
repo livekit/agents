@@ -42,6 +42,8 @@ from .fake_tts import FakeTTS
 from .toxic_proxy import Proxy, Toxiproxy
 from .utils import EventCollector, fake_llm_stream, wer
 
+pytestmark = pytest.mark.tts
+
 load_dotenv(override=True)
 
 
@@ -67,7 +69,20 @@ async def assert_valid_synthesized_audio(
     # use Deepgram as the source of truth to verify synthesized speech
     frame = rtc.combine_audio_frames(frames)
 
-    # Make sure the data is PCM and can't be another container.
+    # Make sure the data is PCM and not a compressed container a provider could return.
+    # Raw PCM has no signature, so ffmpeg's probe can coincidentally match obscure
+    # raw-format demuxers (e.g. lmlm4 when the audio starts with silence). Only fail
+    # on formats with real signatures that a TTS API could actually emit.
+    compressed_formats = {
+        "mp3",
+        "aac",
+        "ogg",
+        "flac",
+        "wav",
+        "mov,mp4,m4a,3gp,3g2,mj2",
+        "matroska,webm",
+        "mpeg",
+    }
     try:
         probe_opts = {
             "probe_size": "32",
@@ -75,24 +90,14 @@ async def assert_valid_synthesized_audio(
         }
         container = av.open(io.BytesIO(frame.data), options=probe_opts)
 
-        if container.format.name not in ("ea_cdata"):  # add more here
+        if container.format.name in compressed_formats:
             print("Container format:", container.format.name)
             print("Container long name:", container.format.long_name)
-            print("Metadata:")
-            for key, value in container.metadata.items():
-                print(f"  {key}: {value}")
-
-            print("Streams:")
             for stream in container.streams:
-                if stream.type == "video":  # false positive
-                    continue
-
                 print(f"  Stream index: {stream.index}")
                 print(f"    Type: {stream.type}")
                 print(f"    Codec: {stream.codec.name}")
-                print(f"    Duration: {stream.duration}")
-                print(f"    Time base: {stream.time_base}")
-                raise ValueError("Audio data isn't PCM")
+            raise ValueError(f"Audio data isn't PCM (detected {container.format.name})")
 
         container.close()
     except av.InvalidDataError:
@@ -203,6 +208,13 @@ SYNTHESIZE_TTS = [
             "proxy-upstream": "users.rime.ai:443",
         },
         id="rime",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": rime.TTS(model="coda"),
+            "proxy-upstream": "users.rime.ai:443",
+        },
+        id="rime-coda",
     ),
     pytest.param(
         lambda: {

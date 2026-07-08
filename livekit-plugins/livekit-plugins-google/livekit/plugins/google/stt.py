@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import time
 import weakref
@@ -22,6 +23,8 @@ from collections.abc import AsyncGenerator, AsyncIterable, Callable
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import cast, get_args
+
+from grpc.aio import StreamStreamCall
 
 import google.auth
 from google.api_core.client_options import ClientOptions
@@ -49,6 +52,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
+from livekit.agents.utils.aio import ChanClosed
 from livekit.agents.voice.io import TimedString
 
 from .log import logger
@@ -63,6 +67,11 @@ _max_session_duration = 240
 
 # Google is very sensitive to background noise, so we'll ignore results with low confidence
 _default_min_confidence = 0.65
+
+# Default boost applied to keyterms set via the provider-agnostic keyterm hook.
+# Google accepts boosts in roughly 0-20; a moderate value biases toward the terms without
+# over-triggering false positives.
+_DEFAULT_KEYTERM_BOOST = 10.0
 
 
 # This class is only be used internally to encapsulate the options
@@ -222,6 +231,8 @@ class STT(stt.STT):
                 streaming=use_streaming,
                 interim_results=True,
                 aligned_transcript="word" if enable_word_time_offsets and use_streaming else False,
+                # adaptation shadows keywords (see build_adaptation), so keyterms can't be applied
+                keyterms=not is_given(adaptation),
             )
         )
 
@@ -265,6 +276,9 @@ class STT(stt.STT):
             speech_end_timeout=speech_end_timeout,
             endpointing_sensitivity=endpointing_sensitivity,
         )
+        # user-tuned (phrase, boost) pairs, kept separate so keyterm updates can't clobber them
+        self._user_keywords: list[tuple[str, float]] = list(keywords) if is_given(keywords) else []
+        self._session_keyterms: list[str] = []  # framework-managed; merged with user keywords
         self._streams = weakref.WeakSet[SpeechStream]()
         self._pool = utils.ConnectionPool[SpeechAsyncClientV2 | SpeechAsyncClientV1](
             max_session_duration=_max_session_duration,
@@ -509,6 +523,10 @@ class STT(stt.STT):
                 logger.warning(
                     "Both 'adaptation' and 'keywords' are set; 'keywords' will be ignored."
                 )
+            self._user_keywords = list(keywords)
+            # re-merge with the active session keyterms so a user update doesn't drop them,
+            # and forward the merged value to the streams below (not the raw user keywords)
+            keywords = self._get_merged_keywords()
             self._config.keywords = keywords
         if is_given(speech_start_timeout):
             self._config.speech_start_timeout = speech_start_timeout
@@ -539,6 +557,36 @@ class STT(stt.STT):
                 speech_end_timeout=speech_end_timeout,
                 endpointing_sensitivity=endpointing_sensitivity,
             )
+
+    def _get_merged_keywords(self) -> list[tuple[str, float]]:
+        # Google biases via (phrase, boost) pairs; the session hook carries no per-term weight,
+        # so keep the user keyword boosts and bias session terms no stronger than the weakest
+        # user term (or a moderate default when the user gave none).
+        user_phrases = {phrase for phrase, _ in self._user_keywords}
+        session_boost = (
+            min(boost for _, boost in self._user_keywords)
+            if self._user_keywords
+            else _DEFAULT_KEYTERM_BOOST
+        )
+        return self._user_keywords + [
+            (term, session_boost) for term in self._session_keyterms if term not in user_phrases
+        ]
+
+    def _update_session_keyterms(self, keyterms: list[str]) -> None:
+        if is_given(self._config.adaptation):
+            logger.warning("'adaptation' is set; ignoring keyterms update")
+            return
+        if keyterms == self._session_keyterms:
+            return
+        self._session_keyterms = list(keyterms)
+        merged = self._get_merged_keywords()
+        self._config.keywords = merged
+        for stream in self._streams:
+            if stream._speaking:
+                # defer the reconnect to the end of the utterance so we don't cut it off
+                stream._pending_keywords = merged
+            else:
+                stream.update_options(keywords=merged)
 
     async def aclose(self) -> None:
         await self._pool.aclose()
@@ -578,6 +626,9 @@ class SpeechStream(stt.SpeechStream):
         self._config = config
         self._reconnect_event = asyncio.Event()
         self._session_connected_at: float = 0
+        self._speaking = False
+        # keywords set while the user is speaking; applied at END_OF_SPEECH (latest wins)
+        self._pending_keywords: list[tuple[str, float]] | None = None
 
     def update_options(
         self,
@@ -627,6 +678,7 @@ class SpeechStream(stt.SpeechStream):
             self._config.adaptation = adaptation
         if is_given(keywords):
             self._config.keywords = keywords
+            self._pending_keywords = None
         if is_given(speech_start_timeout):
             self._config.speech_start_timeout = speech_start_timeout
         if is_given(speech_end_timeout):
@@ -635,6 +687,11 @@ class SpeechStream(stt.SpeechStream):
             self._config.endpointing_sensitivity = endpointing_sensitivity
 
         self._reconnect_event.set()
+
+    def _on_end_of_speech(self) -> None:
+        if self._pending_keywords is not None:
+            self.update_options(keywords=self._pending_keywords)
+            self._pending_keywords = None
 
     def _build_streaming_config(
         self,
@@ -748,15 +805,28 @@ class SpeechStream(stt.SpeechStream):
             None,
         ]:
             nonlocal audio_pushed
+            stop_task = asyncio.create_task(should_stop.wait())
+            frame_task: asyncio.Task[object] | None = None
             try:
                 yield self._build_init_request(client)
 
-                async for frame in self._input_ch:
-                    # when the stream is aborted due to reconnect, this input_generator
-                    # needs to stop consuming frames
-                    # when the generator stops, the previous gRPC stream will close
-                    if should_stop.is_set():
+                while True:
+                    # Race the next-frame await against should_stop so this generator
+                    # can exit even when no audio is flowing. Without this, on reconnect
+                    # the generator stays parked on _input_ch and pins the previous
+                    # gRPC streaming call, leaking it across iterations.
+                    frame_task = asyncio.create_task(self._input_ch.recv())
+                    done, _ = await asyncio.wait(
+                        [frame_task, stop_task], return_when=asyncio.FIRST_COMPLETED
+                    )
+                    if stop_task in done:
                         return
+                    try:
+                        frame = frame_task.result()
+                    except ChanClosed:
+                        return
+                    finally:
+                        frame_task = None
 
                     if isinstance(frame, rtc.AudioFrame):
                         yield self._build_audio_request(frame)
@@ -765,6 +835,10 @@ class SpeechStream(stt.SpeechStream):
 
             except Exception:
                 logger.exception("an error occurred while streaming input to google STT")
+            finally:
+                await utils.aio.gracefully_cancel(
+                    stop_task, *([frame_task] if frame_task is not None else [])
+                )
 
         async def process_stream(
             client: SpeechAsyncClientV2 | SpeechAsyncClientV1,
@@ -773,7 +847,7 @@ class SpeechStream(stt.SpeechStream):
                 | cloud_speech_v1.StreamingRecognizeResponse
             ],
         ) -> None:
-            has_started = False
+            self._speaking = False
             last_usage_event_time: float = 0.0
             async for resp in stream:
                 if resp.speech_event_type == (
@@ -784,7 +858,7 @@ class SpeechStream(stt.SpeechStream):
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
                     )
-                    has_started = True
+                    self._speaking = True
 
                 if (
                     resp.speech_event_type
@@ -823,11 +897,12 @@ class SpeechStream(stt.SpeechStream):
                                 "Google STT maximum connection time reached. Reconnecting..."
                             )
                             self._pool.remove(client)
-                            if has_started:
+                            if self._speaking:
                                 self._event_ch.send_nowait(
                                     stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                                 )
-                                has_started = False
+                                self._speaking = False
+                                self._on_end_of_speech()
                             self._reconnect_event.set()
                             return
 
@@ -839,7 +914,8 @@ class SpeechStream(stt.SpeechStream):
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                     )
-                    has_started = False
+                    self._speaking = False
+                    self._on_end_of_speech()
 
                 if (audio_duration := _get_audio_duration(resp, last_usage_event_time)) > 0:
                     self._event_ch.send_nowait(
@@ -882,6 +958,12 @@ class SpeechStream(stt.SpeechStream):
                         self._reconnect_event.clear()
                     finally:
                         should_stop.set()
+                        # Cancel the streaming RPC so its underlying call object releases
+                        # its read/write tasks and request iterator. Without this the
+                        # call (and the input_generator that yielded into it) stays
+                        # pinned across reconnects and leaks ~0.4 MB per cycle.
+                        with contextlib.suppress(Exception):
+                            cast(StreamStreamCall, stream).cancel()
                         if not process_stream_task.done() and not wait_reconnect_task.done():
                             # try to gracefully stop the process_stream_task
                             try:

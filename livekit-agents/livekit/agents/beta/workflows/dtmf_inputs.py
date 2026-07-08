@@ -187,7 +187,7 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
         ctx = get_job_context()
 
         ctx.room.on("sip_dtmf_received", self._on_sip_dtmf_received)
-        self.session.on("agent_state_changed", self._on_user_state_changed)
+        self.session.on("user_state_changed", self._on_user_state_changed)
         self.session.on("agent_state_changed", self._on_agent_state_changed)
         self.session.generate_reply(tool_choice="none")
 
@@ -195,6 +195,6 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
         ctx = get_job_context()
 
         ctx.room.off("sip_dtmf_received", self._on_sip_dtmf_received)
-        self.session.off("agent_state_changed", self._on_user_state_changed)
+        self.session.off("user_state_changed", self._on_user_state_changed)
         self.session.off("agent_state_changed", self._on_agent_state_changed)
         self._generate_dtmf_reply.cancel()

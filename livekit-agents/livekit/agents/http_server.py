@@ -10,9 +10,9 @@ from typing import TYPE_CHECKING, Any
 import aiohttp
 import aiohttp.typedefs
 from aiohttp import web
-from google.protobuf.json_format import MessageToDict, ParseDict
+from google.protobuf.json_format import MessageToDict, MessageToJson, ParseDict
 
-from livekit.protocol import agent
+from livekit.protocol import agent, agent_worker
 from livekit.protocol.agent_pb import agent_text
 
 from . import utils
@@ -84,16 +84,17 @@ class AgentHttpServer(HttpServer):
 
     async def _worker_info(self, _: web.Request) -> web.Response:
         """Worker info endpoint - returns worker metadata."""
-        body = json.dumps(
-            {
-                "agent_name": self._agent_server._agent_name,
-                "worker_type": agent.JobType.Name(self._agent_server._server_type.value),
-                "worker_load": getattr(self._agent_server, "_worker_load", 0.0),
-                "active_jobs": len(self._agent_server.active_jobs),
-                "sdk_version": __version__,
-                "project_type": "python",
-            }
+        from .worker import WORKER_PROTOCOL_VERSION
+
+        worker_info = agent_worker.WorkerInfo(
+            worker_type=agent.JobType.Name(self._agent_server._server_type.value),
+            agent_name=self._agent_server._agent_name,
+            active_jobs=len(self._agent_server.active_jobs),
+            sdk_version=__version__,
+            worker_load=getattr(self._agent_server, "_worker_load", 0.0),
+            protocol_version=WORKER_PROTOCOL_VERSION,
         )
+        body = MessageToJson(worker_info, preserving_proto_field_name=True)
         return web.Response(body=body, content_type="application/json")
 
     async def _handle_text_request(self, request: web.Request) -> web.StreamResponse:

@@ -5,8 +5,9 @@ import struct
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
+from google.protobuf.duration_pb2 import Duration
 from google.protobuf.timestamp_pb2 import Timestamp
 
 from livekit import rtc
@@ -23,22 +24,31 @@ from ..llm import (
     RawFunctionTool,
     Toolset,
 )
+from ..llm.chat_context import Instructions
 from ..log import logger
 from ..metrics import (
     AgentSessionUsage,
+    EOTModelUsage,
     InterruptionModelUsage,
     LLMModelUsage,
     STTModelUsage,
     TTSModelUsage,
 )
 from ..version import __version__
+from ..voice.amd import AMDCategory, AMDPredictionEvent
 from .events import (
     AgentState,
     AgentStateChangedEvent,
     ConversationItemAddedEvent,
+    EotPredictionEvent,
     ErrorEvent,
     FunctionToolsExecutedEvent,
     SessionUsageUpdatedEvent,
+    ToolCallEnded,
+    ToolCallStarted,
+    ToolCallUpdated,
+    ToolExecutionUpdatedEvent,
+    ToolReplyUpdated,
     UserInputTranscribedEvent,
     UserState,
     UserStateChangedEvent,
@@ -46,10 +56,9 @@ from .events import (
 from .run_result import RunResult
 
 if TYPE_CHECKING:
-    from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput  # type: ignore[import-untyped]
+    from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput
     from ..inference.interruption import OverlappingSpeechEvent
     from .agent_session import AgentSession, AgentSessionOptions
-    from .room_io.types import TextInputCallback
 
 
 TOPIC_SESSION_MESSAGES = "lk.agent.session"
@@ -124,8 +133,8 @@ class RoomSessionTransport(SessionTransport):
             )
             await writer.write(data)
             await writer.aclose()
-        except Exception:
-            logger.warning("failed to send binary stream message", exc_info=True)
+        except Exception as e:
+            logger.warning("failed to send binary stream message: %s", e)
 
     async def close(self) -> None:
         if self._recv_ch.closed:
@@ -248,6 +257,27 @@ _METRICS_FIELDS = (
     "e2e_latency",
 )
 
+_TOOL_CALL_STATUS_MAP: dict[str, agent_pb.ToolCallStatus] = {
+    "done": agent_pb.TC_DONE,
+    "error": agent_pb.TC_ERROR,
+    "cancelled": agent_pb.TC_CANCELLED,
+}
+
+_TOOL_REPLY_STATUS_MAP: dict[str, agent_pb.ToolReplyStatus] = {
+    "scheduled": agent_pb.TR_SCHEDULED,
+    "completed": agent_pb.TR_COMPLETED,
+    "interrupted": agent_pb.TR_INTERRUPTED,
+    "skipped": agent_pb.TR_SKIPPED,
+}
+
+_AMD_CATEGORY_MAP: dict[AMDCategory, agent_pb.AmdCategory] = {
+    AMDCategory.HUMAN: agent_pb.AmdCategory.AMD_HUMAN,
+    AMDCategory.MACHINE_IVR: agent_pb.AmdCategory.AMD_MACHINE_IVR,
+    AMDCategory.MACHINE_VM: agent_pb.AmdCategory.AMD_MACHINE_VM,
+    AMDCategory.MACHINE_UNAVAILABLE: agent_pb.AmdCategory.AMD_MACHINE_UNAVAILABLE,
+    AMDCategory.UNCERTAIN: agent_pb.AmdCategory.AMD_UNCERTAIN,
+}
+
 
 def _tool_names(tools: Sequence[llm.Tool | Toolset]) -> list[str]:
     result: list[str] = []
@@ -282,6 +312,7 @@ def _chat_item_to_proto(item: llm.ChatItem) -> agent_pb.ChatContext.ChatItem:
             id=item.id,
             role=pb_role,
             content=content,
+            interrupted=item.interrupted,
             metrics=_metrics_to_proto(item.metrics),
         )
         return agent_pb.ChatContext.ChatItem(message=pb_msg)
@@ -314,7 +345,7 @@ def _chat_item_to_proto(item: llm.ChatItem) -> agent_pb.ChatContext.ChatItem:
         return agent_pb.ChatContext.ChatItem(
             agent_config_update=agent_pb.AgentConfigUpdate(
                 id=item.id,
-                instructions=item.instructions,
+                instructions=str(item.instructions) if item.instructions is not None else None,
                 tools_added=item.tools_added or [],
                 tools_removed=item.tools_removed or [],
             )
@@ -328,7 +359,7 @@ def _serialize_options(opts: AgentSessionOptions) -> dict[str, str]:
         "interruption": str(dict(opts.interruption)),
         "max_tool_steps": str(opts.max_tool_steps),
         "user_away_timeout": str(opts.user_away_timeout),
-        "preemptive_generation": str(opts.preemptive_generation),
+        "preemptive_generation": str(dict(opts.preemptive_generation)),
         "min_consecutive_speech_delay": str(opts.min_consecutive_speech_delay),
         "use_tts_aligned_transcript": str(opts.use_tts_aligned_transcript),
         "ivr_detection": str(opts.ivr_detection),
@@ -350,7 +381,6 @@ class SessionHost:
         self._tasks = utils.aio.TaskSet()
         self._session: AgentSession | None = None
         self._events_registered = False
-        self._text_input_cb: TextInputCallback | None = None
 
     def register_session(self, session: AgentSession) -> None:
         self._session = session
@@ -361,12 +391,11 @@ class SessionHost:
             session.on("conversation_item_added", self._on_conversation_item_added)
             session.on("user_input_transcribed", self._on_user_input_transcribed)
             session.on("function_tools_executed", self._on_function_tools_executed)
+            session.on("tool_execution_updated", self._on_tool_execution_updated)
             session.on("session_usage_updated", self._on_session_usage_updated)
             session.on("overlapping_speech", self._on_overlapping_speech)
             session.on("error", self._on_error)
-
-    def register_text_input(self, text_input_cb: TextInputCallback) -> None:
-        self._text_input_cb = text_input_cb
+            session.on("debug_message", self._on_debug_message)
 
     async def start(self) -> None:
         if self._started:
@@ -387,9 +416,11 @@ class SessionHost:
             self._session.off("conversation_item_added", self._on_conversation_item_added)
             self._session.off("user_input_transcribed", self._on_user_input_transcribed)
             self._session.off("function_tools_executed", self._on_function_tools_executed)
+            self._session.off("tool_execution_updated", self._on_tool_execution_updated)
             self._session.off("session_usage_updated", self._on_session_usage_updated)
             self._session.off("overlapping_speech", self._on_overlapping_speech)
             self._session.off("error", self._on_error)
+            self._session.off("debug_message", self._on_debug_message)
 
         if self._recv_task:
             await utils.aio.cancel_and_wait(self._recv_task)
@@ -505,6 +536,54 @@ class SessionHost:
             )
         )
 
+    def _on_tool_execution_updated(self, event: ToolExecutionUpdatedEvent) -> None:
+        pb = agent_pb.AgentSessionEvent.ToolExecutionUpdated
+        updated: agent_pb.AgentSessionEvent.ToolExecutionUpdated
+        if isinstance(event.update, ToolCallStarted):
+            fc = event.update.function_call
+            updated = pb(
+                started=pb.Started(
+                    function_call=agent_pb.FunctionCall(
+                        id=fc.id,
+                        call_id=fc.call_id,
+                        name=fc.name,
+                        arguments=fc.arguments,
+                    )
+                )
+            )
+        elif isinstance(event.update, ToolCallUpdated):
+            updated = pb(
+                call_updated=pb.CallUpdated(
+                    id=event.update.id,
+                    call_id=event.update.call_id,
+                    message=event.update.message,
+                )
+            )
+        elif isinstance(event.update, ToolCallEnded):
+            ended = pb.Ended(
+                id=event.update.id,
+                call_id=event.update.call_id,
+                status=_TOOL_CALL_STATUS_MAP[event.update.status],
+            )
+            if event.update.message is not None:
+                ended.message = event.update.message
+            updated = pb(ended=ended)
+        elif isinstance(event.update, ToolReplyUpdated):
+            updated = pb(
+                reply_updated=pb.ReplyUpdated(
+                    update_ids=event.update.update_ids,
+                    status=_TOOL_REPLY_STATUS_MAP[event.update.status],
+                    speech_id=event.update.speech_id,
+                )
+            )
+        else:
+            return
+
+        self._send_event(
+            agent_pb.AgentSessionEvent(tool_execution_updated=updated),
+            created_at=event.created_at,
+        )
+
     def _on_overlapping_speech(self, event: OverlappingSpeechEvent) -> None:
         detected_at = Timestamp()
         detected_at.FromNanoseconds(int(event.detected_at * 1e9))
@@ -524,6 +603,43 @@ class SessionHost:
 
         self._send_event(agent_pb.AgentSessionEvent(overlapping_speech=pb))
 
+    def _on_amd_prediction(self, event: AMDPredictionEvent) -> None:
+        speech_duration = Duration()
+        speech_duration.FromNanoseconds(int(event.speech_duration * 1e9))
+
+        delay = Duration()
+        delay.FromNanoseconds(int(event.delay * 1e9))
+
+        self._send_event(
+            agent_pb.AgentSessionEvent(
+                amd_prediction=agent_pb.AgentSessionEvent.AmdPrediction(
+                    speech_duration=speech_duration,
+                    delay=delay,
+                    category=_AMD_CATEGORY_MAP[event.category],
+                    reason=event.reason,
+                    transcript=event.transcript,
+                )
+            )
+        )
+
+    def _on_eot_prediction(self, event: EotPredictionEvent) -> None:
+        inference_duration = Duration()
+        inference_duration.FromNanoseconds(int(event.inference_duration * 1e9))
+
+        delay = Duration()
+        delay.FromNanoseconds(int(event.delay * 1e9))
+
+        self._send_event(
+            agent_pb.AgentSessionEvent(
+                eot_prediction=agent_pb.AgentSessionEvent.EotPrediction(
+                    probability=event.probability,
+                    threshold=event.threshold,
+                    inference_duration=inference_duration,
+                    delay=delay,
+                )
+            )
+        )
+
     def _on_session_usage_updated(self, event: SessionUsageUpdatedEvent) -> None:
         self._send_event(
             agent_pb.AgentSessionEvent(
@@ -541,6 +657,9 @@ class SessionHost:
                 )
             )
         )
+
+    def _on_debug_message(self, event: agent_pb.DebugMessage) -> None:
+        self._send_event(agent_pb.AgentSessionEvent(debug_message=event))
 
     async def _handle_request_safe(self, req: agent_pb.SessionRequest) -> None:
         try:
@@ -589,12 +708,19 @@ class SessionHost:
         elif req.HasField("get_agent_info"):
             agent = self._session.current_agent
             items = [_chat_item_to_proto(item) for item in agent.chat_ctx.items]
+            # collapse modality variants for the report; audio-first matches the
+            # update_instructions default for voice sessions
+            agent_instructions = (
+                agent.instructions.render(modality="audio")
+                if isinstance(agent.instructions, Instructions)
+                else agent.instructions
+            )
             resp = agent_pb.AgentSessionMessage(
                 response=agent_pb.SessionResponse(
                     request_id=req.request_id,
                     get_agent_info=agent_pb.SessionResponse.GetAgentInfoResponse(
                         id=agent.id,
-                        instructions=agent.instructions,
+                        instructions=agent_instructions,
                         tools=_tool_names(agent.tools),
                         chat_ctx=items,
                     ),
@@ -606,28 +732,23 @@ class SessionHost:
             items_list: list[agent_pb.ChatContext.ChatItem] = []
             error: str | None = None
             text = req.run_input.text
-            if text:
-                if self._text_input_cb is not None:
-                    from .room_io.types import TextInputEvent
+            if not text:
+                error = "empty run_input text"
+            else:
+                try:
+                    await self._session.interrupt(force=True)
+                except RuntimeError:
+                    pass
 
-                    cb_result = self._text_input_cb(
-                        self._session,
-                        TextInputEvent(text=text, info=None, participant=None),
-                    )
-                    if asyncio.iscoroutine(cb_result):
-                        await cb_result
-                else:
-                    try:
-                        await self._session.interrupt(force=True)
-                    except RuntimeError:
-                        pass
+                try:
+                    result: RunResult[None] = self._session.run(user_input=text)
+                    await result
+                    items_list = [_chat_item_to_proto(ev.item) for ev in result.events]
+                except Exception as e:
+                    error = str(e)
 
-                    try:
-                        result: RunResult[None] = self._session.run(user_input=text)
-                        await result
-                        items_list = [_chat_item_to_proto(ev.item) for ev in result.events]
-                    except Exception as e:
-                        error = str(e)
+                if not items_list and not error:
+                    error = "agent produced no response items"
 
             resp = agent_pb.AgentSessionMessage(
                 response=agent_pb.SessionResponse(
@@ -728,6 +849,85 @@ class SessionHost:
             )
             await self._transport.send_message(resp)
 
+        elif req.HasField("update_io"):
+            # Honor the remote control's mute/unmute toggles for audio /
+            # video / transcription. Only fields actually set in the proto
+            # are applied (presence-tracked booleans), so the client can
+            # send a partial update without clobbering the other channels.
+            io = req.update_io
+            input_io = self._session.input
+            output_io = self._session.output
+            if io.HasField("input"):
+                if io.input.HasField("audio_enabled"):
+                    input_io.set_audio_enabled(io.input.audio_enabled)
+                if io.input.HasField("video_enabled"):
+                    input_io.set_video_enabled(io.input.video_enabled)
+            if io.HasField("output"):
+                if io.output.HasField("audio_enabled"):
+                    output_io.set_audio_enabled(io.output.audio_enabled)
+                if io.output.HasField("video_enabled"):
+                    output_io.set_video_enabled(io.output.video_enabled)
+                if io.output.HasField("transcription_enabled"):
+                    output_io.set_transcription_enabled(io.output.transcription_enabled)
+            resp = agent_pb.AgentSessionMessage(
+                response=agent_pb.SessionResponse(
+                    request_id=req.request_id,
+                    update_io=agent_pb.SessionResponse.UpdateIOResponse(),
+                )
+            )
+            await self._transport.send_message(resp)
+
+        elif req.HasField("finalize_simulation"):
+            # The simulator's verdict is passed in so on_simulation_end can read it
+            # (ctx.simulator_verdict); the agent records its OWN verdict via
+            # ctx.success()/fail(). Both are reported; this is not an override.
+            user_verdict: (
+                agent_pb.SessionResponse.FinalizeSimulationResponse.SimulationVerdict | None
+            ) = None  # noqa: E501
+            sim_error: str | None = None
+            try:
+                from livekit.protocol import agent_simulation as sim_pb
+
+                from ..job import get_job_context
+                from ..simulation import SimulationVerdict
+
+                jc = get_job_context(required=False)
+                sim_ctx = jc.simulation_context() if jc is not None else None
+                if sim_ctx is not None:
+                    sim_ctx._begin_finalize(
+                        simulator_verdict=SimulationVerdict(
+                            success=req.finalize_simulation.provisional_success,
+                            reason=req.finalize_simulation.provisional_reason,
+                        ),
+                        run=sim_pb.SimulationRun(id=sim_ctx._dispatch.simulation_run_id),
+                        job=None,
+                    )
+                    fnc = jc._simulation_end_fnc if jc is not None else None
+                    if fnc is not None:
+                        cb_res = fnc(sim_ctx)
+                        if asyncio.iscoroutine(cb_res):
+                            await cb_res
+                    if (uv := sim_ctx.user_verdict) is not None:
+                        user_verdict = (
+                            agent_pb.SessionResponse.FinalizeSimulationResponse.SimulationVerdict(
+                                success=uv.success, reason=uv.reason
+                            )
+                        )
+            except Exception as e:
+                sim_error = str(e)
+                logger.exception("error while executing the on_simulation_end callback")
+
+            resp = agent_pb.AgentSessionMessage(
+                response=agent_pb.SessionResponse(
+                    request_id=req.request_id,
+                    error=sim_error,
+                    finalize_simulation=agent_pb.SessionResponse.FinalizeSimulationResponse(
+                        user_verdict=user_verdict,
+                    ),
+                )
+            )
+            await self._transport.send_message(resp)
+
 
 def _session_usage_to_proto(usage: AgentSessionUsage) -> agent_pb.AgentSessionUsage:
     model_usages: list[agent_pb.ModelUsage] = []
@@ -788,4 +988,216 @@ def _session_usage_to_proto(usage: AgentSessionUsage) -> agent_pb.AgentSessionUs
                     )
                 )
             )
+        elif isinstance(mu, EOTModelUsage):
+            model_usages.append(
+                agent_pb.ModelUsage(
+                    eot=agent_pb.EotModelUsage(
+                        provider=mu.provider,
+                        model=mu.model,
+                        total_requests=mu.total_requests,
+                    )
+                )
+            )
     return agent_pb.AgentSessionUsage(model_usage=model_usages)
+
+
+RemoteSessionEventTypes = Literal[
+    "agent_state_changed",
+    "user_state_changed",
+    "conversation_item_added",
+    "user_input_transcribed",
+    "function_tools_executed",
+    "tool_execution_updated",
+    "session_usage_updated",
+    "error",
+]
+
+
+class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
+    def __init__(self, transport: SessionTransport) -> None:
+        super().__init__()
+        self._transport = transport
+        self._started = False
+        self._pending_requests: dict[str, asyncio.Future[agent_pb.SessionResponse]] = {}
+        self._recv_task: asyncio.Task[None] | None = None
+
+    @classmethod
+    def from_room(cls, room: rtc.Room, agent_identity: str) -> RemoteSession:
+        transport = RoomSessionTransport(room, agent_identity)
+        return cls(transport)
+
+    async def start(self) -> None:
+        if self._started:
+            return
+        self._started = True
+        await self._transport.start()
+        self._recv_task = asyncio.create_task(self._recv_loop())
+
+    async def aclose(self) -> None:
+        if not self._started:
+            return
+        self._started = False
+
+        for future in self._pending_requests.values():
+            future.cancel()
+        self._pending_requests.clear()
+
+        if self._recv_task:
+            await utils.aio.cancel_and_wait(self._recv_task)
+
+        await self._transport.close()
+
+    async def _recv_loop(self) -> None:
+        try:
+            async for msg in self._transport:
+                if msg.HasField("response"):
+                    self._dispatch_response(msg.response)
+                elif msg.HasField("event"):
+                    event_field = msg.event.WhichOneof("event")
+                    if event_field:
+                        self.emit(event_field, msg.event)
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.warning("error processing session message", exc_info=True)
+
+    def _dispatch_response(self, response: agent_pb.SessionResponse) -> None:
+        future = self._pending_requests.pop(response.request_id, None)
+        if future and not future.done():
+            future.set_result(response)
+
+    async def _send_request(
+        self,
+        request: agent_pb.SessionRequest,
+        timeout: float = 60.0,
+    ) -> agent_pb.SessionResponse:
+        req_type = request.WhichOneof("request")
+        future: asyncio.Future[agent_pb.SessionResponse] = asyncio.Future()
+        self._pending_requests[request.request_id] = future
+
+        try:
+            msg = agent_pb.AgentSessionMessage(request=request)
+            await self._transport.send_message(msg)
+            resp = await asyncio.wait_for(future, timeout=timeout)
+        except asyncio.TimeoutError:
+            self._pending_requests.pop(request.request_id, None)
+            logger.warning(
+                "remote session request timed out",
+                extra={"request_id": request.request_id, "type": req_type, "timeout": timeout},
+            )
+            raise
+        except Exception:
+            self._pending_requests.pop(request.request_id, None)
+            raise
+
+        if resp.error:
+            raise RuntimeError(f"session request {req_type} failed: {resp.error}")
+
+        return resp
+
+    async def wait_for_ready(self, timeout: float = 5.0, retry_interval: float = 0.5) -> None:
+        deadline = asyncio.get_event_loop().time() + timeout
+        while True:
+            remaining = deadline - asyncio.get_event_loop().time()
+            if remaining <= 0:
+                raise TimeoutError("wait_for_ready timed out")
+            req = agent_pb.SessionRequest(
+                request_id=utils.shortuuid("req_"),
+                ping=agent_pb.SessionRequest.Ping(),
+            )
+            try:
+                await self._send_request(req, timeout=min(retry_interval, remaining))
+                return
+            except (TimeoutError, asyncio.TimeoutError):
+                if asyncio.get_event_loop().time() >= deadline:
+                    raise TimeoutError("wait_for_ready timed out") from None
+
+    async def get_chat_history(self) -> agent_pb.SessionResponse.GetChatHistoryResponse:
+        req = agent_pb.SessionRequest(
+            request_id=utils.shortuuid("req_"),
+            get_chat_history=agent_pb.SessionRequest.GetChatHistory(),
+        )
+        resp = await self._send_request(req)
+        return resp.get_chat_history
+
+    async def get_agent_info(self) -> agent_pb.SessionResponse.GetAgentInfoResponse:
+        req = agent_pb.SessionRequest(
+            request_id=utils.shortuuid("req_"),
+            get_agent_info=agent_pb.SessionRequest.GetAgentInfo(),
+        )
+        resp = await self._send_request(req)
+        return resp.get_agent_info
+
+    async def get_session_state(self) -> agent_pb.SessionResponse.GetSessionStateResponse:
+        req = agent_pb.SessionRequest(
+            request_id=utils.shortuuid("req_"),
+            get_session_state=agent_pb.SessionRequest.GetSessionState(),
+        )
+        resp = await self._send_request(req)
+        return resp.get_session_state
+
+    async def run(
+        self, text: str, timeout: float = 60.0
+    ) -> agent_pb.SessionResponse.RunInputResponse:
+        req = agent_pb.SessionRequest(
+            request_id=utils.shortuuid("req_"),
+            run_input=agent_pb.SessionRequest.RunInput(text=text),
+        )
+        resp = await self._send_request(req, timeout=timeout)
+        return resp.run_input
+
+    async def update_io(
+        self,
+        *,
+        input_audio_enabled: bool | None = None,
+        input_video_enabled: bool | None = None,
+        output_audio_enabled: bool | None = None,
+        output_video_enabled: bool | None = None,
+        output_transcription_enabled: bool | None = None,
+        timeout: float = 60.0,
+    ) -> agent_pb.SessionResponse.UpdateIOResponse:
+        """Toggle the agent's I/O channels remotely.
+
+        Only the channels passed (non-None) are applied; the rest are left
+        untouched. Simulators use this to disable the agent's audio I/O instead
+        of relying on a room attribute.
+        """
+        update = agent_pb.SessionRequest.UpdateIO()
+        if input_audio_enabled is not None:
+            update.input.audio_enabled = input_audio_enabled
+        if input_video_enabled is not None:
+            update.input.video_enabled = input_video_enabled
+        if output_audio_enabled is not None:
+            update.output.audio_enabled = output_audio_enabled
+        if output_video_enabled is not None:
+            update.output.video_enabled = output_video_enabled
+        if output_transcription_enabled is not None:
+            update.output.transcription_enabled = output_transcription_enabled
+
+        req = agent_pb.SessionRequest(
+            request_id=utils.shortuuid("req_"),
+            update_io=update,
+        )
+        resp = await self._send_request(req, timeout=timeout)
+        return resp.update_io
+
+    async def finalize_simulation(
+        self,
+        *,
+        provisional_success: bool,
+        provisional_reason: str = "",
+        timeout: float = 60.0,
+    ) -> agent_pb.SessionResponse.FinalizeSimulationResponse:
+        """Hand the agent under test the simulator's provisional verdict and return the
+        agent's own verdict from its on_simulation_end callback. The response's
+        ``user_verdict`` is unset when the agent has no handler (or times out) or sets
+        no verdict of its own; both verdicts are reported, neither overrides the other."""
+        req = agent_pb.SessionRequest(
+            request_id=utils.shortuuid("req_"),
+            finalize_simulation=agent_pb.SessionRequest.FinalizeSimulation(
+                provisional_success=provisional_success,
+                provisional_reason=provisional_reason,
+            ),
+        )
+        resp = await self._send_request(req, timeout=timeout)
+        return resp.finalize_simulation

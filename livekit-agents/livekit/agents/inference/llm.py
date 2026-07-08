@@ -28,7 +28,13 @@ from ..llm.tool_context import Tool
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
-from ._utils import create_access_token, get_default_inference_url, get_inference_headers
+from ._utils import (
+    HEADER_INFERENCE_PRIORITY,
+    HEADER_INFERENCE_PROVIDER,
+    create_access_token,
+    get_default_inference_url,
+    get_inference_headers,
+)
 
 lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
@@ -45,12 +51,23 @@ _REASONING_UNSUPPORTED_PARAMS: set[str] = {
     "n",
 }
 
+# xAI reasoning models only restrict presence_penalty, frequency_penalty, stop.
+# They still support temperature and top_p.
+_XAI_REASONING_UNSUPPORTED_PARAMS: set[str] = {
+    "presence_penalty",
+    "frequency_penalty",
+    "stop",
+}
+
 # Model prefix -> set of param names that should be dropped
 _UNSUPPORTED_PARAMS: dict[str, set[str]] = {
     "o1": _REASONING_UNSUPPORTED_PARAMS,
     "o3": _REASONING_UNSUPPORTED_PARAMS,
     "o4": _REASONING_UNSUPPORTED_PARAMS,
     "gpt-5": _REASONING_UNSUPPORTED_PARAMS,
+    "grok-4-1-fast-reasoning": _XAI_REASONING_UNSUPPORTED_PARAMS,
+    "grok-4.20-0309-reasoning": _XAI_REASONING_UNSUPPORTED_PARAMS,
+    "grok-4.20-multi-agent": _XAI_REASONING_UNSUPPORTED_PARAMS,
 }
 
 # models that don't support reasoning_effort when function tools are present
@@ -92,25 +109,46 @@ OpenAIModels = Literal[
     "openai/gpt-5.2-chat-latest",
     "openai/gpt-5.3-chat-latest",
     "openai/gpt-5.4",
+    "openai/gpt-5.4-mini",
+    "openai/gpt-5.4-nano",
+    "openai/gpt-5.5",
+    "openai/chat-latest",
     "openai/gpt-oss-120b",
 ]
 
 GoogleModels = Literal[
-    "google/gemini-3-pro",
+    "google/gemini-3.1-pro",
     "google/gemini-3-flash",
+    "google/gemini-3.1-flash-lite",
+    "google/gemini-3.5-flash",
     "google/gemini-2.5-pro",
     "google/gemini-2.5-flash",
     "google/gemini-2.5-flash-lite",
 ]
 
-KimiModels = Literal["moonshotai/kimi-k2-instruct"]
+KimiModels = Literal[
+    "moonshotai/kimi-k2.5",
+    "moonshotai/kimi-k2.6",
+]
 
 DeepSeekModels = Literal[
     "deepseek-ai/deepseek-v3",
     "deepseek-ai/deepseek-v3.2",
 ]
 
-LLMModels = OpenAIModels | GoogleModels | KimiModels | DeepSeekModels
+ZAIModels = Literal["zai/glm-5.1"]
+
+XAIModels = Literal[
+    "xai/grok-4-1-fast-non-reasoning",
+    "xai/grok-4-1-fast-reasoning",
+    "xai/grok-4.20-0309-non-reasoning",
+    "xai/grok-4.20-0309-reasoning",
+    "xai/grok-4.20-multi-agent-0309",
+]
+
+LLMModels = OpenAIModels | GoogleModels | KimiModels | DeepSeekModels | ZAIModels | XAIModels
+
+InferenceClass = Literal["priority", "standard"]
 
 
 class ChatCompletionOptions(TypedDict, total=False):
@@ -153,6 +191,7 @@ class _LLMOptions:
     base_url: str
     api_key: str
     api_secret: str
+    inference_class: InferenceClass | None
     extra_kwargs: ChatCompletionOptions | dict[str, Any]
 
 
@@ -165,6 +204,7 @@ class LLM(llm.LLM):
         base_url: str | None = None,
         api_key: str | None = None,
         api_secret: str | None = None,
+        inference_class: InferenceClass | None = None,
         extra_kwargs: ChatCompletionOptions | dict[str, Any] | None = None,
     ) -> None:
         super().__init__()
@@ -197,11 +237,13 @@ class LLM(llm.LLM):
             base_url=lk_base_url,
             api_key=lk_api_key,
             api_secret=lk_api_secret,
+            inference_class=inference_class,
             extra_kwargs=extra_kwargs or {},
         )
         self._client = openai.AsyncClient(
             api_key=create_access_token(self._opts.api_key, self._opts.api_secret),
             base_url=self._opts.base_url,
+            max_retries=0,
             http_client=httpx.AsyncClient(
                 timeout=httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
                 follow_redirects=True,
@@ -218,6 +260,24 @@ class LLM(llm.LLM):
     def from_model_string(cls, model: str) -> LLM:
         """Create a LLM instance from a model string"""
         return cls(model)
+
+    def update_options(
+        self,
+        *,
+        model: NotGivenOr[LLMModels | str] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[ChatCompletionOptions | dict[str, Any]] = NOT_GIVEN,
+    ) -> None:
+        """Update LLM configuration options.
+
+        Each option is read on the next ``chat()`` call, so a swap
+        takes effect on the agent's next turn without recreating the
+        LLM. ``extra_kwargs`` *replaces* the persistent kwargs dict
+        rather than merging — pass ``{}`` to clear it.
+        """
+        if is_given(model):
+            self._opts.model = model
+        if is_given(extra_kwargs):
+            self._opts.extra_kwargs = dict(extra_kwargs)
 
     @property
     def model(self) -> str:
@@ -239,6 +299,7 @@ class LLM(llm.LLM):
         response_format: NotGivenOr[
             completion_create_params.ResponseFormat | type[llm_utils.ResponseFormatT]
         ] = NOT_GIVEN,
+        inference_class: NotGivenOr[InferenceClass] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream:
         extra = {}
@@ -272,11 +333,16 @@ class LLM(llm.LLM):
 
         extra.update(self._opts.extra_kwargs)
 
+        effective_inference_class = (
+            inference_class if is_given(inference_class) else self._opts.inference_class
+        )
+
         self._client.api_key = create_access_token(self._opts.api_key, self._opts.api_secret)
         return LLMStream(
             self,
             model=self._opts.model,
             provider=self._opts.provider,
+            inference_class=effective_inference_class,
             strict_tool_schema=True,
             client=self._client,
             chat_ctx=chat_ctx,
@@ -293,6 +359,7 @@ class LLMStream(llm.LLMStream):
         *,
         model: LLMModels | str,
         provider: str | None = None,
+        inference_class: InferenceClass | None = None,
         strict_tool_schema: bool,
         client: openai.AsyncClient,
         chat_ctx: llm.ChatContext,
@@ -304,6 +371,7 @@ class LLMStream(llm.LLMStream):
         super().__init__(llm_v, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._model = model
         self._provider = provider
+        self._inference_class = inference_class
         self._provider_fmt = provider_fmt
         self._strict_tool_schema = strict_tool_schema
         self._client = client
@@ -345,7 +413,9 @@ class LLMStream(llm.LLMStream):
             extra_headers = self._extra_kwargs.setdefault("extra_headers", {})
             extra_headers.update(get_inference_headers())
             if self._provider:
-                extra_headers["X-LiveKit-Inference-Provider"] = self._provider
+                extra_headers[HEADER_INFERENCE_PROVIDER] = self._provider
+            if self._inference_class:
+                extra_headers[HEADER_INFERENCE_PRIORITY] = self._inference_class
 
             self._oai_stream = stream = await self._client.chat.completions.create(
                 messages=cast(list[ChatCompletionMessageParam], chat_ctx),
@@ -444,11 +514,13 @@ class LLMStream(llm.LLMStream):
                     return call_chunk
 
         if choice.finish_reason in ("tool_calls", "stop") and self._tool_call_id:
+            finish_extra = getattr(delta, "extra_content", None)
             call_chunk = llm.ChatChunk(
                 id=id,
                 delta=llm.ChoiceDelta(
                     role="assistant",
                     content=delta.content,
+                    extra=finish_extra,
                     tool_calls=[
                         llm.FunctionToolCall(
                             arguments=self._fnc_raw_arguments or "",

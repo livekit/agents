@@ -63,11 +63,13 @@ DEFAULT_BUFFER_CHAR_THRESHOLD = 120
 DEFAULT_MAX_BUFFER_DELAY_MS = 3000
 NUM_CHANNELS = 1
 
+TTSModels = Literal["inworld-tts-2", "inworld-tts-1.5-max"]
 Encoding = Literal["LINEAR16", "PCM", "MP3", "OGG_OPUS", "FLAC"]
 TimestampType = Literal["TIMESTAMP_TYPE_UNSPECIFIED", "WORD", "CHARACTER"]
 _TextNormalizationStr = Literal["APPLY_TEXT_NORMALIZATION_UNSPECIFIED", "ON", "OFF"]
 TextNormalization = _TextNormalizationStr | bool
 TimestampTransportStrategy = Literal["TIMESTAMP_TRANSPORT_STRATEGY_UNSPECIFIED", "SYNC", "ASYNC"]
+DeliveryMode = Literal["DELIVERY_MODE_UNSPECIFIED", "STABLE", "BALANCED", "CREATIVE"]
 
 DEFAULT_TIMESTAMP_TRANSPORT_STRATEGY: TimestampTransportStrategy = "ASYNC"
 
@@ -87,15 +89,17 @@ def _resolve_text_normalization(value: Any) -> _TextNormalizationStr:
 
 @dataclass
 class _TTSOptions:
-    model: str
+    model: TTSModels | str
     encoding: Encoding
     voice: str
     sample_rate: int
     bit_rate: int
     speaking_rate: float
     temperature: float
+    language: NotGivenOr[str] = NOT_GIVEN
     timestamp_type: NotGivenOr[TimestampType] = NOT_GIVEN
     text_normalization: NotGivenOr[TextNormalization] = NOT_GIVEN
+    delivery_mode: NotGivenOr[DeliveryMode] = NOT_GIVEN
     timestamp_transport_strategy: TimestampTransportStrategy = DEFAULT_TIMESTAMP_TRANSPORT_STRATEGY
     buffer_char_threshold: int = DEFAULT_BUFFER_CHAR_THRESHOLD
     max_buffer_delay_ms: int = DEFAULT_MAX_BUFFER_DELAY_MS
@@ -400,10 +404,14 @@ class _InworldConnection:
                         },
                         "contextId": msg.context_id,
                     }
+                    if is_given(opts.language):
+                        pkt["create"]["language"] = opts.language
                     if is_given(opts.timestamp_type):
                         pkt["create"]["timestampType"] = opts.timestamp_type
                     if is_given(opts.text_normalization):
                         pkt["create"]["applyTextNormalization"] = opts.text_normalization
+                    if is_given(opts.delivery_mode):
+                        pkt["create"]["deliveryMode"] = opts.delivery_mode
                     # Always enable auto_mode since we always use SentenceTokenizer
                     pkt["create"]["autoMode"] = True
                     await self._ws.send_str(json.dumps(pkt))
@@ -818,14 +826,16 @@ class TTS(tts.TTS):
         *,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         voice: NotGivenOr[str] = NOT_GIVEN,
-        model: NotGivenOr[str] = NOT_GIVEN,
+        model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
         encoding: NotGivenOr[Encoding] = NOT_GIVEN,
         bit_rate: NotGivenOr[int] = NOT_GIVEN,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
         speaking_rate: NotGivenOr[float] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
         timestamp_type: NotGivenOr[TimestampType] = NOT_GIVEN,
         text_normalization: NotGivenOr[TextNormalization] = NOT_GIVEN,
+        delivery_mode: NotGivenOr[DeliveryMode] = NOT_GIVEN,
         timestamp_transport_strategy: NotGivenOr[TimestampTransportStrategy] = NOT_GIVEN,
         buffer_char_threshold: NotGivenOr[int] = NOT_GIVEN,
         max_buffer_delay_ms: NotGivenOr[int] = NOT_GIVEN,
@@ -852,12 +862,20 @@ class TTS(tts.TTS):
                 Defaults to 1.0.
             temperature (float, optional): Determines the degree of randomness when sampling audio
                 tokens to generate the response. Range (0, 2]. Defaults to 1.0.
+            language (str, optional): BCP-47 language tag (e.g., "en-US", "fr-FR", "ja-JP")
+                specifying the language that the given voice should speak the text in.
+                If not set, the model default applies.
             timestamp_type (str, optional): Controls timestamp metadata returned with the audio.
                 Use "WORD" for word-level timestamps or "CHARACTER" for character-level.
                 Useful for karaoke-style captions, word highlighting, and lipsync.
             text_normalization (str, optional): Controls text normalization. When "ON", numbers,
                 dates, and abbreviations are expanded (e.g., "Dr." -> "Doctor"). When "OFF",
                 text is read exactly as written. Defaults to automatic.
+            delivery_mode (str, optional): Controls output variation on ``inworld-tts-2`` only.
+                One of "DELIVERY_MODE_UNSPECIFIED", "STABLE", "BALANCED", or "CREATIVE".
+                The Inworld API ignores ``temperature`` on ``inworld-tts-2`` — use
+                ``delivery_mode`` to steer output variation on that model instead.
+                Defaults to the server-side default ("BALANCED").
             timestamp_transport_strategy (str, optional): Controls how timestamp info is
                 transported relative to audio data. "SYNC" returns timestamps in the same
                 message as audio data. "ASYNC" allows timestamps to return in trailing
@@ -910,6 +928,8 @@ class TTS(tts.TTS):
             _validate_str_param(timestamp_type, "timestamp_type", TimestampType)
         if is_given(text_normalization):
             text_normalization = _resolve_text_normalization(text_normalization)
+        if is_given(delivery_mode):
+            _validate_str_param(delivery_mode, "delivery_mode", DeliveryMode)
         if is_given(timestamp_transport_strategy):
             _validate_str_param(
                 timestamp_transport_strategy,
@@ -925,8 +945,10 @@ class TTS(tts.TTS):
             sample_rate=sample_rate if is_given(sample_rate) else DEFAULT_SAMPLE_RATE,
             speaking_rate=speaking_rate if is_given(speaking_rate) else DEFAULT_SPEAKING_RATE,
             temperature=temperature if is_given(temperature) else DEFAULT_TEMPERATURE,
+            language=language,
             timestamp_type=timestamp_type,
             text_normalization=text_normalization,
+            delivery_mode=delivery_mode,
             timestamp_transport_strategy=timestamp_transport_strategy
             if is_given(timestamp_transport_strategy)
             else DEFAULT_TIMESTAMP_TRANSPORT_STRATEGY,
@@ -950,6 +972,14 @@ class TTS(tts.TTS):
                 retain_format=retain_format if is_given(retain_format) else True
             )
         )
+
+    class Markup(tts.TTS.Markup):
+        # markup delegation lives in the base class, keyed on _provider_key()
+        def _provider_key(self) -> str:
+            # only inworld-tts-2 understands the markup tags; older models get no
+            # markup so the tags aren't injected, converted, or stripped (matches
+            # the inference gateway's behavior)
+            return "inworld" if "tts-2" in self._tts.model else ""
 
     @property
     def model(self) -> str:
@@ -976,14 +1006,16 @@ class TTS(tts.TTS):
         self,
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
-        model: NotGivenOr[str] = NOT_GIVEN,
+        model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
         encoding: NotGivenOr[Encoding] = NOT_GIVEN,
         bit_rate: NotGivenOr[int] = NOT_GIVEN,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
         speaking_rate: NotGivenOr[float] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
         timestamp_type: NotGivenOr[TimestampType] = NOT_GIVEN,
         text_normalization: NotGivenOr[TextNormalization] = NOT_GIVEN,
+        delivery_mode: NotGivenOr[DeliveryMode] = NOT_GIVEN,
         timestamp_transport_strategy: NotGivenOr[TimestampTransportStrategy] = NOT_GIVEN,
         buffer_char_threshold: NotGivenOr[int] = NOT_GIVEN,
         max_buffer_delay_ms: NotGivenOr[int] = NOT_GIVEN,
@@ -1000,8 +1032,12 @@ class TTS(tts.TTS):
             speaking_rate (float, optional): The speed of the voice.
             temperature (float, optional): Determines the degree of randomness when sampling audio
                 tokens to generate the response.
+            language (str, optional): BCP-47 language tag (e.g., "en-US", "fr-FR").
             timestamp_type (str, optional): Controls timestamp metadata ("WORD" or "CHARACTER").
             text_normalization (str, optional): Controls text normalization ("ON" or "OFF").
+            delivery_mode (str, optional): Controls output variation on ``inworld-tts-2`` only
+                ("DELIVERY_MODE_UNSPECIFIED", "STABLE", "BALANCED", or "CREATIVE"). The Inworld
+                API ignores ``temperature`` on TTS-2; use this instead.
             timestamp_transport_strategy (str, optional): Controls timestamp transport strategy
                 ("SYNC" or "ASYNC").
             buffer_char_threshold (int, optional): For streaming, min characters before triggering.
@@ -1022,11 +1058,16 @@ class TTS(tts.TTS):
             self._opts.speaking_rate = speaking_rate
         if is_given(temperature):
             self._opts.temperature = temperature
+        if is_given(language):
+            self._opts.language = language
         if is_given(timestamp_type):
             _validate_str_param(timestamp_type, "timestamp_type", TimestampType)
             self._opts.timestamp_type = timestamp_type
         if is_given(text_normalization):
             self._opts.text_normalization = _resolve_text_normalization(text_normalization)
+        if is_given(delivery_mode):
+            _validate_str_param(delivery_mode, "delivery_mode", DeliveryMode)
+            self._opts.delivery_mode = delivery_mode
         if is_given(timestamp_transport_strategy):
             _validate_str_param(
                 timestamp_transport_strategy,
@@ -1132,10 +1173,14 @@ class ChunkedStream(tts.ChunkedStream):
                 "modelId": self._opts.model,
                 "audioConfig": audio_config,
             }
+            if utils.is_given(self._opts.language):
+                body_params["language"] = self._opts.language
             if utils.is_given(self._opts.timestamp_type):
                 body_params["timestampType"] = self._opts.timestamp_type
             if utils.is_given(self._opts.text_normalization):
                 body_params["applyTextNormalization"] = self._opts.text_normalization
+            if utils.is_given(self._opts.delivery_mode):
+                body_params["deliveryMode"] = self._opts.delivery_mode
             body_params["timestampTransportStrategy"] = self._opts.timestamp_transport_strategy
 
             x_request_id = str(uuid.uuid4())
@@ -1287,9 +1332,7 @@ def _parse_timestamp_info(
         ends = word_align.get("wordEndTimeSeconds", [])
 
         for word, start, end in zip(words, starts, ends, strict=False):
-            # Each word gets a trailing space so that when the synchronizer concatenates
-            # them via `pushed_text += text`, the transcript reads naturally.
-            text = f"{word} "
+            text = f"{word}"
             timed_strings.append(
                 TimedString(
                     text,

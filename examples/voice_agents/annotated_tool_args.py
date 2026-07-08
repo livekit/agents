@@ -8,7 +8,6 @@ from pydantic import Field  # noqa: F401
 
 from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli, inference
 from livekit.agents.llm import function_tool
-from livekit.plugins import silero
 
 logger = logging.getLogger("annotated-tool-args")
 logger.setLevel(logging.INFO)
@@ -92,7 +91,6 @@ server = AgentServer()
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     agent = AgentSession(
-        vad=silero.VAD.load(),
         stt=inference.STT("deepgram/nova-3"),
         llm=inference.LLM("google/gemini-2.5-flash"),
         tts=inference.TTS("rime/arcana"),

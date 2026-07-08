@@ -5,8 +5,8 @@ import pytest
 
 from livekit.agents import AgentSession, beta, inference, llm
 
+from .agent import FrontDeskAgent, Userdata
 from .calendar_api import AvailableSlot, FakeCalendar
-from .frontdesk_agent import FrontDeskAgent, Userdata
 
 TIMEZONE = "UTC"
 

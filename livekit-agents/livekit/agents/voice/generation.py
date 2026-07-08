@@ -2,15 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import functools
-import inspect
 import json
 import time
-from collections.abc import AsyncGenerator, AsyncIterable, Callable, Sequence
+from collections.abc import AsyncIterable, Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 from opentelemetry import trace
-from pydantic import ValidationError
 
 from livekit import rtc
 
@@ -26,11 +24,17 @@ from ..llm import (
 from ..llm.chat_context import Instructions
 from ..log import logger
 from ..telemetry import trace_types, tracer
-from ..types import USERDATA_TIMED_TRANSCRIPT, FlushSentinel, NotGivenOr
-from ..utils import aio, is_given
+from ..types import (
+    USERDATA_TIMED_TRANSCRIPT,
+    USERDATA_TTS_STARTED_TIME,
+    FlushSentinel,
+    NotGivenOr,
+)
+from ..utils import aio
 from ..utils.aio import itertools
 from . import io
 from .speech_handle import InputDetails, SpeechHandle
+from .tool_executor import _build_executor_map
 from .transcription.text_transforms import _apply_text_transforms
 
 if TYPE_CHECKING:
@@ -51,9 +55,70 @@ class _LLMGenerationData:
     function_ch: aio.Chan[llm.FunctionCall]
     generated_text: str = ""
     generated_functions: list[llm.FunctionCall] = field(default_factory=list)
+    generated_extra: dict[str, Any] = field(default_factory=dict)
     id: str = field(default_factory=lambda: utils.shortuuid("item_"))
     started_fut: asyncio.Future[None] = field(default_factory=asyncio.Future)
     ttft: float | None = None
+
+
+# output for an injected in-progress tool call, phrased so the model waits instead of
+# re-issuing the call.
+_RUNNING_TOOL_PLACEHOLDER = "The tool call is still in progress."
+# extra flag marking an injected pair so it can be stripped before the ctx is forwarded.
+_RUNNING_PLACEHOLDER_KEY = "__lk_running_placeholder__"
+
+
+def _inject_running_tool_calls(
+    chat_ctx: ChatContext,
+    running_calls: Iterable[llm.FunctionCall],
+    *,
+    placeholder: str = _RUNNING_TOOL_PLACEHOLDER,
+) -> None:
+    """Add a flagged in-progress pair for each running tool call missing from ``chat_ctx``
+    so the model won't re-issue an in-flight call. Mutates in place; strip the pairs with
+    :func:`_strip_running_tool_calls` before the ctx is persisted or forwarded."""
+    existing = {
+        item.call_id
+        for item in chat_ctx.items
+        if item.type in ("function_call", "function_call_output")
+    }
+    for fnc_call in running_calls:
+        if fnc_call.call_id in existing:
+            continue
+        existing.add(fnc_call.call_id)
+        # copy so the executor's live FunctionCall stays unflagged
+        call = fnc_call.model_copy(
+            update={"extra": {**fnc_call.extra, _RUNNING_PLACEHOLDER_KEY: True}}
+        )
+        chat_ctx.insert(
+            [
+                call,
+                llm.FunctionCallOutput(
+                    call_id=fnc_call.call_id,
+                    name=fnc_call.name,
+                    output=placeholder,
+                    is_error=False,
+                    created_at=fnc_call.created_at,
+                ),
+            ]
+        )
+
+
+def _strip_running_tool_calls(chat_ctx: ChatContext) -> None:
+    """Remove the pairs added by :func:`_inject_running_tool_calls`, keeping everything
+    else (e.g. items a custom ``llm_node`` added)."""
+    flagged = {
+        item.call_id
+        for item in chat_ctx.items
+        if item.type == "function_call" and item.extra.get(_RUNNING_PLACEHOLDER_KEY)
+    }
+    if not flagged:
+        return
+    chat_ctx.items[:] = [
+        item
+        for item in chat_ctx.items
+        if not (item.type in ("function_call", "function_call_output") and item.call_id in flagged)
+    ]
 
 
 def perform_llm_inference(
@@ -126,8 +191,10 @@ async def _llm_inference_task(
 
     # store any updated tools, to ensure subsequent tool calls in the same turn (nested calls)
     # are using the newer tools.
-    # tool_ctx here is ephemeral for this turn, and we allow manipulations
-    tool_ctx.update_tools(tools)
+    # tool_ctx here is ephemeral for this turn, and we allow manipulations.
+    # _sync_flattened writes back flat edits while preserving Toolset grouping
+    # (e.g. tool_ctx.toolsets stays intact for executor routing on handoff).
+    tool_ctx._sync_flattened(tools)
     tools_snapshot = tools.copy()
 
     if isinstance(llm_node, str):
@@ -145,10 +212,11 @@ async def _llm_inference_task(
             if data.ttft is None:
                 data.ttft = time.perf_counter() - start_time
 
-            # io.LLMNode can either return a string or a ChatChunk
+            # extract text content from either str or ChatChunk
+            content: str | None = None
+
             if isinstance(chunk, str):
-                data.generated_text += chunk
-                text_ch.send_nowait(chunk)
+                content = chunk
 
             elif isinstance(chunk, ChatChunk):
                 if not chunk.delta:
@@ -159,12 +227,11 @@ async def _llm_inference_task(
                         if tool.type != "function":
                             continue
 
-                        # lazily update the tool_ctx in case tools changed in the middle of `llm_node`
                         if (
                             tool_ctx.get_function_tool(tool.name) is None
                             and tools != tools_snapshot
                         ):
-                            tool_ctx.update_tools(tools)
+                            tool_ctx._sync_flattened(tools)
                             tools_snapshot = tools.copy()
 
                         fnc_call = llm.FunctionCall(
@@ -177,16 +244,24 @@ async def _llm_inference_task(
                         data.generated_functions.append(fnc_call)
                         function_ch.send_nowait(fnc_call)
 
-                if chunk.delta.content:
-                    data.generated_text += chunk.delta.content
-                    text_ch.send_nowait(chunk.delta.content)
+                if chunk.delta.extra:
+                    data.generated_extra.update(chunk.delta.extra)
+
+                content = chunk.delta.content
 
             elif isinstance(chunk, FlushSentinel):
                 text_ch.send_nowait(chunk)
+                content = None
             else:
                 logger.warning(
                     f"LLM node returned an unexpected type: {type(chunk)}",
                 )
+                content = None
+
+            # route text content to output channels
+            if content:
+                data.generated_text += content
+                text_ch.send_nowait(content)
     finally:
         if isinstance(llm_node, _ACloseable):
             await llm_node.aclose()
@@ -213,7 +288,7 @@ class _TTSGenerationData:
 def perform_tts_inference(
     *,
     node: io.TTSNode,
-    input: AsyncIterable[str | FlushSentinel],
+    input: AsyncIterable[str],
     model_settings: ModelSettings,
     text_transforms: Sequence[TextTransforms] | None,
     model: str | None = None,
@@ -239,97 +314,72 @@ def perform_tts_inference(
 
 
 @utils.log_exceptions(logger=logger)
+@tracer.start_as_current_span("tts_node")
 async def _tts_inference_task(
     node: io.TTSNode,
-    input: AsyncIterable[str | FlushSentinel],
+    input: AsyncIterable[str],
     model_settings: ModelSettings,
     data: _TTSGenerationData,
     text_transforms: Sequence[TextTransforms] | None,
     model: str | None = None,
     provider: str | None = None,
 ) -> bool:
-    start_time: float | None = None
+    current_span = trace.get_current_span()
+    if model:
+        current_span.set_attribute(trace_types.ATTR_GEN_AI_REQUEST_MODEL, model)
+    if provider:
+        current_span.set_attribute(trace_types.ATTR_GEN_AI_PROVIDER_NAME, provider)
+
     audio_ch, timed_texts_fut = data.audio_ch, data.timed_texts_fut
+    if text_transforms:
+        input = _apply_text_transforms(input, text_transforms)
 
-    @tracer.start_as_current_span("tts_node")
-    async def _tts_node_inference(input: AsyncIterable[str], pushed_duration: float) -> float:
-        # set model/provider attributes on the span
-        current_span = trace.get_current_span()
-        if model:
-            current_span.set_attribute(trace_types.ATTR_GEN_AI_REQUEST_MODEL, model)
-        if provider:
-            current_span.set_attribute(trace_types.ATTR_GEN_AI_PROVIDER_NAME, provider)
-        if text_transforms:
-            input = _apply_text_transforms(input, text_transforms)
-
-        tts_node = node(input, model_settings)
-        if asyncio.iscoroutine(tts_node):
-            tts_node = await tts_node
-
-        audio_duration: float = 0.0
-        if not isinstance(tts_node, AsyncIterable):
-            if not timed_texts_fut.done():
-                timed_texts_fut.set_result(None)
-            return audio_duration
-
-        if timed_texts_fut.done():
-            timed_text_ch = timed_texts_fut.result()
-        else:
-            timed_text_ch = aio.Chan[io.TimedString]()
-            timed_texts_fut.set_result(timed_text_ch)
-
-        async for audio_frame in tts_node:
-            if start_time is not None and data.ttfb is None:
-                data.ttfb = time.perf_counter() - start_time
-                current_span = trace.get_current_span()
-                current_span.set_attribute(trace_types.ATTR_RESPONSE_TTFB, data.ttfb)
-
-            if timed_text_ch is not None:
-                for text in audio_frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, []):
-                    if isinstance(text, io.TimedString):
-                        if is_given(text.start_time):
-                            text.start_time += pushed_duration
-                        if is_given(text.end_time):
-                            text.end_time += pushed_duration
-                        timed_text_ch.send_nowait(text)
-
-            audio_ch.send_nowait(audio_frame)
-            audio_duration += audio_frame.duration
-        return audio_duration
-
+    start_time: float | None = None
     input_tee = itertools.tee(input, 2)
-    finished = False
 
     async def _get_start_time() -> None:
         nonlocal start_time
-        async for chunk in input_tee[0]:
-            if not isinstance(chunk, FlushSentinel):
-                start_time = time.perf_counter()
-                break
-
-    async def _input_segment() -> AsyncGenerator[str, None]:
-        async for chunk in input_tee[1]:
-            if isinstance(chunk, FlushSentinel):
-                return
-            yield chunk
-
-        nonlocal finished
-        finished = True
+        async for _ in input_tee[0]:
+            start_time = time.perf_counter()
+            break
 
     _start_time_task = asyncio.create_task(_get_start_time())
-    pushed_duration: float = 0.0
-    input_segment: AsyncGenerator[str, None] | None = None
     try:
-        while not finished:
-            input_segment = _input_segment()
-            pushed_duration += await _tts_node_inference(input_segment, pushed_duration)
+        tts_node = node(input_tee[1], model_settings)
+        if asyncio.iscoroutine(tts_node):
+            tts_node = await tts_node
+
+        if not isinstance(tts_node, AsyncIterable):
+            timed_texts_fut.set_result(None)
+            return False
+
+        timed_text_ch = aio.Chan[io.TimedString]()
+        timed_texts_fut.set_result(timed_text_ch)
+
+        audio_duration = 0.0
+        async for audio_frame in tts_node:
+            if data.ttfb is None:
+                # the framework TTS streams attach the time the text was first sent to the
+                # provider; without it (custom tts_node), fall back to the arrival of the
+                # first input token, which also counts any text buffering (e.g. sentence
+                # tokenization) as TTFB
+                anchor: float | None = audio_frame.userdata.get(
+                    USERDATA_TTS_STARTED_TIME, start_time
+                )
+                if anchor is not None:
+                    data.ttfb = time.perf_counter() - anchor
+                    current_span.set_attribute(trace_types.ATTR_RESPONSE_TTFB, data.ttfb)
+
+            for text in audio_frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, []):
+                if isinstance(text, io.TimedString):
+                    timed_text_ch.send_nowait(text)
+
+            audio_ch.send_nowait(audio_frame)
+            audio_duration += audio_frame.duration
+        return audio_duration > 0
     finally:
         await aio.gracefully_cancel(_start_time_task)
-        if input_segment is not None:
-            await input_segment.aclose()
         await input_tee.aclose()
-
-    return pushed_duration > 0
 
 
 @dataclass
@@ -339,7 +389,9 @@ class _TextOutput:
 
 
 def perform_text_forwarding(
-    *, text_output: io.TextOutput | None, source: AsyncIterable[str]
+    *,
+    text_output: io.TextOutput | None,
+    source: AsyncIterable[str],
 ) -> tuple[asyncio.Task[None], _TextOutput]:
     out = _TextOutput(text="", first_text_fut=asyncio.Future())
     task = asyncio.create_task(_text_forwarding_task(text_output, source, out))
@@ -352,14 +404,17 @@ async def _text_forwarding_task(
     source: AsyncIterable[str],
     out: _TextOutput,
 ) -> None:
+    # The raw LLM text (expressive markup intact) is forwarded verbatim: it flows into
+    # chat history via out.text and on to the transcript sinks. The markup is a TTS audio
+    # directive, not spoken text, so the sinks strip it downstream (and surface the leading
+    # expression as the segment's lk.expression attribute) — see TranscriptMarkupStripper.
     try:
         async for delta in source:
             out.text += delta
-            if text_output is not None:
-                await text_output.capture_text(delta)
-
             if not out.first_text_fut.done():
                 out.first_text_fut.set_result(None)
+            if text_output is not None and delta:
+                await text_output.capture_text(delta)
     finally:
         if isinstance(source, _ACloseable):
             await source.aclose()
@@ -373,6 +428,8 @@ class _AudioOutput:
     audio: list[rtc.AudioFrame]
     first_frame_fut: asyncio.Future[float]
     """Future that will be set with the timestamp of the first frame's capture"""
+
+    started_forwarding_at: float | None = None
 
     def _resolve_first_frame_fut(self, ev: io.PlaybackStartedEvent) -> None:
         if not self.first_frame_fut.done():
@@ -402,11 +459,14 @@ async def _audio_forwarding_task(
 ) -> None:
     resampler: rtc.AudioResampler | None = None
 
+    cancelled = False
     try:
         audio_output.resume()
 
         async for frame in tts_output:
             out.audio.append(frame)
+            if out.started_forwarding_at is None:
+                out.started_forwarding_at = time.time()
 
             if (
                 not out.first_frame_fut.done()
@@ -430,14 +490,115 @@ async def _audio_forwarding_task(
             for frame in resampler.flush():
                 await audio_output.capture_frame(frame)
 
+    except asyncio.CancelledError:
+        cancelled = True
+        raise
     finally:
         if isinstance(tts_output, _ACloseable):
             try:
                 await tts_output.aclose()
             except Exception as e:
-                logger.error("error while closing tts output", exc_info=e)
+                logger.warning("error while closing tts output: %s", e)
 
         audio_output.flush()
+        if cancelled:
+            audio_output.clear_buffer()
+
+
+@dataclass
+class _ForwardOutput:
+    """Result of forwarding one generation segment's audio and text to the outputs."""
+
+    text_out: _TextOutput | None = None
+    audio_out: _AudioOutput | None = None
+    played: Literal["full", "partial", "skipped"] = "skipped"
+    playback_position: float = 0.0
+    synchronized_transcript: str | None = None
+
+    @property
+    def forwarded_text(self) -> str:
+        """The text that actually reached the user, accounting for interruptions."""
+        if self.played == "skipped":
+            return ""
+        if self.played == "partial" and self.synchronized_transcript is not None:
+            return self.synchronized_transcript
+        return self.text_out.text if self.text_out else ""
+
+
+async def forward_generation(
+    *,
+    speech_handle: SpeechHandle,
+    audio_output: io.AudioOutput | None,
+    text_output: io.TextOutput | None,
+    audio_source: AsyncIterable[rtc.AudioFrame] | None,
+    text_source: AsyncIterable[str] | None,
+    on_first_frame: Callable[[asyncio.Future[Any], _AudioOutput | None], None],
+) -> _ForwardOutput:
+    """Forward one segment's audio/text to the outputs, then wait for its playout.
+
+    Returns when the segment has fully played, been interrupted, or never started
+    (e.g. interrupted before the first frame). Callers resolve the audio/text sources
+    and own message creation; this is the shared core between the pipeline and realtime
+    generation paths.
+    """
+    out = _ForwardOutput()
+    forward_tasks: list[asyncio.Task[Any]] = []
+    try:
+        audio_out: _AudioOutput | None = None
+        if audio_output is not None and audio_source is not None:
+            forward_audio_task, audio_out = perform_audio_forwarding(
+                audio_output=audio_output, tts_output=audio_source
+            )
+            forward_tasks.append(forward_audio_task)
+            audio_out.first_frame_fut.add_done_callback(lambda fut: on_first_frame(fut, audio_out))
+            out.audio_out = audio_out
+
+        text_out: _TextOutput | None = None
+        if text_source is not None:
+            forward_text_task, text_out = perform_text_forwarding(
+                text_output=text_output, source=text_source
+            )
+            forward_tasks.append(forward_text_task)
+            out.text_out = text_out
+
+        if audio_out is None and text_out is not None:
+            text_out.first_text_fut.add_done_callback(lambda fut: on_first_frame(fut, None))
+
+        playout_fut: asyncio.Future[Any] | None = None
+        await speech_handle.wait_if_not_interrupted(list(forward_tasks))
+        if not speech_handle.interrupted and audio_output is not None:
+            playout_fut = asyncio.ensure_future(audio_output.wait_for_playout())
+            await speech_handle.wait_if_not_interrupted([playout_fut])
+
+        if speech_handle.interrupted:
+            await utils.aio.cancel_and_wait(*forward_tasks)
+            if audio_output is not None:
+                audio_output.clear_buffer()
+                playback_ev = await audio_output.wait_for_playout()
+                if (
+                    audio_out is not None
+                    and audio_out.first_frame_fut.done()
+                    and not audio_out.first_frame_fut.cancelled()
+                ):
+                    out.played = "partial"
+                    out.playback_position = playback_ev.playback_position
+                    out.synchronized_transcript = playback_ev.synchronized_transcript
+                # else: audio never reached the speakers, stays "skipped"
+            elif text_out is not None and text_out.text:
+                out.played = "partial"
+            return out
+
+        if audio_output is not None:
+            assert playout_fut is not None
+            playback_ev = playout_fut.result()
+            out.played = "full"
+            out.playback_position = playback_ev.playback_position
+            out.synchronized_transcript = playback_ev.synchronized_transcript
+        elif text_out is not None and text_out.text:
+            out.played = "full"
+        return out
+    finally:
+        await utils.aio.cancel_and_wait(*forward_tasks)
 
 
 @dataclass
@@ -498,14 +659,34 @@ async def _execute_tools_task(
     tool_output: _ToolOutput,
     durable_scheduler: DurableScheduler,
 ) -> None:
-    """execute tools, when cancelled, stop executing new tools but wait for the pending ones"""
+    """Dispatch tools through the activity's _ToolExecutor.
+
+    Tools that never call ``ctx.update()`` behave like classic sync tools. Those
+    that do release control to the LLM with the first update as their synthetic
+    output, and later updates / the final return are coalesced into deferred replies.
+    """
 
     from .agent import _set_activity_task_info
     from .events import RunContext
+    from .run_result import _MockToolsContextVar
 
     def _tool_completed(out: ToolExecutionOutput) -> None:
         tool_execution_completed_cb(out)
         tool_output.output.append(out)
+
+    activity = session._activity
+    if activity is None:
+        logger.error(
+            "no active AgentActivity to execute tools",
+            extra={"speech_id": speech_handle.id},
+        )
+        return
+
+    # Route AsyncToolset members to their own executor so session-scoped async
+    # tools survive handoff; everything else falls back to the activity executor.
+    executor_by_name = _build_executor_map(
+        toolsets=tool_ctx.toolsets, default=activity._tool_executor
+    )
 
     tasks: list[asyncio.Task[Any]] = []
     try:
@@ -534,7 +715,11 @@ async def _execute_tools_task(
                     make_tool_output(
                         fnc_call=fnc_call,
                         output=None,
-                        exception=ToolError(f"Unknown function: {fnc_call.name}"),
+                        # Name the available tools so the model can self-correct
+                        exception=ToolError(
+                            f"Unknown function: {fnc_call.name} - available tools: "
+                            f"{', '.join(tool_ctx.function_tools.keys())}"
+                        ),
                     )
                 )
                 continue
@@ -556,104 +741,77 @@ async def _execute_tools_task(
                 )
                 continue
 
-            tool_flags = function_tool.info.flags
+            # parse up front so the executor doesn't repeat the work, and so
+            # invalid JSON surfaces as a tool error instead of inside the lock.
+            # parse_function_arguments adds json_repair fallback + chat-template
+            # token cleanup for misbehaving open-weight models.
+            json_args = fnc_call.arguments or "{}"
             try:
-                json_args = fnc_call.arguments or "{}"
-                fnc_args, fnc_kwargs = llm_utils.prepare_function_arguments(
-                    fnc=function_tool,
-                    json_arguments=json_args,
-                    call_ctx=RunContext(
-                        session=session,
-                        speech_handle=speech_handle,
-                        function_call=fnc_call,
-                    ),
-                )
-
-            except (ValidationError, ValueError) as e:
-                logger.exception(
-                    f"tried to call AI function `{fnc_call.name}` with invalid arguments",
+                raw_args = llm_utils.parse_function_arguments(json_args)
+            except ValueError as e:
+                logger.warning(
+                    f"invalid arguments for AI function `{fnc_call.name}`: {e}",
                     extra={
                         "function": fnc_call.name,
                         "arguments": fnc_call.arguments,
                         "speech_id": speech_handle.id,
                     },
                 )
-                _tool_completed(make_tool_output(fnc_call=fnc_call, output=None, exception=e))
+                _tool_completed(
+                    make_tool_output(
+                        fnc_call=fnc_call,
+                        output=None,
+                        exception=ToolError(f"Error parsing arguments for `{fnc_call.name}`: {e}"),
+                    )
+                )
                 continue
+
+            # write canonical JSON back so subsequent LLM turns see valid JSON
+            # even if the original was repaired
+            canonical = json.dumps(raw_args, default=str)
+            if canonical != json_args:
+                fnc_call.arguments = canonical
 
             if not tool_output.first_tool_started_fut.done():
                 tool_output.first_tool_started_fut.set_result(None)
 
             tool_execution_started_cb(fnc_call)
             try:
-                from .run_result import _MockToolsContextVar
-
                 mock_tools: dict[str, Callable] = _MockToolsContextVar.get({}).get(
                     type(session.current_agent), {}
                 )
+                mock = mock_tools.get(fnc_call.name)
+                mocked = mock is not None
 
-                if mock := mock_tools.get(fnc_call.name):
-                    logger.debug(
-                        "executing mock tool",
-                        extra={
-                            "function": fnc_call.name,
-                            "arguments": fnc_call.arguments,
-                            "speech_id": speech_handle.id,
-                        },
-                    )
+                run_ctx = RunContext(
+                    session=session, speech_handle=speech_handle, function_call=fnc_call
+                )
 
-                    async def _run_mock(mock: Callable, *fnc_args: Any, **fnc_kwargs: Any) -> Any:
-                        sig = inspect.signature(mock)
+                logger.debug(
+                    "executing mock tool" if mocked else "executing tool",
+                    extra={
+                        "function": fnc_call.name,
+                        "arguments": fnc_call.arguments,
+                        "speech_id": speech_handle.id,
+                    },
+                )
 
-                        pos_param_names = [
-                            name
-                            for name, param in sig.parameters.items()
-                            if param.kind
-                            in (
-                                inspect.Parameter.POSITIONAL_ONLY,
-                                inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                            )
-                        ]
-                        max_positional = len(pos_param_names)
-                        trimmed_args = fnc_args[:max_positional]
-                        kw_param_names = [
-                            name
-                            for name, param in sig.parameters.items()
-                            if param.kind
-                            in (
-                                inspect.Parameter.KEYWORD_ONLY,
-                                inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                            )
-                        ]
-                        trimmed_kwargs = {
-                            k: v for k, v in fnc_kwargs.items() if k in kw_param_names
-                        }
-
-                        bound = sig.bind_partial(*trimmed_args, **trimmed_kwargs)
-                        bound.apply_defaults()
-
-                        if inspect.iscoroutinefunction(mock):
-                            return await mock(*bound.args, **bound.kwargs)
-                        else:
-                            return mock(*bound.args, **bound.kwargs)
-
-                    function_callable = functools.partial(_run_mock, mock, *fnc_args, **fnc_kwargs)
-                else:
-                    logger.debug(
-                        "executing tool",
-                        extra={
-                            "function": fnc_call.name,
-                            "arguments": fnc_call.arguments,
-                            "speech_id": speech_handle.id,
-                        },
-                    )
-                    function_callable = functools.partial(function_tool, *fnc_args, **fnc_kwargs)
+                executor = executor_by_name.get(fnc_call.name, activity._tool_executor)
+                # the executor owns durable dispatch too: it drives DURABLE tools through
+                # the durable scheduler and runs the rest with the normal update/filler flow
+                function_callable = functools.partial(
+                    executor.execute,
+                    tool=function_tool,
+                    run_ctx=run_ctx,
+                    raw_arguments=raw_args,
+                    mock=mock,
+                    durable_scheduler=durable_scheduler,
+                )
 
                 @tracer.start_as_current_span("function_tool")
                 async def _traceable_fnc_tool(
                     function_callable: Callable,
                     fnc_call: llm.FunctionCall,
-                    tool_flags: llm.ToolFlag,
                 ) -> None:
                     current_span = trace.get_current_span()
                     current_span.set_attributes(
@@ -665,19 +823,7 @@ async def _execute_tools_task(
                     )
 
                     try:
-                        if tool_flags & llm.ToolFlag.DURABLE:
-                            val = await durable_scheduler.execute(
-                                function_callable,
-                                metadata=_DurableExecutionMetadata(
-                                    num_steps=speech_handle.num_steps,
-                                    function_call=fnc_call.model_dump_json(),
-                                    allow_interruptions=speech_handle.allow_interruptions,
-                                    input_details=speech_handle.input_details,
-                                ),
-                            )
-                        else:
-                            val = await function_callable()
-
+                        val = await function_callable()
                         output = make_tool_output(fnc_call=fnc_call, output=val, exception=None)
                     except BaseException as e:
                         if isinstance(e, ToolError):
@@ -709,7 +855,7 @@ async def _execute_tools_task(
                     _tool_completed(output)
 
                 task = asyncio.create_task(
-                    _traceable_fnc_tool(function_callable, fnc_call, tool_flags),
+                    _traceable_fnc_tool(function_callable, fnc_call),
                     name=f"func_exec_{fnc_call.name}",  # task name is used for logging when the task is cancelled
                 )
                 _set_activity_task_info(
@@ -844,25 +990,30 @@ The ID of the instructions message in the chat context. (only for stateless LLMs
 
 
 def update_instructions(
-    chat_ctx: ChatContext, *, instructions: str | Instructions, add_if_missing: bool
+    chat_ctx: ChatContext,
+    *,
+    instructions: str | Instructions,
+    add_if_missing: bool,
+    modality: Literal["audio", "text"] = "audio",
 ) -> None:
     """
     Update the instruction message in the chat context or insert a new one if missing.
 
-    This function looks for an existing instruction message in the chat context using the identifier
-    'INSTRUCTIONS_MESSAGE_ID'.
-
-    Raises:
-        ValueError: If an existing instruction message is not of type "message".
+    Instructions are resolved to a plain string using the given modality before storage.
     """
+    text = (
+        instructions.render(modality=modality)
+        if isinstance(instructions, Instructions)
+        else instructions
+    )
+
     idx = chat_ctx.index_by_id(INSTRUCTIONS_MESSAGE_ID)
     if idx is not None:
         if chat_ctx.items[idx].type == "message":
-            # create a new instance to avoid mutating the original
             chat_ctx.items[idx] = llm.ChatMessage(
                 id=INSTRUCTIONS_MESSAGE_ID,
                 role="system",
-                content=[instructions],
+                content=[text],
                 created_at=chat_ctx.items[idx].created_at,
             )
         else:
@@ -870,28 +1021,10 @@ def update_instructions(
                 "expected the instructions inside the chat_ctx to be of type 'message'"
             )
     elif add_if_missing:
-        # insert the instructions at the beginning of the chat context
         chat_ctx.items.insert(
             0,
-            llm.ChatMessage(id=INSTRUCTIONS_MESSAGE_ID, role="system", content=[instructions]),
+            llm.ChatMessage(id=INSTRUCTIONS_MESSAGE_ID, role="system", content=[text]),
         )
-
-
-def apply_instructions_modality(
-    chat_ctx: ChatContext, *, modality: Literal["audio", "text"]
-) -> None:
-    idx = chat_ctx.index_by_id(INSTRUCTIONS_MESSAGE_ID)
-    if idx is not None and (item := chat_ctx.items[idx]).type == "message":
-        has_modality_specific = any(isinstance(c, Instructions) for c in item.content)
-        if not has_modality_specific:
-            return
-
-        # ChatContext.copy shadows the original item, create a new instance to avoid mutating the original
-        new_item = item.model_copy()
-        new_item.content = [
-            c.as_modality(modality) if isinstance(c, Instructions) else c for c in new_item.content
-        ]
-        chat_ctx.items[idx] = new_item
 
 
 def remove_instructions(chat_ctx: ChatContext) -> None:

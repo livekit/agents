@@ -21,9 +21,9 @@ async def entrypoint(ctx: JobContext):
         resume_false_interruption=False,
     )
 
-    persona_id = os.getenv("TAVUS_PERSONA_ID")
-    replica_id = os.getenv("TAVUS_REPLICA_ID")
-    tavus_avatar = tavus.AvatarSession(persona_id=persona_id, replica_id=replica_id)
+    pal_id = os.getenv("TAVUS_PAL_ID")
+    face_id = os.getenv("TAVUS_FACE_ID")
+    tavus_avatar = tavus.AvatarSession(pal_id=pal_id, face_id=face_id)
     await tavus_avatar.start(session, room=ctx.room)
 
     # start the agent, it will join the room and wait for the avatar to join

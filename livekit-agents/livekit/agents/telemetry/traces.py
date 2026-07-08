@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import threading
+import time
 from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
@@ -323,6 +325,26 @@ def _chat_ctx_to_otel_events(chat_ctx: ChatContext) -> list[tuple[str, Attribute
     return events
 
 
+async def _parse_retry_delay(resp: aiohttp.ClientResponse) -> float | None:
+    """Parse a protobuf Status error response for RetryInfo and return the retry delay in seconds,
+    or None if the error is not retryable."""
+    from google.rpc import error_details_pb2, status_pb2  # type: ignore[import-untyped]
+
+    try:
+        body = await resp.read()
+        status = status_pb2.Status()
+        status.ParseFromString(body)
+        for detail in status.details:
+            retry_info = error_details_pb2.RetryInfo()
+            if detail.Unpack(retry_info):
+                delay = retry_info.retry_delay
+                return float(delay.seconds + delay.nanos / 1e9)
+    except Exception:
+        pass
+
+    return None
+
+
 async def _upload_session_report(
     *,
     agent_name: str,
@@ -466,20 +488,11 @@ async def _upload_session_report(
     header_msg.start_time.FromMilliseconds(int((report.audio_recording_started_at or 0) * 1000))
     header_bytes = header_msg.SerializeToString()
 
-    mp = aiohttp.MultipartWriter("form-data")
-
-    part = mp.append(header_bytes)
-    part.set_content_disposition("form-data", name="header", filename="header.binpb")
-    part.headers["Content-Type"] = "application/protobuf"
-    part.headers["Content-Length"] = str(len(header_bytes))
-
+    chat_history_json = ""
     if recording_options["transcript"]:
         chat_history_json = json.dumps(report.chat_history.to_dict(exclude_timestamp=False))
-        part = mp.append(chat_history_json)
-        part.set_content_disposition("form-data", name="chat_history", filename="chat_history.json")
-        part.headers["Content-Type"] = "application/json"
-        part.headers["Content-Length"] = str(len(chat_history_json))
 
+    audio_bytes = b""
     if has_audio and report.audio_recording_path:
         try:
             async with aiofiles.open(report.audio_recording_path, "rb") as f:
@@ -487,43 +500,127 @@ async def _upload_session_report(
         except Exception:
             audio_bytes = b""
 
+    url = f"{observability_url}/observability/recordings/v0"
+
+    def _build_multipart() -> aiohttp.MultipartWriter:
+        mp = aiohttp.MultipartWriter("form-data")
+
+        part = mp.append(header_bytes)
+        part.set_content_disposition("form-data", name="header", filename="header.binpb")
+        part.headers["Content-Type"] = "application/protobuf"
+        part.headers["Content-Length"] = str(len(header_bytes))
+
+        if recording_options["transcript"]:
+            part = mp.append(chat_history_json)
+            part.set_content_disposition(
+                "form-data", name="chat_history", filename="chat_history.json"
+            )
+            part.headers["Content-Type"] = "application/json"
+            part.headers["Content-Length"] = str(len(chat_history_json))
+
         if audio_bytes:
             part = mp.append(audio_bytes)
             part.set_content_disposition("form-data", name="audio", filename="recording.ogg")
             part.headers["Content-Type"] = "audio/ogg"
             part.headers["Content-Length"] = str(len(audio_bytes))
 
-    url = f"{observability_url}/observability/recordings/v0"
-    headers = {
-        "Authorization": f"Bearer {jwt}",
-        "Content-Type": mp.content_type,
-    }
+        return mp
 
-    logger.debug("uploading session report to LiveKit Cloud")
-    async with http_session.post(url, data=mp, headers=headers) as resp:
-        resp.raise_for_status()
+    max_retries = 3
+    for attempt in range(max_retries + 1):
+        mp = _build_multipart()
+        headers = {
+            "Authorization": f"Bearer {jwt}",
+            "Content-Type": mp.content_type,
+        }
+
+        logger.debug("uploading session report to LiveKit Cloud")
+        async with http_session.post(url, data=mp, headers=headers) as resp:
+            if resp.status < 400:
+                break
+
+            retry_delay = await _parse_retry_delay(resp)
+            if retry_delay is None or attempt == max_retries:
+                resp.raise_for_status()
+                raise RuntimeError(f"recording upload failed: status {resp.status}")
+
+            logger.warning(
+                "recording upload failed (attempt %d/%d), retrying in %.1fs",
+                attempt + 1,
+                max_retries + 1,
+                retry_delay,
+            )
+            await asyncio.sleep(retry_delay)
 
     logger.debug("finished uploading")
 
 
-def _shutdown_telemetry() -> None:
-    if isinstance(tracer_provider := tracer._tracer_provider, trace_sdk.TracerProvider):
-        logger.debug("shutting down telemetry tracer provider")
-        tracer_provider.force_flush()
-        tracer_provider.shutdown()
+_TELEMETRY_SHUTDOWN_TIMEOUT = 10.0
 
-    if isinstance(logger_provider := get_logger_provider(), LoggerProvider):
-        # remove the OTLP LoggingHandler before flushing to avoid deadlock —
-        # force_flush triggers log export which emits new logs back through the handler
-        root = logging.getLogger()
-        for h in root.handlers[:]:
-            if isinstance(h, LoggingHandler):
-                root.removeHandler(h)
 
-        logger_provider.force_flush()
-        logger_provider.shutdown()  # type: ignore
+def _shutdown_telemetry(timeout: float = _TELEMETRY_SHUTDOWN_TIMEOUT) -> None:
+    """Shut down OTel providers with a hard wall-clock bound.
 
-    if isinstance(meter_provider := metrics_api.get_meter_provider(), SdkMeterProvider):
-        logger.debug("shutting down telemetry meter provider")
-        meter_provider.force_flush()
-        meter_provider.shutdown()
+    ``provider.shutdown()`` internally joins its exporter worker with a 30s
+    default timeout per provider (and ``force_flush`` ignores its timeout arg
+    in the current SDK — see #4623). Across tracer/logger/meter that's up to
+    ~90s, enough to stall the caller's event loop past the supervisor's 60s
+    ping/pong deadline when the OTLP endpoint is rate-limiting or unreachable.
+
+    Each provider is shut down in its *own* daemon thread, run in parallel.
+    That matters for two reasons:
+      1) Main-thread wait is bounded by ``max`` of the three, not the ``sum``.
+      2) ``BatchProcessor.shutdown()`` sets ``_shutdown = True`` as its first
+         action; running in parallel guarantees that flag gets set on every
+         provider within milliseconds, even if one hangs in ``worker_thread.join``.
+         Any later atexit re-entry (OTel registers one, and Python's
+         ``logging.shutdown()`` may spawn a *non-daemon* thread via
+         ``LoggingHandler.flush`` → ``force_flush`` — see opentelemetry-python
+         PR #4636) then short-circuits instead of hanging process exit.
+
+    Any unfinished work stays on existing daemon threads and is discarded at
+    process exit.
+
+    Upstream context:
+    - https://github.com/open-telemetry/opentelemetry-python/issues/4623
+      (TracerProvider.shutdown() has no configurable timeout — still open)
+    """
+    # Detach the OTLP LoggingHandler from the root logger — belt to the
+    # suspenders of the parallel shutdown below.
+    root = logging.getLogger()
+    for h in list(root.handlers):
+        if isinstance(h, LoggingHandler):
+            root.removeHandler(h)
+
+    providers: list[Any] = []
+    if isinstance(lp := get_logger_provider(), LoggerProvider):
+        providers.append(lp)
+    if isinstance(tp := tracer._tracer_provider, trace_sdk.TracerProvider):
+        providers.append(tp)
+    if isinstance(mp := metrics_api.get_meter_provider(), SdkMeterProvider):
+        providers.append(mp)
+
+    def _shutdown_one(provider: Any) -> None:
+        try:
+            provider.shutdown()
+        except Exception:
+            logger.exception("failed to shut down telemetry provider")
+
+    threads = [
+        threading.Thread(
+            target=_shutdown_one,
+            args=(p,),
+            name=f"livekit-telemetry-shutdown-{type(p).__name__}",
+            daemon=True,
+        )
+        for p in providers
+    ]
+    for t in threads:
+        t.start()
+
+    deadline = time.monotonic() + timeout
+    for t in threads:
+        t.join(max(0.0, deadline - time.monotonic()))
+
+    if any(t.is_alive() for t in threads):
+        logger.warning("telemetry shutdown exceeded %.1fs; continuing", timeout)

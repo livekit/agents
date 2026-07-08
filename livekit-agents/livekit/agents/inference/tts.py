@@ -11,7 +11,7 @@ from typing import Any, Literal, TypedDict, overload
 import aiohttp
 from typing_extensions import NotRequired
 
-from .. import tokenize, tts, utils
+from .. import tts, utils
 from .._exceptions import (
     APIConnectionError,
     APIError,
@@ -27,10 +27,13 @@ from ._utils import create_access_token, get_default_inference_url, get_inferenc
 
 CartesiaModels = Literal[
     "cartesia",
+    "cartesia/sonic-3.5",
     "cartesia/sonic-3",
     "cartesia/sonic-2",
     "cartesia/sonic-turbo",
     "cartesia/sonic",
+    "cartesia/sonic-3-latest",
+    "cartesia/sonic-latest",
 ]
 DeepgramModels = Literal[
     "deepgram",
@@ -44,21 +47,30 @@ ElevenlabsModels = Literal[
     "elevenlabs/eleven_turbo_v2",
     "elevenlabs/eleven_turbo_v2_5",
     "elevenlabs/eleven_multilingual_v2",
+    "elevenlabs/eleven_v3",
 ]
 RimeModels = Literal[
     "rime",
     "rime/arcana",
+    "rime/coda",
     "rime/mistv2",
+    "rime/mistv3",
+    "rime/mist",
 ]
 InworldModels = Literal[
     "inworld",
+    "inworld/inworld-tts-2",
     "inworld/inworld-tts-1.5-max",
     "inworld/inworld-tts-1.5-mini",
+    "inworld/inworld-tts-1.5",
     "inworld/inworld-tts-1-max",
     "inworld/inworld-tts-1",
 ]
+XaiModels = Literal["xai/tts-1",]
 
-TTSModels = CartesiaModels | DeepgramModels | ElevenlabsModels | RimeModels | InworldModels
+TTSModels = (
+    CartesiaModels | DeepgramModels | ElevenlabsModels | RimeModels | InworldModels | XaiModels
+)
 
 
 def _parse_model_string(model: str) -> tuple[str, str | None]:
@@ -76,7 +88,7 @@ def _parse_model_string(model: str) -> tuple[str, str | None]:
 
 
 class FallbackModel(TypedDict):
-    """A fallback model with optional extra configuration.
+    """Inference Fallback Adapter: configuration for a fallback TTS model that runs server-side in LiveKit Inference, providing automatic fallback between providers.
 
     Extra fields are passed through to the provider.
 
@@ -95,6 +107,17 @@ class FallbackModel(TypedDict):
 
 
 FallbackModelType = FallbackModel | str
+
+
+def _has_aligned_transcript(model: str, extra_kwargs: dict[str, Any]) -> bool:
+    provider = model.split("/")[0]
+    if provider == "cartesia":
+        return bool(extra_kwargs.get("add_timestamps"))
+    if provider == "elevenlabs":
+        return bool(extra_kwargs.get("sync_alignment"))
+    if provider == "inworld":
+        return extra_kwargs.get("timestamp_type") in ("WORD", "CHARACTER")
+    return False
 
 
 def _normalize_fallback(
@@ -159,8 +182,14 @@ class RimeOptions(TypedDict, total=False):
 class InworldOptions(TypedDict, total=False):
     speaking_rate: float  # range >0.5, <=1.5
     temperature: float  # range 0-2
+    # inworld-tts-2 only; temperature is ignored on that model, use this to steer variation
+    delivery_mode: Literal["DELIVERY_MODE_UNSPECIFIED", "STABLE", "BALANCED", "CREATIVE"]
     timestamp_type: Literal["TIMESTAMP_TYPE_UNSPECIFIED", "WORD", "CHARACTER"]
     apply_text_normalization: Literal["APPLY_TEXT_NORMALIZATION_UNSPECIFIED", "ON", "OFF"]
+
+
+class XaiOptions(TypedDict, total=False):
+    bit_rate: Literal[32000, 64000, 96000, 128000, 192000]
 
 
 TTSEncoding = Literal["pcm_s16le"]
@@ -283,6 +312,25 @@ class TTS(tts.TTS):
     @overload
     def __init__(
         self,
+        model: XaiModels,
+        *,
+        voice: NotGivenOr[str] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        encoding: NotGivenOr[TTSEncoding] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        extra_kwargs: NotGivenOr[XaiOptions] = NOT_GIVEN,
+        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+    ) -> None:
+        pass
+
+    @overload
+    def __init__(
+        self,
         model: str,
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
@@ -318,6 +366,7 @@ class TTS(tts.TTS):
             | ElevenlabsOptions
             | RimeOptions
             | InworldOptions
+            | XaiOptions
         ] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
@@ -340,11 +389,6 @@ class TTS(tts.TTS):
             conn_options (APIConnectOptions, optional): Connection options for request attempts.
         """
         sample_rate = sample_rate if is_given(sample_rate) else DEFAULT_SAMPLE_RATE
-        super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=True, aligned_transcript=False),
-            sample_rate=sample_rate,
-            num_channels=1,
-        )
 
         # Parse voice from model string if provided: "provider/model:voice"
         if isinstance(model, str):
@@ -352,6 +396,16 @@ class TTS(tts.TTS):
             model = parsed_model
             if parsed_voice is not None and not is_given(voice):
                 voice = parsed_voice
+
+        resolved_extra_kwargs = dict(extra_kwargs) if is_given(extra_kwargs) else {}
+        super().__init__(
+            capabilities=tts.TTSCapabilities(
+                streaming=True,
+                aligned_transcript=_has_aligned_transcript(model, resolved_extra_kwargs),
+            ),
+            sample_rate=sample_rate,
+            num_channels=1,
+        )
 
         lk_base_url = base_url if is_given(base_url) else get_default_inference_url()
 
@@ -388,7 +442,7 @@ class TTS(tts.TTS):
             base_url=lk_base_url,
             api_key=lk_api_key,
             api_secret=lk_api_secret,
-            extra_kwargs=dict(extra_kwargs) if is_given(extra_kwargs) else {},
+            extra_kwargs=resolved_extra_kwargs,
             fallback=fallback_models,
             conn_options=conn_options if is_given(conn_options) else DEFAULT_API_CONNECT_OPTIONS,
         )
@@ -400,6 +454,23 @@ class TTS(tts.TTS):
             mark_refreshed_on_get=True,
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
+
+    class Markup(tts.TTS.Markup):
+        def __init__(self, gateway_tts: TTS) -> None:
+            super().__init__(gateway_tts)
+            self._gateway_tts = gateway_tts
+
+        def _provider_key(self) -> str:
+            model = self._gateway_tts._opts.model
+            provider = model.split("/")[0]
+            if provider == "inworld" and "tts-2" in model:
+                return "inworld"
+            elif provider == "inworld":
+                return ""  # older inworld models don't support markup
+            return provider
+
+        # llm_instructions / to_text / normalize / convert are inherited from the
+        # base Markup, keyed on _provider_key() above.
 
     @classmethod
     def from_model_string(cls, model: str) -> TTS:
@@ -476,7 +547,8 @@ class TTS(tts.TTS):
             }
 
         try:
-            await ws.send_str(json.dumps(params))
+            payload = json.dumps(params)
+            await ws.send_str(payload)
         except Exception as e:
             await ws.close()
             raise APIConnectionError(
@@ -521,6 +593,10 @@ class TTS(tts.TTS):
         if is_given(extra_kwargs):
             self._opts.extra_kwargs.update(extra_kwargs)
 
+        self._capabilities.aligned_transcript = _has_aligned_transcript(
+            self._opts.model, self._opts.extra_kwargs
+        )
+
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> tts.ChunkedStream:
@@ -549,6 +625,11 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._tts: TTS = tts
 
         self._opts = replace(tts._opts)
+        # Snapshot whether expressive is active now, while the framework holds it
+        # fixed for this synthesis (set synchronously before stream()). Reading it
+        # lazily in _run would race with the next turn/session mutating the shared
+        # TTS instance.
+        self._expressive = tts._expressive
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
@@ -560,7 +641,11 @@ class SynthesizeStream(tts.SynthesizeStream):
             mime_type="audio/pcm",
         )
 
-        sent_tokenizer_stream = tokenize.basic.SentenceTokenizer().stream()
+        # chunking defaults (cap + expressive batch size) live in _provider_format
+        from ..tts._provider_format import sentence_tokenizer
+
+        provider = self._opts.model.split("/")[0]
+        sent_tokenizer_stream = sentence_tokenizer(provider, expressive=self._expressive).stream()
         input_sent_event = asyncio.Event()
 
         async def _input_task() -> None:
@@ -568,7 +653,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if isinstance(data, self._FlushSentinel):
                     sent_tokenizer_stream.flush()
                     continue
-                sent_tokenizer_stream.push_text(data)
+                sent_tokenizer_stream.push_text(self._tts.markup.normalize(data))
 
             sent_tokenizer_stream.end_input()
 
@@ -577,7 +662,10 @@ class SynthesizeStream(tts.SynthesizeStream):
             base_pkt["type"] = "input_transcript"
             async for ev in sent_tokenizer_stream:
                 token_pkt = base_pkt.copy()
-                token_pkt["transcript"] = ev.token + " "
+                # re-normalize at sentence level: tags split across input chunks
+                # aren't caught by the per-chunk normalize in _input_task
+                converted = self._tts.markup.convert(self._tts.markup.normalize(ev.token))
+                token_pkt["transcript"] = converted + " "
                 generation_config: dict[str, Any] = {}
                 if self._opts.voice:
                     generation_config["voice"] = self._opts.voice
@@ -588,13 +676,15 @@ class SynthesizeStream(tts.SynthesizeStream):
                 token_pkt["generation_config"] = generation_config
                 token_pkt["extra"] = self._opts.extra_kwargs if self._opts.extra_kwargs else {}
                 self._mark_started()
-                await ws.send_str(json.dumps(token_pkt))
+                payload = json.dumps(token_pkt)
+                await ws.send_str(payload)
                 input_sent_event.set()
 
             end_pkt = {
                 "type": "session.flush",
             }
-            await ws.send_str(json.dumps(end_pkt))
+            flush_payload = json.dumps(end_pkt)
+            await ws.send_str(flush_payload)
             # needed in case empty input is sent
             input_sent_event.set()
 
@@ -628,13 +718,32 @@ class SynthesizeStream(tts.SynthesizeStream):
                 elif data.get("type") == "output_audio":
                     b64data = base64.b64decode(data["audio"])
                     output_emitter.push(b64data)
+                elif data.get("type") == "output_alignment":
+                    from ..voice.io import TimedString
+
+                    if words := data.get("words"):
+                        for word_info in words:
+                            output_emitter.push_timed_transcript(
+                                TimedString(
+                                    word_info["word"],
+                                    start_time=word_info["start"],
+                                    end_time=word_info["end"],
+                                )
+                            )
+                    elif chars := data.get("chars"):
+                        for char_info in chars:
+                            output_emitter.push_timed_transcript(
+                                TimedString(
+                                    char_info["char"],
+                                    start_time=char_info["start"],
+                                    end_time=char_info["end"],
+                                )
+                            )
                 elif data.get("type") == "done":
                     output_emitter.end_input()
                     break
                 elif data.get("type") == "error":
                     raise APIError(f"LiveKit Inference TTS returned error: {msg.data}")
-                else:
-                    logger.warning("unexpected message %s", data)
 
         try:
             async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:

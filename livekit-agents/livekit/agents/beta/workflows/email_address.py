@@ -8,51 +8,16 @@ from typing import TYPE_CHECKING, Any
 from ... import llm, stt, tts, vad
 from ...llm.chat_context import Instructions
 from ...llm.tool_context import ToolError, ToolFlag, function_tool
+from ...log import logger
 from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given
 from ...voice.agent import AgentTask
 from ...voice.events import RunContext
+from .utils import WorkflowInstructions
 
 if TYPE_CHECKING:
     from ...voice.agent import Agent, _AgentState
     from ...voice.turn import TurnDetectionMode
-
-EMAIL_REGEX = (
-    r"^[A-Za-z0-9][A-Za-z0-9._%+\-]*@(?:[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}$"
-)
-
-_BASE_INSTRUCTIONS = """
-You are only a single step in a broader system, responsible solely for capturing an email address.
-{modality_specific}
-Call `update_email_address` at the first opportunity whenever you form a new hypothesis about the email. (before asking any questions or providing any answers.)
-Don't invent new email addresses, stick strictly to what the user said.
-{confirmation_instructions}
-If the email is unclear or invalid, or it takes too much back-and-forth, prompt for it in parts: first the part before the '@', then the domain—only if needed.
-Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary.
-Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called.\
-{extra_instructions}
-"""
-
-_AUDIO_SPECIFIC = """
-Handle input as noisy voice transcription. Expect that users will say emails aloud with formats like:
-- 'john dot doe at gmail dot com'
-- 'susan underscore smith at yahoo dot co dot uk'
-- 'dave dash b at protonmail dot com'
-- 'jane at example' (partial—prompt for the domain)
-- 'theo t h e o at livekit dot io' (name followed by spelling)
-Normalize common spoken patterns silently:
-- Convert words like 'dot', 'underscore', 'dash', 'plus' into symbols: `.`, `_`, `-`, `+`.
-- Convert 'at' to `@`.
-- Recognize patterns where users speak their name or a word, followed by spelling: e.g., 'john j o h n'.
-- Filter out filler words or hesitations.
-- Assume some spelling if contextually obvious (e.g. 'mike b two two' → mikeb22).
-Don't mention corrections. Treat inputs as possibly imperfect but fix them silently.
-"""
-
-_TEXT_SPECIFIC = """
-Handle input as typed text. Expect users to type their email address directly in standard format.
-If the address looks almost correct but has minor typos (e.g. missing '@' or domain), prompt for clarification.
-"""
 
 
 @dataclass
@@ -63,7 +28,8 @@ class GetEmailResult:
 class GetEmailTask(AgentTask[GetEmailResult]):
     def __init__(
         self,
-        extra_instructions: str = "",
+        *,
+        instructions: NotGivenOr[WorkflowInstructions | Instructions | str] = NOT_GIVEN,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
@@ -73,39 +39,46 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         require_confirmation: NotGivenOr[bool] = NOT_GIVEN,
-        *,
+        require_explicit_ask: bool = False,
         setup_fnc: Callable[[Agent], None] | None = None,
+        # deprecated
+        extra_instructions: str = "",
     ) -> None:
         self._init_kwargs = {
-            "extra_instructions": extra_instructions,
+            "instructions": instructions,
             "allow_interruptions": allow_interruptions,
             "require_confirmation": require_confirmation,
+            "require_explicit_ask": require_explicit_ask,
+            "extra_instructions": extra_instructions,
         }
-        confirmation_instructions = (
-            "Call `confirm_email_address` after the user confirmed the email address is correct."
-        )
-        extra = extra_instructions if extra_instructions else ""
+
+        if not is_given(instructions):
+            instructions = WorkflowInstructions(persona=PERSONA, extra=extra_instructions)
+        elif extra_instructions:
+            logger.warning("`extra_instructions` will be ignored when `instructions` is provided")
+
+        if isinstance(instructions, WorkflowInstructions):
+            instructions = instructions.resolve(
+                template=INSTRUCTIONS_TEMPLATE,
+                default_persona=PERSONA,
+                _modality_specific=Instructions(audio=AUDIO_SPECIFIC, text=TEXT_SPECIFIC),
+                _confirmation=Instructions(
+                    # confirmation is enabled by default for audio, disabled by default for text
+                    audio=CONFIRMATION_INSTRUCTION if require_confirmation is not False else "",
+                    text=CONFIRMATION_INSTRUCTION if require_confirmation is True else "",
+                ),
+            )
+
+        assert isinstance(instructions, (str, Instructions))  # for type checking
+        self._current_email = ""
+        self._require_confirmation = require_confirmation
+        self._require_explicit_ask = require_explicit_ask
 
         super().__init__(
-            instructions=Instructions(
-                _BASE_INSTRUCTIONS.format(
-                    modality_specific=_AUDIO_SPECIFIC,
-                    confirmation_instructions=(
-                        confirmation_instructions if require_confirmation is not False else ""
-                    ),
-                    extra_instructions=extra,
-                ),
-                text=_BASE_INSTRUCTIONS.format(
-                    modality_specific=_TEXT_SPECIFIC,
-                    confirmation_instructions=(
-                        confirmation_instructions if require_confirmation is True else ""
-                    ),
-                    extra_instructions=extra,
-                ),
-            ),
+            instructions=instructions,
             chat_ctx=chat_ctx,
             turn_detection=turn_detection,
-            tools=tools or [],
+            tools=[*(tools or []), self._build_update_email_tool()],
             stt=stt,
             vad=vad,
             llm=llm,
@@ -114,22 +87,29 @@ class GetEmailTask(AgentTask[GetEmailResult]):
             setup_fnc=setup_fnc,
         )
 
-        self._current_email = ""
-        self._require_confirmation = require_confirmation
-
     def export_init_kwargs(self) -> dict[str, Any]:
         return self._init_kwargs
 
     async def on_enter(self) -> None:
         self.session.generate_reply(instructions="Ask the user to provide an email address.")
 
-    @function_tool
-    async def update_email_address(self, email: str, ctx: RunContext) -> str | None:
-        """Update the email address provided by the user.
+    def _build_update_email_tool(self) -> llm.FunctionTool:
+        # Built dynamically so we can apply IGNORE_ON_ENTER per-instance
+        # based on require_explicit_ask.
+        flags = ToolFlag.IGNORE_ON_ENTER if self._require_explicit_ask else ToolFlag.NONE
 
-        Args:
-            email: The email address provided by the user
-        """
+        @function_tool(flags=flags)
+        async def update_email_address(email: str, ctx: RunContext) -> str | None:
+            """Update the email address provided by the user.
+
+            Args:
+                email: The email address provided by the user
+            """
+            return await self._update_email_impl(email, ctx)
+
+        return update_email_address
+
+    async def _update_email_impl(self, email: str, ctx: RunContext) -> str | None:
         email = email.strip()
 
         if not re.match(EMAIL_REGEX, email):
@@ -192,3 +172,51 @@ class GetEmailTask(AgentTask[GetEmailResult]):
     def _restore(self, state: _AgentState) -> None:
         super()._restore(state)
         self._current_email = state.extra_state["current_email"]
+
+
+EMAIL_REGEX = (
+    r"^[A-Za-z0-9][A-Za-z0-9._%+\-]*@(?:[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}$"
+)
+
+
+# instructions
+PERSONA = "You are only a single step in a broader system, responsible solely for capturing an email address."
+
+AUDIO_SPECIFIC = """\
+Handle input as noisy voice transcription. Expect that users will say emails aloud with formats like:
+- 'john dot doe at gmail dot com'
+- 'susan underscore smith at yahoo dot co dot uk'
+- 'dave dash b at protonmail dot com'
+- 'jane at example' (partial—prompt for the domain)
+- 'theo t h e o at livekit dot io' (name followed by spelling)
+Normalize common spoken patterns silently:
+- Convert words like 'dot', 'underscore', 'dash', 'plus' into symbols: `.`, `_`, `-`, `+`.
+- Convert 'at' to `@`.
+- Recognize patterns where users speak their name or a word, followed by spelling: e.g., 'john j o h n'.
+- Filter out filler words or hesitations.
+- Assume some spelling if contextually obvious (e.g. 'mike b two two' → mikeb22).
+Don't mention corrections. Treat inputs as possibly imperfect but fix them silently."""
+
+TEXT_SPECIFIC = """\
+Handle input as typed text. Expect users to type their email address directly in standard format.
+If the address looks almost correct but has minor typos (e.g. missing '@' or domain), prompt for clarification."""
+
+
+CONFIRMATION_INSTRUCTION = """\
+Call `confirm_email_address` after the user confirmed the email address is correct."""
+
+INSTRUCTIONS_TEMPLATE = """\
+{persona}
+
+{_modality_specific}
+
+Call `update_email_address` at the first opportunity whenever you form a new hypothesis about the email. (before asking any questions or providing any answers.)
+Don't invent new email addresses, stick strictly to what the user said.
+{_confirmation}
+If the email is unclear or invalid, or it takes too much back-and-forth, prompt for it in parts: first the part before the '@', then the domain—only if needed.
+
+Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary.
+Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called.
+
+{extra}
+"""

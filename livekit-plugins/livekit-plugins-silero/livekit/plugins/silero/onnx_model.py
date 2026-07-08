@@ -84,6 +84,11 @@ class OnnxModel:
     def context_size(self) -> int:
         return self._context_size
 
+    def reset(self) -> None:
+        self._context.fill(0)
+        self._rnn_state.fill(0)
+        self._input_buffer.fill(0)
+
     def __call__(self, x: np.ndarray) -> float:
         self._input_buffer[:, : self._context_size] = self._context
         self._input_buffer[:, self._context_size :] = x

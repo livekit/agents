@@ -25,6 +25,8 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from .log import logger
 
 TTSModel = Literal[
+    "speech-2.8-hd",
+    "speech-2.8-turbo",
     "speech-2.6-hd",
     "speech-2.6-turbo",
     "speech-2.5-hd-preview",
@@ -191,8 +193,9 @@ class TTS(tts.TTS):
 
         Args:
             model (TTSModel | str, optional): The Minimax TTS model to use. Defaults to DEFAULT_MODEL.
-                Available models: speech-2.6-hd, speech-2.6-turbo, speech-2.5-hd-preview,
-                speech-2.5-turbo-preview, speech-02-hd, speech-02-turbo, speech-01-hd, speech-01-turbo.
+                Available models: speech-2.8-hd, speech-2.8-turbo, speech-2.6-hd, speech-2.6-turbo,
+                speech-2.5-hd-preview, speech-2.5-turbo-preview, speech-02-hd, speech-02-turbo,
+                speech-01-hd, speech-01-turbo.
             voice (TTSVoice | str, optional): The voice to use. Defaults to DEFAULT_VOICE_ID.
             emotion (TTSEmotion | None, optional): Emotion control for speech synthesis.
                 Options: "happy", "sad", "angry", "fearful", "disgusted", "surprised", "neutral", "fluent".
@@ -209,7 +212,7 @@ class TTS(tts.TTS):
             timbre (int | None, optional): Corresponds to the "Nasal/Crisp" slider on the official page. Range: [-100, 100].
             sample_rate (TTSSampleRate, optional): The audio sample rate in Hz. Defaults to 24000.
             bitrate (TTSBitRate, optional): The audio bitrate in kbps. Defaults to 128000.
-            tokenizer (NotGivenOr[tokenize.SentenceTokenizer], optional): The sentence tokenizer to use. Defaults to `livekit.agents.tokenize.basic.SentenceTokenizer`.
+            tokenizer (NotGivenOr[tokenize.SentenceTokenizer], optional): The sentence tokenizer to use. Defaults to `livekit.agents.tokenize.blingfire.SentenceTokenizer`.
             text_pacing (tts.SentenceStreamPacer | bool, optional): Enable text pacing for sentence-level timing control. Defaults to False.
             api_key (str | None, optional): The Minimax API key. Defaults to None.
             base_url (NotGivenOr[str], optional): The base URL for the Minimax API. Defaults to NOT_GIVEN.
@@ -249,7 +252,7 @@ class TTS(tts.TTS):
             )
 
         self._sentence_tokenizer = (
-            tokenizer if utils.is_given(tokenizer) else tokenize.basic.SentenceTokenizer()
+            tokenizer if utils.is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
         )
 
         self._stream_pacer: tts.SentenceStreamPacer | None = None

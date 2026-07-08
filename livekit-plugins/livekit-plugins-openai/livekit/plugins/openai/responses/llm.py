@@ -33,6 +33,7 @@ from openai.types.responses import (
     ResponseFailedEvent,
     ResponseInputParam,
     ResponseOutputItemDoneEvent,
+    ResponseOutputMessage,
     ResponseTextDeltaEvent,
     ToolParam,
     response_create_params,
@@ -42,8 +43,10 @@ from openai.types.shared_params import ResponsesModel
 
 from ..log import logger
 from ..models import _supports_reasoning_effort
+from ..tools import OpenAITool
 
 ServiceTier = Literal["auto", "default", "flex", "scale", "priority"]
+Verbosity = Literal["low", "medium", "high"]
 
 OPENAI_RESPONSES_WS_URL = "wss://api.openai.com/v1/responses"
 
@@ -144,10 +147,16 @@ class _LLMOptions:
     reasoning: NotGivenOr[Reasoning]
     metadata: NotGivenOr[dict[str, str]]
     service_tier: NotGivenOr[ServiceTier]
+    verbosity: NotGivenOr[Verbosity]
+    max_output_tokens: NotGivenOr[int]
     use_websocket: bool
 
 
 class LLM(llm.LLM):
+    # the plugin's ProviderTool subclass; subclasses (e.g. xAI) override this so server-side
+    # provider tools are recognized when serializing the request. See to_responses_fnc_ctx.
+    _provider_tool_type: type[llm.ProviderTool] = OpenAITool
+
     def __init__(
         self,
         *,
@@ -164,6 +173,8 @@ class LLM(llm.LLM):
         store: NotGivenOr[bool] = NOT_GIVEN,
         metadata: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         service_tier: NotGivenOr[ServiceTier] = NOT_GIVEN,
+        verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
+        max_output_tokens: NotGivenOr[int] = NOT_GIVEN,
         timeout: httpx.Timeout | None = None,
     ) -> None:
         """
@@ -175,7 +186,7 @@ class LLM(llm.LLM):
         super().__init__()
 
         if not is_given(reasoning) and _supports_reasoning_effort(model):
-            if model in ["gpt-5.1", "gpt-5.2", "gpt-5.4"]:
+            if model in ["gpt-5.1", "gpt-5.2", "gpt-5.4", "gpt-5.4-mini"]:
                 reasoning = Reasoning(effort="none")
             else:
                 reasoning = Reasoning(effort="minimal")
@@ -194,6 +205,8 @@ class LLM(llm.LLM):
             metadata=metadata,
             reasoning=reasoning,
             service_tier=service_tier,
+            verbosity=verbosity,
+            max_output_tokens=max_output_tokens,
             use_websocket=use_websocket,
         )
         self._client = client
@@ -289,6 +302,13 @@ class LLM(llm.LLM):
 
         if is_given(self._opts.service_tier):
             extra["service_tier"] = self._opts.service_tier
+
+        if is_given(self._opts.verbosity):
+            text_cfg = extra.get("text") or {}
+            extra["text"] = {**text_cfg, "verbosity": self._opts.verbosity}
+
+        if is_given(self._opts.max_output_tokens):
+            extra["max_output_tokens"] = self._opts.max_output_tokens
 
         parallel_tool_calls = (
             parallel_tool_calls if is_given(parallel_tool_calls) else self._opts.parallel_tool_calls
@@ -388,12 +408,13 @@ class LLMStream(llm.LLMStream):
     async def _run_impl(self) -> None:
         self._response_completed = False
         chat_ctx, _ = self._chat_ctx.to_provider_format(format="openai.responses")
-
         self._tool_ctx = llm.ToolContext(self.tools)
         tool_schemas = cast(
             list[ToolParam],
             self._tool_ctx.parse_function_tools(
-                "openai.responses", strict=self._strict_tool_schema
+                "openai.responses",
+                strict=self._strict_tool_schema,
+                provider_tool_type=self._llm._provider_tool_type,
             ),
         )
 
@@ -459,6 +480,20 @@ class LLMStream(llm.LLMStream):
                 raise APIConnectionError(retryable=retryable) from e
 
     def _parse_ws_event(self, event: dict) -> ResponseStreamEvent | None:
+        # Strip prompt_cache_retention from any response object before validation:
+        # the OpenAI SDK Pydantic type doesn't match actual API values (e.g. "in_memory"
+        # vs "in-memory"). We don't use this field so dropping it is safe.
+        if (
+            isinstance(event.get("response"), dict)
+            and "prompt_cache_retention" in event["response"]
+        ):
+            event = {
+                **event,
+                "response": {
+                    k: v for k, v in event["response"].items() if k != "prompt_cache_retention"
+                },
+            }
+
         event_type = event.get("type", "")
         if event_type == "error":
             return ResponseErrorEvent.model_validate({**event.get("error", {}), **event})
@@ -513,6 +548,21 @@ class LLMStream(llm.LLMStream):
         self._response_id = event.response.id
 
     def _handle_response_completed(self, event: ResponseCompletedEvent) -> llm.ChatChunk | None:
+        for item in event.response.output:
+            # Every item.type is a discriminator of openai's ResponseOutputItem union.
+            # Of those, only these are produced/consumed by the agent itself; all other
+            # members of the union are tools the Responses API runs server-side (e.g.
+            # openai web_search, xAI web_search and x_search's custom_tool_call subcalls),
+            # so anything not in this set is a provider-executed tool.
+            if item.type not in ("message", "reasoning", "function_call", "function_call_output"):
+                logger.info(
+                    "provider tool executed",
+                    extra={
+                        "tool_type": item.type,
+                        "result": item.model_dump(exclude_none=True),
+                    },
+                )
+
         self._response_completed = True
         self._llm._prev_chat_ctx = self._full_chat_ctx
         self._llm._prev_resp_id = self._response_id
@@ -552,6 +602,17 @@ class LLMStream(llm.LLMStream):
                 ),
             )
             self._pending_tool_calls.add(event.item.call_id)
+        elif isinstance(event.item, ResponseOutputMessage) and event.item.phase is not None:
+            # Models like gpt-5.3-codex label assistant messages as intermediate
+            # `commentary` or the `final_answer`
+            chunk = llm.ChatChunk(
+                id=self._response_id,
+                delta=llm.ChoiceDelta(
+                    role="assistant",
+                    content=None,
+                    extra={"openai": {"phase": event.item.phase}},
+                ),
+            )
         return chunk
 
     def _handle_response_output_text_delta(

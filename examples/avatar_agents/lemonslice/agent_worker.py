@@ -3,7 +3,15 @@ import os
 
 from dotenv import load_dotenv
 
-from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli, inference
+from livekit.agents import (
+    Agent,
+    AgentServer,
+    AgentSession,
+    JobContext,
+    TurnHandlingOptions,
+    cli,
+    inference,
+)
 from livekit.plugins import lemonslice
 
 logger = logging.getLogger("lemonslice-avatar-example")
@@ -21,7 +29,11 @@ async def entrypoint(ctx: JobContext):
         stt=inference.STT("deepgram/nova-3"),
         llm=inference.LLM("google/gemini-2.5-flash"),
         tts=inference.TTS("cartesia/sonic-3"),
-        resume_false_interruption=False,
+        turn_handling=TurnHandlingOptions(
+            interruption={
+                "resume_false_interruption": False,
+            },
+        ),
     )
 
     lemonslice_image_url = os.getenv("LEMONSLICE_IMAGE_URL")

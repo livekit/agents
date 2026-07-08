@@ -19,6 +19,7 @@ import asyncio
 import dataclasses
 import json
 import os
+import time
 import weakref
 from dataclasses import dataclass
 from typing import Literal
@@ -39,6 +40,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import AudioBuffer, is_given
+from livekit.agents.voice.events import ConversationItemAddedEvent
 from livekit.agents.voice.io import TimedString
 
 from .log import logger
@@ -50,19 +52,39 @@ class STTOptions:
     buffer_size_seconds: float
     encoding: Literal["pcm_s16le", "pcm_mulaw"] = "pcm_s16le"
     speech_model: Literal[
-        "universal-streaming-english", "universal-streaming-multilingual", "u3-rt-pro", "u3-pro"
-    ] = "universal-streaming-english"
+        "universal-streaming-english",
+        "universal-streaming-multilingual",
+        "u3-rt-pro",
+        "u3-rt-pro-beta-1",
+        "u3-pro",
+        "universal-3-5-pro",
+    ] = "universal-3-5-pro"
     language_detection: NotGivenOr[bool] = NOT_GIVEN
+    language_code: NotGivenOr[str] = NOT_GIVEN
     end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN
     min_turn_silence: NotGivenOr[int] = NOT_GIVEN
     max_turn_silence: NotGivenOr[int] = NOT_GIVEN
     format_turns: NotGivenOr[bool] = NOT_GIVEN
+    continuous_partials: NotGivenOr[bool] = NOT_GIVEN
+    interruption_delay: NotGivenOr[int] = NOT_GIVEN
     keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN
     prompt: NotGivenOr[str] = NOT_GIVEN
+    agent_context: NotGivenOr[str] = NOT_GIVEN
+    previous_context_n_turns: NotGivenOr[int] = NOT_GIVEN
     vad_threshold: NotGivenOr[float] = NOT_GIVEN
     speaker_labels: NotGivenOr[bool] = NOT_GIVEN
     max_speakers: NotGivenOr[int] = NOT_GIVEN
     domain: NotGivenOr[str] = NOT_GIVEN
+    voice_focus: NotGivenOr[Literal["near-field", "far-field"]] = NOT_GIVEN
+    voice_focus_threshold: NotGivenOr[float] = NOT_GIVEN
+    mode: NotGivenOr[Literal["min_latency", "balanced", "max_accuracy"]] = NOT_GIVEN
+
+
+# Speech models in the Universal-3 Pro family, which share the same parameter support
+# (prompt, agent_context, previous_context_n_turns, continuous_partials,
+# interruption_delay, voice_focus, voice_focus_threshold) and connect-time
+# defaults. Mirrors the server-side `SpeechModel.is_u3_pro`.
+_U3_PRO_MODELS = ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro")
 
 
 class STT(stt.STT):
@@ -76,19 +98,30 @@ class STT(stt.STT):
             "universal-streaming-english",
             "universal-streaming-multilingual",
             "u3-rt-pro",
+            "u3-rt-pro-beta-1",
             "u3-pro",
-        ] = "universal-streaming-english",
+            "universal-3-5-pro",
+        ] = "universal-3-5-pro",
         language_detection: NotGivenOr[bool] = NOT_GIVEN,
+        language_code: NotGivenOr[str] = NOT_GIVEN,
         end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
         min_turn_silence: NotGivenOr[int] = NOT_GIVEN,
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
         format_turns: NotGivenOr[bool] = NOT_GIVEN,
+        continuous_partials: NotGivenOr[bool] = NOT_GIVEN,
+        interruption_delay: NotGivenOr[int] = NOT_GIVEN,
         keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
         prompt: NotGivenOr[str] = NOT_GIVEN,
+        agent_context: NotGivenOr[str] = NOT_GIVEN,
+        previous_context_n_turns: NotGivenOr[int] = NOT_GIVEN,
+        agent_context_carryover: bool = False,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         speaker_labels: NotGivenOr[bool] = NOT_GIVEN,
         max_speakers: NotGivenOr[int] = NOT_GIVEN,
         domain: NotGivenOr[str] = NOT_GIVEN,
+        voice_focus: NotGivenOr[Literal["near-field", "far-field"]] = NOT_GIVEN,
+        voice_focus_threshold: NotGivenOr[float] = NOT_GIVEN,
+        mode: NotGivenOr[Literal["min_latency", "balanced", "max_accuracy"]] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         buffer_size_seconds: float = 0.05,
         base_url: str = "wss://streaming.assemblyai.com",
@@ -105,9 +138,72 @@ class STT(stt.STT):
                 0 and 1 that determines how sensitive the VAD is. Lower values make the VAD
                 more sensitive (detects quieter speech). Higher values make it less sensitive.
                 Defaults to 0.4.
+            language_code: Steer transcription toward a specific language (e.g. 'en', 'es',
+                'fr'). Accepts any common format ('en', 'en-US', 'english'); it is normalized
+                to a bare ISO 639-1 code before being sent. When set, the model is biased
+                toward this language instead of automatically detecting/code-switching across
+                the supported languages. Leave unset to use the model's default multilingual
+                behavior. Only supported with the Universal-3 Pro family models. Set at
+                construction (connect) time only.
             min_turn_silence: Minimum silence in ms before a confident end-of-turn is finalized.
             min_end_of_turn_silence_when_confident: Deprecated. Use min_turn_silence instead.
+            continuous_partials: Whether to emit additional partial transcripts during long
+                turns at a steady ~3 second cadence. By default, partials are emitted at
+                two points: one at 750 ms after turn start (configurable via
+                `interruption_delay`), and one each time silence exceeds
+                `min_turn_silence` without ending the turn. When enabled (default in
+                LiveKit; AssemblyAI server defaults to False), additional partials covering
+                the full turn transcript are emitted approximately every 3 seconds while
+                speech continues, on top of those baseline partials. Only supported with
+                the Universal-3 Pro family models.
+            interruption_delay: How soon the first early partial is emitted, in ms.
+                Range 0–1000, default 500. Lower values produce faster time-to-first-token
+                for barge-in; higher values produce more confident first partials. Only
+                supported with the Universal-3 Pro family models.
+            agent_context: Free-text context describing what the agent said, used to bias
+                transcription of the user's reply. Set at construction or updated per-turn
+                via `update_options(agent_context=...)`. Only supported with the
+                Universal-3 Pro family models (max 1500 characters).
+            previous_context_n_turns: Maximum number of prior conversation entries (user
+                transcripts and any `agent_context` values) carried forward as context for
+                each transcription. Set to 0 to disable automatic context carryover
+                entirely; leave unset to use the server default (recommended). Range 0–100.
+                Only supported with the Universal-3 Pro family models. Set at construction
+                (connect) time only; it cannot be changed via `update_options`.
+            agent_context_carryover: When the model supports it, let an ``AgentSession`` push each
+                assistant reply into ``agent_context`` so it is carried into the model's
+                conversation context. Defaults to False; set True to enable. Prior user turns are
+                carried automatically by the model regardless of this flag. Ignored on models
+                without context support.
+            voice_focus: Voice Focus isolates the primary voice and suppresses background
+                noise (chatter, keyboard clicks, fan hum, room echo) before the audio reaches
+                the model. Use 'near-field' for headsets, handsets, and close-talking
+                microphones; use 'far-field' for conference rooms, laptop mics, and other
+                distant-mic setups. Only supported with the Universal-3 Pro family models.
+                Set at construction (connect) time only.
+                See https://www.assemblyai.com/docs/streaming/voice-focus.
+            voice_focus_threshold: Controls how aggressively background audio is suppressed,
+                a float between 0.0 and 1.0 (higher is more aggressive). Only takes effect
+                alongside `voice_focus`. Only supported with the Universal-3 Pro family
+                models. Set at construction (connect) time only.
+            mode: Accuracy/latency preset for the Universal-3 Pro family: 'min_latency'
+                (fastest time-to-text), 'balanced' (the server default, recommended for
+                voice agents), or 'max_accuracy' (highest accuracy, for scribes/post-call).
+                The model applies its own per-mode silence tuning. To let that tuning take
+                effect, the plugin suppresses its default 100ms min/max turn-silence windows
+                when a mode is set; values you pass explicitly for `min_turn_silence` /
+                `max_turn_silence` still take precedence over the mode's defaults.
+                Leave unset to use the server default. Only supported with the Universal-3 Pro
+                family models. Set at construction (connect) time only.
         """
+        # agent_context carryover is only available on the u3-rt-pro family
+        # ("u3-pro" is normalized to "u3-rt-pro" below) and is opt-in via the user
+        supports_carryover = model in _U3_PRO_MODELS or model == "u3-pro"
+        if agent_context_carryover and not supports_carryover:
+            logger.warning(
+                "agent_context_carryover is enabled but model %r does not support it; ignoring",
+                model,
+            )
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
@@ -115,14 +211,39 @@ class STT(stt.STT):
                 aligned_transcript="word",
                 offline_recognize=False,
                 diarization=is_given(speaker_labels) and speaker_labels is True,
+                keyterms=True,
+                chat_context=agent_context_carryover and supports_carryover,
             ),
         )
         if model == "u3-pro":
-            logger.warning("'u3-pro' is deprecated, use 'u3-rt-pro' instead.")
-            model = "u3-rt-pro"
+            logger.warning("'u3-pro' is deprecated, use 'universal-3-5-pro' instead.")
+            model = "universal-3-5-pro"
 
-        if is_given(prompt) and model != "u3-rt-pro":
-            raise ValueError("The 'prompt' parameter is only supported with the 'u3-rt-pro' model.")
+        # These parameters are only supported by the Universal-3 Pro family of models.
+        if model not in _U3_PRO_MODELS:
+            _u3_pro_only_params = {
+                "prompt": prompt,
+                "agent_context": agent_context,
+                "previous_context_n_turns": previous_context_n_turns,
+                "continuous_partials": continuous_partials,
+                "interruption_delay": interruption_delay,
+                "voice_focus": voice_focus,
+                "voice_focus_threshold": voice_focus_threshold,
+                "mode": mode,
+                "language_code": language_code,
+            }
+            for _param_name, _param_value in _u3_pro_only_params.items():
+                if is_given(_param_value):
+                    raise ValueError(
+                        f"The {_param_name!r} parameter is only supported with the "
+                        f"{', '.join(_U3_PRO_MODELS)} models."
+                    )
+
+        # LiveKit defaults continuous_partials to True (vs. AssemblyAI's server default of
+        # False) for steady-cadence partials. This parameter is only supported for
+        # the Universal-3 Pro family, enforced by the validation above.
+        if not is_given(continuous_partials) and model in _U3_PRO_MODELS:
+            continuous_partials = True
 
         self._base_url = base_url
         assemblyai_api_key = api_key if is_given(api_key) else os.environ.get("ASSEMBLYAI_API_KEY")
@@ -144,9 +265,17 @@ class STT(stt.STT):
                 min_turn_silence = min_end_of_turn_silence_when_confident
 
         # we want to minimize latency as much as possible, it's ok if the phrase arrives in multiple final transcripts
-        # designed to work with LK's end of turn models
-        if not is_given(min_turn_silence):
+        # designed to work with LK's end of turn models.
+        # Skip this default when a `mode` preset is selected so the server's
+        # per-mode silence tuning governs instead of being overridden by 100.
+        if not is_given(min_turn_silence) and not is_given(mode):
             min_turn_silence = 100
+
+        # Normalize to a bare ISO 639-1 code (e.g. "es-ES" / "Spanish" -> "es"),
+        # the form AssemblyAI's language steering expects.
+        normalized_language_code: NotGivenOr[str] = NOT_GIVEN
+        if is_given(language_code):
+            normalized_language_code = LanguageCode(language_code).language
 
         self._opts = STTOptions(
             sample_rate=sample_rate,
@@ -154,18 +283,29 @@ class STT(stt.STT):
             encoding=encoding,
             speech_model=model,
             language_detection=language_detection,
+            language_code=normalized_language_code,
             end_of_turn_confidence_threshold=end_of_turn_confidence_threshold,
             min_turn_silence=min_turn_silence,
             max_turn_silence=max_turn_silence,
             format_turns=format_turns,
+            continuous_partials=continuous_partials,
+            interruption_delay=interruption_delay,
             keyterms_prompt=keyterms_prompt,
             prompt=prompt,
+            agent_context=agent_context,
+            previous_context_n_turns=previous_context_n_turns,
             vad_threshold=vad_threshold,
             speaker_labels=speaker_labels,
             max_speakers=max_speakers,
             domain=domain,
+            voice_focus=voice_focus,
+            voice_focus_threshold=voice_focus_threshold,
+            mode=mode,
         )
         self._session = http_session
+        # user keyterms; _opts.keyterms_prompt holds the effective set (user + session)
+        self._user_keyterms: list[str] = list(keyterms_prompt or [])
+        self._session_keyterms: list[str] = []
         self._streams = weakref.WeakSet[SpeechStream]()
 
     @property
@@ -217,8 +357,11 @@ class STT(stt.STT):
         min_turn_silence: NotGivenOr[int] = NOT_GIVEN,
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
         prompt: NotGivenOr[str] = NOT_GIVEN,
+        agent_context: NotGivenOr[str] = NOT_GIVEN,
         keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
+        continuous_partials: NotGivenOr[bool] = NOT_GIVEN,
+        interruption_delay: NotGivenOr[int] = NOT_GIVEN,
         # Deprecated — use min_turn_silence instead
         min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
@@ -240,10 +383,19 @@ class STT(stt.STT):
             self._opts.max_turn_silence = max_turn_silence
         if is_given(prompt):
             self._opts.prompt = prompt
+        if is_given(agent_context):
+            self._opts.agent_context = agent_context
         if is_given(keyterms_prompt):
+            self._user_keyterms = list(keyterms_prompt)
+            # re-merge with the active session keyterms so a user update doesn't drop them
+            keyterms_prompt = list(dict.fromkeys([*self._user_keyterms, *self._session_keyterms]))
             self._opts.keyterms_prompt = keyterms_prompt
         if is_given(vad_threshold):
             self._opts.vad_threshold = vad_threshold
+        if is_given(continuous_partials):
+            self._opts.continuous_partials = continuous_partials
+        if is_given(interruption_delay):
+            self._opts.interruption_delay = interruption_delay
 
         for stream in self._streams:
             stream.update_options(
@@ -252,9 +404,30 @@ class STT(stt.STT):
                 min_turn_silence=min_turn_silence,
                 max_turn_silence=max_turn_silence,
                 prompt=prompt,
+                agent_context=agent_context,
                 keyterms_prompt=keyterms_prompt,
                 vad_threshold=vad_threshold,
+                continuous_partials=continuous_partials,
+                interruption_delay=interruption_delay,
             )
+
+    def _update_session_keyterms(self, keyterms: list[str]) -> None:
+        if keyterms == self._session_keyterms:
+            return
+        self._session_keyterms = list(keyterms)
+        merged = list(dict.fromkeys([*self._user_keyterms, *keyterms]))
+        self._opts.keyterms_prompt = merged
+        # applied live via the stream's UpdateConfiguration (no reconnect)
+        for stream in self._streams:
+            stream.update_options(keyterms_prompt=merged)
+
+    def _push_conversation_item(self, ev: ConversationItemAddedEvent) -> None:
+        if (
+            (chat_item := ev.item).type == "message"
+            and chat_item.role == "assistant"
+            and chat_item.text_content
+        ):
+            self.update_options(agent_context=chat_item.text_content)
 
 
 class SpeechStream(stt.SpeechStream):
@@ -282,6 +455,7 @@ class SpeechStream(stt.SpeechStream):
         self._config_update_queue: asyncio.Queue[dict] = asyncio.Queue()
         self._session_id: str | None = None
         self._expires_at: int | None = None
+        self._last_frame_sent_at: float | None = None
 
     @property
     def session_id(self) -> str | None:
@@ -304,8 +478,11 @@ class SpeechStream(stt.SpeechStream):
         min_turn_silence: NotGivenOr[int] = NOT_GIVEN,
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
         prompt: NotGivenOr[str] = NOT_GIVEN,
+        agent_context: NotGivenOr[str] = NOT_GIVEN,
         keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
+        continuous_partials: NotGivenOr[bool] = NOT_GIVEN,
+        interruption_delay: NotGivenOr[int] = NOT_GIVEN,
         # Deprecated — use min_turn_silence instead
         min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
@@ -327,15 +504,23 @@ class SpeechStream(stt.SpeechStream):
             self._opts.max_turn_silence = max_turn_silence
         if is_given(prompt):
             self._opts.prompt = prompt
+        if is_given(agent_context):
+            self._opts.agent_context = agent_context
         if is_given(keyterms_prompt):
             self._opts.keyterms_prompt = keyterms_prompt
         if is_given(vad_threshold):
             self._opts.vad_threshold = vad_threshold
+        if is_given(continuous_partials):
+            self._opts.continuous_partials = continuous_partials
+        if is_given(interruption_delay):
+            self._opts.interruption_delay = interruption_delay
 
         # Send UpdateConfiguration message over the active websocket
         config_msg: dict = {"type": "UpdateConfiguration"}
         if is_given(prompt):
             config_msg["prompt"] = prompt
+        if is_given(agent_context):
+            config_msg["agent_context"] = agent_context
         if is_given(keyterms_prompt):
             config_msg["keyterms_prompt"] = keyterms_prompt
         if is_given(max_turn_silence):
@@ -344,6 +529,10 @@ class SpeechStream(stt.SpeechStream):
             config_msg["min_turn_silence"] = min_turn_silence
         if is_given(end_of_turn_confidence_threshold):
             config_msg["end_of_turn_confidence_threshold"] = end_of_turn_confidence_threshold
+        if is_given(continuous_partials):
+            config_msg["continuous_partials"] = continuous_partials
+        if is_given(interruption_delay):
+            config_msg["interruption_delay"] = interruption_delay
         if is_given(vad_threshold):
             config_msg["vad_threshold"] = vad_threshold
 
@@ -360,6 +549,7 @@ class SpeechStream(stt.SpeechStream):
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
+            anchored = False
 
             samples_per_buffer = self._opts.sample_rate // round(1 / self._opts.buffer_size_seconds)
             audio_bstream = utils.audio.AudioByteStream(
@@ -378,20 +568,51 @@ class SpeechStream(stt.SpeechStream):
                     frames = audio_bstream.write(data.data.tobytes())
 
                 for frame in frames:
+                    if not anchored:
+                        # Anchor the stream's wall-clock to the moment just
+                        # before the first frame is sent — aligned with the
+                        # server's stream-relative zero used by
+                        # SpeechStarted.timestamp.
+                        self.start_time = time.time()
+                        anchored = True
                     self._speech_duration += frame.duration
                     await ws.send_bytes(frame.data.tobytes())
+                    self._last_frame_sent_at = time.time()
 
             closing_ws = True
+            logger.debug("AssemblyAI sending close message session=%s", self._session_id)
             await ws.send_str(SpeechStream._CLOSE_MSG)
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
+            consecutive_timeouts = 0
             while True:
                 try:
                     msg = await asyncio.wait_for(ws.receive(), timeout=5)
+                    consecutive_timeouts = 0
                 except asyncio.TimeoutError:
                     if closing_ws:
                         break
+                    consecutive_timeouts += 1
+                    # First warning at 15s, then every 15s while silence continues.
+                    # `session=None` here means WS connected but AAI never sent `Begin`.
+                    if consecutive_timeouts % 3 == 0:
+                        logger.warning(
+                            "AssemblyAI no messages received for %ds session=%s",
+                            consecutive_timeouts * 5,
+                            self._session_id,
+                        )
+                        # If the send side is also idle, the stall is upstream
+                        # of this plugin (no audio reaching us). Otherwise
+                        # frames are flowing and the stall is downstream.
+                        if self._last_frame_sent_at is not None:
+                            send_idle_s = time.time() - self._last_frame_sent_at
+                            if send_idle_s >= 15:
+                                logger.warning(
+                                    "AssemblyAI no audio frames sent for %.0fs session=%s",
+                                    send_idle_s,
+                                    self._session_id,
+                                )
                     continue
 
                 if msg.type in (
@@ -402,6 +623,14 @@ class SpeechStream(stt.SpeechStream):
                     if closing_ws:  # close is expected, see SpeechStream.aclose
                         return
 
+                    logger.warning(
+                        "AssemblyAI WebSocket closed unexpectedly "
+                        "session=%s code=%s data=%s extra=%s",
+                        self._session_id,
+                        ws.close_code,
+                        msg.data,
+                        msg.extra,
+                    )
                     raise APIStatusError(
                         "AssemblyAI connection closed unexpectedly",
                         status_code=ws.close_code or -1,
@@ -409,13 +638,20 @@ class SpeechStream(stt.SpeechStream):
                     )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
-                    logger.error("unexpected AssemblyAI message type %s", msg.type)
+                    logger.error(
+                        "unexpected AssemblyAI message type=%s session=%s",
+                        msg.type,
+                        self._session_id,
+                    )
                     continue
 
                 try:
                     self._process_stream_event(json.loads(msg.data))
                 except Exception:
-                    logger.exception("failed to process AssemblyAI message")
+                    logger.exception(
+                        "failed to process AssemblyAI message session=%s",
+                        self._session_id,
+                    )
 
         async def send_config_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             """Send config updates and control messages immediately, independent of audio."""
@@ -440,12 +676,18 @@ class SpeechStream(stt.SpeechStream):
                 await ws.close()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        # u3-rt-pro defaults: min=100, max=min (so both 100 unless overridden)
+        # Universal-3 Pro family defaults: min=100, max=min (so both 100 unless overridden).
+        # When a `mode` preset is selected, leave them unset (None) unless the
+        # caller set them explicitly, so the server's per-mode silence tuning is
+        # not overridden by the latency-optimized 100ms default.
         min_silence: int | None
         max_silence: int | None
-        if self._opts.speech_model == "u3-rt-pro":
+        if self._opts.speech_model in _U3_PRO_MODELS:
+            default_min = None if is_given(self._opts.mode) else 100
             min_silence = (
-                self._opts.min_turn_silence if is_given(self._opts.min_turn_silence) else 100
+                self._opts.min_turn_silence
+                if is_given(self._opts.min_turn_silence)
+                else default_min
             )
             max_silence = (
                 self._opts.max_turn_silence
@@ -465,20 +707,36 @@ class SpeechStream(stt.SpeechStream):
             "encoding": self._opts.encoding,
             "speech_model": self._opts.speech_model,
             "format_turns": self._opts.format_turns if is_given(self._opts.format_turns) else None,
+            "continuous_partials": self._opts.continuous_partials
+            if is_given(self._opts.continuous_partials)
+            else None,
+            "interruption_delay": self._opts.interruption_delay
+            if is_given(self._opts.interruption_delay)
+            else None,
             "end_of_turn_confidence_threshold": self._opts.end_of_turn_confidence_threshold
             if is_given(self._opts.end_of_turn_confidence_threshold)
             else None,
             "min_turn_silence": min_silence,
             "max_turn_silence": max_silence,
             "keyterms_prompt": json.dumps(self._opts.keyterms_prompt)
-            if is_given(self._opts.keyterms_prompt)
+            if self._opts.keyterms_prompt
             else None,
             "language_detection": self._opts.language_detection
             if is_given(self._opts.language_detection)
             else True
-            if "multilingual" in self._opts.speech_model or self._opts.speech_model == "u3-rt-pro"
+            if "multilingual" in self._opts.speech_model
+            or self._opts.speech_model in _U3_PRO_MODELS
             else False,
+            "language_code": self._opts.language_code
+            if is_given(self._opts.language_code)
+            else None,
             "prompt": self._opts.prompt if is_given(self._opts.prompt) else None,
+            "agent_context": self._opts.agent_context
+            if is_given(self._opts.agent_context)
+            else None,
+            "previous_context_n_turns": self._opts.previous_context_n_turns
+            if is_given(self._opts.previous_context_n_turns)
+            else None,
             "vad_threshold": self._opts.vad_threshold
             if is_given(self._opts.vad_threshold)
             else None,
@@ -487,6 +745,11 @@ class SpeechStream(stt.SpeechStream):
             else None,
             "max_speakers": self._opts.max_speakers if is_given(self._opts.max_speakers) else None,
             "domain": self._opts.domain if is_given(self._opts.domain) else None,
+            "voice_focus": self._opts.voice_focus if is_given(self._opts.voice_focus) else None,
+            "voice_focus_threshold": self._opts.voice_focus_threshold
+            if is_given(self._opts.voice_focus_threshold)
+            else None,
+            "mode": self._opts.mode if is_given(self._opts.mode) else None,
         }
 
         headers = {
@@ -501,7 +764,16 @@ class SpeechStream(stt.SpeechStream):
             if v is not None
         }
         url = f"{self._base_url}/v3/ws?{urlencode(filtered_config)}"
+        logger.debug(
+            "connecting to AssemblyAI model=%s base_url=%s",
+            self._opts.speech_model,
+            self._base_url,
+        )
         ws = await self._session.ws_connect(url, headers=headers)
+        logger.debug(
+            "AssemblyAI WebSocket connected status=%s",
+            ws._response.status if ws._response is not None else None,
+        )
         return ws
 
     def _process_stream_event(self, data: dict) -> None:
@@ -518,20 +790,40 @@ class SpeechStream(stt.SpeechStream):
             return
 
         if message_type == "SpeechStarted":
-            self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+            # SpeechStarted can arrive well after actual speech onset. The
+            # `timestamp` field carries the server VAD's onset time in stream-
+            # relative ms. Convert to wall-clock by adding self.start_time
+            # (the stream's wall-clock anchor) so the framework records an
+            # accurate _speech_start_time instead of message arrival.
+            timestamp_ms = data.get("timestamp")
+            speech_start_time: float | None = None
+            if timestamp_ms is not None:
+                speech_start_time = self.start_time + timestamp_ms / 1000
+            self._event_ch.send_nowait(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.START_OF_SPEECH,
+                    speech_start_time=speech_start_time,
+                )
+            )
             return
 
         if message_type == "Termination":
             audio_duration = data.get("audio_duration_seconds")
             session_duration = data.get("session_duration_seconds")
             logger.debug(
-                "AssemblyAI session terminated audio_duration=%ss session_duration=%ss",
+                "AssemblyAI session terminated session=%s audio_duration=%ss session_duration=%ss",
+                self._session_id,
                 audio_duration,
                 session_duration,
             )
             return
 
         if message_type != "Turn":
+            logger.debug(
+                "AssemblyAI unhandled message type=%s session=%s",
+                message_type,
+                self._session_id,
+            )
             return
         words = data.get("words", [])
         end_of_turn = data.get("end_of_turn", False)
@@ -585,7 +877,11 @@ class SpeechStream(stt.SpeechStream):
                 ],
             )
             self._event_ch.send_nowait(interim_event)
-            logger.debug("interim transcript end_of_turn_confidence=%s", end_of_turn_confidence)
+            logger.debug(
+                "interim transcript session=%s end_of_turn_confidence=%s",
+                self._session_id,
+                end_of_turn_confidence,
+            )
 
         if utterance:
             if self._last_preflight_start_time == 0.0:
@@ -617,7 +913,11 @@ class SpeechStream(stt.SpeechStream):
                 ],
             )
             self._event_ch.send_nowait(final_event)
-            logger.debug("preflight transcript end_of_turn_confidence=%s", end_of_turn_confidence)
+            logger.debug(
+                "preflight transcript session=%s end_of_turn_confidence=%s",
+                self._session_id,
+                end_of_turn_confidence,
+            )
             self._last_preflight_start_time = end_time
 
         if end_of_turn and (
@@ -638,14 +938,19 @@ class SpeechStream(stt.SpeechStream):
                 ],
             )
             self._event_ch.send_nowait(final_event)
-            logger.debug("final transcript end_of_turn_confidence=%s", end_of_turn_confidence)
+            logger.debug(
+                "final transcript session=%s end_of_turn_confidence=%s",
+                self._session_id,
+                end_of_turn_confidence,
+            )
 
             if words:
                 first_word_start = words[0].get("start", 0)
                 last_word_end = words[-1].get("end", 0)
                 logger.debug(
-                    "turn speech_duration=%.3fs (from word timestamps)",
+                    "turn speech_duration=%.3fs session=%s (from word timestamps)",
                     (last_word_end - first_word_start) / 1000,
+                    self._session_id,
                 )
 
             self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))

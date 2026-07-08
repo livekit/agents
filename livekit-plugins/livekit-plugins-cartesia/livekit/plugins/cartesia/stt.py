@@ -15,121 +15,202 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
-import uuid
 import weakref
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import aiohttp
 
-from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
-    APIConnectionError,
-    APIConnectOptions,
-    APIStatusError,
     LanguageCode,
     stt,
     utils,
 )
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
-from livekit.agents.utils import is_given
-from livekit.agents.voice.io import TimedString
+from livekit.agents.types import NOT_GIVEN
 
-from .constants import API_VERSION, REQUEST_ID_HEADER, USER_AGENT
+from ._recognize_streams.auto_finalize_recognize_stream import AutoFinalizeRecognizeStream
+from ._recognize_streams.cartesia_recognize_stream import CartesiaRecognizeStream
+from ._recognize_streams.legacy_recognize_stream import LegacyRecognizeStream
+from .constants import AUDIO_ENCODING
 from .log import logger
-from .models import STTEncoding, STTLanguages, STTModels
+
+if TYPE_CHECKING:
+    from typing import Literal
+
+    from typing_extensions import Never
+
+    from livekit.agents import APIConnectOptions
+    from livekit.agents.types import NotGivenOr
+
+    from .models import STTEncoding, STTLanguages, STTModels
+
+    _ResolvedFinalTranscriptMode = Literal["auto", "legacy"]
 
 
-@dataclass
-class STTOptions:
-    model: STTModels | str
-    language: LanguageCode | None
-    encoding: STTEncoding
-    sample_rate: int
-    api_key: str
-    base_url: str
+def _is_whisper_model(model: STTModels | str) -> bool:
+    return str(model).startswith("ink-whisper")
 
-    def get_http_url(self, path: str) -> str:
-        return f"{self.base_url}{path}"
 
-    def get_ws_url(self, path: str) -> str:
-        # If base_url already has a protocol, replace it, otherwise add wss://
-        if self.base_url.startswith(("http://", "https://")):
-            return f"{self.base_url.replace('http', 'ws', 1)}{path}"
-        else:
-            return f"wss://{self.base_url}{path}"
+def _base_url_to_ws_base_url(base_url: str) -> str:
+    # If base_url already has a protocol, replace it, otherwise add wss://
+    if base_url.startswith(("http://", "https://")):
+        return base_url.replace("http", "ws", 1)
+    else:
+        return f"wss://{base_url}"
 
 
 class STT(stt.STT):
+    """Cartesia speech to text.
+
+    Model ``ink-2`` supports:
+        - Streaming
+        - Turn detection
+        - Interim results
+
+    Model ``ink-whisper`` supports:
+        - Streaming
+        - Word aligned transcripts
+
+    See also:
+        https://docs.cartesia.ai/build-with-cartesia/stt-models/latest
+
+    Examples:
+
+        ```# Turn detecting
+        from livekit.agents import AgentSession
+        from livekit.plugins import cartesia
+
+        session = AgentSession(
+            stt=cartesia.STT(),
+            llm=LLM(),  # choose your favorite LLM
+            tts=cartesia.TTS(),
+            turn_handling={
+                "turn_detection": "stt",
+            },
+        )
+        ```
+    """
+
     def __init__(
         self,
         *,
-        model: STTModels | str = "ink-whisper",
-        language: STTLanguages | str = "en",
-        encoding: STTEncoding = "pcm_s16le",
+        model: NotGivenOr[STTModels | str] = NOT_GIVEN,
         sample_rate: int = 16000,
         api_key: str | None = None,
+        audio_chunk_duration_ms: int = 160,
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = "https://api.cartesia.ai",
+        language: STTLanguages | str | None = None,
+        encoding: STTEncoding = AUDIO_ENCODING,
     ) -> None:
         """
         Create a new instance of Cartesia STT.
 
+        Model ``ink-2`` supports:
+            - Streaming
+            - Turn detection
+            - Interim results
+
+        Model ``ink-whisper`` supports:
+            - Streaming
+            - Word aligned transcripts
+
+        See also:
+            https://docs.cartesia.ai/build-with-cartesia/stt-models/latest
+
         Args:
-            model: The Cartesia STT model to use. Defaults to "ink-whisper".
-            language: The language code for recognition. Defaults to "en".
-            encoding: The audio encoding format. Defaults to "pcm_s16le".
-            sample_rate: The sample rate of the audio in Hz. Defaults to 16000.
+            model: The Cartesia STT model to use.
+                Defaults to ``ink-2`` if language is ``en``.
+                Defaults to ``ink-whisper`` for other languages.
+            sample_rate: The sample rate of the audio in Hz. Defaults to 16 kHz.
             api_key: The Cartesia API key. If not provided, it will be read from
-                the CARTESIA_API_KEY environment variable.
+                the ``CARTESIA_API_KEY`` environment variable.
+            audio_chunk_duration_ms: Duration in milliseconds of each audio chunk
+                sent to the Cartesia STT websocket. Defaults to 160 ms.
             http_session: Optional aiohttp ClientSession to use for requests.
             base_url: The base URL for the Cartesia API.
-                Defaults to "https://api.cartesia.ai".
+                Defaults to ``https://api.cartesia.ai``.
+            language: The language code for recognition.
+                This plugin only supports ``en`` for ``ink-2``.
+            encoding: The audio encoding format. Must be ``pcm_s16le``.
 
         Raises:
             ValueError: If no API key is provided or found in environment variables.
-        """
-        super().__init__(
-            capabilities=stt.STTCapabilities(
-                streaming=True,
-                interim_results=False,
-                aligned_transcript="word",
-                offline_recognize=False,
-            )
-        )
 
-        cartesia_api_key = api_key or os.environ.get("CARTESIA_API_KEY")
-        if not cartesia_api_key:
+        Examples:
+
+            ```# Turn detecting
+            from livekit.agents import AgentSession
+            from livekit.plugins import cartesia
+
+            session = AgentSession(
+                stt=cartesia.STT(),
+                llm=LLM(),  # choose your favorite LLM
+                tts=cartesia.TTS(),
+                turn_handling={
+                    "turn_detection": "stt",
+                },
+            )
+            ```
+        """
+        resolved_api_key = api_key or os.environ.get("CARTESIA_API_KEY")
+        if not resolved_api_key:
             raise ValueError(
                 "Cartesia API key is required, either as argument or set"
                 " CARTESIA_API_KEY environment variable"
             )
 
-        self._opts = STTOptions(
-            model=model,
-            language=LanguageCode(language),
-            encoding=encoding,
-            sample_rate=sample_rate,
-            api_key=cartesia_api_key,
-            base_url=base_url,
+        language_code = None if language is None else LanguageCode(language)
+
+        # TODO: default all languages to ink-2 once they are supported
+        if utils.is_given(model):
+            resolved_model = model
+        elif language_code is None or language_code.language == "en":
+            resolved_model = "ink-2"
+        else:
+            resolved_model = "ink-whisper"
+
+        is_whisper = _is_whisper_model(resolved_model)
+
+        resolved_final_transcript_mode: _ResolvedFinalTranscriptMode
+        if is_whisper:
+            resolved_final_transcript_mode = "legacy"
+        else:
+            resolved_final_transcript_mode = "auto"
+
+        super().__init__(
+            capabilities=stt.STTCapabilities(
+                streaming=True,
+                interim_results=resolved_final_transcript_mode != "legacy",
+                aligned_transcript="word" if is_whisper else False,
+                offline_recognize=False,
+                diarization=False,
+            )
         )
+
+        self._api_key = resolved_api_key
+        self._audio_chunk_duration_ms = audio_chunk_duration_ms
+        self._final_transcript_mode: _ResolvedFinalTranscriptMode = resolved_final_transcript_mode
+        self._encoding: STTEncoding = encoding
+        self._language = language_code
+        self._model = resolved_model
+        self._sample_rate = sample_rate
         self._session = http_session
-        self._streams = weakref.WeakSet[SpeechStream]()
+        self._ws_base_url = _base_url_to_ws_base_url(base_url=base_url)
+
+        self._streams = weakref.WeakSet[CartesiaRecognizeStream]()
+
+        self._warn_on_unexpected_args(language=self._language)
 
     @property
     def model(self) -> str:
-        return self._opts.model
+        return self._model
 
     @property
     def provider(self) -> str:
         return "Cartesia"
-
-    def _ensure_session(self) -> aiohttp.ClientSession:
-        if not self._session:
-            self._session = utils.http_context.http_session()
-        return self._session
 
     async def _recognize_impl(
         self,
@@ -147,301 +228,128 @@ class STT(stt.STT):
         *,
         language: NotGivenOr[STTLanguages | str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> SpeechStream:
-        """Create a streaming transcription session."""
-        config = self._sanitize_options(language=language)
-        stream = SpeechStream(
-            stt=self,
-            opts=config,
-            conn_options=conn_options,
-        )
+    ) -> CartesiaRecognizeStream:
+        if utils.is_given(language):
+            resolved_language = LanguageCode(language)
+        elif self._language is not None:
+            resolved_language = LanguageCode(self._language)
+        else:
+            resolved_language = None
+
+        self._warn_on_unexpected_args(language=resolved_language)
+
+        if self._session is None:
+            session = utils.http_context.http_session()
+            self._session = session
+        else:
+            session = self._session
+
+        stream: CartesiaRecognizeStream
+        match self._final_transcript_mode:
+            case "auto":
+                stream = AutoFinalizeRecognizeStream(
+                    stt=self,
+                    conn_options=conn_options,
+                    sample_rate=self._sample_rate,
+                    encoding=self._encoding,
+                    audio_chunk_duration_ms=self._audio_chunk_duration_ms,
+                    model=self._model,
+                    api_key=self._api_key,
+                    ws_base_url=self._ws_base_url,
+                    session=session,
+                    language=resolved_language or LanguageCode("en"),
+                )
+            case "legacy":
+                stream = LegacyRecognizeStream(
+                    stt=self,
+                    conn_options=conn_options,
+                    sample_rate=self._sample_rate,
+                    encoding=self._encoding,
+                    audio_chunk_duration_ms=self._audio_chunk_duration_ms,
+                    model=self._model,
+                    api_key=self._api_key,
+                    ws_base_url=self._ws_base_url,
+                    session=session,
+                    language=resolved_language,
+                )
+            case _:
+                _exhaustive_check: Never = self._final_transcript_mode
+                raise RuntimeError(
+                    f"Cartesia STT has unexpected final_transcript_mode={_exhaustive_check}"
+                )
+
         self._streams.add(stream)
         return stream
 
+    async def aclose(self) -> None:
+        """Close every stream created by :meth:`stream`.
+
+        The HTTP session is left open: it is either supplied by the caller or
+        owned by the shared HTTP context, so it is not ours to close.
+        """
+        streams = list(self._streams)
+        self._streams.clear()
+        # return_exceptions=True so one stream failing to close doesn't abandon the rest
+        await asyncio.gather(*(stream.aclose() for stream in streams), return_exceptions=True)
+
     def update_options(
         self,
         *,
-        model: NotGivenOr[STTModels | str] = NOT_GIVEN,
         language: NotGivenOr[STTLanguages | str] = NOT_GIVEN,
+        model: NotGivenOr[STTModels | str] = NOT_GIVEN,
     ) -> None:
-        """Update STT configuration options."""
-        if is_given(model):
-            self._opts.model = model
-        if is_given(language):
-            self._opts.language = LanguageCode(language)
+        """Change Cartesia STT options.
 
-        # Update all active streams
+        Also propagates changes to all :class:`SpeechStream` created by :meth:`stream`.
+
+        Args:
+            language: Used to change the language to match what the user is speaking.
+                Ink 2 does not have multi-lingual support yet and only works with English.
+            model: Deprecated. This is a no-op. Construct a new STT instance to change the model.
+        """
+        if utils.is_given(model) and model != self._model:
+            logger.warning(
+                "Cartesia STT update_options() ignores the model kwarg. Construct a new STT instance to change the model."
+            )
+
+        if utils.is_given(language):
+            self._language = LanguageCode(language)
+            self._warn_on_unexpected_args(language=self._language)
+
         for stream in self._streams:
-            stream.update_options(
-                model=model,
-                language=language,
+            # do not update model since this is likely user error
+            stream.update_options(language=language)
+
+    def _warn_on_unexpected_args(self, language: LanguageCode | None) -> None:
+        """Logs a warning when arguments are unexpected.
+
+        This is not necessarily an error since the API may support languages in the future.
+        """
+        if self._final_transcript_mode == "auto" and language and language.language != "en":
+            logger.warning(
+                f'Cartesia STT model="{self._model}" currently only supports English. You provided {language}, which may produce unexpected results.'
             )
 
-    def _sanitize_options(
-        self, *, language: NotGivenOr[STTLanguages | str] = NOT_GIVEN
-    ) -> STTOptions:
-        """Create a sanitized copy of options with language override if provided."""
-        config = STTOptions(
-            model=self._opts.model,
-            language=self._opts.language,
-            encoding=self._opts.encoding,
-            sample_rate=self._opts.sample_rate,
-            api_key=self._opts.api_key,
-            base_url=self._opts.base_url,
-        )
 
-        if is_given(language):
-            config.language = LanguageCode(language)
+@dataclass
+class STTOptions:
+    """
+    .. deprecated::
+        1.5.12 Not used anymore. Kept for backward compatibility.
+    """
 
-        return config
+    model: STTModels | str
+    language: LanguageCode | None
+    encoding: STTEncoding
+    sample_rate: int
+    api_key: str
+    base_url: str
+
+    def get_http_url(self, path: str) -> str:
+        return f"{self.base_url}{path}"
+
+    def get_ws_url(self, path: str) -> str:
+        return f"{_base_url_to_ws_base_url(self.base_url)}{path}"
 
 
-class SpeechStream(stt.SpeechStream):
-    def __init__(
-        self,
-        *,
-        stt: STT,
-        opts: STTOptions,
-        conn_options: APIConnectOptions,
-    ) -> None:
-        super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
-        self._opts = opts
-        self._session = stt._ensure_session()
-        self._request_id = str(uuid.uuid4())
-        self._reconnect_event = asyncio.Event()
-        self._speaking = False
-        self._speech_duration: float = 0
-        self._last_speech_end_time: float = 0
-
-    def update_options(
-        self,
-        *,
-        model: NotGivenOr[STTModels | str] = NOT_GIVEN,
-        language: NotGivenOr[STTLanguages | str] = NOT_GIVEN,
-    ) -> None:
-        """Update streaming transcription options."""
-        if is_given(model):
-            self._opts.model = model
-        if is_given(language):
-            self._opts.language = LanguageCode(language)
-
-        self._reconnect_event.set()
-
-    async def _run(self) -> None:
-        """Main loop for streaming transcription."""
-        closing_ws = False
-
-        async def keepalive_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            try:
-                while True:
-                    await ws.ping()
-                    await asyncio.sleep(30)
-            except Exception:
-                return
-
-        @utils.log_exceptions(logger=logger)
-        async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
-
-            # Forward audio to Cartesia in chunks
-            samples_50ms = self._opts.sample_rate // 20
-            audio_bstream = utils.audio.AudioByteStream(
-                sample_rate=self._opts.sample_rate,
-                num_channels=1,
-                samples_per_channel=samples_50ms,
-            )
-
-            async for data in self._input_ch:
-                frames: list[rtc.AudioFrame] = []
-                if isinstance(data, rtc.AudioFrame):
-                    frames.extend(audio_bstream.write(data.data.tobytes()))
-                elif isinstance(data, self._FlushSentinel):
-                    frames.extend(audio_bstream.flush())
-
-                for frame in frames:
-                    self._speech_duration += frame.duration
-                    await ws.send_bytes(frame.data.tobytes())
-
-            closing_ws = True
-            await ws.send_str("finalize")
-
-        @utils.log_exceptions(logger=logger)
-        async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
-            while True:
-                msg = await ws.receive()
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
-                    if closing_ws or self._session.closed:
-                        return
-                    raise APIStatusError(message="Cartesia STT connection closed unexpectedly")
-
-                if msg.type != aiohttp.WSMsgType.TEXT:
-                    logger.warning("unexpected Cartesia STT message type %s", msg.type)
-                    continue
-
-                try:
-                    self._process_stream_event(json.loads(msg.data))
-                except Exception:
-                    logger.exception("failed to process Cartesia STT message")
-
-        ws: aiohttp.ClientWebSocketResponse | None = None
-
-        while True:
-            try:
-                ws = await self._connect_ws()
-                tasks = [
-                    asyncio.create_task(send_task(ws)),
-                    asyncio.create_task(recv_task(ws)),
-                    asyncio.create_task(keepalive_task(ws)),
-                ]
-                tasks_group = asyncio.gather(*tasks)
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-
-                try:
-                    done, _ = await asyncio.wait(
-                        (tasks_group, wait_reconnect_task),
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-
-                    for task in done:
-                        if task != wait_reconnect_task:
-                            task.result()
-
-                    if wait_reconnect_task not in done:
-                        break
-
-                    self._reconnect_event.clear()
-                finally:
-                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
-                    tasks_group.cancel()
-                    tasks_group.exception()  # retrieve the exception
-            finally:
-                if ws is not None:
-                    await ws.close()
-
-    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        """Connect to the Cartesia STT WebSocket."""
-        params = {
-            "model": self._opts.model,
-            "sample_rate": str(self._opts.sample_rate),
-            "encoding": self._opts.encoding,
-            "cartesia_version": API_VERSION,
-            "api_key": self._opts.api_key,
-        }
-
-        if self._opts.language:
-            params["language"] = self._opts.language
-
-        # Build URL
-        url = self._opts.get_ws_url("/stt/websocket")
-        query_string = "&".join(f"{k}={v}" for k, v in params.items())
-        ws_url = f"{url}?{query_string}"
-
-        try:
-            ws = await asyncio.wait_for(
-                self._session.ws_connect(ws_url, headers={"User-Agent": USER_AGENT}),
-                self._conn_options.timeout,
-            )
-            c_request_id = ws._response.headers.get(REQUEST_ID_HEADER)
-            logger.debug(
-                "Established new Cartesia STT WebSocket connection",
-                extra={"cartesia_request_id": c_request_id},
-            )
-        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
-            raise APIConnectionError("failed to connect to cartesia") from e
-        return ws
-
-    def _process_stream_event(self, data: dict) -> None:
-        """Process incoming WebSocket messages. See https://docs.cartesia.ai/2025-04-16/api-reference/stt/stt"""
-        message_type = data.get("type")
-
-        if message_type == "transcript":
-            request_id = data.get("request_id", self._request_id)
-            text = data.get("text", "")
-            words = data.get("words", [])
-            timed_words: list[TimedString] = [
-                TimedString(
-                    text=word.get("word", ""),
-                    start_time=word.get("start", 0) + self.start_time_offset,
-                    end_time=word.get("end", 0) + self.start_time_offset,
-                    start_time_offset=self.start_time_offset,
-                )
-                for word in words
-            ]
-            # word timestamps are often within the audio window, so we track time separately
-            if self._last_speech_end_time == 0.0:
-                self._last_speech_end_time = self.start_time_offset
-            start_time = self._last_speech_end_time
-            end_time = start_time + data.get("duration", 0)
-            self._last_speech_end_time = end_time
-            is_final = data.get("is_final", False)
-            language = LanguageCode(data.get("language", self._opts.language or "en"))
-
-            if not text and not is_final:
-                return
-
-            # we don't have a super accurate way of detecting when speech started.
-            # this is typically the job of the VAD, but perfoming it here just in case something's
-            # relying on STT to perform this task.
-            if not self._speaking:
-                self._speaking = True
-                start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
-                self._event_ch.send_nowait(start_event)
-
-            speech_data = stt.SpeechData(
-                language=language,
-                start_time=start_time,
-                end_time=end_time,
-                confidence=data.get("probability", 1.0),
-                text=text,
-                words=timed_words,
-            )
-
-            if is_final:
-                if self._speech_duration > 0:
-                    self._event_ch.send_nowait(
-                        stt.SpeechEvent(
-                            type=stt.SpeechEventType.RECOGNITION_USAGE,
-                            request_id=request_id,
-                            recognition_usage=stt.RecognitionUsage(
-                                audio_duration=self._speech_duration,
-                            ),
-                        )
-                    )
-                    self._speech_duration = 0
-
-                event = stt.SpeechEvent(
-                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                    request_id=request_id,
-                    alternatives=[speech_data],
-                )
-                self._event_ch.send_nowait(event)
-
-                if self._speaking:
-                    self._speaking = False
-                    end_event = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-                    self._event_ch.send_nowait(end_event)
-            else:
-                event = stt.SpeechEvent(
-                    type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                    request_id=request_id,
-                    alternatives=[speech_data],
-                )
-                self._event_ch.send_nowait(event)
-
-        elif message_type == "flush_done":
-            logger.debug("Received flush_done acknowledgment from Cartesia STT")
-
-        elif message_type == "done":
-            logger.debug("Received done acknowledgment from Cartesia STT - session closing")
-
-        elif message_type == "error":
-            error_msg = data.get("message", "Unknown error")
-            logger.error("Cartesia STT error: %s", error_msg)
-            # We could emit an error event here if needed
-        else:
-            logger.warning("received unexpected message from Cartesia STT: %s", data)
+SpeechStream = CartesiaRecognizeStream

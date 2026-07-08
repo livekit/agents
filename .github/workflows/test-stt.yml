@@ -31,7 +31,7 @@ jobs:
     steps:
       - name: Get PR details and check authorization
         id: pr-info
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const comment = context.payload.comment.body.trim();
@@ -114,7 +114,7 @@ jobs:
 
       - name: Trigger workflow
         if: steps.pr-info.outputs.is_command == 'true'
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             await github.rest.actions.createWorkflowDispatch({
@@ -148,14 +148,14 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.branch != '' && github.event.inputs.branch || github.ref }}
           fetch-depth: 0
           lfs: true
 
       - name: Install uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
         with:
           version: "latest"
 
@@ -198,7 +198,7 @@ jobs:
           # AWS_REGION: ${{ secrets.AWS_REGION }}
           SARVAM_API_KEY: ${{ secrets.SARVAM_API_KEY }}
         run: |
-          uv run pytest -n 3 -v tests/test_stt.py --tb=long --junitxml=test-results.xml 2>&1 | tee test-output.txt || true
+          uv run pytest -n 3 -v --stt --tb=long --junitxml=test-results.xml 2>&1 | tee test-output.txt || true
 
       - name: Cleanup Google credentials
         if: always()
@@ -214,7 +214,7 @@ jobs:
 
       - name: Post results to PR
         if: always() && (github.event_name == 'pull_request' || github.event.inputs.pr_number != '')
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const fs = require('fs');

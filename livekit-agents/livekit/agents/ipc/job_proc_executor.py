@@ -16,7 +16,7 @@ from . import channel, proto
 from .inference_executor import InferenceExecutor
 from .job_executor import JobStatus
 from .job_proc_lazy_main import ProcStartArgs, proc_main
-from .supervised_proc import SupervisedProc
+from .supervised_proc import SupervisedProc, SupervisedProcKind
 
 
 class ProcJobExecutor(SupervisedProc):
@@ -27,6 +27,7 @@ class ProcJobExecutor(SupervisedProc):
         job_entrypoint_fnc: Callable[[JobContext], Awaitable[None]],
         session_end_fnc: Callable[[JobContext], Awaitable[None]] | None,
         text_response_fnc: Callable[[proto.TextResponse], None],
+        simulation_end_fnc: Callable[[Any], Any] | None,
         inference_executor: InferenceExecutor | None,
         initialize_timeout: float,
         close_timeout: float,
@@ -60,6 +61,7 @@ class ProcJobExecutor(SupervisedProc):
         self._job_entrypoint_fnc = job_entrypoint_fnc
         self._text_response_fnc = text_response_fnc
         self._session_end_fnc = session_end_fnc
+        self._simulation_end_fnc = simulation_end_fnc
         self._session_end_timeout = session_end_timeout
         self._inference_executor = inference_executor
         self._inference_tasks: set[asyncio.Task[None]] = set()
@@ -68,6 +70,10 @@ class ProcJobExecutor(SupervisedProc):
     @property
     def id(self) -> str:
         return self._id
+
+    @property
+    def process_kind(self) -> SupervisedProcKind:
+        return SupervisedProcKind.JOB
 
     @property
     def status(self) -> JobStatus:
@@ -101,6 +107,7 @@ class ProcJobExecutor(SupervisedProc):
             initialize_process_fnc=self._initialize_process_fnc,
             job_entrypoint_fnc=self._job_entrypoint_fnc,
             session_end_fnc=self._session_end_fnc,
+            simulation_end_fnc=self._simulation_end_fnc,
             session_end_timeout=self._session_end_timeout,
             log_cch=log_cch,
             mp_cch=cch,
@@ -184,6 +191,6 @@ class ProcJobExecutor(SupervisedProc):
 
         if self._running_job:
             extra["job_id"] = self._running_job.job.id
-            extra["room_id"] = self._running_job.job.room.sid
+            extra["room"] = self._running_job.job.room.name
 
         return extra

@@ -52,10 +52,13 @@ def to_chat_ctx(
 
         if msg.type == "message":
             for c in msg.content:
-                if c and isinstance(c, str):
-                    content.append({"text": c, "type": "text"})
-                elif isinstance(c, llm.ImageContent):
+                if isinstance(c, llm.ImageContent):
                     content.append(_to_image_content(c))
+                elif isinstance(c, llm.AudioContent):
+                    pass
+                elif c:
+                    # str or Instructions
+                    content.append({"text": str(c), "type": "text"})
         elif msg.type == "function_call":
             content.append(
                 {
@@ -98,7 +101,7 @@ def to_chat_ctx(
     # Claude 4.6+ does not support prefilling (trailing assistant messages).
     # Append a dummy user message so the request ends with a user turn.
     if inject_trailing_user_message and messages and messages[-1]["role"] == "assistant":
-        messages.append({"role": "user", "content": [{"text": " ", "type": "text"}]})
+        messages.append({"role": "user", "content": [{"text": ".", "type": "text"}]})
 
     return messages, AnthropicFormatData(system_messages=system_messages)
 

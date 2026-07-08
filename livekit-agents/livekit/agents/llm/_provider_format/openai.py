@@ -7,6 +7,12 @@ from livekit.agents import llm
 
 from .utils import group_tool_calls
 
+_EXTRA_CONTENT_KEYS = ("google", "livekit", "xai")
+
+
+def _filter_extra(extra: dict[str, Any]) -> dict[str, Any]:
+    return {k: extra[k] for k in _EXTRA_CONTENT_KEYS if extra.get(k)}
+
 
 def to_chat_ctx(
     chat_ctx: llm.ChatContext, *, inject_dummy_user_message: bool = True
@@ -26,12 +32,12 @@ def to_chat_ctx(
                 "type": "function",
                 "function": {"name": tool_call.name, "arguments": tool_call.arguments},
             }
-            # Include provider-specific extra content (e.g., Google thought signatures)
-            if tool_call.extra.get("google"):
-                tc["extra_content"] = {"google": tool_call.extra["google"]}
+            extra_content = _filter_extra(tool_call.extra) if tool_call.extra else {}
+            if extra_content:
+                tc["extra_content"] = extra_content
             tool_calls.append(tc)
         if tool_calls:
-            msg["tool_calls"] = tool_calls
+            msg["tool_calls"] = tool_calls  # type: ignore[assignment]
         messages.append(msg)
 
         # append tool outputs following the tool calls
@@ -46,12 +52,15 @@ def _to_chat_item(msg: llm.ChatItem) -> dict[str, Any]:
         list_content: list[dict[str, Any]] = []
         text_content = ""
         for content in msg.content:
-            if isinstance(content, str):
+            if isinstance(content, llm.ImageContent):
+                list_content.append(_to_image_content(content))
+            elif isinstance(content, llm.AudioContent):
+                pass
+            else:
+                # str or Instructions
                 if text_content:
                     text_content += "\n"
-                text_content += content
-            elif isinstance(content, llm.ImageContent):
-                list_content.append(_to_image_content(content))
+                text_content += str(content)
 
         if not list_content:
             # certain providers require text-only content in a string vs a list.
@@ -62,9 +71,7 @@ def _to_chat_item(msg: llm.ChatItem) -> dict[str, Any]:
                 list_content.append({"type": "text", "text": text_content})
             result = {"role": msg.role, "content": list_content}
 
-        # Include provider-specific extra content (e.g., Google thought signatures)
-        provider_keys = ("google", "livekit")
-        extra_content = {k: msg.extra[k] for k in provider_keys if msg.extra.get(k)}
+        extra_content = _filter_extra(msg.extra)
         if extra_content:
             result["extra_content"] = extra_content
         return result
@@ -78,9 +85,9 @@ def _to_chat_item(msg: llm.ChatItem) -> dict[str, Any]:
                 "arguments": msg.arguments,
             },
         }
-        # Include provider-specific extra content (e.g., Google thought signatures)
-        if msg.extra.get("google"):
-            tc["extra_content"] = {"google": msg.extra["google"]}
+        extra_content = _filter_extra(msg.extra)
+        if extra_content:
+            tc["extra_content"] = extra_content
         return {
             "role": "assistant",
             "tool_calls": [tc],
@@ -167,20 +174,32 @@ def _to_responses_chat_item(msg: llm.ChatItem) -> dict[str, Any]:
         list_content: list[dict[str, Any]] = []
         text_content = ""
         for content in msg.content:
-            if isinstance(content, str):
+            if isinstance(content, llm.ImageContent):
+                list_content.append(_to_responses_image_content(content))
+            elif isinstance(content, llm.AudioContent):
+                pass
+            else:
+                # str or Instructions
                 if text_content:
                     text_content += "\n"
-                text_content += content
-            elif isinstance(content, llm.ImageContent):
-                list_content.append(_to_responses_image_content(content))
+                text_content += str(content)
 
         if not list_content:
-            return {"role": msg.role, "content": text_content}
+            item: dict[str, Any] = {"role": msg.role, "content": text_content}
+        else:
+            if text_content:
+                list_content.append({"type": "input_text", "text": text_content})
+            item = {"role": msg.role, "content": list_content}
 
-        if text_content:
-            list_content.append({"type": "input_text", "text": text_content})
+        # Re-attach the assistant message phase (commentary / final_answer) captured from
+        # the Responses API. Dropping it on follow-up requests can degrade performance for
+        # models like gpt-5.3-codex.
+        if msg.role == "assistant":
+            phase = msg.extra.get("openai", {}).get("phase")
+            if phase is not None:
+                item["phase"] = phase
 
-        return {"role": msg.role, "content": list_content}
+        return item
 
     elif msg.type == "function_call_output":
         return {
@@ -214,19 +233,25 @@ def to_fnc_ctx(tool_ctx: llm.ToolContext, *, strict: bool = True) -> list[dict[s
     return schemas
 
 
-def to_responses_fnc_ctx(tool_ctx: llm.ToolContext, *, strict: bool = True) -> list[dict[str, Any]]:
-    from livekit.plugins import openai
-
+def to_responses_fnc_ctx(
+    tool_ctx: llm.ToolContext,
+    *,
+    strict: bool = True,
+    provider_tool_type: type[llm.ProviderTool] | None = None,
+) -> list[dict[str, Any]]:
     schemas: list[dict[str, Any]] = []
     for tool in tool_ctx.flatten():
         if isinstance(tool, llm.RawFunctionTool):
-            schema = tool.info.raw_schema
-            schema["type"] = "function"
+            schema = {**tool.info.raw_schema, "type": "function"}
             schemas.append(schema)
         elif isinstance(tool, llm.FunctionTool):
             schema = llm.utils.build_legacy_openai_schema(tool, internally_tagged=True)
             schemas.append(schema)
-        elif isinstance(tool, openai.tools.OpenAITool):
+        elif (
+            provider_tool_type is not None
+            and isinstance(tool, provider_tool_type)
+            and hasattr(tool, "to_dict")
+        ):
             schemas.append(tool.to_dict())
 
     return schemas

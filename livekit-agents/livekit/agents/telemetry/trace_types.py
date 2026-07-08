@@ -3,6 +3,12 @@ ATTR_AGENT_LABEL = "lk.agent_label"
 ATTR_START_TIME = "lk.start_time"
 ATTR_END_TIME = "lk.end_time"
 ATTR_RETRY_COUNT = "lk.retry_count"
+ATTR_PROVIDER_REQUEST_IDS = "lk.provider_request_ids"
+"""Provider-known correlation ids associated with this span (list[str]).
+
+Populated by STT/TTS plugins when the id is either sent to the provider
+(e.g. WS context_id) or returned by it (e.g. response request_id / session_id),
+so it can be cross-referenced with the provider's logs for debugging."""
 
 
 ATTR_PARTICIPANT_ID = "lk.participant_id"
@@ -53,6 +59,9 @@ ATTR_USER_TRANSCRIPT = "lk.user_transcript"
 ATTR_TRANSCRIPT_CONFIDENCE = "lk.transcript_confidence"
 ATTR_TRANSCRIPTION_DELAY = "lk.transcription_delay"
 ATTR_END_OF_TURN_DELAY = "lk.end_of_turn_delay"
+ATTR_EOU_SOURCE = "lk.eou.source"
+ATTR_EOU_DETECTION_DELAY = "lk.eou.detection_delay"
+ATTR_EOU_FROM_CACHE = "lk.eou.from_cache"
 
 # metrics
 ATTR_LLM_METRICS = "lk.llm_metrics"
