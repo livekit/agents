@@ -826,6 +826,15 @@ def strip_all_markup(text: str) -> str:
     return split_all_markup(text)[0]
 
 
+def strip_expr_markup(text: str) -> str:
+    """Strip only the ``<expr/>`` dialect, leaving all other markup untouched.
+
+    Unlike :func:`strip_all_markup`, provider-native tags and square-bracket spans
+    survive.
+    """
+    return _split_expr(text)[0]
+
+
 def expression_attribute(tags: list[ExpressiveTag]) -> dict[str, str] | None:
     """Build the ``lk.expression`` transcription attribute from stripped markup tags.
 

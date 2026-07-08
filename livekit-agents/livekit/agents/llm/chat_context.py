@@ -297,7 +297,25 @@ class ChatMessage(BaseModel):
     @property
     def text_content(self) -> str | None:
         """
-        Returns a string of all text content in the message.
+        Returns a string of all text content in the message, with LiveKit's
+        expressive ``<expr/>`` tags removed from assistant messages.
+
+        Multiple text content items will be joined by a newline.
+        Use :attr:`raw_text_content` for the exact model-facing content.
+        """
+        raw = self.raw_text_content
+        if raw is None or self.role != "assistant":
+            return raw
+
+        from ..tts._provider_format import strip_expr_markup
+
+        return strip_expr_markup(raw)
+
+    @property
+    def raw_text_content(self) -> str | None:
+        """
+        Returns a string of all text content in the message, exactly as generated
+        (assistant messages may contain expressive ``<expr/>`` tags).
 
         Multiple text content items will be joined by a newline.
         """
@@ -305,21 +323,6 @@ class ChatMessage(BaseModel):
         if not text_parts:
             return None
         return "\n".join(text_parts)
-
-    @property
-    def plain_text_content(self) -> str | None:
-        """
-        Returns a string of all text content without any expressive tags in the message.
-
-        Multiple text content items will be joined by a newline.
-        """
-        raw = self.text_content
-        if raw is None:
-            return None
-
-        from ..tts._provider_format import strip_all_markup
-
-        return strip_all_markup(raw)
 
 
 ChatContent: TypeAlias = ImageContent | AudioContent | str
@@ -621,12 +624,12 @@ class ChatContext:
                     item.content = [c for c in item.content if not isinstance(c, ImageContent)]
                 if exclude_audio:
                     item.content = [c for c in item.content if not isinstance(c, AudioContent)]
-                # only strip expressive tags in assistant messages
+                # only strip the <expr/> dialect, and only in assistant messages
                 if strip_markup and item.role == "assistant":
-                    from ..tts._provider_format import strip_all_markup
+                    from ..tts._provider_format import strip_expr_markup
 
                     item.content = [
-                        strip_all_markup(c) if isinstance(c, str) else c for c in item.content
+                        strip_expr_markup(c) if isinstance(c, str) else c for c in item.content
                     ]
 
             items.append(item)
@@ -781,9 +784,7 @@ class ChatContext:
                 if item.extra.get("is_summary") is True:  # avoid making summary of summaries
                     continue
 
-                # strip markup from assistant turns only; user turns stay raw
-                content = item.plain_text_content if item.role == "assistant" else item.text_content
-                if (content or "").strip():
+                if (item.text_content or "").strip():
                     to_summarize.append(item)
             elif isinstance(item, (FunctionCall, FunctionCallOutput)):
                 to_summarize.append(item)
@@ -795,10 +796,9 @@ class ChatContext:
         contents: list[str] = []
         for m in to_summarize:
             if isinstance(m, (FunctionCall, FunctionCallOutput)):
-                contents.append(_function_call_item_to_message(m).text_content or "")
+                contents.append(_function_call_item_to_message(m).raw_text_content or "")
             else:
-                content = m.plain_text_content if m.role == "assistant" else m.text_content
-                contents.append(to_xml(m.role, (content or "").strip()))
+                contents.append(to_xml(m.role, (m.text_content or "").strip()))
 
         source_text = "\n".join(contents).strip()
 

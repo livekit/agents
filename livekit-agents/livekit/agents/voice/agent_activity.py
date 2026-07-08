@@ -1382,7 +1382,7 @@ class AgentActivity(RecognitionHooks):
                 self._realtime_reply_task(
                     speech_handle=handle,
                     # TODO(theomonnom): support llm.ChatMessage for the realtime model
-                    user_input=user_message.text_content if user_message else None,
+                    user_input=user_message.raw_text_content if user_message else None,
                     instructions=self._render_realtime_instructions(instructions)
                     if instructions
                     else None,
@@ -2291,7 +2291,7 @@ class AgentActivity(RecognitionHooks):
             # make sure the on_user_turn_completed didn't change some request parameters
             # otherwise invalidate the preemptive generation
             if (
-                preemptive.info.new_transcript == user_message.text_content
+                preemptive.info.new_transcript == user_message.raw_text_content
                 and preemptive.chat_ctx.is_equivalent(temp_mutable_chat_ctx)
                 and preemptive.tools == self.tools
                 and preemptive.tool_choice == self._tool_choice
@@ -2801,7 +2801,9 @@ class AgentActivity(RecognitionHooks):
             )
             current_span.set_attribute(trace_types.ATTR_INSTRUCTIONS, instr_trace)
         if new_message:
-            current_span.set_attribute(trace_types.ATTR_USER_INPUT, new_message.text_content or "")
+            current_span.set_attribute(
+                trace_types.ATTR_USER_INPUT, new_message.raw_text_content or ""
+            )
 
         if (room_io := self._session._room_io) and room_io.room.isconnected():
             _set_participant_attributes(current_span, room_io.room.local_participant)
