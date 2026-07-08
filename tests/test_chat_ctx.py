@@ -82,6 +82,31 @@ def test_dict():
     print(ChatContext.from_dict(chat_ctx.to_dict()).items)
 
 
+def test_text_content_strips_expr_markup():
+    from livekit.agents.llm import ChatMessage
+
+    msg = ChatMessage(
+        role="assistant",
+        content=['<expr type="expression" label="warm"/>Hi there [1, 2]'],
+    )
+    # text_content strips the unified <expr> markup but keeps legitimate bracket text
+    assert msg.text_content == "Hi there [1, 2]"
+    # raw_text_content preserves the markup exactly as the LLM emitted it
+    assert msg.raw_text_content == '<expr type="expression" label="warm"/>Hi there [1, 2]'
+
+
+def test_text_content_no_markup_is_unchanged():
+    from livekit.agents.llm import ChatMessage
+
+    msg = ChatMessage(role="user", content=["What is 3 < 5?"])
+    assert msg.text_content == "What is 3 < 5?"
+    assert msg.raw_text_content == "What is 3 < 5?"
+
+    empty = ChatMessage(role="user", content=[])
+    assert empty.text_content is None
+    assert empty.raw_text_content is None
+
+
 @pytest.mark.parametrize(
     ("mime_type", "expected_format"),
     [

@@ -297,29 +297,33 @@ class ChatMessage(BaseModel):
     @property
     def text_content(self) -> str | None:
         """
-        Returns a string of all text content in the message.
+        Returns a string of all text content in the message, with expressive markup
+        (the unified ``<expr>`` dialect) stripped.
 
-        Multiple text content items will be joined by a newline.
+        Multiple text content items will be joined by a newline. Use
+        :attr:`raw_text_content` for the text exactly as the LLM emitted it.
         """
-        text_parts = [c for c in self.content if isinstance(c, str)]
-        if not text_parts:
-            return None
-        return "\n".join(text_parts)
-
-    @property
-    def plain_text_content(self) -> str | None:
-        """
-        Returns a string of all text content without any expressive tags in the message.
-
-        Multiple text content items will be joined by a newline.
-        """
-        raw = self.text_content
+        raw = self.raw_text_content
         if raw is None:
             return None
 
         from ..tts._provider_format import strip_all_markup
 
         return strip_all_markup(raw)
+
+    @property
+    def raw_text_content(self) -> str | None:
+        """
+        Returns a string of all text content in the message, with any expressive markup
+        preserved as the LLM emitted it.
+
+        Multiple text content items will be joined by a newline. Use
+        :attr:`text_content` for the markup-stripped text.
+        """
+        text_parts = [c for c in self.content if isinstance(c, str)]
+        if not text_parts:
+            return None
+        return "\n".join(text_parts)
 
 
 ChatContent: TypeAlias = ImageContent | AudioContent | str
@@ -781,9 +785,8 @@ class ChatContext:
                 if item.extra.get("is_summary") is True:  # avoid making summary of summaries
                     continue
 
-                # strip markup from assistant turns only; user turns stay raw
-                content = item.plain_text_content if item.role == "assistant" else item.text_content
-                if (content or "").strip():
+                # text_content is already markup-stripped
+                if (item.text_content or "").strip():
                     to_summarize.append(item)
             elif isinstance(item, (FunctionCall, FunctionCallOutput)):
                 to_summarize.append(item)
@@ -797,8 +800,7 @@ class ChatContext:
             if isinstance(m, (FunctionCall, FunctionCallOutput)):
                 contents.append(_function_call_item_to_message(m).text_content or "")
             else:
-                content = m.plain_text_content if m.role == "assistant" else m.text_content
-                contents.append(to_xml(m.role, (content or "").strip()))
+                contents.append(to_xml(m.role, (m.text_content or "").strip()))
 
         source_text = "\n".join(contents).strip()
 

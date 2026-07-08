@@ -176,13 +176,13 @@ def test_split_markup_wrapping_keeps_inner_text() -> None:
     ]
 
 
-def test_split_all_markup_mixed_expr_and_native() -> None:
+def test_split_all_markup_strips_expr_only() -> None:
+    # only the unified <expr> dialect is stripped; native tags and brackets the LLM
+    # never emits directly (convert_markup lowers <expr> downstream) are left intact
     text = '<expr type="expression" label="say playfully"/> Hello! <sound value="laugh"/> [sigh]'
     clean, tags = split_all_markup(text)
-    assert clean.strip() == "Hello!"
-    assert {"type": "expression", "value": "say playfully"} in tags
-    assert {"type": "sound", "value": "laugh"} in tags
-    assert {"type": "", "value": "sigh"} in tags
+    assert clean.strip() == 'Hello! <sound value="laugh"/> [sigh]'
+    assert tags == [{"type": "expression", "value": "say playfully"}]
 
 
 def test_expr_regex_does_not_match_native_expression_tag() -> None:

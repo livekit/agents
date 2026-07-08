@@ -803,22 +803,17 @@ def extract_markup(provider: str, text: str) -> list[ExpressiveTag]:
     return split_markup(provider, text)[1]
 
 
-# Union of every provider's XML tag names — used by the transcript sinks to strip markup
-# without knowing which provider produced it (see :class:`TranscriptMarkupStripper`).
-_ALL_MARKUP_TAGS: list[str] = sorted({tag for tags, _ in _PROVIDER_MARKUP.values() for tag in tags})
-
-
 def split_all_markup(text: str) -> tuple[str, list[ExpressiveTag]]:
-    """Strip the union of every provider's expressive markup (provider-agnostic).
+    """Strip the unified ``<expr>`` markup dialect (provider-agnostic).
 
-    The transcript sinks strip downstream, where the originating TTS/provider is no
-    longer in scope, so they remove every provider's tags (XML + square brackets) at
-    once. These tag shapes never appear in real spoken text — the LLM only emits them
-    as audio directives — so a universal strip is safe.
+    The transcript sinks and chat-context accessors strip downstream, where the
+    originating TTS/provider is no longer in scope. The LLM is only ever taught the
+    unified ``<expr>`` dialect (see :func:`llm_instructions`) and its lowering to native
+    tags (:func:`convert_markup`) runs later in the audio path — so the text reaching
+    here only carries ``<expr>`` markers. Scoping the strip to those markers keeps XML
+    or square-bracket text the LLM legitimately wrote (``[1, 2]``, ``a < b``) intact.
     """
-    text, expr_tags = _split_expr(text)
-    clean, raw_tags = extract_and_strip(text, xml_tags=_ALL_MARKUP_TAGS, brackets=True)
-    return clean, expr_tags + [{"type": tag, "value": value} for tag, value in raw_tags]
+    return _split_expr(text)
 
 
 def strip_all_markup(text: str) -> str:
@@ -845,11 +840,11 @@ class TranscriptMarkupStripper:
     """Stateful, provider-agnostic markup stripper for one transcript segment.
 
     Fed text chunk-by-chunk, it returns the user-visible text and accumulates the
-    stripped tags. A tag-shaped trailing fragment (a partial ``<...`` or ``[...``
-    arriving split across chunks) is held back until it closes, so a tag straddling a
-    chunk boundary is never emitted half-stripped. Shared by the transcript sinks (room
-    output + transcript synchronizer) so stripping and expression extraction stay
-    identical across them.
+    stripped tags. A tag-shaped trailing fragment (a partial ``<expr ...`` arriving split
+    across chunks) is held back until it closes, so a marker straddling a chunk boundary
+    is never emitted half-stripped. Shared by the transcript sinks (room output +
+    transcript synchronizer) so stripping and expression extraction stay identical across
+    them.
     """
 
     def __init__(self) -> None:
@@ -857,14 +852,14 @@ class TranscriptMarkupStripper:
         self._tags: list[ExpressiveTag] = []
 
     def _has_open_tag(self) -> bool:
-        # hold a tag-shaped trailing "<" (partial XML tag) so "3 < 5" isn't stalled, and
-        # any unclosed "[" (bracket tags have no such ambiguity)
+        # hold only a tag-shaped trailing "<" (a partial <expr ...> marker) so "3 < 5"
+        # isn't stalled; square brackets are no longer stripped, so they never buffer
         last_lt = self._buf.rfind("<")
         if last_lt > self._buf.rfind(">"):
             nxt = self._buf[last_lt + 1 : last_lt + 2]
             if not nxt or nxt == "/" or nxt.isalpha():
                 return True
-        return self._buf.rfind("[") > self._buf.rfind("]")
+        return False
 
     def push(self, text: str) -> str:
         """Feed a chunk; return the clean text ready to emit (may be empty)."""
