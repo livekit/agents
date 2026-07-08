@@ -49,17 +49,13 @@ class WatchClient:
         try:
             # On startup: tell the CLI about this agent server (agent name + URL) so
             # it can surface things like a Cloud console link, then sync running jobs.
-            # ServerInfo was added in a later livekit-protocol; degrade gracefully
-            # (skip it) when running against an older one.
-            server_info_cls = getattr(agent_dev, "ServerInfo", None)
-            if server_info_cls is not None:
-                info = agent_dev.AgentDevMessage(
-                    server_info=server_info_cls(
-                        agent_name=self._worker._agent_name,
-                        url=self._worker._ws_url,
-                    )
+            info = agent_dev.AgentDevMessage(
+                server_info=agent_dev.ServerInfo(
+                    agent_name=self._worker._agent_name,
+                    url=self._worker._ws_url,
                 )
-                await _send_proto(writer, info.SerializeToString())
+            )
+            await _send_proto(writer, info.SerializeToString())
 
             # send GetRunningJobsRequest to Go, recv response, reload jobs
             req = agent_dev.AgentDevMessage(
