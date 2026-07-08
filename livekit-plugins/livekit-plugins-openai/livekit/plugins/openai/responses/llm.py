@@ -559,7 +559,7 @@ class LLMStream(llm.LLMStream):
                     "provider tool executed",
                     extra={
                         "tool_type": item.type,
-                        "result": item.model_dump(exclude_none=True),
+                        "lk.pii.result": item.model_dump(exclude_none=True),
                     },
                 )
 

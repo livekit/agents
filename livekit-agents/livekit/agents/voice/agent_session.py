@@ -1223,7 +1223,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if transcript is not None:
             logger.debug(
                 "IVR detection started with transcript",
-                extra={"transcript": transcript},
+                extra={"lk.pii.transcript": transcript},
             )
             self._ivr_activity._on_user_input_transcribed(
                 UserInputTranscribedEvent(transcript=transcript, is_final=True)
@@ -1799,7 +1799,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if text := message.text_content:
             logger.debug(
                 "conversation_item_added",
-                extra={"role": message.role, "text": text},
+                extra={"role": message.role, "lk.pii.text": text},
             )
         self.emit("conversation_item_added", ConversationItemAddedEvent(item=message))
 

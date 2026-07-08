@@ -561,7 +561,10 @@ class SpeechStream(stt.SpeechStream):
                 try:
                     data = json.loads(msg.data)
                 except json.JSONDecodeError:
-                    logger.debug("[SLNG STT] ignoring non-JSON text frame: %s", msg.data[:200])
+                    logger.debug(
+                        "[SLNG STT] ignoring non-JSON text frame",
+                        extra={"lk.pii.data": msg.data[:200]},
+                    )
                     continue
                 if not isinstance(data, dict):
                     continue

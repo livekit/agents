@@ -644,10 +644,10 @@ class SpeechStreamv2(stt.SpeechStream):
                 self._event_ch.send_nowait(end_event)
 
         elif data["type"] == "ConfigureSuccess":
-            logger.debug("deepgram applied Configure update", extra={"data": data})
+            logger.debug("deepgram applied Configure update", extra={"lk.pii.data": data})
 
         elif data["type"] == "ConfigureFailure":
-            logger.warning("deepgram rejected Configure update", extra={"data": data})
+            logger.warning("deepgram rejected Configure update", extra={"lk.pii.data": data})
 
         elif data["type"] == "Error":
             logger.warning("deepgram sent an error", extra={"data": data})

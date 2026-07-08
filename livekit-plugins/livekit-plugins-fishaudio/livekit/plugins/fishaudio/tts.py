@@ -443,7 +443,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         )
                     break
                 else:
-                    logger.debug("unknown Fish Audio event: %s", data)
+                    logger.debug("unknown Fish Audio event", extra={"lk.pii.data": data})
 
         tasks = [
             asyncio.create_task(input_task()),

@@ -129,7 +129,7 @@ def _parse_received_event(resp: dict[str, object]) -> _ReceivedEvent:
     if mtype in _ERROR_TYPES:
         return _ReceivedEvent(kind="error", error_message=_extract_error_message(resp))
 
-    logger.debug("[SLNG TTS] ignoring unknown message: %s", resp)
+    logger.debug("[SLNG TTS] ignoring unknown message", extra={"lk.pii.data": resp})
     return _ReceivedEvent(kind="ignore")
 
 
@@ -400,7 +400,10 @@ class ChunkedStream(tts.ChunkedStream):
                 try:
                     resp = json.loads(msg.data)
                 except json.JSONDecodeError:
-                    logger.debug("[SLNG TTS] ignoring non-JSON text frame: %s", msg.data)
+                    logger.debug(
+                        "[SLNG TTS] ignoring non-JSON text frame",
+                        extra={"lk.pii.data": msg.data},
+                    )
                     continue
 
                 if not isinstance(resp, dict):
@@ -577,7 +580,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                     try:
                         resp = json.loads(msg.data)
                     except json.JSONDecodeError:
-                        logger.debug("[SLNG TTS] ignoring non-JSON text frame: %s", msg.data)
+                        logger.debug(
+                            "[SLNG TTS] ignoring non-JSON text frame",
+                            extra={"lk.pii.data": msg.data},
+                        )
                         continue
 
                     if not isinstance(resp, dict):

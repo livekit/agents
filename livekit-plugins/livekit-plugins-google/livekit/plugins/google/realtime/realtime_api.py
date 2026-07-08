@@ -530,7 +530,7 @@ class RealtimeSession(llm.RealtimeSession):
                     if isinstance(msg, types.LiveClientContent) and msg.turn_complete is True:
                         logger.warning(
                             "discarding client content for turn completion, may cause generate_reply timeout",
-                            extra={"content": str(msg)},
+                            extra={"lk.pii.content": str(msg)},
                         )
 
             self._msg_ch = utils.aio.Chan[ClientEvents]()
@@ -1030,7 +1030,7 @@ class RealtimeSession(llm.RealtimeSession):
                     ):
                         logger.debug(
                             f">>> sent {type(msg).__name__}",
-                            extra={"content": msg.model_dump(exclude_defaults=True)},
+                            extra={"lk.pii.content": msg.model_dump(exclude_defaults=True)},
                         )
 
         except Exception as e:
@@ -1063,7 +1063,7 @@ class RealtimeSession(llm.RealtimeSession):
                             for part in parts:
                                 if part and part.get("inline_data"):
                                     part["inline_data"] = "<audio>"
-                        logger.debug("<<< received response", extra={"response": resp_copy})
+                        logger.debug("<<< received response", extra={"lk.pii.response": resp_copy})
 
                     if response.tool_call and self._opts.tool_choice == "none":
                         # reject without opening a generation, so the pending generate_reply
@@ -1245,7 +1245,9 @@ class RealtimeSession(llm.RealtimeSession):
             if self._rejected_tool_calls:
                 logger.debug(
                     "ignoring server content from a rejected tool call turn",
-                    extra={"server_content": server_content.model_dump_json(exclude_none=True)},
+                    extra={
+                        "lk.pii.server_content": server_content.model_dump_json(exclude_none=True)
+                    },
                 )
             else:
                 logger.warning("received server content but no active generation.")
@@ -1355,7 +1357,7 @@ class RealtimeSession(llm.RealtimeSession):
         gen.message_ch.close()
         gen._done = True
         if lk_google_debug:
-            logger.debug(f"generation done {gen}")
+            logger.debug("generation done", extra={"lk.pii.generation": str(gen)})
 
     def _handle_input_speech_started(self) -> None:
         self.emit("input_speech_started", llm.InputSpeechStartedEvent())

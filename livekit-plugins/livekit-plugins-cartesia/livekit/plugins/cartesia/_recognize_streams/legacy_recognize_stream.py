@@ -420,7 +420,9 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
             if status_code >= 500:
                 raise APIConnectionError(message=message, retryable=True)
         else:
-            logger.warning("received unexpected message from Cartesia STT: %s", data)
+            logger.warning(
+                "received unexpected message from Cartesia STT", extra={"lk.pii.data": data}
+            )
 
     def update_options(
         self,

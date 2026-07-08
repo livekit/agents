@@ -483,7 +483,7 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
                 raise APIConnectionError(message=message, retryable=True)
             return
 
-        logger.warning("received unexpected message from Cartesia STT: %s", data)
+        logger.warning("received unexpected message from Cartesia STT", extra={"lk.pii.data": data})
 
     def update_options(
         self,

@@ -404,7 +404,9 @@ class SpeechStream(stt.SpeechStream):
                 try:
                     data = json.loads(msg.data)
                 except json.JSONDecodeError:
-                    logger.warning("failed to parse Smallest AI STT message: %s", msg.data)
+                    logger.warning(
+                        "failed to parse Smallest AI STT message", extra={"lk.pii.data": msg.data}
+                    )
                     continue
 
                 self._process_stream_event(data)

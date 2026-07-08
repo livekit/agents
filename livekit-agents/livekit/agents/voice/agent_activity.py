@@ -2137,7 +2137,7 @@ class AgentActivity(RecognitionHooks):
             self._cancel_preemptive_generation()
             logger.warning(
                 "skipping user input, speech scheduling is paused",
-                extra={"user_input": info.new_transcript},
+                extra={"lk.pii.user_input": info.new_transcript},
             )
 
             if self._session._closing:
@@ -2232,7 +2232,7 @@ class AgentActivity(RecognitionHooks):
             if not current_speech.allow_interruptions:
                 logger.warning(
                     "skipping reply to user input, current speech generation cannot be interrupted",
-                    extra={"user_input": info.new_transcript},
+                    extra={"lk.pii.user_input": info.new_transcript},
                 )
                 return
             await self._cancel_speech_pause(self._cancel_speech_pause_task)
@@ -2245,7 +2245,7 @@ class AgentActivity(RecognitionHooks):
         if self._scheduling_paused or self._new_turns_blocked:
             logger.warning(
                 "skipping on_user_turn_completed, speech scheduling is paused",
-                extra={"user_input": info.new_transcript},
+                extra={"lk.pii.user_input": info.new_transcript},
             )
             if self._session._closing:
                 self._agent._chat_ctx.items.append(user_message)
@@ -2279,7 +2279,7 @@ class AgentActivity(RecognitionHooks):
         if self._scheduling_paused or self._new_turns_blocked:
             logger.warning(
                 "skipping reply to user input, speech scheduling is paused",
-                extra={"user_input": info.new_transcript},
+                extra={"lk.pii.user_input": info.new_transcript},
             )
             if user_message and self._session._closing:
                 self._agent._chat_ctx.items.append(user_message)

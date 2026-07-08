@@ -312,10 +312,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                         b64data = base64.b64decode(audio)
                         output_emitter.push(b64data)
                     except Exception:
-                        logger.warning("invalid audio payload %s", data)
+                        logger.warning("invalid audio payload", extra={"lk.pii.data": data})
                         continue
                 else:
-                    logger.warning("unexpected message %s", data)
+                    logger.warning("unexpected message", extra={"lk.pii.data": data})
 
         async_context_id = str(uuid.uuid4())
         try:

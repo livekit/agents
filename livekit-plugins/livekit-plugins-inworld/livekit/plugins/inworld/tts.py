@@ -523,7 +523,7 @@ class _InworldConnection:
                                     extra={
                                         "context_id": context_id,
                                         "cumulative_offset": ctx.cumulative_time,
-                                        "raw_words": raw_words,
+                                        "lk.pii.raw_words": raw_words,
                                         "raw_starts": raw_starts,
                                         "raw_ends": raw_ends,
                                     },
@@ -542,7 +542,7 @@ class _InworldConnection:
                                     "Adjusted timestamps (with cumulative offset)",
                                     extra={
                                         "context_id": context_id,
-                                        "words": [str(ts) for ts in timed_strings],
+                                        "lk.pii.words": [str(ts) for ts in timed_strings],
                                         "adjusted_starts": [ts.start_time for ts in timed_strings],
                                         "adjusted_ends": [ts.end_time for ts in timed_strings],
                                         "generation_end_time": ctx.generation_end_time,
@@ -1214,7 +1214,9 @@ class ChunkedStream(tts.ChunkedStream):
                     try:
                         data = json.loads(line)
                     except json.JSONDecodeError:
-                        logger.warning("failed to parse Inworld response line: %s", line)
+                        logger.warning(
+                            "failed to parse Inworld response line", extra={"lk.pii.line": line}
+                        )
                         continue
 
                     if result := data.get("result"):

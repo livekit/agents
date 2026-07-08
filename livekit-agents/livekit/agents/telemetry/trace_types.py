@@ -1,3 +1,12 @@
+"""Span attribute and event name constants for LiveKit Agents telemetry.
+
+Attributes carrying conversational content, tool payloads, or other user data
+must include a dot-delimited ``pii`` segment (``lk.pii.<name>``): PII-enabled
+projects have these attributes stripped at the LiveKit Cloud collector, and the
+segment is the only marker it honors. Attributes must never embed such content
+in span names, event names, or log message bodies — those are not redactable.
+"""
+
 ATTR_SPEECH_ID = "lk.speech_id"
 ATTR_AGENT_LABEL = "lk.agent_label"
 ATTR_START_TIME = "lk.start_time"
@@ -24,28 +33,28 @@ ATTR_SESSION_OPTIONS = "lk.session_options"
 # agent turn
 ATTR_AGENT_TURN_ID = "lk.generation_id"
 ATTR_AGENT_PARENT_TURN_ID = "lk.parent_generation_id"
-ATTR_USER_INPUT = "lk.user_input"
-ATTR_INSTRUCTIONS = "lk.instructions"
+ATTR_USER_INPUT = "lk.pii.user_input"
+ATTR_INSTRUCTIONS = "lk.pii.instructions"
 ATTR_SPEECH_INTERRUPTED = "lk.interrupted"
 
 # llm node
-ATTR_CHAT_CTX = "lk.chat_ctx"
+ATTR_CHAT_CTX = "lk.pii.chat_ctx"
 ATTR_FUNCTION_TOOLS = "lk.function_tools"
 ATTR_PROVIDER_TOOLS = "lk.provider_tools"
 ATTR_TOOL_SETS = "lk.tool_sets"
-ATTR_RESPONSE_TEXT = "lk.response.text"
-ATTR_RESPONSE_FUNCTION_CALLS = "lk.response.function_calls"
+ATTR_RESPONSE_TEXT = "lk.pii.response.text"
+ATTR_RESPONSE_FUNCTION_CALLS = "lk.pii.response.function_calls"
 ATTR_RESPONSE_TTFT = "lk.response.ttft"
 
 # function tool
 ATTR_FUNCTION_TOOL_ID = "lk.function_tool.id"
 ATTR_FUNCTION_TOOL_NAME = "lk.function_tool.name"
-ATTR_FUNCTION_TOOL_ARGS = "lk.function_tool.arguments"
+ATTR_FUNCTION_TOOL_ARGS = "lk.pii.function_tool.arguments"
 ATTR_FUNCTION_TOOL_IS_ERROR = "lk.function_tool.is_error"
-ATTR_FUNCTION_TOOL_OUTPUT = "lk.function_tool.output"
+ATTR_FUNCTION_TOOL_OUTPUT = "lk.pii.function_tool.output"
 
 # tts node
-ATTR_TTS_INPUT_TEXT = "lk.input_text"
+ATTR_TTS_INPUT_TEXT = "lk.pii.input_text"
 ATTR_TTS_STREAMING = "lk.tts.streaming"
 ATTR_TTS_LABEL = "lk.tts.label"
 ATTR_RESPONSE_TTFB = "lk.response.ttfb"
@@ -55,7 +64,7 @@ ATTR_EOU_PROBABILITY = "lk.eou.probability"
 ATTR_EOU_UNLIKELY_THRESHOLD = "lk.eou.unlikely_threshold"
 ATTR_EOU_DELAY = "lk.eou.endpointing_delay"
 ATTR_EOU_LANGUAGE = "lk.eou.language"
-ATTR_USER_TRANSCRIPT = "lk.user_transcript"
+ATTR_USER_TRANSCRIPT = "lk.pii.user_transcript"
 ATTR_TRANSCRIPT_CONFIDENCE = "lk.transcript_confidence"
 ATTR_TRANSCRIPTION_DELAY = "lk.transcription_delay"
 ATTR_END_OF_TURN_DELAY = "lk.end_of_turn_delay"
@@ -108,7 +117,7 @@ ATTR_AMD_CATEGORY = "lk.amd.category"
 ATTR_AMD_REASON = "lk.amd.reason"
 ATTR_AMD_SPEECH_DURATION = "lk.amd.speech_duration"
 ATTR_AMD_DELAY = "lk.amd.delay"
-ATTR_AMD_TRANSCRIPT = "lk.amd.transcript"
+ATTR_AMD_TRANSCRIPT = "lk.pii.amd.transcript"
 
 # Adaptive Interruption attributes
 ATTR_IS_INTERRUPTION = "lk.is_interruption"

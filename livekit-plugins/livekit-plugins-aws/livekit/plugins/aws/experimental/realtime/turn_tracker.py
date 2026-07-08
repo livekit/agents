@@ -87,7 +87,7 @@ class _TurnTracker:
                 return
 
         elif kind == "BARGE_IN":
-            logger.debug(f"BARGE-IN DETECTED IN TURN TRACKER: {turn}")
+            logger.debug("barge-in detected in turn tracker", extra={"lk.pii.turn": turn})
             # start new turn immediately to make interruptions snappier
             self._emit("input_speech_started", llm.InputSpeechStartedEvent())
             turn.phase = _Phase.DONE

@@ -278,7 +278,7 @@ class LLMStream(llm.LLMStream):
                     delta=llm.ChoiceDelta(content=delta["text"], role="assistant"),
                 )
             else:
-                logger.warning(f"aws bedrock llm: unknown chunk type: {chunk}")
+                logger.warning("aws bedrock llm: unknown chunk type", extra={"lk.pii.chunk": chunk})
 
         elif "metadata" in chunk:
             metadata = chunk["metadata"]

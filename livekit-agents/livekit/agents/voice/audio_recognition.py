@@ -1107,7 +1107,10 @@ class AudioRecognition:
             if self._session.amd is not None:
                 self._session.amd._on_transcript(transcript)
 
-            extra: dict[str, Any] = {"user_transcript": transcript, "language": self._last_language}
+            extra: dict[str, Any] = {
+                "lk.pii.user_transcript": transcript,
+                "language": self._last_language,
+            }
             if self._last_speaking_time:
                 extra["transcript_delay"] = time.time() - self._last_speaking_time
             logger.debug("received user transcript", extra=extra)
@@ -1171,7 +1174,7 @@ class AudioRecognition:
 
             logger.debug(
                 "received user preflight transcript",
-                extra={"user_transcript": transcript, "language": self._last_language},
+                extra={"lk.pii.user_transcript": transcript, "language": self._last_language},
             )
 
             # still need to increment it as it's used for turn detection,

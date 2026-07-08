@@ -380,7 +380,9 @@ class RealtimeSession(llm.RealtimeSession):
             if isinstance(item, llm.ChatMessage) and item.role in ("system", "developer"):
                 text = item.text_content
                 if text:
-                    logger.debug(f"Sending add system message: {text}")
+                    logger.debug(
+                        "Sending add system message", extra={"lk.pii.system_message": text}
+                    )
                     if self._socket:
                         await self._socket.send_add_system_message(
                             AddSystemMessagePayload(system_message=text)
@@ -395,7 +397,7 @@ class RealtimeSession(llm.RealtimeSession):
             ):
                 text = item.text_content
                 if text:
-                    logger.info(f"Received user text input: {text}")
+                    logger.info("Received user text input", extra={"lk.pii.text": text})
                     self._pending_user_text = text
                     buffered_user_text = True
 

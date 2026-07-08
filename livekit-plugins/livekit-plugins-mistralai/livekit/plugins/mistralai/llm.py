@@ -364,7 +364,7 @@ class LLMStream(llm.LLMStream):
             args = self._provider_tool_args.pop(data.id, "")
             logger.debug(
                 "executed provider tool",
-                extra={"function": data.name, "arguments": args, "info": data.info},
+                extra={"function": data.name, "lk.pii.arguments": args, "lk.pii.info": data.info},
             )
 
         return chunks

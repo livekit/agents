@@ -319,7 +319,10 @@ class SpeechStream(stt.RecognizeStream):
                 connected_msg = await asyncio.wait_for(ws.recv(), timeout=10)
                 connected_data = json.loads(connected_msg)
                 if connected_data.get("type") != "connected":
-                    logger.warning(f"Unexpected first message from Gnani STT: {connected_data}")
+                    logger.warning(
+                        "Unexpected first message from Gnani STT",
+                        extra={"lk.pii.data": connected_data},
+                    )
 
                 send_task = asyncio.create_task(self._send_audio(ws), name="gnani-stt-send")
                 recv_task = asyncio.create_task(self._recv_messages(ws), name="gnani-stt-recv")
