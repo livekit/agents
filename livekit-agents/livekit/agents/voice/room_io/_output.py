@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 
 from google.protobuf.json_format import MessageToDict
@@ -28,6 +29,9 @@ from ...types import (
 )
 from .. import io
 from ..transcription import find_micro_track_id
+
+# a complete self-closing expressive marker (<expr/>, <expression/>, or <emotion/>)
+_EXPR_MARKER_SPLIT_RE = re.compile(r"(<(?:expr|expression|emotion)\b[^>]*?/\s*>)")
 
 
 class _ParticipantAudioOutput(io.AudioOutput):
@@ -412,11 +416,15 @@ class _ParticipantStreamTranscriptionOutput:
         self._current_id = utils.shortuuid("SG_")
         self._capturing = False
         self._latest_text = ""
-        # per-segment markup stripping: delta streams strip incrementally (buffering a tag
+        # per-turn markup stripping: delta streams strip incrementally (buffering a tag
         # split across chunks); non-delta streams re-strip the full text each time and keep
         # the latest tags here for the expression attribute (see TranscriptMarkupStripper)
         self._stripper = TranscriptMarkupStripper()
         self._segment_tags: list[ExpressiveTag] = []
+        # delta-stream expression bookkeeping (drives mid-turn segment rotation)
+        self._expr_consumed = 0
+        self._writer_expression_sent = False
+        self._writer_has_text = False
 
     def _encode(self, clean_text: str, timing_src: str | None = None) -> str:
         """Wrap visible text for the wire (JSON TimedString when json_format, else raw)."""
@@ -436,7 +444,9 @@ class _ParticipantStreamTranscriptionOutput:
         return json.dumps(MessageToDict(ts_pb, preserving_proto_field_name=True)) + "\n"
 
     async def _create_text_writer(
-        self, attributes: dict[str, str] | None = None
+        self,
+        attributes: dict[str, str] | None = None,
+        extra_attributes: dict[str, str] | None = None,
     ) -> rtc.TextStreamWriter:
         assert self._participant_identity is not None, "participant_identity is not set"
 
@@ -448,6 +458,9 @@ class _ParticipantStreamTranscriptionOutput:
                 attributes[ATTRIBUTE_TRANSCRIPTION_TRACK_ID] = self._track_id
         attributes[ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID] = self._current_id
 
+        for key, val in (extra_attributes or {}).items():
+            attributes.setdefault(key, val)
+
         for key, val in self._additional_attributes.items():
             if key not in attributes:
                 attributes[key] = val
@@ -457,6 +470,63 @@ class _ParticipantStreamTranscriptionOutput:
             sender_identity=self._participant_identity,
             attributes=attributes,
         )
+
+    def _pending_expressions(self) -> list[ExpressiveTag]:
+        """Expression tags stripped so far but not yet attached to a wire segment."""
+        tags = [t for t in self._stripper.tags if t["type"] in ("expression", "emotion")]
+        return tags[self._expr_consumed :]
+
+    def _consume_expressions(self) -> None:
+        self._expr_consumed = sum(
+            1 for t in self._stripper.tags if t["type"] in ("expression", "emotion")
+        )
+
+    async def _rotate_writer(self, pending: list[ExpressiveTag]) -> None:
+        """Finalize the current wire segment and open a new one led by the pending expression."""
+        assert self._writer is not None
+        attributes = {ATTRIBUTE_TRANSCRIPTION_FINAL: "true"}
+        if self._track_id:
+            attributes[ATTRIBUTE_TRANSCRIPTION_TRACK_ID] = self._track_id
+        await self._writer.aclose(attributes=attributes)
+
+        self._current_id = utils.shortuuid("SG_")
+        self._writer = await self._create_text_writer(
+            extra_attributes=expression_attribute(pending)
+        )
+        self._writer_expression_sent = True
+        self._writer_has_text = False
+
+    async def _capture_delta(self, piece: str, timing_src: str) -> None:
+        clean_text = self._stripper.push(piece)
+        if not self._room.isconnected():
+            return
+
+        pending = self._pending_expressions()
+        if self._writer is None:
+            if not clean_text and not pending:
+                return
+            # open the segment as soon as its leading expression (or first text) is
+            # known, so lk.expression rides the opening header
+            self._writer = await self._create_text_writer(
+                extra_attributes=expression_attribute(pending)
+            )
+            self._writer_expression_sent = bool(pending)
+            self._consume_expressions()
+        elif pending and clean_text:
+            if self._writer_has_text or not self._writer_expression_sent:
+                # a new expression starts a new statement: rotate so the new segment's
+                # opening header carries it
+                await self._rotate_writer(pending)
+            # else: markers stacked before the first word coalesce into the header
+            # already sent (first tag wins)
+            self._consume_expressions()
+
+        if clean_text:
+            payload = self._encode(clean_text, timing_src)
+            self._latest_text = payload
+            await self._writer.write(payload)
+            if clean_text.strip():
+                self._writer_has_text = True
 
     @utils.log_exceptions(logger=logger)
     async def capture_text(self, text: str) -> None:
@@ -471,29 +541,26 @@ class _ParticipantStreamTranscriptionOutput:
             self._capturing = True
 
         # the raw text (expressive markup intact) arrives here; publish only the visible
-        # text. Skip a chunk that strips to nothing (a partial tag still buffering, or a
-        # markup-only token) so the transcript cadence isn't disturbed.
-        if self._is_delta_stream:
-            clean_text = self._stripper.push(text)
-        else:
-            clean_text, self._segment_tags = split_all_markup(text)
-        if not clean_text:
-            return
-
-        payload = self._encode(clean_text, text)
-        self._latest_text = payload
-
+        # text. A chunk that strips to nothing (a partial tag still buffering) is held
+        # back so the transcript cadence isn't disturbed.
         try:
-            if self._room.isconnected():
-                if self._is_delta_stream:  # reuse the existing writer
-                    if self._writer is None:
-                        self._writer = await self._create_text_writer()
-
-                    await self._writer.write(payload)
-                else:  # always create a new writer
-                    tmp_writer = await self._create_text_writer()
-                    await tmp_writer.write(payload)
-                    await tmp_writer.aclose()
+            if self._is_delta_stream:
+                # split at expression markers so text on each side of a marker lands
+                # in the right wire segment
+                for piece in _EXPR_MARKER_SPLIT_RE.split(text):
+                    if piece:
+                        await self._capture_delta(piece, text)
+            else:  # always create a new writer
+                clean_text, self._segment_tags = split_all_markup(text)
+                if not clean_text or not self._room.isconnected():
+                    return
+                payload = self._encode(clean_text, text)
+                self._latest_text = payload
+                tmp_writer = await self._create_text_writer(
+                    extra_attributes=expression_attribute(self._segment_tags)
+                )
+                await tmp_writer.write(payload)
+                await tmp_writer.aclose()
         except Exception as e:
             logger.warning("failed to publish agent transcription to room: %s", e)
 
@@ -525,8 +592,8 @@ class _ParticipantStreamTranscriptionOutput:
 
     def flush(self) -> None:
         # only emit on a segment that captured text (keeps lk.transcription cadence intact).
-        # The leading expression the sinks stripped rides along on the closing header as the
-        # lk.expression attribute.
+        # The closing header carries the expression only as a fallback when the stream
+        # never got one — e.g. the tag only completed in the flush remainder.
         if self._participant_identity is None or not self._capturing:
             return
 
@@ -534,16 +601,18 @@ class _ParticipantStreamTranscriptionOutput:
         curr_writer = self._writer
         self._writer = None
 
+        extra_attributes: dict[str, str] | None = None
         if self._is_delta_stream:
             remaining = self._stripper.flush()
-            tags = self._stripper.tags
+            if not self._writer_expression_sent:
+                extra_attributes = expression_attribute(self._pending_expressions())
         else:
             remaining = ""
-            tags = self._segment_tags
+            extra_attributes = expression_attribute(self._segment_tags)
 
         pending_text = self._encode(remaining) if remaining else ""
         self._flush_atask = asyncio.create_task(
-            self._flush_task(curr_writer, expression_attribute(tags), pending_text)
+            self._flush_task(curr_writer, extra_attributes, pending_text)
         )
 
     async def aclose(self) -> None:
