@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import time
 from dataclasses import dataclass, replace
 from typing import Any, Literal, cast
@@ -11,20 +10,12 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 import aiohttp
 from openai.types.realtime import (
     ConversationItemAdded,
-    ConversationItemDeletedEvent,
     ConversationItemInputAudioTranscriptionCompletedEvent,
-    ConversationItemInputAudioTranscriptionFailedEvent,
     InputAudioBufferSpeechStartedEvent,
     InputAudioBufferSpeechStoppedEvent,
-    ResponseAudioDeltaEvent,
-    ResponseAudioDoneEvent,
-    ResponseContentPartAddedEvent,
+    RealtimeErrorEvent,
     ResponseCreatedEvent,
     ResponseDoneEvent,
-    ResponseOutputItemAddedEvent,
-    ResponseOutputItemDoneEvent,
-    ResponseTextDeltaEvent,
-    ResponseTextDoneEvent,
 )
 from pydantic import BaseModel
 
@@ -38,7 +29,10 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 from livekit.plugins.openai.realtime import realtime_model as openai_rt
-from livekit.plugins.openai.realtime.utils import calculate_confidence_from_logprobs
+from livekit.plugins.openai.realtime.utils import (
+    calculate_confidence_from_logprobs,
+    openai_item_to_livekit_item,
+)
 
 from ..log import logger
 
@@ -56,6 +50,10 @@ _DEFAULT_TURN_DETECTION = {
 
 _DEFAULT_OUTPUT_MODALITIES: list[Literal["audio"]] = ["audio"]
 _VALID_OUTPUT_MODALITIES = ("text", "audio")
+
+# Server close codes that a reconnect cannot fix:
+# 3000 = invalid API key / ephemeral key.
+_NON_RETRYABLE_CLOSE_CODES = frozenset({3000})
 
 
 @dataclass
@@ -151,7 +149,10 @@ class RealtimeModel(openai_rt.RealtimeModel):
         self._capabilities.user_transcription = _input_audio_transcription_enabled(
             input_audio_transcription_config
         )
-        self._capabilities.auto_tool_reply_generation = True
+        # The server treats conversation.item.create as a pure insert (its
+        # AUTO_GENERATE_ON_ITEM_CREATE defaults to false), so the framework must
+        # send response.create after posting tool outputs, like OpenAI.
+        self._capabilities.auto_tool_reply_generation = False
         self._capabilities.audio_output = "audio" in output_modalities
         self._capabilities.mutable_chat_context = False
 
@@ -240,15 +241,27 @@ class RealtimeSession(openai_rt.RealtimeSession):
     def __init__(self, realtime_model: RealtimeModel) -> None:
         self._boson_model = realtime_model
         self._boson_opts = replace(realtime_model._boson_opts)
-        self._boson_closing = False
-        self._closing = False
         self._closed = False
         self._suppress_next_response_cancel = False
         self._current_response_id: str | None = None
         self._boson_remote_item_ids: set[str] = set()
+        # Server-assigned session id (from session.created), kept for logging.
+        # The server does not persist sessions: every connection is a fresh
+        # session, so reconnection replays the local chat context instead.
+        self._session_id: str | None = None
+        # Set when the server announces it is ending the session on purpose
+        # (session.idle_timeout / session.max_duration_reached); the following
+        # close must not trigger a reconnect, which would restart the session
+        # the server just ended.
+        self._server_terminal_reason: str | None = None
         super().__init__(realtime_model)
         # Compatibility alias for the previous Boson implementation and tests.
         self._pending_response_futures = self._response_created_futures
+        # The base recv loop dispatches OpenAI event types to _handle_* methods
+        # and re-emits every raw event on this hook; Boson-specific events are
+        # handled off it instead of forking the whole dispatch.
+        self.on("openai_server_event_received", self._handle_boson_server_event)
+        self.on("session_reconnected", self._on_session_reconnected)
 
     def send_event(self, event: Any) -> None:
         if self._closed or self._msg_ch.closed:
@@ -258,26 +271,23 @@ class RealtimeSession(openai_rt.RealtimeSession):
         with contextlib.suppress(utils.aio.ChanClosed):
             self._msg_ch.send_nowait(event)
 
-    async def _main_task(self) -> None:
-        await self._run()
+    @property
+    def session_id(self) -> str | None:
+        return self._session_id
 
-    async def _run(self) -> None:
-        ws: aiohttp.ClientWebSocketResponse | None = None
+    async def _main_task(self) -> None:
+        # The base task owns connect/retry/reconnect (including the chat-context
+        # replay via _create_update_chat_ctx_events). On terminal failure it
+        # leaves pending response futures to their own timeouts; fail them and
+        # stop accepting events right away instead.
         try:
-            ws = await self._create_ws_conn()
-            await self._run_ws(ws)
-        except asyncio.CancelledError:
-            raise
+            await super()._main_task()
         except Exception as exc:
-            if not self._boson_closing:
-                self._emit_error(exc, recoverable=False)
-                self._fail_response_created_futures(_as_realtime_error(exc))
-                self._close_current_generation("Boson realtime session failed")
-                self._closed = True
-                self._msg_ch.close()
-        finally:
-            if ws is not None and not ws.closed:
-                await ws.close()
+            self._fail_response_created_futures(_as_realtime_error(exc))
+            self._close_current_generation("Boson realtime session failed")
+            self._closed = True
+            self._msg_ch.close()
+            raise
 
     async def _create_ws_conn(self) -> aiohttp.ClientWebSocketResponse:
         headers = {"User-Agent": "LiveKit Agents Boson plugin"}
@@ -301,137 +311,78 @@ class RealtimeSession(openai_rt.RealtimeSession):
             raise APIConnectionError("Boson realtime connection timed out") from exc
 
     async def _run_ws(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
-        async def _send_task() -> None:
-            async for event in self._msg_ch:
-                try:
-                    if isinstance(event, BaseModel):
-                        event = event.model_dump(
-                            by_alias=True,
-                            exclude_unset=True,
-                            exclude_defaults=False,
-                        )
-                    self.emit("openai_client_event_queued", event)
-                    await ws_conn.send_str(json.dumps(event))
-                except Exception:
-                    logger.exception("failed to send Boson realtime event")
-
-        recv_task = asyncio.create_task(
-            self._recv_loop(ws_conn), name="BosonRealtimeSession._recv_loop"
-        )
-        send_task = asyncio.create_task(_send_task(), name="BosonRealtimeSession._send_loop")
-        pending: set[asyncio.Task[None]] = {recv_task, send_task}
         try:
-            done, pending = await asyncio.wait(
-                pending,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            for task in done:
-                task.result()
-            if not self._boson_closing:
-                raise ConnectionError("Boson realtime WebSocket closed unexpectedly.")
-        finally:
-            await utils.aio.cancel_and_wait(*pending)
+            await super()._run_ws(ws_conn)
+        except APIConnectionError as exc:
+            # The base recv loop raises every unexpected close as retryable;
+            # reclassify the ones a reconnect cannot fix.
+            if self._server_terminal_reason is not None:
+                raise APIConnectionError(
+                    f"Boson realtime session ended by server: {self._server_terminal_reason}",
+                    retryable=False,
+                ) from exc
+            close_code = ws_conn.close_code
+            if close_code is not None:
+                raise APIConnectionError(
+                    f"Boson realtime WebSocket closed unexpectedly (close_code={close_code}).",
+                    retryable=close_code not in _NON_RETRYABLE_CLOSE_CODES,
+                ) from exc
+            raise
 
-    async def _recv_loop(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
-        while True:
-            msg = await ws_conn.receive()
-            if msg.type in (
-                aiohttp.WSMsgType.CLOSED,
-                aiohttp.WSMsgType.CLOSE,
-                aiohttp.WSMsgType.CLOSING,
-            ):
-                if self._boson_closing or self._closing:
-                    return
-                raise ConnectionError(_format_ws_close_message(ws_conn, msg))
-            if msg.type == aiohttp.WSMsgType.ERROR:
-                raise ConnectionError(_format_ws_close_message(ws_conn, msg))
-            if msg.type != aiohttp.WSMsgType.TEXT:
-                continue
-            try:
-                event = json.loads(msg.data)
-            except json.JSONDecodeError as exc:
-                logger.warning("Ignoring invalid Boson realtime JSON message: %s", msg.data)
-                self._emit_error(
-                    llm.RealtimeError(f"Invalid Boson realtime JSON message: {exc}"),
-                    recoverable=True,
-                )
-                continue
-            if not isinstance(event, dict):
-                self._emit_error(
-                    llm.RealtimeError("Invalid Boson realtime message: expected a JSON object."),
-                    recoverable=True,
-                )
-                continue
-            self.emit("openai_server_event_received", event)
-            self._handle_server_event(event)
-
-    def _handle_server_event(self, event: dict[str, Any]) -> None:
+    def _handle_boson_server_event(self, event: dict[str, Any]) -> None:
         event_type = event.get("type")
-        try:
-            if event_type == "input_audio_buffer.speech_started":
-                self._handle_input_audio_buffer_speech_started(
-                    InputAudioBufferSpeechStartedEvent.construct(**event)
-                )
-            elif event_type == "input_audio_buffer.speech_stopped":
-                self._handle_input_audio_buffer_speech_stopped(
-                    InputAudioBufferSpeechStoppedEvent.construct(**event)
-                )
-            elif event_type == "conversation.item.input_audio_transcription.completed":
-                self._handle_conversion_item_input_audio_transcription_completed(
-                    ConversationItemInputAudioTranscriptionCompletedEvent.construct(**event)
-                )
-            elif event_type == "conversation.item.input_audio_transcription.failed":
-                self._handle_conversion_item_input_audio_transcription_failed(
-                    ConversationItemInputAudioTranscriptionFailedEvent.construct(**event)
-                )
-            elif event_type == "conversation.item.added":
-                self._handle_conversion_item_added(ConversationItemAdded.construct(**event))
-            elif event_type == "conversation.item.deleted":
-                self._handle_conversion_item_deleted(
-                    ConversationItemDeletedEvent.construct(**event)
-                )
-            elif event_type == "response.created":
-                self._handle_response_created(ResponseCreatedEvent.construct(**event))
-            elif event_type == "response.output_item.added":
-                self._handle_response_output_item_added(
-                    ResponseOutputItemAddedEvent.construct(**event)
-                )
-            elif event_type == "response.content_part.added":
-                self._handle_response_content_part_added(
-                    ResponseContentPartAddedEvent.construct(**event)
-                )
-            elif event_type == "response.output_text.delta":
-                self._handle_response_text_delta(ResponseTextDeltaEvent.construct(**event))
-            elif event_type == "response.output_text.done":
-                self._handle_response_text_done(ResponseTextDoneEvent.construct(**event))
-            elif event_type == "response.output_audio_transcript.delta":
-                self._handle_response_audio_transcript_delta(event)
-            elif event_type == "response.output_audio.delta":
-                self._handle_response_audio_delta(ResponseAudioDeltaEvent.construct(**event))
-            elif event_type == "response.output_audio.done":
-                self._handle_response_audio_done(ResponseAudioDoneEvent.construct(**event))
-            elif event_type in (
-                "response.output_audio_transcript.length",
-                "response.output_audio_transcript.done",
-                "response.content_part.done",
-            ):
-                pass
-            elif event_type == "response.output_item.done":
-                self._handle_response_output_item_done(
-                    ResponseOutputItemDoneEvent.construct(**event)
-                )
-            elif event_type == "response.done":
-                self._handle_response_done(ResponseDoneEvent.construct(**event))
-            elif event_type == "error":
-                self._handle_boson_error_event(event)
-        except Exception as exc:
-            logger.exception("failed to handle Boson realtime event: %s", event_type)
-            self._emit_error(exc, recoverable=True)
+        if event_type in ("session.created", "session.updated"):
+            # Track the server-assigned id for logging/diagnostics.
+            session_obj = event.get("session") or {}
+            session_id = session_obj.get("id")
+            if isinstance(session_id, str) and session_id:
+                self._session_id = session_id
+        elif event_type == "session.idle_timeout":
+            seconds_idle = event.get("seconds_idle")
+            self._server_terminal_reason = f"idle timeout ({seconds_idle}s)"
+            logger.info(
+                "Boson realtime session idle timeout announced by server",
+                extra={"session_id": self._session_id, "seconds_idle": seconds_idle},
+            )
+        elif event_type == "session.max_duration_reached":
+            max_duration_sec = event.get("max_duration_sec")
+            self._server_terminal_reason = f"max session duration reached ({max_duration_sec}s)"
+            logger.info(
+                "Boson realtime session max duration announced by server",
+                extra={"session_id": self._session_id, "max_duration_sec": max_duration_sec},
+            )
+
+    def _on_session_reconnected(self, _event: llm.RealtimeSessionReconnectedEvent) -> None:
+        # Per-connection state the base _reconnect doesn't know about.
+        self._pushed_duration_s = 0.0
+        self._current_response_id = None
+        self._suppress_next_response_cancel = False
+        logger.info("reconnected to Boson realtime session", extra={"session_id": self._session_id})
 
     def _handle_conversion_item_added(self, event: ConversationItemAdded) -> None:
+        item_id = event.item.id
+        if item_id is not None and (remote_item := self._remote_chat_ctx.get(item_id)) is not None:
+            # The server merges consecutive same-role turns into a single item
+            # (voice-chat conv_context.add) and re-emits conversation.item.added
+            # with the same id and cumulative content. Update the mirrored text
+            # in place instead of letting the base insert fail with a warning.
+            # Audio-input configs re-add with an empty input_audio part and no
+            # transcript — keep whatever transcription has already arrived.
+            lk_item = openai_item_to_livekit_item(event.item)
+            if (
+                isinstance(lk_item, llm.ChatMessage)
+                and isinstance(remote_item.item, llm.ChatMessage)
+                and lk_item.text_content
+            ):
+                _set_message_text(remote_item.item, lk_item.text_content)
+            if fut := self._item_create_future.pop(item_id, None):
+                if not fut.cancelled():
+                    fut.set_result(None)
+            return
+
         super()._handle_conversion_item_added(event)
-        if event.item.id is not None:
-            self._boson_remote_item_ids.add(event.item.id)
+        if item_id is not None:
+            self._boson_remote_item_ids.add(item_id)
 
     def _handle_conversion_item_input_audio_transcription_completed(
         self, event: ConversationItemInputAudioTranscriptionCompletedEvent
@@ -442,18 +393,7 @@ class RealtimeSession(openai_rt.RealtimeSession):
         if remote_item := self._remote_chat_ctx.get(event.item_id):
             assert isinstance(remote_item.item, llm.ChatMessage)
             if event.transcript:
-                text_index = next(
-                    (
-                        idx
-                        for idx, content in enumerate(remote_item.item.content)
-                        if isinstance(content, str)
-                    ),
-                    None,
-                )
-                if text_index is None:
-                    remote_item.item.content.append(event.transcript)
-                else:
-                    remote_item.item.content[text_index] = event.transcript
+                _set_message_text(remote_item.item, event.transcript)
             remote_item.item.transcript_confidence = confidence
 
         self.emit(
@@ -469,7 +409,41 @@ class RealtimeSession(openai_rt.RealtimeSession):
     def _create_session_update_event(self) -> dict[str, Any]:
         return self._build_session_update_event("session_update_")
 
-    def _build_session_update_event(self, event_prefix: str) -> dict[str, Any]:
+    def _create_tools_update_event(self, tools: list[llm.Tool]) -> dict[str, Any]:
+        # The server treats session.update as a full replace (not OpenAI's
+        # partial merge), so a tools-only update must carry the whole config.
+        return self._build_session_update_event("tools_update_", tools=tools)
+
+    def _create_update_chat_ctx_events(  # type: ignore[override]
+        self, chat_ctx: llm.ChatContext
+    ) -> list[dict[str, Any]]:
+        # Called by the base _reconnect to rebuild the conversation: the server
+        # keeps no state across connections, so every item is replayed as a
+        # conversation.item.create in the Boson item shape (the documented
+        # reconnection contract, docs/client-integration-guide.md). The base has
+        # already reset _remote_chat_ctx; rebuild the seen-id set from the
+        # replayed items so update_chat_ctx doesn't re-send them.
+        events: list[dict[str, Any]] = []
+        self._boson_remote_item_ids = set()
+        for item in chat_ctx.items:
+            payload = _livekit_item_to_boson_item(item)
+            if payload is None:
+                continue
+            item_id = payload.get("id")
+            if isinstance(item_id, str):
+                self._boson_remote_item_ids.add(item_id)
+            events.append(
+                {
+                    "type": "conversation.item.create",
+                    "event_id": utils.shortuuid("chat_ctx_replay_"),
+                    "item": payload,
+                }
+            )
+        return events
+
+    def _build_session_update_event(
+        self, event_prefix: str, tools: list[llm.Tool] | None = None
+    ) -> dict[str, Any]:
         audio_input: dict[str, Any] = {
             "format": {"type": "audio/pcm", "rate": SAMPLE_RATE},
             "turn_detection": self._boson_opts.turn_detection,
@@ -494,7 +468,7 @@ class RealtimeSession(openai_rt.RealtimeSession):
                 "input": audio_input,
                 "output": audio_output,
             },
-            "tools": _tools_to_boson(self._tools.flatten()),
+            "tools": _tools_to_boson(tools if tools is not None else self._tools.flatten()),
             "tool_choice": _tool_choice_to_boson(self._boson_opts.tool_choice),
             "temperature": self._boson_opts.temperature,
             "max_output_tokens": self._boson_opts.max_output_tokens,
@@ -531,10 +505,6 @@ class RealtimeSession(openai_rt.RealtimeSession):
                 }
             )
             previous_item_id = item_id
-
-    async def update_tools(self, tools: list[llm.Tool]) -> None:
-        self._tools = llm.ToolContext(tools)
-        self.send_event(self._build_session_update_event("tools_update_"))
 
     def update_options(
         self,
@@ -584,20 +554,6 @@ class RealtimeSession(openai_rt.RealtimeSession):
     def push_video(self, frame: rtc.VideoFrame) -> None:
         logger.debug("Boson RealtimeModel does not support video input yet; frame ignored.")
 
-    def commit_audio(self) -> None:
-        if self._pushed_duration_s <= 0.1:
-            return
-        self.send_event(
-            {"type": "input_audio_buffer.commit", "event_id": utils.shortuuid("audio_commit_")}
-        )
-        self._pushed_duration_s = 0.0
-
-    def clear_audio(self) -> None:
-        self.send_event(
-            {"type": "input_audio_buffer.clear", "event_id": utils.shortuuid("audio_clear_")}
-        )
-        self._pushed_duration_s = 0.0
-
     def interrupt(self) -> None:
         if not self.has_active_generation:
             return
@@ -614,11 +570,12 @@ class RealtimeSession(openai_rt.RealtimeSession):
         self.send_event(event)
 
     async def aclose(self) -> None:
-        self._boson_closing = True
         self._closing = True
         self._closed = True
         self._close_current_generation("session closed")
         self._msg_ch.close()
+        # Cancel instead of the base's await: the main task may be sleeping in a
+        # retry backoff or mid-connect, which close should not wait out.
         await utils.aio.cancel_and_wait(self._main_atask)
 
     def _handle_input_audio_buffer_speech_started(
@@ -655,14 +612,17 @@ class RealtimeSession(openai_rt.RealtimeSession):
         super()._handle_response_done(event)
         self._current_response_id = None
 
-    def _handle_boson_error_event(self, event: dict[str, Any]) -> None:
-        error = event.get("error") or {}
-        realtime_error = llm.RealtimeError(_format_error_message(error, event))
-        self._emit_error(realtime_error, recoverable=True)
-        self._fail_response_created_futures(
-            realtime_error,
-            event_id=error.get("event_id") or event.get("event_id"),
+    def _handle_error(self, event: RealtimeErrorEvent) -> None:
+        # Unlike the base handler, fail the pending generate_reply future the
+        # error refers to (the server reports the offending client event_id and
+        # may not follow up with a response.done).
+        error: dict[str, Any] = (
+            event.error if isinstance(event.error, dict) else event.error.model_dump()
         )
+        event_id = error.get("event_id") or getattr(event, "event_id", None)
+        realtime_error = llm.RealtimeError(_format_error_message(error, event_id))
+        self._emit_error(realtime_error, recoverable=True)
+        self._fail_response_created_futures(realtime_error, event_id=event_id)
 
     def _fail_response_created_futures(
         self, error: Exception, *, event_id: str | None = None
@@ -689,6 +649,18 @@ def _normalize_ws_url(url: str, query_params: dict[str, str]) -> str:
     return urlunparse(
         (scheme, parsed.netloc, parsed.path, parsed.params, urlencode(query), parsed.fragment)
     )
+
+
+def _set_message_text(message: llm.ChatMessage, text: str) -> None:
+    """Replace the first text part of ``message`` (or append one) with ``text``."""
+    text_index = next(
+        (idx for idx, content in enumerate(message.content) if isinstance(content, str)),
+        None,
+    )
+    if text_index is None:
+        message.content.append(text)
+    else:
+        message.content[text_index] = text
 
 
 def _copy_dict_or_none(value: Any | None) -> dict[str, Any] | None:
@@ -855,32 +827,17 @@ def _text_from_content(content: list[llm.ChatContent]) -> str:
     return "\n".join(parts)
 
 
-def _format_error_message(error: dict[str, Any], event: dict[str, Any]) -> str:
+def _format_error_message(error: dict[str, Any], event_id: str | None) -> str:
     message = error.get("message") or "Boson realtime API error"
     details = {
         "type": error.get("type"),
         "code": error.get("code"),
-        "event_id": error.get("event_id") or event.get("event_id"),
+        "event_id": event_id,
     }
     details = {key: value for key, value in details.items() if value is not None}
     if details:
         return f"{message} ({', '.join(f'{key}={value}' for key, value in details.items())})"
     return message
-
-
-def _format_ws_close_message(ws: aiohttp.ClientWebSocketResponse, msg: aiohttp.WSMessage) -> str:
-    close_code = getattr(ws, "close_code", None)
-    if close_code is None and msg.data is not None:
-        close_code = msg.data
-    reason = msg.extra
-    details = []
-    if close_code is not None:
-        details.append(f"close_code={close_code}")
-    if reason:
-        details.append(f"reason={reason}")
-    if details:
-        return f"Boson realtime WebSocket closed unexpectedly ({', '.join(details)})."
-    return "Boson realtime WebSocket closed unexpectedly."
 
 
 def _as_realtime_error(error: Exception) -> llm.RealtimeError:
