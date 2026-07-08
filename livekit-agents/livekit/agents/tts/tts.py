@@ -440,16 +440,29 @@ class ChunkedStream(ABC):
                 if isinstance(e, APIStatusError) and e.status_code == 499:
                     return
 
-                retry_interval = self._conn_options._interval_for_retry(i)
-                if self._conn_options.max_retry == 0 or self._conn_options.max_retry == i:
+                # settle the emitter so no frames from this attempt are delivered after
+                # the retry starts; the retry restarts the synthesis under a fresh
+                # request_id, signaling downstream that any partial audio is stale
+                await output_emitter.aclose()
+
+                should_retry = (
+                    e.retryable
+                    and self._conn_options.max_retry > 0
+                    and i < self._conn_options.max_retry
+                )
+
+                if not should_retry:
                     self._emit_error(e, recoverable=False)
                     raise
-                else:
-                    self._emit_error(e, recoverable=True)
-                    logger.warning(
-                        f"failed to synthesize speech: {e}, retrying in {retry_interval}s",
-                        extra={"tts": self._tts._label, "attempt": i + 1, "streamed": False},
-                    )
+
+                retry_interval = self._conn_options._interval_for_retry(i)
+                self._emit_error(e, recoverable=True)
+                logger.warning(
+                    "failed to synthesize speech: %s, retrying in %ss",
+                    e,
+                    retry_interval,
+                    extra={"tts": self._tts._label, "attempt": i + 1, "streamed": False},
+                )
 
                 await asyncio.sleep(retry_interval)
                 # Reset the flag when retrying
