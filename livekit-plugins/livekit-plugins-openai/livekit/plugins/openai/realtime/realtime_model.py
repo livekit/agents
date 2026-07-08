@@ -281,6 +281,12 @@ class _DiscardedGeneration:
     pass
 
 
+# Minimum time a connection must stay up before we treat it as "healthy" and reset the
+# reconnect retry budget. Prevents an endpoint that connects then immediately drops from
+# looping forever (num_retries would never reach max_retries otherwise).
+_MIN_HEALTHY_CONNECTION_DURATION = 5.0
+
+
 class RealtimeModel(llm.RealtimeModel):
     @overload
     def __init__(
@@ -929,19 +935,29 @@ class RealtimeSession(
             self._discarded_event_ids.clear()
             self._close_current_generation("session reconnection")
 
-            logger.debug(f"reconnected to {self._realtime_model._provider_label}")
-            self.emit("session_reconnected", llm.RealtimeSessionReconnectedEvent())
+            logger.info(f"reconnected to {self._realtime_model._provider_label}")
+            self._set_reconnected()
 
         reconnecting = False
         while not self._msg_ch.closed:
+            connected_at: float | None = None
             try:
                 ws_conn = await self._create_ws_conn()
                 if reconnecting:
                     await _reconnect()
-                    num_retries = 0  # reset the retry counter
+                connected_at = time.time()
                 await self._run_ws(ws_conn)
 
             except APIError as e:
+                # Only reset the retry budget if the previous connection stayed healthy
+                # long enough; otherwise an endpoint that connects then immediately drops
+                # would loop forever (num_retries would never reach max_retries).
+                if (
+                    connected_at is not None
+                    and time.time() - connected_at >= _MIN_HEALTHY_CONNECTION_DURATION
+                ):
+                    num_retries = 0
+
                 if max_retries == 0 or not e.retryable:
                     self._emit_error(e, recoverable=False)
                     raise
@@ -951,6 +967,7 @@ class RealtimeSession(
                         f"{self._realtime_model._provider_label} connection failed after {num_retries} attempts",
                     ) from e
                 else:
+                    self._set_reconnecting()
                     self._emit_error(e, recoverable=True)
 
                     retry_interval = self._opts.conn_options._interval_for_retry(num_retries)
@@ -1384,7 +1401,7 @@ class RealtimeSession(
                     elif isinstance(ev, ConversationItemCreateEvent):
                         assert ev.item.id is not None
                         self._item_create_future.pop(ev.item.id, None)
-                raise llm.RealtimeError("update_chat_ctx timed out.") from None
+                raise llm.RealtimeError("update_chat_ctx timed out.", is_timeout=True) from None
 
     def _create_update_chat_ctx_events(
         self, chat_ctx: llm.ChatContext
@@ -1601,7 +1618,11 @@ class RealtimeSession(
             if fut and not fut.done():
                 # discard the response if the server still creates it after the timeout
                 self._discarded_event_ids.add(event_id)
-                fut.set_exception(llm.RealtimeError("generate_reply timed out."))
+                fut.set_exception(
+                    llm.RealtimeError(
+                        "generate_reply timed out.", recoverable=True, is_timeout=True
+                    )
+                )
 
         handle = asyncio.get_event_loop().call_later(10.0, _on_timeout)
 
@@ -1626,6 +1647,22 @@ class RealtimeSession(
         if not self.has_active_generation:
             return
         self.send_event(ResponseCancelEvent(type="response.cancel"))
+
+    async def cancel_and_wait(self, timeout: float = 5.0) -> None:
+        """Cancel the active response (if any) and wait for it to clear server-side.
+
+        Used before re-issuing generate_reply on retry so the server has no active
+        response, avoiding ``conversation_already_has_active_response``.
+        """
+        if not self.has_active_generation:
+            return
+        gen = self._current_generation
+        self.send_event(ResponseCancelEvent(type="response.cancel"))
+        if isinstance(gen, _ResponseGeneration) and not gen._done_fut.done():
+            # shield so our timeout doesn't cancel the shared future; suppress because a
+            # failed/cancelled response resolves it with an exception we don't care about here
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(asyncio.shield(gen._done_fut), timeout)
 
     def truncate(
         self,
@@ -1770,6 +1807,7 @@ class RealtimeSession(
             function_stream=self._current_generation.function_ch,
             user_initiated=False,
             response_id=event.response.id,
+            done_fut=self._current_generation._done_fut,
         )
 
         if client_event_id and (fut := self._response_created_futures.pop(client_event_id, None)):
@@ -2062,11 +2100,14 @@ class RealtimeSession(
             if event.response.status in ("failed", "incomplete"):
                 details = event.response.status_details
                 msg = f"response {event.response.status}"
+                err_body = details.error if details else None
                 if details and details.error:
                     msg = f"{msg}: [{details.error.type}] {details.error.code}"
                 elif details and details.reason:
                     msg = f"{msg}: {details.reason}"
-                self._current_generation._done_fut.set_exception(llm.RealtimeError(msg))
+                self._current_generation._done_fut.set_exception(
+                    llm.RealtimeError(msg, recoverable=not llm.is_fatal_error(err_body))
+                )
             else:
                 self._current_generation._done_fut.set_result(None)
 
@@ -2144,9 +2185,9 @@ class RealtimeSession(
                     body=error_body,
                     retryable=True,
                 ),
-                # all possible faulures undocumented by openai,
-                # so we assume optimistically all retryable/recoverable
-                recoverable=True,
+                # optimistically recoverable unless the error code is a known-fatal one
+                # (quota / auth / billing), which can never succeed on retry
+                recoverable=not llm.is_fatal_error(error_body),
             )
         elif event.response.status in {"cancelled", "incomplete"}:
             status_details = event.response.status_details
@@ -2181,17 +2222,30 @@ class RealtimeSession(
             f"{provider_label} returned an error: {event.error}",
             extra={"error": event.error},
         )
+        recoverable = not llm.is_fatal_error(event.error)
         self._emit_error(
             APIError(
                 message=f"{provider_label} returned an error",
                 body=event.error,
                 retryable=True,
             ),
-            recoverable=True,
+            recoverable=recoverable,
         )
 
         # response errors are handled by _handle_response_done via _done_fut.
         # error events here are for non-response errors (e.g. invalid request).
+        if not recoverable:
+            # A fatal error (e.g. insufficient_quota) means a pending generate_reply will
+            # never be created; fail its future now with recoverable=False so the caller
+            # fails fast instead of waiting out the 10s timeout.
+            for fut in list(self._response_created_futures.values()):
+                if not fut.done():
+                    fut.set_exception(
+                        llm.RealtimeError(
+                            f"{provider_label} returned a fatal error", recoverable=False
+                        )
+                    )
+            self._response_created_futures.clear()
 
     def _emit_error(self, error: Exception, recoverable: bool) -> None:
         self.emit(

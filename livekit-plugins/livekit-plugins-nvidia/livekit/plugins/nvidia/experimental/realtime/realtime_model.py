@@ -383,10 +383,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
                 self._msg_ch = utils.aio.Chan[bytes]()
 
                 if restart_wait_task in done:
-                    self.emit(
-                        "session_reconnected",
-                        llm.RealtimeSessionReconnectedEvent(),
-                    )
+                    self._set_reconnected()
 
             except Exception as e:
                 logger.error(f"PersonaPlex WebSocket error: {e}", exc_info=True)

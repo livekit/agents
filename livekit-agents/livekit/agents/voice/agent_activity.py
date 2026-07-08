@@ -103,6 +103,15 @@ _AgentActivityContextVar = contextvars.ContextVar["AgentActivity"]("agents_activ
 _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_handle")
 _IdleHoldContextVar = contextvars.ContextVar[bool]("agents_idle_hold", default=False)
 
+# How many times a realtime generate_reply is re-issued when it fails *before the reply
+# starts* (timeout / server error / discarded on reconnection). Fatal errors (quota, auth)
+# are never retried.
+_REALTIME_REPLY_MAX_RETRIES = 3
+# Delay between retry attempts (a reconnect wait, when applicable, happens on top of this).
+_REALTIME_REPLY_RETRY_INTERVAL = 0.5
+# Upper bound on how long a retry waits for an in-progress reconnection before giving up.
+_REALTIME_RECONNECT_WAIT_TIMEOUT = 10.0
+
 
 class ActivityClosedError(Exception):
     """Raised by ``wait_for_idle`` when the target activity/session has closed."""
@@ -3259,7 +3268,19 @@ class AgentActivity(RecognitionHooks):
         if user_input is not None:
             chat_ctx = self._rt_session.chat_ctx.copy()
             msg = chat_ctx.add_message(role="user", content=user_input)
-            await self._rt_session.update_chat_ctx(chat_ctx)
+            try:
+                await self._rt_session.update_chat_ctx(chat_ctx)
+            except llm.RealtimeError as e:
+                # A timeout means the item events are already on the wire; re-pushing would
+                # duplicate the user message, so proceed and let the reply run. Any other
+                # failure means the message never landed — surface it and don't reply.
+                if e.is_timeout:
+                    logger.warning("update_chat_ctx timed out; assuming the message was queued")
+                else:
+                    logger.error("failed to push user message before reply: %s", str(e))
+                    speech_handle._mark_done(error=e)
+                    self._session._update_agent_state("listening")
+                    return
             self._agent._chat_ctx._upsert_item(msg)
             self._session._conversation_item_added(msg)
 
@@ -3282,38 +3303,73 @@ class AgentActivity(RecognitionHooks):
                     ori_tools = self._rt_session.tools.flatten()
                     await self._rt_session.update_tools(llm.ToolContext(tools).flatten())
 
-            generate_reply_fut = self._rt_session.generate_reply(
-                instructions=instructions or NOT_GIVEN,
-                tool_choice=(model_settings.tool_choice if per_response_tool_choice else NOT_GIVEN),
-                tools=(
-                    llm.ToolContext(tools).flatten()
-                    if per_response_tool_choice and tools is not None
-                    else NOT_GIVEN
-                ),
-            )
-            await speech_handle.wait_if_not_interrupted([generate_reply_fut])
-            if speech_handle.interrupted:
-                # cancel the pending generation; the plugin emits response.cancel
-                if not generate_reply_fut.done():
-                    generate_reply_fut.cancel()
-                return
+            # Retry the reply while it fails *before it starts* (pre-``response.created``):
+            # timeouts, server errors that produced no output, or a response discarded by a
+            # session reconnection. All of these raise from ``await generate_reply_fut``, so we
+            # re-issue here. Failures *after* the reply starts are handled by the generation
+            # task below and surfaced through ``SpeechHandle.exception()``.
+            reply_ev: llm.GenerationCreatedEvent | None = None
+            last_error: llm.RealtimeError | None = None
+            for attempt in range(_REALTIME_REPLY_MAX_RETRIES + 1):
+                if attempt > 0:
+                    # clear the previous (failed) response and wait for the socket to be
+                    # healthy again before re-issuing, so we neither collide with a still-active
+                    # response nor fire into a reconnecting session
+                    await self._rt_session.cancel_and_wait()
+                    if self._rt_session.reconnecting:
+                        await self._rt_session.wait_reconnected(_REALTIME_RECONNECT_WAIT_TIMEOUT)
+                    await asyncio.sleep(_REALTIME_REPLY_RETRY_INTERVAL)
 
-            try:
-                generation_ev = await generate_reply_fut
-            except llm.RealtimeError as e:
-                logger.error(
-                    "failed to generate a reply%s: %s",
-                    " after tool execution" if tool_reply else "",
-                    str(e),
+                generate_reply_fut = self._rt_session.generate_reply(
+                    instructions=instructions or NOT_GIVEN,
+                    tool_choice=(
+                        model_settings.tool_choice if per_response_tool_choice else NOT_GIVEN
+                    ),
+                    tools=(
+                        llm.ToolContext(tools).flatten()
+                        if per_response_tool_choice and tools is not None
+                        else NOT_GIVEN
+                    ),
                 )
-                speech_handle._mark_done(error=e)
+                await speech_handle.wait_if_not_interrupted([generate_reply_fut])
+                if speech_handle.interrupted:
+                    # cancel the pending generation; the plugin emits response.cancel
+                    if not generate_reply_fut.done():
+                        generate_reply_fut.cancel()
+                    return
+
+                try:
+                    reply_ev = await generate_reply_fut
+                    break
+                except llm.RealtimeError as e:
+                    last_error = e
+                    if not e.recoverable:
+                        # fatal / non-recoverable (quota, auth, retries exhausted upstream)
+                        logger.error(
+                            "failed to generate a reply%s (not recoverable, not retrying): %s",
+                            " after tool execution" if tool_reply else "",
+                            str(e),
+                        )
+                        break
+                    logger.warning(
+                        "failed to generate a reply%s (attempt %d/%d): %s",
+                        " after tool execution" if tool_reply else "",
+                        attempt + 1,
+                        _REALTIME_REPLY_MAX_RETRIES + 1,
+                        str(e),
+                    )
+
+            if reply_ev is None:
+                # every attempt failed (or a fatal error): record it so callers can read it
+                # via SpeechHandle.exception() (awaiting the handle never raises)
+                speech_handle._mark_done(error=last_error)
                 self._session._update_agent_state("listening")
                 return
 
             # _realtime_generation_task will clear the authorization
             await self._realtime_generation_task(
                 speech_handle=speech_handle,
-                generation_ev=generation_ev,
+                generation_ev=reply_ev,
                 model_settings=model_settings,
                 instructions=instructions,
             )
