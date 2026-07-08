@@ -334,8 +334,8 @@ class RealtimeSession(llm.RealtimeSession):
                 item
                 for item in chat_ctx.items
                 if isinstance(item, llm.ChatMessage)
-                and item.text_content
-                and item.text_content.strip()
+                and item.raw_text_content
+                and item.raw_text_content.strip()
             ]
             if messages:
                 turn_history = self._build_turn_history(chat_ctx)
@@ -378,7 +378,7 @@ class RealtimeSession(llm.RealtimeSession):
                         forbid_speech = True
 
             if isinstance(item, llm.ChatMessage) and item.role in ("system", "developer"):
-                text = item.text_content
+                text = item.raw_text_content
                 if text:
                     logger.debug(f"Sending add system message: {text}")
                     if self._socket:
@@ -393,7 +393,7 @@ class RealtimeSession(llm.RealtimeSession):
                 and item.role == "user"
                 and item_id == last_item_id
             ):
-                text = item.text_content
+                text = item.raw_text_content
                 if text:
                     logger.info(f"Received user text input: {text}")
                     self._pending_user_text = text
@@ -509,9 +509,11 @@ class RealtimeSession(llm.RealtimeSession):
         messages = [
             item
             for item in chat_ctx.items
-            if isinstance(item, llm.ChatMessage) and item.text_content and item.text_content.strip()
+            if isinstance(item, llm.ChatMessage)
+            and item.raw_text_content
+            and item.raw_text_content.strip()
         ]
-        return "\n".join(f"{m.role}: {m.text_content}" for m in messages)
+        return "\n".join(f"{m.role}: {m.raw_text_content}" for m in messages)
 
     def _build_config_options(
         self, *, system_prompt: str, tools_payload: list[dict | str]
