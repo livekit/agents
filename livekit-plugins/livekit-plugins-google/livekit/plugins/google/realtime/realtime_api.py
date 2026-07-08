@@ -61,6 +61,7 @@ KNOWN_GEMINI_API_MODELS: frozenset[str] = frozenset(
     {
         "gemini-3.1-flash-live-preview",
         "gemini-2.5-flash-native-audio-preview-12-2025",
+        "gemini-3.5-live-translate-preview",
     }
 )
 
@@ -154,6 +155,7 @@ class _RealtimeOptions:
     tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN
     thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN
     session_resumption: NotGivenOr[types.SessionResumptionConfig] = NOT_GIVEN
+    translation_config: NotGivenOr[types.TranslationConfig] = NOT_GIVEN
     credentials: google.auth.credentials.Credentials | None = None
 
 
@@ -223,6 +225,7 @@ class RealtimeModel(llm.RealtimeModel):
         http_options: NotGivenOr[types.HttpOptions] = NOT_GIVEN,
         media_resolution: NotGivenOr[types.MediaResolution] = NOT_GIVEN,
         thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN,
+        translation_config: NotGivenOr[types.TranslationConfig] = NOT_GIVEN,
         credentials: google.auth.credentials.Credentials | None = None,
     ) -> None:
         """
@@ -263,6 +266,12 @@ class RealtimeModel(llm.RealtimeModel):
             tool_response_scheduling (FunctionResponseScheduling, optional): The scheduling for tool response. Default scheduling is WHEN_IDLE.
             session_resumption (SessionResumptionConfig, optional): The configuration for session resumption. Defaults to None.
             thinking_config (ThinkingConfig, optional): Native audio thinking configuration.
+            translation_config (TranslationConfig, optional): Speech translation configuration, required by live-translate models
+                (e.g. "gemini-3.5-live-translate-preview"). Sets the target language (BCP-47 code) via `target_language_code` and
+                whether to also play back speech in the target language via `echo_target_language`. The input language is detected
+                automatically. Note that live-translate models are audio-to-audio only (AUDIO response modality) and do not support
+                tools or system instructions the way conversational Live models do.
+                See https://ai.google.dev/gemini-api/docs/live-api/live-translate. Defaults to None.
             conn_options (APIConnectOptions, optional): The configuration for the API connection. Defaults to DEFAULT_API_CONNECT_OPTIONS.
 
         Raises:
@@ -381,6 +390,7 @@ class RealtimeModel(llm.RealtimeModel):
             media_resolution=media_resolution,
             thinking_config=thinking_config,
             session_resumption=session_resumption,
+            translation_config=translation_config,
             credentials=credentials,
         )
 
@@ -1186,6 +1196,8 @@ class RealtimeSession(llm.RealtimeSession):
             conf.realtime_input_config = self._opts.realtime_input_config
         if is_given(self._opts.context_window_compression):
             conf.context_window_compression = self._opts.context_window_compression
+        if is_given(self._opts.translation_config):
+            conf.translation_config = self._opts.translation_config
 
         return conf
 
