@@ -245,6 +245,10 @@ class RealtimeSession(openai_rt.RealtimeSession):
         self._suppress_next_response_cancel = False
         self._current_response_id: str | None = None
         self._boson_remote_item_ids: set[str] = set()
+        # Responses discarded while another generation was streaming; their
+        # terminal events must not close the active generation (the base
+        # generation slot and handlers are not response-id aware).
+        self._boson_discarded_response_ids: set[str] = set()
         # Server-assigned session id (from session.created), kept for logging.
         # The server does not persist sessions: every connection is a fresh
         # session, so reconnection replays the local chat context instead.
@@ -608,10 +612,17 @@ class RealtimeSession(openai_rt.RealtimeSession):
             client_event_id = event.response.metadata.get("client_event_id")
         if client_event_id and client_event_id in self._discarded_event_ids:
             # A response that timed out or was interrupted before the server
-            # created it: the base handler cancels and discards it without
-            # touching any in-progress generation, so don't close the current
-            # one or track the stale response id here.
+            # created it. The base handler cancels it and parks a discard
+            # marker in the generation slot so its trailing events are skipped.
+            # When a legitimate generation is already streaming, keep it in the
+            # slot instead, and remember the stale response id so its
+            # response.done doesn't close the active generation.
+            active = self._current_generation
             super()._handle_response_created(event)
+            if isinstance(active, openai_rt._ResponseGeneration):
+                if event.response.id is not None:
+                    self._boson_discarded_response_ids.add(event.response.id)
+                self._current_generation = active
             return
 
         if self._current_generation is not None:
@@ -620,6 +631,13 @@ class RealtimeSession(openai_rt.RealtimeSession):
         super()._handle_response_created(event)
 
     def _handle_response_done(self, event: ResponseDoneEvent) -> None:
+        response_id = event.response.id
+        if response_id is not None and response_id in self._boson_discarded_response_ids:
+            # Terminal event of a response discarded while another generation
+            # was streaming; it must not close the active generation or clear
+            # the response id that interrupt() targets.
+            self._boson_discarded_response_ids.discard(response_id)
+            return
         super()._handle_response_done(event)
         self._current_response_id = None
 
