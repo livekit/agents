@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 import livekit.plugins.rnnoise as rn
 from livekit import rtc
@@ -136,28 +137,33 @@ def test_noise_reduction_through_resampled_16k_path():
     # Exercises the actual resample(16k->48k) -> denoise -> resample(48k->16k)
     # round-trip, not just the no-resampling 48kHz case above. Measured
     # empirically: the resampler/denoiser warm-up clears well within 80
-    # frames (energy becomes nonzero around frame 7-9, steady state by ~70),
-    # after which output energy stays several orders of magnitude below the
-    # white-noise input -- so a broken/silent pipeline would show energy 0
-    # here, and a passthrough-without-denoising pipeline would show energy
-    # close to the input.
+    # frames (energy becomes nonzero around frame 7-9, steady state by ~70).
+    #
+    # Comparing against the raw input energy is misleading here: the
+    # resampler's anti-alias filter alone attenuates white noise
+    # (~0.92x), so `out_energy < in_energy` would pass even for a no-op
+    # denoiser. Instead we compare against a baseline processor whose
+    # RNNoise denoising is bypassed (identity), isolating what real
+    # denoising contributes on top of the resampler-only pipeline.
     processor = RNNoise()
-    last_in_energy = None
+    baseline_processor = RNNoise()
+    baseline_processor._denoiser.denoise_chunk = lambda chunk, partial=False: iter([(0.0, chunk)])
+
     last_out_frame = None
+    last_baseline_frame = None
 
     for i in range(80):
         samples = _white_noise(160, amplitude=8000, seed=300 + i)
-        frame = _make_frame(samples, 16000)
 
-        out = processor._process(frame)
-
-        last_in_energy = _frame_energy(frame)
-        last_out_frame = out
+        last_out_frame = processor._process(_make_frame(samples, 16000))
+        last_baseline_frame = baseline_processor._process(_make_frame(samples, 16000))
 
     assert last_out_frame is not None
+    assert last_baseline_frame is not None
     out_energy = _frame_energy(last_out_frame)
+    baseline_energy = _frame_energy(last_baseline_frame)
     assert out_energy > 0
-    assert out_energy < last_in_energy
+    assert out_energy < baseline_energy
 
 
 def test_close_resets_state_and_is_idempotent():
@@ -174,6 +180,20 @@ def test_close_resets_state_and_is_idempotent():
     assert out.sample_rate == 48000
     assert out.num_channels == 1
     assert out.samples_per_channel == 480
+
+
+def test_process_raises_on_stereo_frame():
+    processor = RNNoise()
+    samples = _white_noise(320, seed=5)  # 160 samples/channel interleaved stereo
+    frame = rtc.AudioFrame(
+        data=samples.astype(np.int16).tobytes(),
+        sample_rate=16000,
+        num_channels=2,
+        samples_per_channel=160,
+    )
+
+    with pytest.raises(ValueError, match="mono"):
+        processor._process(frame)
 
 
 def test_public_api_and_type():

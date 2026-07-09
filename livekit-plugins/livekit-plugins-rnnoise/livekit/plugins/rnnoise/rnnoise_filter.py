@@ -82,6 +82,12 @@ class RNNoiseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         if not self._enabled:
             return frame
 
+        if frame.num_channels != 1:
+            raise ValueError(
+                "RNNoiseFrameProcessor v1 only supports mono audio, but "
+                f"received a frame with {frame.num_channels} channels"
+            )
+
         n = frame.samples_per_channel
         self._ensure_pipeline(frame.sample_rate, frame.num_channels)
 
