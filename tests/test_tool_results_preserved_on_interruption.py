@@ -1,9 +1,7 @@
 """Regression tests for https://github.com/livekit/agents/issues/3702
 
-Completed tool calls/outputs must be committed to the agent's chat context even
-when the speech that carries them is interrupted. Otherwise the next LLM
-inference has no record the tool ran and re-issues the same call, duplicating
-side effects for non-idempotent tools (bookings, payments, ...).
+Completed tool calls/outputs must survive interruption, or the next inference
+re-issues the call and duplicates side effects.
 """
 
 from __future__ import annotations
@@ -77,10 +75,8 @@ def _weather_tool_turn(actions: FakeActions, *, tts_duration: float) -> None:
 async def test_tool_results_preserved_when_tool_reply_turn_interrupted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The main gap: the tool turn completes normally and schedules the tool
-    reply turn. An interruption landing right after scheduling makes that reply
-    turn return at one of its early interruption gates — the tool messages must
-    already be committed by then."""
+    """Interruption lands right after the tool reply turn is scheduled: the reply
+    returns at an early interruption gate, tool messages must already be committed."""
     actions = FakeActions()
     _weather_tool_turn(actions, tts_duration=1.0)  # playout ~3.5s -> 4.5s
     # tool reply turn, interrupted before it generates anything
@@ -95,9 +91,8 @@ async def test_tool_results_preserved_when_tool_reply_turn_interrupted(
     session = create_session(actions)
     agent = WeatherAgent()
 
-    # the tool reply turn is the only speech re-scheduled with force=True;
-    # interrupt synchronously right after that scheduling decision — the same
-    # window a user utterance landing at tool completion hits in production
+    # the tool reply turn is the only speech scheduled with force=True;
+    # interrupt synchronously right after that scheduling decision
     forced_schedules: list[SpeechHandle] = []
     orig_schedule = AgentActivity._schedule_speech
 
@@ -126,9 +121,7 @@ async def test_tool_results_preserved_when_tool_reply_turn_interrupted(
 
 
 async def test_tool_results_preserved_when_interrupted_during_playout() -> None:
-    """Interruption lands while the agent is still speaking the tool turn: the
-    turn returns right after playout without scheduling the tool reply turn,
-    and the completed results in `tool_output.output` must be committed."""
+    """Interruption lands while the agent is still speaking the tool turn."""
     actions = FakeActions()
     _weather_tool_turn(actions, tts_duration=10.0)  # playout 3.5s -> 13.5s
     actions.add_user_speech(5.0, 6.0, "Stop!", stt_delay=0.2)  # interrupts at 5.5s
@@ -144,9 +137,8 @@ async def test_tool_results_preserved_when_interrupted_during_playout() -> None:
 
 
 async def test_tool_results_preserved_when_tool_in_flight_at_interruption() -> None:
-    """Interruption fires while the tool is still executing: the cancellation
-    path lets in-flight tools run to completion, and their results must be
-    committed."""
+    """Interruption fires while the tool is still executing: in-flight tools run
+    to completion and their results must be committed."""
     actions = FakeActions()
     _weather_tool_turn(actions, tts_duration=10.0)  # playout 3.5s -> 13.5s
     actions.add_user_speech(5.0, 6.0, "Stop!", stt_delay=0.2)  # interrupts at 5.5s
@@ -163,9 +155,8 @@ async def test_tool_results_preserved_when_tool_in_flight_at_interruption() -> N
 
 
 async def test_handoff_tool_not_recorded_when_interrupted() -> None:
-    """Agent handoff tools are excluded from the interrupted-path commit: the
-    handoff itself is not applied on an interrupted speech, and recording its
-    call as completed would prevent the LLM from retrying it."""
+    """Handoffs aren't applied on interrupted speech, so their calls must not be
+    recorded as completed — the LLM needs to retry them."""
 
     class TransferAgent(Agent):
         def __init__(self) -> None:
@@ -200,14 +191,8 @@ async def test_handoff_tool_not_recorded_when_interrupted() -> None:
 async def test_realtime_tool_results_preserved_on_interruption(
     auto_tool_reply_generation: bool,
 ) -> None:
-    """Realtime path: an interruption after the tool completed must commit the
-    tool output locally (the call is already added when execution starts).
-
-    When the model doesn't auto-generate tool replies (OpenAI-style), the output
-    is also pushed to the realtime session, whose server-side conversation state
-    drives the next generation. When it does (Gemini-style), pushing the output
-    would trigger a spoken reply right after the interruption, so it stays local.
-    """
+    """Realtime path: the interrupted tool output is committed locally, and pushed
+    to the server only when that wouldn't auto-trigger a tool reply (Gemini-style)."""
     model = FakeRealtimeModel(
         capabilities=fake_capabilities(auto_tool_reply_generation=auto_tool_reply_generation)
     )
@@ -222,8 +207,7 @@ async def test_realtime_tool_results_preserved_on_interruption(
     await session.start(agent)
     rt_session = model.active_session
 
-    # a generation producing no message and one function call; the function
-    # stream is left open so the generation is still in flight at interruption
+    # one function call, no message; stream left open so the generation is in flight
     fnc_ch = utils.aio.Chan[FunctionCall]()
     fnc_ch.send_nowait(
         FunctionCall(call_id="1", name="get_weather", arguments='{"location": "Tokyo"}')
@@ -248,11 +232,10 @@ async def test_realtime_tool_results_preserved_on_interruption(
     _assert_weather_tool_preserved(agent, session)
     pushed = any(i.type == "function_call_output" for i in rt_session.chat_ctx.items)
     if auto_tool_reply_generation:
-        # pushing the output would trigger a generation; it must stay local-only
+        # pushing would trigger a generation; must stay local-only
         assert not pushed
     else:
-        # the output must also reach the realtime session's server-side context,
-        # otherwise the model still sees a dangling function call and can re-issue it
+        # otherwise the server still sees a dangling call and can re-issue it
         assert pushed
 
     fnc_ch.close()

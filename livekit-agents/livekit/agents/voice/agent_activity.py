@@ -3213,9 +3213,8 @@ class AgentActivity(RecognitionHooks):
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(exe_task)
 
-            # cancel_and_wait lets in-flight tools finish; commit their results or the
-            # next inference re-executes them (see #3702). handoffs are excluded: they
-            # aren't applied when interrupted, and recording them would suppress the retry
+            # commit results of tools that finished despite the interruption (#3702);
+            # handoffs excluded: not applied when interrupted, must stay retryable
             interrupted_calls: list[llm.FunctionCall] = []
             interrupted_fnc_outputs: list[llm.FunctionCallOutput] = []
             for sanitized_out in tool_output.output:
@@ -3285,9 +3284,7 @@ class AgentActivity(RecognitionHooks):
                 draining = True
 
             tool_messages = new_calls + new_fnc_outputs
-            # commit immediately: if the reply speech below is interrupted or never
-            # runs, dropping already-executed tool results makes the next inference
-            # re-issue the calls (see #3702)
+            # commit now so results survive even if the reply speech never runs (#3702)
             if tool_messages:
                 self._agent._chat_ctx.insert(tool_messages)
                 self._session._tool_items_added(tool_messages)
@@ -3831,8 +3828,7 @@ class AgentActivity(RecognitionHooks):
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(exe_task)
 
-            # as in the pipeline path (see #3702), but only the outputs: the fnc_call
-            # is already added by _tool_execution_started_cb
+            # as in the pipeline path (#3702); the fnc_call is already in the chat_ctx
             interrupted_fnc_outputs: list[llm.FunctionCallOutput] = []
             for sanitized_out in tool_output.output:
                 if sanitized_out.fnc_call_out is not None and sanitized_out.agent_task is None:
@@ -3841,8 +3837,9 @@ class AgentActivity(RecognitionHooks):
                     self._session._tool_items_added([sanitized_out.fnc_call_out])
 
             if len(interrupted_fnc_outputs) > 0:
+                # push the outputs to the server-side context, unless that would
+                # trigger a spoken tool reply right after the interruption
                 if not self._rt_session.capabilities.auto_tool_reply_generation:
-                    # without this the server-side state keeps a dangling call and can re-issue it
                     chat_ctx = self._rt_session.chat_ctx.copy()
                     chat_ctx.items.extend(interrupted_fnc_outputs)
                     try:
@@ -3853,8 +3850,6 @@ class AgentActivity(RecognitionHooks):
                             extra={"error": str(e)},
                         )
                 else:
-                    # sending the tool outputs would trigger a spoken reply right after
-                    # the user interrupted, so keep them local-only
                     logger.warning(
                         "tool results preserved locally but not sent to the realtime session; "
                         "the model may re-execute the interrupted function calls",
