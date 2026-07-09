@@ -7,19 +7,14 @@ re-issues the call and duplicates side effects.
 from __future__ import annotations
 
 import asyncio
-import contextlib
-from collections.abc import AsyncIterator
 
 import pytest
 
-from livekit.agents import Agent, AgentSession, function_tool, utils
-from livekit.agents.llm import FunctionCall, FunctionToolCall, GenerationCreatedEvent
-from livekit.agents.llm.realtime import MessageGeneration
+from livekit.agents import Agent, AgentSession, function_tool
+from livekit.agents.llm import FunctionToolCall
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.speech_handle import SpeechHandle
 
-from .fake_io import FakeAudioInput, FakeAudioOutput
-from .fake_realtime import FakeRealtimeModel, fake_capabilities
 from .fake_session import FakeActions, create_session, run_session
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
@@ -185,60 +180,3 @@ async def test_handoff_tool_not_recorded_when_interrupted() -> None:
 
     for items in (agent.chat_ctx.items, session.history.items):
         assert not any(i.type in ("function_call", "function_call_output") for i in items)
-
-
-@pytest.mark.parametrize("auto_tool_reply_generation", [False, True])
-async def test_realtime_tool_results_preserved_on_interruption(
-    auto_tool_reply_generation: bool,
-) -> None:
-    """Realtime path: the interrupted tool output is committed locally, and pushed
-    to the server unless the model auto-generates tool replies (Gemini-style)."""
-    model = FakeRealtimeModel(
-        capabilities=fake_capabilities(auto_tool_reply_generation=auto_tool_reply_generation)
-    )
-    session = AgentSession[None](llm=model)
-    session.input.audio = FakeAudioInput()
-    session.output.audio = FakeAudioOutput()
-    agent = WeatherAgent()
-
-    speech_handles: list[SpeechHandle] = []
-    session.on("speech_created", lambda ev: speech_handles.append(ev.speech_handle))
-
-    await session.start(agent)
-    rt_session = model.active_session
-
-    # one function call, no message; stream left open so the generation is in flight
-    fnc_ch = utils.aio.Chan[FunctionCall]()
-    fnc_ch.send_nowait(
-        FunctionCall(call_id="1", name="get_weather", arguments='{"location": "Tokyo"}')
-    )
-
-    async def _no_messages() -> AsyncIterator[MessageGeneration]:
-        return
-        yield
-
-    rt_session.emit(
-        "generation_created",
-        GenerationCreatedEvent(
-            message_stream=_no_messages(), function_stream=fnc_ch, user_initiated=False
-        ),
-    )
-
-    await asyncio.wait_for(agent.tool_executed.wait(), timeout=SESSION_TIMEOUT)
-    assert speech_handles, "no speech was created for the realtime generation"
-    speech_handles[0].interrupt()
-    await asyncio.sleep(1.0)  # let the interrupted turn commit before asserting
-
-    _assert_weather_tool_preserved(agent, session)
-    pushed = any(i.type == "function_call_output" for i in rt_session.chat_ctx.items)
-    if auto_tool_reply_generation:
-        # pushing would trigger a generation; must stay local-only
-        assert not pushed
-    else:
-        # otherwise the server still sees a dangling call and can re-issue it
-        assert pushed
-
-    fnc_ch.close()
-    with contextlib.suppress(RuntimeError):
-        await session.drain()
-    await session.aclose()

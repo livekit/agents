@@ -3827,34 +3827,6 @@ class AgentActivity(RecognitionHooks):
 
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(exe_task)
-
-            # as in the pipeline path (#3702); the fnc_call is already in the chat_ctx
-            interrupted_fnc_outputs: list[llm.FunctionCallOutput] = []
-            for sanitized_out in tool_output.output:
-                if sanitized_out.fnc_call_out is not None and sanitized_out.agent_task is None:
-                    interrupted_fnc_outputs.append(sanitized_out.fnc_call_out)
-                    self._agent._chat_ctx._upsert_item(sanitized_out.fnc_call_out)
-                    self._session._tool_items_added([sanitized_out.fnc_call_out])
-
-            if len(interrupted_fnc_outputs) > 0:
-                # push the outputs to the server-side context, unless that would
-                # trigger a spoken tool reply right after the interruption
-                if not self._rt_session.capabilities.auto_tool_reply_generation:
-                    chat_ctx = self._rt_session.chat_ctx.copy()
-                    chat_ctx.items.extend(interrupted_fnc_outputs)
-                    try:
-                        await self._rt_session.update_chat_ctx(chat_ctx)
-                    except llm.RealtimeError as e:
-                        logger.warning(
-                            "failed to update chat context with the interrupted function calls results",  # noqa: E501
-                            extra={"error": str(e)},
-                        )
-                else:
-                    logger.warning(
-                        "interrupted tool results added to the local chat context "
-                        "but not sent to the realtime session",
-                        extra={"call_ids": [out.call_id for out in interrupted_fnc_outputs]},
-                    )
             return
 
         # wait for the tool execution to complete
