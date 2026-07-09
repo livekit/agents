@@ -23,8 +23,9 @@ dependencies = [
     "livekit-agents>=1.6.4",
     "livekit>=1.0.23,<2",
     "numpy>=1.20.0",
+    # Only used to locate/load its bundled native librnnoise via ctypes -- the
+    # pyrnnoise Python package itself is never imported.
     "pyrnnoise>=0.4.3",
-    "av>=14.0.0,<16",
 ]
 
 [project.urls]

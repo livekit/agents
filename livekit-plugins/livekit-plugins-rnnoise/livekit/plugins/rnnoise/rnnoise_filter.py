@@ -25,10 +25,9 @@ from __future__ import annotations
 
 import numpy as np
 
-# pyrnnoise ships no stubs/py.typed marker upstream.
-from pyrnnoise import RNNoise as _RNNoiseDenoiser  # type: ignore[import-untyped]
-
 from livekit import rtc
+
+from ._rnnoise_native import _RNNoiseDenoiser
 
 _RNNOISE_SAMPLE_RATE = 48000
 _RNNOISE_FRAME_SAMPLES = 480
@@ -58,7 +57,7 @@ class RNNoiseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
 
     def __init__(self, *, enabled: bool = True) -> None:
         self._enabled = enabled
-        self._denoiser = _RNNoiseDenoiser(_RNNOISE_SAMPLE_RATE)
+        self._denoiser = _RNNoiseDenoiser()
 
         self._source_rate: int | None = None
         self._num_channels: int | None = None
@@ -101,7 +100,8 @@ class RNNoiseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         return self._take_output_frame(frame, n)
 
     def _close(self) -> None:
-        self._denoiser = _RNNoiseDenoiser(_RNNOISE_SAMPLE_RATE)
+        self._denoiser.close()
+        self._denoiser = _RNNoiseDenoiser()
         self._source_rate = None
         self._num_channels = None
         self._in_resampler = None
@@ -151,8 +151,8 @@ class RNNoiseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         self._in_buffer = self._in_buffer[drain_len:]
 
         denoised_parts = [
-            np.asarray(denoised, dtype=np.int16).reshape(-1)
-            for _, denoised in self._denoiser.denoise_chunk(to_denoise)
+            self._denoiser.process_frame(to_denoise[i : i + _RNNOISE_FRAME_SAMPLES])
+            for i in range(0, drain_len, _RNNOISE_FRAME_SAMPLES)
         ]
         if denoised_parts:
             self._pending_denoised_48k = np.concatenate(
