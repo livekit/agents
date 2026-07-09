@@ -27,7 +27,15 @@ from livekit.agents import (
     inference,
     vad,
 )
-from livekit.agents.llm import FunctionToolCall, InputTranscriptionCompleted
+from livekit.agents.llm import (
+    FunctionTool,
+    FunctionToolCall,
+    InputTranscriptionCompleted,
+    RawFunctionTool,
+    ToolContext,
+    ToolFlag,
+    Toolset,
+)
 from livekit.agents.llm.chat_context import ChatContext, ChatMessage
 from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
 from livekit.agents.utils import aio
@@ -692,6 +700,179 @@ async def test_generate_reply() -> None:
     assert agent.chat_ctx.items[6].role == "assistant"
     assert agent.chat_ctx.items[6].text_content == "Goodbye! have a nice day!"
     assert agent.chat_ctx.items[7].type == "function_call_output"
+
+
+async def test_on_enter_hides_ignore_on_enter_tools() -> None:
+    """IGNORE_ON_ENTER tools (bare + toolset-nested) are hidden inside on_enter, restored after."""
+
+    class _Toolset(Toolset):
+        def __init__(self) -> None:
+            end_call = function_tool(
+                self._end_call,
+                name="end_call",
+                description="ends the call",
+                flags=ToolFlag.IGNORE_ON_ENTER,
+            )
+            keep = function_tool(self._keep, name="keep", description="a normal tool")
+            super().__init__(id="ts", tools=[end_call, keep])
+
+        async def _end_call(self) -> None: ...
+
+        async def _keep(self) -> None: ...
+
+    @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
+    async def bare_ignored() -> None:
+        """A bare flagged tool."""
+
+    class _Agent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="you are helpful", tools=[_Toolset(), bare_ignored])
+
+        async def on_enter(self) -> None:
+            self.session.generate_reply(instructions="instructions:say hello to the user")
+
+    actions = FakeActions()
+    actions.add_llm("Hello!", input="instructions:say hello to the user")
+    actions.add_tts(1.0)
+    actions.add_user_speech(2.0, 3.0, "hi there")
+    actions.add_llm("How can I help?")
+    actions.add_tts(1.0)
+
+    session = create_session(actions)
+
+    captured: list[set[str]] = []
+    orig_chat = session.llm.chat
+
+    def _recording_chat(*, chat_ctx, tools=None, **kwargs):  # type: ignore[no-untyped-def]
+        captured.append(
+            {t.info.name for t in (tools or []) if isinstance(t, (FunctionTool, RawFunctionTool))}
+        )
+        return orig_chat(chat_ctx=chat_ctx, tools=tools, **kwargs)
+
+    session.llm.chat = _recording_chat  # type: ignore[method-assign]
+
+    await asyncio.wait_for(run_session(session, _Agent()), timeout=SESSION_TIMEOUT)
+
+    assert len(captured) == 2
+    # on_enter reply: flagged tools hidden, normal tool still offered
+    assert captured[0] == {"keep"}
+    # a later (non-on_enter) turn sees every tool again
+    assert captured[1] == {"keep", "end_call", "bare_ignored"}
+
+
+async def test_on_enter_hides_tools_in_nested_tool_reply() -> None:
+    """When an on_enter reply calls a tool, the tool-response follow-up (a nested speech task)
+    also hides the flagged tools — proving the on_enter contextvar reaches nested tasks."""
+
+    class _Toolset(Toolset):
+        def __init__(self) -> None:
+            end_call = function_tool(
+                self._end_call, name="end_call", description="ends", flags=ToolFlag.IGNORE_ON_ENTER
+            )
+            keep = function_tool(self._keep, name="keep", description="a normal tool")
+            super().__init__(id="ts", tools=[end_call, keep])
+
+        async def _end_call(self) -> None: ...
+
+        async def _keep(self) -> str:
+            return "kept"
+
+    @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
+    async def bare_ignored() -> None:
+        """A bare flagged tool."""
+
+    class _Agent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="you are helpful", tools=[_Toolset(), bare_ignored])
+
+        async def on_enter(self) -> None:
+            self.session.generate_reply(instructions="instructions:say hello to the user")
+
+    actions = FakeActions()
+    # on_enter reply calls the visible `keep` tool instead of speaking, spawning a follow-up
+    actions.add_llm(
+        "",
+        tool_calls=[FunctionToolCall(name="keep", arguments="{}", call_id="1")],
+        input="instructions:say hello to the user",
+    )
+    # tool-response follow-up (keyed on the `keep` return value)
+    actions.add_llm("Hello there!", input="kept")
+    actions.add_tts(1.0)
+    # a user turn ends the run and confirms tools are restored afterwards
+    actions.add_user_speech(4.0, 5.0, "hi there")
+    actions.add_llm("How can I help?")
+    actions.add_tts(1.0)
+
+    session = create_session(actions)
+
+    captured: list[set[str]] = []
+    orig_chat = session.llm.chat
+
+    def _recording_chat(*, chat_ctx, tools=None, **kwargs):  # type: ignore[no-untyped-def]
+        captured.append(
+            {t.info.name for t in (tools or []) if isinstance(t, (FunctionTool, RawFunctionTool))}
+        )
+        return orig_chat(chat_ctx=chat_ctx, tools=tools, **kwargs)
+
+    session.llm.chat = _recording_chat  # type: ignore[method-assign]
+
+    await asyncio.wait_for(run_session(session, _Agent()), timeout=SESSION_TIMEOUT)
+
+    assert len(captured) == 3
+    greeting, tool_reply, user_turn = captured
+    # both the greeting reply and its nested tool-response follow-up hide the flagged tools
+    assert greeting == {"keep"}
+    assert tool_reply == {"keep"}
+    # the later (non-on_enter) user turn sees every tool again
+    assert user_turn == {"keep", "end_call", "bare_ignored"}
+
+
+def test_on_enter_ignored_tools() -> None:
+    """_on_enter_ignored_tools returns flagged tools only inside this agent/session's on_enter."""
+    from livekit.agents.voice.agent_activity import _OnEnterContextVar, _OnEnterData
+
+    class _Toolset(Toolset):
+        def __init__(self) -> None:
+            end_call = function_tool(
+                self._end_call, name="end_call", description="ends", flags=ToolFlag.IGNORE_ON_ENTER
+            )
+            ts_keep = function_tool(self._keep, name="ts_keep", description="normal")
+            super().__init__(id="ts", tools=[end_call, ts_keep])
+
+        async def _end_call(self) -> None: ...
+
+        async def _keep(self) -> None: ...
+
+    @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
+    async def bare_ignored() -> None:
+        """A flagged bare tool."""
+
+    @function_tool
+    async def bare_keep() -> None:
+        """A normal bare tool."""
+
+    activity = object.__new__(AgentActivity)
+    activity._agent = object()  # type: ignore[assignment]
+    activity._session = object()  # type: ignore[assignment]
+    tool_ctx = ToolContext([_Toolset(), bare_ignored, bare_keep])
+
+    # outside on_enter: nothing is ignored
+    assert activity._on_enter_ignored_tools(tool_ctx) == []
+
+    # inside this agent/session's on_enter: flagged tools (bare + nested) are returned
+    tk = _OnEnterContextVar.set(_OnEnterData(session=activity._session, agent=activity._agent))
+    try:
+        ignored = {t.info.name for t in activity._on_enter_ignored_tools(tool_ctx)}
+    finally:
+        _OnEnterContextVar.reset(tk)
+    assert ignored == {"end_call", "bare_ignored"}
+
+    # a different agent's on_enter must not leak in
+    tk = _OnEnterContextVar.set(_OnEnterData(session=activity._session, agent=object()))
+    try:
+        assert activity._on_enter_ignored_tools(tool_ctx) == []
+    finally:
+        _OnEnterContextVar.reset(tk)
 
 
 async def test_aec_warmup() -> None:

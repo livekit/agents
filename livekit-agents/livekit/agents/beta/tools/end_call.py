@@ -3,7 +3,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from ...job import get_job_context
-from ...llm import RealtimeModel, Toolset, function_tool
+from ...llm import RealtimeModel, ToolFlag, Toolset, function_tool
 from ...log import logger
 from ...voice.events import CloseEvent, RunContext, SpeechCreatedEvent
 from ...voice.speech_handle import SpeechHandle
@@ -31,6 +31,7 @@ class EndCallTool(Toolset):
         extra_description: str = "",
         delete_room: bool = True,
         end_instructions: str | None = "say goodbye to the user",
+        ignore_on_enter: bool = False,
         on_tool_called: Callable[[Toolset.ToolCalledEvent], Awaitable[None]] | None = None,
         on_tool_completed: Callable[[Toolset.ToolCompletedEvent], Awaitable[None]] | None = None,
     ):
@@ -41,6 +42,7 @@ class EndCallTool(Toolset):
             extra_description: Additional description to add to the end call tool.
             delete_room: Whether to delete the room when the user ends the call. deleting the room disconnects all remote users, including SIP callers.
             end_instructions: Tool output to the LLM for generating the tool response.
+            ignore_on_enter: Hide the tool during ``on_enter`` so the model can't end the call while greeting.
             on_tool_called: Callback to call when the tool is called.
             on_tool_completed: Callback to call when the tool is completed.
         """
@@ -48,6 +50,7 @@ class EndCallTool(Toolset):
             self._end_call,
             name="end_call",
             description=f"{END_CALL_DESCRIPTION}\n{extra_description}",
+            flags=ToolFlag.IGNORE_ON_ENTER if ignore_on_enter else ToolFlag.NONE,
         )
         super().__init__(id="end_call", tools=[end_call_tool])
 
