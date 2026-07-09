@@ -34,7 +34,7 @@ from livekit.agents import (
     function_tool,
     inference,
 )
-from livekit.agents.voice import UserStateChangedEvent, presets
+from livekit.agents.voice import UserStateChangedEvent
 
 load_dotenv()
 
@@ -490,7 +490,6 @@ async def drive_thru_agent(ctx: JobContext) -> None:
             voice="Sarah",
             extra_kwargs={"delivery_mode": "CREATIVE", "speaking_rate": 1.1},
         ),
-        expressive=presets.CUSTOMER_SERVICE,
         max_tool_steps=10,
         # Flip user_state to "away" after 10s of mutual silence so we can
         # check whether they're still there (default is 15s).

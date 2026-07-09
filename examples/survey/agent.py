@@ -22,7 +22,7 @@ from livekit.agents import (
 )
 from livekit.agents.beta.workflows import GetEmailTask, TaskGroup
 from livekit.agents.llm import function_tool
-from livekit.agents.voice import UserStateChangedEvent, presets
+from livekit.agents.voice import UserStateChangedEvent
 
 logger = logging.getLogger("SurveyAgent")
 
@@ -356,7 +356,6 @@ async def entrypoint(ctx: JobContext):
         tts=inference.TTS(
             "inworld/inworld-tts-2", voice="Nate", extra_kwargs={"delivery_mode": "CREATIVE"}
         ),
-        expressive=presets.CASUAL,
         preemptive_generation=True,
         # Flip user_state to "away" after 10s of mutual silence so we can
         # check whether they're still there (default is 15s).

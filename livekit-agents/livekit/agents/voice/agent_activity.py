@@ -2425,7 +2425,10 @@ class AgentActivity(RecognitionHooks):
         return instructions
 
     def _resolve_expressive_options(self) -> ExpressiveOptions | None:
-        """Resolve expressive from agent (overrides session). Returns None if disabled.
+        """Resolve the session's internal expressive setting. Returns None if disabled.
+
+        Expressive mode is framework-internal and not publicly exposed; the session
+        hardcodes it to ``False``, so this currently always returns ``None``.
 
         Expressive mode requires two things:
         - the inference gateway TTS (``livekit.agents.inference.TTS``): the markup
@@ -2443,9 +2446,7 @@ class AgentActivity(RecognitionHooks):
         if not isinstance(self.tts, inference.TTS) or self.tts.markup.llm_instructions() is None:
             return None
 
-        expr = self._agent.expressive
-        if not utils.is_given(expr):
-            expr = self._session.options.expressive
+        expr = self._session._expressive
         if isinstance(expr, dict):
             # a `preset` selector resolves to the active TTS provider's tuned preset
             # (falling back to the agnostic default); explicit fields override on top
