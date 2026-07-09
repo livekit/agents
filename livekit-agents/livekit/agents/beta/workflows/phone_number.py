@@ -85,7 +85,7 @@ class GetPhoneNumberTask(AgentTask[GetPhoneNumberResult]):
 
         super().__init__(
             instructions=Instructions(
-                _BASE_INSTRUCTIONS.format(
+                audio=_BASE_INSTRUCTIONS.format(
                     modality_specific=_AUDIO_SPECIFIC,
                     confirmation_instructions=(
                         confirmation_instructions if require_confirmation is not False else ""

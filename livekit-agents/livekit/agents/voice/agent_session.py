@@ -64,7 +64,7 @@ from .ivr import IVRActivity
 from .keyterm_detection import KeytermDetector, KeytermsOptions, _resolve_keyterms_options
 from .recorder_io import RecorderIO
 from .remote_session import RoomSessionTransport, SessionHost, SessionTransport
-from .run_result import RunResult
+from .run_result import RunOutputOptions, RunResult
 from .speech_handle import InputDetails, SpeechHandle
 from .tool_executor import ToolHandlingOptions, _resolve_async_tool_options
 from .turn import (
@@ -84,6 +84,7 @@ if TYPE_CHECKING:
     from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput
     from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
+    from .presets import Preset
     from .transcription.text_transforms import TextTransforms
 
 
@@ -138,6 +139,36 @@ class SessionConnectOptions:
     tts_conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     max_unrecoverable_errors: int = 3
     """Maximum number of consecutive unrecoverable errors from llm or tts."""
+
+
+class ExpressiveOptions(TypedDict, total=False):
+    """Configuration for the expressive pipeline (framework-internal, not publicly exposed).
+
+    Controls how TTS markup instructions are injected into the LLM when expressive is
+    enabled. All keys are optional; common shapes:
+
+    - ``{"preset": Preset.CASUAL}`` — a domain preset, resolved to the active
+      TTS provider's tuned tags (see ``voice.presets``).
+    - ``{"preset": ..., "tts_instructions_append": "..."}`` — a preset plus your own
+      rules appended after it resolves.
+    - ``{"tts_instructions_template": "..."}`` — a fully custom prompt.
+
+    Any explicit template overrides the corresponding part of the resolved preset; unset
+    parts fall back to the resolved preset (or the provider-agnostic default).
+    """
+
+    preset: Preset
+    tts_instructions_template: Instructions | str
+    tts_instructions_append: str
+
+
+DEFAULT_EXPRESSIVE_OPTIONS: ExpressiveOptions = ExpressiveOptions(
+    tts_instructions_template=Instructions(
+        "You can control how you speak using the following formatting tags. "
+        "Use them when appropriate to make your speech more expressive and natural:\n\n"
+        "{tts.markup.llm_instructions}"
+    ),
+)
 
 
 @dataclass
@@ -404,6 +435,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             aec_warmup_duration=aec_warmup_duration,
             session_close_transcript_timeout=session_close_transcript_timeout,
         )
+        # expressive mode is not publicly exposed; the pipeline stays disabled
+        self._expressive: bool | ExpressiveOptions = False
         self._conn_options = conn_options or SessionConnectOptions()
         self._started = False
 
@@ -616,11 +649,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         user_input: str,
         input_modality: Literal["text", "audio"] = "text",
         output_type: type[Run_T] | None = None,
+        output_options: NotGivenOr[RunOutputOptions | None] = NOT_GIVEN,
     ) -> RunResult[Run_T]:
         if self._global_run_state is not None and not self._global_run_state.done():
             raise RuntimeError("nested runs are not supported")
 
-        run_state = RunResult(user_input=user_input, output_type=output_type)
+        run_state = RunResult(
+            user_input=user_input,
+            output_type=output_type,
+            output_options=output_options,
+            session=self,
+        )
         self._global_run_state = run_state
         self.generate_reply(user_input=user_input, input_modality=input_modality)
         return run_state
@@ -1034,7 +1073,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     and (audio_recognition := activity._audio_recognition) is not None
                 ):
                     # wait for the user transcript to be committed
-                    audio_recognition.commit_user_turn(
+                    audio_recognition._commit_user_turn(
                         audio_detached=True,
                         transcript_timeout=self._opts.session_close_transcript_timeout,
                     )
@@ -1052,6 +1091,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             if self._forward_audio_atask is not None:
                 await utils.aio.cancel_and_wait(self._forward_audio_atask)
+
+            if self._forward_video_atask is not None:
+                await utils.aio.cancel_and_wait(self._forward_video_atask)
 
             if self._recorder_io:
                 await self._recorder_io.aclose()

@@ -8,6 +8,7 @@ from typing import Any
 
 from livekit import rtc
 from livekit.agents import llm
+from livekit.agents.llm.chat_context import Instructions
 from livekit.agents.types import (
     NotGivenOr,
 )
@@ -167,11 +168,11 @@ def livekit_item_to_openai_item(item: llm.ChatItem) -> realtime.ConversationItem
         if item.role == "system" or item.role == "developer":
             system_content: list[realtime.realtime_conversation_item_system_message.Content] = []
             for c in item.content:
-                if isinstance(c, str):
+                if isinstance(c, (str, Instructions)):
                     system_content.append(
                         realtime.realtime_conversation_item_system_message.Content(
                             type="input_text",
-                            text=c,
+                            text=str(c),
                         )
                     )
             conversation_item = realtime.RealtimeConversationItemSystemMessage(
@@ -184,11 +185,11 @@ def livekit_item_to_openai_item(item: llm.ChatItem) -> realtime.ConversationItem
                 realtime.realtime_conversation_item_assistant_message.Content
             ] = []
             for c in item.content:
-                if isinstance(c, str):
+                if isinstance(c, (str, Instructions)):
                     assistant_content.append(
                         realtime.realtime_conversation_item_assistant_message.Content(
                             type="output_text",
-                            text=c,
+                            text=str(c),
                         )
                     )
             conversation_item = realtime.RealtimeConversationItemAssistantMessage(
@@ -200,11 +201,11 @@ def livekit_item_to_openai_item(item: llm.ChatItem) -> realtime.ConversationItem
             user_content: list[realtime.realtime_conversation_item_user_message.Content] = []
             # only user messages could be a list of content
             for c in item.content:
-                if isinstance(c, str):
+                if isinstance(c, (str, Instructions)):
                     user_content.append(
                         realtime.realtime_conversation_item_user_message.Content(
                             type="input_text",
-                            text=c,
+                            text=str(c),
                         )
                     )
                 elif isinstance(c, llm.ImageContent):
