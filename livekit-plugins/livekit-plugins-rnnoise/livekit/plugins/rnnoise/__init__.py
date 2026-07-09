@@ -12,7 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from livekit.agents import Plugin
+
 from .log import logger
+from .rnnoise_filter import RNNoise, RNNoiseFrameProcessor
 from .version import __version__
 
-__all__ = ["__version__", "logger"]
+__all__ = ["RNNoise", "RNNoiseFrameProcessor", "logger", "__version__"]
+
+
+class RNNoisePlugin(Plugin):
+    def __init__(self) -> None:
+        super().__init__(__name__, __version__, __package__, logger)
+
+
+Plugin.register_plugin(RNNoisePlugin())
