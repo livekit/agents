@@ -21,7 +21,7 @@ from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.speech_handle import SpeechHandle
 
 from .fake_io import FakeAudioInput, FakeAudioOutput
-from .fake_realtime import FakeRealtimeModel
+from .fake_realtime import FakeRealtimeModel, fake_capabilities
 from .fake_session import FakeActions, create_session, run_session
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
@@ -78,10 +78,9 @@ async def test_tool_results_preserved_when_tool_reply_turn_interrupted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The main gap: the tool turn completes normally and schedules the tool
-    reply turn, which carries the completed call/output via
-    `_previous_tools_messages`. An interruption landing right after scheduling
-    makes that reply turn return at one of its early interruption gates — the
-    tool messages must already be committed by then."""
+    reply turn. An interruption landing right after scheduling makes that reply
+    turn return at one of its early interruption gates — the tool messages must
+    already be committed by then."""
     actions = FakeActions()
     _weather_tool_turn(actions, tts_duration=1.0)  # playout ~3.5s -> 4.5s
     # tool reply turn, interrupted before it generates anything
@@ -197,12 +196,21 @@ async def test_handoff_tool_not_recorded_when_interrupted() -> None:
         assert not any(i.type in ("function_call", "function_call_output") for i in items)
 
 
-async def test_realtime_tool_results_preserved_on_interruption() -> None:
+@pytest.mark.parametrize("auto_tool_reply_generation", [False, True])
+async def test_realtime_tool_results_preserved_on_interruption(
+    auto_tool_reply_generation: bool,
+) -> None:
     """Realtime path: an interruption after the tool completed must commit the
-    tool output locally (the call is already added when execution starts) and
-    push it to the realtime session, whose server-side conversation state
-    drives the next generation."""
-    model = FakeRealtimeModel()
+    tool output locally (the call is already added when execution starts).
+
+    When the model doesn't auto-generate tool replies (OpenAI-style), the output
+    is also pushed to the realtime session, whose server-side conversation state
+    drives the next generation. When it does (Gemini-style), pushing the output
+    would trigger a spoken reply right after the interruption, so it stays local.
+    """
+    model = FakeRealtimeModel(
+        capabilities=fake_capabilities(auto_tool_reply_generation=auto_tool_reply_generation)
+    )
     session = AgentSession[None](llm=model)
     session.input.audio = FakeAudioInput()
     session.output.audio = FakeAudioOutput()
@@ -238,9 +246,14 @@ async def test_realtime_tool_results_preserved_on_interruption() -> None:
     await asyncio.sleep(1.0)  # let the interrupted turn commit before asserting
 
     _assert_weather_tool_preserved(agent, session)
-    # the output must also reach the realtime session's server-side context,
-    # otherwise the model still sees a dangling function call and can re-issue it
-    assert any(i.type == "function_call_output" for i in rt_session.chat_ctx.items)
+    pushed = any(i.type == "function_call_output" for i in rt_session.chat_ctx.items)
+    if auto_tool_reply_generation:
+        # pushing the output would trigger a generation; it must stay local-only
+        assert not pushed
+    else:
+        # the output must also reach the realtime session's server-side context,
+        # otherwise the model still sees a dangling function call and can re-issue it
+        assert pushed
 
     fnc_ch.close()
     with contextlib.suppress(RuntimeError):

@@ -5,7 +5,7 @@ import contextvars
 import heapq
 import json
 import time
-from collections.abc import AsyncIterable, Coroutine, Sequence
+from collections.abc import AsyncIterable, Coroutine
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -2755,7 +2755,6 @@ class AgentActivity(RecognitionHooks):
         new_message: llm.ChatMessage | None = None,
         instructions: str | Instructions | None = None,
         _previous_user_metrics: llm.MetricsReport | None = None,
-        _previous_tools_messages: Sequence[llm.FunctionCall | llm.FunctionCallOutput] | None = None,
     ) -> None:
         with tracer.start_as_current_span(
             "agent_turn", context=self._session._root_span_context
@@ -2773,7 +2772,6 @@ class AgentActivity(RecognitionHooks):
                 new_message=new_message,
                 instructions=instructions,
                 _previous_user_metrics=_previous_user_metrics,
-                _previous_tools_messages=_previous_tools_messages,
             )
 
     async def _pipeline_reply_task_impl(
@@ -2786,15 +2784,8 @@ class AgentActivity(RecognitionHooks):
         new_message: llm.ChatMessage | None = None,
         instructions: str | Instructions | None = None,
         _previous_user_metrics: llm.MetricsReport | None = None,
-        _previous_tools_messages: Sequence[llm.FunctionCall | llm.FunctionCallOutput] | None = None,
     ) -> None:
         from .agent import ModelSettings
-
-        # commit before any interruption gate: dropping already-executed tool
-        # results makes the next inference re-issue the calls (see #3702)
-        if _previous_tools_messages:
-            self._agent._chat_ctx.insert(_previous_tools_messages)
-            self._session._tool_items_added(_previous_tools_messages)
 
         current_span = trace.get_current_span(context=speech_handle._agent_turn_context)
         current_span.set_attribute(trace_types.ATTR_SPEECH_ID, speech_handle.id)
@@ -3294,6 +3285,13 @@ class AgentActivity(RecognitionHooks):
                 draining = True
 
             tool_messages = new_calls + new_fnc_outputs
+            # commit immediately: if the reply speech below is interrupted or never
+            # runs, dropping already-executed tool results makes the next inference
+            # re-issue the calls (see #3702)
+            if tool_messages:
+                self._agent._chat_ctx.insert(tool_messages)
+                self._session._tool_items_added(tool_messages)
+
             if fnc_executed_ev._reply_required and not speech_handle.interrupted:
                 # forwarding chat_ctx to the tool reply: drop the in-progress placeholders
                 # (the next turn re-injects from the live running set)
@@ -3336,7 +3334,6 @@ class AgentActivity(RecognitionHooks):
                         # in case the current reply only generated tools (no speech), re-use the current user_metrics for the next
                         # tool response generation
                         _previous_user_metrics=user_metrics if not forwarded_text else None,
-                        _previous_tools_messages=tool_messages,
                     ),
                     speech_handle=speech_handle,
                     name="AgentActivity.pipeline_reply",
@@ -3345,10 +3342,6 @@ class AgentActivity(RecognitionHooks):
                 self._schedule_speech(
                     speech_handle, SpeechHandle.SPEECH_PRIORITY_NORMAL, force=True
                 )
-            elif len(new_fnc_outputs) > 0:
-                # add the tool calls and outputs to the chat context even no reply is generated
-                self._agent._chat_ctx.insert(tool_messages)
-                self._session._tool_items_added(tool_messages)
 
     @utils.log_exceptions(logger=logger)
     async def _realtime_reply_task(
@@ -3848,15 +3841,24 @@ class AgentActivity(RecognitionHooks):
                     self._session._tool_items_added([sanitized_out.fnc_call_out])
 
             if len(interrupted_fnc_outputs) > 0:
-                # without this the server-side state keeps a dangling call and can re-issue it
-                chat_ctx = self._rt_session.chat_ctx.copy()
-                chat_ctx.items.extend(interrupted_fnc_outputs)
-                try:
-                    await self._rt_session.update_chat_ctx(chat_ctx)
-                except llm.RealtimeError as e:
+                if not self._rt_session.capabilities.auto_tool_reply_generation:
+                    # without this the server-side state keeps a dangling call and can re-issue it
+                    chat_ctx = self._rt_session.chat_ctx.copy()
+                    chat_ctx.items.extend(interrupted_fnc_outputs)
+                    try:
+                        await self._rt_session.update_chat_ctx(chat_ctx)
+                    except llm.RealtimeError as e:
+                        logger.warning(
+                            "failed to update chat context with the interrupted function calls results",  # noqa: E501
+                            extra={"error": str(e)},
+                        )
+                else:
+                    # sending the tool outputs would trigger a spoken reply right after
+                    # the user interrupted, so keep them local-only
                     logger.warning(
-                        "failed to update chat context with the interrupted function calls results",
-                        extra={"error": str(e)},
+                        "tool results preserved locally but not sent to the realtime session; "
+                        "the model may re-execute the interrupted function calls",
+                        extra={"function_calls": [out.call_id for out in interrupted_fnc_outputs]},
                     )
             return
 
