@@ -58,7 +58,7 @@ class DataCaptureAgent(Agent):
     async def collect_phone_number(self, context: RunContext) -> str:
         """Collect the user's phone number."""
         result = await beta.workflows.GetPhoneNumberTask(require_confirmation=True)
-        logger.info(f"captured phone: {result.phone_number}")
+        logger.info("captured phone number")
         return f"Phone number captured: {result.phone_number}. Read it back to the user."
 
     @function_tool
