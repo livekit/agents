@@ -3053,13 +3053,13 @@ name = "livekit-plugins-spatius"
 source = { editable = "livekit-plugins/livekit-plugins-spatius" }
 dependencies = [
     { name = "livekit-agents" },
-    { name = "spatius" },
+    { name = "spatius", extra = ["opus"] },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "livekit-agents", editable = "livekit-agents" },
-    { name = "spatius", specifier = ">=1.0.2" },
+    { name = "spatius", extras = ["opus"], specifier = ">=1.0.3" },
 ]
 
 [[package]]
@@ -3934,6 +3934,12 @@ numpy = [
     { name = "numpy" },
     { name = "numpy-typing-compat" },
 ]
+
+[[package]]
+name = "opuslib"
+version = "3.0.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/46/55/826befabb29fd3902bad6d6d7308790894c7ad4d73f051728a0c53d37cd7/opuslib-3.0.1.tar.gz", hash = "sha256:2cb045e5b03e7fc50dfefe431e3404dddddbd8f5961c10c51e32dfb69a044c97", size = 8550, upload-time = "2018-01-16T06:04:42.184Z" }
 
 [[package]]
 name = "orjson"
@@ -5238,7 +5244,7 @@ wheels = [
 
 [[package]]
 name = "spatius"
-version = "1.0.2"
+version = "1.0.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -5246,9 +5252,14 @@ dependencies = [
     { name = "protobuf" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d5/9b/96c1d2051879e93efd6d30e0b0a141f54f28539d54d49b523713e6173aca/spatius-1.0.2.tar.gz", hash = "sha256:58bd31e58ee757ec416d85d679eac337bf9e805527f9bda0ab2223b7ba492b13", size = 136362, upload-time = "2026-06-09T11:05:35.457Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/43/08/acd87ee0b4d1df32babb54567940f6c7243c4b3cfcfdb32daebbb9244c22/spatius-1.0.3.tar.gz", hash = "sha256:c4ba60fe362498689ab8f79088ad72126fe0cc76eb8be1225d89ccd0035e7713", size = 139470, upload-time = "2026-07-07T09:24:12.379Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/39/f1/d3d6f827c6bcd7b587c8845f3529ca1e7789d32454b9b48fde691b9a5709/spatius-1.0.2-py3-none-any.whl", hash = "sha256:ebff283714222023111643491e40faf9e358e6898b563ea3fcc4871b3aebec38", size = 22363, upload-time = "2026-06-09T11:05:34.322Z" },
+    { url = "https://files.pythonhosted.org/packages/86/ed/2427b8501bb8137055cbe8925d450deae07654c2316f6d03823b48b539ba/spatius-1.0.3-py3-none-any.whl", hash = "sha256:d850f7043b8284bd5ea152398566389ebe0089d3122c17b7912bd7c1adde5ccf", size = 22856, upload-time = "2026-07-07T09:24:11.255Z" },
+]
+
+[package.optional-dependencies]
+opus = [
+    { name = "opuslib" },
 ]
 
 [[package]]

@@ -14,10 +14,13 @@
 
 """Spatius avatar plugin for LiveKit Agents."""
 
+from spatius import AudioFormat
+
 from .avatar import AvatarSession, SpatiusException
 from .version import __version__
 
 __all__ = [
+    "AudioFormat",
     "AvatarSession",
     "SpatiusException",
     "__version__",

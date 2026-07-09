@@ -23,7 +23,7 @@ classifiers = [
 ]
 dependencies = [
     "livekit-agents>=1.6.4",
-    "spatius>=1.0.2",
+    "spatius[opus]>=1.0.3",
 ]
 
 [project.urls]
