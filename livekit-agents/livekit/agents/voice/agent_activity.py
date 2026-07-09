@@ -3853,7 +3853,7 @@ class AgentActivity(RecognitionHooks):
                     logger.warning(
                         "interrupted tool results added to the local chat context "
                         "but not sent to the realtime session",
-                        extra={"function_calls": [out.call_id for out in interrupted_fnc_outputs]},
+                        extra={"call_ids": [out.call_id for out in interrupted_fnc_outputs]},
                     )
             return
 
