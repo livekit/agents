@@ -98,11 +98,12 @@ class _RNNoiseDenoiser:
     """Owns one native RNNoise DenoiseState and processes 480-sample frames."""
 
     def __init__(self) -> None:
+        self._state: int | None = None
         self._lib = _load_lib()
         state = self._lib.rnnoise_create(None)  # NULL model -> baked-in default RNNModel
         if not state:
             raise RuntimeError("rnnoise_create(None) returned NULL")
-        self._state: int | None = state
+        self._state = state
 
     def process_frame(self, frame_480_int16: np.ndarray) -> np.ndarray:
         """Denoise exactly one 480-sample mono int16 frame, in place semantics aside."""
