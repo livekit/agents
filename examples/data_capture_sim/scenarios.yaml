@@ -1,0 +1,268 @@
+# Scenarios for the data-capture workflow refactor: confirm_* / update_* tools
+# now return corrective instructions as tool output instead of calling
+# session.generate_reply() mid-tool. Every scenario drives one of the changed
+# branches; the shared failure mode to catch is the agent going SILENT (or
+# completing with a stale value) at the point where the old code fired a
+# separate generate_reply.
+#
+# Run from the repo root (requires lk >= 2.17.0, which resolves the SDK
+# version from the synced workspace environment):
+#   lk agent simulate examples/data_capture_sim/agent.py \
+#     --scenarios examples/data_capture_sim/scenarios.yaml
+
+name: Data capture workflows — corrective branches
+
+scenarios:
+  # --- email: happy path through the confirm tool ---------------------------
+  - label: Email captured and confirmed
+    instructions: |
+      PERSONA: Maya Chen, cooperative caller registering for an event.
+      OPENING LINE: "Hi, I'd like to give you my email address."
+      FACTS:
+      - email: maya.chen@example.com
+      DO, IN ORDER:
+      1. Give the email when asked.
+      2. When the agent reads it back and asks you to confirm, say "yes, that's correct."
+      3. Don't hang up until the agent has read the captured email back after confirming.
+    agent_expectations: >
+      Starts the email capture, records maya.chen@example.com, asks the user to
+      confirm it, and after the user confirms, completes the capture and reads
+      the same email back. The agent must keep speaking at every step — no dead
+      air after the confirmation — and must not ask the user to confirm twice
+      when nothing changed.
+    tags:
+      workflow: email
+      branch: happy_path
+
+  # --- email: correction at the confirmation step ---------------------------
+  - label: Email corrected while confirming
+    instructions: |
+      PERSONA: Jordan Reyes, slightly distracted, initially gives an old email.
+      OPENING LINE: "I need to update my email with you."
+      FACTS:
+      - old email (give first): jordan.reyes@oldmail.com
+      - real email: jordan.reyes@gmail.com
+      DO, IN ORDER:
+      1. Give the OLD email when asked.
+      2. When the agent asks you to confirm it, do NOT say yes - say in one
+         message: "oh wait, actually it's jordan.reyes@gmail.com, yes that one's right."
+      3. If the agent asks you to confirm the NEW email, confirm it.
+      4. Don't hang up until the agent reads back the gmail address as captured.
+    agent_expectations: >
+      When the user replaces the email at the confirmation step, the agent must
+      switch to the new address: it acknowledges jordan.reyes@gmail.com and asks
+      for (or completes) confirmation of the UPDATED email. It must never
+      complete the capture with the stale oldmail.com address, and it must
+      respond verbally right after the correction — a silent turn there is a
+      failure. The final read-back is jordan.reyes@gmail.com.
+    tags:
+      workflow: email
+      branch: confirm_stale_guard
+
+  # --- phone: invalid number, then correction at confirmation ---------------
+  - label: Bad phone number, then a swap during confirmation
+    instructions: |
+      PERSONA: Sam Okafor, gives a too-short number first, then corrects himself twice.
+      OPENING LINE: "Let me give you my phone number."
+      FACTS:
+      - first attempt (invalid, too short): "555 12"
+      - second attempt: "+1 415 555 0142"
+      - final number (the correction): "+1 415 555 0199"
+      DO, IN ORDER:
+      1. When the agent asks for your phone number, give the invalid short
+         number as if it were complete.
+      2. When the agent says it's invalid or asks again, give +1 415 555 0142.
+      3. When the agent reads it back for confirmation, say: "hmm, actually use
+         my new number, +1 415 555 0199 - that's the right one."
+      4. Confirm the new number when asked.
+      5. Don't hang up until the agent reads back the 0199 number as captured.
+    agent_expectations: >
+      Rejects the too-short number conversationally and asks again rather than
+      recording it. After the mid-confirmation swap, the agent re-confirms and
+      completes with +14155550199, never the 0142 number. The agent must speak
+      after both the invalid attempt and the swap — no silent turns — and the
+      final read-back contains the 0199 number.
+    tags:
+      workflow: phone
+      branch: confirm_stale_guard
+
+  # --- address: change during confirmation ----------------------------------
+  - label: Address changed while confirming
+    instructions: |
+      PERSONA: Priya Nair, recently moved, gives the old address by habit.
+      OPENING LINE: "I'd like to give you my mailing address."
+      FACTS:
+      - old address (give first): 12 Elm Street, Springfield Illinois 62704, United States
+      - new address: 88 Harbor Lane, Apartment 3, Portland Oregon 97209, United States
+      DO, IN ORDER:
+      1. Give the OLD address when asked.
+      2. When the agent reads it back and asks you to confirm, say: "wait, no -
+         we just moved. It's 88 Harbor Lane, Apartment 3, Portland Oregon 97209,
+         United States. Yes, that's the one."
+      3. If the agent asks you to confirm the NEW address, confirm it.
+      4. Don't hang up until the agent reads back the Portland address as captured.
+    agent_expectations: >
+      When the user replaces the address at the confirmation step, the agent
+      acknowledges the Portland address and confirms THAT one; it never
+      completes with the Springfield address. It responds verbally immediately
+      after the correction, and the final read-back is the Portland address
+      including the apartment number.
+    tags:
+      workflow: address
+      branch: confirm_stale_guard
+
+  # --- name: spelling correction at confirmation -----------------------------
+  - label: Name spelling corrected while confirming
+    instructions: |
+      PERSONA: Shayne Cole - pronounced "Shane", so say "Shane" conversationally;
+      the Y appears only when you spell it.
+      OPENING LINE: "You'll need my name, right? It's Shane Cole."
+      DO, IN ORDER:
+      1. Give the name as "Shane Cole".
+      2. When the agent asks you to confirm, say: "almost - first name is
+         spelled S-H-A-Y-N-E. With that fixed, yes."
+      3. If the agent asks you to confirm the corrected spelling, confirm it.
+      4. Don't hang up until the agent reads back "Shayne Cole" as captured.
+    agent_expectations: >
+      Accepts the correction at the confirmation step and re-confirms the
+      updated spelling: the capture completes with first name Shayne (with the
+      Y), not Shane. The agent must not complete with the uncorrected spelling
+      and must not go silent after the correction.
+    tags:
+      workflow: name
+      branch: confirm_stale_guard
+
+  # --- dob: time of birth offered before the date ----------------------------
+  - label: Time of birth given before the date
+    instructions: |
+      PERSONA: Leo Marsh, proud of knowing his exact time of birth; leads with it.
+      OPENING LINE: "I can give you my date of birth - fun fact, I even know the time!"
+      FACTS:
+      - time of birth: 6:45 in the morning
+      - date of birth: March 3rd, 1992
+      DO, IN ORDER:
+      1. When asked for the date of birth, give ONLY the time first: "I was born
+         at 6:45 in the morning." Do not mention the date yet.
+      2. If the agent asks you to confirm before you've given a date, say "yes,
+         that's right" - do NOT volunteer the date until the agent explicitly
+         asks for the date itself.
+      3. When the agent asks for the date, give March 3rd, 1992.
+      4. Confirm the full date (and time) when read back.
+      5. Don't hang up until the agent reads back March 3rd, 1992 as captured.
+    agent_expectations: >
+      Records the 6:45 AM time of birth but recognizes the date is still
+      missing: if the user tries to confirm before any date exists, the agent
+      must say the date of birth hasn't been provided yet and ask for it — not
+      complete the capture, not fabricate a date, and not go silent. Once the
+      user gives March 3rd, 1992 and confirms, the capture completes with that
+      date and the 6:45 AM time.
+    tags:
+      workflow: dob
+      branch: confirm_missing_dob
+
+  # --- dob: date changed while confirming ------------------------------------
+  - label: Date of birth corrected while confirming
+    instructions: |
+      PERSONA: Ana Sofia Torres, mixes up day and month at first.
+      OPENING LINE: "Sure, my date of birth - it's July 9th, 1988."
+      FACTS:
+      - first date given: July 9th, 1988
+      - corrected date: September 7th, 1988
+      DO, IN ORDER:
+      1. Give July 9th, 1988 when asked.
+      2. When the agent asks you to confirm, say: "hold on, I always flip those -
+         it's September 7th, 1988. Yes, that's right."
+      3. If the agent asks you to confirm the corrected date, confirm it.
+      4. Don't hang up until the agent reads back September 7th, 1988 as captured.
+    agent_expectations: >
+      After the correction at the confirmation step, the agent confirms and
+      completes with September 7th, 1988 — never July 9th. It responds verbally
+      right after the correction, and the final read-back is September 7th, 1988.
+    tags:
+      workflow: dob
+      branch: confirm_stale_guard
+
+  # --- credit card: number too short, then valid -----------------------------
+  - label: Card number too short on the first try
+    instructions: |
+      PERSONA: Dana Whitfield, rattles off a partial card number first.
+      OPENING LINE: "I'm ready to give you my card details."
+      FACTS:
+      - first attempt (too short, only 10 digits): 4242 4242 42
+      - real card number: 4242 4242 4242 4242
+      - expiration: 11/29
+      - security code: 833
+      - cardholder name: Dana Whitfield
+      DO, IN ORDER:
+      1. When the agent asks for your card number, give the 10-digit partial
+         number as if it were complete.
+      2. When the agent says it's invalid or asks you to repeat, give the full
+         4242 4242 4242 4242.
+      3. Repeat the full number when asked to confirm it.
+      4. Provide the expiration, security code, and name as asked, repeating
+         each back when asked to confirm.
+      5. Don't hang up until the agent confirms the card details are complete.
+    agent_expectations: >
+      Tells the user the number is invalid (wrong length) and asks them to
+      repeat it — it must not accept the 10-digit number, must not go silent
+      after the invalid attempt, and must not read the card number back aloud.
+      After the full 16-digit number is given and repeated, the flow proceeds
+      through expiration, security code, and cardholder name to completion.
+    tags:
+      workflow: credit_card
+      branch: update_invalid_length
+
+  # --- credit card: repeated number doesn't match ----------------------------
+  - label: Card number repeat mismatch
+    instructions: |
+      PERSONA: Omar Haddad, fumbles one digit when repeating his card number.
+      OPENING LINE: "Let's do the card details."
+      FACTS:
+      - card number: 4242 4242 4242 4242
+      - WRONG repeat (first confirmation attempt): 4242 4242 4242 4245
+      - expiration: 08/30
+      - security code: 456
+      - cardholder name: Omar Haddad
+      DO, IN ORDER:
+      1. Give the correct card number when asked.
+      2. When asked to repeat it for confirmation, repeat it WRONG once (ending 4245).
+      3. When the agent says it doesn't match and asks again, repeat it correctly.
+      4. Provide the expiration, security code, and name as asked, repeating
+         each back when asked to confirm.
+      5. Don't hang up until the agent confirms the card details are complete.
+    agent_expectations: >
+      Detects that the repeated number doesn't match the original and asks the
+      user to try again — without revealing the stored number and without going
+      silent after the mismatch. After the correct repeat, the flow proceeds
+      through the remaining card fields to completion.
+    tags:
+      workflow: credit_card
+      branch: confirm_mismatch
+
+  # --- credit card: expired date, then a valid one ----------------------------
+  - label: Expired card date, then corrected
+    instructions: |
+      PERSONA: Grace Lindqvist, reads the date off an old card first.
+      OPENING LINE: "I'll give you my card now."
+      FACTS:
+      - card number: 4242 4242 4242 4242
+      - expired date (give first): 05/24
+      - real expiration: 05/28
+      - security code: 291
+      - cardholder name: Grace Lindqvist
+      DO, IN ORDER:
+      1. Give the card number and repeat it when asked to confirm.
+      2. When asked for the expiration, give 05/24 (the expired one).
+      3. When the agent says the card is expired or asks for another, say "oh,
+         I grabbed the old card - the current one is 05/28, same number."
+      4. Repeat the expiration when asked to confirm, then provide the security
+         code and name as asked, repeating each back when asked to confirm.
+      5. Don't hang up until the agent confirms the card details are complete.
+    agent_expectations: >
+      Recognizes 05/24 as in the past, tells the user the card appears expired,
+      and asks for another — it must not accept the expired date, and must not
+      go silent after rejecting it. After the user supplies 05/28, the flow
+      proceeds through the remaining fields to completion.
+    tags:
+      workflow: credit_card
+      branch: update_expired_date
