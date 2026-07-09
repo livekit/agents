@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
     from .agent_activity import AgentActivity
-    from .agent_session import AgentSession, ExpressiveOptions
+    from .agent_session import AgentSession
     from .audio_recognition import AudioRecognition
     from .io import TimedString
     from .turn import TurnDetectionMode
@@ -50,7 +50,6 @@ class Agent:
         tool_handling: NotGivenOr[ToolHandlingOptions] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
-        expressive: NotGivenOr[bool | ExpressiveOptions] = NOT_GIVEN,
         min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         # deprecated
@@ -124,7 +123,6 @@ class Agent:
                 "passing MCP servers to AgentSession or Agent is deprecated "
                 "and will be removed in a future version. Use `MCPToolset` instead."
             )
-        self._expressive = expressive
         self._activity: AgentActivity | None = None
 
     @property
@@ -168,10 +166,6 @@ class Agent:
     @property
     def interruption_detection(self) -> NotGivenOr[Literal["adaptive", "vad"]]:
         return self._interruption_detection
-
-    @property
-    def expressive(self) -> NotGivenOr[bool | ExpressiveOptions]:
-        return self._expressive
 
     @property
     def audio_recognition(self) -> AudioRecognition:

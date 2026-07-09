@@ -1,8 +1,7 @@
-from . import io, presets, run_result
+from . import io, run_result
 from .agent import Agent, AgentTask, ModelSettings
 from .agent_session import (
     AgentSession,
-    ExpressiveOptions,
     RecordingOptions,
     VoiceActivityVideoSampler,
 )
@@ -47,8 +46,6 @@ __all__ = [
     "VoiceActivityVideoSampler",
     "Agent",
     "ModelSettings",
-    "ExpressiveOptions",
-    "presets",
     "AgentTask",
     "SpeechHandle",
     "RunContext",
