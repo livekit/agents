@@ -158,6 +158,18 @@ class TestMetricsToProto:
         pb = _metrics_to_proto(metrics)
         assert pb.transcription_delay == pytest.approx(0.42)
 
+    @pytest.mark.skipif(
+        "llm_node_tps" not in agent_pb.MetricsReport.DESCRIPTOR.fields_by_name,
+        reason="livekit-protocol < 1.1.18 lacks llm_node_tps/llm_node_ttfs",
+    )
+    def test_llm_node_throughput_fields(self) -> None:
+        # guards the dict-key -> proto-field mapping: a mismatch (e.g. "tps" vs
+        # "llm_node_tps") raises at MetricsReport(**kwargs) instead of silently dropping.
+        metrics = {"llm_node_tps": 12.5, "llm_node_ttfs": 0.6}
+        pb = _metrics_to_proto(metrics)
+        assert pb.llm_node_tps == pytest.approx(12.5)
+        assert pb.llm_node_ttfs == pytest.approx(0.6)
+
 
 class TestSessionUsageToProto:
     def test_llm_usage(self) -> None:
@@ -278,7 +290,7 @@ class TestSessionHostEvents:
     def test_register_session(self, transport: InMemoryTransport, mock_session: MagicMock) -> None:
         host = SessionHost(transport)
         host.register_session(mock_session)
-        assert mock_session.on.call_count == 10
+        assert mock_session.on.call_count == 11
 
     @pytest.mark.asyncio
     async def test_agent_state_changed(self, transport: InMemoryTransport) -> None:
@@ -660,4 +672,4 @@ class TestSessionHostRequests:
         host.register_session(session)
         await host.start()
         await host.aclose()
-        assert session.off.call_count == 10
+        assert session.off.call_count == 11

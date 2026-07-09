@@ -256,6 +256,18 @@ class MetricsReport(TypedDict, total=False):
     Assistant `ChatMessage` only
     """
 
+    llm_node_tps: float
+    """LLM output tokens per second for this turn, measured at the `llm_node`
+
+    Assistant `ChatMessage` only
+    """
+
+    llm_node_ttfs: float
+    """Time from LLM generation start to the first complete sentence
+
+    Assistant `ChatMessage` only
+    """
+
     tts_node_ttfb: float
     """Time taken for the `tts_node` to return the first chunk of audio (after the first text token has been sent)
 

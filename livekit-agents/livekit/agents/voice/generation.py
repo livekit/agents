@@ -24,6 +24,7 @@ from ..llm import (
 from ..llm.chat_context import Instructions
 from ..log import logger
 from ..telemetry import trace_types, tracer
+from ..tokenize import blingfire
 from ..types import (
     USERDATA_TIMED_TRANSCRIPT,
     USERDATA_TTS_STARTED_TIME,
@@ -58,11 +59,20 @@ class _LLMGenerationData:
     id: str = field(default_factory=lambda: utils.shortuuid("item_"))
     started_fut: asyncio.Future[None] = field(default_factory=asyncio.Future)
     ttft: float | None = None
+    tps: float | None = None
+    ttfs: float | None = None
 
 
 # output for an injected in-progress tool call, phrased so the model waits instead of
 # re-issuing the call.
 _RUNNING_TOOL_PLACEHOLDER = "The tool call is still in progress."
+
+
+# Stateless and cheap to construct, min_sentence_len=1
+# keeps short first sentences (e.g. "Hi there.") counted when timing ttfs.
+_SENTENCE_TOKENIZER = blingfire.SentenceTokenizer(min_sentence_len=1)
+
+
 # extra flag marking an injected pair so it can be stripped before the ctx is forwarded.
 _RUNNING_PLACEHOLDER_KEY = "__lk_running_placeholder__"
 
@@ -228,6 +238,20 @@ async def _llm_inference_task(
         return False
 
     # forward llm stream to output channels
+    usage: Any = None
+    # Time the first complete sentence (ttfs) with a streaming tokenizer that consumes
+    # text incrementally without re-tokenizing the whole generation each chunk.
+    sentence_stream = _SENTENCE_TOKENIZER.stream()
+
+    async def _set_time_first_sentence() -> None:
+        try:
+            async for _ in sentence_stream:
+                data.ttfs = time.perf_counter() - start_time
+                return
+        except Exception:
+            logger.exception("failed to time first sentence (llm_node_ttfs)")
+
+    ttfs_task = asyncio.create_task(_set_time_first_sentence())
     try:
         async for chunk in llm_node:
             if data.ttft is None:
@@ -240,6 +264,8 @@ async def _llm_inference_task(
                 content = chunk
 
             elif isinstance(chunk, ChatChunk):
+                if chunk.usage is not None:
+                    usage = chunk.usage
                 if not chunk.delta:
                     continue
 
@@ -283,9 +309,22 @@ async def _llm_inference_task(
             if content:
                 data.generated_text += content
                 text_ch.send_nowait(content)
+                if data.ttfs is None:
+                    sentence_stream.push_text(content)
     finally:
         if isinstance(llm_node, _ACloseable):
             await llm_node.aclose()
+        try:
+            sentence_stream.end_input()  # flush any trailing sentence, then close
+        except RuntimeError:
+            pass
+        await utils.aio.cancel_and_wait(ttfs_task)
+
+    duration = time.perf_counter() - start_time
+    if usage is not None and duration > 0:
+        data.tps = usage.completion_tokens / duration
+    if data.ttfs is None and data.generated_text.strip():
+        data.ttfs = duration
 
     current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, data.generated_text)
     current_span.set_attribute(

@@ -3249,6 +3249,12 @@ class AgentActivity(RecognitionHooks):
         if llm_gen_data.ttft is not None:
             assistant_metrics["llm_node_ttft"] = llm_gen_data.ttft
 
+        if llm_gen_data.tps is not None:
+            assistant_metrics["llm_node_tps"] = llm_gen_data.tps
+
+        if llm_gen_data.ttfs is not None:
+            assistant_metrics["llm_node_ttfs"] = llm_gen_data.ttfs
+
         if first_tts_gen_data and first_tts_gen_data.ttfb is not None:
             assistant_metrics["tts_node_ttfb"] = first_tts_gen_data.ttfb
 

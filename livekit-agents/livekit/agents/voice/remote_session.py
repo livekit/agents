@@ -37,6 +37,7 @@ from ..metrics import (
 from ..version import __version__
 from ..voice.amd import AMDCategory, AMDPredictionEvent
 from .events import (
+    AgentFalseInterruptionEvent,
     AgentState,
     AgentStateChangedEvent,
     ConversationItemAddedEvent,
@@ -255,6 +256,8 @@ _METRICS_FIELDS = (
     "llm_node_ttft",
     "tts_node_ttfb",
     "e2e_latency",
+    "llm_node_tps",
+    "llm_node_ttfs",
 )
 
 _TOOL_CALL_STATUS_MAP: dict[str, agent_pb.ToolCallStatus] = {
@@ -395,6 +398,7 @@ class SessionHost:
             session.on("tool_execution_updated", self._on_tool_execution_updated)
             session.on("session_usage_updated", self._on_session_usage_updated)
             session.on("overlapping_speech", self._on_overlapping_speech)
+            session.on("agent_false_interruption", self._on_agent_false_interruption)
             session.on("error", self._on_error)
             session.on("debug_message", self._on_debug_message)
 
@@ -420,6 +424,7 @@ class SessionHost:
             self._session.off("tool_execution_updated", self._on_tool_execution_updated)
             self._session.off("session_usage_updated", self._on_session_usage_updated)
             self._session.off("overlapping_speech", self._on_overlapping_speech)
+            self._session.off("agent_false_interruption", self._on_agent_false_interruption)
             self._session.off("error", self._on_error)
             self._session.off("debug_message", self._on_debug_message)
 
@@ -604,6 +609,10 @@ class SessionHost:
             pb.overlap_started_at.CopyFrom(overlap_started_at)
 
         self._send_event(agent_pb.AgentSessionEvent(overlapping_speech=pb))
+
+    def _on_agent_false_interruption(self, event: AgentFalseInterruptionEvent) -> None:
+        pb = agent_pb.AgentSessionEvent.AgentFalseInterruption(resumed=event.resumed)
+        self._send_event(agent_pb.AgentSessionEvent(agent_false_interruption=pb))
 
     def _on_amd_prediction(self, event: AMDPredictionEvent) -> None:
         speech_duration = Duration()
