@@ -35,12 +35,13 @@ from livekit.agents import (
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
+from livekit.agents.voice.io import TimedString
 
 from .log import logger
 
 WEBSOCKET_URL = "wss://tts-rt.soniox.com/tts-websocket"
 NUM_CHANNELS = 1
-DEFAULT_MODEL = "tts-rt-v1-preview"
+DEFAULT_MODEL = "tts-rt-v1"
 DEFAULT_LANGUAGE = "en"
 DEFAULT_VOICE = "Maya"
 DEFAULT_AUDIO_FORMAT = "pcm_s16le"
@@ -72,28 +73,32 @@ class TTS(tts.TTS):
         model: str = DEFAULT_MODEL,
         language: str = DEFAULT_LANGUAGE,
         voice: str = DEFAULT_VOICE,
+        speed: float | None = None,
         audio_format: str = DEFAULT_AUDIO_FORMAT,
         sample_rate: int = DEFAULT_SAMPLE_RATE,
         bitrate: int | None = None,
         api_key: str | None = None,
         websocket_url: str = WEBSOCKET_URL,
         http_session: aiohttp.ClientSession | None = None,
+        return_timestamps: bool = True,
     ) -> None:
         """Initialize instance of Soniox Text-to-Speech API service.
 
         Args:
-            model (str): Soniox TTS model to use. Defaults to "tts-rt-v1-preview".
+            model (str): Soniox TTS model to use. Defaults to "tts-rt-v1".
             language (str): Language code (e.g., "en", "es", "fr"). Defaults to "en".
-            voice (str): Voice name (e.g., "Maya", "Adrian"). Defaults to "Maya".
+            voice (str): Voice name (e.g. "Maya") or a cloned-voice UUID. Defaults to "Maya".
+            speed (float): Speech rate multiplier 0.7-1.3; None uses the server default.
             audio_format (str): Audio format (e.g., "pcm_s16le", "mp3"). Defaults to "pcm_s16le".
             sample_rate (int): Sample rate in Hz. Required for raw audio formats. Defaults to 24000.
             bitrate (int): Codec bitrate in bps for compressed formats. Optional.
             api_key (str): Soniox API key. If not provided, will look for SONIOX_API_KEY env variable.
             websocket_url (str): Base WebSocket URL for Soniox TTS API.
             http_session (aiohttp.ClientSession): Optional aiohttp.ClientSession to use for requests.
+            return_timestamps (bool): Emit word-timestamped transcript deltas. Defaults to True.
         """
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=True),
+            capabilities=tts.TTSCapabilities(streaming=True, aligned_transcript=return_timestamps),
             sample_rate=sample_rate,
             num_channels=NUM_CHANNELS,
         )
@@ -106,11 +111,13 @@ class TTS(tts.TTS):
             model=model,
             language=language,
             voice=voice,
+            speed=speed,
             audio_format=audio_format,
             sample_rate=sample_rate,
             bitrate=bitrate,
             websocket_url=websocket_url,
             api_key=api_key,
+            return_timestamps=return_timestamps,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
@@ -160,12 +167,14 @@ class TTS(tts.TTS):
         model: NotGivenOr[str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
         voice: NotGivenOr[str] = NOT_GIVEN,
+        speed: NotGivenOr[float | None] = NOT_GIVEN,
     ) -> None:
         """
         Args:
             model: TTS model to use.
             language: Language code to use.
-            voice: Voice to use.
+            voice: Voice name or cloned-voice UUID to use.
+            speed: Speech rate multiplier (0.7-1.3); None uses the server default.
         """
         if is_given(model):
             self._opts.model = model
@@ -173,6 +182,8 @@ class TTS(tts.TTS):
             self._opts.language = language
         if is_given(voice):
             self._opts.voice = voice
+        if is_given(speed):
+            self._opts.speed = speed
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -309,11 +320,13 @@ class _TTSOptions:
     model: str
     language: str
     voice: str
+    speed: float | None
     audio_format: str
     sample_rate: int
     bitrate: int | None
     websocket_url: str
     api_key: str
+    return_timestamps: bool = True
 
 
 @dataclass
@@ -347,6 +360,54 @@ class _StreamData:
     # This flag is how recv loop tells them apart.
     cancel_sent: bool = False
     config_sent: bool = False
+    partial: tuple[str, float] | None = None
+    """Word spanning multiple timestamp messages: (text, start_seconds)."""
+    spaceless: bool = False
+    """Spaceless language (zh/ja); frozen at register time."""
+
+
+def _is_spaceless_language(language: str) -> bool:
+    """Languages written without spaces (zh/ja): each character is its own word."""
+    return language.split("-")[0].lower() in ("zh", "ja")
+
+
+def _chars_to_word_times(
+    characters: list[str],
+    start_times: list[float],
+    partial: tuple[str, float] | None,
+    spaceless: bool,
+) -> tuple[list[tuple[str, float]], tuple[str, float] | None]:
+    """Group one Soniox timestamp message into ``(word, start_seconds)`` tuples.
+
+    Soniox emits two parallel per-character arrays:
+
+        characters:                    ["H", "i", " ", "y", "o", "u"]
+        character_start_times_seconds: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+
+    which becomes [("Hi ", 0.1), ("you ", 0.4)].
+    """
+    if len(characters) != len(start_times):
+        logger.error(
+            f"Soniox TTS timestamp length mismatch: {len(characters)} vs {len(start_times)}"
+        )
+        return [], partial
+
+    if spaceless:
+        words = [(ch, t) for ch, t in zip(characters, start_times, strict=True) if ch.isalnum()]
+        return words, None
+
+    text, start = partial or ("", 0.0)
+    words = []
+    for ch, t in zip(characters, start_times, strict=True):
+        if ch == " ":
+            if text:
+                words.append((text + " ", start))
+                text = ""
+        else:
+            if not text:  # new word
+                start = t
+            text += ch
+    return words, ((text, start) if text else None)
 
 
 class _Connection:
@@ -427,7 +488,12 @@ class _Connection:
             raise ValueError(f"stream_id {stream_id} already registered")
 
         # Server starts a per-stream timeout on _StartConfig receipt; we queue it lazily in send_text.
-        self._streams[stream_id] = _StreamData(emitter=emitter, waiter=waiter, opts=opts)
+        self._streams[stream_id] = _StreamData(
+            emitter=emitter,
+            waiter=waiter,
+            opts=opts,
+            spaceless=_is_spaceless_language(opts.language),
+        )
 
     def unregister_stream(self, stream_id: str) -> None:
         self._streams.pop(stream_id, None)
@@ -490,6 +556,10 @@ class _Connection:
                     }
                     if msg.opts.bitrate is not None:
                         config["bitrate"] = msg.opts.bitrate
+                    if msg.opts.speed is not None:
+                        config["speed"] = msg.opts.speed
+                    if msg.opts.return_timestamps:
+                        config["return_timestamps"] = True
                     await self._ws.send_str(json.dumps(config))
                 elif isinstance(msg, _SendText):
                     payload: dict[str, Any] = {"stream_id": msg.stream_id}
@@ -574,12 +644,32 @@ class _Connection:
                 if audio_b64:
                     stream.emitter.push(base64.b64decode(audio_b64))
 
+                timestamps = resp.get("timestamps")
+                if timestamps:
+                    words, stream.partial = _chars_to_word_times(
+                        timestamps.get("characters", []),
+                        timestamps.get("character_start_times_seconds", []),
+                        stream.partial,
+                        stream.spaceless,
+                    )
+                    if words:
+                        stream.emitter.push_timed_transcript(
+                            [TimedString(text=w, start_time=t) for w, t in words]
+                        )
+
                 if resp.get("audio_end"):
                     stream.audio_ended = True
                     # end_segment() is called from SynthesizeStream._run's finally
                     # block (covers cancel/error paths too).
 
                 if resp.get("terminated"):
+                    # Flush the final word (no trailing space closed it).
+                    if stream.partial:
+                        text, start = stream.partial
+                        stream.emitter.push_timed_transcript(
+                            TimedString(text=text, start_time=start)
+                        )
+                        stream.partial = None
                     # Don't clobber an exception already raised on the error_code path.
                     if not stream.waiter.done():
                         # Server aborted on its own - no audio_end, no cancel from us.
