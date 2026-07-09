@@ -24,7 +24,9 @@ num_channels and samples_per_channel as the input.
 from __future__ import annotations
 
 import numpy as np
-from pyrnnoise import RNNoise as _RNNoiseDenoiser
+
+# pyrnnoise ships no stubs/py.typed marker upstream.
+from pyrnnoise import RNNoise as _RNNoiseDenoiser  # type: ignore[import-untyped]
 
 from livekit import rtc
 
@@ -137,9 +139,7 @@ class RNNoiseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         resampled_frames = self._in_resampler.push(frame)
         if not resampled_frames:
             return _EMPTY_SAMPLES
-        return np.concatenate(
-            [np.frombuffer(f.data, dtype=np.int16) for f in resampled_frames]
-        )
+        return np.concatenate([np.frombuffer(f.data, dtype=np.int16) for f in resampled_frames])
 
     def _denoise_complete_chunks(self) -> None:
         num_chunks = len(self._in_buffer) // _RNNOISE_FRAME_SAMPLES
