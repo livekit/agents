@@ -192,7 +192,7 @@ async def test_realtime_tool_results_preserved_on_interruption(
     auto_tool_reply_generation: bool,
 ) -> None:
     """Realtime path: the interrupted tool output is committed locally, and pushed
-    to the server only when that wouldn't auto-trigger a tool reply (Gemini-style)."""
+    to the server unless the model auto-generates tool replies (Gemini-style)."""
     model = FakeRealtimeModel(
         capabilities=fake_capabilities(auto_tool_reply_generation=auto_tool_reply_generation)
     )
