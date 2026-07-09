@@ -226,8 +226,13 @@ class TTS(tts.TTS):
         speed: NotGivenOr[float] = NOT_GIVEN,
         volume: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
-        if is_given(model):
+        if is_given(model) and model != self._opts.model:
             self._opts.model = model
+            # The model is sent as a connection header at ws-handshake time, not in the
+            # per-request body, so a pooled socket keeps the old model. Drop pooled
+            # connections so the next stream reconnects with the new model. Other
+            # options ride in the per-request body and need no reconnect.
+            self._pool.invalidate()
         if is_given(voice_id):
             self._opts.voice_id = voice_id
         if is_given(latency_mode):
