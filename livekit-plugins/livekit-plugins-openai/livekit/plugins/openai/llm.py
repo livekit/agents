@@ -40,6 +40,7 @@ from openai.types import ReasoningEffort
 from openai.types.chat import ChatCompletionToolChoiceOptionParam, completion_create_params
 
 from .models import (
+    BedrockChatModels,
     CerebrasChatModels,
     ChatModels,
     CometAPIChatModels,
@@ -55,7 +56,11 @@ from .models import (
     XAIChatModels,
     _supports_reasoning_effort,
 )
-from .utils import AsyncAzureADTokenProvider
+from .utils import (
+    AsyncAzureADTokenProvider,
+    AsyncBedrockTokenProvider,
+    resolve_bedrock_base_url,
+)
 
 lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
@@ -124,7 +129,7 @@ class LLM(llm.LLM):
         super().__init__()
 
         if not is_given(reasoning_effort) and _supports_reasoning_effort(model):
-            if model in ["gpt-5.1", "gpt-5.2", "gpt-5.4", "gpt-5.4-mini"]:
+            if model.removeprefix("openai.") in ["gpt-5.1", "gpt-5.2", "gpt-5.4", "gpt-5.4-mini"]:
                 reasoning_effort = "none"
             else:
                 reasoning_effort = "minimal"
@@ -251,6 +256,85 @@ class LLM(llm.LLM):
             top_p=top_p,
             verbosity=verbosity,
             max_completion_tokens=max_completion_tokens,
+        )
+        llm._owns_client = True
+        return llm
+
+    @staticmethod
+    def with_aws_bedrock(
+        *,
+        model: str | BedrockChatModels = "openai.gpt-oss-120b",
+        api_key: str | None = None,
+        bedrock_token_provider: AsyncBedrockTokenProvider | None = None,
+        aws_region: str | None = None,
+        base_url: str | None = None,
+        organization: str | None = None,
+        project: str | None = None,
+        user: NotGivenOr[str] = NOT_GIVEN,
+        safety_identifier: NotGivenOr[str] = NOT_GIVEN,
+        prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        timeout: httpx.Timeout | None = None,
+        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+        verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
+        max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
+    ) -> LLM:
+        """
+        Create a new instance of a Chat Completions LLM backed by OpenAI models on
+        Amazon Bedrock.
+
+        Amazon Bedrock exposes an OpenAI-compatible endpoint for OpenAI's open-weight
+        models (e.g. ``openai.gpt-oss-120b``). This builds an
+        ``openai.AsyncBedrockOpenAI`` client, which resolves the regional Bedrock
+        endpoint (``https://bedrock-mantle.<region>.api.aws/openai/v1``) and sends the
+        Bedrock bearer token in the ``Authorization`` header.
+
+        Only the ``gpt-oss`` models are available over Chat Completions on Bedrock. The
+        ``gpt-5.x`` models are Responses-only — use
+        :meth:`livekit.plugins.openai.responses.LLM.with_aws_bedrock` for those.
+
+        This automatically infers the following arguments from their corresponding
+        environment variables if they are not provided:
+        - ``api_key`` from ``AWS_BEARER_TOKEN_BEDROCK``
+        - ``aws_region`` from ``AWS_REGION`` or ``AWS_DEFAULT_REGION``
+        - ``base_url`` from ``AWS_BEDROCK_BASE_URL``
+
+        For refreshable credentials, pass ``bedrock_token_provider`` (for example
+        ``aws_bedrock_token_generator.provide_token``) instead of ``api_key``; the two
+        are mutually exclusive.
+        """
+        bedrock_client = openai.AsyncBedrockOpenAI(
+            api_key=api_key,
+            bedrock_token_provider=bedrock_token_provider,
+            aws_region=aws_region,
+            base_url=resolve_bedrock_base_url(model, aws_region, base_url),
+            organization=organization,
+            project=project,
+            max_retries=0,
+            timeout=timeout
+            if timeout
+            else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
+        )
+
+        llm = LLM(
+            model=model,
+            client=bedrock_client,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+            reasoning_effort=reasoning_effort,
+            safety_identifier=safety_identifier,
+            prompt_cache_key=prompt_cache_key,
+            top_p=top_p,
+            verbosity=verbosity,
+            max_completion_tokens=max_completion_tokens,
+            # Bedrock currently serves the gpt-oss open-weight models behind an
+            # OpenAI-compatible shim, like the other open-model providers above.
+            _strict_tool_schema=False,
         )
         llm._owns_client = True
         return llm

@@ -42,8 +42,9 @@ from openai.types.responses.response_stream_event import ResponseStreamEvent
 from openai.types.shared_params import ResponsesModel
 
 from ..log import logger
-from ..models import _supports_reasoning_effort
+from ..models import BedrockResponsesModels, _supports_reasoning_effort
 from ..tools import OpenAITool
+from ..utils import AsyncBedrockTokenProvider, resolve_bedrock_base_url
 
 ServiceTier = Literal["auto", "default", "flex", "scale", "priority"]
 Verbosity = Literal["low", "medium", "high"]
@@ -186,7 +187,7 @@ class LLM(llm.LLM):
         super().__init__()
 
         if not is_given(reasoning) and _supports_reasoning_effort(model):
-            if model in ["gpt-5.1", "gpt-5.2", "gpt-5.4", "gpt-5.4-mini"]:
+            if model.removeprefix("openai.") in ["gpt-5.1", "gpt-5.2", "gpt-5.4", "gpt-5.4-mini"]:
                 reasoning = Reasoning(effort="none")
             else:
                 reasoning = Reasoning(effort="minimal")
@@ -249,6 +250,79 @@ class LLM(llm.LLM):
                     ),
                 ),
             )
+
+    @staticmethod
+    def with_aws_bedrock(
+        *,
+        model: str | BedrockResponsesModels = "openai.gpt-5.5",
+        api_key: str | None = None,
+        bedrock_token_provider: AsyncBedrockTokenProvider | None = None,
+        aws_region: str | None = None,
+        base_url: str | None = None,
+        organization: str | None = None,
+        project: str | None = None,
+        user: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        reasoning: NotGivenOr[Reasoning] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
+        store: NotGivenOr[bool] = NOT_GIVEN,
+        metadata: NotGivenOr[dict[str, str]] = NOT_GIVEN,
+        service_tier: NotGivenOr[ServiceTier] = NOT_GIVEN,
+        verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
+        max_output_tokens: NotGivenOr[int] = NOT_GIVEN,
+        timeout: httpx.Timeout | None = None,
+    ) -> LLM:
+        """
+        Create a new instance of a Responses API LLM backed by OpenAI models on Amazon
+        Bedrock.
+
+        Bedrock serves the ``gpt-5.x`` models (e.g. ``openai.gpt-5.5``,
+        ``openai.gpt-5.4``) and the ``gpt-oss`` models over the OpenAI-compatible
+        Responses API on the regional ``bedrock-mantle`` endpoint. This builds an
+        ``openai.AsyncBedrockOpenAI`` client; the WebSocket transport is disabled
+        automatically since Bedrock only exposes the HTTP Responses path.
+
+        This automatically infers the following arguments from their corresponding
+        environment variables if they are not provided:
+        - ``api_key`` from ``AWS_BEARER_TOKEN_BEDROCK``
+        - ``aws_region`` from ``AWS_REGION`` or ``AWS_DEFAULT_REGION``
+        - ``base_url`` from ``AWS_BEDROCK_BASE_URL``
+
+        For refreshable credentials, pass ``bedrock_token_provider`` (for example
+        ``aws_bedrock_token_generator.provide_token``) instead of ``api_key``; the two
+        are mutually exclusive.
+        """
+        bedrock_client = openai.AsyncBedrockOpenAI(
+            api_key=api_key,
+            bedrock_token_provider=bedrock_token_provider,
+            aws_region=aws_region,
+            base_url=resolve_bedrock_base_url(model, aws_region, base_url),
+            organization=organization,
+            project=project,
+            max_retries=0,
+            timeout=timeout
+            if timeout
+            else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
+        )
+
+        llm = LLM(
+            model=model,
+            client=bedrock_client,
+            use_websocket=False,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            reasoning=reasoning,
+            tool_choice=tool_choice,
+            store=store,
+            metadata=metadata,
+            service_tier=service_tier,
+            verbosity=verbosity,
+            max_output_tokens=max_output_tokens,
+        )
+        llm._owns_client = True
+        return llm
 
     async def aclose(self) -> None:
         if self._ws:

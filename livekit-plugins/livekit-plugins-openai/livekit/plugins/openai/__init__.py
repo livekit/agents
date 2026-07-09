@@ -16,8 +16,9 @@
 
 Support for OpenAI Realtime API, LLM, TTS, and STT APIs.
 
-Also includes support for a large number of OpenAI-compatible APIs including Azure OpenAI, Cerebras,
-Fireworks, Perplexity, Telnyx, xAI, Ollama, DeepSeek, OpenRouter, and OVHcloud AI Endpoints.
+Also includes support for a large number of OpenAI-compatible APIs including Azure OpenAI, Amazon
+Bedrock, Cerebras, Fireworks, Perplexity, Telnyx, xAI, Ollama, DeepSeek, OpenRouter, and OVHcloud
+AI Endpoints.
 
 See https://docs.livekit.io/agents/integrations/openai/ and
 https://docs.livekit.io/agents/integrations/llm/ for more information.
