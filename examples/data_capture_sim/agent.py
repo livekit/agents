@@ -72,7 +72,7 @@ class DataCaptureAgent(Agent):
     async def collect_date_of_birth(self, context: RunContext) -> str:
         """Collect the user's date of birth (and time of birth if they know it)."""
         result = await beta.workflows.GetDOBTask(include_time=True, require_confirmation=True)
-        logger.info(f"captured dob: {result.date_of_birth} time: {result.time_of_birth}")
+        logger.info("captured dob value")
         captured = result.date_of_birth.isoformat()
         if result.time_of_birth is not None:
             captured += f" at {result.time_of_birth.strftime('%H:%M')}"
