@@ -306,8 +306,8 @@ def _chat_item_to_proto(item: llm.ChatItem) -> agent_pb.ChatContext.ChatItem:
         }
         pb_role = role_map.get(item.role, agent_pb.ASSISTANT)
         content = []
-        if item.text_content:
-            content.append(agent_pb.ChatMessage.ChatContent(text=item.text_content))
+        if item.raw_text_content:
+            content.append(agent_pb.ChatMessage.ChatContent(text=item.raw_text_content))
         pb_msg = agent_pb.ChatMessage(
             id=item.id,
             role=pb_role,

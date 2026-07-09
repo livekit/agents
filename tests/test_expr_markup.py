@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import pytest
 
+from livekit.agents.llm import ChatContext, ChatMessage
 from livekit.agents.tts._provider_format import (
     TranscriptMarkupStripper,
     convert_markup,
@@ -19,6 +20,7 @@ from livekit.agents.tts._provider_format import (
     normalize_markup,
     split_all_markup,
     split_markup,
+    strip_expr_markup,
 )
 
 pytestmark = pytest.mark.unit
@@ -293,3 +295,64 @@ def test_llm_instructions_xai_kinds() -> None:
 def test_llm_instructions_none_for_unknown_provider() -> None:
     assert llm_instructions("") is None
     assert llm_instructions("openai") is None
+
+
+# ---------------------------------------------------------------------------
+# strip_expr_markup + ChatMessage.text_content / raw_text_content
+# ---------------------------------------------------------------------------
+
+# assistant text mixing expr markers with content that must survive an expr-only strip:
+# provider-native tags, bracket spans, markdown links, and stray angle brackets
+MIXED = (
+    '<expr type="expression" label="happy"/> Press [Enter] to see <b>bold</b>, '
+    'read [the docs](https://docs.livekit.io), then 1 < 2. <break time="1s"/> '
+    '<expr type="prosody" label="whisper">keep it secret</expr>'
+)
+MIXED_CLEAN = (
+    " Press [Enter] to see <b>bold</b>, "
+    'read [the docs](https://docs.livekit.io), then 1 < 2. <break time="1s"/> '
+    "keep it secret"
+)
+
+
+def test_strip_expr_markup_only_touches_expr() -> None:
+    assert strip_expr_markup(MIXED) == MIXED_CLEAN
+
+
+def test_strip_expr_markup_noop_without_expr() -> None:
+    text = 'plain text with [brackets] and <sound value="laugh"/>'
+    assert strip_expr_markup(text) == text
+
+
+def test_assistant_text_content_strips_expr_only() -> None:
+    msg = ChatMessage(role="assistant", content=[MIXED])
+    assert msg.text_content == MIXED_CLEAN
+    assert msg.raw_text_content == MIXED
+
+
+@pytest.mark.parametrize("role", ["user", "system", "developer"])
+def test_non_assistant_text_content_stays_raw(role: str) -> None:
+    # only assistant messages carry expressive markup; other roles are never stripped
+    msg = ChatMessage(role=role, content=[JOKE])
+    assert msg.text_content == JOKE
+    assert msg.raw_text_content == JOKE
+
+
+def test_text_content_none_without_text() -> None:
+    msg = ChatMessage(role="assistant", content=[])
+    assert msg.text_content is None
+    assert msg.raw_text_content is None
+
+
+def test_to_dict_strip_markup_is_expr_only_and_assistant_only() -> None:
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="user", content=[MIXED])
+    chat_ctx.add_message(role="assistant", content=[MIXED])
+
+    items = chat_ctx.to_dict(strip_markup=True)["items"]
+    assert items[0]["content"] == [MIXED]  # user content untouched
+    assert items[1]["content"] == [MIXED_CLEAN]  # assistant loses only expr tags
+
+    # default keeps the raw content for persistence
+    items = chat_ctx.to_dict()["items"]
+    assert items[1]["content"] == [MIXED]

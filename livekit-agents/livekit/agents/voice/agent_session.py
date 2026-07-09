@@ -1794,7 +1794,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _conversation_item_added(self, message: llm.ChatMessage) -> None:
         self._chat_ctx.insert(message)
-        if text := message.text_content:
+        if text := message.raw_text_content:
             logger.debug(
                 "conversation_item_added",
                 extra={"role": message.role, "text": text},

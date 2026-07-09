@@ -109,7 +109,7 @@ def compute_chat_ctx_diff(old_ctx: ChatContext, new_ctx: ChatContext) -> DiffOps
             # check if the content is different
             old_msg = old_ctx_by_id[new_msg.id]
             if new_msg.type == "message" and old_msg.type == "message":
-                if new_msg.text_content != old_msg.text_content:
+                if new_msg.raw_text_content != old_msg.raw_text_content:
                     to_update.append((prev_id, new_msg.id))
                 # TODO: check other content types
 
