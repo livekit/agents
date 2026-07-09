@@ -103,6 +103,28 @@ def _inject_running_tool_calls(
         )
 
 
+def _strip_assistant_markup(chat_ctx: ChatContext) -> None:
+    """Remove expressive TTS markup from past assistant messages, in place.
+
+    Called when a turn runs with expressive off (toggled off via
+    ``session.update_options``, an agent-level override, or a handoff to a TTS
+    without a markup dialect): tags left in history would few-shot the LLM into
+    emitting markup that nothing downstream converts or strips, so an unsupported
+    tag would reach the TTS as literal text and be spoken. Mutates the stored
+    history: once a turn runs with expressive off, prior turns' markup is gone
+    even if expressive is re-enabled later (the re-injected instructions carry
+    the style examples instead).
+    """
+    from ..tts._provider_format import strip_all_markup
+
+    for item in chat_ctx.items:
+        if item.type != "message" or item.role != "assistant":
+            continue
+        if not any(isinstance(c, str) and ("<" in c or "[" in c) for c in item.content):
+            continue
+        item.content = [strip_all_markup(c) if isinstance(c, str) else c for c in item.content]
+
+
 def _strip_running_tool_calls(chat_ctx: ChatContext) -> None:
     """Remove the pairs added by :func:`_inject_running_tool_calls`, keeping everything
     else (e.g. items a custom ``llm_node`` added)."""
@@ -1013,6 +1035,42 @@ def remove_instructions(chat_ctx: ChatContext) -> None:
     # loop in case there are items with the same id (shouldn't happen!)
     while True:
         if msg := chat_ctx.get_by_id(INSTRUCTIONS_MESSAGE_ID):
+            chat_ctx.items.remove(msg)
+        else:
+            break
+
+
+EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID = "lk.expressive.instructions"  #  value must not change
+"""
+The ID of the expressive TTS markup-guide message in the chat context.
+"""
+
+
+def update_expressive_instructions(chat_ctx: ChatContext, *, text: str) -> None:
+    """Insert or replace the expressive markup-guide system message.
+
+    Keyed by :data:`EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID` so per-turn re-injection
+    replaces the previous guide instead of accumulating one copy per turn, and a
+    turn that runs with expressive off can remove it again
+    (:func:`remove_expressive_instructions`).
+    """
+    idx = chat_ctx.index_by_id(EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID)
+    if idx is not None:
+        chat_ctx.items[idx] = llm.ChatMessage(
+            id=EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID,
+            role="system",
+            content=[text],
+            created_at=chat_ctx.items[idx].created_at,
+        )
+    else:
+        chat_ctx.add_message(role="system", content=text, id=EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID)
+
+
+def remove_expressive_instructions(chat_ctx: ChatContext) -> None:
+    """Remove the expressive markup-guide message added by
+    :func:`update_expressive_instructions`, if present."""
+    while True:
+        if msg := chat_ctx.get_by_id(EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID):
             chat_ctx.items.remove(msg)
         else:
             break
