@@ -204,3 +204,41 @@ session = AgentSession(
    # ... llm, etc.
 )
 ```
+
+### Realtime (speech-to-speech)
+
+Inworld's Realtime API is a single WebSocket that runs STT, LLM, and TTS server-side. It is
+wire-compatible with the OpenAI Realtime spec, so it plugs into `AgentSession` as the `llm`:
+
+```python
+from livekit.plugins import inworld
+
+session = AgentSession(
+    llm=inworld.realtime.RealtimeModel(
+        model="openai/gpt-4o-mini",   # LLM (or a router like "inworld/auto")
+        voice="Clive",                # TTS voice
+        tts_model="inworld-tts-2",    # or "inworld-tts-1.5-mini"
+        stt_model="inworld/inworld-stt-1",
+    )
+)
+```
+
+Inworld-specific extensions (STT tuning, TTS segmentation, memory, back-channel,
+responsiveness fillers, prompt caching, LLM generation params) are passed through
+`provider_data`. It is a typed `ProviderData` (a `TypedDict`), so you get autocompletion and
+type checking while still writing a plain dict:
+
+```python
+llm = inworld.realtime.RealtimeModel(
+    provider_data={
+        "stt": {"voice_profile": True, "language_hints": ["en-US"]},
+        "tts": {"segmenter_strategy": "sentence", "delivery_mode": "CREATIVE"},
+        "memory": {"enabled": True, "turn_interval": 5},
+        "text_generation_config": {"reasoning": {"effort": "LOW"}},
+        "user_id": "user_abc123",
+    },
+)
+```
+
+See the [Inworld Realtime API Extensions](https://docs.inworld.ai/realtime/provider-data)
+reference for every field.
