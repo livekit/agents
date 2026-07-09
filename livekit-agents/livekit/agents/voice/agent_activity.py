@@ -3851,8 +3851,8 @@ class AgentActivity(RecognitionHooks):
                         )
                 else:
                     logger.warning(
-                        "tool results preserved locally but not sent to the realtime session; "
-                        "the model may re-execute the interrupted function calls",
+                        "interrupted tool results added to the local chat context "
+                        "but not sent to the realtime session",
                         extra={"function_calls": [out.call_id for out in interrupted_fnc_outputs]},
                     )
             return
