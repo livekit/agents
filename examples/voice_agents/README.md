@@ -18,11 +18,16 @@ session = AgentSession(
 
 **Note:** Realtime models (OpenAI, AWS, Google, etc.) are not supported by LiveKit Inference and must use the plugin directly. See the [Real-time Models](#-real-time-models) section below.
 
+### Local OpenAI-Compatible Models
+
+For a fully local pipeline, use the OpenAI plugin with local servers - see [`local_voice_agent.py`](./local_voice_agent.py)
+
 ## 📋 Table of Contents
 
 ### 🚀 Getting Started
 
 - [`basic_agent.py`](./basic_agent.py) - A fundamental voice agent using LiveKit Inference with metrics collection
+- [`local_voice_agent.py`](./local_voice_agent.py) - A fully local pipeline using Whisper STT, Ollama LLM, and Kokoro TTS
 
 ### 🛠️ Tool Integration & Function Calling
 

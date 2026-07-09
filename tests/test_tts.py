@@ -40,6 +40,7 @@ from livekit.plugins import (
     lmnt,
     mistralai,
     neuphonic,
+    openai,
     resemble,
     rime,
     speechify,
@@ -265,6 +266,20 @@ SYNTHESIZE_TTS = [
             "proxy-upstream": "api.mistral.ai:443",
         },
         id="mistralai",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": openai.TTS(),
+            "proxy-upstream": "api.openai.com:443",
+        },
+        id="openai",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": openai.TTS(stream_format="audio"),
+            "proxy-upstream": "api.openai.com:443",
+        },
+        id="openai-audio",
     ),
 ]
 
