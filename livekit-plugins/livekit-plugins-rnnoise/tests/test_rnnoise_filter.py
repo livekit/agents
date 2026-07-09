@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+import sys
+
 import numpy as np
 import pytest
 
@@ -147,7 +149,7 @@ def test_noise_reduction_through_resampled_16k_path():
     # denoising contributes on top of the resampler-only pipeline.
     processor = RNNoise()
     baseline_processor = RNNoise()
-    baseline_processor._denoiser.denoise_chunk = lambda chunk, partial=False: iter([(0.0, chunk)])
+    baseline_processor._denoiser.process_frame = lambda frame: frame
 
     last_out_frame = None
     last_baseline_frame = None
@@ -201,3 +203,16 @@ def test_public_api_and_type():
 
     assert isinstance(processor, rtc.FrameProcessor)
     assert isinstance(processor, rn.RNNoiseFrameProcessor)
+
+
+def test_does_not_import_pyrnnoise_or_audiolab():
+    # The whole point of the ctypes wrapper: it loads pyrnnoise's bundled
+    # native librnnoise directly and must never import the pyrnnoise Python
+    # package (which pulls in audiolab -> matplotlib).
+    processor = RNNoise()
+    for i in range(5):
+        samples = _white_noise(480, seed=400 + i)
+        processor._process(_make_frame(samples, 48000))
+
+    assert "pyrnnoise" not in sys.modules
+    assert "audiolab" not in sys.modules
