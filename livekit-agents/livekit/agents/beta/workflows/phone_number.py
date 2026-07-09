@@ -155,16 +155,19 @@ class GetPhoneNumberTask(AgentTask[GetPhoneNumberResult]):
 
     def _build_confirm_tool(self, *, phone_number: str) -> llm.FunctionTool:
         @function_tool()
-        async def confirm_phone_number() -> None:
+        async def confirm_phone_number() -> str | None:
             """Call after the user confirms the phone number is correct."""
             if phone_number != self._current_phone_number:
-                self.session.generate_reply(
-                    instructions="The phone number has changed since confirmation was requested, ask the user to confirm the updated number."
+                # stale closure: update_phone_number ran again after this confirm
+                # tool was installed (e.g. parallel tool calls in the same turn)
+                return (
+                    "The phone number has changed since confirmation was requested, "
+                    "ask the user to confirm the updated number."
                 )
-                return
 
             if not self.done():
                 self.complete(GetPhoneNumberResult(phone_number=phone_number))
+            return None
 
         return confirm_phone_number
 
