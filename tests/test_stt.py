@@ -31,6 +31,7 @@ from livekit.plugins import (
     sarvam,
     soniox,
     speechmatics,
+    tencent,
 )
 
 from .utils import make_test_speech, wer
@@ -85,6 +86,7 @@ STTs: list[Callable[[], stt.STT]] = [
 # add value to test_stream (openai realtime shares the REST path with openai.STT())
 STREAM_ONLY_STTs: list[Callable[[], stt.STT]] = [
     pytest.param(lambda: openai.STT(use_realtime=True), id="livekit.plugins.openai.realtime"),
+    parameter_factory(tencent),
 ]
 
 

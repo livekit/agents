@@ -44,6 +44,7 @@ from livekit.plugins import (
     rime,
     speechify,
     spitch,
+    tencent,
 )
 
 from .fake_tts import FakeTTS
@@ -63,6 +64,17 @@ TEST_AUDIO_SYNTHESIZE_MULTI_TOKENS = pathlib.Path(
 
 PROXY_LISTEN = "0.0.0.0:443"
 DG_STT_LISTEN = "0.0.0.0:500"
+
+
+def _tencent_tts_info() -> dict:
+    try:
+        tts_v = tencent.TTS()
+    except ValueError as e:
+        pytest.skip(f"tencent: {e}")
+    return {
+        "tts": tts_v,
+        "proxy-upstream": "tts.cloud.tencent.com:443",
+    }
 
 
 def setup_deepgram_stt_proxy(toxiproxy: Toxiproxy) -> Proxy:
@@ -252,6 +264,7 @@ SYNTHESIZE_TTS = [
         },
         id="inworld",
     ),
+    pytest.param(_tencent_tts_info, id="tencent"),
     pytest.param(
         lambda: {
             "tts": inference.TTS(model="cartesia/sonic-3"),
@@ -524,6 +537,7 @@ STREAM_TTS = [
         },
         id="inference-rime",
     ),
+    pytest.param(_tencent_tts_info, id="tencent"),
 ]
 
 PLUGIN = os.getenv("PLUGIN", "").strip()
