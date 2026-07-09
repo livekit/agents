@@ -302,7 +302,10 @@ class RealtimeModel(llm.RealtimeModel):
                 else "gemini-2.5-flash-native-audio-preview-12-2025"
             )
 
-        mutable = "3.1" not in model
+        # live-translate models are audio-to-audio only and do not accept system
+        # instructions or tools, so their chat context / instructions are not mutable.
+        is_translate = "live-translate" in model
+        mutable = "3.1" not in model and not is_translate
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
                 message_truncation=False,
@@ -1140,10 +1143,19 @@ class RealtimeSession(llm.RealtimeSession):
     def _build_connect_config(self) -> types.LiveConnectConfig:
         temp = self._opts.temperature if is_given(self._opts.temperature) else None
 
-        tools_config = create_tools_config(
-            self._tools,
-            tool_behavior=self._opts.tool_behavior,
-            use_parameters_json_schema=False,
+        # live-translate models are audio-to-audio only: they translate speech via
+        # translation_config and do not accept system instructions, tools, or a
+        # prebuilt voice/speech config. Omit those fields so the API doesn't reject them.
+        is_translate = "live-translate" in self._opts.model
+
+        tools_config = (
+            None
+            if is_translate
+            else create_tools_config(
+                self._tools,
+                tool_behavior=self._opts.tool_behavior,
+                use_parameters_json_schema=False,
+            )
         )
         conf = types.LiveConnectConfig(
             response_modalities=self._opts.response_modalities,
@@ -1172,9 +1184,11 @@ class RealtimeSession(llm.RealtimeSession):
                 else None,
             ),
             system_instruction=types.Content(parts=[types.Part(text=self._opts.instructions)])
-            if is_given(self._opts.instructions)
+            if is_given(self._opts.instructions) and not is_translate
             else None,
-            speech_config=types.SpeechConfig(
+            speech_config=None
+            if is_translate
+            else types.SpeechConfig(
                 voice_config=types.VoiceConfig(
                     prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=self._opts.voice)
                 ),
