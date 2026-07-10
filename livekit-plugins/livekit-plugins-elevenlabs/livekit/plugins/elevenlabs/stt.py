@@ -91,7 +91,8 @@ class STT(stt.STT):
         server_vad: NotGivenOr[VADOptions] = NOT_GIVEN,
         include_timestamps: bool = False,
         http_session: aiohttp.ClientSession | None = None,
-        model_id: NotGivenOr[ElevenLabsSTTModels | str] = NOT_GIVEN,
+        model: NotGivenOr[ElevenLabsSTTModels | str] = NOT_GIVEN,
+        model_id: NotGivenOr[ElevenLabsSTTModels | str] = NOT_GIVEN,  # Deprecated
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
         no_verbatim: NotGivenOr[bool] = NOT_GIVEN,
         enable_logging: bool = True,
@@ -110,8 +111,9 @@ class STT(stt.STT):
             sample_rate (STTRealtimeSampleRates): Audio sample rate in Hz. Default is 16000.
             server_vad (NotGivenOr[VADOptions]): Server-side VAD options, only supported for Scribe v2 realtime model.
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
-            model_id (ElevenLabsSTTModels | str): ElevenLabs STT model to use. If not specified a default model will
+            model (ElevenLabsSTTModels | str): ElevenLabs STT model to use. If not specified a default model will
                 be selected based on parameters provided.
+            model_id (ElevenLabsSTTModels | str): Deprecated alias for `model`. Use `model` instead.
             keyterms (NotGivenOr[list[str]]): A list of keywords or phrases to bias the transcription towards.
                 Each keyterm can contain at most 5 words and must be less than 50 characters.
                 Maximum of 100 keyterms. Only supported for Scribe v2 batch recognition
@@ -123,20 +125,29 @@ class STT(stt.STT):
                 mode will be used. Defaults to True.
         """
 
-        if is_given(use_realtime):
-            if is_given(model_id):
+        if is_given(model_id):
+            if is_given(model):
                 logger.warning(
-                    "both `use_realtime` and `model_id` parameters are provided. `use_realtime` will be ignored."
+                    "both `model` and `model_id` parameters are provided. `model_id` will be ignored."
+                )
+            else:
+                logger.warning("`model_id` parameter is deprecated, use `model` instead.")
+                model = model_id
+
+        if is_given(use_realtime):
+            if is_given(model):
+                logger.warning(
+                    "both `use_realtime` and `model` parameters are provided. `use_realtime` will be ignored."
                 )
             else:
                 logger.warning(
                     "`use_realtime` parameter is deprecated. "
-                    "Specify a realtime model_id to enable streaming. "
-                    "Defaulting model_id to one based on use_realtime parameter. "
+                    "Specify a realtime model to enable streaming. "
+                    "Defaulting model to one based on use_realtime parameter. "
                 )
-                model_id = "scribe_v2_realtime" if use_realtime else "scribe_v1"
-        model_id = model_id if is_given(model_id) else "scribe_v1"
-        use_realtime = model_id == "scribe_v2_realtime"
+                model = "scribe_v2_realtime" if use_realtime else "scribe_v1"
+        model = model if is_given(model) else "scribe_v1"
+        use_realtime = model == "scribe_v2_realtime"
 
         if not use_realtime and is_given(server_vad):
             logger.warning("Server-side VAD is only supported for Scribe v2 realtime model")
@@ -164,7 +175,7 @@ class STT(stt.STT):
             sample_rate=sample_rate,
             server_vad=server_vad,
             include_timestamps=include_timestamps,
-            model_id=model_id,
+            model_id=model,
             keyterms=keyterms,
             no_verbatim=no_verbatim if is_given(no_verbatim) else False,
             enable_logging=enable_logging,
