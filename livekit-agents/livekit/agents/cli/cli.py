@@ -288,8 +288,8 @@ def _run_worker(server: AgentServer, args: proto.CliArgs) -> None:
     if args.simulation:
         server._simulation = True
 
-    if args.reload_addr and not args.dev:
-        raise ValueError("--reload-addr requires --dev")
+    if args.cli_addr and not args.dev:
+        raise ValueError("--cli-addr requires --dev")
 
     devmode = args.dev
     colored_logs = devmode or args.log_format == "colored"
@@ -320,10 +320,10 @@ def _run_worker(server: AgentServer, args: proto.CliArgs) -> None:
             logger.exception("worker failed")
 
     watch_client = None
-    if args.reload_addr:
+    if args.cli_addr:
         from .watcher import WatchClient
 
-        watch_client = WatchClient(server, args.reload_addr, loop=loop)
+        watch_client = WatchClient(server, args.cli_addr, loop=loop)
         watch_client.start()
 
     try:
