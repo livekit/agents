@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from types import SimpleNamespace
 from typing import cast
 
 import pytest
 
-from livekit.agents import llm, utils
+from livekit.agents import llm
+from livekit.agents._exceptions import APIError
 from livekit.agents.llm.remote_chat_context import RemoteChatContext
-from livekit.plugins.openai.realtime.realtime_model import RealtimeSession, _ResponseGeneration
+from livekit.plugins.openai.realtime.realtime_model import RealtimeSession, _is_fatal_error
 
 pytestmark = pytest.mark.unit
 
@@ -36,8 +36,16 @@ def test_update_chat_ctx_deletes_empty_remote_items() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# error classification (_handle_error): fatal -> non-recoverable
+# fatal error classification: a fatal error must stop the reconnect loop
 # --------------------------------------------------------------------------- #
+
+
+def test_is_fatal_error_matches_known_codes() -> None:
+    assert _is_fatal_error(SimpleNamespace(code="insufficient_quota"))
+    assert _is_fatal_error(SimpleNamespace(code=None, type="invalid_api_key"))
+    assert not _is_fatal_error(SimpleNamespace(code="server_error"))
+    assert not _is_fatal_error(SimpleNamespace())
+    assert not _is_fatal_error(None)
 
 
 def _handle_error_session(capture: dict[str, object]) -> RealtimeSession:
@@ -47,24 +55,29 @@ def _handle_error_session(capture: dict[str, object]) -> RealtimeSession:
             _realtime_model=SimpleNamespace(_provider_label="openai"),
             _emit_error=lambda error, recoverable: capture.update(recoverable=recoverable),
             _response_created_futures={},
+            _fatal_error=None,
         ),
     )
 
 
 def test_handle_error_marks_fatal_non_recoverable() -> None:
     captured: dict[str, object] = {}
+    session = _handle_error_session(captured)
     event = SimpleNamespace(
         error=SimpleNamespace(message="quota exceeded", code="insufficient_quota")
     )
-    RealtimeSession._handle_error(_handle_error_session(captured), event)
+    RealtimeSession._handle_error(session, event)
     assert captured["recoverable"] is False
+    assert isinstance(session._fatal_error, APIError)  # _main_task stops reconnecting
 
 
-def test_handle_error_marks_transient_recoverable() -> None:
+def test_handle_error_keeps_transient_recoverable() -> None:
     captured: dict[str, object] = {}
+    session = _handle_error_session(captured)
     event = SimpleNamespace(error=SimpleNamespace(message="server hiccup", code="server_error"))
-    RealtimeSession._handle_error(_handle_error_session(captured), event)
+    RealtimeSession._handle_error(session, event)
     assert captured["recoverable"] is True
+    assert session._fatal_error is None
 
 
 def test_handle_error_ignores_cancellation_failed() -> None:
@@ -74,98 +87,62 @@ def test_handle_error_ignores_cancellation_failed() -> None:
     assert captured == {}  # early return, nothing emitted
 
 
-def test_handle_error_fails_pending_reply_future_on_fatal() -> None:
-    # a fatal error must fail a pending generate_reply future (recoverable=False) so the
-    # caller fails fast instead of waiting out the timeout
-    fut: asyncio.Future[object] = asyncio.get_event_loop().create_future()
-    session = cast(
-        RealtimeSession,
-        SimpleNamespace(
-            _realtime_model=SimpleNamespace(_provider_label="openai"),
-            _emit_error=lambda error, recoverable: None,
-            _response_created_futures={"ev": fut},
-        ),
-    )
+async def test_handle_error_fails_pending_reply_future_on_fatal() -> None:
+    # a fatal error means a pending generate_reply will never be served; its future must
+    # fail immediately instead of waiting out the timeout
+    fut: asyncio.Future[llm.GenerationCreatedEvent] = asyncio.get_running_loop().create_future()
+    session = _handle_error_session({})
+    session._response_created_futures["ev"] = fut
+
     event = SimpleNamespace(error=SimpleNamespace(message="quota", code="insufficient_quota"))
     RealtimeSession._handle_error(session, event)
 
     assert fut.done()
-    exc = fut.exception()
-    assert isinstance(exc, llm.RealtimeError)
-    assert exc.recoverable is False
+    assert isinstance(fut.exception(), llm.RealtimeError)
+    assert not session._response_created_futures
 
 
-def test_handle_error_leaves_pending_future_on_transient() -> None:
-    fut: asyncio.Future[object] = asyncio.get_event_loop().create_future()
-    session = cast(
-        RealtimeSession,
-        SimpleNamespace(
-            _realtime_model=SimpleNamespace(_provider_label="openai"),
-            _emit_error=lambda error, recoverable: None,
-            _response_created_futures={"ev": fut},
-        ),
-    )
+async def test_handle_error_leaves_pending_future_on_transient() -> None:
+    fut: asyncio.Future[llm.GenerationCreatedEvent] = asyncio.get_running_loop().create_future()
+    session = _handle_error_session({})
+    session._response_created_futures["ev"] = fut
+
     event = SimpleNamespace(error=SimpleNamespace(message="hiccup", code="server_error"))
     RealtimeSession._handle_error(session, event)
 
-    assert not fut.done()  # transient error: let it time out / succeed normally
+    assert not fut.done()  # transient error: let it resolve or time out normally
     fut.cancel()  # cleanup
 
 
-# --------------------------------------------------------------------------- #
-# cancel_and_wait: cancels the active response and waits for it to clear
-# --------------------------------------------------------------------------- #
-
-
-def _active_generation(done_fut: asyncio.Future[None]) -> _ResponseGeneration:
-    return _ResponseGeneration(
-        message_ch=utils.aio.Chan(),
-        function_ch=utils.aio.Chan(),
-        messages={},
-        _created_timestamp=time.time(),
-        _done_fut=done_fut,
+def test_response_done_failed_fatal_sets_fatal_error() -> None:
+    captured: dict[str, object] = {}
+    session = _handle_error_session(captured)
+    event = SimpleNamespace(
+        response=SimpleNamespace(
+            id="resp_1",
+            status="failed",
+            status_details=SimpleNamespace(
+                error=SimpleNamespace(type="insufficient_quota", code="insufficient_quota")
+            ),
+        )
     )
+    RealtimeSession._handle_response_done_but_not_complete(session, event)
+    assert captured["recoverable"] is False
+    assert isinstance(session._fatal_error, APIError)
 
 
-async def test_cancel_and_wait_noop_without_active_generation() -> None:
-    sent: list[object] = []
-    session = cast(
-        RealtimeSession,
-        SimpleNamespace(has_active_generation=False, send_event=sent.append),
+def test_response_done_failed_transient_stays_recoverable() -> None:
+    captured: dict[str, object] = {}
+    session = _handle_error_session(captured)
+    event = SimpleNamespace(
+        response=SimpleNamespace(
+            id="resp_1",
+            status="failed",
+            status_details=SimpleNamespace(
+                error=SimpleNamespace(type="invalid_request_error", code="rate_limit_exceeded")
+            ),
+        )
     )
-    await RealtimeSession.cancel_and_wait(session)
-    assert sent == []
-
-
-async def test_cancel_and_wait_sends_cancel_and_waits_for_done() -> None:
-    done_fut: asyncio.Future[None] = asyncio.get_event_loop().create_future()
-    sent: list[object] = []
-    session = cast(
-        RealtimeSession,
-        SimpleNamespace(
-            has_active_generation=True,
-            _current_generation=_active_generation(done_fut),
-            send_event=sent.append,
-        ),
-    )
-    task = asyncio.ensure_future(RealtimeSession.cancel_and_wait(session, timeout=1.0))
-    await asyncio.sleep(0)
-    assert len(sent) == 1  # response.cancel was sent
-    assert not task.done()  # still waiting for the response to clear
-    done_fut.set_result(None)
-    await task
-
-
-async def test_cancel_and_wait_times_out_gracefully() -> None:
-    done_fut: asyncio.Future[None] = asyncio.get_event_loop().create_future()
-    session = cast(
-        RealtimeSession,
-        SimpleNamespace(
-            has_active_generation=True,
-            _current_generation=_active_generation(done_fut),
-            send_event=lambda ev: None,
-        ),
-    )
-    # returns without raising even though the response never clears
-    await RealtimeSession.cancel_and_wait(session, timeout=0.05)
-    done_fut.set_result(None)  # clean up the pending future
+    RealtimeSession._handle_response_done_but_not_complete(session, event)
+    assert captured["recoverable"] is True
+    assert session._fatal_error is None

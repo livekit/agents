@@ -25,7 +25,6 @@ from .llm import (
     LLMStream,
 )
 from .realtime import (
-    FATAL_REALTIME_ERROR_CODES,
     GenerationCreatedEvent,
     InputSpeechStartedEvent,
     InputSpeechStoppedEvent,
@@ -37,9 +36,7 @@ from .realtime import (
     RealtimeModelError,
     RealtimeSession,
     RealtimeSessionReconnectedEvent,
-    RealtimeSessionReconnectingEvent,
     RemoteItemAddedEvent,
-    is_fatal_error,
 )
 from .realtime_fallback_adapter import (
     RealtimeAvailabilityChangedEvent,
@@ -116,9 +113,7 @@ __all__ = [
     "GenerationCreatedEvent",
     "MessageGeneration",
     "RealtimeSessionReconnectedEvent",
-    "RealtimeSessionReconnectingEvent",
-    "FATAL_REALTIME_ERROR_CODES",
-    "is_fatal_error",
+    "RealtimeSessionRestoredEvent",
     "LLMError",
     "RemoteItemAddedEvent",
 ]

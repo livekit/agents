@@ -21,6 +21,7 @@ from .realtime import (
     RealtimeModel,
     RealtimeModelError,
     RealtimeSession,
+    RealtimeSessionReconnectedEvent,
 )
 from .tool_context import Tool, ToolChoice, ToolContext
 
@@ -335,7 +336,7 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
                 return
 
             # a swap is a reconnect from the caller's perspective
-            self._set_reconnected()
+            self.emit("session_reconnected", RealtimeSessionReconnectedEvent())
 
             # re-issue the interrupted reply on the new session
             if (
