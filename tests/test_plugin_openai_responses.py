@@ -4,8 +4,8 @@ import json
 
 import aiohttp
 import pytest
-
 from openai.types import Reasoning
+
 from livekit.plugins.openai.responses.llm import LLMStream, _ResponsesWebsocket
 
 pytestmark = pytest.mark.plugin("openai")
