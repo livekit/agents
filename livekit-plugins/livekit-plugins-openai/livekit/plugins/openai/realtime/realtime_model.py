@@ -955,6 +955,10 @@ class RealtimeSession(
 
         reconnecting = False
         while not self._msg_ch.closed:
+            if self._fatal_error is not None:
+                # also reachable when _run_ws exits normally (e.g. max_session_duration
+                # refresh) after a fatal error, not only via a connection failure below
+                raise self._fatal_error
             try:
                 ws_conn = await self._create_ws_conn()
                 if reconnecting:
