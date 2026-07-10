@@ -4,7 +4,7 @@ from .fallback_adapter import (
     FallbackChunkedStream,
     FallbackSynthesizeStream,
 )
-from .stream_adapter import StreamAdapter, StreamAdapterWrapper
+from .stream_adapter import ChunkingOptions, StreamAdapter, StreamAdapterWrapper
 from .stream_pacer import SentenceStreamPacer
 from .tts import (
     TTS,
@@ -23,6 +23,7 @@ __all__ = [
     "TTSCapabilities",
     "StreamAdapterWrapper",
     "StreamAdapter",
+    "ChunkingOptions",
     "ChunkedStream",
     "AvailabilityChangedEvent",
     "FallbackAdapter",

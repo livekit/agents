@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterable
-from typing import Any, ClassVar
+from dataclasses import dataclass
+from typing import Any, ClassVar, Literal
 
 from .. import tokenize, utils
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
@@ -22,22 +23,48 @@ DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS = APIConnectOptions(
 )
 
 
+@dataclass
+class ChunkingOptions:
+    min_chars: int | None = None
+    max_chars: int | None = None
+    oversized_sentence: Literal["allow", "error"] = "allow"
+
+    def __post_init__(self) -> None:
+        if self.min_chars is not None and self.min_chars <= 0:
+            raise ValueError("min_chars must be greater than 0")
+
+        if self.max_chars is not None and self.max_chars <= 0:
+            raise ValueError("max_chars must be greater than 0")
+
+        if self.oversized_sentence not in ("allow", "error"):
+            raise ValueError('oversized_sentence must be "allow" or "error"')
+
+
 class StreamAdapter(TTS):
     def __init__(
         self,
         *,
         tts: TTS,
         sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        chunking: NotGivenOr[ChunkingOptions] = NOT_GIVEN,
         text_pacing: SentenceStreamPacer | bool = False,
+        _xml_aware: bool = False,
     ) -> None:
+        if utils.is_given(sentence_tokenizer) and utils.is_given(chunking):
+            raise ValueError("sentence_tokenizer and chunking cannot both be provided")
+
         super().__init__(
             capabilities=TTSCapabilities(streaming=True, aligned_transcript=True),
             sample_rate=tts.sample_rate,
             num_channels=tts.num_channels,
         )
         self._wrapped_tts = tts
+        self._chunking: ChunkingOptions | None = chunking if utils.is_given(chunking) else None
         self._sentence_tokenizer = sentence_tokenizer or tokenize.blingfire.SentenceTokenizer(
-            retain_format=True
+            retain_format=True,
+            min_token_len=self._chunking.min_chars if self._chunking is not None else None,
+            max_token_len=self._chunking.max_chars if self._chunking is not None else None,
+            xml_aware=_xml_aware,
         )
         self._stream_pacer: SentenceStreamPacer | None = None
         if text_pacing is True:
@@ -127,6 +154,17 @@ class StreamAdapterWrapper(SynthesizeStream):
 
                 if not (text := ev.token.strip()):
                     continue
+
+                if (
+                    self._tts._chunking is not None
+                    and self._tts._chunking.max_chars is not None
+                    and self._tts._chunking.oversized_sentence == "error"
+                    and len(text) > self._tts._chunking.max_chars
+                ):
+                    raise ValueError(
+                        f"TTS sentence length {len(text)} exceeds max_chars "
+                        f"{self._tts._chunking.max_chars}"
+                    )
 
                 self._mark_started()
                 async with self._tts._wrapped_tts.synthesize(

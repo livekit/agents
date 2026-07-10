@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 
 from livekit import rtc
 
-from .. import inference, llm, stt, tokenize, tts, utils, vad
+from .. import inference, llm, stt, tts, utils, vad
 from ..llm import ChatContext, RealtimeModel, ToolError, find_function_tools
 from ..llm.chat_context import Instructions, _ReadOnlyChatContext
 from ..log import logger
@@ -23,6 +23,7 @@ from .turn import TurnHandlingOptions, _migrate_turn_handling
 if TYPE_CHECKING:
     from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
+    from ..tts import ChunkingOptions as TTSChunkingOptions
     from .agent_activity import AgentActivity
     from .agent_session import AgentSession
     from .audio_recognition import AudioRecognition
@@ -50,6 +51,7 @@ class Agent:
         tool_handling: NotGivenOr[ToolHandlingOptions] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
+        tts_chunking: NotGivenOr[TTSChunkingOptions] = NOT_GIVEN,
         min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         # deprecated
@@ -93,6 +95,7 @@ class Agent:
         self._stt = stt
         self._llm = llm
         self._tts = tts
+        self._tts_chunking = tts_chunking
         self._vad = vad
 
         self._allow_interruptions: NotGivenOr[bool] = NOT_GIVEN
@@ -524,11 +527,9 @@ class Agent:
             if not activity.tts.capabilities.streaming:
                 wrapped_tts = tts.StreamAdapter(
                     tts=wrapped_tts,
-                    sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(
-                        retain_format=True,
-                        # markup only exists in the stream when expressive is active
-                        xml_aware=expressive_active,
-                    ),
+                    chunking=agent.tts_chunking,
+                    # markup only exists in the stream when expressive is active
+                    _xml_aware=expressive_active,
                 )
 
             # Mark whether expressive is active for this synthesis, synchronously
@@ -646,6 +647,14 @@ class Agent:
             NotGivenOr[tts.TTS | None]: An optional TTS component for generating audio output.
         """  # noqa: E501
         return self._tts
+
+    @property
+    def tts_chunking(self) -> NotGivenOr[TTSChunkingOptions]:
+        """
+        Retrieves chunking options used when a non-streaming TTS is automatically
+        wrapped in a streaming adapter.
+        """
+        return self._tts_chunking
 
     @property
     def mcp_servers(self) -> NotGivenOr[list[mcp.MCPServer] | None]:
