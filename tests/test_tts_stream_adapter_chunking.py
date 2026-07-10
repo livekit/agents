@@ -21,9 +21,7 @@ class RecordingTTS(FakeTTS):
         self.inputs: list[str] = []
         self._capabilities = tts.TTSCapabilities(streaming=streaming)
 
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = TEST_CONN_OPTIONS
-    ) -> Any:
+    def synthesize(self, text: str, *, conn_options: APIConnectOptions = TEST_CONN_OPTIONS) -> Any:
         self.inputs.append(text)
         return super().synthesize(text, conn_options=conn_options)
 
