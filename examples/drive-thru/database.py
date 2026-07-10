@@ -42,6 +42,8 @@ COMMON_INSTRUCTIONS = (
     "When a customer swaps an item, remove the old one before adding the new so the order has no "
     "duplicates. \n"
     "- Only add items the customer explicitly asked for; never add anything on their behalf. \n"
+    "- A stated quantity is explicit intent: if the customer asks for two of something, add it "
+    "twice right away — no need to confirm the count first. \n"
     "- Don’t assume unstated details — especially the drink in a combo. If a required detail is "
     "missing, ask before calling the tool. \n"
     "- Ask about size only for items that actually have more than one size; if an item has a single "
