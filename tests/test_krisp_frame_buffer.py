@@ -8,6 +8,10 @@ never inject silence *between* real audio. Doing so produces audible gaps
 happens whenever the input frame size is not a clean multiple of the internal
 chunk size.
 
+With an identity session the output is a pure subsequence of the input — no
+zeros are ever inserted — so the whole output stream must equal the input,
+minus the tail still buffered in flight.
+
 The tests are hermetic — they do not import or require the ``krisp_audio`` wheel.
 """
 
@@ -46,7 +50,6 @@ def _make_processor(sample_rate: int, chunk_samples: int) -> _KrispLicenseFrameP
     proc._frame_duration_ms = int(chunk_samples * 1000 / sample_rate)
     proc._in_buf = np.empty(0, dtype=np.int16)
     proc._out_buf = np.empty(0, dtype=np.int16)
-    proc._warming_up = True
     return proc
 
 
@@ -96,9 +99,10 @@ def test_no_interior_silence_when_frame_smaller_than_chunk() -> None:
     assert _interior_zeros(out_stream) == 0, (
         "silence was injected between real audio — this is the cutting in/out artifact"
     )
-    # With an identity session the real audio must survive intact and in order.
-    real = out_stream[np.flatnonzero(out_stream)[0] :]
-    assert np.array_equal(real, in_stream[: real.size])
+    # With an identity session and no injected silence, the output is exactly
+    # the input in order, minus the tail still buffered in flight.
+    assert out_stream.size > 0
+    assert np.array_equal(out_stream, in_stream[: out_stream.size])
 
 
 def test_no_interior_silence_with_variable_frame_sizes() -> None:
