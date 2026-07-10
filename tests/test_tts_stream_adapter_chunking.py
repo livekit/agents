@@ -114,11 +114,11 @@ async def test_end_input_emits_buffered_text() -> None:
     assert _normalized_inputs(wrapped) == ["This buffered text has no terminator"]
 
 
-async def test_oversized_sentence_allow_passes_long_single_sentence() -> None:
+async def test_oversized_sentence_passes_through() -> None:
     wrapped = RecordingTTS()
     adapter = tts.StreamAdapter(
         tts=wrapped,
-        chunking=tts.ChunkingOptions(max_chars=20, oversized_sentence="allow"),
+        chunking=tts.ChunkingOptions(max_chars=20),
     )
 
     await _collect_stream(adapter, "This single sentence is longer than the configured cap.")
@@ -126,19 +126,6 @@ async def test_oversized_sentence_allow_passes_long_single_sentence() -> None:
     assert _normalized_inputs(wrapped) == [
         "This single sentence is longer than the configured cap."
     ]
-
-
-async def test_oversized_sentence_error_raises_on_long_single_sentence() -> None:
-    wrapped = RecordingTTS()
-    adapter = tts.StreamAdapter(
-        tts=wrapped,
-        chunking=tts.ChunkingOptions(max_chars=20, oversized_sentence="error"),
-    )
-
-    with pytest.raises(ValueError, match="exceeds max_chars"):
-        await _collect_stream(adapter, "This single sentence is longer than the configured cap.")
-
-    assert wrapped.inputs == []
 
 
 async def test_agent_tts_chunking_is_passed_to_automatic_stream_adapter(monkeypatch: Any) -> None:
@@ -228,7 +215,6 @@ def test_valid_chunking_options(
     [
         ({"min_chars": 0}, "min_chars"),
         ({"max_chars": 0}, "max_chars"),
-        ({"oversized_sentence": "split"}, "oversized_sentence"),
     ],
 )
 def test_invalid_chunking_options_raise(kwargs: dict[str, Any], match: str) -> None:

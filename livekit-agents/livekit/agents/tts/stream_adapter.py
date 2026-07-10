@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar
 
 from .. import tokenize, utils
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
@@ -27,7 +27,6 @@ DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS = APIConnectOptions(
 class ChunkingOptions:
     min_chars: int | None = None
     max_chars: int | None = None
-    oversized_sentence: Literal["allow", "error"] = "allow"
 
     def __post_init__(self) -> None:
         if self.min_chars is not None and self.min_chars <= 0:
@@ -35,9 +34,6 @@ class ChunkingOptions:
 
         if self.max_chars is not None and self.max_chars <= 0:
             raise ValueError("max_chars must be greater than 0")
-
-        if self.oversized_sentence not in ("allow", "error"):
-            raise ValueError('oversized_sentence must be "allow" or "error"')
 
 
 class StreamAdapter(TTS):
@@ -154,17 +150,6 @@ class StreamAdapterWrapper(SynthesizeStream):
 
                 if not (text := ev.token.strip()):
                     continue
-
-                if (
-                    self._tts._chunking is not None
-                    and self._tts._chunking.max_chars is not None
-                    and self._tts._chunking.oversized_sentence == "error"
-                    and len(text) > self._tts._chunking.max_chars
-                ):
-                    raise ValueError(
-                        f"TTS sentence length {len(text)} exceeds max_chars "
-                        f"{self._tts._chunking.max_chars}"
-                    )
 
                 self._mark_started()
                 async with self._tts._wrapped_tts.synthesize(
