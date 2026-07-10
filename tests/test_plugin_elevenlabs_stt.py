@@ -85,7 +85,7 @@ def test_manual_commit_still_waits_for_empty_commit() -> None:
 
 
 def _stt(**kwargs: object) -> elevenlabs_stt.STT:
-    return elevenlabs_stt.STT(api_key="test-key", model_id="scribe_v2_realtime", **kwargs)
+    return elevenlabs_stt.STT(api_key="test-key", model="scribe_v2_realtime", **kwargs)
 
 
 def test_no_verbatim_defaults_to_false() -> None:

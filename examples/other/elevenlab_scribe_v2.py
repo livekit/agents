@@ -25,7 +25,7 @@ async def entrypoint(ctx: JobContext) -> None:
             "min_speech_duration_ms": 100,
             "min_silence_duration_ms": 300,
         },
-        model_id="scribe_v2_realtime",
+        model="scribe_v2_realtime",
     )
 
     session: AgentSession = AgentSession(
