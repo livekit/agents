@@ -114,7 +114,7 @@ async def test_end_input_emits_buffered_text() -> None:
     assert _normalized_inputs(wrapped) == ["This buffered text has no terminator"]
 
 
-async def test_oversized_sentence_passes_through() -> None:
+async def test_max_chars_does_not_split_oversized_sentence() -> None:
     wrapped = RecordingTTS()
     adapter = tts.StreamAdapter(
         tts=wrapped,

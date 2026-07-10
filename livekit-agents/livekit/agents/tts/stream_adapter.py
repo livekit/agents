@@ -25,6 +25,13 @@ DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS = APIConnectOptions(
 
 @dataclass
 class ChunkingOptions:
+    """Sentence batching hints for the default StreamAdapter tokenizer.
+
+    max_chars is a soft sentence-batch cap: the tokenizer avoids adding another
+    sentence when that would exceed the cap, but it does not split a single
+    oversized sentence.
+    """
+
     min_chars: int | None = None
     max_chars: int | None = None
 
