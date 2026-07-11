@@ -88,7 +88,11 @@ class FastResponseAgent(Agent):
 
             yield chunk
 
-        # example: fast response conditioned on the tool call name and the presence of a text message
+        # When the model emits its own text preamble before a tool call, the pipeline
+        # already flushes it to TTS automatically at the tool boundary (via the
+        # `tool_call_started` marker), so no manual flush is needed for that case.
+        #
+        # example: scripted fast response for when the model calls the tool with no preamble
         tool_names = [tool.name for tool in called_tools]
         if not has_text_message and "get_weather" in tool_names:
             logger.info("Fast response triggered")

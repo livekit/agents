@@ -388,6 +388,7 @@ class LLMStream(llm.LLMStream):
         self._fnc_raw_arguments: str | None = None
         self._tool_extra: dict[str, Any] | None = None
         self._tool_index: int | None = None
+        self._tool_start_signaled = False
         retryable = True
 
         try:
@@ -507,6 +508,19 @@ class LLMStream(llm.LLMStream):
                     self._fnc_raw_arguments = tool.function.arguments or ""
                     # Extract extra from tool call (e.g., Google thought signatures)
                     self._tool_extra = getattr(tool, "extra_content", None)
+
+                    # Signal the start of the tool call so a buffered text preamble can be
+                    # flushed to TTS now, rather than after the arguments finish streaming
+                    # (which can add ~1s of dead air). The marker carries no tool_calls, so
+                    # it never triggers tool execution; the assembled call is still emitted
+                    # once the arguments are complete. Only the first tool call of a turn
+                    # can have a preamble to flush.
+                    if not self._tool_start_signaled and call_chunk is None:
+                        self._tool_start_signaled = True
+                        return llm.ChatChunk(
+                            id=id,
+                            delta=llm.ChoiceDelta(role="assistant", tool_call_started=True),
+                        )
                 elif tool.function.arguments:
                     self._fnc_raw_arguments += tool.function.arguments  # type: ignore
 
