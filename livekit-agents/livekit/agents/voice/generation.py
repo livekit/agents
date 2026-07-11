@@ -221,6 +221,11 @@ async def _llm_inference_task(
                 if not chunk.delta:
                     continue
 
+                # A tool call is starting: flush any buffered text preamble to TTS now,
+                # so it plays while the tool arguments are still streaming in.
+                if chunk.delta.tool_call_started:
+                    text_ch.send_nowait(FlushSentinel())
+
                 if chunk.delta.tool_calls:
                     for tool in chunk.delta.tool_calls:
                         if tool.type != "function":
