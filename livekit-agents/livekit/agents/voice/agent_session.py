@@ -28,7 +28,7 @@ from livekit import rtc
 from livekit.protocol.agent_pb import agent_session as agent_pb
 
 from .. import cli, inference, llm, stt, tts, utils, vad
-from .._exceptions import APIError
+from .._exceptions import APIError, APIQuotaExceededError
 from ..job import get_job_context
 from ..llm import AgentHandoff, ChatContext, MetricsReport
 from ..llm.chat_context import Instructions
@@ -238,6 +238,16 @@ class VoiceActivityVideoSampler:
 
 DEFAULT_TTS_TEXT_TRANSFORMS: list[TextTransforms] = ["filter_markdown", "filter_emoji"]
 
+DEFAULT_ERROR_MESSAGE = (
+    "I'm sorry, the assistant is temporarily unavailable. Please try again later."
+)
+"""Spoken when an unrecoverable error closes the session and no more specific
+message is available (e.g. a quota error without a gateway ``hint``)."""
+
+# upper bound on how long we wait for the error message to play before closing,
+# so a failing TTS can never stall session teardown
+_ERROR_MESSAGE_PLAYOUT_TIMEOUT = 16.0
+
 
 class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @deprecate_params(
@@ -280,6 +290,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         ivr_detection: bool = False,
         user_away_timeout: float | None = 15.0,
         session_close_transcript_timeout: float = 2.0,
+        error_message: NotGivenOr[str | None] = NOT_GIVEN,
         # Runtime settings
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
@@ -361,6 +372,20 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             session_close_transcript_timeout (float, optional): Seconds to wait for the
                 final STT transcript when closing the session (after audio is detached).
                 Default ``2.0`` s (independent of ``commit_user_turn``'s ``transcript_timeout``).
+            error_message (str | None, optional): Message spoken to the user just before
+                the session closes on a terminal/unrecoverable error, so the agent never
+                goes silent. Pass a string to speak it on any unrecoverable error; pass
+                ``None`` to disable spoken errors entirely. When *NOT_GIVEN* (the default),
+                nothing is spoken for generic errors, but a terminal quota error
+                (:class:`~livekit.agents.APIQuotaExceededError` from depleted LiveKit
+                Inference credits) speaks its gateway ``hint`` — falling back to a generic
+                message when no hint is provided. The session always emits ``error`` and
+                ``close`` events regardless of this setting.
+                Note: the message is synthesized through the configured TTS, so it cannot
+                be heard if TTS itself is the failed/exhausted resource. For a TTS-resilient
+                signal, handle ``@session.on("error")`` and call
+                ``session.say(..., audio=...)`` with pre-recorded audio instead
+                (see https://docs.livekit.io/reference/agents/events/#pre-recorded-audio-fallback).
             preemptive_generation (NotGivenOr[bool | PreemptiveGenerationOptions]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
             min_endpointing_delay (NotGivenOr[float]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
             max_endpointing_delay (NotGivenOr[float]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
@@ -438,6 +463,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # expressive mode is not publicly exposed; the pipeline stays disabled
         self._expressive: bool | ExpressiveOptions = False
         self._conn_options = conn_options or SessionConnectOptions()
+        self._error_message = error_message
         self._started = False
 
         if isinstance(stt, str):
@@ -1591,14 +1617,21 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._closing_task or error.recoverable:
             return
 
-        if error.type == "llm_error":
-            self._llm_error_counts += 1
-            if self._llm_error_counts <= self.conn_options.max_unrecoverable_errors:
-                return
-        elif error.type == "tts_error":
-            self._tts_error_counts += 1
-            if self._tts_error_counts <= self.conn_options.max_unrecoverable_errors:
-                return
+        # A terminal error (e.g. out of LiveKit Inference credits) will fail identically
+        # every turn, so surface it on the first occurrence instead of absorbing
+        # `max_unrecoverable_errors` silent dead turns. Transient errors (incl. rate
+        # limits) still fall through the tolerance below.
+        terminal = isinstance(error.error, APIError) and error.error.terminal
+
+        if not terminal:
+            if error.type == "llm_error":
+                self._llm_error_counts += 1
+                if self._llm_error_counts <= self.conn_options.max_unrecoverable_errors:
+                    return
+            elif error.type == "tts_error":
+                self._tts_error_counts += 1
+                if self._tts_error_counts <= self.conn_options.max_unrecoverable_errors:
+                    return
 
         if isinstance(error.error, APIError):
             logger.error(f"AgentSession is closing due to unrecoverable error: {error.error}")
@@ -1611,10 +1644,57 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         def on_close_done(_: asyncio.Task[None]) -> None:
             self._closing_task = None
 
-        self._closing_task = asyncio.create_task(
-            self._aclose_impl(error=error, reason=CloseReason.ERROR)
-        )
+        self._closing_task = asyncio.create_task(self._close_on_error(error))
         self._closing_task.add_done_callback(on_close_done)
+
+    def _resolve_error_message(self, error: Exception) -> str | None:
+        """Resolve the message to speak before closing on an unrecoverable error.
+
+        Returns ``None`` when nothing should be spoken (see the ``error_message``
+        argument of :class:`AgentSession`).
+        """
+        if self._error_message is None:
+            return None  # explicitly disabled
+
+        if is_given(self._error_message):
+            return self._error_message  # speak the configured message on any error
+
+        # default: only speak for a terminal quota error, preferring the gateway hint.
+        # Transient errors (incl. rate limits) stay silent — speaking "out of credits"
+        # for a recoverable blip would be misleading.
+        if isinstance(error, APIQuotaExceededError) and error.terminal:
+            return error.hint or DEFAULT_ERROR_MESSAGE
+
+        return None
+
+    async def _close_on_error(
+        self, error: llm.LLMError | stt.STTError | tts.TTSError | llm.RealtimeModelError
+    ) -> None:
+        try:
+            await self._try_speak_error_message(error.error)
+        finally:
+            await self._aclose_impl(error=error, reason=CloseReason.ERROR)
+
+    async def _try_speak_error_message(self, error: Exception) -> None:
+        """Best-effort: speak a fallback message before the session is torn down.
+
+        Never raises — a failing or unavailable TTS just falls through to close, so
+        the user still gets the ``error``/``close`` events.
+        """
+        message = self._resolve_error_message(error)
+        if not message or self._activity is None or self.output.audio is None:
+            return
+
+        # NOTE: this synthesizes through the configured TTS, so it won't be heard if TTS
+        # itself is the exhausted/failed resource. Developers needing a TTS-resilient
+        # signal should use @session.on("error") + session.say(..., audio=<pre-recorded>).
+        try:
+            handle = self.say(message, allow_interruptions=False, add_to_chat_ctx=False)
+            await asyncio.wait_for(
+                handle.wait_for_playout(), timeout=_ERROR_MESSAGE_PLAYOUT_TIMEOUT
+            )
+        except Exception:
+            logger.warning("failed to play the unrecoverable-error message", exc_info=True)
 
     @utils.log_exceptions(logger=logger)
     async def _forward_audio_task(self) -> None:
