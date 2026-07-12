@@ -448,35 +448,18 @@ class JobContext:
         when you want the scenario in your entrypoint (e.g. to seed scenario-specific
         mocks). Resolves synchronously from the job's ``lk.simulator.dispatch``
         attribute (a protojson ``SimulationDispatch``), available as soon as the
-        entrypoint runs; a production job has none and returns ``None``. Falls back
-        to the simulator participant's attributes for servers that predate job
-        attributes, in which case the simulator must have joined before this
-        resolves.
+        entrypoint runs; a production job has none and returns ``None``.
         """
         if self._simulation_resolved:
             return self._simulation_ctx
 
-        # Preferred source: the simulation attributes ride the agent dispatch and
-        # land on the job itself, so they are readable before the room connects.
+        # The simulation attributes ride the agent dispatch and land on the job
+        # itself, so this is final before the room even connects.
+        self._simulation_resolved = True
+
         metadata = self._info.job.attributes.get(ATTRIBUTE_SIMULATOR_DISPATCH, "")
         if not metadata:
-            # Fallback for servers that predate job attributes: the simulator
-            # participant carries the same attributes.
-            for participant in self._room.remote_participants.values():
-                if ATTRIBUTE_SIMULATOR not in participant.attributes:
-                    continue
-                if dispatch_json := participant.attributes.get(ATTRIBUTE_SIMULATOR_DISPATCH):
-                    metadata = dispatch_json
-                    break
-        if not metadata:
-            # The simulator joins before the agent, so a miss is only final
-            # once the room is connected and a remote participant is visible.
-            self._simulation_resolved = (
-                self._room.isconnected() and len(self._room.remote_participants) > 0
-            )
             return None
-
-        self._simulation_resolved = True
 
         from google.protobuf import json_format
 
