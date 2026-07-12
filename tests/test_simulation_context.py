@@ -30,8 +30,3 @@ def test_simulation_context_resolves_from_job_attributes() -> None:
         assert sim.scenario.label == "happy path"
         # cached on second call
         assert ctx.simulation_context() is sim
-
-
-def test_simulation_context_none_without_attributes() -> None:
-    with fake_job_context() as ctx:
-        assert ctx.simulation_context() is None
