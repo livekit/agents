@@ -180,12 +180,20 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         super()._handle_function_call(item)
 
     def _handle_conversion_item_added(self, event: ConversationItemAdded) -> None:
-        # xAI's `conversation.item.added` event always has the previous_item_id as None
-        # replace it with the last item in the remote chat context
-        if event.previous_item_id is None:
-            event.previous_item_id = (
-                self._remote_chat_ctx._tail.item.id if self._remote_chat_ctx._tail else None
-            )
+        # xAI's `conversation.item.added` event always has the previous_item_id as None;
+        # anchor it to the last item in the remote chat context.
+        #
+        # The event can also reference an item our local copy no longer has, after an
+        # interruption's truncation/delete traffic desyncs us from the server (the
+        # `conversation.item.deleted` event carries no item id, so the delete is guessed
+        # and can drop the wrong item). Anchoring to a missing item makes the base handler
+        # raise `previous_item_id not found` and drop this item, which strands every later
+        # item that chains off it and corrupts the whole context. Fall back to the current
+        # tail so a single desync self-heals instead of cascading.
+        prev_id = event.previous_item_id
+        if prev_id is None or self._remote_chat_ctx.get(prev_id) is None:
+            prev_id = self._remote_chat_ctx._tail.item.id if self._remote_chat_ctx._tail else None
+        event.previous_item_id = prev_id
 
         super()._handle_conversion_item_added(event)
 
