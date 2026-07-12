@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from livekit import rtc
 
+    from .ipc.channel import Message
     from .ipc.inference_executor import InferenceExecutor
     from .job import JobContext
 
@@ -21,6 +22,14 @@ class _NoopInferenceExecutor:
 
     async def do_inference(self, method: str, data: bytes) -> bytes | None:
         raise NotImplementedError("inference executor not available in a fake job")
+
+
+class _NoopIPCClient:
+    """A fake (worker-less) job has no main process to talk to; text-mode responses
+    (the only user of the IPC client) aren't supported here."""
+
+    async def send(self, msg: Message) -> None:
+        raise NotImplementedError("IPC client not available in a fake job")
 
 
 @contextlib.contextmanager
@@ -81,6 +90,7 @@ def fake_job_context(
         on_connect=lambda: None,
         on_shutdown=lambda _reason: None,
         inference_executor=inference_executor or _NoopInferenceExecutor(),
+        ipc_client=_NoopIPCClient(),
     )
     # the caller owns the room connection (a fake job has no signal URL), so mark the
     # context connected to keep JobContext.connect() — invoked by session.start() — a no-op

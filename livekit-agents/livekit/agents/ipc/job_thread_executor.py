@@ -23,6 +23,7 @@ class _ProcOpts:
     initialize_process_fnc: Callable[[JobProcess], Any]
     job_entrypoint_fnc: Callable[[JobContext], Awaitable[None]]
     session_end_fnc: Callable[[JobContext], Awaitable[None]] | None
+    text_response_fnc: Callable[[proto.TextResponse], None]
     simulation_end_fnc: Callable[[Any], Any] | None
     initialize_timeout: float
     close_timeout: float
@@ -39,6 +40,7 @@ class ThreadJobExecutor:
         initialize_process_fnc: Callable[[JobProcess], Any],
         job_entrypoint_fnc: Callable[[JobContext], Awaitable[None]],
         session_end_fnc: Callable[[JobContext], Awaitable[None]] | None,
+        text_response_fnc: Callable[[proto.TextResponse], None],
         simulation_end_fnc: Callable[[Any], Any] | None,
         inference_executor: InferenceExecutor | None,
         initialize_timeout: float,
@@ -54,6 +56,7 @@ class ThreadJobExecutor:
             initialize_process_fnc=initialize_process_fnc,
             job_entrypoint_fnc=job_entrypoint_fnc,
             session_end_fnc=session_end_fnc,
+            text_response_fnc=text_response_fnc,
             simulation_end_fnc=simulation_end_fnc,
             initialize_timeout=initialize_timeout,
             close_timeout=close_timeout,
@@ -288,8 +291,18 @@ class ThreadJobExecutor:
         monitor_task = asyncio.create_task(self._monitor_task())
 
         await self._join_fut
+        await utils.aio.cancel_and_wait(ping_task)
 
-        await utils.aio.cancel_and_wait(ping_task, monitor_task)
+        # let monitor_task drain any remaining buffered messages
+        try:
+            await asyncio.wait_for(monitor_task, timeout=2.0)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "draining remaining messages timed out after thread exit",
+                extra=self.logging_extra(),
+            )
+            await utils.aio.cancel_and_wait(monitor_task)
+
         await utils.aio.cancel_and_wait(*self._inference_tasks)
 
         with contextlib.suppress(duplex_unix.DuplexClosed):
@@ -328,6 +341,9 @@ class ThreadJobExecutor:
                 task = asyncio.create_task(self._do_inference_task(msg))
                 self._inference_tasks.add(task)
                 task.add_done_callback(self._inference_tasks.discard)
+
+            if isinstance(msg, proto.TextResponse):
+                self._opts.text_response_fnc(msg)
 
         # resolve pending futures when the channel closes
         if not self._shutdown_ack_fut.done():

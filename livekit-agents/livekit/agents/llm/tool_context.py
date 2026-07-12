@@ -30,12 +30,15 @@ from typing import (
     Literal,
     TypeGuard,
     TypeVar,
+    cast,
     get_type_hints,
     overload,
 )
 
 from pydantic import Field
 from typing_extensions import NotRequired, ParamSpec, Required, Self, TypedDict
+
+from livekit.durable.function import DurableFunction, durable
 
 from ..log import logger
 from . import _provider_format
@@ -152,6 +155,7 @@ class StopResponse(Exception):
 class ToolFlag(Flag):
     NONE = 0
     IGNORE_ON_ENTER = auto()
+    DURABLE = auto()
     CANCELLABLE = auto()
 
 
@@ -207,8 +211,17 @@ _R = TypeVar("_R", bound=Awaitable[Any])
 class _BaseFunctionTool(Tool, Generic[_InfoT, _P, _R]):
     """Base class for function tool wrappers with descriptor support."""
 
-    def __init__(self, func: Callable[_P, _R], info: _InfoT, instance: Any = None) -> None:
-        functools.update_wrapper(self, func)
+    def __init__(
+        self, func: Callable[_P, _R] | DurableFunction, info: _InfoT, instance: Any = None
+    ) -> None:
+        if isinstance(func, DurableFunction):
+            self._raw_func = cast(Callable[_P, _R], func.registered_fn.fn)
+        else:
+            self._raw_func = func
+            if info.flags & ToolFlag.DURABLE:
+                func = durable(func)
+
+        functools.update_wrapper(self, self._raw_func)
         self._func = func
         self._info: _InfoT = info
         self._instance = instance
@@ -227,10 +240,12 @@ class _BaseFunctionTool(Tool, Generic[_InfoT, _P, _R]):
 
         # bind the tool to an instance
         bound_tool = self.__class__(self._func, self._info, instance=obj)
-        sig = inspect.signature(self._func)
+
         # skip the instance parameter (e.g. usually the 'self')
+        sig = inspect.signature(self._raw_func)
         params = list(sig.parameters.values())[1:]
         bound_tool.__signature__ = sig.replace(parameters=params)  # type: ignore[attr-defined]
+
         return bound_tool
 
     def __call__(self, *args: _P.args, **kwargs: _P.kwargs) -> _R:

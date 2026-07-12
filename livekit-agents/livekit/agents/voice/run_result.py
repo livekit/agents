@@ -7,7 +7,7 @@ import functools
 import json
 import os
 import weakref
-from collections.abc import Callable, Generator
+from collections.abc import AsyncIterator, Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import (
@@ -26,7 +26,7 @@ from .. import llm
 from ..llm import function_tool, utils as llm_utils
 from ..telemetry import trace_types, tracer
 from ..types import NOT_GIVEN, NotGivenOr
-from ..utils import is_given
+from ..utils import aio, is_given
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
@@ -120,6 +120,7 @@ class RunResult(Generic[Run_T]):
         )
         self._session = session
         self._recorded_items: list[RunEvent] = []
+        self._recorded_items_ch: aio.Chan[RunEvent] = aio.Chan()
         self._final_output: Run_T | None = None
 
         self.__last_speech_handle: SpeechHandle | None = None
@@ -189,6 +190,22 @@ class RunResult(Generic[Run_T]):
 
         return _await_impl().__await__()
 
+    async def __anext__(self) -> RunEvent:
+        try:
+            val = await self._recorded_items_ch.__anext__()
+        except StopAsyncIteration:
+            # TODO(long): this may raise a ToolError, maybe we should handle it differently?
+            if self._done_fut.done() and (exc := self._done_fut.exception()):
+                raise exc  # noqa: B904
+
+            raise StopAsyncIteration from None
+
+        return val
+
+    def __aiter__(self) -> AsyncIterator[RunEvent]:
+        # NOTE: the order of FunctionCallEvent and FunctionCallOutputEvent is not guaranteed to be chronological
+        return self
+
     def _agent_handoff(
         self, *, item: llm.AgentHandoff, old_agent: Agent | None, new_agent: Agent
     ) -> None:
@@ -198,6 +215,7 @@ class RunResult(Generic[Run_T]):
         event = AgentHandoffEvent(item=item, old_agent=old_agent, new_agent=new_agent)
         index = self._find_insertion_index(created_at=event.item.created_at)
         self._recorded_items.insert(index, event)
+        self._recorded_items_ch.send_nowait(event)
 
     def _item_added(self, item: llm.ChatItem) -> None:
         if self._done_fut.done():
@@ -214,6 +232,7 @@ class RunResult(Generic[Run_T]):
         if event is not None:
             index = self._find_insertion_index(created_at=event.item.created_at)
             self._recorded_items.insert(index, event)
+            self._recorded_items_ch.send_nowait(event)
 
     def _watch_handle(self, handle: SpeechHandle | asyncio.Task) -> None:
         if self._done_fut.done():
@@ -245,6 +264,7 @@ class RunResult(Generic[Run_T]):
             self._mark_done()
 
     def _mark_done(self) -> None:
+        self._recorded_items_ch.close()
         with contextlib.suppress(asyncio.InvalidStateError):
             if self.__last_speech_handle is None:
                 self._done_fut.set_result(None)

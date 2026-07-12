@@ -99,6 +99,7 @@ __all__ = [
     "ToolError",
     "ToolFlag",
     "StopResponse",
+    "ToolFlag",
     "utils",
     "remote_chat_context",
     "FunctionToolCall",

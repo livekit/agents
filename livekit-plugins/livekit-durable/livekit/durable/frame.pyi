@@ -5,19 +5,19 @@ from typing import Any
 def get_frame_ip(frame: FrameType | Coroutine | Generator | AsyncGenerator) -> int:
     """Get instruction pointer of a generator or coroutine."""
 
-def set_frame_ip(frame: FrameType | Coroutine | Generator | AsyncGenerator, ip: int):
+def set_frame_ip(frame: FrameType | Coroutine | Generator | AsyncGenerator, ip: int) -> None:
     """Set instruction pointer of a generator or coroutine."""
 
 def get_frame_sp(frame: FrameType | Coroutine | Generator | AsyncGenerator) -> int:
     """Get stack pointer of a generator or coroutine."""
 
-def set_frame_sp(frame: FrameType | Coroutine | Generator | AsyncGenerator, sp: int):
+def set_frame_sp(frame: FrameType | Coroutine | Generator | AsyncGenerator, sp: int) -> None:
     """Set stack pointer of a generator or coroutine."""
 
 def get_frame_bp(frame: FrameType | Coroutine | Generator | AsyncGenerator) -> int:
     """Get block pointer of a generator or coroutine."""
 
-def set_frame_bp(frame: FrameType | Coroutine | Generator | AsyncGenerator, bp: int):
+def set_frame_bp(frame: FrameType | Coroutine | Generator | AsyncGenerator, bp: int) -> None:
     """Set block pointer of a generator or coroutine."""
 
 def get_frame_stack_at(
@@ -30,7 +30,7 @@ def set_frame_stack_at(
     index: int,
     unset: bool,
     value: Any,
-):
+) -> None:
     """Set or unset an object on the stack of a generator or coroutine."""
 
 def get_frame_block_at(
@@ -42,7 +42,7 @@ def set_frame_block_at(
     frame: FrameType | Coroutine | Generator | AsyncGenerator,
     index: int,
     value: tuple[int, int, int],
-):
+) -> None:
     """Restore a block of a generator or coroutine."""
 
 def get_frame_state(
@@ -50,5 +50,5 @@ def get_frame_state(
 ) -> int:
     """Get frame state of a generator or coroutine."""
 
-def set_frame_state(frame: FrameType | Coroutine | Generator | AsyncGenerator, state: int):
+def set_frame_state(frame: FrameType | Coroutine | Generator | AsyncGenerator, state: int) -> None:
     """Set frame state of a generator or coroutine."""

@@ -11,7 +11,7 @@ from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo
 from ..log import logger
 from ..utils import aio
 from ..utils.hw.cpu import get_cpu_monitor
-from . import inference_executor, job_proc_executor, job_thread_executor
+from . import inference_executor, job_proc_executor, job_thread_executor, proto
 from .job_executor import JobExecutor
 
 EventTypes = Literal[
@@ -20,6 +20,7 @@ EventTypes = Literal[
     "process_ready",
     "process_closed",
     "process_job_launched",
+    "text_response",
 ]
 
 MAX_CONCURRENT_INITIALIZATIONS = min(math.ceil(get_cpu_monitor().cpu_count()), 4)
@@ -161,7 +162,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         )
         raise RuntimeError(f"no process became available after {MAX_ACQUIRE_ATTEMPTS} attempts")
 
-    async def launch_job(self, info: RunningJobInfo) -> None:
+    async def launch_job(self, info: RunningJobInfo) -> str:
         MAX_LAUNCH_ATTEMPTS = 3
 
         for attempt in range(MAX_LAUNCH_ATTEMPTS):
@@ -174,7 +175,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
             try:
                 await proc.launch_job(info)
                 self.emit("process_job_launched", proc)
-                return
+                return proc.id
             except Exception:
                 close_task = asyncio.create_task(proc.aclose())
                 self._close_tasks.add(close_task)
@@ -191,6 +192,8 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                     extra={"job_id": info.job.id, "attempt": attempt + 1},
                 )
 
+        raise RuntimeError("unreachable")
+
     def set_target_idle_processes(self, num_idle_processes: int) -> None:
         self._target_idle_processes = num_idle_processes
 
@@ -206,6 +209,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                 initialize_process_fnc=self._initialize_process_fnc,
                 job_entrypoint_fnc=self._job_entrypoint_fnc,
                 session_end_fnc=self._session_end_fnc,
+                text_response_fnc=self._on_text_response,
                 simulation_end_fnc=self._simulation_end_fnc,
                 initialize_timeout=self._initialize_timeout,
                 close_timeout=self._close_timeout,
@@ -221,6 +225,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                 initialize_process_fnc=self._initialize_process_fnc,
                 job_entrypoint_fnc=self._job_entrypoint_fnc,
                 session_end_fnc=self._session_end_fnc,
+                text_response_fnc=self._on_text_response,
                 simulation_end_fnc=self._simulation_end_fnc,
                 initialize_timeout=self._initialize_timeout,
                 close_timeout=self._close_timeout,
@@ -298,3 +303,6 @@ class ProcPool(utils.EventEmitter[EventTypes]):
             await asyncio.gather(*[proc.aclose() for proc in self._executors])
             await asyncio.gather(*self._close_tasks)
             await asyncio.gather(*self._monitor_tasks)
+
+    def _on_text_response(self, msg: proto.TextResponse) -> None:
+        self.emit("text_response", msg)

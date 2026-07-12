@@ -65,6 +65,10 @@ class RunContext(Generic[Userdata_T]):
         self._executor: _ToolExecutor | None = None
         self._first_update_fut: asyncio.Future[Any] | None = None
 
+        # set when the tool runs inside a durable function; disables ctx.update()
+        # (the deferred-reply pattern isn't replayable — see _execute_durable)
+        self._durable = False
+
     @property
     def session(self) -> AgentSession[Userdata_T]:
         return self._session
@@ -100,6 +104,32 @@ class RunContext(Generic[Userdata_T]):
         this method only waits for the assistant's spoken response prior running
         this tool to finish playing."""
         await self.speech_handle._wait_for_generation(step_idx=self._initial_step_idx)
+
+    def __getstate__(self) -> dict[str, Any]:
+        return {
+            "function_call": self.function_call,
+            "initial_step_idx": self._initial_step_idx,
+        }
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        from .agent_activity import _SpeechHandleContextVar
+        from .agent_session import _AgentSessionContextVar
+
+        self._session = _AgentSessionContextVar.get()
+        self._speech_handle = _SpeechHandleContextVar.get()
+        self._function_call = state["function_call"]
+        self._initial_step_idx = state["initial_step_idx"]
+
+        # transient attributes not carried in the pickle; reset like __init__
+        self._filler_schedulers = []
+        self._updates = []
+        self._executor = None
+        self._first_update_fut = None
+        # a RunContext is only pickled by the durable scheduler, so an unpickled one
+        # is always running inside a durable function
+        self._durable = True
+
+        assert self._initial_step_idx == self._speech_handle.num_steps - 1
 
     @asynccontextmanager
     async def with_filler(
@@ -181,6 +211,11 @@ class RunContext(Generic[Userdata_T]):
                 callable receiving ``UpdatePromptArgs``. Defaults to the executor's
                 resolved ``update`` template (or the module default when standalone).
         """
+        if self._durable:
+            # the first-update / deferred-reply flow releases control to the LLM
+            # mid-tool, which can't be checkpointed and replayed deterministically
+            raise RuntimeError("ctx.update() is not supported inside a durable function")
+
         # update() is a deliberate agent action — reset any active filler dwell so a
         # pending filler doesn't race the real update to the speech queue
         for s in self._filler_schedulers:
