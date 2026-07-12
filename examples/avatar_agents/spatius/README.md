@@ -3,6 +3,14 @@
 This example demonstrates how to create an animated avatar using
 [Spatius](https://www.spatius.ai/).
 
+## Client-side rendering
+
+Spatius renders the avatar in the frontend. A standard LiveKit video renderer will
+show black frames because the avatar video track carries motion data rather than
+server-rendered video. Use the [Spatius client SDK and LiveKit adapter](https://docs.spatius.ai/livekit-agents/client)
+to render the avatar. The [reference frontend](https://github.com/spatius-ai/spatius-avatar-demo/tree/main/platform-integrations/livekit-agents-demo/livekit-agents-reference-demo/frontend)
+contains a working integration.
+
 ## Prerequisites
 
 Set up your LiveKit credentials and Spatius avatar credentials:
