@@ -2120,7 +2120,7 @@ requires-dist = [
     { name = "livekit-plugins-ultravox", marker = "extra == 'ultravox'", editable = "livekit-plugins/livekit-plugins-ultravox" },
     { name = "livekit-plugins-upliftai", marker = "extra == 'upliftai'", editable = "livekit-plugins/livekit-plugins-upliftai" },
     { name = "livekit-plugins-xai", marker = "extra == 'xai'", editable = "livekit-plugins/livekit-plugins-xai" },
-    { name = "livekit-protocol", specifier = ">=1.1.15,<2" },
+    { name = "livekit-protocol", specifier = ">=1.1.17,<2" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.24.0,<2" },
     { name = "nest-asyncio", specifier = ">=1.6.0" },
     { name = "numpy", specifier = ">=1.26.0" },
@@ -3122,15 +3122,15 @@ requires-dist = [{ name = "livekit-agents", extras = ["openai"], editable = "liv
 
 [[package]]
 name = "livekit-protocol"
-version = "1.1.15"
+version = "1.1.19"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "protobuf" },
     { name = "types-protobuf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e8/ec/c8db606cda3e39cdc4fecf5215978d134338d797b85f0bed1e779af9a25a/livekit_protocol-1.1.15.tar.gz", hash = "sha256:023fe391d4d8aefe8d86b295ab1d7aa786db30069ae24afa351a35739707013f", size = 112778, upload-time = "2026-06-10T19:08:48.327Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/84/85/10aee7d87cf716ab06075836590616cb91d453251dac683cae73fe4b7122/livekit_protocol-1.1.19.tar.gz", hash = "sha256:81709e8bc47cdaf0cc5ba937bd9ec24a095e4978c58fb3d5e69b9888b9930be4", size = 118325, upload-time = "2026-07-08T17:21:10.707Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/1e/36/a748889e07e9fed8638ee56acc56701b49ce9febbad8b724deb215c1755e/livekit_protocol-1.1.15-py3-none-any.whl", hash = "sha256:0ff2a5cc3da4a1b53f402d2f2fd6f2b26cd89e4f582925620f59a0621c4ad10f", size = 138770, upload-time = "2026-06-10T19:08:47.019Z" },
+    { url = "https://files.pythonhosted.org/packages/44/20/98150dc45b9e92ab81a8eba74cdf544015b9291c4281252e2e76a7338462/livekit_protocol-1.1.19-py3-none-any.whl", hash = "sha256:fe5a8411c6cb886e55b2564d729f275af5d77ec191dd2ca95ffac3db16979a8a", size = 145513, upload-time = "2026-07-08T17:21:09.303Z" },
 ]
 
 [[package]]

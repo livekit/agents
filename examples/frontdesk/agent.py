@@ -284,10 +284,6 @@ async def frontdesk_agent(ctx: JobContext):
     timezone = "UTC"
     tool_mocks: dict[str, Callable] = {}
 
-    # the simulator carries the scenario in its participant attributes;
-    # it must have joined before simulation_context() can resolve
-    await ctx.wait_for_participant()
-
     if sim := ctx.simulation_context():
         # the scenario's userdata seeds the calendar; the tools run mocked
         cal = simulation.fake_calendar(sim, timezone=timezone)
