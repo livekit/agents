@@ -415,6 +415,7 @@ class STT(stt.STT):
 
         query_params: dict[str, str] = {
             "intent": "transcription",
+            "model": self._opts.model,
         }
         headers = {
             "User-Agent": "LiveKit Agents",

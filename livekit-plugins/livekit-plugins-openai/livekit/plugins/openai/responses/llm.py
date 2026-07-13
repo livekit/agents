@@ -6,6 +6,7 @@ import os
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from typing import Any, Literal, cast
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import aiohttp
 import httpx
@@ -53,11 +54,23 @@ OPENAI_RESPONSES_WS_URL = "wss://api.openai.com/v1/responses"
 
 class _ResponsesWebsocket:
     def __init__(
-        self, api_key: str | None, timeout: float | None, base_url: str | None = None
+        self, api_key: str | None, timeout: float | None, model: str, base_url: str | None = None
     ) -> None:
         self._api_key = api_key
         self._timeout = timeout or DEFAULT_API_CONNECT_OPTIONS.timeout
-        self._base_url = base_url if base_url else OPENAI_RESPONSES_WS_URL
+        url = urlparse(base_url if base_url else OPENAI_RESPONSES_WS_URL)
+        query_params = parse_qs(url.query)
+        query_params["model"] = [model]
+        self._base_url = urlunparse(
+            (
+                url.scheme,
+                url.netloc,
+                url.path,
+                url.params,
+                urlencode(query_params, doseq=True),
+                url.fragment,
+            )
+        )
 
         self._session: aiohttp.ClientSession | None = None
 
@@ -241,6 +254,7 @@ class LLM(llm.LLM):
             self._ws = _ResponsesWebsocket(
                 api_key=resolved_api_key,
                 timeout=timeout.connect if timeout is not None else None,
+                model=str(model),
                 base_url=base_url if is_given(base_url) else None,
             )
 
