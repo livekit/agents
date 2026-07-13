@@ -301,11 +301,13 @@ class TTS(tts.TTS):
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         """
         Args:
             voice (str): Voice to use.
             language (str): Language code.
+            speed (float): Playback speed multiplier.
         """
         invalidate_pool = False
         if is_given(voice):
@@ -315,6 +317,9 @@ class TTS(tts.TTS):
         if is_given(language):
             invalidate_pool = invalidate_pool or self._opts.language != language
             self._opts.language = language
+        if is_given(speed):
+            invalidate_pool = invalidate_pool or self._opts.speed != speed
+            self._opts.speed = speed
 
         if invalidate_pool:
             self._pool.invalidate()

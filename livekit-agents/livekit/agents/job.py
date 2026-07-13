@@ -192,7 +192,7 @@ class JobContext:
 
         self._primary_agent_session: AgentSession | None = None
 
-        # Lazily built from the simulation room's metadata; None when not under a
+        # Lazily built from the job's simulation attributes; None when not under a
         # simulation. _simulation_resolved guards the one-time parse.
         self._simulation_ctx: SimulationContext | None = None
         self._simulation_resolved = False
@@ -446,29 +446,20 @@ class JobContext:
         Resolved once and cached. The framework hands it to ``on_simulation_end``
         automatically, so you never need to call this to "prime" anything. Call it only
         when you want the scenario in your entrypoint (e.g. to seed scenario-specific
-        mocks). Resolves synchronously from the simulator participant's
-        ``lk.simulator.dispatch`` attribute (a protojson ``SimulationDispatch``); a
-        production room has none and returns ``None``.
+        mocks). Resolves synchronously from the job's ``lk.simulator.dispatch``
+        attribute (a protojson ``SimulationDispatch``), available as soon as the
+        entrypoint runs; a production job has none and returns ``None``.
         """
         if self._simulation_resolved:
             return self._simulation_ctx
 
-        metadata = ""
-        for participant in self._room.remote_participants.values():
-            if ATTRIBUTE_SIMULATOR not in participant.attributes:
-                continue
-            if dispatch_json := participant.attributes.get(ATTRIBUTE_SIMULATOR_DISPATCH):
-                metadata = dispatch_json
-                break
-        if not metadata:
-            # The simulator joins before the agent, so a miss is only final
-            # once the room is connected and a remote participant is visible.
-            self._simulation_resolved = (
-                self._room.isconnected() and len(self._room.remote_participants) > 0
-            )
-            return None
-
+        # The simulation attributes ride the agent dispatch and land on the job
+        # itself, so this is final before the room even connects.
         self._simulation_resolved = True
+
+        metadata = self._info.job.attributes.get(ATTRIBUTE_SIMULATOR_DISPATCH, "")
+        if not metadata:
+            return None
 
         from google.protobuf import json_format
 
@@ -739,7 +730,7 @@ class JobContext:
         self._track_pending_task(task, name="transfer_sip_participant")
         return task
 
-    def shutdown(self, reason: str = "") -> None:
+    def shutdown(self, reason: str = "user requested") -> None:
         self._on_shutdown(reason)
 
     def add_participant_entrypoint(

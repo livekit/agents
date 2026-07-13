@@ -61,6 +61,26 @@ def test_speech_data_target_languages_preserves_existing_language_code_instances
     assert sd.target_languages[0] is code
 
 
+@pytest.mark.parametrize("level", [0, 1, 2, 3])
+def test_endpoint_latency_adjustment_level_accepts_supported_values(level: int):
+    from livekit.plugins.soniox import STTOptions
+
+    assert (
+        STTOptions(endpoint_latency_adjustment_level=level).endpoint_latency_adjustment_level
+        == level
+    )
+
+
+@pytest.mark.parametrize("level", [-1, 4])
+def test_endpoint_latency_adjustment_level_rejects_unsupported_values(level: int):
+    from livekit.plugins.soniox import STTOptions
+
+    with pytest.raises(
+        ValueError, match="endpoint_latency_adjustment_level must be between 0 and 3"
+    ):
+        STTOptions(endpoint_latency_adjustment_level=level)
+
+
 # ---------------------------------------------------------------------------
 # _TokenAccumulator._lang_segments coalescing
 # ---------------------------------------------------------------------------
@@ -175,6 +195,38 @@ def _make_stream(translation: Any = None):
     with patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=_fake_create_task):
         stream = SpeechStream(stt=stt_instance, conn_options=DEFAULT_API_CONNECT_OPTIONS)
     return stream
+
+
+@pytest.mark.parametrize("level", [None, 0, 2])
+async def test_endpoint_latency_adjustment_level_websocket_config(level: int | None):
+    from livekit.plugins.soniox import STTOptions
+
+    stream = _make_stream()
+    stream._stt._params = STTOptions(endpoint_latency_adjustment_level=level)
+
+    class FakeWebSocket:
+        config: dict[str, Any] | None = None
+
+        async def send_str(self, message: str) -> None:
+            self.config = json.loads(message)
+
+    class FakeSession:
+        def __init__(self, ws: FakeWebSocket) -> None:
+            self.ws = ws
+
+        async def ws_connect(self, url: str) -> FakeWebSocket:
+            return self.ws
+
+    ws = FakeWebSocket()
+    stream._stt._http_session = FakeSession(ws)
+
+    await stream._connect_ws()
+
+    assert ws.config is not None
+    if level is None:
+        assert "endpoint_latency_adjustment_level" not in ws.config
+    else:
+        assert ws.config["endpoint_latency_adjustment_level"] == level
 
 
 async def _drive_recv(

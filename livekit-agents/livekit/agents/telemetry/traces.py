@@ -296,7 +296,7 @@ def _chat_ctx_to_otel_events(chat_ctx: ChatContext) -> list[tuple[str, Attribute
     for item in chat_ctx.items:
         if item.type == "message" and (event_name := role_to_event.get(item.role)):
             # only support text content for now
-            events.append((event_name, {"content": item.text_content or ""}))
+            events.append((event_name, {"content": item.raw_text_content or ""}))
         elif item.type == "function_call":
             events.append(
                 (
@@ -342,10 +342,12 @@ def _build_proto_chat_item(
         }
         msg.role = role_map[item.role]
 
+        from ..llm.chat_context import Instructions
+
         for content in item.content:
-            if isinstance(content, str):
+            if isinstance(content, (str, Instructions)):
                 content_pb = msg.content.add()
-                content_pb.text = content
+                content_pb.text = str(content)
 
         msg.interrupted = item.interrupted
 

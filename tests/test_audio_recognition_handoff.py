@@ -7,8 +7,11 @@ import pytest
 
 from livekit import rtc
 from livekit.agents import Agent
+from livekit.agents.types import NOT_GIVEN
+from livekit.agents.utils import aio
 from livekit.agents.voice.agent import ModelSettings
 from livekit.agents.voice.agent_activity import AgentActivity
+from livekit.agents.voice.audio_recognition import AudioRecognition, _STTPipeline
 from livekit.agents.voice.turn import _StreamingTurnDetector
 
 pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
@@ -18,8 +21,8 @@ def _make_activity(agent: Agent, stt: object, turn_detection: object = None) -> 
     act = MagicMock(spec=AgentActivity)
     act.agent = agent
     act._audio_recognition = MagicMock()
-    act._audio_recognition.detach_stt = AsyncMock(return_value=MagicMock())
-    act._audio_recognition.detach_turn_detector = MagicMock(return_value=MagicMock())
+    act._audio_recognition._detach_stt = AsyncMock(return_value=MagicMock())
+    act._audio_recognition._detach_turn_detector = MagicMock(return_value=MagicMock())
     type(act).stt = PropertyMock(return_value=stt)
     # turn detector reuse checks read this; None disables the reuse branch
     act._turn_detection = turn_detection
@@ -49,7 +52,7 @@ async def test_reusable_same_class_same_stt() -> None:
 
     result = await _detach_stt_if_reusable(old, new)
     assert result is not None  # detach_stt was called
-    old._audio_recognition.detach_stt.assert_awaited_once()
+    old._audio_recognition._detach_stt.assert_awaited_once()
 
 
 async def test_not_reusable_different_stt_instance() -> None:
@@ -174,7 +177,7 @@ async def test_turn_detector_reusable_same_instance() -> None:
 
     result = await _detach_turn_detector_if_reusable(old, new)
     assert result is not None
-    old._audio_recognition.detach_turn_detector.assert_called_once()
+    old._audio_recognition._detach_turn_detector.assert_called_once()
 
 
 async def test_turn_detector_not_reusable_different_instance() -> None:
@@ -188,7 +191,7 @@ async def test_turn_detector_not_reusable_different_instance() -> None:
 
     result = await _detach_turn_detector_if_reusable(old, new)
     assert result is None
-    old._audio_recognition.detach_turn_detector.assert_not_called()
+    old._audio_recognition._detach_turn_detector.assert_not_called()
 
 
 async def test_turn_detector_not_reusable_when_new_opts_out() -> None:
@@ -199,4 +202,51 @@ async def test_turn_detector_not_reusable_when_new_opts_out() -> None:
 
     result = await _detach_turn_detector_if_reusable(old, new)
     assert result is None
-    old._audio_recognition.detach_turn_detector.assert_not_called()
+    old._audio_recognition._detach_turn_detector.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Input-time anchor (end_time=0 wall clock) survives pipeline reuse
+# ---------------------------------------------------------------------------
+
+
+def _stub_recognition() -> AudioRecognition:
+    ar = object.__new__(AudioRecognition)
+    ar._stt_consumer_atask = None  # type: ignore[attr-defined]
+    ar._stt_pipeline = None  # type: ignore[attr-defined]
+    ar._transcript_buffer = MagicMock()  # type: ignore[attr-defined]
+    ar._ignore_user_transcript_until = NOT_GIVEN  # type: ignore[attr-defined]
+    return ar
+
+
+async def test_input_anchor_preserved_when_pipeline_reused() -> None:
+    """_update_stt must not reset a reused pipeline's input anchor.
+
+    The STT ``end_time`` clock is relative to the original stream start. Re-anchoring
+    ``input_started_at`` to the handoff time would desync the two and push the derived
+    speaking time minutes into the future (see the 68s end-of-turn stall).
+    """
+    reused = object.__new__(_STTPipeline)
+    reused.input_started_at = 1000.0  # anchored during the previous activity
+    ch = aio.Chan()  # type: ignore[var-annotated]
+    ch.close()  # closed channel → the swapped-in consumer exits immediately
+    reused._event_ch = ch  # type: ignore[attr-defined]
+
+    ar = _stub_recognition()
+    ar._update_stt(MagicMock(), pipeline=reused)
+
+    assert ar._input_started_at == 1000.0  # carried over, not reset to None
+    if ar._stt_consumer_atask is not None:
+        await ar._stt_consumer_atask
+
+
+def test_input_anchor_reads_through_to_pipeline() -> None:
+    """The anchor lives on the pipeline so it travels with the stream across handoff."""
+    ar = _stub_recognition()
+    assert ar._input_started_at is None  # no pipeline attached yet
+
+    pipeline = object.__new__(_STTPipeline)
+    pipeline.input_started_at = 1234.5
+    ar._stt_pipeline = pipeline  # type: ignore[attr-defined]
+
+    assert ar._input_started_at == 1234.5  # read-only view of the pipeline's anchor

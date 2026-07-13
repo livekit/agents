@@ -21,11 +21,13 @@ name 'Smith', code 'HTL-AB12'`.
 ## Architecture
 
 ```
-agent.py          — HotelReceptionistAgent + every intent tool
-workflows.py      — AgentTask subclasses (consent / booking flows / verify)
-hotel_db.py       — HotelDB (apsw) + schema + views + pricing + dispute policy
-ui_view.py        — SQLite changeset streamer for the playground
-fake_data/seed.py — manual seed script (writes fake_data/hotel.db)
+agent.py           — HotelReceptionistAgent + tool mixins
+tools_*.py         — Tool mixins: rooms, restaurant, services
+book_*.py          — AgentTask subclasses for booking flows
+hotel_db.py        — HotelDB (apsw) + schema + views + pricing + dispute policy
+instructions.py    — Prompt instructions and routing rules
+ui_view.py         — SQLite changeset streamer for the playground
+fake_data/seed.py  — manual seed script (writes fake_data/hotel.db)
 ```
 
 The LLM never owns money values. `book_room` computes the total

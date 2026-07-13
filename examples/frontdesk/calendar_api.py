@@ -33,7 +33,22 @@ class AvailableSlot:
         return f"ST_{base64.b32encode(digest).decode().rstrip('=').lower()}"
 
 
+@dataclass
+class BookedAppointment:
+    slot: AvailableSlot
+    attendee_email: str
+
+
 class Calendar(Protocol):
+    # The bookings made this session. The calendar is the single system of
+    # record, so callers never keep a parallel list that could drift.
+    scheduled_appointments: list[BookedAppointment]
+
+    def now(self) -> datetime.datetime:
+        """The calendar's current time (tz-aware). Wall-clock in production;
+        a fixed value under simulation so scenario dates stay deterministic."""
+        ...
+
     async def initialize(self) -> None: ...
     async def schedule_appointment(
         self,
@@ -47,15 +62,27 @@ class Calendar(Protocol):
 
 
 class FakeCalendar(Calendar):
-    def __init__(self, *, timezone: str, slots: list[AvailableSlot] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        timezone: str,
+        slots: list[AvailableSlot] | None = None,
+        seed: int | None = None,
+        now: datetime.datetime | None = None,
+    ) -> None:
         self.tz = ZoneInfo(timezone)
+        # A fixed clock keeps simulation scenarios deterministic; None means
+        # follow the wall clock.
+        self._now = now
         self._slots: list[AvailableSlot] = []
+        self.scheduled_appointments: list[BookedAppointment] = []
 
         if slots is not None:
             self._slots.extend(slots)
             return
 
-        today = datetime.datetime.now(self.tz).date()
+        rng = random.Random(seed)
+        today = self.now().date()
         for day_offset in range(1, 90):  # generate slots for the next 90 days
             current_day = today + datetime.timedelta(days=day_offset)
             if current_day.weekday() >= 5:
@@ -68,11 +95,16 @@ class FakeCalendar(Calendar):
                 for i in range(int((17 - 9) * 2))  # (17-9)=8 hours => 16 slots
             ]
 
-            num_slots = random.randint(3, 6)
-            chosen = random.sample(slots_in_day, num_slots)
+            num_slots = rng.randint(3, 6)
+            chosen = rng.sample(slots_in_day, num_slots)
 
             for slot_start in sorted(chosen):
                 self._slots.append(AvailableSlot(start_time=slot_start, duration_min=30))
+
+    def now(self) -> datetime.datetime:
+        if self._now is not None:
+            return self._now.astimezone(self.tz)
+        return datetime.datetime.now(self.tz)
 
     async def initialize(self) -> None:
         pass
@@ -80,8 +112,14 @@ class FakeCalendar(Calendar):
     async def schedule_appointment(
         self, *, start_time: datetime.datetime, attendee_email: str
     ) -> None:
-        # fake it by just removing it from our slots list
-        self._slots = [slot for slot in self._slots if slot.start_time != start_time]
+        slot = next((s for s in self._slots if s.start_time == start_time), None)
+        if slot is None:
+            raise SlotUnavailableError(f"no available slot at {start_time.isoformat()}")
+
+        self._slots.remove(slot)
+        self.scheduled_appointments.append(
+            BookedAppointment(slot=slot, attendee_email=attendee_email)
+        )
 
     async def list_available_slots(
         self, *, start_time: datetime.datetime, end_time: datetime.datetime
@@ -100,6 +138,7 @@ class CalComCalendar(Calendar):
     def __init__(self, *, api_key: str, timezone: str) -> None:
         self.tz = ZoneInfo(timezone)
         self._api_key = api_key
+        self.scheduled_appointments: list[BookedAppointment] = []
 
         try:
             self._http_session = http_context.http_session()
@@ -107,6 +146,9 @@ class CalComCalendar(Calendar):
             self._http_session = aiohttp.ClientSession()
 
         self._logger = logging.getLogger("cal.com")
+
+    def now(self) -> datetime.datetime:
+        return datetime.datetime.now(self.tz)
 
     async def initialize(self) -> None:
         async with self._http_session.get(
@@ -149,6 +191,7 @@ class CalComCalendar(Calendar):
     async def schedule_appointment(
         self, *, start_time: datetime.datetime, attendee_email: str
     ) -> None:
+        slot = AvailableSlot(start_time=start_time, duration_min=EVENT_DURATION_MIN)
         start_time = start_time.astimezone(datetime.timezone.utc)
 
         async with self._http_session.post(
@@ -171,6 +214,10 @@ class CalComCalendar(Calendar):
                     raise SlotUnavailableError(error["message"])
 
             resp.raise_for_status()
+
+        self.scheduled_appointments.append(
+            BookedAppointment(slot=slot, attendee_email=attendee_email)
+        )
 
     async def list_available_slots(
         self, *, start_time: datetime.datetime, end_time: datetime.datetime

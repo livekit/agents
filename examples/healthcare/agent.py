@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -32,6 +33,7 @@ from livekit.agents.beta.workflows import (
     WarmTransferTask,
 )
 from livekit.agents.llm import ToolError, function_tool
+from livekit.agents.voice import UserStateChangedEvent
 
 logger = logging.getLogger("HealthcareAgent")
 
@@ -563,7 +565,11 @@ class HealthcareAgent(Agent):
 
     async def on_enter(self) -> None:
         await self.session.generate_reply(
-            instructions="Greet the user and gather the reason for their call."
+            instructions=(
+                "Warmly welcome the user to the healthcare clinic and ask how you can help "
+                'them today, e.g. "Welcome to the healthcare clinic, how can I help you?" '
+                "Then gather the reason for their call."
+            )
         )
 
     async def task_completed_callback(self, event, task_group):
@@ -751,10 +757,39 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         userdata=userdata,
         stt=inference.STT("deepgram/nova-3", language="multi"),
-        llm=inference.LLM("openai/gpt-4.1-mini"),
-        tts=inference.TTS("inworld/inworld-tts-1"),
+        llm=inference.LLM("google/gemma-4-31b-it"),
+        tts=inference.TTS(
+            "inworld/inworld-tts-2",
+            voice="Luna",
+            extra_kwargs={"delivery_mode": "CREATIVE", "speaking_rate": 1.1},
+        ),
         preemptive_generation=True,
+        # Flip user_state to "away" after 10s of mutual silence so we can
+        # check whether they're still there (default is 15s).
+        user_away_timeout=10.0,
     )
+
+    idle_task: asyncio.Task[None] | None = None
+
+    async def _nudge_while_idle() -> None:
+        # Nudge every 10s until the user speaks again — speaking flips
+        # user_state out of "away", which cancels this task below.
+        while True:
+            logger.info("user idle — checking if they're still there")
+            await session.generate_reply(
+                instructions="The user has been idle, see if they're still there"
+            )
+            await asyncio.sleep(10)
+
+    @session.on("user_state_changed")
+    def _on_user_state_changed(ev: UserStateChangedEvent) -> None:
+        nonlocal idle_task
+        if ev.new_state == "away":
+            if idle_task is None or idle_task.done():
+                idle_task = asyncio.create_task(_nudge_while_idle())
+        elif idle_task is not None:
+            idle_task.cancel()
+            idle_task = None
 
     await session.start(
         agent=HealthcareAgent(database=db),

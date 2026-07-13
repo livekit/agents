@@ -11,7 +11,7 @@ from typing import Any, Literal, TypedDict, overload
 import aiohttp
 from typing_extensions import NotRequired
 
-from .. import tokenize, tts, utils
+from .. import tts, utils
 from .._exceptions import (
     APIConnectionError,
     APIError,
@@ -455,6 +455,23 @@ class TTS(tts.TTS):
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
+    class Markup(tts.TTS.Markup):
+        def __init__(self, gateway_tts: TTS) -> None:
+            super().__init__(gateway_tts)
+            self._gateway_tts = gateway_tts
+
+        def _provider_key(self) -> str:
+            model = self._gateway_tts._opts.model
+            provider = model.split("/")[0]
+            if provider == "inworld" and "tts-2" in model:
+                return "inworld"
+            elif provider == "inworld":
+                return ""  # older inworld models don't support markup
+            return provider
+
+        # llm_instructions / to_text / normalize / convert are inherited from the
+        # base Markup, keyed on _provider_key() above.
+
     @classmethod
     def from_model_string(cls, model: str) -> TTS:
         """Create a TTS instance from a model string
@@ -530,7 +547,8 @@ class TTS(tts.TTS):
             }
 
         try:
-            await ws.send_str(json.dumps(params))
+            payload = json.dumps(params)
+            await ws.send_str(payload)
         except Exception as e:
             await ws.close()
             raise APIConnectionError(
@@ -607,6 +625,11 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._tts: TTS = tts
 
         self._opts = replace(tts._opts)
+        # Snapshot whether expressive is active now, while the framework holds it
+        # fixed for this synthesis (set synchronously before stream()). Reading it
+        # lazily in _run would race with the next turn/session mutating the shared
+        # TTS instance.
+        self._expressive = tts._expressive
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
@@ -618,7 +641,11 @@ class SynthesizeStream(tts.SynthesizeStream):
             mime_type="audio/pcm",
         )
 
-        sent_tokenizer_stream = tokenize.basic.SentenceTokenizer().stream()
+        # chunking defaults (cap + expressive batch size) live in _provider_format
+        from ..tts._provider_format import sentence_tokenizer
+
+        provider = self._opts.model.split("/")[0]
+        sent_tokenizer_stream = sentence_tokenizer(provider, expressive=self._expressive).stream()
         input_sent_event = asyncio.Event()
 
         async def _input_task() -> None:
@@ -626,7 +653,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if isinstance(data, self._FlushSentinel):
                     sent_tokenizer_stream.flush()
                     continue
-                sent_tokenizer_stream.push_text(data)
+                sent_tokenizer_stream.push_text(self._tts.markup.normalize(data))
 
             sent_tokenizer_stream.end_input()
 
@@ -635,7 +662,10 @@ class SynthesizeStream(tts.SynthesizeStream):
             base_pkt["type"] = "input_transcript"
             async for ev in sent_tokenizer_stream:
                 token_pkt = base_pkt.copy()
-                token_pkt["transcript"] = ev.token + " "
+                # re-normalize at sentence level: tags split across input chunks
+                # aren't caught by the per-chunk normalize in _input_task
+                converted = self._tts.markup.convert(self._tts.markup.normalize(ev.token))
+                token_pkt["transcript"] = converted + " "
                 generation_config: dict[str, Any] = {}
                 if self._opts.voice:
                     generation_config["voice"] = self._opts.voice
@@ -646,13 +676,15 @@ class SynthesizeStream(tts.SynthesizeStream):
                 token_pkt["generation_config"] = generation_config
                 token_pkt["extra"] = self._opts.extra_kwargs if self._opts.extra_kwargs else {}
                 self._mark_started()
-                await ws.send_str(json.dumps(token_pkt))
+                payload = json.dumps(token_pkt)
+                await ws.send_str(payload)
                 input_sent_event.set()
 
             end_pkt = {
                 "type": "session.flush",
             }
-            await ws.send_str(json.dumps(end_pkt))
+            flush_payload = json.dumps(end_pkt)
+            await ws.send_str(flush_payload)
             # needed in case empty input is sent
             input_sent_event.set()
 
