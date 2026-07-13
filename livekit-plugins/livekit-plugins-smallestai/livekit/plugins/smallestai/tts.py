@@ -319,7 +319,14 @@ class SynthesizeStream(tts.SynthesizeStream):
                 send_task = asyncio.create_task(self._send_task(ws))
                 recv_task = asyncio.create_task(self._recv_task(ws, output_emitter))
                 try:
-                    await asyncio.gather(send_task, recv_task)
+                    # send_task reports whether any text was actually sent; if the
+                    # segment was empty (no non-whitespace tokens) no flush is sent and
+                    # the server produces no `complete`, so don't wait on recv_task.
+                    sent_any = await send_task
+                    if sent_any:
+                        await recv_task
+                    else:
+                        await utils.aio.gracefully_cancel(recv_task)
                 finally:
                     await utils.aio.gracefully_cancel(send_task, recv_task)
         except asyncio.TimeoutError:
@@ -350,10 +357,12 @@ class SynthesizeStream(tts.SynthesizeStream):
             payload["word_timestamps"] = True
         return payload
 
-    async def _send_task(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _send_task(self, ws: aiohttp.ClientWebSocketResponse) -> bool:
         # Forward each token as it arrives (continuous streaming) instead of buffering
         # the whole segment, so the server can begin synthesis before the text is
-        # complete. The flush sentinel (or end of input) closes the segment.
+        # complete. The flush sentinel (or end of input) closes the segment. Returns
+        # whether any non-whitespace text was actually sent.
+        sent_any = False
         async for data in self._input_ch:
             if isinstance(data, self._FlushSentinel):
                 break
@@ -362,10 +371,14 @@ class SynthesizeStream(tts.SynthesizeStream):
             token_pkt = {**self._base_payload(), "text": data, "continue": True, "flush": False}
             self._mark_started()
             await ws.send_str(json.dumps(token_pkt))
+            sent_any = True
 
-        # Flush the server-side buffer to force out any remaining audio for the segment.
-        flush_pkt = {**self._base_payload(), "text": "", "continue": False, "flush": True}
-        await ws.send_str(json.dumps(flush_pkt))
+        # Only flush when text was sent; an empty segment produces no `complete`, so
+        # sending a flush would leave _recv_task waiting until the connection timeout.
+        if sent_any:
+            flush_pkt = {**self._base_payload(), "text": "", "continue": False, "flush": True}
+            await ws.send_str(json.dumps(flush_pkt))
+        return sent_any
 
     async def _recv_task(
         self, ws: aiohttp.ClientWebSocketResponse, output_emitter: tts.AudioEmitter
