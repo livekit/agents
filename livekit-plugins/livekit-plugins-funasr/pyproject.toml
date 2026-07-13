@@ -21,7 +21,13 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3 :: Only",
 ]
-dependencies = ["livekit-agents>=1.2.0", "funasr>=1.1.0", "numpy"]
+dependencies = [
+    "livekit-agents>=1.6.5",
+    "funasr>=1.1.0",
+    "numpy",
+    "torch>=2.0",
+    "torchaudio>=2.0",
+]
 
 [project.urls]
 Documentation = "https://docs.livekit.io"

@@ -14,6 +14,19 @@ from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectionError
 pytestmark = pytest.mark.plugin("funasr")
 
 
+def test_package_imports_with_declared_dependencies() -> None:
+    import funasr as funasr_runtime
+    import torch
+    import torchaudio
+
+    from livekit.plugins import funasr as livekit_funasr
+
+    assert callable(funasr_runtime.AutoModel)
+    assert torch.__version__
+    assert torchaudio.__version__
+    assert livekit_funasr.STT is livekit_funasr.FunASRSTT
+
+
 class _FakeAutoModel:
     generate_impl: Callable[..., list[dict[str, str]]]
 

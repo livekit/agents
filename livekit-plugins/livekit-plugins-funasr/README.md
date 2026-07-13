@@ -15,7 +15,11 @@ pip install livekit-plugins-funasr
 ```python
 from livekit.plugins import funasr
 
-stt = funasr.STT(model="iic/SenseVoiceSmall", device="cuda")
+stt = funasr.STT(model="iic/SenseVoiceSmall")
 ```
 
 The first run downloads the model from ModelScope/Hugging Face. Use `language=None` (default) for automatic language detection, or set e.g. `language="zh"`.
+
+CPU inference works with the default installation. For GPU inference, install a
+PyTorch and torchaudio build that matches your CUDA runtime, then pass
+`device="cuda"`.
