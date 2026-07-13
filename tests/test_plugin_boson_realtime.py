@@ -1411,6 +1411,9 @@ async def test_boson_realtime_reconnects_and_replays_chat_ctx_after_ws_drop():
         conn_options=APIConnectOptions(max_retry=3, retry_interval=0.01, timeout=1.0),
     )
     session = model.session()
+    # A response discarded on the first connection never sees its
+    # response.done; reconnection must not carry it over.
+    session._boson_discarded_response_ids.add("resp_stale")
     errors = []
     reconnected = []
     session.on("error", errors.append)
@@ -1422,6 +1425,7 @@ async def test_boson_realtime_reconnects_and_replays_chat_ctx_after_ws_drop():
             await asyncio.sleep(0.01)
         assert reconnected
         assert len(client.connect_urls) == 2
+        assert session._boson_discarded_response_ids == set()
 
         # The session config is re-sent first on the new connection, then the
         # local chat-context mirror is replayed via conversation.item.create
