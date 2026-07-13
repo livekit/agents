@@ -59,7 +59,12 @@ class _ResponsesWebsocket:
         self._api_key = api_key
         self._timeout = timeout or DEFAULT_API_CONNECT_OPTIONS.timeout
         url = URL(base_url if base_url else OPENAI_RESPONSES_WS_URL)
-        self._base_url = str(url.update_query(model=model))
+        if url.host != "api.openai.com":
+            # OpenAI's native endpoint takes the model in the response.create
+            # payload; gateways need it on the upgrade URL to route the
+            # connection before the first frame.
+            url = url.update_query(model=model)
+        self._base_url = str(url)
 
         self._session: aiohttp.ClientSession | None = None
 

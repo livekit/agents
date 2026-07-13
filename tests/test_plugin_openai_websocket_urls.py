@@ -75,3 +75,18 @@ async def test_responses_websocket_connect_url_includes_model() -> None:
     assert parsed_url.netloc == "gateway.example.com"
     assert parsed_url.path == "/v1/responses"
     assert parse_qs(parsed_url.query) == {"model": [model]}
+
+
+async def test_native_responses_websocket_connect_url_omits_model() -> None:
+    instance = responses.LLM(api_key="test-key", model="gpt-4.1", use_websocket=True)
+    assert instance._ws is not None
+    session = _FakeSession()
+    instance._ws._session = session
+
+    await instance._ws._create_ws(5)
+
+    parsed_url = urlparse(session.url)
+    assert parsed_url.scheme == "wss"
+    assert parsed_url.netloc == "api.openai.com"
+    assert parsed_url.path == "/v1/responses"
+    assert parse_qs(parsed_url.query) == {}
