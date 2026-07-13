@@ -192,12 +192,8 @@ async def test_start_time_has_default_before_plugin_override():
 
 
 async def test_continuous_partials_default():
-    """Test continuous_partials is not set by default for a non-u3-rt-pro-family model.
-
-    (The plugin default model is universal-3-5-pro, a u3-rt-pro-family model that
-    defaults continuous_partials to True — covered by
-    test_universal_3_5_pro_defaults_continuous_partials_true.)
-    """
+    """Test continuous_partials is not set by default so AssemblyAI's server defaults
+    apply (enabled, except when speaker_labels is on)."""
     from livekit.plugins.assemblyai import STT
 
     stt = STT(api_key="test-key", model="universal-streaming-english")
@@ -252,17 +248,17 @@ async def test_continuous_partials_update():
     assert stt._opts.continuous_partials is True
 
 
-async def test_continuous_partials_defaults_to_true_for_u3_rt_pro():
-    """Test continuous_partials defaults to True when model is u3-rt-pro (LiveKit-only
-    default; AssemblyAI server defaults to False)."""
+async def test_continuous_partials_unset_by_default_for_u3_rt_pro():
+    """continuous_partials is left unset for u3-rt-pro so AssemblyAI's server defaults
+    apply (enabled, but disabled by the server when speaker_labels is on)."""
     from livekit.plugins.assemblyai import STT
 
     stt = STT(api_key="test-key", model="u3-rt-pro")
-    assert stt._opts.continuous_partials is True
+    assert stt._opts.continuous_partials is NOT_GIVEN
 
 
-async def test_continuous_partials_explicit_false_overrides_livekit_default():
-    """Test explicit continuous_partials=False overrides the LiveKit-only True default."""
+async def test_continuous_partials_explicit_false():
+    """Test explicit continuous_partials=False is preserved."""
     from livekit.plugins.assemblyai import STT
 
     stt = STT(api_key="test-key", model="u3-rt-pro", continuous_partials=False)
@@ -270,12 +266,11 @@ async def test_continuous_partials_explicit_false_overrides_livekit_default():
 
 
 async def test_continuous_partials_update_from_default():
-    """Test continuous_partials can be updated via update_options away from LiveKit default."""
+    """Test continuous_partials can be set via update_options when unset at construction."""
     from livekit.plugins.assemblyai import STT
 
-    # LiveKit defaults this to True for u3-rt-pro
     stt = STT(api_key="test-key", model="u3-rt-pro")
-    assert stt._opts.continuous_partials is True
+    assert stt._opts.continuous_partials is NOT_GIVEN
 
     stt.update_options(continuous_partials=False)
     assert stt._opts.continuous_partials is False
@@ -412,7 +407,7 @@ async def test_agent_context_propagates_from_stt_to_active_stream():
 #
 # u3-rt-pro-beta-1 shares all u3-rt-pro behavior, so the u3-pro-gated params
 # (prompt, agent_context, previous_context_n_turns, continuous_partials,
-# interruption_delay) are accepted with it, and continuous_partials defaults to True.
+# interruption_delay) are accepted with it.
 # ---------------------------------------------------------------------------
 
 
@@ -422,8 +417,8 @@ async def test_u3_rt_pro_beta_1_accepted():
 
     stt = STT(api_key="test-key", model="u3-rt-pro-beta-1")
     assert stt._opts.speech_model == "u3-rt-pro-beta-1"
-    # continuous_partials defaults to True for the u3-rt-pro family
-    assert stt._opts.continuous_partials is True
+    # continuous_partials is left unset so AssemblyAI's server defaults apply
+    assert stt._opts.continuous_partials is NOT_GIVEN
 
 
 async def test_u3_rt_pro_beta_1_accepts_u3_pro_params():
@@ -557,12 +552,13 @@ async def test_universal_3_5_pro_accepts_u3_pro_params():
     assert stt._opts.interruption_delay == 300
 
 
-async def test_universal_3_5_pro_defaults_continuous_partials_true():
-    """continuous_partials defaults to True for universal-3-5-pro (u3-rt-pro family)."""
+async def test_universal_3_5_pro_leaves_continuous_partials_unset():
+    """continuous_partials is left unset for universal-3-5-pro so AssemblyAI's server
+    defaults apply (enabled, but disabled by the server when speaker_labels is on)."""
     from livekit.plugins.assemblyai import STT
 
     stt = STT(api_key="test-key", model="universal-3-5-pro")
-    assert stt._opts.continuous_partials is True
+    assert stt._opts.continuous_partials is NOT_GIVEN
 
 
 # ---------------------------------------------------------------------------
@@ -717,13 +713,14 @@ async def test_voice_focus_allowed_for_all_u3_pro_family_models():
         assert stt._opts.voice_focus == "far-field"
 
 
-async def test_default_model_defaults_continuous_partials_true():
-    """A bare STT() (relying on the default model) defaults continuous_partials to True,
-    tying the default-model choice to its u3-rt-pro-family behavior."""
+async def test_default_model_leaves_continuous_partials_unset():
+    """A bare STT() (relying on the default model) leaves continuous_partials unset so
+    AssemblyAI's server defaults apply (enabled, but disabled by the server when
+    speaker_labels is on)."""
     from livekit.plugins.assemblyai import STT
 
     stt = STT(api_key="test-key")
-    assert stt._opts.continuous_partials is True
+    assert stt._opts.continuous_partials is NOT_GIVEN
 
 
 # ---------------------------------------------------------------------------
