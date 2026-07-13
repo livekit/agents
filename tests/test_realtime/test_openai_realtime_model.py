@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from types import SimpleNamespace
 from typing import cast
 
@@ -36,7 +35,8 @@ def test_update_chat_ctx_deletes_empty_remote_items() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# fatal error classification: a fatal error must stop the reconnect loop
+# fatal error classification: a fatal error must break the recv loop so that
+# _main_task stops reconnecting (raised as APIError(retryable=False))
 # --------------------------------------------------------------------------- #
 
 
@@ -54,30 +54,30 @@ def _handle_error_session(capture: dict[str, object]) -> RealtimeSession:
         SimpleNamespace(
             _realtime_model=SimpleNamespace(_provider_label="openai"),
             _emit_error=lambda error, recoverable: capture.update(recoverable=recoverable),
-            _response_created_futures={},
-            _fatal_error=None,
         ),
     )
 
 
-def test_handle_error_marks_fatal_non_recoverable() -> None:
+def test_handle_error_raises_on_fatal() -> None:
+    # a fatal code is raised (not emitted here): the recv loop re-raises it so
+    # _main_task emits it once with recoverable=False and stops reconnecting
     captured: dict[str, object] = {}
     session = _handle_error_session(captured)
     event = SimpleNamespace(
         error=SimpleNamespace(message="quota exceeded", code="insufficient_quota")
     )
-    RealtimeSession._handle_error(session, event)
-    assert captured["recoverable"] is False
-    assert isinstance(session._fatal_error, APIError)  # _main_task stops reconnecting
+    with pytest.raises(APIError) as exc_info:
+        RealtimeSession._handle_error(session, event)
+    assert exc_info.value.retryable is False
+    assert captured == {}  # not emitted by the handler; _main_task owns the emit
 
 
-def test_handle_error_keeps_transient_recoverable() -> None:
+def test_handle_error_emits_transient_as_recoverable() -> None:
     captured: dict[str, object] = {}
     session = _handle_error_session(captured)
     event = SimpleNamespace(error=SimpleNamespace(message="server hiccup", code="server_error"))
     RealtimeSession._handle_error(session, event)
     assert captured["recoverable"] is True
-    assert session._fatal_error is None
 
 
 def test_handle_error_ignores_cancellation_failed() -> None:
@@ -87,34 +87,7 @@ def test_handle_error_ignores_cancellation_failed() -> None:
     assert captured == {}  # early return, nothing emitted
 
 
-async def test_handle_error_fails_pending_reply_future_on_fatal() -> None:
-    # a fatal error means a pending generate_reply will never be served; its future must
-    # fail immediately instead of waiting out the timeout
-    fut: asyncio.Future[llm.GenerationCreatedEvent] = asyncio.get_running_loop().create_future()
-    session = _handle_error_session({})
-    session._response_created_futures["ev"] = fut
-
-    event = SimpleNamespace(error=SimpleNamespace(message="quota", code="insufficient_quota"))
-    RealtimeSession._handle_error(session, event)
-
-    assert fut.done()
-    assert isinstance(fut.exception(), llm.RealtimeError)
-    assert not session._response_created_futures
-
-
-async def test_handle_error_leaves_pending_future_on_transient() -> None:
-    fut: asyncio.Future[llm.GenerationCreatedEvent] = asyncio.get_running_loop().create_future()
-    session = _handle_error_session({})
-    session._response_created_futures["ev"] = fut
-
-    event = SimpleNamespace(error=SimpleNamespace(message="hiccup", code="server_error"))
-    RealtimeSession._handle_error(session, event)
-
-    assert not fut.done()  # transient error: let it resolve or time out normally
-    fut.cancel()  # cleanup
-
-
-def test_response_done_failed_fatal_sets_fatal_error() -> None:
+def test_response_done_failed_fatal_raises() -> None:
     captured: dict[str, object] = {}
     session = _handle_error_session(captured)
     event = SimpleNamespace(
@@ -126,9 +99,10 @@ def test_response_done_failed_fatal_sets_fatal_error() -> None:
             ),
         )
     )
-    RealtimeSession._handle_response_done_but_not_complete(session, event)
-    assert captured["recoverable"] is False
-    assert isinstance(session._fatal_error, APIError)
+    with pytest.raises(APIError) as exc_info:
+        RealtimeSession._handle_response_done_but_not_complete(session, event)
+    assert exc_info.value.retryable is False
+    assert captured == {}
 
 
 def test_response_done_failed_transient_stays_recoverable() -> None:
@@ -145,4 +119,3 @@ def test_response_done_failed_transient_stays_recoverable() -> None:
     )
     RealtimeSession._handle_response_done_but_not_complete(session, event)
     assert captured["recoverable"] is True
-    assert session._fatal_error is None
