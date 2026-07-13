@@ -24,7 +24,7 @@ session = AgentSession(
 
 ### 🎙️ [Voice Agents](./voice_agents/)
 
-A comprehensive collection of voice-based agent examples, including basic voice interactions, tool integrations, RAG implementations, and advanced features like multi-agent workflows and push-to-talk agents.
+A collection of voice-based agent examples, including basic voice interactions, tool integrations, RAG implementations, real-time models, and tracing.
 
 ### 🔄 [Warm Transfer](./warm-transfer/)
 

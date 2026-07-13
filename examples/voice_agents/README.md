@@ -24,31 +24,11 @@ session = AgentSession(
 
 - [`basic_agent.py`](./basic_agent.py) - A fundamental voice agent with multilingual STT, turn detection, preemptive generation, and metrics collection
 
-### Tool Integration & Function Calling
-
-- [`async_tool_agent.py`](./async_tool_agent.py) - Long-running async tools with mid-flight progress updates using `AsyncToolset` (travel assistant demo)
-- [`tool_search_agent.py`](./tool_search_agent.py) - Dynamic tool discovery using `ToolSearchToolset` / `ToolProxyToolset` to keep large tool sets out of the LLM context
-- [`filler_agent.py`](./filler_agent.py) - Using acoustic fillers and progress updates during long-running tool calls
-
-### Pipeline Nodes & Hooks
-
-- [`fast-preresponse.py`](./fast-preresponse.py) - Generating quick acknowledgements with a small LLM using the `on_user_turn_completed` hook while the main LLM runs
-- [`timed_agent_transcript.py`](./timed_agent_transcript.py) - Reading timestamped transcripts from `transcription_node`
-
-### Agent Configuration
-
-- [`instructions_per_modality.py`](./instructions_per_modality.py) - Providing different instructions for voice vs. text modalities using `Instructions`
-
 ### Real-time Models
 
 > **Note:** Real-time models use provider plugins directly. These examples require provider-specific API keys.
 
-- [`realtime_joke_teller.py`](./realtime_joke_teller.py) - Amazon Nova Sonic real-time model with function calls
 - [`grok/`](./grok/) - xAI Grok Voice Agents API with built-in X.com and web search
-
-### Multi-agent
-
-- [`restaurant_agent.py`](./restaurant_agent.py) - Multi-agent system for restaurant ordering and reservation management
 
 ### MCP & External Integrations
 
@@ -66,13 +46,6 @@ session = AgentSession(
 ### Tracing & Error Handling
 
 - [`otel_trace.py`](./otel_trace.py) - OpenTelemetry (OTLP) integration for conversation tracing
-- [`error_callback.py`](./error_callback.py) - Handling session errors and close events
-
-### Specialized Use Cases
-
-- [`push_to_talk.py`](./push_to_talk.py) - Push-to-talk for multi-participant conversations via RPC
-- [`google_gemini_tts.py`](./google_gemini_tts.py) - Gemini native TTS with streaming audio synthesis
-- [`gnani_agent.py`](./gnani_agent.py) - Gnani Vachana STT/TTS for Indian language voice conversations
 
 ## Additional Resources
 
