@@ -34,7 +34,7 @@ livekit-plugins-inworld = { workspace = true }
 livekit-plugins-krisp = { workspace = true }
 livekit-plugins-keyframe = { workspace = true }
 livekit-plugins-langchain = { workspace = true }
-livekit-plugins-lemonslice = { workspace = true}
+livekit-plugins-lemonslice = { workspace = true }
 livekit-plugins-liveavatar = { workspace = true }
 livekit-plugins-lmnt = { workspace = true }
 livekit-plugins-minimax-ai = { workspace = true }
@@ -158,7 +158,12 @@ filterwarnings = [
     # alternative that returns a default loop for unmarked tests without erroring.
     "ignore:Overriding the \"event_loop_policy\" fixture is deprecated:Warning",
 ]
-addopts = ["--import-mode=importlib", "--ignore=examples", "-p", "tests.concurrency"]
+addopts = [
+    "--import-mode=importlib",
+    "--ignore=examples",
+    "-p",
+    "tests.concurrency",
+]
 pythonpath = ["."]
 testpaths = ["tests"]
 markers = [
