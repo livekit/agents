@@ -5,7 +5,7 @@ import contextvars
 import heapq
 import json
 import time
-from collections.abc import AsyncIterable, Coroutine, Sequence
+from collections.abc import AsyncIterable, Coroutine
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -2756,7 +2756,6 @@ class AgentActivity(RecognitionHooks):
         new_message: llm.ChatMessage | None = None,
         instructions: str | Instructions | None = None,
         _previous_user_metrics: llm.MetricsReport | None = None,
-        _previous_tools_messages: Sequence[llm.FunctionCall | llm.FunctionCallOutput] | None = None,
     ) -> None:
         with tracer.start_as_current_span(
             "agent_turn", context=self._session._root_span_context
@@ -2774,7 +2773,6 @@ class AgentActivity(RecognitionHooks):
                 new_message=new_message,
                 instructions=instructions,
                 _previous_user_metrics=_previous_user_metrics,
-                _previous_tools_messages=_previous_tools_messages,
             )
 
     async def _pipeline_reply_task_impl(
@@ -2787,7 +2785,6 @@ class AgentActivity(RecognitionHooks):
         new_message: llm.ChatMessage | None = None,
         instructions: str | Instructions | None = None,
         _previous_user_metrics: llm.MetricsReport | None = None,
-        _previous_tools_messages: Sequence[llm.FunctionCall | llm.FunctionCallOutput] | None = None,
     ) -> None:
         from .agent import ModelSettings
 
@@ -3167,11 +3164,6 @@ class AgentActivity(RecognitionHooks):
 
         current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, speech_handle.interrupted)
 
-        # add the tools messages that triggers this reply to the chat context
-        if _previous_tools_messages:
-            self._agent._chat_ctx.insert(_previous_tools_messages)
-            self._session._tool_items_added(_previous_tools_messages)
-
         forwarded_text = "".join(out.forwarded_text for out in segment_outputs)
         if speech_handle.interrupted:
             # forward_generation already cleared the buffer and waited for playout
@@ -3224,6 +3216,19 @@ class AgentActivity(RecognitionHooks):
 
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(exe_task)
+
+            # commit results of tools that finished despite the interruption (#3702);
+            # handoffs excluded: not applied when interrupted, must stay retryable
+            interrupted_calls: list[llm.FunctionCall] = []
+            interrupted_fnc_outputs: list[llm.FunctionCallOutput] = []
+            for sanitized_out in tool_output.output:
+                if sanitized_out.fnc_call_out is not None and sanitized_out.agent_task is None:
+                    interrupted_calls.append(sanitized_out.fnc_call)
+                    interrupted_fnc_outputs.append(sanitized_out.fnc_call_out)
+
+            if interrupted_tool_messages := interrupted_calls + interrupted_fnc_outputs:
+                self._agent._chat_ctx.insert(interrupted_tool_messages)
+                self._session._tool_items_added(interrupted_tool_messages)
             return
 
         # wait for the tool execution to complete
@@ -3283,6 +3288,11 @@ class AgentActivity(RecognitionHooks):
                 draining = True
 
             tool_messages = new_calls + new_fnc_outputs
+            # commit now so results survive even if the reply speech never runs (#3702)
+            if tool_messages:
+                self._agent._chat_ctx.insert(tool_messages)
+                self._session._tool_items_added(tool_messages)
+
             if fnc_executed_ev._reply_required and not speech_handle.interrupted:
                 # forwarding chat_ctx to the tool reply: drop the in-progress placeholders
                 # (the next turn re-injects from the live running set)
@@ -3325,7 +3335,6 @@ class AgentActivity(RecognitionHooks):
                         # in case the current reply only generated tools (no speech), re-use the current user_metrics for the next
                         # tool response generation
                         _previous_user_metrics=user_metrics if not forwarded_text else None,
-                        _previous_tools_messages=tool_messages,
                     ),
                     speech_handle=speech_handle,
                     name="AgentActivity.pipeline_reply",
@@ -3334,10 +3343,6 @@ class AgentActivity(RecognitionHooks):
                 self._schedule_speech(
                     speech_handle, SpeechHandle.SPEECH_PRIORITY_NORMAL, force=True
                 )
-            elif len(new_fnc_outputs) > 0:
-                # add the tool calls and outputs to the chat context even no reply is generated
-                self._agent._chat_ctx.insert(tool_messages)
-                self._session._tool_items_added(tool_messages)
 
     @utils.log_exceptions(logger=logger)
     async def _realtime_reply_task(
