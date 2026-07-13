@@ -47,9 +47,13 @@ from .version import __version__
 
 NUM_CHANNELS = 1
 # Base URL for the Smallest AI API.
-# Streaming: wss://api.smallest.ai/waves/v1/{model}/get_text
-# Batch:     https://api.smallest.ai/waves/v1/{model}/get_text
+# Streaming: wss://api.smallest.ai/waves/v1/stt/live?model={model}
+# Batch:     https://api.smallest.ai/waves/v1/stt/?model={model}
 SMALLEST_STT_BASE_URL = "https://api.smallest.ai/waves/v1"
+
+# Models that support real-time streaming. All others are batch-only and will be
+# wrapped with a StreamAdapter by the agent framework automatically.
+_STREAMING_MODELS: frozenset[str] = frozenset({"pulse"})
 
 # ---------------------------------------------------------------------------
 # Minimal PeriodicCollector — same logic as livekit-plugins-deepgram/_utils.py
@@ -92,7 +96,7 @@ class _STTOptions:
     encoding: STTEncoding | str
     word_timestamps: bool
     diarize: bool
-    eou_timeout_ms: int  # end-of-utterance silence timeout (100–10 000 ms)
+    eou_timeout_ms: int  # end-of-utterance silence timeout in ms; valid range 100–10000ms
     base_url: str
 
 
@@ -106,29 +110,39 @@ class STT(stt.STT):
         encoding: STTEncoding | str = "linear16",
         word_timestamps: bool = True,
         diarize: bool = False,
-        eou_timeout_ms: int = 0,
+        eou_timeout_ms: int = 100,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = SMALLEST_STT_BASE_URL,
     ) -> None:
-        """Create a new instance of Smallest AI Pulse STT.
+        """Create a new instance of Smallest AI STT.
 
         Args:
-            model: STT model to use. Currently only "pulse" is available.
+            model: STT model to use. ``"pulse"`` supports streaming and batch
+                transcription across 38 languages. ``"pulse-pro"`` is a
+                higher-accuracy English-only model available for batch
+                (pre-recorded) transcription only — calling ``stream()`` with
+                ``pulse-pro`` raises ``ValueError``.
             language: BCP-47 language code (e.g. "en", "hi", "fr"). Use "multi"
                 for automatic language detection across 39 supported languages.
+                ``pulse-pro`` only supports ``"en"``.
             sample_rate: Audio sample rate in Hz. Supported: 8000, 16000, 22050,
                 24000, 44100, 48000. Defaults to 16000.
             encoding: PCM encoding of the audio stream. Use "linear16" for raw
                 16-bit PCM (the default and most compatible choice for streaming).
             word_timestamps: Include per-word start/end timestamps and confidence
-                scores in transcripts. Defaults to True.
+                scores in transcripts. Supported by both ``pulse`` and
+                ``pulse-pro``. Defaults to True.
             diarize: Enable speaker diarization. When True, each word includes a
-                speaker ID (integer during streaming). Defaults to False.
+                speaker ID (integer during streaming, string label in batch).
+                Defaults to False.
             eou_timeout_ms: Milliseconds of silence before the server considers an
-                utterance complete and emits a final transcript. Set to 0 to disable
-                server-side end-of-utterance detection, which is recommended when using
-                LiveKit's built-in turn detection to minimise latency. Defaults to 0.
+                utterance complete and emits a final transcript. Must be between 100 and
+                10000ms. Defaults to 100ms (the minimum) so that server-side EOU adds
+                minimal latency alongside LiveKit's own end-of-turn detection. If omitted,
+                the server applies an 800ms default. Note: the Smallest AI API will soon
+                support disabling server-side EOU entirely, which will allow LiveKit's
+                end-of-turn detection to be used exclusively.
             api_key: Smallest AI API key. Falls back to the SMALLEST_API_KEY
                 environment variable if not provided.
             http_session: An existing aiohttp ClientSession to reuse.
@@ -136,7 +150,7 @@ class STT(stt.STT):
         """
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=True,
+                streaming=model in _STREAMING_MODELS,
                 interim_results=True,
                 diarization=diarize,
                 aligned_transcript="word" if word_timestamps else False,
@@ -186,6 +200,7 @@ class STT(stt.STT):
     ) -> stt.SpeechEvent:
         config = self._sanitize_options(language=language)
         params: dict[str, Any] = {
+            "model": config.model,
             "language": config.language,
             "encoding": config.encoding,
             "sample_rate": config.sample_rate,
@@ -195,7 +210,7 @@ class STT(stt.STT):
 
         try:
             async with self._ensure_session().post(
-                url=f"{config.base_url}/{config.model}/get_text",
+                url=f"{config.base_url}/stt/",
                 headers={
                     "Authorization": f"Bearer {config.api_key}",
                     "Content-Type": "application/octet-stream",
@@ -232,6 +247,10 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
+        if not self.capabilities.streaming:
+            raise ValueError(
+                f"{self._opts.model} does not support streaming; use recognize() for batch transcription"
+            )
         config = self._sanitize_options(language=language)
         stream = SpeechStream(
             stt=self,
@@ -254,6 +273,7 @@ class STT(stt.STT):
         """Update STT options; propagates to all active streams (triggers reconnect)."""
         if is_given(model):
             self._opts.model = model
+            self._capabilities.streaming = model in _STREAMING_MODELS
         if is_given(language):
             self._opts.language = language
         if is_given(sample_rate):
@@ -280,9 +300,10 @@ class STT(stt.STT):
 
 
 class SpeechStream(stt.SpeechStream):
-    # Tells the server to flush remaining audio and close the session gracefully.
-    # After sending this, the server will respond with a final message (is_last=True).
-    _FINALIZE_MSG: str = json.dumps({"type": "finalize"})
+    # Signals end of stream: server flushes remaining audio, emits final transcripts,
+    # and responds with is_last=True before closing the session.
+    # Use {"type": "finalize"} mid-session to force is_final without closing.
+    _CLOSE_STREAM_MSG: str = json.dumps({"type": "close_stream"})
 
     def __init__(
         self,
@@ -353,9 +374,10 @@ class SpeechStream(stt.SpeechStream):
                         await ws.send_bytes(frame.data.tobytes())
                     self._audio_duration_collector.flush()
 
-            # Input channel closed: tell the server we are done and let it flush.
+            # Input channel closed: close the stream so the server flushes remaining
+            # audio, emits final transcripts, and sends is_last=True.
             closing_ws = True
-            await ws.send_str(SpeechStream._FINALIZE_MSG)
+            await ws.send_str(SpeechStream._CLOSE_STREAM_MSG)
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -424,21 +446,17 @@ class SpeechStream(stt.SpeechStream):
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         params: dict[str, Any] = {
+            "model": self._opts.model,
             "language": self._opts.language,
             "encoding": self._opts.encoding,
             "sample_rate": self._opts.sample_rate,
             "word_timestamps": str(self._opts.word_timestamps).lower(),
             "diarize": str(self._opts.diarize).lower(),
         }
-        # Only send eou_timeout_ms when explicitly set (non-zero).
-        # When 0, omit the parameter and let the server use its default,
-        # which avoids adding server-side silence latency on top of LiveKit's
-        # own end-of-turn detection.
-        if self._opts.eou_timeout_ms > 0:
-            params["eou_timeout_ms"] = self._opts.eou_timeout_ms
+        params["eou_timeout_ms"] = self._opts.eou_timeout_ms
         ws_url = (
             self._opts.base_url.replace("https://", "wss://", 1).replace("http://", "ws://", 1)
-            + f"/{self._opts.model}/get_text"
+            + "/stt/live"
             + f"?{urlencode(params)}"
         )
 
@@ -480,7 +498,7 @@ class SpeechStream(stt.SpeechStream):
         #   "session_id":   str,
         #   "transcript":   str,        # partial or final text for this utterance
         #   "is_final":     bool,       # True when the utterance is complete
-        #   "is_last":      bool,       # True when the session itself is done (after finalize)
+        #   "is_last":      bool,       # True when the session itself is done (after close_stream)
         #   "language":     str,        # present when is_final=True (detected or echoed)
         #   "words":        [           # present when word_timestamps=True
         #     {"word": str, "start": float, "end": float,

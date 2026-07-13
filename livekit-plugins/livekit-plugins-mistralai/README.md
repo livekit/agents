@@ -101,6 +101,7 @@ agent = Agent(
         mistralai.tools.WebSearch(),
         mistralai.tools.CodeInterpreter(),
         mistralai.tools.DocumentLibrary(library_ids=["<your-library-id>"]),
+        mistralai.tools.Connector(connector_id="<your_connector_id>")
     ]
 )
 ```

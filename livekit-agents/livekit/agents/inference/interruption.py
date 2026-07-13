@@ -41,19 +41,15 @@ from ..utils import (
     aio,
     http_context,
     is_given,
-    log_exceptions,
     shortuuid,
 )
 from ._utils import (
-    DEFAULT_INFERENCE_URL,
-    STAGING_INFERENCE_URL,
     create_access_token,
     get_default_inference_url,
     get_inference_headers,
 )
 
 SAMPLE_RATE = 16000
-THRESHOLD = 0.5
 MIN_INTERRUPTION_DURATION = 0.025 * 2  # 25ms per frame, 2 consecutive frames
 MAX_AUDIO_DURATION = 3  # 3 seconds
 DETECTION_INTERVAL = 0.1  # 0.1 second
@@ -75,8 +71,8 @@ class InterruptionDetectionError(BaseModel):
 class InterruptionOptions:
     sample_rate: int
     """The sample rate of the audio frames, defaults to 16000Hz"""
-    threshold: float
-    """The threshold for the interruption detection, defaults to 0.5"""
+    threshold: NotGivenOr[float]
+    """The threshold for the interruption detection. NOT_GIVEN to use server defaults."""
     min_frames: int
     """The minimum number of frames to detect a interruption, defaults to 50ms/2 frames"""
     max_audio_duration: float
@@ -90,8 +86,6 @@ class InterruptionOptions:
     base_url: str
     api_key: str
     api_secret: str
-    use_proxy: bool
-    """Whether to use the inference instead of the hosted API"""
 
 
 @dataclass(slots=True, kw_only=True)
@@ -270,7 +264,7 @@ class AdaptiveInterruptionDetector(
     def __init__(
         self,
         *,
-        threshold: float = THRESHOLD,
+        threshold: NotGivenOr[float] = NOT_GIVEN,
         min_interruption_duration: float = MIN_INTERRUPTION_DURATION,
         max_audio_duration: float = MAX_AUDIO_DURATION,
         audio_prefix_duration: float = AUDIO_PREFIX_DURATION,
@@ -285,13 +279,13 @@ class AdaptiveInterruptionDetector(
         Initialize a AdaptiveInterruptionDetector instance.
 
         Args:
-            threshold (float, optional): The threshold for the interruption detection, defaults to 0.5.
+            threshold (float, optional): The threshold for the interruption detection. When not set, the server-recommended default (returned in session.created) is used.
             min_interruption_duration (float, optional): The minimum duration, in seconds, of the interruption event, defaults to 50ms.
             max_audio_duration (float, optional): The maximum audio duration, including the audio prefix, in seconds, for the interruption detection, defaults to 3s.
             audio_prefix_duration (float, optional): The audio prefix duration, in seconds, for the interruption detection, defaults to 0.5s.
             detection_interval (float, optional): The interval between detections, in seconds, for the interruption detection, defaults to 0.1s.
             inference_timeout (float, optional): The timeout for the interruption detection, defaults to 1 second.
-            base_url (str, optional): The base URL for the interruption detection, defaults to the shared LIVEKIT_REMOTE_EOT_URL environment variable.
+            base_url (str, optional): The base URL for the interruption detection, defaults to the shared LIVEKIT_INFERENCE_URL environment variable.
             api_key (str, optional): The API key for the interruption detection, defaults to the LIVEKIT_INFERENCE_API_KEY environment variable.
             api_secret (str, optional): The API secret for the interruption detection, defaults to the LIVEKIT_INFERENCE_API_SECRET environment variable.
             http_session (aiohttp.ClientSession, optional): The HTTP session to use for the interruption detection.
@@ -300,39 +294,27 @@ class AdaptiveInterruptionDetector(
         if max_audio_duration > 3.0:
             raise ValueError("max_audio_duration must be less than or equal to 3.0 seconds")
 
-        lk_base_url = (
-            base_url
-            if base_url
-            else os.getenv("LIVEKIT_REMOTE_EOT_URL", get_default_inference_url())
+        lk_base_url = base_url if base_url else get_default_inference_url()
+
+        lk_api_key = (
+            api_key
+            if api_key
+            else os.getenv("LIVEKIT_INFERENCE_API_KEY", os.getenv("LIVEKIT_API_KEY", ""))
         )
-        lk_api_key: str = api_key if api_key else ""
-        lk_api_secret: str = api_secret if api_secret else ""
-        # use LiveKit credentials if using the inference service (production or staging)
-        is_inference_url = lk_base_url in (DEFAULT_INFERENCE_URL, STAGING_INFERENCE_URL)
-        if is_inference_url:
-            lk_api_key = (
-                api_key
-                if api_key
-                else os.getenv("LIVEKIT_INFERENCE_API_KEY", os.getenv("LIVEKIT_API_KEY", ""))
+        if not lk_api_key:
+            raise ValueError(
+                "api_key is required, either as argument or set LIVEKIT_API_KEY environmental variable"
             )
-            if not lk_api_key:
-                raise ValueError(
-                    "api_key is required, either as argument or set LIVEKIT_API_KEY environmental variable"
-                )
 
-            lk_api_secret = (
-                api_secret
-                if api_secret
-                else os.getenv("LIVEKIT_INFERENCE_API_SECRET", os.getenv("LIVEKIT_API_SECRET", ""))
+        lk_api_secret = (
+            api_secret
+            if api_secret
+            else os.getenv("LIVEKIT_INFERENCE_API_SECRET", os.getenv("LIVEKIT_API_SECRET", ""))
+        )
+        if not lk_api_secret:
+            raise ValueError(
+                "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable"
             )
-            if not lk_api_secret:
-                raise ValueError(
-                    "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable"
-                )
-
-            use_proxy = True
-        else:
-            use_proxy = False
 
         self._opts = InterruptionOptions(
             sample_rate=SAMPLE_RATE,
@@ -345,12 +327,11 @@ class AdaptiveInterruptionDetector(
             base_url=lk_base_url,
             api_key=lk_api_key,
             api_secret=lk_api_secret,
-            use_proxy=use_proxy,
         )
         self._label = f"{type(self).__module__}.{type(self).__name__}"
         self._sample_rate = SAMPLE_RATE
         self._session = http_session
-        self._streams = weakref.WeakSet[InterruptionHttpStream | InterruptionWebSocketStream]()
+        self._streams = weakref.WeakSet[InterruptionWebSocketStream]()
 
         logger.info(
             "adaptive interruption detector initialized",
@@ -360,9 +341,8 @@ class AdaptiveInterruptionDetector(
                 "audio_prefix_duration": self._opts.audio_prefix_duration,
                 "max_audio_duration": self._opts.max_audio_duration,
                 "min_frames": self._opts.min_frames,
-                "threshold": self._opts.threshold,
+                "threshold": self._opts.threshold if is_given(self._opts.threshold) else None,
                 "inference_timeout": self._opts.inference_timeout,
-                "use_proxy": self._opts.use_proxy,
             },
         )
 
@@ -399,13 +379,9 @@ class AdaptiveInterruptionDetector(
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> InterruptionHttpStream | InterruptionWebSocketStream:
+    ) -> InterruptionWebSocketStream:
         try:
-            stream: InterruptionHttpStream | InterruptionWebSocketStream
-            if self._opts.use_proxy:
-                stream = InterruptionWebSocketStream(model=self, conn_options=conn_options)
-            else:
-                stream = InterruptionHttpStream(model=self, conn_options=conn_options)
+            stream = InterruptionWebSocketStream(model=self, conn_options=conn_options)
         except Exception as e:
             self._emit_error(e, recoverable=False)
             raise
@@ -470,7 +446,6 @@ class InterruptionStreamBase(ABC):
     @abstractmethod
     async def _run(self) -> None: ...
 
-    @log_exceptions(logger=logger)
     async def _main_task(self) -> None:
         max_retries = self._conn_options.max_retry
 
@@ -491,8 +466,9 @@ class InterruptionStreamBase(ABC):
 
                     retry_interval = self._conn_options._interval_for_retry(self._num_retries)
                     logger.warning(
-                        f"failed to detect interruption, retrying in {retry_interval}s",
-                        exc_info=e,
+                        "failed to detect interruption, retrying in %ss: %s",
+                        retry_interval,
+                        e,
                         extra={
                             "model": self._model._label,
                             "attempt": self._num_retries,
@@ -688,141 +664,6 @@ class InterruptionStreamBase(ABC):
             self._model.emit("metrics_collected", metrics)
 
 
-# region: HTTP Stream
-
-
-class InterruptionResponse(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-    created_at: int
-    is_bargein: bool
-    prediction_duration: float
-    probabilities: npt.NDArray[np.float32] = Field(..., exclude=True)
-
-
-class InterruptionHttpStream(InterruptionStreamBase):
-    def __init__(
-        self, *, model: AdaptiveInterruptionDetector, conn_options: APIConnectOptions
-    ) -> None:
-        super().__init__(model=model, conn_options=conn_options)
-
-    def update_options(
-        self,
-        *,
-        threshold: NotGivenOr[float] = NOT_GIVEN,
-        min_interruption_duration: NotGivenOr[float] = NOT_GIVEN,
-    ) -> None:
-        if is_given(threshold):
-            self._opts.threshold = threshold
-        if is_given(min_interruption_duration):
-            self._opts.min_frames = math.ceil(min_interruption_duration * _FRAMES_PER_SECOND)
-
-    async def _run(self) -> None:
-        async def _send_task(input_ch: aio.Chan[npt.NDArray[np.int16]]) -> None:
-            async for data in input_ch:
-                if (
-                    overlap_started_at := self._overlap_started_at
-                ) is None or not self._overlap_started:
-                    continue
-
-                # we don't increment the request counter for hosted agents
-                resp: InterruptionResponse = await self.predict(data)
-                created_at = resp.created_at
-                self._cache[created_at] = entry = InterruptionCacheEntry(
-                    created_at=created_at,
-                    speech_input=data,
-                    prediction_duration=resp.prediction_duration,
-                    total_duration=(time.perf_counter_ns() - created_at) / 1e9,
-                    detection_delay=time.time() - overlap_started_at,
-                    probabilities=resp.probabilities,
-                    is_interruption=resp.is_bargein,
-                )
-                if entry.is_interruption and self._overlap_started:
-                    logger.debug("user interruption detected")
-                    if self._user_speech_span:
-                        self._update_user_speech_span(self._user_speech_span, entry)
-                        self._user_speech_span = None
-                    ev = OverlappingSpeechEvent.from_cache_entry(
-                        entry=entry,
-                        is_interruption=True,
-                        started_at=overlap_started_at,
-                        ended_at=time.time(),
-                    )
-                    self.send(ev)
-                    self._overlap_started = False
-
-        data_ch = aio.Chan[npt.NDArray[np.int16]]()
-        tasks = [
-            asyncio.create_task(self._forward_data(data_ch)),
-            asyncio.create_task(_send_task(data_ch)),
-        ]
-        try:
-            await asyncio.gather(*tasks)
-        finally:
-            await aio.cancel_and_wait(*tasks)
-
-    @log_exceptions(logger=logger)
-    async def predict(self, waveform: np.ndarray) -> InterruptionResponse:
-        created_at = perf_counter_ns()
-        try:
-            async with self._session.post(
-                url=f"{self._opts.base_url}/bargein?threshold={self._opts.threshold}&min_frames={int(self._opts.min_frames)}&created_at={int(created_at)}",
-                headers={
-                    "Content-Type": "application/octet-stream",
-                    "Authorization": f"Bearer {create_access_token(self._opts.api_key, self._opts.api_secret)}",
-                },
-                data=waveform.tobytes(),
-                timeout=aiohttp.ClientTimeout(total=self._opts.inference_timeout),
-            ) as resp:
-                try:
-                    resp.raise_for_status()
-                    data: dict[str, Any] = await resp.json()
-                    result = InterruptionResponse.model_validate(
-                        data
-                        | {
-                            "prediction_duration": (time.perf_counter_ns() - created_at) / 1e9,
-                            "probabilities": np.array(
-                                data.get("probabilities", []), dtype=np.float32
-                            ),
-                        }
-                    )
-
-                    logger.trace(
-                        "interruption inference done",
-                        extra={
-                            "created_at": created_at,
-                            "is_interruption": result.is_bargein,
-                            "prediction_duration": result.prediction_duration,
-                        },
-                    )
-                    return result
-                except Exception as e:
-                    msg = await resp.text()
-                    status_code = (
-                        e.status if isinstance(e, aiohttp.ClientResponseError) else resp.status
-                    )
-                    raise APIStatusError(
-                        f"error during interruption prediction: {e}",
-                        body=msg,
-                        status_code=status_code,
-                        retryable=False if status_code == 429 else None,
-                    ) from e
-        except asyncio.TimeoutError as e:
-            raise APIStatusError(
-                f"interruption inference timeout: {e}",
-                status_code=408,
-                retryable=False,
-            ) from e
-        except aiohttp.ClientError as e:
-            raise APIConnectionError(f"interruption inference connection error: {e}") from e
-        except APIError as e:
-            raise e
-        except Exception as e:
-            raise APIError(f"error during interruption prediction: {e}") from e
-
-
-# endregion
-
-
 # region: WebSocket Stream
 
 
@@ -841,12 +682,14 @@ class InterruptionWSSessionCreatedMessage(BaseModel):
     type: Literal[InterruptionWSMessageType.SESSION_CREATED] = (
         InterruptionWSMessageType.SESSION_CREATED
     )
+    default_threshold: float | None = None
+    """The server-recommended interruption threshold."""
 
 
 class InterruptionWSSessionCreateSettings(BaseModel):
     sample_rate: int
     num_channels: int
-    threshold: float
+    threshold: float | None = None
     min_frames: int
     encoding: Literal["s16le"]
 
@@ -923,11 +766,19 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
         threshold: NotGivenOr[float] = NOT_GIVEN,
         min_interruption_duration: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
-        if is_given(threshold):
-            self._opts.threshold = threshold
-        if is_given(min_interruption_duration):
-            self._opts.min_frames = math.ceil(min_interruption_duration * _FRAMES_PER_SECOND)
+        # opts are shared with the detector (self._opts is model._opts), no need to update them here
         self._reconnect_event.set()
+
+    def _resolve_effective_threshold(self, default_threshold: float | None) -> float | None:
+        """Return the effective threshold for observability only.
+
+        Precedence: user override, then server default; None when neither is known.
+        """
+        if is_given(self._opts.threshold):
+            return self._opts.threshold
+        if default_threshold is not None:
+            return default_threshold
+        return None
 
     async def _run(self) -> None:
         closing_ws = False
@@ -995,9 +846,29 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
                 msg: AnyInterruptionWSMessage = InterruptionWSMessage.validate_python(data)
 
                 match msg:
-                    case (
-                        InterruptionWSSessionCreatedMessage() | InterruptionWSSessionClosedMessage()
-                    ):
+                    case InterruptionWSSessionCreatedMessage():
+                        if not is_given(self._opts.threshold) and msg.default_threshold is None:
+                            raise APIStatusError(
+                                message=(
+                                    "adaptive interruption session created without a threshold: "
+                                    "no user override and the server did not report a "
+                                    "default_threshold"
+                                ),
+                                status_code=500,
+                                retryable=False,
+                            )
+                        # Observability only — the server makes the actual decision;
+                        logger.debug(
+                            "adaptive interruption session created",
+                            extra={
+                                "default_threshold": msg.default_threshold,
+                                "effective_threshold": self._resolve_effective_threshold(
+                                    msg.default_threshold
+                                ),
+                                "user_override": is_given(self._opts.threshold),
+                            },
+                        )
+                    case InterruptionWSSessionClosedMessage():
                         pass
                     case InterruptionWSDetectedMessage():
                         created_at = msg.created_at
@@ -1118,8 +989,8 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
         settings = InterruptionWSSessionCreateSettings(
             sample_rate=self._opts.sample_rate,
             num_channels=1,
-            threshold=self._opts.threshold,
-            min_frames=self._model._opts.min_frames,
+            threshold=self._opts.threshold if is_given(self._opts.threshold) else None,
+            min_frames=self._opts.min_frames,
             encoding="s16le",
         )
 
@@ -1158,7 +1029,7 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
                 type=InterruptionWSMessageType.SESSION_CREATE,
                 settings=settings,
             )
-            await ws.send_str(msg.model_dump_json())
+            await ws.send_str(msg.model_dump_json(exclude_none=True))
         except Exception as e:
             await ws.close()
             raise APIConnectionError(

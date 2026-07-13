@@ -375,19 +375,19 @@ class RealtimeSession(
                 continue
 
             if item.type == "message" and item.role in ("system", "developer"):
-                if item.text_content:
+                if item.raw_text_content:
                     self._send_client_event(
                         UserTextMessageEvent(
-                            text=f"<instruction>{item.text_content}</instruction>",
+                            text=f"<instruction>{item.raw_text_content}</instruction>",
                             defer_response=True,
                         )
                     )
 
             elif item.type == "message" and item.role == "user":
                 # Inject user message as context; do not trigger an immediate response
-                if item.text_content:
+                if item.raw_text_content:
                     self._send_client_event(
-                        UserTextMessageEvent(text=item.text_content, defer_response=True)
+                        UserTextMessageEvent(text=item.raw_text_content, defer_response=True)
                     )
             elif item.type == "function_call_output":
                 # Bridge tool result back to Ultravox using the original invocationId
@@ -490,7 +490,11 @@ class RealtimeSession(
             logger.warning(
                 "generate_reply called while another generation is pending, cancelling previous."
             )
-            self._pending_generation_fut.cancel("Superseded by new generate_reply call")
+            # clear the slot before cancelling so the done callback doesn't treat it
+            # as an external cancellation and signal the server.
+            old_fut = self._pending_generation_fut
+            self._pending_generation_fut = None
+            old_fut.cancel("Superseded by new generate_reply call")
 
         # Record epoch for server-event gating
         self._pending_generation_epoch = time.perf_counter()
@@ -522,7 +526,21 @@ class RealtimeSession(
                     self._pending_generation_epoch = None
 
         timeout_handle = asyncio.get_event_loop().call_later(5.0, _on_timeout)
-        fut.add_done_callback(lambda _: timeout_handle.cancel())
+
+        def _on_fut_done(f: asyncio.Future[llm.GenerationCreatedEvent]) -> None:
+            timeout_handle.cancel()
+            is_current = self._pending_generation_fut is fut
+            if is_current:
+                self._pending_generation_fut = None
+                self._pending_generation_epoch = None
+            if f.cancelled() and is_current:
+                # external cancel: send a deferred barge-in so Ultravox does not
+                # produce a response (or interrupts one already in progress).
+                self._send_client_event(
+                    UserTextMessageEvent(text="", urgency="immediate", defer_response=True)
+                )
+
+        fut.add_done_callback(_on_fut_done)
 
         return fut
 

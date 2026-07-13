@@ -51,6 +51,11 @@ def create_session(
     )
     # allowing overriding default endpointing and interruption options
     turn_handling = turn_handling or {}
+    # Use VAD-based endpointing by default. The AgentSession default is the
+    # turn-detector-v1-mini model; it runs locally but predicts end-of-turn from
+    # acoustic features, so it can't fire deterministically on synthetic test
+    # audio. Model accuracy is covered by the audio_eot suite instead.
+    turn_handling.setdefault("turn_detection", None)
     turn_handling["endpointing"] = EndpointingOptions(
         **{**default_endpointing, **turn_handling.get("endpointing", {})}
     )
@@ -93,7 +98,7 @@ def create_session(
     return session
 
 
-async def run_session(session: AgentSession, agent: Agent, *, drain_delay: float = 0.2) -> float:
+async def run_session(session: AgentSession, agent: Agent, *, drain_delay: float = 5) -> float:
     stt = session.stt
     audio_input = session.input.audio
     assert isinstance(stt, FakeSTT)

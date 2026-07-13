@@ -25,7 +25,7 @@ from ...voice.background_audio import (
     BuiltinAudioClip,
     PlayHandle,
 )
-from .utils import InstructionParts
+from .utils import WorkflowInstructions
 
 if TYPE_CHECKING:
     from ...voice.turn import TurnDetectionMode
@@ -45,8 +45,10 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         sip_connection: NotGivenOr[api.SIPOutboundConfig] = NOT_GIVEN,
         sip_number: NotGivenOr[str] = NOT_GIVEN,
         sip_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
+        dtmf: NotGivenOr[str | None] = NOT_GIVEN,
+        ringing_timeout: NotGivenOr[float | None] = NOT_GIVEN,
         hold_audio: NotGivenOr[AudioSource | AudioConfig | list[AudioConfig] | None] = NOT_GIVEN,
-        instructions: NotGivenOr[InstructionParts | Instructions | str] = NOT_GIVEN,
+        instructions: NotGivenOr[WorkflowInstructions | Instructions | str] = NOT_GIVEN,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
@@ -72,6 +74,13 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
                 saved trunk. Use this when you need to specify a custom hostname,
                 transport, or authentication credentials directly, bypassing the
                 trunk-based configuration.
+            dtmf: DTMF tones to send once the human agent's call is answered, e.g. to dial
+                an extension or navigate an IVR menu (``"1234#"``). Insert ``w`` characters
+                to pause ~0.5s each before/between digits (``"wwww1234#"`` waits ~2s, useful
+                when the destination plays a greeting before accepting input).
+            ringing_timeout: How long to wait, in seconds, for the human agent to answer
+                before giving up on the call. When the timeout elapses the task completes
+                with a ``ToolError`` and the caller conversation resumes.
             hold_audio: Audio played to the caller while they are on hold during the
                     transfer.
             extra_instructions: Extra instructions to append to the base instructions
@@ -79,19 +88,19 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         """
 
         if not is_given(instructions):
-            instructions = InstructionParts(persona=PERSONA, extra=extra_instructions)
+            instructions = WorkflowInstructions(persona=PERSONA, extra=extra_instructions)
         elif extra_instructions:
             logger.warning("`extra_instructions` will be ignored when `instructions` is provided")
 
-        if isinstance(instructions, InstructionParts):
+        if isinstance(instructions, WorkflowInstructions):
             conversation_history = self._format_conversation_history(chat_ctx)
-            instructions = Instructions(INSTRUCTIONS_TEMPLATE).format(
-                persona=instructions.persona if is_given(instructions.persona) else PERSONA,
-                extra=instructions.extra,
+            instructions = instructions.resolve(
+                template=INSTRUCTIONS_TEMPLATE,
+                default_persona=PERSONA,
                 _conversation_history=conversation_history,
             )
 
-        assert is_given(instructions)  # for type checking
+        assert isinstance(instructions, (str, Instructions))  # for type checking
         super().__init__(
             instructions=instructions,
             chat_ctx=NOT_GIVEN,  # don't pass the chat_ctx
@@ -119,11 +128,13 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
 
         self._sip_call_to = sip_call_to
         self._sip_connection = sip_connection if is_given(sip_connection) else None
-        self._sip_trunk_id = (
-            sip_trunk_id
-            if is_given(sip_trunk_id)
-            else os.getenv("LIVEKIT_SIP_OUTBOUND_TRUNK", None)
-        )
+        if is_given(sip_trunk_id):
+            self._sip_trunk_id = sip_trunk_id
+        elif self._sip_connection is not None:
+            # explicit sip_connection: don't override with the env var trunk
+            self._sip_trunk_id = None
+        else:
+            self._sip_trunk_id = os.getenv("LIVEKIT_SIP_OUTBOUND_TRUNK", None)
         if self._sip_trunk_id is None and self._sip_connection is None:
             raise ValueError(
                 "`LIVEKIT_SIP_OUTBOUND_TRUNK` environment variable, `sip_trunk_id`,"
@@ -134,6 +145,8 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
             sip_number if is_given(sip_number) else os.getenv("LIVEKIT_SIP_NUMBER", "")
         )
         self._sip_headers = sip_headers if is_given(sip_headers) else {}
+        self._dtmf = dtmf if is_given(dtmf) else None
+        self._ringing_timeout = ringing_timeout if is_given(ringing_timeout) else None
 
         # background audio and io
         self._background_audio = BackgroundAudioPlayer()
@@ -325,7 +338,10 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
             wait_until_answered=True,
             sip_number=self._sip_number or None,
             headers=self._sip_headers,
+            dtmf=self._dtmf or "",
         )
+        if self._ringing_timeout is not None:
+            sip_request.ringing_timeout.FromNanoseconds(int(self._ringing_timeout * 1e9))
         if self._sip_connection is not None:
             sip_request.trunk.CopyFrom(self._sip_connection)
         await job_ctx.api.sip.create_sip_participant(sip_request)

@@ -28,7 +28,7 @@ from livekit.agents.utils import audio as audio_utils, images, is_given
 from livekit.plugins.google.realtime.api_proto import ClientEvents, LiveAPIModels, Voice
 
 from ..log import logger
-from ..utils import create_tools_config, get_tool_results_for_realtime
+from ..utils import create_function_response, create_tools_config, get_tool_results_for_realtime
 from ..version import __version__
 
 INPUT_AUDIO_SAMPLE_RATE = 16000
@@ -43,6 +43,9 @@ DEFAULT_IMAGE_ENCODE_OPTIONS = images.EncodeOptions(
 )
 
 lk_google_debug = int(os.getenv("LK_GOOGLE_DEBUG", 0))
+
+# stop rejecting tool calls after this many in a row to avoid a loop (tool_choice="none")
+MAX_TOOL_CALL_REJECTIONS = 3
 
 # Known VertexAI models for the Live API
 # See: https://docs.cloud.google.com/vertex-ai/generative-ai/docs/live-api
@@ -140,6 +143,7 @@ class _RealtimeOptions:
     image_encode_options: NotGivenOr[images.EncodeOptions]
     conn_options: APIConnectOptions
     http_options: NotGivenOr[types.HttpOptions]
+    media_resolution: NotGivenOr[types.MediaResolution] = NOT_GIVEN
     enable_affective_dialog: NotGivenOr[bool] = NOT_GIVEN
     proactivity: NotGivenOr[bool] = NOT_GIVEN
     realtime_input_config: NotGivenOr[types.RealtimeInputConfig] = NOT_GIVEN
@@ -147,6 +151,7 @@ class _RealtimeOptions:
     api_version: NotGivenOr[str] = NOT_GIVEN
     tool_behavior: NotGivenOr[types.Behavior] = NOT_GIVEN
     tool_response_scheduling: NotGivenOr[types.FunctionResponseScheduling] = NOT_GIVEN
+    tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN
     thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN
     session_resumption: NotGivenOr[types.SessionResumptionConfig] = NOT_GIVEN
     credentials: google.auth.credentials.Credentials | None = None
@@ -216,6 +221,7 @@ class RealtimeModel(llm.RealtimeModel):
         api_version: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         http_options: NotGivenOr[types.HttpOptions] = NOT_GIVEN,
+        media_resolution: NotGivenOr[types.MediaResolution] = NOT_GIVEN,
         thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN,
         credentials: google.auth.credentials.Credentials | None = None,
     ) -> None:
@@ -248,6 +254,7 @@ class RealtimeModel(llm.RealtimeModel):
             input_audio_transcription (AudioTranscriptionConfig | None, optional): The configuration for input audio transcription. Defaults to None.)
             output_audio_transcription (AudioTranscriptionConfig | None, optional): The configuration for output audio transcription. Defaults to AudioTranscriptionConfig().
             image_encode_options (images.EncodeOptions, optional): The configuration for image encoding. Defaults to DEFAULT_ENCODE_OPTIONS.
+            media_resolution (MediaResolution, optional): The media resolution for the session. Defaults to None.
             enable_affective_dialog (bool, optional): Whether to enable affective dialog. Defaults to False.
             proactivity (bool, optional): Whether to enable proactive audio. Defaults to False.
             realtime_input_config (RealtimeInputConfig, optional): The configuration for realtime input. Defaults to None.
@@ -371,6 +378,7 @@ class RealtimeModel(llm.RealtimeModel):
             tool_response_scheduling=tool_response_scheduling,
             conn_options=conn_options,
             http_options=http_options,
+            media_resolution=media_resolution,
             thinking_config=thinking_config,
             session_resumption=session_resumption,
             credentials=credentials,
@@ -484,6 +492,10 @@ class RealtimeSession(llm.RealtimeSession):
         self._session_should_close = asyncio.Event()
         self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
         self._pending_generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
+        # number of tool calls rejected in the current tool_choice="none" turn; non-zero also
+        # means we're draining that turn's trailing events (which have no generation to attach
+        # to). reset when the next generation starts.
+        self._rejected_tool_calls = 0
 
         self._session_resumption_handle: str | None = (
             self._opts.session_resumption.handle
@@ -494,6 +506,9 @@ class RealtimeSession(llm.RealtimeSession):
         self._in_user_activity = False
         self._session_lock = asyncio.Lock()
         self._num_retries = 0
+        # error recorded by the recv/send tasks so _main_task can bound retries
+        # and surface it through the "error" event
+        self._session_error: Exception | None = None
 
     async def _close_active_session(self) -> None:
         async with self._session_lock:
@@ -550,7 +565,19 @@ class RealtimeSession(llm.RealtimeSession):
             # no need to restart
 
         if is_given(tool_choice):
-            logger.warning("tool_choice is not supported by the Google Realtime API.")
+            # no per-response tool_choice on Gemini; "none" is emulated by rejecting any tool
+            # call emitted during the turn (see _reject_tool_calls).
+            self._opts.tool_choice = tool_choice
+            if tool_choice == "none":
+                logger.warning(
+                    "the Google Realtime API has no tool_choice='none'; tool calls emitted "
+                    "this turn will be rejected so the model replies directly."
+                )
+            elif tool_choice not in (None, "auto"):
+                logger.warning(
+                    f"tool_choice='{tool_choice}' is not supported by the Google Realtime API, "
+                    "falling back to 'auto'."
+                )
 
         if should_restart:
             self._mark_restart_needed()
@@ -717,7 +744,11 @@ class RealtimeSession(llm.RealtimeSession):
             logger.warning(
                 "generate_reply called while another generation is pending, cancelling previous."
             )
-            self._pending_generation_fut.cancel("Superseded by new generate_reply call")
+            # clear the slot before cancelling so the done callback doesn't treat it
+            # as an external cancellation and signal the server.
+            old_fut = self._pending_generation_fut
+            self._pending_generation_fut = None
+            old_fut.cancel("Superseded by new generate_reply call")
 
         fut = asyncio.Future[llm.GenerationCreatedEvent]()
         self._pending_generation_fut = fut
@@ -749,7 +780,17 @@ class RealtimeSession(llm.RealtimeSession):
                     self._pending_generation_fut = None
 
         timeout_handle = asyncio.get_event_loop().call_later(5.0, _on_timeout)
-        fut.add_done_callback(lambda _: timeout_handle.cancel())
+
+        def _on_fut_done(f: asyncio.Future[llm.GenerationCreatedEvent]) -> None:
+            timeout_handle.cancel()
+            is_current = self._pending_generation_fut is fut
+            if is_current:
+                self._pending_generation_fut = None
+            if f.cancelled() and is_current:
+                # external cancel: signal interrupt to Gemini via activity_start
+                self.interrupt()
+
+        fut.add_done_callback(_on_fut_done)
 
         return fut
 
@@ -884,6 +925,14 @@ class RealtimeSession(llm.RealtimeSession):
                     for task in pending:
                         await utils.aio.cancel_and_wait(task)
 
+                    # the recv/send tasks signal restart by setting _session_should_close
+                    # rather than raising. propagate any error they recorded so the handler
+                    # below can bound retries and surface it through the "error" event.
+                    if self._session_error is not None:
+                        err = self._session_error
+                        self._session_error = None
+                        raise err
+
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -895,6 +944,22 @@ class RealtimeSession(llm.RealtimeSession):
                     logger.error(f"Gemini Realtime API error: {e}", exc_info=e)
 
                 if not self._msg_ch.closed:
+                    # Gemini Live closes with 1007 ("Request contains an invalid argument")
+                    # when the session context is exhausted. Reconnecting replays the same
+                    # oversized chat context and fails identically, producing a tight retry
+                    # loop, so treat it as fatal to the session instead of retrying.
+                    if getattr(e, "code", None) == 1007 or "1007" in str(e):
+                        logger.error(
+                            "Gemini Live closed the session: context exhausted (1007). "
+                            "Reconnecting would replay the same context and fail again; "
+                            "terminating the session.",
+                            exc_info=e,
+                        )
+                        self._emit_error(e, recoverable=False)
+                        raise APIConnectionError(
+                            message="Gemini Live session context exhausted (1007)"
+                        ) from e
+
                     # we shouldn't retry when it's not connected, usually this means incorrect
                     # parameters or setup
                     if not session or max_retries == 0:
@@ -911,6 +976,7 @@ class RealtimeSession(llm.RealtimeSession):
                             error_msg += hint
                         raise APIConnectionError(message=error_msg) from e
 
+                    self._emit_error(e, recoverable=True)
                     retry_interval = self._opts.conn_options._interval_for_retry(self._num_retries)
                     logger.warning(
                         f"Gemini Realtime API connection failed, retrying in {retry_interval}s",
@@ -970,6 +1036,7 @@ class RealtimeSession(llm.RealtimeSession):
         except Exception as e:
             if not self._session_should_close.is_set():
                 logger.error(f"error in send task: {e}", exc_info=e)
+                self._session_error = e
                 self._mark_restart_needed(on_error=True)
         finally:
             logger.debug("send task finished.")
@@ -997,6 +1064,13 @@ class RealtimeSession(llm.RealtimeSession):
                                 if part and part.get("inline_data"):
                                     part["inline_data"] = "<audio>"
                         logger.debug("<<< received response", extra={"response": resp_copy})
+
+                    if response.tool_call and self._opts.tool_choice == "none":
+                        # reject without opening a generation, so the pending generate_reply
+                        # stays bound to the model's eventual reply and tools stay suppressed
+                        # for the whole turn.
+                        self._reject_tool_calls(response.tool_call.function_calls or [])
+                        continue
 
                     if not self._current_generation or self._current_generation._done:
                         if (sc := response.server_content) and sc.interrupted:
@@ -1048,6 +1122,7 @@ class RealtimeSession(llm.RealtimeSession):
         except Exception as e:
             if not self._session_should_close.is_set():
                 logger.error(f"error in receive task: {e}", exc_info=e)
+                self._session_error = e
                 self._mark_restart_needed(on_error=True)
         finally:
             self._mark_current_generation_done()
@@ -1055,7 +1130,11 @@ class RealtimeSession(llm.RealtimeSession):
     def _build_connect_config(self) -> types.LiveConnectConfig:
         temp = self._opts.temperature if is_given(self._opts.temperature) else None
 
-        tools_config = create_tools_config(self._tools, tool_behavior=self._opts.tool_behavior)
+        tools_config = create_tools_config(
+            self._tools,
+            tool_behavior=self._opts.tool_behavior,
+            use_parameters_json_schema=False,
+        )
         conf = types.LiveConnectConfig(
             response_modalities=self._opts.response_modalities,
             history_config=types.HistoryConfig(initial_history_in_client_content=True)
@@ -1077,6 +1156,9 @@ class RealtimeSession(llm.RealtimeSession):
                 else None,
                 thinking_config=self._opts.thinking_config
                 if is_given(self._opts.thinking_config)
+                else None,
+                media_resolution=self._opts.media_resolution
+                if is_given(self._opts.media_resolution)
                 else None,
             ),
             system_instruction=types.Content(parts=[types.Part(text=self._opts.instructions)])
@@ -1108,6 +1190,7 @@ class RealtimeSession(llm.RealtimeSession):
         return conf
 
     def _start_new_generation(self) -> None:
+        self._rejected_tool_calls = 0
         if self._current_generation and not self._current_generation._done:
             logger.warning("starting new generation while another is active. Finalizing previous.")
             self._mark_current_generation_done()
@@ -1159,7 +1242,13 @@ class RealtimeSession(llm.RealtimeSession):
     def _handle_server_content(self, server_content: types.LiveServerContent) -> None:
         current_gen = self._current_generation
         if not current_gen:
-            logger.warning("received server content but no active generation.")
+            if self._rejected_tool_calls:
+                logger.debug(
+                    "ignoring server content from a rejected tool call turn",
+                    extra={"server_content": server_content.model_dump_json(exclude_none=True)},
+                )
+            else:
+                logger.warning("received server content but no active generation.")
             return
 
         if model_turn := server_content.model_turn:
@@ -1277,6 +1366,38 @@ class RealtimeSession(llm.RealtimeSession):
             llm.InputSpeechStoppedEvent(user_transcription_enabled=False),
         )
 
+    def _reject_tool_calls(self, function_calls: list[types.FunctionCall]) -> None:
+        if not function_calls:
+            return
+
+        self._rejected_tool_calls += 1
+        extra = {"functions": [fnc_call.name for fnc_call in function_calls]}
+        if self._rejected_tool_calls > MAX_TOOL_CALL_REJECTIONS:
+            # stop responding to break the loop; the user can still interrupt by voice
+            if self._rejected_tool_calls == MAX_TOOL_CALL_REJECTIONS + 1:
+                logger.error(
+                    "model keeps calling tools despite tool_choice='none'; "
+                    f"stopping after {MAX_TOOL_CALL_REJECTIONS} rejections to avoid a loop",
+                    extra=extra,
+                )
+            return
+
+        logger.warning("rejecting tool call requested while tool_choice='none'", extra=extra)
+        responses = [
+            create_function_response(
+                llm.FunctionCallOutput(
+                    name=fnc_call.name or "",
+                    call_id=fnc_call.id or "",
+                    output="Tool calls are disabled for this turn, respond to the user directly.",
+                    is_error=True,
+                ),
+                vertexai=self._opts.vertexai,
+                tool_response_scheduling=self._opts.tool_response_scheduling,
+            )
+            for fnc_call in function_calls
+        ]
+        self._send_client_event(types.LiveClientToolResponse(function_responses=responses))
+
     def _handle_tool_calls(self, tool_call: types.LiveServerToolCall) -> None:
         if not self._current_generation:
             logger.warning("received tool call but no active generation.")
@@ -1306,7 +1427,10 @@ class RealtimeSession(llm.RealtimeSession):
     def _handle_usage_metadata(self, usage_metadata: types.UsageMetadata) -> None:
         current_gen = self._current_generation
         if not current_gen:
-            logger.warning("no active generation to report metrics for")
+            if self._rejected_tool_calls:
+                logger.debug("ignoring usage metadata from a rejected tool call turn")
+            else:
+                logger.warning("no active generation to report metrics for")
             return
 
         ttft = (

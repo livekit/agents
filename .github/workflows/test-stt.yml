@@ -148,7 +148,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.branch != '' && github.event.inputs.branch || github.ref }}
           fetch-depth: 0
@@ -198,7 +198,7 @@ jobs:
           # AWS_REGION: ${{ secrets.AWS_REGION }}
           SARVAM_API_KEY: ${{ secrets.SARVAM_API_KEY }}
         run: |
-          uv run pytest -n 3 -v tests/test_stt.py --tb=long --junitxml=test-results.xml 2>&1 | tee test-output.txt || true
+          uv run pytest -n 3 -v --stt --tb=long --junitxml=test-results.xml 2>&1 | tee test-output.txt || true
 
       - name: Cleanup Google credentials
         if: always()

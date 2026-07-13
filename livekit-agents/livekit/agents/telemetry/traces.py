@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import threading
@@ -295,7 +296,7 @@ def _chat_ctx_to_otel_events(chat_ctx: ChatContext) -> list[tuple[str, Attribute
     for item in chat_ctx.items:
         if item.type == "message" and (event_name := role_to_event.get(item.role)):
             # only support text content for now
-            events.append((event_name, {"content": item.text_content or ""}))
+            events.append((event_name, {"content": item.raw_text_content or ""}))
         elif item.type == "function_call":
             events.append(
                 (
@@ -324,7 +325,9 @@ def _chat_ctx_to_otel_events(chat_ctx: ChatContext) -> list[tuple[str, Attribute
     return events
 
 
-def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatContext.ChatItem:
+def _build_proto_chat_item(
+    item: ChatItem,
+) -> agent_pb.agent_session.ChatContext.ChatItem:
     item_pb = agent_pb.agent_session.ChatContext.ChatItem()
 
     if item.type == "message":
@@ -339,10 +342,12 @@ def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatC
         }
         msg.role = role_map[item.role]
 
+        from ..llm.chat_context import Instructions
+
         for content in item.content:
-            if isinstance(content, str):
+            if isinstance(content, (str, Instructions)):
                 content_pb = msg.content.add()
-                content_pb.text = content
+                content_pb.text = str(content)
 
         msg.interrupted = item.interrupted
 
@@ -400,7 +405,42 @@ def _to_proto_chat_item(item: ChatItem) -> dict:  # agent_pb.agent_session.ChatC
         ah.new_agent_id = item.new_agent_id
         ah.created_at.FromMilliseconds(int(item.created_at * 1000))
 
-    return MessageToDict(item_pb, preserving_proto_field_name=True)
+    elif item.type == "agent_config_update":
+        acu = item_pb.agent_config_update
+        acu.id = item.id
+        if item.instructions is not None:
+            acu.instructions = item.instructions
+        if item.tools_added:
+            acu.tools_added.extend(item.tools_added)
+        if item.tools_removed:
+            acu.tools_removed.extend(item.tools_removed)
+        acu.created_at.FromMilliseconds(int(item.created_at * 1000))
+
+    return item_pb
+
+
+def _to_proto_chat_item(item: ChatItem) -> dict:
+    return MessageToDict(_build_proto_chat_item(item), preserving_proto_field_name=True)
+
+
+async def _parse_retry_delay(resp: aiohttp.ClientResponse) -> float | None:
+    """Parse a protobuf Status error response for RetryInfo and return the retry delay in seconds,
+    or None if the error is not retryable."""
+    from google.rpc import error_details_pb2, status_pb2  # type: ignore[import-untyped]
+
+    try:
+        body = await resp.read()
+        status = status_pb2.Status()
+        status.ParseFromString(body)
+        for detail in status.details:
+            retry_info = error_details_pb2.RetryInfo()
+            if detail.Unpack(retry_info):
+                delay = retry_info.retry_delay
+                return float(delay.seconds + delay.nanos / 1e9)
+    except Exception:
+        pass
+
+    return None
 
 
 async def _upload_session_report(
@@ -544,20 +584,11 @@ async def _upload_session_report(
     header_msg.start_time.FromMilliseconds(int((report.audio_recording_started_at or 0) * 1000))
     header_bytes = header_msg.SerializeToString()
 
-    mp = aiohttp.MultipartWriter("form-data")
-
-    part = mp.append(header_bytes)
-    part.set_content_disposition("form-data", name="header", filename="header.binpb")
-    part.headers["Content-Type"] = "application/protobuf"
-    part.headers["Content-Length"] = str(len(header_bytes))
-
+    chat_history_json = ""
     if recording_options["transcript"]:
         chat_history_json = json.dumps(report.chat_history.to_dict(exclude_timestamp=False))
-        part = mp.append(chat_history_json)
-        part.set_content_disposition("form-data", name="chat_history", filename="chat_history.json")
-        part.headers["Content-Type"] = "application/json"
-        part.headers["Content-Length"] = str(len(chat_history_json))
 
+    audio_bytes = b""
     if has_audio and report.audio_recording_path:
         try:
             async with aiofiles.open(report.audio_recording_path, "rb") as f:
@@ -565,21 +596,57 @@ async def _upload_session_report(
         except Exception:
             audio_bytes = b""
 
+    url = f"{observability_url}/observability/recordings/v0"
+
+    def _build_multipart() -> aiohttp.MultipartWriter:
+        mp = aiohttp.MultipartWriter("form-data")
+
+        part = mp.append(header_bytes)
+        part.set_content_disposition("form-data", name="header", filename="header.binpb")
+        part.headers["Content-Type"] = "application/protobuf"
+        part.headers["Content-Length"] = str(len(header_bytes))
+
+        if recording_options["transcript"]:
+            part = mp.append(chat_history_json)
+            part.set_content_disposition(
+                "form-data", name="chat_history", filename="chat_history.json"
+            )
+            part.headers["Content-Type"] = "application/json"
+            part.headers["Content-Length"] = str(len(chat_history_json))
+
         if audio_bytes:
             part = mp.append(audio_bytes)
             part.set_content_disposition("form-data", name="audio", filename="recording.ogg")
             part.headers["Content-Type"] = "audio/ogg"
             part.headers["Content-Length"] = str(len(audio_bytes))
 
-    url = f"{observability_url}/observability/recordings/v0"
-    headers = {
-        "Authorization": f"Bearer {jwt}",
-        "Content-Type": mp.content_type,
-    }
+        return mp
 
-    logger.debug("uploading session report to LiveKit Cloud")
-    async with http_session.post(url, data=mp, headers=headers) as resp:
-        resp.raise_for_status()
+    max_retries = 3
+    for attempt in range(max_retries + 1):
+        mp = _build_multipart()
+        headers = {
+            "Authorization": f"Bearer {jwt}",
+            "Content-Type": mp.content_type,
+        }
+
+        logger.debug("uploading session report to LiveKit Cloud")
+        async with http_session.post(url, data=mp, headers=headers) as resp:
+            if resp.status < 400:
+                break
+
+            retry_delay = await _parse_retry_delay(resp)
+            if retry_delay is None or attempt == max_retries:
+                resp.raise_for_status()
+                raise RuntimeError(f"recording upload failed: status {resp.status}")
+
+            logger.warning(
+                "recording upload failed (attempt %d/%d), retrying in %.1fs",
+                attempt + 1,
+                max_retries + 1,
+                retry_delay,
+            )
+            await asyncio.sleep(retry_delay)
 
     logger.debug("finished uploading")
 

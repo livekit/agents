@@ -11,6 +11,13 @@ from livekit.protocol.agent_pb import agent_session as agent_pb
 
 from ... import utils
 from ...log import logger
+from ...tts._provider_format import (
+    ExpressiveTag,
+    TranscriptMarkupStripper,
+    expression_attribute,
+    split_all_markup,
+    strip_all_markup,
+)
 from ...types import (
     ATTRIBUTE_PUBLISH_ON_BEHALF,
     ATTRIBUTE_TRANSCRIPTION_FINAL,
@@ -52,8 +59,6 @@ class _ParticipantAudioOutput(io.AudioOutput):
             sample_rate, num_channels, samples_per_channel=sample_rate // 20, progressive=True
         )
 
-        # used to republish track on reconnection
-        self._republish_task: asyncio.Task[None] | None = None
         self._flush_task: asyncio.Task[None] | None = None
         self._interrupted_event = asyncio.Event()
         self._forwarding_task: asyncio.Task[None] | None = None
@@ -81,12 +86,8 @@ class _ParticipantAudioOutput(io.AudioOutput):
     async def start(self) -> None:
         self._forwarding_task = asyncio.create_task(self._forward_audio())
         await self._publish_track()
-        self._room.on("reconnected", self._on_reconnected)
 
     async def aclose(self) -> None:
-        self._room.off("reconnected", self._on_reconnected)
-        if self._republish_task:
-            await utils.aio.cancel_and_wait(self._republish_task)
         if self._flush_task:
             await utils.aio.cancel_and_wait(self._flush_task)
         if self._forwarding_task:
@@ -159,7 +160,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
             return_when=asyncio.FIRST_COMPLETED,
         )
 
-        interrupted = wait_for_interruption.done()
+        interrupted = self._interrupted_event.is_set()
         pushed_duration = self._pushed_duration
 
         if interrupted:
@@ -197,11 +198,6 @@ class _ParticipantAudioOutput(io.AudioOutput):
                 self._first_frame_event.set()
                 self.on_playback_started(created_at=time.time())
             await self._audio_source.capture_frame(frame)
-
-    def _on_reconnected(self) -> None:
-        if self._republish_task:
-            self._republish_task.cancel()
-        self._republish_task = asyncio.create_task(self._publish_track())
 
 
 class _ParticipantLegacyTranscriptionOutput:
@@ -278,15 +274,21 @@ class _ParticipantLegacyTranscriptionOutput:
         else:
             self._pushed_text = text
 
-        await self._publish_transcription(self._current_id, self._pushed_text, final=False)
+        # _pushed_text keeps the raw text (markup intact); publish the visible text only.
+        # Stripping the whole accumulation each time avoids partial-tag edge cases; the
+        # expression is dropped here — the deprecated rtc Transcription API has no
+        # attribute channel (the stream-based output carries lk.expression instead).
+        clean_text = strip_all_markup(self._pushed_text)
+        await self._publish_transcription(self._current_id, clean_text, final=False)
 
     @utils.log_exceptions(logger=logger)
     def flush(self) -> None:
         if self._participant_identity is None or self._track_id is None or not self._capturing:
             return
 
+        clean_text = strip_all_markup(self._pushed_text)
         self._flush_task = asyncio.create_task(
-            self._publish_transcription(self._current_id, self._pushed_text, final=True)
+            self._publish_transcription(self._current_id, clean_text, final=True)
         )
         self._reset_state()
 
@@ -323,7 +325,7 @@ class _ParticipantLegacyTranscriptionOutput:
                 await self._room.local_participant.publish_transcription(transcription)
         except Exception as e:
             if self._room.isconnected():
-                logger.warning("failed to publish agent transcription to room", exc_info=e)
+                logger.warning("failed to publish agent transcription to room: %s", e)
 
     def _on_track_published(
         self, track: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant
@@ -376,7 +378,6 @@ class _ParticipantStreamTranscriptionOutput:
         self._track_id: str | None = None
         self._participant_identity: str | None = None
         self._additional_attributes = attributes or {}
-
         self._writer: rtc.TextStreamWriter | None = None
         self._json_format = json_format
 
@@ -411,6 +412,28 @@ class _ParticipantStreamTranscriptionOutput:
         self._current_id = utils.shortuuid("SG_")
         self._capturing = False
         self._latest_text = ""
+        # per-segment markup stripping: delta streams strip incrementally (buffering a tag
+        # split across chunks); non-delta streams re-strip the full text each time and keep
+        # the latest tags here for the expression attribute (see TranscriptMarkupStripper)
+        self._stripper = TranscriptMarkupStripper()
+        self._segment_tags: list[ExpressiveTag] = []
+
+    def _encode(self, clean_text: str, timing_src: str | None = None) -> str:
+        """Wrap visible text for the wire (JSON TimedString when json_format, else raw)."""
+        if not self._json_format:
+            return clean_text
+
+        ts_pb = agent_pb.TimedString(text=clean_text)
+        if isinstance(timing_src, TimedString):
+            if utils.is_given(timing_src.start_time):
+                ts_pb.start_time = timing_src.start_time
+            if utils.is_given(timing_src.end_time):
+                ts_pb.end_time = timing_src.end_time
+            if utils.is_given(timing_src.confidence):
+                ts_pb.confidence = timing_src.confidence
+            if utils.is_given(timing_src.start_time_offset):
+                ts_pb.start_time_offset = timing_src.start_time_offset
+        return json.dumps(MessageToDict(ts_pb, preserving_proto_field_name=True)) + "\n"
 
     async def _create_text_writer(
         self, attributes: dict[str, str] | None = None
@@ -447,20 +470,18 @@ class _ParticipantStreamTranscriptionOutput:
             self._reset_state()
             self._capturing = True
 
-        if self._json_format:
-            ts_pb = agent_pb.TimedString(text=str(text))
-            if isinstance(text, TimedString):
-                if utils.is_given(text.start_time):
-                    ts_pb.start_time = text.start_time
-                if utils.is_given(text.end_time):
-                    ts_pb.end_time = text.end_time
-                if utils.is_given(text.confidence):
-                    ts_pb.confidence = text.confidence
-                if utils.is_given(text.start_time_offset):
-                    ts_pb.start_time_offset = text.start_time_offset
-            text = json.dumps(MessageToDict(ts_pb, preserving_proto_field_name=True)) + "\n"
+        # the raw text (expressive markup intact) arrives here; publish only the visible
+        # text. Skip a chunk that strips to nothing (a partial tag still buffering, or a
+        # markup-only token) so the transcript cadence isn't disturbed.
+        if self._is_delta_stream:
+            clean_text = self._stripper.push(text)
+        else:
+            clean_text, self._segment_tags = split_all_markup(text)
+        if not clean_text:
+            return
 
-        self._latest_text = text
+        payload = self._encode(clean_text, text)
+        self._latest_text = payload
 
         try:
             if self._room.isconnected():
@@ -468,39 +489,62 @@ class _ParticipantStreamTranscriptionOutput:
                     if self._writer is None:
                         self._writer = await self._create_text_writer()
 
-                    await self._writer.write(text)
+                    await self._writer.write(payload)
                 else:  # always create a new writer
                     tmp_writer = await self._create_text_writer()
-                    await tmp_writer.write(text)
+                    await tmp_writer.write(payload)
                     await tmp_writer.aclose()
         except Exception as e:
-            logger.warning("failed to publish agent transcription to room", exc_info=e)
+            logger.warning("failed to publish agent transcription to room: %s", e)
 
-    async def _flush_task(self, writer: rtc.TextStreamWriter | None) -> None:
+    async def _flush_task(
+        self,
+        writer: rtc.TextStreamWriter | None,
+        extra_attributes: dict[str, str] | None = None,
+        pending_text: str = "",
+    ) -> None:
         attributes = {ATTRIBUTE_TRANSCRIPTION_FINAL: "true"}
         if self._track_id:
             attributes[ATTRIBUTE_TRANSCRIPTION_TRACK_ID] = self._track_id
+        for key, val in (extra_attributes or {}).items():
+            attributes.setdefault(key, val)
 
         try:
             if self._room.isconnected():
                 if self._is_delta_stream:
                     if writer:
+                        if pending_text:  # visible text left in the strip buffer
+                            await writer.write(pending_text)
                         await writer.aclose(attributes=attributes)
                 else:
                     tmp_writer = await self._create_text_writer(attributes=attributes)
                     await tmp_writer.write(self._latest_text)
                     await tmp_writer.aclose()
         except Exception as e:
-            logger.warning("failed to publish agent transcription to room", exc_info=e)
+            logger.warning("failed to publish agent transcription to room: %s", e)
 
     def flush(self) -> None:
+        # only emit on a segment that captured text (keeps lk.transcription cadence intact).
+        # The leading expression the sinks stripped rides along on the closing header as the
+        # lk.expression attribute.
         if self._participant_identity is None or not self._capturing:
             return
 
         self._capturing = False
         curr_writer = self._writer
         self._writer = None
-        self._flush_atask = asyncio.create_task(self._flush_task(curr_writer))
+
+        if self._is_delta_stream:
+            remaining = self._stripper.flush()
+            tags = self._stripper.tags
+        else:
+            remaining = ""
+            tags = self._segment_tags
+
+        pending_text = self._encode(remaining) if remaining else ""
+        self._flush_atask = asyncio.create_task(
+            self._flush_task(curr_writer, expression_attribute(tags), pending_text)
+        )
 
     async def aclose(self) -> None:
         if self._closed:

@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from pydantic import ValidationError
 from typing_extensions import Self
 
 from ...llm.tool_context import (
@@ -16,7 +15,6 @@ from ...llm.tool_context import (
     function_tool,
 )
 from ...llm.utils import function_arguments_to_pydantic_model, prepare_function_arguments
-from ...log import logger
 from ...types import NOT_GIVEN, NotGivenOr
 from ...voice.events import RunContext
 from .tool_search import SearchStrategy, ToolSearchToolset
@@ -122,6 +120,9 @@ class ToolProxyToolset(ToolSearchToolset):
         if parameters is None:
             raise ToolError("parameters is required")
 
+        if not isinstance(parameters, dict | str):
+            raise ToolError("parameters must be a dictionary or a string")
+
         if self._tool_ctx is None:
             raise RuntimeError("toolset not initialized, call setup() first")
 
@@ -129,26 +130,11 @@ class ToolProxyToolset(ToolSearchToolset):
         if fnc_tool is None:
             raise ToolError(f"unknown tool '{name}', use search_tools to discover available tools")
 
-        try:
-            json_args = json.dumps(parameters) if isinstance(parameters, dict) else str(parameters)
-            fnc_args, fnc_kwargs = prepare_function_arguments(
-                fnc=fnc_tool,
-                json_arguments=json_args,
-                call_ctx=ctx,
-            )
-        except ValidationError as e:
-            raise ToolError(
-                f"invalid parameters for tool '{name}': {e.json(include_url=False)}"
-            ) from e
-        except ToolError:
-            raise
-        except Exception as e:
-            logger.exception(
-                f"error parsing arguments for tool '{name}'",
-                extra={"tool": name, "arguments": parameters},
-            )
-            raise ToolError(f"error calling '{name}': {e}") from e
-
+        fnc_args, fnc_kwargs = prepare_function_arguments(
+            fnc=fnc_tool,
+            json_arguments=parameters,
+            call_ctx=ctx,
+        )
         return await fnc_tool(*fnc_args, **fnc_kwargs)
 
 

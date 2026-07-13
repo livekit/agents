@@ -15,7 +15,9 @@ from ..llm.chat_context import Instructions, _ReadOnlyChatContext
 from ..log import logger
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils import is_given, misc
+from .events import UserTurnExceededEvent
 from .speech_handle import SpeechHandle
+from .tool_executor import ToolHandlingOptions
 from .turn import TurnHandlingOptions, _migrate_turn_handling
 
 if TYPE_CHECKING:
@@ -23,6 +25,7 @@ if TYPE_CHECKING:
     from ..llm import mcp
     from .agent_activity import AgentActivity
     from .agent_session import AgentSession
+    from .audio_recognition import AudioRecognition
     from .io import TimedString
     from .turn import TurnDetectionMode
 
@@ -44,9 +47,9 @@ class Agent:
         stt: NotGivenOr[stt.STT | STTModels | str | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
+        tool_handling: NotGivenOr[ToolHandlingOptions] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
-        mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
         min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         # deprecated
@@ -54,6 +57,7 @@ class Agent:
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+        mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
     ) -> None:
         tools = tools or []
         if type(self) is Agent:
@@ -104,11 +108,21 @@ class Agent:
         self._min_endpointing_delay = endpointing.get("min_delay", NOT_GIVEN)
         self._max_endpointing_delay = endpointing.get("max_delay", NOT_GIVEN)
         self._turn_handling = turn_handling
+        # stored unresolved so the resolution chain can tell "set on agent" from "fall
+        # back to session"; async_options absent on a given tool_handling means NOT_GIVEN
+        self._async_tool_options = (
+            tool_handling.get("async_options", NOT_GIVEN) if is_given(tool_handling) else NOT_GIVEN
+        )
 
         if isinstance(mcp_servers, list) and len(mcp_servers) == 0:
             mcp_servers = None  # treat empty list as None (but keep NOT_GIVEN)
 
         self._mcp_servers = mcp_servers
+        if self._mcp_servers:
+            logger.warning(
+                "passing MCP servers to AgentSession or Agent is deprecated "
+                "and will be removed in a future version. Use `MCPToolset` instead."
+            )
         self._activity: AgentActivity | None = None
 
     @property
@@ -152,6 +166,20 @@ class Agent:
     @property
     def interruption_detection(self) -> NotGivenOr[Literal["adaptive", "vad"]]:
         return self._interruption_detection
+
+    @property
+    def audio_recognition(self) -> AudioRecognition:
+        """Access the audio recognition system for this agent.
+
+        The only public member is ``stt_context`` — live speaker metadata from the
+        STT stream.
+
+        Raises:
+            RuntimeError: If the agent is not running.
+        """
+        activity = self._get_activity_or_raise()
+        assert activity._audio_recognition is not None
+        return activity._audio_recognition
 
     async def update_instructions(self, instructions: str) -> None:
         """
@@ -253,6 +281,26 @@ class Agent:
         sent to the LLM.
         """
         pass
+
+    async def on_user_turn_exceeded(self, ev: UserTurnExceededEvent) -> None:
+        """Called when the user turn has exceeded the configured limit.
+
+        The user has been speaking for too long without the agent successfully
+        responding. By default, generates a reply using the current turn's
+        transcript (previous turns are already in the chat context).
+
+        Override to customize (e.g., use session.say() with a canned message,
+        or skip the interruption entirely).
+        """
+        await self.session.generate_reply(
+            user_input=ev.transcript,
+            instructions=(
+                "The user has been speaking too long without giving a chance to reply. "
+                "Politely cut in with a short reply or notice. Keep it short since the user cannot interrupt it."
+            ),
+            allow_interruptions=False,
+            tool_choice="none",
+        )
 
     def stt_node(
         self, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
@@ -458,7 +506,9 @@ class Agent:
 
         @staticmethod
         async def tts_node(
-            agent: Agent, text: AsyncIterable[str], model_settings: ModelSettings
+            agent: Agent,
+            text: AsyncIterable[str],
+            model_settings: ModelSettings,
         ) -> AsyncGenerator[rtc.AudioFrame, None]:
             """Default implementation for `Agent.tts_node`"""
             activity = agent._get_activity_or_raise()
@@ -468,13 +518,25 @@ class Agent:
                     "`session.output.set_audio_enabled(False)`."
                 )
 
+            expressive_active = activity._resolve_expressive_options() is not None
             wrapped_tts = activity.tts
 
             if not activity.tts.capabilities.streaming:
                 wrapped_tts = tts.StreamAdapter(
                     tts=wrapped_tts,
-                    sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(retain_format=True),
+                    sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(
+                        retain_format=True,
+                        # markup only exists in the stream when expressive is active
+                        xml_aware=expressive_active,
+                    ),
                 )
+
+            # Mark whether expressive is active for this synthesis, synchronously
+            # just before stream() snapshots it. Doing it here (the single synthesis
+            # choke point for both generate_reply and say()) scopes it to this turn
+            # rather than leaving stale state on the instance. The provider's chunk
+            # defaults then drive the TTS's input tokenizer.
+            activity.tts._set_expressive(expressive_active)
 
             conn_options = activity.session.conn_options.tts_conn_options
             async with wrapped_tts.stream(conn_options=conn_options) as stream:
@@ -699,13 +761,13 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
-        mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
         preserve_function_call_history: bool = False,
         # deprecated
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
+        mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
     ) -> None:
         tools = tools or []
         turn_handling = (
@@ -836,6 +898,16 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         ):
             blocked_tasks.append(old_activity._on_enter_task)
 
+        # register before any await so a concurrent drain (e.g. session close)
+        # won't wait for tasks blocked on this handoff
+        old_activity._add_drain_blocked_tasks(blocked_tasks)
+
+        # watch the blocked tasks so an active run won't complete mid-handoff
+        # (the parent speech may predate the run, e.g. created in on_enter)
+        if (run_state := session._global_run_state) and not run_state.done():
+            for task in blocked_tasks:
+                run_state._watch_handle(task)
+
         if (
             task_info.function_call
             and isinstance(old_activity.llm, RealtimeModel)
@@ -915,7 +987,11 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 except BaseException:
                     logger.exception("error in on_enter task of agent %s", self.id)
 
-            if session.current_agent != self:
+            if session._closing and self._activity is None:
+                # the activity never started (session closing), skip the handoff;
+                # the close path owns the previous activity
+                pass
+            elif session.current_agent != self:
                 logger.warning(
                     f"{self.__class__.__name__} completed, but the agent has changed in the meantime. "
                     "Ignoring handoff to the previous agent, likely due to `AgentSession.update_agent` being invoked."

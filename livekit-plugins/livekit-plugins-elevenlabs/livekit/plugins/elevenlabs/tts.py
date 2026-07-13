@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import dataclasses
 import json
 import os
@@ -43,6 +44,7 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGive
 from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TimedString
 
+from ._utils import trace_id_from_headers
 from .log import logger
 from .models import TTSEncoding, TTSModels
 
@@ -89,7 +91,7 @@ class PronunciationDictionaryLocator:
     version_id: str
 
 
-DEFAULT_VOICE_ID = "l7kNoIfnJKPg7779LI2t"
+DEFAULT_VOICE_ID = "hpp4J3VqNfWAUOO0d1Us"
 API_BASE_URL_V1 = "https://api.elevenlabs.io/v1"
 AUTHORIZATION_HEADER = "xi-api-key"
 WS_INACTIVITY_TIMEOUT = 180
@@ -109,6 +111,7 @@ class TTS(tts.TTS):
         inactivity_timeout: int = WS_INACTIVITY_TIMEOUT,
         auto_mode: NotGivenOr[bool] = NOT_GIVEN,
         apply_text_normalization: Literal["auto", "off", "on"] = "auto",
+        apply_language_text_normalization: NotGivenOr[bool] = NOT_GIVEN,
         word_tokenizer: NotGivenOr[tokenize.WordTokenizer | tokenize.SentenceTokenizer] = NOT_GIVEN,
         enable_ssml_parsing: bool = False,
         enable_logging: bool = True,
@@ -132,13 +135,17 @@ class TTS(tts.TTS):
             base_url (NotGivenOr[str]): Custom base URL for the API. Optional.
             streaming_latency (NotGivenOr[int]): Optimize for streaming latency, defaults to 0 - disabled. 4 for max latency optimizations. deprecated
             inactivity_timeout (int): Inactivity timeout in seconds for the websocket connection. Defaults to 300.
-            auto_mode (bool): Reduces latency by disabling chunk schedule and buffers. Sentence tokenizer will be used to synthesize one sentence at a time. Defaults to True.
+            auto_mode (bool): Reduces latency by disabling chunk schedule and buffers.
+                Sentence tokenizer will be used to synthesize one sentence at a time.
+                Defaults to True unless ``chunk_length_schedule`` is provided.
+            apply_text_normalization (Literal["auto", "off", "on"]): This parameter controls text normalization with three modes: ‘auto’, ‘on’, and ‘off’. When set to ‘auto’, the system will automatically decide whether to apply text normalization (e.g., spelling out numbers). With ‘on’, text normalization will always be applied, while with ‘off’, it will be skipped.
+            apply_language_text_normalization (bool): This parameter controls language text normalization. This helps with proper pronunciation of text in some supported languages.
             word_tokenizer (NotGivenOr[tokenize.WordTokenizer | tokenize.SentenceTokenizer]): Tokenizer for processing text. Defaults to basic WordTokenizer when auto_mode=False, `livekit.agents.tokenize.blingfire.SentenceTokenizer` otherwise.
             enable_ssml_parsing (bool): Enable SSML parsing for input text. Defaults to False.
             enable_logging (bool): Enable logging of the request. When set to false, zero retention mode will be used. Defaults to True.
             chunk_length_schedule (NotGivenOr[list[int]]): Schedule for chunk lengths, ranging from 50 to 500. Defaults are [120, 160, 250, 290].
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
-            language (NotGivenOr[str]): Language code for the TTS model, as of 10/24/24 only valid for "eleven_turbo_v2_5".
+            language (NotGivenOr[str]): Language code used to enforce a language for the model and text normalization. If the model does not support language overrides, it will be ignored.
             sync_alignment (bool): Enable sync alignment for the TTS model. Defaults to True.
             preferred_alignment (Literal["normalized", "original"]): Use normalized or original alignment. Defaults to "normalized", or "original" for CJK (ja, ko, zh) languages.
             pronunciation_dictionary_locators (NotGivenOr[list[PronunciationDictionaryLocator]]): List of pronunciation dictionary locators to use for pronunciation control.
@@ -163,7 +170,7 @@ class TTS(tts.TTS):
             )
 
         if not is_given(auto_mode):
-            auto_mode = True
+            auto_mode = not is_given(chunk_length_schedule)
 
         if not is_given(word_tokenizer):
             word_tokenizer = (
@@ -195,6 +202,7 @@ class TTS(tts.TTS):
             sync_alignment=sync_alignment,
             auto_mode=auto_mode,
             apply_text_normalization=apply_text_normalization,
+            apply_language_text_normalization=apply_language_text_normalization,
             preferred_alignment=preferred_alignment,
             pronunciation_dictionary_locators=pronunciation_dictionary_locators,
         )
@@ -329,6 +337,13 @@ class ChunkedStream(tts.ChunkedStream):
             if is_given(self._opts.voice_settings)
             else None
         )
+        extra_params: dict[str, str | bool] = {}
+        if is_given(self._opts.language):
+            extra_params["language_code"] = self._opts.language.language
+        if is_given(self._opts.apply_language_text_normalization):
+            extra_params["apply_language_text_normalization"] = (
+                self._opts.apply_language_text_normalization
+            )
         try:
             async with self._tts._ensure_session().post(
                 _synthesize_url(self._opts),
@@ -337,6 +352,8 @@ class ChunkedStream(tts.ChunkedStream):
                     "text": self._input_text,
                     "model_id": self._opts.model,
                     "voice_settings": voice_settings,
+                    "apply_text_normalization": self._opts.apply_text_normalization,
+                    **extra_params,
                 },
                 timeout=aiohttp.ClientTimeout(
                     total=30,
@@ -367,7 +384,7 @@ class ChunkedStream(tts.ChunkedStream):
             raise APIStatusError(
                 message=e.message,
                 status_code=e.status,
-                request_id=None,
+                request_id=trace_id_from_headers(e.headers),
                 body=None,
             ) from e
         except Exception as e:
@@ -418,11 +435,18 @@ class SynthesizeStream(tts.SynthesizeStream):
             )
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
+        except aiohttp.WSServerHandshakeError as e:
+            raise APIStatusError(
+                message=e.message,
+                status_code=e.status,
+                request_id=trace_id_from_headers(e.headers),
+            ) from e
         except Exception as e:
             raise APIConnectionError("could not connect to ElevenLabs") from e
 
         waiter: asyncio.Future[None] = asyncio.get_event_loop().create_future()
         connection.register_stream(self, output_emitter, waiter)
+        context_closed = False
 
         async def _input_task() -> None:
             async for data in self._input_ch:
@@ -433,6 +457,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             sent_tokenizer_stream.end_input()
 
         async def _sentence_stream_task() -> None:
+            nonlocal context_closed
+
             flush_on_chunk = (
                 isinstance(self._opts.word_tokenizer, tokenize.SentenceTokenizer)
                 and is_given(self._opts.auto_mode)
@@ -474,6 +500,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             connection.send_content(_SynthesizeContent(self._context_id, "", flush=True))
             connection.close_context(self._context_id)
+            context_closed = True
 
         input_t = asyncio.create_task(_input_task())
         stream_t = asyncio.create_task(_sentence_stream_task())
@@ -489,6 +516,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         finally:
             output_emitter.end_segment()
             await utils.aio.gracefully_cancel(input_t, stream_t)
+            if not context_closed:
+                with contextlib.suppress(Exception):
+                    connection.close_context(self._context_id)
             await sent_tokenizer_stream.aclose()
 
 
@@ -510,9 +540,36 @@ class _TTSOptions:
     inactivity_timeout: int
     sync_alignment: bool
     apply_text_normalization: Literal["auto", "on", "off"]
+    apply_language_text_normalization: NotGivenOr[bool]
     preferred_alignment: NotGivenOr[Literal["normalized", "original"]]
     auto_mode: NotGivenOr[bool]
     pronunciation_dictionary_locators: NotGivenOr[list[PronunciationDictionaryLocator]]
+
+
+def _build_context_init_packet(opts: _TTSOptions, *, context_id: str) -> dict[str, Any]:
+    voice_settings = (
+        _strip_nones(dataclasses.asdict(opts.voice_settings))
+        if is_given(opts.voice_settings)
+        else {}
+    )
+    init_pkt: dict[str, Any] = {
+        "text": " ",
+        "voice_settings": voice_settings,
+        "context_id": context_id,
+    }
+    if is_given(opts.chunk_length_schedule):
+        init_pkt["generation_config"] = {
+            "chunk_length_schedule": opts.chunk_length_schedule,
+        }
+    if is_given(opts.pronunciation_dictionary_locators):
+        init_pkt["pronunciation_dictionary_locators"] = [
+            {
+                "pronunciation_dictionary_id": locator.pronunciation_dictionary_id,
+                "version_id": locator.version_id,
+            }
+            for locator in opts.pronunciation_dictionary_locators
+        ]
+    return init_pkt
 
 
 @dataclass
@@ -628,24 +685,10 @@ class _Connection:
                     is_new_context = msg.context_id not in self._active_contexts
 
                     if is_new_context:
-                        voice_settings = (
-                            _strip_nones(dataclasses.asdict(self._opts.voice_settings))
-                            if is_given(self._opts.voice_settings)
-                            else {}
+                        init_pkt = _build_context_init_packet(
+                            self._opts,
+                            context_id=msg.context_id,
                         )
-                        init_pkt: dict[str, Any] = {
-                            "text": " ",
-                            "voice_settings": voice_settings,
-                            "context_id": msg.context_id,
-                        }
-                        if is_given(self._opts.pronunciation_dictionary_locators):
-                            init_pkt["pronunciation_dictionary_locators"] = [
-                                {
-                                    "pronunciation_dictionary_id": locator.pronunciation_dictionary_id,
-                                    "version_id": locator.version_id,
-                                }
-                                for locator in self._opts.pronunciation_dictionary_locators
-                            ]
                         await self._ws.send_json(init_pkt)
                         self._active_contexts.add(msg.context_id)
 
@@ -688,7 +731,10 @@ class _Connection:
                 ):
                     if not self._closed and len(self._context_data) > 0:
                         # websocket will be closed after all contexts are closed
-                        logger.warning("websocket closed unexpectedly")
+                        raise APIStatusError(
+                            "ElevenLabs websocket connection closed unexpectedly",
+                            status_code=self._ws.close_code or -1,
+                        )
                     break
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
@@ -696,7 +742,9 @@ class _Connection:
                     continue
 
                 data = json.loads(msg.data)
-                context_id = data.get("contextId")
+                # ElevenLabs currently sends snake_case context IDs on the websocket API,
+                # while older responses and some examples use camelCase.
+                context_id = data.get("contextId") or data.get("context_id")
                 ctx = self._context_data.get(context_id) if context_id is not None else None
 
                 if error := data.get("error"):
@@ -711,6 +759,13 @@ class _Connection:
                     continue
 
                 if ctx is None:
+                    if data.get("type") == "flush_done":
+                        logger.debug(
+                            "ignoring elevenlabs flush_done message for inactive context",
+                            extra={"context_id": context_id, "data": data},
+                        )
+                        continue
+
                     logger.warning(
                         "unexpected message received from elevenlabs tts", extra={"data": data}
                     )
@@ -848,11 +903,10 @@ def _strip_nones(data: dict[str, Any]) -> dict[str, Any]:
 def _synthesize_url(opts: _TTSOptions) -> str:
     base_url = opts.base_url
     voice_id = opts.voice_id
-    model_id = opts.model
     output_format = opts.encoding
     url = (
         f"{base_url}/text-to-speech/{voice_id}/stream?"
-        f"model_id={model_id}&output_format={output_format}"
+        f"output_format={output_format}&enable_logging={str(opts.enable_logging).lower()}"
     )
     if is_given(opts.streaming_latency):
         url += f"&optimize_streaming_latency={opts.streaming_latency}"
@@ -872,6 +926,10 @@ def _multi_stream_url(opts: _TTSOptions) -> str:
     params.append(f"enable_logging={str(opts.enable_logging).lower()}")
     params.append(f"inactivity_timeout={opts.inactivity_timeout}")
     params.append(f"apply_text_normalization={opts.apply_text_normalization}")
+    if is_given(opts.apply_language_text_normalization):
+        params.append(
+            f"apply_language_text_normalization={str(opts.apply_language_text_normalization).lower()}"
+        )
     if opts.sync_alignment:
         params.append("sync_alignment=true")
     if is_given(opts.auto_mode):

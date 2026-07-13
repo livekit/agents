@@ -50,7 +50,6 @@ class AvatarRunner:
         self._lock = asyncio.Lock()
         self._audio_publication: rtc.LocalTrackPublication | None = None
         self._video_publication: rtc.LocalTrackPublication | None = None
-        self._republish_atask: asyncio.Task[None] | None = None
         self._lazy_publish = _lazy_publish
 
         # Audio/video sources
@@ -82,7 +81,6 @@ class AvatarRunner:
         await self._audio_recv.start()
         self._audio_recv.on("clear_buffer", self._on_clear_buffer)
 
-        self._room.on("reconnected", self._on_reconnected)
         self._room.on("connection_state_changed", self._on_connection_state_changed)
         if self._room.isconnected():
             self._room_connected_fut.set_result(None)
@@ -185,20 +183,11 @@ class AvatarRunner:
         task.add_done_callback(self._tasks.discard)
         self._audio_playing = False
 
-    def _on_reconnected(self) -> None:
-        if self._lazy_publish and not self._video_publication:
-            return
-
-        if self._republish_atask:
-            self._republish_atask.cancel()
-        self._republish_atask = asyncio.create_task(self._publish_track())
-
     def _on_connection_state_changed(self, _: rtc.ConnectionState) -> None:
         if self._room.isconnected() and not self._room_connected_fut.done():
             self._room_connected_fut.set_result(None)
 
     async def aclose(self) -> None:
-        self._room.off("reconnected", self._on_reconnected)
         self._room.off("connection_state_changed", self._on_connection_state_changed)
 
         await self._audio_recv.aclose()
@@ -207,9 +196,6 @@ class AvatarRunner:
         if self._read_audio_atask:
             await aio.cancel_and_wait(self._read_audio_atask)
         await aio.cancel_and_wait(*self._tasks)
-
-        if self._republish_atask:
-            await aio.cancel_and_wait(self._republish_atask)
 
         await self._av_sync.aclose()
         await self._audio_source.aclose()

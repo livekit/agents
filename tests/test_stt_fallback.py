@@ -20,6 +20,8 @@ from livekit.agents.utils.audio import AudioBuffer
 
 from .fake_stt import FakeSTT
 
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
+
 
 class FallbackAdapterTester(FallbackAdapter):
     def __init__(
@@ -90,6 +92,33 @@ async def test_stt_fallback() -> None:
             last_alt = ev.alternatives[0].text
 
         assert last_alt == "hello world"
+
+    await fallback_adapter.aclose()
+
+
+async def test_stt_stream_fallback_propagates_start_time_offset() -> None:
+    # A mid-stream fallback must anchor each leg's timestamps to the original input
+    # timeline by seeding start_time_offset; otherwise a leg created after the switch
+    # emits timestamps relative to the switch moment, placing post-switch transcripts
+    # far in the past for consumers that anchor them to the input start.
+    fake1 = FakeSTT(fake_exception=APIConnectionError("fake1 failed"))
+    fake2 = FakeSTT(fake_transcript="hello world")
+
+    fallback_adapter = FallbackAdapterTester([fake1, fake2])
+
+    stream = fallback_adapter.stream()
+    # simulate that audio input started 30s before this stream was created
+    stream.start_time_offset = 30.0
+
+    async with stream:
+        stream.end_input()
+        async for _ in stream:
+            pass
+
+    leg1 = fake1.stream_ch.recv_nowait()
+    leg2 = fake2.stream_ch.recv_nowait()
+    assert leg1.start_time_offset >= 30.0
+    assert leg2.start_time_offset >= 30.0
 
     await fallback_adapter.aclose()
 

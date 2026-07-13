@@ -28,6 +28,7 @@ session = AgentSession(
 
 - [`async_tool_agent.py`](./async_tool_agent.py) - Long-running async tools with mid-flight progress updates using `AsyncToolset` (travel assistant demo)
 - [`tool_search_agent.py`](./tool_search_agent.py) - Dynamic tool discovery using `ToolSearchToolset` / `ToolProxyToolset` to keep large tool sets out of the LLM context
+- [`filler_agent.py`](./filler_agent.py) - Using acoustic fillers and progress updates during long-running tool calls
 
 ### Pipeline Nodes & Hooks
 
@@ -64,12 +65,14 @@ session = AgentSession(
 
 ### Tracing & Error Handling
 
-- [`langfuse_trace.py`](./langfuse_trace.py) - LangFuse integration for conversation tracing
+- [`otel_trace.py`](./otel_trace.py) - OpenTelemetry (OTLP) integration for conversation tracing
 - [`error_callback.py`](./error_callback.py) - Handling session errors and close events
 
 ### Specialized Use Cases
 
 - [`push_to_talk.py`](./push_to_talk.py) - Push-to-talk for multi-participant conversations via RPC
+- [`google_gemini_tts.py`](./google_gemini_tts.py) - Gemini native TTS with streaming audio synthesis
+- [`gnani_agent.py`](./gnani_agent.py) - Gnani Vachana STT/TTS for Indian language voice conversations
 
 ## Additional Resources
 

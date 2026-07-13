@@ -59,11 +59,17 @@ class RealtimeModelError(BaseModel):
 @dataclass
 class RealtimeCapabilities:
     message_truncation: bool
+    """Whether generated assistant messages can be truncated after interruption"""
     turn_detection: bool
+    """Whether the model emits server-side speech start and stop events for turn taking"""
     user_transcription: bool
+    """Whether the model emits user audio transcription events"""
     auto_tool_reply_generation: bool
+    """Whether the model automatically generates a reply after receiving tool results"""
     audio_output: bool
+    """Whether the model can produce audio output directly"""
     manual_function_calls: bool
+    """Whether function call items already in the chat context can be resumed"""
     mutable_chat_context: bool = False
     """Whether the chat context can be updated mid-session"""
     mutable_instructions: bool = False
@@ -73,7 +79,11 @@ class RealtimeCapabilities:
     per_response_tool_choice: bool = False
     """Whether the tool and tool choice can be specified per response"""
     supports_say: bool = False
-    """Whether the model supports session.say()"""
+    """Whether session.say() can use the realtime session directly, without TTS.
+
+    When used through a RealtimeModel, add_to_chat_ctx=False is ignored and the
+    message is still added to the chat context.
+    """
 
 
 class RealtimeError(Exception):
@@ -184,6 +194,15 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
     @property
     def realtime_model(self) -> RealtimeModel:
         return self._realtime_model
+
+    @property
+    def capabilities(self) -> RealtimeCapabilities:
+        """Capabilities of the session.
+
+        Defaults to the parent model's capabilities. Adapters that swap the underlying model
+        mid-session override this to report the currently active model's capabilities.
+        """
+        return self._realtime_model.capabilities
 
     @property
     @abstractmethod

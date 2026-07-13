@@ -46,6 +46,7 @@ class AvatarSession(BaseAvatarSession):
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
+        super().__init__()
         self._avatar_id = avatar_id or EGE_STOCK_AVATAR_ID
         self._api_url = api_url or os.getenv("BEY_API_URL", _DEFAULT_API_URL)
         self._api_key = api_key or os.getenv("BEY_API_KEY")
@@ -59,6 +60,14 @@ class AvatarSession(BaseAvatarSession):
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
         self._http_session: aiohttp.ClientSession | None = None
         self._conn_options = conn_options
+
+    @property
+    def avatar_identity(self) -> str:
+        return self._avatar_participant_identity
+
+    @property
+    def provider(self) -> str:
+        return "bey"
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         if self._http_session is None:
@@ -102,10 +111,12 @@ class AvatarSession(BaseAvatarSession):
         logger.debug("starting avatar session")
         await self._start_agent(livekit_url, livekit_token)
 
-        agent_session.output.audio = DataStreamAudioOutput(
-            room=room,
-            destination_identity=self._avatar_participant_identity,
-            wait_remote_track=rtc.TrackKind.KIND_VIDEO,
+        agent_session.output.replace_audio_tail(
+            DataStreamAudioOutput(
+                room=room,
+                destination_identity=self._avatar_participant_identity,
+                wait_remote_track=rtc.TrackKind.KIND_VIDEO,
+            ),
         )
 
     async def _start_agent(self, livekit_url: str, livekit_token: str) -> None:

@@ -25,8 +25,8 @@ dependencies = [
     "google-auth >= 2, < 3",
     "google-cloud-speech >= 2, < 3",
     "google-cloud-texttospeech >= 2.32, < 3",
-    "google-genai >= 1.55; python_version >= '3.10'",
-    "livekit-agents>=1.5.6",
+    "google-genai >= 1.67; python_version >= '3.10'",
+    "livekit-agents>=1.6.5",
 ]
 
 [project.urls]

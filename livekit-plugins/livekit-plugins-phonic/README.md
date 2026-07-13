@@ -100,6 +100,7 @@ Set the `PHONIC_API_KEY` environment variable, or pass `api_key` directly to `Re
 | `no_input_poke_sec` | `float` | Seconds of silence before sending poke message |
 | `no_input_poke_text` | `str` | Poke message text (ignored when `generate_no_input_poke_text` is True) |
 | `no_input_end_conversation_sec` | `float` | Seconds of silence before ending conversation |
+| `forbid_speech_after_tool_call` | `list[str]` | Tool names after which Phonic should NOT auto-generate a spoken reply. Use for tools that always hand off/trigger an agent switch |
 
 If you already have an agent set up on the Phonic platform, you can use the `phonic_agent` option to specify the agent name. As a note, configuration options you set in the LiveKit Agents SDK will override the agent settings set on the Phonic platform. This means the system prompt you have set on the Phonic platform will be ignored in favor of the `instructions` field set on the LiveKit `Agent`. Likewise, options explicitly set in the `RealtimeModel` constructor will override the Phonic agent's settings.
 
