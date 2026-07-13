@@ -72,6 +72,10 @@ _UNSUPPORTED_PARAMS: dict[str, set[str]] = {
 # models that don't support reasoning_effort when function tools are present
 _REASONING_EFFORT_TOOL_INCOMPATIBLE_PREFIXES: set[str] = {"gpt-5.2", "gpt-5.4"}
 
+_MODEL_THINK_TAGS = {
+    "google/gemma-4-31b-it": ("<|channel>thought", "<channel|>"),
+}
+
 
 def drop_unsupported_params(
     model: str, params: dict[str, Any], tools: list[Any] | None = None
@@ -426,7 +430,11 @@ class LLMStream(llm.LLMStream):
                 **self._extra_kwargs,
             )
 
-            thinking_filter = llm_utils.ThinkingTokenFilter()
+            thinking_filter = llm_utils.ThinkingTokenFilter(
+                *_MODEL_THINK_TAGS.get(
+                    self._model, (llm_utils.THINK_TAG_START, llm_utils.THINK_TAG_END)
+                )
+            )
             async with stream:
                 async for chunk in stream:
                     for choice in chunk.choices:
@@ -473,6 +481,10 @@ class LLMStream(llm.LLMStream):
         # the delta can be None when using Azure OpenAI (content filtering)
         if delta is None:
             return None
+
+        delta.content = llm_utils.strip_thinking_tokens(
+            delta.content, thinking_filter, final=choice.finish_reason is not None
+        )
 
         if delta.tool_calls:
             for tool in delta.tool_calls:
@@ -533,10 +545,6 @@ class LLMStream(llm.LLMStream):
             self._tool_call_id = self._fnc_name = self._fnc_raw_arguments = None
             self._tool_extra = None
             return call_chunk
-
-        delta.content = llm_utils.strip_thinking_tokens(
-            delta.content, thinking_filter, final=choice.finish_reason is not None
-        )
 
         # Extract extra from delta (e.g., Google thought signatures on text parts)
         delta_extra = getattr(delta, "extra_content", None)

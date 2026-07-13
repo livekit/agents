@@ -42,10 +42,6 @@ if TYPE_CHECKING:
 
 THINK_TAG_START = "<think>"
 THINK_TAG_END = "</think>"
-THINK_TAG_PAIRS = (
-    (THINK_TAG_START, THINK_TAG_END),
-    ("<|channel>thought", "<channel|>"),
-)
 
 
 def _compute_lcs(old_ids: list[str], new_ids: list[str]) -> list[str]:
@@ -614,6 +610,8 @@ def _shallow_model_dump(model: BaseModel, *, by_alias: bool = False) -> dict[str
 class ThinkingTokenFilter:
     """State for stripping thinking tokens from streamed content."""
 
+    start_tag: str = THINK_TAG_START
+    end_tag: str = THINK_TAG_END
     _buffer: str = ""
     _end_marker: str | None = None
 
@@ -649,21 +647,14 @@ def strip_thinking_tokens(
             state._end_marker = None
             continue
 
-        marker = min(
-            (
-                (idx, start, end)
-                for start, end in THINK_TAG_PAIRS
-                if (idx := state._buffer.find(start)) >= 0
-            ),
-            default=None,
-        )
-        if marker is not None:
-            idx, start, state._end_marker = marker
+        idx = state._buffer.find(state.start_tag)
+        if idx >= 0:
             visible.append(state._buffer[:idx])
-            state._buffer = state._buffer[idx + len(start) :]
+            state._buffer = state._buffer[idx + len(state.start_tag) :]
+            state._end_marker = state.end_tag
             continue
 
-        keep = _partial_marker_length(state._buffer, tuple(start for start, _ in THINK_TAG_PAIRS))
+        keep = _partial_marker_length(state._buffer, (state.start_tag,))
         visible.append(state._buffer[:-keep] if keep else state._buffer)
         state._buffer = state._buffer[-keep:] if keep else ""
         break
