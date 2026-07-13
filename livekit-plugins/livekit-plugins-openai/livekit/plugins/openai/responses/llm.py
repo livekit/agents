@@ -6,10 +6,10 @@ import os
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from typing import Any, Literal, cast
-from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import aiohttp
 import httpx
+from yarl import URL
 
 import openai
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm, utils
@@ -58,19 +58,8 @@ class _ResponsesWebsocket:
     ) -> None:
         self._api_key = api_key
         self._timeout = timeout or DEFAULT_API_CONNECT_OPTIONS.timeout
-        url = urlparse(base_url if base_url else OPENAI_RESPONSES_WS_URL)
-        query_params = parse_qs(url.query)
-        query_params["model"] = [model]
-        self._base_url = urlunparse(
-            (
-                url.scheme,
-                url.netloc,
-                url.path,
-                url.params,
-                urlencode(query_params, doseq=True),
-                url.fragment,
-            )
-        )
+        url = URL(base_url if base_url else OPENAI_RESPONSES_WS_URL)
+        self._base_url = str(url.update_query(model=model))
 
         self._session: aiohttp.ClientSession | None = None
 
