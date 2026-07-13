@@ -4,7 +4,7 @@ import datetime
 from collections.abc import Callable
 from zoneinfo import ZoneInfo
 
-from calendar_api import AvailableSlot, FakeCalendar
+from calendar_api import AvailableSlot, FakeCalendar, SlotUnavailableError
 
 from livekit.agents import RunContext, SimulationContext, ToolError, beta
 
@@ -69,9 +69,14 @@ def tool_mocks(cal: FakeCalendar, tz: ZoneInfo) -> dict[str, Callable]:
 
         ctx.disallow_interruptions()
 
-        await cal.schedule_appointment(
-            start_time=slot.start_time, attendee_email=email_result.email_address
-        )
+        # the booking is recorded on the calendar itself, so on_session_end and
+        # on_simulation_end both read it with no bookkeeping duplicated here
+        try:
+            await cal.schedule_appointment(
+                start_time=slot.start_time, attendee_email=email_result.email_address
+            )
+        except SlotUnavailableError:
+            raise ToolError("This slot isn't available anymore") from None
         local = slot.start_time.astimezone(tz)
         return f"The appointment was successfully scheduled for {local:%A, %B %d, %Y at %H:%M}."
 

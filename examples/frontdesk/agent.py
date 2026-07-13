@@ -5,7 +5,7 @@ import logging
 import os
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Literal
 from zoneinfo import ZoneInfo
 
@@ -57,7 +57,6 @@ load_dotenv()
 @dataclass
 class Userdata:
     cal: Calendar
-    booked_times: list[str] = field(default_factory=list)
     slot_unavailable_count: int = 0
     # Optional UI for the LiveKit Playground. ``None`` when the agent
     # is running anywhere else — the tool handlers no-op on it and
@@ -136,12 +135,13 @@ class FrontDeskAgent(Agent):
             # Tell the LLM this slot isn't available anymore
             raise ToolError("This slot isn't available anymore") from None
 
+        # the booking is recorded by the calendar (the system of record); no
+        # parallel bookkeeping here that the simulation mock would have to mirror
         local = slot.start_time.astimezone(self.tz)
-        ctx.userdata.booked_times.append(local.isoformat())
         try:
             get_job_context().tagger.add(
                 "appointment:booked",
-                metadata={"time": ctx.userdata.booked_times},
+                metadata={"time": local.isoformat()},
             )
         except RuntimeError:
             pass
@@ -271,7 +271,7 @@ async def on_session_end(ctx: JobContext) -> None:
     await judges.evaluate(report.chat_history)
 
     userdata = ctx.primary_session.userdata
-    if userdata.booked_times:
+    if userdata.cal.scheduled_appointments:
         ctx.tagger.success()
     else:
         ctx.tagger.fail(reason="Appointment was not booked")

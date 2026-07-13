@@ -33,7 +33,17 @@ class AvailableSlot:
         return f"ST_{base64.b32encode(digest).decode().rstrip('=').lower()}"
 
 
+@dataclass
+class BookedAppointment:
+    slot: AvailableSlot
+    attendee_email: str
+
+
 class Calendar(Protocol):
+    # The bookings made this session. The calendar is the single system of
+    # record, so callers never keep a parallel list that could drift.
+    scheduled_appointments: list[BookedAppointment]
+
     def now(self) -> datetime.datetime:
         """The calendar's current time (tz-aware). Wall-clock in production;
         a fixed value under simulation so scenario dates stay deterministic."""
@@ -49,12 +59,6 @@ class Calendar(Protocol):
     async def list_available_slots(
         self, *, start_time: datetime.datetime, end_time: datetime.datetime
     ) -> list[AvailableSlot]: ...
-
-
-@dataclass
-class BookedAppointment:
-    slot: AvailableSlot
-    attendee_email: str
 
 
 class FakeCalendar(Calendar):
@@ -134,6 +138,7 @@ class CalComCalendar(Calendar):
     def __init__(self, *, api_key: str, timezone: str) -> None:
         self.tz = ZoneInfo(timezone)
         self._api_key = api_key
+        self.scheduled_appointments: list[BookedAppointment] = []
 
         try:
             self._http_session = http_context.http_session()
@@ -186,6 +191,7 @@ class CalComCalendar(Calendar):
     async def schedule_appointment(
         self, *, start_time: datetime.datetime, attendee_email: str
     ) -> None:
+        slot = AvailableSlot(start_time=start_time, duration_min=EVENT_DURATION_MIN)
         start_time = start_time.astimezone(datetime.timezone.utc)
 
         async with self._http_session.post(
@@ -208,6 +214,10 @@ class CalComCalendar(Calendar):
                     raise SlotUnavailableError(error["message"])
 
             resp.raise_for_status()
+
+        self.scheduled_appointments.append(
+            BookedAppointment(slot=slot, attendee_email=attendee_email)
+        )
 
     async def list_available_slots(
         self, *, start_time: datetime.datetime, end_time: datetime.datetime
