@@ -1,9 +1,8 @@
-# These scenarios are written against a pinned clock:
+# These scenarios use absolute dates against a fixed clock:
 #   2026-06-12T09:00:00   (a Friday; simulation.SIMULATION_NOW)
-# Under simulation the agent pins this automatically, so the absolute dates
-# below (availability, expected bookings, weekday references) always line up;
-# no FRONTDESK_NOW env var is needed. A scenario may override the clock with a
-# `now` field in its userdata.
+# Under simulation the FakeCalendar runs on this clock, so the absolute dates
+# below (availability, expected bookings, weekday references) always line up. A
+# scenario may override the clock with a `now` field in its userdata.
 #
 # Per-scenario userdata:
 #   now:              ISO datetime overriding the pinned clock (optional)

@@ -4,7 +4,6 @@ import base64
 import datetime
 import hashlib
 import logging
-import os
 import random
 from dataclasses import dataclass
 from typing import Protocol
@@ -14,26 +13,6 @@ from zoneinfo import ZoneInfo
 import aiohttp
 
 from livekit.agents.utils import http_context
-
-_pinned_now: datetime.datetime | None = None
-
-
-def pin_now(value: datetime.datetime) -> None:
-    """Freeze the clock returned by :func:`now`. Called under simulation so the
-    absolute dates in scenarios.yaml always line up, without relying on the
-    ``FRONTDESK_NOW`` environment variable being set. ``value`` must be tz-aware."""
-    global _pinned_now
-    _pinned_now = value
-
-
-def now(tz: ZoneInfo) -> datetime.datetime:
-    """Current time, or a pinned clock (via :func:`pin_now` or ``FRONTDESK_NOW``)
-    that keeps the absolute dates in scenarios.yaml from going stale."""
-    if _pinned_now is not None:
-        return _pinned_now.astimezone(tz)
-    if pinned := os.getenv("FRONTDESK_NOW"):
-        return datetime.datetime.fromisoformat(pinned).replace(tzinfo=tz)
-    return datetime.datetime.now(tz)
 
 
 class SlotUnavailableError(Exception):
@@ -55,6 +34,11 @@ class AvailableSlot:
 
 
 class Calendar(Protocol):
+    def now(self) -> datetime.datetime:
+        """The calendar's current time (tz-aware). Wall-clock in production;
+        a fixed value under simulation so scenario dates stay deterministic."""
+        ...
+
     async def initialize(self) -> None: ...
     async def schedule_appointment(
         self,
@@ -80,8 +64,12 @@ class FakeCalendar(Calendar):
         timezone: str,
         slots: list[AvailableSlot] | None = None,
         seed: int | None = None,
+        now: datetime.datetime | None = None,
     ) -> None:
         self.tz = ZoneInfo(timezone)
+        # A fixed clock keeps simulation scenarios deterministic; None means
+        # follow the wall clock.
+        self._now = now
         self._slots: list[AvailableSlot] = []
         self.scheduled_appointments: list[BookedAppointment] = []
 
@@ -90,7 +78,7 @@ class FakeCalendar(Calendar):
             return
 
         rng = random.Random(seed)
-        today = now(self.tz).date()
+        today = self.now().date()
         for day_offset in range(1, 90):  # generate slots for the next 90 days
             current_day = today + datetime.timedelta(days=day_offset)
             if current_day.weekday() >= 5:
@@ -108,6 +96,11 @@ class FakeCalendar(Calendar):
 
             for slot_start in sorted(chosen):
                 self._slots.append(AvailableSlot(start_time=slot_start, duration_min=30))
+
+    def now(self) -> datetime.datetime:
+        if self._now is not None:
+            return self._now.astimezone(self.tz)
+        return datetime.datetime.now(self.tz)
 
     async def initialize(self) -> None:
         pass
@@ -148,6 +141,9 @@ class CalComCalendar(Calendar):
             self._http_session = aiohttp.ClientSession()
 
         self._logger = logging.getLogger("cal.com")
+
+    def now(self) -> datetime.datetime:
+        return datetime.datetime.now(self.tz)
 
     async def initialize(self) -> None:
         async with self._http_session.get(

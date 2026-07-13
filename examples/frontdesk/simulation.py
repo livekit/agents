@@ -4,7 +4,7 @@ import datetime
 from collections.abc import Callable
 from zoneinfo import ZoneInfo
 
-from calendar_api import AvailableSlot, FakeCalendar, now
+from calendar_api import AvailableSlot, FakeCalendar
 
 from livekit.agents import RunContext, SimulationContext, ToolError, beta
 
@@ -28,13 +28,14 @@ def scenario_now(sim: SimulationContext, *, timezone: str) -> datetime.datetime:
 
 
 def fake_calendar(sim: SimulationContext, *, timezone: str) -> FakeCalendar:
-    """Seed a FakeCalendar with the scenario's ``available_slots``."""
+    """Seed a FakeCalendar with the scenario's ``available_slots``, pinned to the
+    scenario's clock so its absolute dates stay in the future where intended."""
     tz = ZoneInfo(timezone)
     slots = [
         AvailableSlot(start_time=parse_slot(s, tz), duration_min=SLOT_DURATION_MIN)
         for s in sim.userdata().get("available_slots", [])
     ]
-    return FakeCalendar(timezone=timezone, slots=slots)
+    return FakeCalendar(timezone=timezone, slots=slots, now=scenario_now(sim, timezone=timezone))
 
 
 def tool_mocks(cal: FakeCalendar, tz: ZoneInfo) -> dict[str, Callable]:
@@ -43,7 +44,7 @@ def tool_mocks(cal: FakeCalendar, tz: ZoneInfo) -> dict[str, Callable]:
     slots_map: dict[str, AvailableSlot] = {}
 
     async def list_available_slots() -> str:
-        start = now(tz)
+        start = cal.now()
         slots = await cal.list_available_slots(
             start_time=start, end_time=start + datetime.timedelta(days=90)
         )

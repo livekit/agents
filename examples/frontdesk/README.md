@@ -49,12 +49,9 @@ Each scenario's `userdata` drives the whole run:
 
 - `available_slots`: ISO datetimes seeding a deterministic `FakeCalendar` for that scenario. The entrypoint detects a simulated run via `ctx.simulation_context()` and swaps the data source.
 - `expected_booking`: grades the run on final calendar state in `on_simulation_end`: the single slot the agent must have booked, `null` when the agent must not book anything, or omitted to grade on the conversation alone. This check can only veto a run the simulator passed (the effective result is the AND of both verdicts).
+- `now`: an optional ISO datetime overriding the scenario clock (defaults to `simulation.SIMULATION_NOW`, `2026-06-12`).
 
-The scenarios reference absolute dates, so they are written against a pinned clock, run the agent with:
-
-```bash
-FRONTDESK_NOW=2026-06-12T09:00:00 python agent.py dev
-```
+The scenarios reference absolute dates, so under simulation the `FakeCalendar` runs on that fixed clock (`simulation.SIMULATION_NOW`, or a per-scenario `now`), keeping availability and expected bookings deterministic without any environment setup.
 
 #### Tool mocking
 

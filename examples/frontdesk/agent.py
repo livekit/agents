@@ -18,8 +18,6 @@ from calendar_api import (
     Calendar,
     FakeCalendar,
     SlotUnavailableError,
-    now,
-    pin_now,
 )
 from dotenv import load_dotenv
 from ui_view import UIView
@@ -71,9 +69,12 @@ logger = logging.getLogger("front-desk")
 
 
 class FrontDeskAgent(Agent):
-    def __init__(self, *, timezone: str) -> None:
+    def __init__(self, *, timezone: str, now: Callable[[], datetime.datetime]) -> None:
         self.tz = ZoneInfo(timezone)
-        today = now(self.tz).strftime("%A, %B %d, %Y")
+        # the calendar's clock, so the agent's sense of "today" matches the
+        # availability it sees (fixed under simulation, wall-clock otherwise)
+        self._now = now
+        today = now().strftime("%A, %B %d, %Y")
 
         super().__init__(
             instructions=(
@@ -166,7 +167,7 @@ class FrontDeskAgent(Agent):
         Args:
             range: Determines how far ahead to search for free time slots.
         """
-        current_time = now(self.tz)
+        current_time = self._now()
         lines: list[str] = []
 
         if range == "+2week" or range == "default":
@@ -286,11 +287,8 @@ async def frontdesk_agent(ctx: JobContext):
     tool_mocks: dict[str, Callable] = {}
 
     if sim := ctx.simulation_context():
-        # pin the clock to the scenarios' baseline before anything reads now(),
-        # so the absolute dates in scenarios.yaml always line up regardless of
-        # FRONTDESK_NOW in the environment; the userdata then seeds the calendar
-        # and the tools run mocked
-        pin_now(simulation.scenario_now(sim, timezone=timezone))
+        # the scenario's userdata seeds the calendar (pinned to the scenario's
+        # clock so its absolute dates line up); the tools run mocked
         cal = simulation.fake_calendar(sim, timezone=timezone)
         tool_mocks = simulation.tool_mocks(cal, ZoneInfo(timezone))
     elif cal_api_key := os.getenv("CAL_API_KEY", None):
@@ -317,7 +315,7 @@ async def frontdesk_agent(ctx: JobContext):
     )
 
     mock_tools(FrontDeskAgent, tool_mocks, session=session)
-    await session.start(agent=FrontDeskAgent(timezone=timezone), room=ctx.room)
+    await session.start(agent=FrontDeskAgent(timezone=timezone, now=cal.now), room=ctx.room)
 
 
 if __name__ == "__main__":
