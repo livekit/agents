@@ -19,6 +19,7 @@ from calendar_api import (
     FakeCalendar,
     SlotUnavailableError,
     now,
+    pin_now,
 )
 from dotenv import load_dotenv
 from ui_view import UIView
@@ -285,7 +286,11 @@ async def frontdesk_agent(ctx: JobContext):
     tool_mocks: dict[str, Callable] = {}
 
     if sim := ctx.simulation_context():
-        # the scenario's userdata seeds the calendar; the tools run mocked
+        # pin the clock to the scenarios' baseline before anything reads now(),
+        # so the absolute dates in scenarios.yaml always line up regardless of
+        # FRONTDESK_NOW in the environment; the userdata then seeds the calendar
+        # and the tools run mocked
+        pin_now(simulation.scenario_now(sim, timezone=timezone))
         cal = simulation.fake_calendar(sim, timezone=timezone)
         tool_mocks = simulation.tool_mocks(cal, ZoneInfo(timezone))
     elif cal_api_key := os.getenv("CAL_API_KEY", None):

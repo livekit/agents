@@ -15,10 +15,22 @@ import aiohttp
 
 from livekit.agents.utils import http_context
 
+_pinned_now: datetime.datetime | None = None
+
+
+def pin_now(value: datetime.datetime) -> None:
+    """Freeze the clock returned by :func:`now`. Called under simulation so the
+    absolute dates in scenarios.yaml always line up, without relying on the
+    ``FRONTDESK_NOW`` environment variable being set. ``value`` must be tz-aware."""
+    global _pinned_now
+    _pinned_now = value
+
 
 def now(tz: ZoneInfo) -> datetime.datetime:
-    """Current time, or the time pinned via ``FRONTDESK_NOW`` (keeps the
-    absolute dates in scenarios.yaml from going stale)."""
+    """Current time, or a pinned clock (via :func:`pin_now` or ``FRONTDESK_NOW``)
+    that keeps the absolute dates in scenarios.yaml from going stale."""
+    if _pinned_now is not None:
+        return _pinned_now.astimezone(tz)
     if pinned := os.getenv("FRONTDESK_NOW"):
         return datetime.datetime.fromisoformat(pinned).replace(tzinfo=tz)
     return datetime.datetime.now(tz)

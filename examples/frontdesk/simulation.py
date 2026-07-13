@@ -10,10 +10,21 @@ from livekit.agents import RunContext, SimulationContext, ToolError, beta
 
 SLOT_DURATION_MIN = 30
 
+# The clock the scenarios in scenarios.yaml are authored against (a Friday).
+# Every scenario shares this baseline unless it overrides it via userdata `now`.
+SIMULATION_NOW = "2026-06-12T09:00:00"
+
 
 def parse_slot(value: str, tz: ZoneInfo) -> datetime.datetime:
     """Parse an ISO datetime from scenario userdata."""
     return datetime.datetime.fromisoformat(value).replace(tzinfo=tz)
+
+
+def scenario_now(sim: SimulationContext, *, timezone: str) -> datetime.datetime:
+    """The clock to pin for a scenario: its userdata ``now`` when set, else the
+    shared :data:`SIMULATION_NOW` baseline the scenarios are authored against."""
+    tz = ZoneInfo(timezone)
+    return parse_slot(sim.userdata().get("now", SIMULATION_NOW), tz)
 
 
 def fake_calendar(sim: SimulationContext, *, timezone: str) -> FakeCalendar:
