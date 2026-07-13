@@ -632,6 +632,9 @@ class RealtimeSession(llm.RealtimeSession):
         )
         async with self._session_lock:
             if not self._active_session:
+                if self._session_resumption_handle is not None:
+                    # The handle points at the server transcript before this local update.
+                    self._session_resumption_handle = None
                 self._chat_ctx = chat_ctx
                 return
 
@@ -892,7 +895,7 @@ class RealtimeSession(llm.RealtimeSession):
                             exclude_config_update=True,
                         ).to_provider_format(format="google", inject_dummy_user_message=False)
                         turns = [types.Content.model_validate(turn) for turn in turns_dict]
-                        if turns:
+                        if turns and self._should_seed_initial_chat_context():
                             await session.send_client_content(
                                 turns=turns,  # type: ignore
                                 turn_complete=False,
@@ -1103,6 +1106,8 @@ class RealtimeSession(llm.RealtimeSession):
                             self._session_resumption_handle = (
                                 response.session_resumption_update.new_handle
                             )
+                        elif not response.session_resumption_update.resumable:
+                            self._session_resumption_handle = None
 
                     if response.server_content:
                         self._handle_server_content(response.server_content)
@@ -1126,6 +1131,9 @@ class RealtimeSession(llm.RealtimeSession):
                 self._mark_restart_needed(on_error=True)
         finally:
             self._mark_current_generation_done()
+
+    def _should_seed_initial_chat_context(self) -> bool:
+        return self._session_resumption_handle is None
 
     def _build_connect_config(self) -> types.LiveConnectConfig:
         temp = self._opts.temperature if is_given(self._opts.temperature) else None
