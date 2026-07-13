@@ -1,5 +1,7 @@
 # Turn detector plugin for LiveKit Agents
 
+> ⚠️ **Deprecated.** This plugin is deprecated and will be removed in a future release. Use [`livekit.agents.inference.TurnDetector`](https://docs.livekit.io/agents/build/turns/turn-detector/) instead — it ships with `livekit-agents`, requires no additional install, and replaces both the English and Multilingual text-based models with a unified audio end-of-turn detector.
+
 This plugin introduces end-of-turn detection for LiveKit Agents using a custom open-weight model to determine when a user has finished speaking.
 
 Traditional voice agents use VAD (voice activity detection) for end-of-turn detection. However, VAD models lack language understanding, often causing false positives where the agent interrupts the user before they finish speaking.
@@ -8,39 +10,28 @@ By leveraging a language model specifically trained for this task, this plugin o
 
 See [https://docs.livekit.io/agents/build/turns/turn-detector/](https://docs.livekit.io/agents/build/turns/turn-detector/) for more information.
 
-## Installation
-
-```bash
-pip install livekit-plugins-turn-detector
-```
-
 ## Usage
 
-### Multilingual model
-
-We've trained a multilingual model that supports the following languages: `English, French, Spanish, German, Italian, Portuguese, Dutch, Chinese, Japanese, Korean, Indonesian, Russian, Turkish, Hindi`
-
-The multilingual model requires ~400MB of RAM and completes inferences in ~25ms.
+The recommended replacement is `TurnDetector`, available from `livekit-agents` directly:
 
 ```python
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
+from livekit.agents.inference import TurnDetector
 
 session = AgentSession(
     ...
-    turn_detection=MultilingualModel(),
+    turn_detection=TurnDetector(),
 )
 ```
 
 ### Usage with RealtimeModel
 
-The turn detector can be used even with speech-to-speech models such as OpenAI's Realtime API. You'll need to provide a separate STT to ensure our model has access to the text content.
+`TurnDetector` works with speech-to-speech models such as OpenAI's Realtime API:
 
 ```python
 session = AgentSession(
     ...
-    stt=deepgram.STT(model="nova-3", language="multi"),
     llm=openai.realtime.RealtimeModel(),
-    turn_detection=MultilingualModel(),
+    turn_detection=TurnDetector(),
 )
 ```
 

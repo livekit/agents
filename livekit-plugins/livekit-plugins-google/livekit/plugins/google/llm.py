@@ -47,7 +47,8 @@ def _is_gemini_3_model(model: str) -> bool:
 
 def _is_gemini_3_flash_model(model: str) -> bool:
     """Check if model is Gemini 3 Flash"""
-    return "gemini-3-flash" in model.lower() or model.lower().startswith("gemini-3-flash")
+    m = model.lower()
+    return m.startswith("gemini-3") and "flash" in m
 
 
 def _requires_thought_signatures(model: str) -> bool:

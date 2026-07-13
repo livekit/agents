@@ -75,6 +75,7 @@ class STTOptions:
     server_vad: NotGivenOr[VADOptions | None]
     keyterms: NotGivenOr[list[str]]
     no_verbatim: bool
+    enable_logging: bool
 
 
 class STT(stt.STT):
@@ -90,9 +91,11 @@ class STT(stt.STT):
         server_vad: NotGivenOr[VADOptions] = NOT_GIVEN,
         include_timestamps: bool = False,
         http_session: aiohttp.ClientSession | None = None,
-        model_id: NotGivenOr[ElevenLabsSTTModels | str] = NOT_GIVEN,
+        model: NotGivenOr[ElevenLabsSTTModels | str] = NOT_GIVEN,
+        model_id: NotGivenOr[ElevenLabsSTTModels | str] = NOT_GIVEN,  # Deprecated
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
         no_verbatim: NotGivenOr[bool] = NOT_GIVEN,
+        enable_logging: bool = True,
     ) -> None:
         """
         Create a new instance of ElevenLabs STT.
@@ -108,8 +111,9 @@ class STT(stt.STT):
             sample_rate (STTRealtimeSampleRates): Audio sample rate in Hz. Default is 16000.
             server_vad (NotGivenOr[VADOptions]): Server-side VAD options, only supported for Scribe v2 realtime model.
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
-            model_id (ElevenLabsSTTModels | str): ElevenLabs STT model to use. If not specified a default model will
+            model (ElevenLabsSTTModels | str): ElevenLabs STT model to use. If not specified a default model will
                 be selected based on parameters provided.
+            model_id (ElevenLabsSTTModels | str): Deprecated alias for `model`. Use `model` instead.
             keyterms (NotGivenOr[list[str]]): A list of keywords or phrases to bias the transcription towards.
                 Each keyterm can contain at most 5 words and must be less than 50 characters.
                 Maximum of 100 keyterms. Only supported for Scribe v2 batch recognition
@@ -117,22 +121,33 @@ class STT(stt.STT):
             no_verbatim (NotGivenOr[bool]): When True, the model removes filler words, false starts
                 and disfluencies from the transcript, producing cleaner output. Supported for both
                 Scribe v2 (batch) and Scribe v2 realtime. Default is False.
+            enable_logging (bool): Enable logging of the request. When set to false, zero retention
+                mode will be used. Defaults to True.
         """
 
-        if is_given(use_realtime):
-            if is_given(model_id):
+        if is_given(model_id):
+            if is_given(model):
                 logger.warning(
-                    "both `use_realtime` and `model_id` parameters are provided. `use_realtime` will be ignored."
+                    "both `model` and `model_id` parameters are provided. `model_id` will be ignored."
+                )
+            else:
+                logger.warning("`model_id` parameter is deprecated, use `model` instead.")
+                model = model_id
+
+        if is_given(use_realtime):
+            if is_given(model):
+                logger.warning(
+                    "both `use_realtime` and `model` parameters are provided. `use_realtime` will be ignored."
                 )
             else:
                 logger.warning(
                     "`use_realtime` parameter is deprecated. "
-                    "Specify a realtime model_id to enable streaming. "
-                    "Defaulting model_id to one based on use_realtime parameter. "
+                    "Specify a realtime model to enable streaming. "
+                    "Defaulting model to one based on use_realtime parameter. "
                 )
-                model_id = "scribe_v2_realtime" if use_realtime else "scribe_v1"
-        model_id = model_id if is_given(model_id) else "scribe_v1"
-        use_realtime = model_id == "scribe_v2_realtime"
+                model = "scribe_v2_realtime" if use_realtime else "scribe_v1"
+        model = model if is_given(model) else "scribe_v1"
+        use_realtime = model == "scribe_v2_realtime"
 
         if not use_realtime and is_given(server_vad):
             logger.warning("Server-side VAD is only supported for Scribe v2 realtime model")
@@ -160,9 +175,10 @@ class STT(stt.STT):
             sample_rate=sample_rate,
             server_vad=server_vad,
             include_timestamps=include_timestamps,
-            model_id=model_id,
+            model_id=model,
             keyterms=keyterms,
             no_verbatim=no_verbatim if is_given(no_verbatim) else False,
+            enable_logging=enable_logging,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -206,7 +222,7 @@ class STT(stt.STT):
 
         try:
             async with self._ensure_session().post(
-                f"{self._opts.base_url}/speech-to-text",
+                _synthesize_url(self._opts),
                 data=form,
                 headers={AUTHORIZATION_HEADER: self._opts.api_key},
             ) as response:
@@ -506,6 +522,7 @@ class SpeechStream(stt.SpeechStream):
             f"model_id={self._opts.model_id}",
             f"audio_format=pcm_{self._opts.sample_rate}",
             f"commit_strategy={commit_strategy}",
+            f"enable_logging={str(self._opts.enable_logging).lower()}",
         ]
 
         if not self._language:
@@ -663,3 +680,9 @@ class SpeechStream(stt.SpeechStream):
             pass
         else:
             logger.warning("ElevenLabs STT unknown message type: %s, data: %s", message_type, data)
+
+
+def _synthesize_url(opts: STTOptions) -> str:
+    base_url = opts.base_url
+    url = f"{base_url}/speech-to-text?enable_logging={str(opts.enable_logging).lower()}"
+    return url

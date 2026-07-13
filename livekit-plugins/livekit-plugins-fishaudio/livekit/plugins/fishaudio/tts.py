@@ -25,11 +25,17 @@ from .log import logger
 from .models import LatencyMode, OutputFormat, TTSModels
 from .version import __version__
 
-DEFAULT_MODEL: TTSModels = "s2-pro"
+DEFAULT_MODEL: TTSModels = "s2.1-pro"
 DEFAULT_VOICE_ID = "933563129e564b19a115bedd57b7406a"
 DEFAULT_BASE_URL = "https://api.fish.audio"
 NUM_CHANNELS = 1
 USER_AGENT = f"livekit-plugins-fishaudio/{__version__}"
+
+# Hold the first N audio chunks before releasing any audio, so playout starts with
+# enough buffered to ride out the gap after Fish's small first chunk (else jitter
+# underruns it into a crackle). Internal stopgap for Fish's cold-start pacing; drop
+# to 1 once inference streams the opening chunks smoothly. Values <= 1 disable it.
+_PREBUFFER_CHUNKS = 2
 
 # Fish Audio's default sample rate per output format. Opus only supports 48 kHz;
 # the other formats default to 24 kHz, which matches the previous plugin default.
@@ -51,6 +57,8 @@ class _TTSOptions:
     api_key: str
     latency_mode: LatencyMode
     chunk_length: int
+    speed: NotGivenOr[float]
+    volume: NotGivenOr[float]
 
     def get_http_url(self, path: str) -> str:
         return f"{self.base_url}{path}"
@@ -71,6 +79,8 @@ class TTS(tts.TTS):
         base_url: NotGivenOr[str] = NOT_GIVEN,
         latency_mode: LatencyMode = "balanced",
         chunk_length: int = 100,
+        speed: NotGivenOr[float] = NOT_GIVEN,
+        volume: NotGivenOr[float] = NOT_GIVEN,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
@@ -82,7 +92,7 @@ class TTS(tts.TTS):
 
         Args:
             api_key (NotGivenOr[str]): Fish Audio API key. Reads ``FISH_API_KEY`` if unset.
-            model (TTSModels | str): TTS model to use. Defaults to ``"s2-pro"``.
+            model (TTSModels | str): TTS model to use. Defaults to ``"s2.1-pro"``.
             voice_id (NotGivenOr[str]): Voice model ID. Fish Audio's API refers to this
                 as ``reference_id``; it's the same value either way.
             output_format (OutputFormat): Audio output format. Defaults to ``"wav"``.
@@ -94,6 +104,12 @@ class TTS(tts.TTS):
                 (100–300). With sentence-level flushing this is only hit by sentences longer
                 than ``chunk_length``; otherwise audio is produced when each sentence is
                 flushed. Defaults to 100.
+            speed (NotGivenOr[float]): Speaking rate multiplier (Fish ``prosody.speed``).
+                ``1.0`` is normal; below 1.0 is slower, above is faster. Unset uses the
+                voice's natural pace.
+            volume (NotGivenOr[float]): Loudness adjustment in decibels (Fish
+                ``prosody.volume``). ``0`` is the voice's natural level. Unset leaves it
+                unchanged.
             tokenizer (tokenize.SentenceTokenizer): Sentence tokenizer used to detect
                 sentence boundaries. Defaults to ``tokenize.blingfire.SentenceTokenizer()``.
             http_session (aiohttp.ClientSession | None): Optional aiohttp session.
@@ -133,9 +149,17 @@ class TTS(tts.TTS):
             api_key=fish_api_key,
             latency_mode=latency_mode,
             chunk_length=chunk_length,
+            speed=speed,
+            volume=volume,
         )
 
         self._session = http_session
+        self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
+            connect_cb=self._connect_ws,
+            close_cb=self._close_ws,
+            max_session_duration=300,
+            mark_refreshed_on_get=True,
+        )
         # min_sentence_len=1 emits each sentence as soon as the next one starts,
         # rather than batching short sentences together — minimizes TTFB on the
         # first sentence and keeps Fish synthesizing continuously.
@@ -171,6 +195,27 @@ class TTS(tts.TTS):
             self._session = utils.http_context.http_session()
         return self._session
 
+    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+        session = self._ensure_session()
+        return await asyncio.wait_for(
+            session.ws_connect(
+                self._opts.get_ws_url("/v1/tts/live"),
+                headers={
+                    "Authorization": f"Bearer {self._opts.api_key}",
+                    "User-Agent": USER_AGENT,
+                    "model": self._opts.model,
+                },
+                heartbeat=30.0,
+            ),
+            timeout,
+        )
+
+    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        await ws.close()
+
+    def prewarm(self) -> None:
+        self._pool.prewarm()
+
     def update_options(
         self,
         *,
@@ -178,9 +223,16 @@ class TTS(tts.TTS):
         voice_id: NotGivenOr[str] = NOT_GIVEN,
         latency_mode: NotGivenOr[LatencyMode] = NOT_GIVEN,
         chunk_length: NotGivenOr[int] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
+        volume: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
-        if is_given(model):
+        if is_given(model) and model != self._opts.model:
             self._opts.model = model
+            # The model is sent as a connection header at ws-handshake time, not in the
+            # per-request body, so a pooled socket keeps the old model. Drop pooled
+            # connections so the next stream reconnects with the new model. Other
+            # options ride in the per-request body and need no reconnect.
+            self._pool.invalidate()
         if is_given(voice_id):
             self._opts.voice_id = voice_id
         if is_given(latency_mode):
@@ -189,6 +241,10 @@ class TTS(tts.TTS):
             if not 100 <= chunk_length <= 300:
                 raise ValueError("chunk_length must be between 100 and 300")
             self._opts.chunk_length = chunk_length
+        if is_given(speed):
+            self._opts.speed = speed
+        if is_given(volume):
+            self._opts.volume = volume
 
     def synthesize(
         self,
@@ -211,6 +267,7 @@ class TTS(tts.TTS):
         for stream in list(self._streams):
             await stream.aclose()
         self._streams.clear()
+        await self._pool.aclose()
 
 
 def _build_tts_request(opts: _TTSOptions, *, text: str = "") -> dict[str, Any]:
@@ -218,6 +275,15 @@ def _build_tts_request(opts: _TTSOptions, *, text: str = "") -> dict[str, Any]:
     # server doesn't fall back to its own (larger) defaults — in particular the
     # docs default of `chunk_length=300` produces large bursts that leave audible
     # gaps between Fish's chunk boundaries.
+    # `prosody` stays None unless the caller set speed/volume, so the default
+    # request is byte-for-byte unchanged.
+    prosody: dict[str, float] | None = None
+    if is_given(opts.speed) or is_given(opts.volume):
+        prosody = {}
+        if is_given(opts.speed):
+            prosody["speed"] = opts.speed
+        if is_given(opts.volume):
+            prosody["volume"] = opts.volume
     return {
         "text": text,
         "chunk_length": opts.chunk_length,
@@ -231,7 +297,7 @@ def _build_tts_request(opts: _TTSOptions, *, text: str = "") -> dict[str, Any]:
         "reference_id": opts.voice_id if is_given(opts.voice_id) else None,
         "normalize": True,
         "latency": opts.latency_mode,
-        "prosody": None,
+        "prosody": prosody,
         "top_p": 0.7,
         "temperature": 0.7,
     }
@@ -302,22 +368,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         )
         output_emitter.start_segment(segment_id=request_id)
 
-        ws: aiohttp.ClientWebSocketResponse | None = None
         try:
-            ws = await asyncio.wait_for(
-                self._tts._ensure_session().ws_connect(
-                    self._opts.get_ws_url("/v1/tts/live"),
-                    headers={
-                        "Authorization": f"Bearer {self._opts.api_key}",
-                        "User-Agent": USER_AGENT,
-                        "model": self._opts.model,
-                    },
-                    heartbeat=30.0,
-                ),
-                self._conn_options.timeout,
-            )
-
-            await self._run_ws(ws, output_emitter)
+            async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+                await self._run_ws(ws, output_emitter)
 
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
@@ -330,8 +383,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         except Exception as e:
             raise APIConnectionError() from e
         finally:
-            if ws is not None:
-                await ws.close()
             output_emitter.end_segment()
 
     async def _run_ws(
@@ -377,6 +428,33 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             await ws.send_bytes(msgpack.packb({"event": "stop"}, use_bin_type=True))
 
+        prebuffer_chunks = _PREBUFFER_CHUNKS
+        prebuffer = bytearray()
+        chunks_seen = 0
+        prebuffering = prebuffer_chunks > 1
+
+        def push_audio(audio: bytes) -> None:
+            nonlocal prebuffering, chunks_seen
+            if prebuffering:
+                prebuffer.extend(audio)
+                chunks_seen += 1
+                if chunks_seen < prebuffer_chunks:
+                    return
+                output_emitter.push(bytes(prebuffer))
+                prebuffer.clear()
+                prebuffering = False
+            else:
+                output_emitter.push(audio)
+
+        def flush_prebuffer() -> None:
+            # Stream ended before we reached `prebuffer_chunks` (short utterance) —
+            # release whatever is held so nothing is dropped or left hanging.
+            nonlocal prebuffering
+            if prebuffering and prebuffer:
+                output_emitter.push(bytes(prebuffer))
+                prebuffer.clear()
+            prebuffering = False
+
         async def recv_task() -> None:
             # No per-receive timeout: Fish has natural inter-sentence gaps that
             # can exceed `_conn_options.timeout` when the LLM is slow. Dead
@@ -404,7 +482,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if event == "audio":
                     audio = data.get("audio")
                     if audio:
-                        output_emitter.push(audio)
+                        push_audio(audio)
                 elif event == "finish":
                     reason = data.get("reason")
                     if reason == "error":
@@ -414,6 +492,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                             request_id=None,
                             body=str(data),
                         )
+                    flush_prebuffer()
                     break
                 else:
                     logger.debug("unknown Fish Audio event: %s", data)

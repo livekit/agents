@@ -4,6 +4,7 @@ from . import aio, audio, codecs, http_context, http_server, hw, images
 from .audio import AudioArrayBuffer, AudioBuffer, combine_frames, merge_frames
 from .bounded_dict import BoundedDict
 from .connection_pool import ConnectionPool
+from .env import resolve_env_var
 from .exp_filter import ExpFilter
 from .log import log_exceptions
 from .misc import is_dev_mode, is_given, is_hosted, nodename, shortuuid, time_ms
@@ -39,6 +40,7 @@ __all__ = [
     "wait_for_agent",
     "wait_for_participant",
     "wait_for_track_publication",
+    "resolve_env_var",
 ]
 
 # Cleanup docs of unexported modules

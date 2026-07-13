@@ -52,7 +52,7 @@ from .log import DEV_LEVEL, logger
 from .plugin import Plugin
 from .simulation import SimulationContext
 from .types import ATTRIBUTE_AGENT_NAME, NOT_GIVEN, NotGivenOr
-from .utils import http_server, is_given
+from .utils import http_context, http_server, is_given
 from .utils.hw import get_cpu_monitor
 from .version import __version__
 
@@ -61,6 +61,7 @@ UPDATE_STATUS_INTERVAL = 2.5
 UPDATE_LOAD_INTERVAL = 0.5
 HEARTBEAT_INTERVAL = 30
 WORKER_PROTOCOL_VERSION = 1
+DRAIN_TIMEOUT = 3600  # 1hr
 
 
 def _default_setup_fnc(proc: JobProcess) -> Any:
@@ -201,7 +202,7 @@ class ServerOptions:
     Defaults to 0 (disabled).
     """  # noqa: E501
 
-    drain_timeout: int = 1800
+    drain_timeout: int = DRAIN_TIMEOUT
     """Number of seconds to wait for current jobs to finish upon receiving TERM or INT signal."""
     num_idle_processes: int | ServerEnvOption[int] = ServerEnvOption(
         dev_default=0, prod_default=min(math.ceil(get_cpu_monitor().cpu_count()), 4)
@@ -306,7 +307,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         load_threshold: float | ServerEnvOption[float] = _default_load_threshold,
         job_memory_warn_mb: float = 1000,
         job_memory_limit_mb: float = 0,
-        drain_timeout: int = 1800,
+        drain_timeout: int = DRAIN_TIMEOUT,
         num_idle_processes: int | ServerEnvOption[int] = _default_num_idle_processes,
         shutdown_process_timeout: float = 10.0,
         session_end_timeout: float = 300.0,
@@ -726,6 +727,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             if self._deployment:
                 os.environ["LIVEKIT_AGENT_DEPLOYMENT"] = self._deployment
 
+            # must run before job processes spawn so they inherit the SSL_CERT_FILE fallback
+            http_context._set_default_cert_env()
+
             logger.info(
                 "starting worker",
                 extra={"version": __version__, "rtc-version": rtc.__version__},
@@ -741,7 +745,14 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 )
 
             if self._mp_ctx_str == "forkserver":
-                plugin_packages = [p.package for p in Plugin.registered_plugins] + ["av"]
+                # `livekit.agents.inference._warmup` is a side-effect module:
+                # importing it from the forkserver process calls `init_vad()` and
+                # `init_eot()`, paging the native model weights into the
+                # forkserver. Forked job processes inherit those pages via COW.
+                plugin_packages = [p.package for p in Plugin.registered_plugins] + [
+                    "av",
+                    "livekit.agents.inference._warmup",
+                ]
                 logger.info("preloading plugins", extra={"packages": plugin_packages})
                 self._mp_ctx.set_forkserver_preload(plugin_packages)
 
@@ -776,7 +787,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._proc_pool.on("process_job_launched", _update_job_status)
             await self._proc_pool.start()
 
-            self._http_session = aiohttp.ClientSession(proxy=self._http_proxy or None)
+            self._http_session = aiohttp.ClientSession(
+                proxy=self._http_proxy or None,
+                connector=aiohttp.TCPConnector(ssl=http_context._create_ssl_context()),
+            )
             if self._ws_url:
                 self._api = api.LiveKitAPI(
                     self._ws_url, self._api_key, self._api_secret, session=self._http_session
@@ -827,6 +841,15 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 )
                 tasks.append(self._conn_task)
 
+                # propagate a terminal connection failure out of run()
+                def _on_conn_task_done(task: asyncio.Task[None]) -> None:
+                    if task.cancelled() or self._close_future is None or self._close_future.done():
+                        return
+                    if (exc := task.exception()) is not None:
+                        self._close_future.set_exception(exc)
+
+                self._conn_task.add_done_callback(_on_conn_task_done)
+
             self.emit("worker_started")
 
         await self._close_future
@@ -844,9 +867,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         job_memory_limit_mb: NotGivenOr[float] = NOT_GIVEN,
         drain_timeout: NotGivenOr[int] = NOT_GIVEN,
         num_idle_processes: NotGivenOr[int] = NOT_GIVEN,
-        shutdown_process_timeout: float = 10.0,
-        session_end_timeout: float = 300.0,
-        initialize_process_timeout: float = 10.0,
+        shutdown_process_timeout: NotGivenOr[float] = NOT_GIVEN,
+        session_end_timeout: NotGivenOr[float] = NOT_GIVEN,
+        initialize_process_timeout: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if not self._closed:
             raise RuntimeError("cannot update options after starting the server")
@@ -886,6 +909,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
         if is_given(session_end_timeout):
             self._session_end_timeout = session_end_timeout
+
+        if is_given(initialize_process_timeout):
+            self._initialize_process_timeout = initialize_process_timeout
 
     @property
     def id(self) -> str:
@@ -991,7 +1017,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         async with self._lock:
             if self._closed:
                 if self._close_future is not None:
-                    await self._close_future
+                    # _close_future may hold run()'s error; keep aclose() a no-op
+                    with contextlib.suppress(Exception):
+                        await self._close_future
                 return
 
             self._closed = True

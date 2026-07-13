@@ -67,7 +67,35 @@ BOOKINGS = [
     ("Amara", "Okafor", "amara.okafor@gmail.com", "+1 650 555 0121", "WX53", "206", -1, 2, 4, ["breakfast", "pets"], "5550", "confirmed"),
     ("Lucas", "Meyer", "lucas.meyer@gmx.de", "+49 30 5550173", "ZP19", "402", -3, 5, 2, ["breakfast", "valet"], "9041", "confirmed"),
     ("Vivienne", "Laurent", "v.laurent@me.com", "+1 415 555 0193", "PH01", "PH", -2, 6, 2, ["breakfast", "valet", "pets"], "1206", "confirmed"),
+    # In-house and being fished for by an outside caller - presence must never be disclosed
+    ("Jonathan", "Pierce", "j.pierce@gmail.com", "+1 415 555 0233", "JP65", "303", -1, 3, 1, [], "5151", "confirmed"),
+    # In-house with an early flight - the wake-up call caller
+    ("Frank", "Adler", "frank.adler@gmail.com", "+1 415 555 0277", "FA09", "304", -1, 3, 1, [], "6203", "confirmed"),
+    # --- Full house tonight (oversold) -------------------------------------
+    # Dana Holt holds room 301 through tomorrow morning - and so does Kenji
+    # Tanaka (RT88, checked in today): the double-booking behind the
+    # "Confirmed guest, no room available tonight" walk scenario. The four
+    # one-nighters fill every otherwise-free room TONIGHT ONLY, so the
+    # re-accommodation search honestly comes up empty and 301 frees tomorrow.
+    ("Dana", "Holt", "dana.holt@gmail.com", "+1 415 555 0341", "DH27", "301", -2, 3, 2, [], "9034", "confirmed"),
+    ("Paul", "Greer", "paul.greer@gmail.com", "+1 415 555 0356", "PG11", "203", 0, 1, 1, [], "2218", "confirmed"),
+    ("Rita", "Moss", "rita.moss@me.com", "+1 415 555 0368", "QM17", "204", 0, 1, 2, [], "7745", "confirmed"),
+    ("Lena", "Fischer", "lena.fischer@gmx.de", "+49 30 5550441", "LF73", "302", 0, 1, 1, [], "6071", "confirmed"),
+    # 205 (the garden queen) stays free tonight ON PURPOSE: it's the one concrete
+    # fix the desk can offer Robert Klein ("I booked a garden view!") - and it's
+    # a lower rate than Kenji Tanaka's king, so the walk resolver correctly
+    # never offers it to him and his walk scenario stays intact.
+    # --- Double-booked next weekend, but the house can absorb it -----------
+    # Tom Whelan's double queen (206) collides with Grace Lin's stay, and the
+    # other double queen (304) is blocked by Noah Petrov - so the only room
+    # that fits his family of four is the suite: the free-upgrade scenario.
+    ("Tom", "Whelan", "tom.whelan@gmail.com", "+1 415 555 0457", "TW55", "206", 4, 3, 4, [], "5126", "confirmed"),
+    ("Grace", "Lin", "grace.lin@gmail.com", "+1 415 555 0463", "GL09", "206", 3, 3, 3, [], "8854", "confirmed"),
+    ("Noah", "Petrov", "noah.petrov@gmail.com", "+1 415 555 0478", "NP66", "304", 3, 4, 4, [], "1937", "confirmed"),
     ("Kenji", "Tanaka", "kenji.tanaka@gmail.com", "+1 415 555 0164", "RT88", "301", 0, 3, 2, ["valet"], "7782", "confirmed"),
+    # Checked in today, king city room - the "unhappy with their room" caller
+    # (insists he booked a garden view; the record says otherwise)
+    ("Robert", "Klein", "robert.klein@gmail.com", "+1 415 555 0377", "RK20", "201", 0, 2, 1, [], "8412", "confirmed"),
     # Arriving tomorrow
     ("Hiroshi", "Sato", "h.sato@gmail.com", "+1 415 555 0211", "BN23", "204", 1, 2, 3, ["breakfast"], "8821", "confirmed"),
     # Upcoming
@@ -75,10 +103,31 @@ BOOKINGS = [
     ("Marcus", "Johnson", "m.johnson@outlook.com", "+1 628 555 0199", "CD34", "205", 9, 3, 4, ["breakfast", "valet"], "1881", "confirmed"),
     # Smoking room (203 is the only smoking-permitted room)
     ("Mei", "Chen", "mei.chen@gmail.com", "+1 415 555 0222", "MN42", "203", 14, 2, 2, ["breakfast"], "4477", "confirmed"),
+    # --- Completely sold out one night (offset 25 = Fri Jul 3, July-4th weekend) ---
+    # Every one of the 13 rooms is taken for this single night, so a fresh
+    # booking inquiry for that date honestly comes up empty: the "we're full,
+    # politely deny the walk-in" scenario. One-nighters (nights=1) so the
+    # block doesn't bleed into adjacent dates or other scenarios.
+    ("Owen", "Carver", "owen.carver@gmail.com", "+1 415 555 0501", "SO01", "201", 25, 1, 2, [], "1101", "confirmed"),
+    ("Bianca", "Ross", "bianca.ross@gmail.com", "+1 415 555 0502", "SO02", "202", 25, 1, 2, [], "1102", "confirmed"),
+    ("Caleb", "Nguyen", "caleb.nguyen@gmail.com", "+1 415 555 0503", "SO03", "203", 25, 1, 2, [], "1103", "confirmed"),
+    ("Delia", "Brooks", "delia.brooks@gmail.com", "+1 415 555 0504", "SO04", "204", 25, 1, 3, [], "1104", "confirmed"),
+    ("Ezra", "Flynn", "ezra.flynn@gmail.com", "+1 415 555 0505", "SO05", "205", 25, 1, 3, [], "1105", "confirmed"),
+    ("Farah", "Haddad", "farah.haddad@gmail.com", "+1 415 555 0506", "SO06", "206", 25, 1, 4, [], "1106", "confirmed"),
+    ("Gideon", "Park", "gideon.park@gmail.com", "+1 415 555 0507", "SO07", "301", 25, 1, 2, [], "1107", "confirmed"),
+    ("Helena", "Cruz", "helena.cruz@gmail.com", "+1 415 555 0508", "SO08", "302", 25, 1, 2, [], "1108", "confirmed"),
+    ("Ivan", "Sokolov", "ivan.sokolov@gmail.com", "+1 415 555 0509", "SO09", "303", 25, 1, 3, [], "1109", "confirmed"),
+    ("Jana", "Novak", "jana.novak@gmail.com", "+1 415 555 0510", "SO10", "304", 25, 1, 4, [], "1110", "confirmed"),
+    ("Kofi", "Mensah", "kofi.mensah@gmail.com", "+1 415 555 0511", "SO11", "401", 25, 1, 4, [], "1111", "confirmed"),
+    ("Lara", "Conti", "lara.conti@gmail.com", "+1 415 555 0512", "SO12", "402", 25, 1, 2, [], "1112", "confirmed"),
+    ("Mateo", "Rivas", "mateo.rivas@gmail.com", "+1 415 555 0513", "SO13", "PH", 25, 1, 5, [], "1113", "confirmed"),
     # Departed (last week / weeks ago) - source of disputes + invoice lookups
     ("Daniel", "Lee", "daniel.lee@gmail.com", "+1 415 555 0104", "GH78", "302", -6, 2, 2, ["late_checkout"], "9999", "confirmed"),
     ("Olivia", "Brandt", "olivia.brandt@me.com", "+1 415 555 0288", "QT55", "204", -10, 3, 2, ["breakfast"], "6677", "confirmed"),
     ("Aino", "Virtanen", "aino.virtanen@gmail.com", "+358 9 5550144", "JX31", "303", -14, 4, 3, ["breakfast", "valet"], "5512", "confirmed"),
+    # No-show (dates passed, guest never checked in; card-guaranteed and charged,
+    # no cancellation on record - the "Angry no-show charge dispute" caller)
+    ("Tanya", "Richardson", "tanya.richardson@gmail.com", "+1 248 555 0291", "NS44", "304", -4, 2, 1, [], "7321", "confirmed"),
     # Cancelled (was a future booking that got cancelled - good for "I cancelled, where's my refund")
     ("Felix", "Wagner", "felix.wagner@me.com", "+1 415 555 0312", "FW77", "402", 3, 2, 2, ["breakfast", "valet"], "2299", "cancelled"),
 ]
@@ -115,6 +164,11 @@ DISPUTES = [
     # Open / unresolved
     ("DSP-2H6T", "HTL-ZP19", "Room service", 8800, "room_service_restaurant", "Charged for a dinner they didn't order.", "escalated_to_manager", 0, "open"),
 ]
+# (last_name, preferences) - read-only guest history for returning-guest personalization.
+GUEST_HISTORY = [
+    ("Lee", "Prefers a high, quiet floor away from the elevator, and feather-free "
+            "(hypoallergenic) pillows. Had a noise complaint on a previous stay."),
+]
 # fmt: on
 
 
@@ -129,6 +183,10 @@ def populate(db: HotelDB, today: date) -> None:
     conn.executemany(
         "INSERT INTO restaurant_tables (label, capacity, location, description) VALUES (?,?,?,?)",
         TABLES,
+    )
+    conn.executemany(
+        "INSERT INTO guest_history (last_name, preferences) VALUES (?,?)",
+        GUEST_HISTORY,
     )
 
     for (

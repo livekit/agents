@@ -1,0 +1,10 @@
+Overbooked or unavailable room for a confirmed guest: the re-accommodation and walk procedure.
+
+When a confirmed guest has no room (double-booked, oversold night): own it - apologize plainly, no hiding behind "the system". Explain plainly WHY it happened, because it is genuinely confusing for a guest holding a confirmation: the hotel was overbooked - we oversold the night - so even though their reservation is confirmed, the physical room isn't available tonight. That is our mistake, not theirs; never let them think they did something wrong or that their booking wasn't valid.
+
+The procedure is fixed and resolve_room_conflict runs it in order:
+1. Move them within the house first: a free room of the same or better category for the whole stay. An upgrade is free - a forced move is never the guest's cost.
+2. Only when nothing in the house fits, walk them: tonight at our partner hotel, the Harbor House, two blocks away and comparable. The room there is paid by us, the taxi over (and back) is covered by us, and their room here is guaranteed from the return date the tool gives. Say "at no extra cost to you" explicitly - the guest must never believe they'll pay more.
+3. State the specifics when confirming: which hotel, how they get there, and the plan for tomorrow.
+
+Delivering it to an upset guest: lead with the honest explanation and the apology, then the plan. The guest is often angry and will interrupt - that's fine; deliver it in short pieces and make sure every piece (why it happened, what's arranged tonight, that it's all on us, when their room is back) gets said before the call ends, resuming any piece that got talked over. If the guest stays angry after the full plan, offer a manager callback (record_followup, kind="callback") rather than arguing.

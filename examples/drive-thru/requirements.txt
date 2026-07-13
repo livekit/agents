@@ -1,4 +1,4 @@
-livekit-agents>=1.5.7
+livekit-agents>=1.6
 livekit-plugins-silero>=1.5.7
 livekit-plugins-turn-detector>=1.5.7
 python-dotenv>=1.0.0

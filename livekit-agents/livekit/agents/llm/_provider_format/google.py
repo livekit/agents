@@ -30,7 +30,7 @@ def to_chat_ctx(
     parts: list[dict] = []
 
     for msg in itertools.chain(*(group.flatten() for group in group_tool_calls(chat_ctx))):
-        if msg.type == "message" and msg.role == "system" and (text := msg.text_content):
+        if msg.type == "message" and msg.role == "system" and (text := msg.raw_text_content):
             system_messages.append(text)
             continue
 
@@ -51,12 +51,15 @@ def to_chat_ctx(
 
         if msg.type == "message":
             for content in msg.content:
-                if content and isinstance(content, str):
-                    parts.append({"text": content})
+                if isinstance(content, llm.ImageContent):
+                    parts.append(_to_image_part(content))
+                elif isinstance(content, llm.AudioContent):
+                    pass
                 elif content and isinstance(content, dict):
                     parts.append({"text": json.dumps(content)})
-                elif isinstance(content, llm.ImageContent):
-                    parts.append(_to_image_part(content))
+                elif content:
+                    # str or Instructions
+                    parts.append({"text": str(content)})
         elif msg.type == "function_call":
             fc_part: dict[str, Any] = {
                 "function_call": {

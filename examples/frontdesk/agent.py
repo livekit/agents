@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import datetime
 import logging
 import os
@@ -48,8 +49,7 @@ from livekit.agents.evals import (
     task_completion_judge,
     tool_use_judge,
 )
-from livekit.plugins import silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
+from livekit.agents.voice import UserStateChangedEvent
 
 load_dotenv()
 
@@ -78,27 +78,56 @@ class FrontDeskAgent(Agent):
 
         super().__init__(
             instructions=(
+                # Outcome — what a great interaction looks like.
                 "You are Front-Desk, a helpful and efficient voice assistant. "
-                "Your main goal is to schedule an appointment for the user. "
+                "A great interaction ends with the user booked into an appointment slot that works "
+                "for them, reached through a warm, flowing conversation with as little "
+                "back-and-forth as possible. "
+                # The current date/time is not baked in (it would break the prompt cache);
+                # pull it from get_current_time whenever you need to reason about dates.
                 "You do not inherently know the current date or time — call get_current_time "
                 "whenever you need to reason about dates, such as interpreting a request like "
                 "'next Tuesday' or checking whether a date the caller mentions has already passed. "
-                "This is a voice conversation — speak naturally, clearly, and concisely. "
-                "When the user says hello or greets you, don’t just respond with a greeting — use it as an opportunity to move things forward. "
-                "For example, follow up with a helpful question like: 'Would you like to book a time?' "
-                "When asked for availability, call list_available_slots and offer a few clear, simple options. "
-                "Say things like 'Monday at 2 PM' — avoid timezones, timestamps, and avoid saying 'AM' or 'PM'. "
-                "Use natural phrases like 'in the morning' or 'in the evening', and don’t mention the year unless it’s different from the current one. "
-                "Offer a few options at a time, pause for a response, then guide the user to confirm. "
-                "If the time is no longer available, let them know gently and offer the next options. "
-                "Always keep the conversation flowing — be proactive, human, and focused on helping the user schedule with ease."
+                # Voice & personality — keep it short and human.
+                "Your output is synthesized directly to speech, so produce a natural verbatim "
+                "transcript, not polished text. Start responses with real reactions (oh, hmm, ah) "
+                'and fillers (um, uh, like) rather than "Absolutely" or "Certainly", with '
+                "mid-sentence fillers (like, you know, I mean) where they’d naturally fall. Mirror "
+                "the user's formality: if they're casual, use informal phrasing (gotcha, alright, "
+                "gonna, kinda, lemme, yeah); if they're more formal, keep your speech cleaner. Vary "
+                "your openers across turns — if you opened the last turn with 'gotcha', pick "
+                "'alright' or 'okay' this turn; don't repeat the same opener back-to-back. "
+                # How to work — be proactive, acknowledge before acting, stop when you can move forward.
+                "Be proactive: when the user greets you, use it to move things forward (e.g. "
+                "'Would you like to book a time?') rather than just greeting back. Before a tool "
+                "call that takes a moment, give a brief spoken acknowledgment so there’s no dead "
+                "air. After each result, check whether you can now move the user toward a booking: "
+                "if so, do it; if you're missing something, ask for just that. "
+                # Speaking about times — constraints that keep it natural over voice.
+                "When talking about availability, call list_available_slots and offer a few clear "
+                "options at a time, then pause for a response and guide the user to confirm. Say "
+                "times like 'Monday at 2' — avoid timezones, timestamps, and the words 'AM'/'PM'; "
+                "use natural phrases like 'in the morning' or 'in the evening', and don’t mention "
+                "the year unless it differs from the current one. When listing several times in the "
+                "same window, group them ('in the evening at 4, 5, or 6') instead of repeating the "
+                "time-of-day qualifier on each slot. If a chosen time is no longer available, let "
+                "them know gently and offer the next options."
             )
         )
 
         self._slots_map: dict[str, AvailableSlot] = {}
 
     async def on_enter(self) -> None:
-        await self.session.say("Hello, I can help you schedule an appointment!")
+        hour = datetime.datetime.now(self.tz).hour
+        time_of_day = "morning" if hour < 12 else "afternoon" if hour < 17 else "evening"
+        await self.session.generate_reply(
+            instructions=(
+                f"Say hello and welcome to the caller — it's currently {time_of_day} their time. "
+                "You're the front desk of an office and you're here to help them schedule a visit. "
+                "Invite them to book an appointment to visit, and ask what time works. "
+                "Keep it warm and brief."
+            )
+        )
 
     @function_tool
     async def get_current_time(self) -> str:
@@ -130,7 +159,7 @@ class FrontDeskAgent(Agent):
         email_result = await beta.workflows.GetEmailTask(chat_ctx=self.chat_ctx)
 
         if ctx.speech_handle.interrupted:
-            return
+            return None
 
         ctx.disallow_interruptions()
 
@@ -324,11 +353,39 @@ async def frontdesk_agent(ctx: JobContext):
         userdata=userdata,
         stt=inference.STT("deepgram/nova-3"),
         llm=inference.LLM("google/gemma-4-31b-it"),
-        tts=inference.TTS("cartesia/sonic-3", voice="39b376fc-488e-4d0c-8b37-e00b72059fdd"),
-        turn_detection=MultilingualModel(),
-        vad=silero.VAD.load(),
-        # default (3): lets a turn chain get_current_time -> list_available_slots
+        tts=inference.TTS(
+            "inworld/inworld-tts-2",
+            voice="Nadia",
+            extra_kwargs={"delivery_mode": "CREATIVE", "speaking_rate": 1.1},
+        ),
+        # leave max_tool_steps at the default (3) so a turn can chain
+        # get_current_time -> list_available_slots
+        # Flip user_state to "away" after 10s of mutual silence so we can
+        # check whether they're still there (default is 15s).
+        user_away_timeout=10.0,
     )
+
+    idle_task: asyncio.Task[None] | None = None
+
+    async def _nudge_while_idle() -> None:
+        # Nudge every 10s until the user speaks again — speaking flips
+        # user_state out of "away", which cancels this task below.
+        while True:
+            logger.info("user idle — checking if they're still there")
+            await session.generate_reply(
+                instructions="The user has been idle, see if they're still there"
+            )
+            await asyncio.sleep(10)
+
+    @session.on("user_state_changed")
+    def _on_user_state_changed(ev: UserStateChangedEvent) -> None:
+        nonlocal idle_task
+        if ev.new_state == "away":
+            if idle_task is None or idle_task.done():
+                idle_task = asyncio.create_task(_nudge_while_idle())
+        elif idle_task is not None:
+            idle_task.cancel()
+            idle_task = None
 
     mock_tools(FrontDeskAgent, tool_mocks, session=session)
     await session.start(agent=FrontDeskAgent(timezone=timezone, now=cal.now), room=ctx.room)

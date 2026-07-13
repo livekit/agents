@@ -16,7 +16,6 @@ from livekit.agents import (
     inference,
     utils,
 )
-from livekit.plugins import silero
 
 try:
     import librosa
@@ -92,8 +91,6 @@ server = AgentServer()
 
 
 def prewarm(proc: JobProcess):
-    proc.userdata["vad"] = silero.VAD.load()
-
     # warmup the librosa JIT
     librosa.effects.time_stretch(np.random.randn(16000).astype(np.float32), rate=1.2)
 
@@ -109,7 +106,6 @@ async def entrypoint(ctx: JobContext):
         "user_id": "your user_id",
     }
     session = AgentSession(
-        vad=ctx.proc.userdata["vad"],
         llm=inference.LLM("openai/gpt-4.1-mini"),
         stt=inference.STT("deepgram/nova-3"),
         tts=inference.TTS("cartesia/sonic-3"),

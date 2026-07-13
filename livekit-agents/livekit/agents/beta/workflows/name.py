@@ -50,6 +50,19 @@ If the name contains special characters or hyphens (e.g., 'Mary-Jane' or 'O'Brie
 """
 
 
+def _clean_name_arg(value: str | None) -> str | None:
+    # Some models (e.g. gemma) fill optional args with placeholder strings like
+    # "null"/"NULL" instead of omitting them, or wrap values in literal quotes.
+    # Normalize those to None/clean values so they hit the required-field
+    # validation below instead of being recorded as the user's name.
+    if value is None:
+        return None
+    value = value.strip().strip("'\"")
+    if not value or value.casefold() in ("null", "none", "nil", "n/a", "unknown", "unspecified"):
+        return None
+    return value
+
+
 @dataclass
 class GetNameResult:
     first_name: str | None = None
@@ -120,7 +133,7 @@ class GetNameTask(AgentTask[GetNameResult]):
 
         super().__init__(
             instructions=Instructions(
-                _BASE_INSTRUCTIONS.format(
+                audio=_BASE_INSTRUCTIONS.format(
                     name_format=self._name_format,
                     modality_specific=_AUDIO_SPECIFIC,
                     spelling_instructions=spelling_instructions,
@@ -197,6 +210,9 @@ class GetNameTask(AgentTask[GetNameResult]):
         middle_name: str | None = None,
         last_name: str | None = None,
     ) -> str | None:
+        first_name, middle_name, last_name = (
+            _clean_name_arg(v) for v in (first_name, middle_name, last_name)
+        )
         errors: list[str] = []
         if self._collect_first_name and not (first_name and first_name.strip()):
             errors.append("first name is required but was not provided")

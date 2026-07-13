@@ -109,7 +109,7 @@ def compute_chat_ctx_diff(old_ctx: ChatContext, new_ctx: ChatContext) -> DiffOps
             # check if the content is different
             old_msg = old_ctx_by_id[new_msg.id]
             if new_msg.type == "message" and old_msg.type == "message":
-                if new_msg.text_content != old_msg.text_content:
+                if new_msg.raw_text_content != old_msg.raw_text_content:
                     to_update.append((prev_id, new_msg.id))
                 # TODO: check other content types
 
@@ -749,16 +749,21 @@ async def execute_function_call(
     function_tool = tool_ctx.function_tools.get(tool_call.name)
     if function_tool is None:
         logger.warning(f"unknown AI function `{tool_call.name}`")
+        # Name the available tools so the model can self-correct
+        msg = (
+            f"Unknown function: {tool_call.name} - available tools: "
+            f"{', '.join(tool_ctx.function_tools.keys())}"
+        )
         return FunctionCallResult(
             fnc_call=fnc_call,
             fnc_call_out=FunctionCallOutput(
                 name=tool_call.name,
                 call_id=tool_call.call_id,
-                output=f"Unknown function: {tool_call.name}",
+                output=msg,
                 is_error=True,
             ),
             raw_output=None,
-            raw_exception=ValueError(f"Unknown function: {tool_call.name}"),
+            raw_exception=ValueError(msg),
         )
 
     try:
