@@ -10,6 +10,8 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 import aiohttp
 from openai.types.realtime import (
     ConversationItemAdded,
+    ConversationItemCreateEvent,
+    ConversationItemDeleteEvent,
     ConversationItemInputAudioTranscriptionCompletedEvent,
     InputAudioBufferSpeechStartedEvent,
     InputAudioBufferSpeechStoppedEvent,
@@ -17,7 +19,7 @@ from openai.types.realtime import (
     ResponseCreatedEvent,
     ResponseDoneEvent,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, llm, utils
@@ -37,7 +39,6 @@ from livekit.plugins.openai.realtime.utils import (
 from ..log import logger
 
 SAMPLE_RATE = openai_rt.SAMPLE_RATE
-NUM_CHANNELS = openai_rt.NUM_CHANNELS
 
 _DEFAULT_TURN_DETECTION = {
     "type": "server_vad",
@@ -47,9 +48,6 @@ _DEFAULT_TURN_DETECTION = {
     "silence_duration_ms": 500,
     "threshold": 0.55,
 }
-
-_DEFAULT_OUTPUT_MODALITIES: list[Literal["audio"]] = ["audio"]
-_VALID_OUTPUT_MODALITIES = ("text", "audio")
 
 # Server close codes that a reconnect cannot fix:
 # 3000 = invalid API key / ephemeral key.
@@ -149,12 +147,14 @@ class RealtimeModel(openai_rt.RealtimeModel):
         self._capabilities.user_transcription = _input_audio_transcription_enabled(
             input_audio_transcription_config
         )
-        # The server treats conversation.item.create as a pure insert (its
-        # AUTO_GENERATE_ON_ITEM_CREATE defaults to false), so the framework must
-        # send response.create after posting tool outputs, like OpenAI.
+        # The server treats conversation.item.create as a pure insert and never
+        # auto-generates a response for it, so the framework must send
+        # response.create after posting tool outputs, like OpenAI.
         self._capabilities.auto_tool_reply_generation = False
         self._capabilities.audio_output = "audio" in output_modalities
-        self._capabilities.mutable_chat_context = False
+        # mutable_chat_context stays True (base default): the server preserves
+        # client-supplied item ids, so items are addressable for the base
+        # diff/create/delete chat-context synchronization.
 
     @property
     def model(self) -> str:
@@ -168,11 +168,6 @@ class RealtimeModel(openai_rt.RealtimeModel):
         session = RealtimeSession(self)
         self._sessions.add(session)
         return session
-
-    async def aclose(self) -> None:
-        for session in list(self._sessions):
-            await session.aclose()
-        await super().aclose()
 
     def update_options(
         self,
@@ -243,8 +238,8 @@ class RealtimeSession(openai_rt.RealtimeSession):
         self._boson_opts = replace(realtime_model._boson_opts)
         self._closed = False
         self._suppress_next_response_cancel = False
+        self._video_unsupported_warned = False
         self._current_response_id: str | None = None
-        self._boson_remote_item_ids: set[str] = set()
         # Responses discarded while another generation was streaming; their
         # terminal events must not close the active generation (the base
         # generation slot and handlers are not response-id aware).
@@ -259,8 +254,6 @@ class RealtimeSession(openai_rt.RealtimeSession):
         # the server just ended.
         self._server_terminal_reason: str | None = None
         super().__init__(realtime_model)
-        # Compatibility alias for the previous Boson implementation and tests.
-        self._pending_response_futures = self._response_created_futures
         # The base recv loop dispatches OpenAI event types to _handle_* methods
         # and re-emits every raw event on this hook; Boson-specific events are
         # handled off it instead of forking the whole dispatch.
@@ -287,7 +280,8 @@ class RealtimeSession(openai_rt.RealtimeSession):
         try:
             await super()._main_task()
         except Exception as exc:
-            self._fail_response_created_futures(_as_realtime_error(exc))
+            error = exc if isinstance(exc, llm.RealtimeError) else llm.RealtimeError(str(exc))
+            self._fail_response_created_futures(error)
             self._close_current_generation("Boson realtime session failed")
             self._closed = True
             self._msg_ch.close()
@@ -366,10 +360,10 @@ class RealtimeSession(openai_rt.RealtimeSession):
     def _handle_conversion_item_added(self, event: ConversationItemAdded) -> None:
         item_id = event.item.id
         if item_id is not None and (remote_item := self._remote_chat_ctx.get(item_id)) is not None:
-            # The server merges consecutive same-role turns into a single item
-            # (voice-chat conv_context.add) and re-emits conversation.item.added
-            # with the same id and cumulative content. Update the mirrored text
-            # in place instead of letting the base insert fail with a warning.
+            # The server merges consecutive same-role speech turns into a single
+            # item and re-emits conversation.item.added with the same id and
+            # cumulative content. Update the mirrored text in place instead of
+            # letting the base insert fail with a warning.
             # Audio-input configs re-add with an empty input_audio part and no
             # transcript — keep whatever transcription has already arrived.
             lk_item = openai_item_to_livekit_item(event.item)
@@ -385,8 +379,6 @@ class RealtimeSession(openai_rt.RealtimeSession):
             return
 
         super()._handle_conversion_item_added(event)
-        if item_id is not None:
-            self._boson_remote_item_ids.add(item_id)
 
     def _handle_conversion_item_input_audio_transcription_completed(
         self, event: ConversationItemInputAudioTranscriptionCompletedEvent
@@ -418,30 +410,69 @@ class RealtimeSession(openai_rt.RealtimeSession):
         # partial merge), so a tools-only update must carry the whole config.
         return self._build_session_update_event("tools_update_", tools=tools)
 
-    def _create_update_chat_ctx_events(  # type: ignore[override]
+    def _create_update_chat_ctx_events(
         self, chat_ctx: llm.ChatContext
-    ) -> list[dict[str, Any]]:
-        # Called by the base _reconnect to rebuild the conversation: the server
-        # keeps no state across connections, so every item is replayed as a
-        # conversation.item.create in the Boson item shape (the documented
-        # reconnection contract, docs/client-integration-guide.md). The base has
-        # already reset _remote_chat_ctx; rebuild the seen-id set from the
-        # replayed items so update_chat_ctx doesn't re-send them.
-        events: list[dict[str, Any]] = []
-        self._boson_remote_item_ids = set()
+    ) -> list[ConversationItemCreateEvent | ConversationItemDeleteEvent]:
+        # The base diff (used both by update_chat_ctx and by _reconnect's
+        # chat-context replay) produces GA-shaped creates; the server stores
+        # items in the Boson shape (a single text content part, type "text" for
+        # assistant) and has no "root" previous_item_id sentinel. Rebuild each
+        # create with the Boson payload. The server preserves client-supplied
+        # item ids, so the rest of the base machinery — echo correlation via
+        # _item_create_future/_item_delete_future and the _remote_chat_ctx
+        # diff — works unchanged.
+        #
+        # Diff against a text-only mirror of the context: the server stores a
+        # single text part per message (audio is represented by its transcript,
+        # images are unsupported), and the base GA converter must never see
+        # audio frames (rtc.combine_audio_frames raises on empty ones). A
+        # message with no text keeps an empty mirror so the base diff retains
+        # it when it already exists remotely (e.g. an audio item whose
+        # transcription is still pending) instead of deleting it, and filters
+        # it out otherwise.
+        sanitized: list[llm.ChatItem] = []
         for item in chat_ctx.items:
-            payload = _livekit_item_to_boson_item(item)
-            if payload is None:
+            if item.type == "message":
+                text = _text_from_content(item.content)
+                sanitized.append(
+                    llm.ChatMessage(id=item.id, role=item.role, content=[text] if text else [])
+                )
+            else:
+                sanitized.append(item)
+        boson_ctx = llm.ChatContext(sanitized)
+
+        events: list[ConversationItemCreateEvent | ConversationItemDeleteEvent] = []
+        # Safety net: a create the conversion still cannot express is not sent;
+        # remap a previous_item_id pointing at it to its own predecessor.
+        dropped: dict[str, str | None] = {}
+        for ev in super()._create_update_chat_ctx_events(boson_ctx):
+            if not isinstance(ev, ConversationItemCreateEvent):
+                events.append(ev)
                 continue
-            item_id = payload.get("id")
-            if isinstance(item_id, str):
-                self._boson_remote_item_ids.add(item_id)
+            assert ev.item.id is not None
+            previous_item_id = ev.previous_item_id
+            if previous_item_id == "root":
+                # The server cannot express insert-at-head; None appends at the
+                # tail, which is correct for the replay/append cases that
+                # produce it (the remote context is empty or being extended).
+                previous_item_id = None
+            elif previous_item_id is not None and previous_item_id in dropped:
+                previous_item_id = dropped[previous_item_id]
+            chat_item = boson_ctx.get_by_id(ev.item.id)
+            payload = _livekit_item_to_boson_item(chat_item) if chat_item is not None else None
+            if payload is None:
+                # The server skips items without text content instead of
+                # storing them, so their conversation.item.added echo would
+                # never resolve the create future.
+                dropped[ev.item.id] = previous_item_id
+                continue
             events.append(
-                {
-                    "type": "conversation.item.create",
-                    "event_id": utils.shortuuid("chat_ctx_replay_"),
-                    "item": payload,
-                }
+                _BosonConversationItemCreateEvent(
+                    type="conversation.item.create",
+                    event_id=ev.event_id or utils.shortuuid("chat_ctx_create_"),
+                    previous_item_id=previous_item_id,
+                    item=_BosonConversationItem(**payload),
+                )
             )
         return events
 
@@ -486,29 +517,6 @@ class RealtimeSession(openai_rt.RealtimeSession):
     async def update_instructions(self, instructions: str) -> None:
         self._instructions = instructions
         self.send_event(self._build_session_update_event("instructions_update_"))
-
-    async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
-        previous_item_id: str | None = None
-        for item in chat_ctx.copy(exclude_handoff=True, exclude_config_update=True).items:
-            payload = _livekit_item_to_boson_item(item)
-            if payload is None:
-                continue
-            item_id = payload.get("id")
-            if not isinstance(item_id, str):
-                continue
-            if item_id in self._boson_remote_item_ids:
-                previous_item_id = item_id
-                continue
-            self._boson_remote_item_ids.add(item_id)
-            self.send_event(
-                {
-                    "type": "conversation.item.create",
-                    "event_id": utils.shortuuid("chat_ctx_create_"),
-                    "previous_item_id": previous_item_id,
-                    "item": payload,
-                }
-            )
-            previous_item_id = item_id
 
     def update_options(
         self,
@@ -556,7 +564,9 @@ class RealtimeSession(openai_rt.RealtimeSession):
         self.send_event(self._build_session_update_event("options_update_"))
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
-        logger.debug("Boson RealtimeModel does not support video input yet; frame ignored.")
+        if not self._video_unsupported_warned:
+            self._video_unsupported_warned = True
+            logger.warning("Boson RealtimeModel does not support video input; frames are ignored.")
 
     def interrupt(self) -> None:
         if not self.has_active_generation:
@@ -648,7 +658,7 @@ class RealtimeSession(openai_rt.RealtimeSession):
         error: dict[str, Any] = (
             event.error if isinstance(event.error, dict) else event.error.model_dump()
         )
-        event_id = error.get("event_id") or getattr(event, "event_id", None)
+        event_id = error.get("event_id") or event.event_id
         realtime_error = llm.RealtimeError(_format_error_message(error, event_id))
         self._emit_error(realtime_error, recoverable=True)
         self._fail_response_created_futures(realtime_error, event_id=event_id)
@@ -713,12 +723,10 @@ def _build_input_audio_transcription(
     language: str | None,
     prompt: str | None,
 ) -> NotGivenOr[dict[str, Any]]:
-    has_convenience_options = any(
-        value is not None and value != "" for value in (model, language, prompt)
-    )
-    if not is_given(input_audio_transcription) and not has_convenience_options:
-        return NOT_GIVEN
-    if input_audio_transcription is None and not has_convenience_options:
+    has_convenience_options = bool(model) or language is not None or prompt is not None
+    if not has_convenience_options and (
+        not is_given(input_audio_transcription) or input_audio_transcription is None
+    ):
         return NOT_GIVEN
 
     transcription = (
@@ -738,11 +746,11 @@ def _build_input_audio_transcription(
 def _input_audio_transcription_enabled(transcription: NotGivenOr[dict[str, Any]]) -> bool:
     """Whether the server will emit user-transcription events for this config.
 
-    Mirrors the server gate (``SessState.emit_input_transcription``): transcript
-    events are returned only when the client sets a non-empty ``model``. Omitting
-    the transcription block, sending ``null``, or sending a block without a model
-    all run ASR internally (for the LLM/logging) but emit no client-facing
-    ``conversation.item.input_audio_transcription.completed`` events.
+    The server returns transcript events only when the client sets a non-empty
+    ``model``. Omitting the transcription block, sending ``null``, or sending a
+    block without a model all run ASR server-side (for the LLM) but emit no
+    client-facing ``conversation.item.input_audio_transcription.completed``
+    events.
     """
     return is_given(transcription) and bool(transcription.get("model"))
 
@@ -756,8 +764,8 @@ def _resolve_output_modalities(
     single-modality. ``None`` defaults to ``["audio"]``.
     """
     if modalities is None:
-        return list(_DEFAULT_OUTPUT_MODALITIES)
-    if len(modalities) != 1 or modalities[0] not in _VALID_OUTPUT_MODALITIES:
+        return ["audio"]
+    if len(modalities) != 1 or modalities[0] not in ("text", "audio"):
         raise ValueError(
             "modalities must be exactly one of ['text'] or ['audio'] "
             f"(got {modalities!r}); mixed and empty lists are not supported."
@@ -808,6 +816,23 @@ def _tool_choice_to_boson(tool_choice: llm.ToolChoice | None) -> Any:
     if name:
         return {"type": "function", "name": name}
     return "auto"
+
+
+class _BosonConversationItem(BaseModel):
+    """A conversation item in the Boson wire shape.
+
+    Typed only as far as the base ``update_chat_ctx`` machinery needs
+    (``item.id`` for echo correlation); the payload rides in extra fields
+    because it deviates from the GA models (assistant content uses type
+    ``"text"``, which their literals reject).
+    """
+
+    model_config = ConfigDict(extra="allow")
+    id: str
+
+
+class _BosonConversationItemCreateEvent(ConversationItemCreateEvent):
+    item: _BosonConversationItem  # type: ignore[assignment]
 
 
 def _livekit_item_to_boson_item(item: llm.ChatItem) -> dict[str, Any] | None:
@@ -867,9 +892,3 @@ def _format_error_message(error: dict[str, Any], event_id: str | None) -> str:
     if details:
         return f"{message} ({', '.join(f'{key}={value}' for key, value in details.items())})"
     return message
-
-
-def _as_realtime_error(error: Exception) -> llm.RealtimeError:
-    if isinstance(error, llm.RealtimeError):
-        return error
-    return llm.RealtimeError(str(error))
