@@ -118,7 +118,7 @@ class FrontDeskAgent(Agent):
         self._slots_map: dict[str, AvailableSlot] = {}
 
     async def on_enter(self) -> None:
-        hour = datetime.datetime.now(self.tz).hour
+        hour = self._now().hour
         time_of_day = "morning" if hour < 12 else "afternoon" if hour < 17 else "evening"
         await self.session.generate_reply(
             instructions=(
