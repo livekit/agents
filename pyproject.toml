@@ -33,6 +33,7 @@ livekit-plugins-hume = { workspace = true }
 livekit-plugins-inworld = { workspace = true }
 livekit-plugins-krisp = { workspace = true }
 livekit-plugins-keyframe = { workspace = true }
+livekit-plugins-kokoro = { workspace = true }
 livekit-plugins-langchain = { workspace = true }
 livekit-plugins-lemonslice = { workspace = true }
 livekit-plugins-liveavatar = { workspace = true }
