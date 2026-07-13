@@ -14,12 +14,17 @@ This example demonstrates how to create an animated avatar that responds to audi
 
 ## Usage
 
+The dispatcher is intended to run as a local helper. Its `/launch` endpoint
+accepts LiveKit room tokens and starts local worker processes, so do not expose
+it directly on a public network without adding your own authentication and
+network controls.
+
 1. Start the avatar dispatcher server:
 ```bash
-python examples/avatar/dispatcher.py [--port 8089]
+python examples/avatar_agents/audio_wave/dispatcher.py [--port 8089]
 ```
 
 2. Start the agent worker:
 ```bash
-python examples/avatar/agent_worker.py dev [--avatar-url http://localhost:8089/launch]
+python examples/avatar_agents/audio_wave/agent_worker.py dev
 ```
