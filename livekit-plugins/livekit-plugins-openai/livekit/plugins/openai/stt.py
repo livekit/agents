@@ -22,7 +22,7 @@ import time
 import weakref
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import aiohttp
 import httpx
@@ -415,8 +415,9 @@ class STT(stt.STT):
 
         query_params: dict[str, str] = {
             "intent": "transcription",
-            "model": self._opts.model,
         }
+        if urlparse(str(self._client.base_url)).hostname != "api.openai.com":
+            query_params["model"] = self._opts.model
         headers = {
             "User-Agent": "LiveKit Agents",
             "Authorization": f"Bearer {self._client.api_key}",

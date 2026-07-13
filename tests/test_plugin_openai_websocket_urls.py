@@ -42,6 +42,20 @@ async def test_realtime_stt_connect_url_includes_model() -> None:
     assert parse_qs(parsed_url.query) == {"intent": ["transcription"], "model": [model]}
 
 
+async def test_native_realtime_stt_connect_url_omits_model() -> None:
+    instance = stt.STT(api_key="test-key", model="gpt-realtime-whisper")
+    session = _FakeSession()
+    instance._session = session
+
+    await instance._connect_ws(5)
+
+    parsed_url = urlparse(session.url)
+    assert parsed_url.scheme == "wss"
+    assert parsed_url.netloc == "api.openai.com"
+    assert parsed_url.path == "/v1/realtime"
+    assert parse_qs(parsed_url.query) == {"intent": ["transcription"]}
+
+
 async def test_responses_websocket_connect_url_includes_model() -> None:
     model = "gateway-responses"
     instance = responses.LLM(
