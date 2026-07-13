@@ -40,7 +40,7 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, http_context, is_given
 from livekit.agents.voice.io import TimedString
 
-from ._utils import PeriodicCollector
+from ._utils import PeriodicCollector, trace_id_from_headers
 from .log import logger
 from .models import STTRealtimeSampleRates
 
@@ -231,7 +231,7 @@ class STT(stt.STT):
                     raise APIStatusError(
                         message=response_json.get("detail", "Unknown ElevenLabs error"),
                         status_code=response.status,
-                        request_id=None,
+                        request_id=trace_id_from_headers(response.headers),
                         body=response_json,
                     )
                 extracted_text = response_json.get("text")
@@ -250,7 +250,7 @@ class STT(stt.STT):
             raise APIStatusError(
                 message=e.message,
                 status_code=e.status,
-                request_id=None,
+                request_id=trace_id_from_headers(e.headers),
                 body=None,
             ) from e
         except Exception as e:
@@ -563,6 +563,12 @@ class SpeechStream(stt.SpeechStream):
                 ),
                 self._conn_options.timeout,
             )
+        except aiohttp.WSServerHandshakeError as e:
+            raise APIStatusError(
+                message=e.message,
+                status_code=e.status,
+                request_id=trace_id_from_headers(e.headers),
+            ) from e
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
             raise APIConnectionError("Failed to connect to ElevenLabs") from e
 

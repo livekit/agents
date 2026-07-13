@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import pytest
+from multidict import CIMultiDict
 
 from livekit.agents import stt
 from livekit.agents.types import NOT_GIVEN
 from livekit.plugins.elevenlabs import stt as elevenlabs_stt
+from livekit.plugins.elevenlabs._utils import trace_id_from_headers
 
 pytestmark = pytest.mark.plugin("elevenlabs")
 
@@ -158,3 +160,10 @@ async def test_connect_ws_includes_enable_logging(enable_logging: bool, expected
     await stream._connect_ws()
 
     assert f"enable_logging={expected}" in captured["url"]
+
+
+def test_trace_id_from_headers() -> None:
+    # header lookup is case-insensitive, and an absent header returns None
+    assert trace_id_from_headers(CIMultiDict({"X-Trace-Id": "trace-1"})) == "trace-1"
+    assert trace_id_from_headers(CIMultiDict()) is None
+    assert trace_id_from_headers(None) is None
