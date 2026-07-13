@@ -429,3 +429,16 @@ def test_steering_resolves_into_template() -> None:
     assert base_pos < steering_pos < append_pos
     assert '<expr type="sound" label="breathe"/>' in body
     assert "tts_instructions_append" not in resolved
+
+
+def test_presets_importable_and_render() -> None:
+    from livekit.agents.tts._provider_format import steering_instructions
+    from livekit.agents.voice import presets
+
+    casual = steering_instructions("inworld", presets.CASUAL_VERBAL_PRESET)
+    assert '<expr type="sound" label="laugh"/>' in casual
+    assert '<expr type="sound" label="breathe"/>' in casual
+
+    professional = steering_instructions("inworld", presets.PROFESSIONAL_VERBAL_PRESET)
+    assert '<expr type="sound" label="breathe"/>' in professional
+    assert "Never use these sound labels: laugh, cough." in professional
