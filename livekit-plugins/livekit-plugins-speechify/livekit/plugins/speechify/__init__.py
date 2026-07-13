@@ -19,10 +19,11 @@ https://docs.speechify.ai for API details.
 """
 
 from livekit.agents import Plugin
+from speechify.types.get_voice import GetVoice
 
 from .log import logger
 from .models import TTSModels
-from .tts import DEFAULT_MODEL, DEFAULT_VOICE_ID, TTS, ChunkedStream, GetVoice, SynthesizeStream
+from .tts import DEFAULT_MODEL, DEFAULT_VOICE_ID, TTS, ChunkedStream, SynthesizeStream
 from .version import __version__
 
 __all__ = [

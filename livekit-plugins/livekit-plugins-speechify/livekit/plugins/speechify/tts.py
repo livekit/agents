@@ -68,7 +68,7 @@ class TTS(tts.TTS):
         language: NotGivenOr[str] = NOT_GIVEN,
         loudness_normalization: NotGivenOr[bool] = NOT_GIVEN,
         text_normalization: NotGivenOr[bool] = NOT_GIVEN,
-        api_key: NotGivenOr[str] = NOT_GIVEN,
+        token: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         client: AsyncSpeechify | None = None,
@@ -93,12 +93,12 @@ class TTS(tts.TTS):
                 level. Increases latency slightly when enabled.
             text_normalization: Expand numbers, dates, etc. into words before
                 synthesis. Increases latency slightly when enabled.
-            api_key: Speechify API key. Falls back to the ``SPEECHIFY_API_KEY``
+            token: Speechify API key. Falls back to the ``SPEECHIFY_API_KEY``
                 environment variable.
             base_url: Override the Speechify API base URL.
             tokenizer: Sentence tokenizer used to chunk input in ``stream()``.
             client: A preconfigured ``AsyncSpeechify`` client. When provided,
-                ``api_key`` and ``base_url`` are ignored.
+                ``token`` and ``base_url`` are ignored.
         """
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True, aligned_transcript=True),
@@ -109,14 +109,14 @@ class TTS(tts.TTS):
         if client is not None:
             self._client = client
         else:
-            token = api_key if is_given(api_key) else os.environ.get("SPEECHIFY_API_KEY")
-            if not token:
+            resolved_token = token if is_given(token) else os.environ.get("SPEECHIFY_API_KEY")
+            if not resolved_token:
                 raise ValueError(
-                    "Speechify API key is required, either as the api_key argument "
+                    "Speechify API key is required, either as the token argument "
                     "or via the SPEECHIFY_API_KEY environment variable"
                 )
             self._client = AsyncSpeechify(
-                api_key=token,
+                token=resolved_token,
                 base_url=base_url if is_given(base_url) else None,
             )
 
