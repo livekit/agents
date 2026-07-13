@@ -416,6 +416,11 @@ class STT(stt.STT):
         query_params: dict[str, str] = {
             "intent": "transcription",
         }
+        # OpenAI's native realtime endpoint treats ?model= as selecting a
+        # conversation session and rejects the transcription-mode
+        # session.update with invalid_model — the model is conveyed via
+        # audio.input.transcription.model instead. Gateways need the model
+        # on the upgrade URL to route the connection before the first frame.
         if urlparse(str(self._client.base_url)).hostname != "api.openai.com":
             query_params["model"] = self._opts.model
         headers = {
