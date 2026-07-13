@@ -654,7 +654,7 @@ async def _execute_tools_task(
 
     from .agent import _set_activity_task_info
     from .events import RunContext
-    from .run_result import _MockToolsContextVar
+    from .run_result import _MockToolsContextVar, _SessionMockTools
 
     def _tool_completed(out: ToolExecutionOutput) -> None:
         tool_execution_completed_cb(out)
@@ -763,9 +763,12 @@ async def _execute_tools_task(
 
             tool_execution_started_cb(fnc_call)
             try:
-                mock_tools: dict[str, Callable] = _MockToolsContextVar.get({}).get(
-                    type(session.current_agent), {}
-                )
+                # context-manager mocks (tests) take precedence over session-scoped ones
+                agent_type = type(session.current_agent)
+                mock_tools: dict[str, Callable] = {
+                    **_SessionMockTools.get(session, {}).get(agent_type, {}),
+                    **_MockToolsContextVar.get({}).get(agent_type, {}),
+                }
                 mock = mock_tools.get(fnc_call.name)
                 mocked = mock is not None
 
