@@ -132,6 +132,12 @@ class STTOptions:
     less likely. Leave as None to use the server-side default.
     Introduced in the Soniox v5 model; earlier models reject it."""
 
+    endpoint_latency_adjustment_level: int | None = None
+    """How aggressively the model reduces endpoint latency. Range: 0 to 3.
+    Higher values reduce latency but may emit more endpoints and slightly reduce accuracy.
+    Leave as None to use the server-side default.
+    Introduced in the Soniox v5 model; earlier models reject it."""
+
     client_reference_id: str | None = None
     translation: TranslationConfig | None = None
 
@@ -140,6 +146,10 @@ class STTOptions:
             raise ValueError("max_endpoint_delay_ms must be between 500 and 3000")
         if self.endpoint_sensitivity is not None and not (-1.0 <= self.endpoint_sensitivity <= 1.0):
             raise ValueError("endpoint_sensitivity must be between -1.0 and 1.0")
+        if self.endpoint_latency_adjustment_level is not None and not (
+            0 <= self.endpoint_latency_adjustment_level <= 3
+        ):
+            raise ValueError("endpoint_latency_adjustment_level must be between 0 and 3")
 
 
 class STT(stt.STT):
@@ -273,6 +283,10 @@ class SpeechStream(stt.SpeechStream):
         config["max_endpoint_delay_ms"] = self._stt._params.max_endpoint_delay_ms
         if self._stt._params.endpoint_sensitivity is not None:
             config["endpoint_sensitivity"] = self._stt._params.endpoint_sensitivity
+        if self._stt._params.endpoint_latency_adjustment_level is not None:
+            config["endpoint_latency_adjustment_level"] = (
+                self._stt._params.endpoint_latency_adjustment_level
+            )
         if self._stt._params.translation is not None:
             tr = self._stt._params.translation
             translation_dict: dict[str, Any] = {"type": tr.type}
