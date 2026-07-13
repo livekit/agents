@@ -72,9 +72,8 @@ class FrontDeskAgent(Agent):
         self.tz = ZoneInfo(timezone)
         # the calendar's clock, so the agent's sense of "today" matches the
         # availability it sees (fixed under simulation, wall-clock otherwise).
-        # The current date/time is injected per turn (see on_user_turn_completed)
-        # rather than baked into these instructions, which keeps the prompt cache
-        # prefix stable across turns and sessions.
+        # Exposed to the model through the get_current_time tool rather than baked
+        # into these instructions, keeping the prompt-cache prefix stable.
         self._now = now
 
         super().__init__(
