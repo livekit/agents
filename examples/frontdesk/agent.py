@@ -71,14 +71,19 @@ class FrontDeskAgent(Agent):
     def __init__(self, *, timezone: str, now: Callable[[], datetime.datetime]) -> None:
         self.tz = ZoneInfo(timezone)
         # the calendar's clock, so the agent's sense of "today" matches the
-        # availability it sees (fixed under simulation, wall-clock otherwise)
+        # availability it sees (fixed under simulation, wall-clock otherwise).
+        # The current date/time is injected per turn (see on_user_turn_completed)
+        # rather than baked into these instructions, which keeps the prompt cache
+        # prefix stable across turns and sessions.
         self._now = now
-        today = now().strftime("%A, %B %d, %Y")
 
         super().__init__(
             instructions=(
-                f"You are Front-Desk, a helpful and efficient voice assistant. "
-                f"Today is {today}. Your main goal is to schedule an appointment for the user. "
+                "You are Front-Desk, a helpful and efficient voice assistant. "
+                "Your main goal is to schedule an appointment for the user. "
+                "You do not inherently know the current date or time — call get_current_time "
+                "whenever you need to reason about dates, such as interpreting a request like "
+                "'next Tuesday' or checking whether a date the caller mentions has already passed. "
                 "This is a voice conversation — speak naturally, clearly, and concisely. "
                 "When the user says hello or greets you, don’t just respond with a greeting — use it as an opportunity to move things forward. "
                 "For example, follow up with a helpful question like: 'Would you like to book a time?' "
@@ -95,6 +100,18 @@ class FrontDeskAgent(Agent):
 
     async def on_enter(self) -> None:
         await self.session.say("Hello, I can help you schedule an appointment!")
+
+    @function_tool
+    async def get_current_time(self) -> str:
+        """Get the current date and time.
+
+        Call this whenever you need to reason about dates — to interpret relative
+        requests like "next Tuesday", or to check whether a date the caller
+        mentions has already passed.
+        """
+        # Kept out of the (cached) system instructions and served on demand, so the
+        # prompt-cache prefix stays stable and the time is always current.
+        return f"The current date and time is {self._now():%A, %B %d, %Y at %H:%M %Z}."
 
     @function_tool
     async def schedule_appointment(
@@ -307,11 +324,11 @@ async def frontdesk_agent(ctx: JobContext):
     session = AgentSession[Userdata](
         userdata=userdata,
         stt=inference.STT("deepgram/nova-3"),
-        llm=inference.LLM("google/gemini-2.5-flash"),
+        llm=inference.LLM("google/gemma-4-31b-it"),
         tts=inference.TTS("cartesia/sonic-3", voice="39b376fc-488e-4d0c-8b37-e00b72059fdd"),
         turn_detection=MultilingualModel(),
         vad=silero.VAD.load(),
-        max_tool_steps=1,
+        # default (3): lets a turn chain get_current_time -> list_available_slots
     )
 
     mock_tools(FrontDeskAgent, tool_mocks, session=session)
