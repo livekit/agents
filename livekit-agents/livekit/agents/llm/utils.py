@@ -42,6 +42,10 @@ if TYPE_CHECKING:
 
 THINK_TAG_START = "<think>"
 THINK_TAG_END = "</think>"
+THINK_TAG_PAIRS = (
+    (THINK_TAG_START, THINK_TAG_END),
+    ("<|channel>thought", "<channel|>"),
+)
 
 
 def _compute_lcs(old_ids: list[str], new_ids: list[str]) -> list[str]:
@@ -606,24 +610,72 @@ def _shallow_model_dump(model: BaseModel, *, by_alias: bool = False) -> dict[str
     return result
 
 
-def strip_thinking_tokens(content: str | None, thinking: asyncio.Event) -> str | None:
-    if content is None:
-        return None
+@dataclass
+class ThinkingTokenFilter:
+    """State for stripping thinking tokens from streamed content."""
 
-    if thinking.is_set():
-        idx = content.find(THINK_TAG_END)
-        if idx >= 0:
-            thinking.clear()
-            content = content[idx + len(THINK_TAG_END) :]
-        else:
-            content = None
-    else:
-        idx = content.find(THINK_TAG_START)
-        if idx >= 0:
-            thinking.set()
-            content = content[idx + len(THINK_TAG_START) :]
+    _buffer: str = ""
+    _end_marker: str | None = None
 
-    return content
+
+def _partial_marker_length(content: str, markers: tuple[str, ...]) -> int:
+    return max(
+        (
+            length
+            for marker in markers
+            for length in range(1, min(len(content), len(marker) - 1) + 1)
+            if content.endswith(marker[:length])
+        ),
+        default=0,
+    )
+
+
+def strip_thinking_tokens(
+    content: str | None, state: ThinkingTokenFilter, *, final: bool = False
+) -> str | None:
+    if content is not None:
+        state._buffer += content
+
+    visible: list[str] = []
+    while state._buffer:
+        if state._end_marker is not None:
+            idx = state._buffer.find(state._end_marker)
+            if idx < 0:
+                keep = _partial_marker_length(state._buffer, (state._end_marker,))
+                state._buffer = state._buffer[-keep:] if keep else ""
+                break
+
+            state._buffer = state._buffer[idx + len(state._end_marker) :]
+            state._end_marker = None
+            continue
+
+        marker = min(
+            (
+                (idx, start, end)
+                for start, end in THINK_TAG_PAIRS
+                if (idx := state._buffer.find(start)) >= 0
+            ),
+            default=None,
+        )
+        if marker is not None:
+            idx, start, state._end_marker = marker
+            visible.append(state._buffer[:idx])
+            state._buffer = state._buffer[idx + len(start) :]
+            continue
+
+        keep = _partial_marker_length(state._buffer, tuple(start for start, _ in THINK_TAG_PAIRS))
+        visible.append(state._buffer[:-keep] if keep else state._buffer)
+        state._buffer = state._buffer[-keep:] if keep else ""
+        break
+
+    if final:
+        if state._end_marker is None:
+            visible.append(state._buffer)
+        state._buffer = ""
+        state._end_marker = None
+
+    result = "".join(visible)
+    return result or ("" if content == "" else None)
 
 
 def _is_valid_function_output(value: Any) -> bool:

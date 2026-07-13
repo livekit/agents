@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import os
 from dataclasses import dataclass
 from typing import Any, Literal, cast
@@ -427,11 +426,11 @@ class LLMStream(llm.LLMStream):
                 **self._extra_kwargs,
             )
 
-            thinking = asyncio.Event()
+            thinking_filter = llm_utils.ThinkingTokenFilter()
             async with stream:
                 async for chunk in stream:
                     for choice in chunk.choices:
-                        chat_chunk = self._parse_choice(chunk.id, choice, thinking)
+                        chat_chunk = self._parse_choice(chunk.id, choice, thinking_filter)
                         if chat_chunk is not None:
                             retryable = False
                             self._event_ch.send_nowait(chat_chunk)
@@ -466,7 +465,7 @@ class LLMStream(llm.LLMStream):
             raise APIConnectionError(retryable=retryable) from e
 
     def _parse_choice(
-        self, id: str, choice: Choice, thinking: asyncio.Event
+        self, id: str, choice: Choice, thinking_filter: llm_utils.ThinkingTokenFilter
     ) -> llm.ChatChunk | None:
         delta = choice.delta
 
@@ -535,7 +534,9 @@ class LLMStream(llm.LLMStream):
             self._tool_extra = None
             return call_chunk
 
-        delta.content = llm_utils.strip_thinking_tokens(delta.content, thinking)
+        delta.content = llm_utils.strip_thinking_tokens(
+            delta.content, thinking_filter, final=choice.finish_reason is not None
+        )
 
         # Extract extra from delta (e.g., Google thought signatures on text parts)
         delta_extra = getattr(delta, "extra_content", None)
