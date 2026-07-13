@@ -59,6 +59,8 @@ class _ResponsesWebsocket:
         self._api_key = api_key
         self._timeout = timeout or DEFAULT_API_CONNECT_OPTIONS.timeout
         url = URL(base_url if base_url else OPENAI_RESPONSES_WS_URL)
+        if url.scheme in ("http", "https"):
+            url = url.with_scheme("ws" if url.scheme == "http" else "wss")
         if url.host != "api.openai.com":
             # OpenAI's native endpoint takes the model in the response.create
             # payload; gateways need it on the upgrade URL to route the
