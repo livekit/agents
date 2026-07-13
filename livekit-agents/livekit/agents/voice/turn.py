@@ -178,6 +178,13 @@ class InterruptionOptions(TypedDict, total=False):
     false_interruption_timeout: float | None
     """Seconds of silence after an interruption before it is
     classified as false. ``None`` disables. Defaults to ``2.0``."""
+    false_interruption_max_speech_duration: float
+    """Maximum VAD speech length (s) for a barge-in to be eligible for the
+    false-interruption resume. Longer segments are treated as real speech
+    whose transcript is still in flight: the paused reply stays paused until
+    the user turn commits (or a watchdog set to ``endpointing.max_delay``
+    interrupts it) instead of resuming stale audio over the user's words.
+    Defaults to ``1.5``."""
     backchannel_boundary: float | tuple[float, float] | None
     """Seconds near the start/end of each agent turn during which overlapping
     speech classified as a backchannel by the adaptive detector is suppressed
@@ -194,6 +201,7 @@ _INTERRUPTION_DEFAULTS: InterruptionOptions = {
     "min_words": 0,
     "resume_false_interruption": True,
     "false_interruption_timeout": 2.0,
+    "false_interruption_max_speech_duration": 1.5,
     "backchannel_boundary": (1.0, 1.0),
 }
 
