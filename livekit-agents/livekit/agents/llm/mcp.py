@@ -54,11 +54,9 @@ MCPTool = RawFunctionTool
 class MCPToolOptions:
     """Per-tool behavior for MCP tools exposed by an :class:`MCPToolset`.
 
-    ``flags`` and ``on_duplicate`` mirror ``@function_tool(flags=..., on_duplicate=...)``.
-    ``forward_progress`` forwards the server's ``report_progress`` notifications to
-    ``ctx.update()`` — making the tool non-blocking so the agent can narrate while it
-    runs in the background. Pair it with ``ToolFlag.CANCELLABLE`` to let the tool be
-    cancelled while running.
+    ``flags`` and ``on_duplicate`` mirror ``@function_tool``. ``forward_progress``
+    forwards the server's ``report_progress`` to ``ctx.update()``, so the tool runs in
+    the background and the agent can narrate.
     """
 
     flags: ToolFlag = ToolFlag.NONE
@@ -66,7 +64,7 @@ class MCPToolOptions:
     forward_progress: bool = False
 
 
-# plain blocking tool, no duplicate handling — the default for unconfigured tools
+# default for tools not listed in tool_options
 _DEFAULT_TOOL_OPTIONS = MCPToolOptions()
 
 
@@ -176,15 +174,16 @@ class MCPServer(ABC):
         return self._raw_tools
 
     async def list_tools(
-        self, *, resolve_options: Callable[[str], MCPToolOptions] | None = None
+        self, *, tool_options: dict[str, MCPToolOptions] | None = None
     ) -> list[MCPTool]:
+        options = tool_options or {}
         return [
             self._make_function_tool(
                 tool.name,
                 tool.description,
                 tool.inputSchema,
                 tool.meta,
-                options=resolve_options(tool.name) if resolve_options else MCPToolOptions(),
+                options=options.get(tool.name, _DEFAULT_TOOL_OPTIONS),
             )
             for tool in await self._list_raw_tools()
         ]
@@ -215,9 +214,7 @@ class MCPServer(ABC):
             return resolved
 
         if options.forward_progress:
-            # routed through the AsyncToolset executor: MCP progress notifications
-            # become ctx.update() calls, so the first update releases the reply loop
-            # and the tool keeps running in the background until it returns.
+            # forward MCP progress as ctx.update(); the first update frees the reply loop
             async def _tool_called_nonblocking(
                 ctx: RunContext, raw_arguments: dict[str, Any]
             ) -> Any:
@@ -436,12 +433,12 @@ class MCPServerHTTP(MCPServer):
             )
 
     async def list_tools(
-        self, *, resolve_options: Callable[[str], MCPToolOptions] | None = None
+        self, *, tool_options: dict[str, MCPToolOptions] | None = None
     ) -> list[MCPTool]:
         """
         List tools from the MCP server, filtered by allowed_tools if specified.
         """
-        all_tools = await super().list_tools(resolve_options=resolve_options)
+        all_tools = await super().list_tools(tool_options=tool_options)
 
         # If no filter is set, return all tools
         if self._allowed_tools is None:
@@ -518,17 +515,10 @@ class MCPServerStdio(MCPServer):
 class MCPToolset(AsyncToolset):
     """A toolset that exposes tools from a Model Context Protocol (MCP) server.
 
-    MCPToolset wraps an ``MCPServer`` instance and makes its tools available for
-    use by an ``Agent``. On ``setup()``, it connects to the MCP server (if not
-    already connected), fetches the available tools, and caches them locally.
-
-    Per-tool behavior is configured with :class:`MCPToolOptions`, keyed by tool name
-    via ``tool_options``; any tool not listed there is a plain blocking call. A tool
-    with ``forward_progress=True`` forwards the server's progress notifications
-    through ``ctx.update()`` (running in the background so the agent can narrate);
-    ``flags`` and ``on_duplicate`` mirror ``@function_tool``. When any tool is
-    ``ToolFlag.CANCELLABLE``, ``lk_agents_get_running_tasks`` and ``lk_agents_cancel_task``
-    are exposed to the LLM automatically.
+    Wraps an ``MCPServer`` and makes its tools available to an ``Agent``; ``setup()``
+    connects to the server and fetches the tools. Per-tool behavior is set with
+    :class:`MCPToolOptions` via ``tool_options`` (keyed by tool name); unlisted tools
+    are plain blocking calls.
 
     Example::
 
@@ -537,9 +527,7 @@ class MCPToolset(AsyncToolset):
             mcp_server=MCPServerHTTP(url="...", client_session_timeout_seconds=120),
             tool_options={
                 "book_flight": MCPToolOptions(
-                    flags=ToolFlag.CANCELLABLE,
-                    on_duplicate="confirm",
-                    forward_progress=True,
+                    flags=ToolFlag.CANCELLABLE, on_duplicate="confirm", forward_progress=True
                 ),
             },
         )
@@ -557,9 +545,6 @@ class MCPToolset(AsyncToolset):
         self._tool_options = dict(tool_options or {})
         self._initialized = False
         self._lock = asyncio.Lock()
-
-    def _resolve_options(self, name: str) -> MCPToolOptions:
-        return self._tool_options.get(name, _DEFAULT_TOOL_OPTIONS)
 
     async def setup(self, *, reload: bool = False) -> Self:
         """Initialize the MCP server connection and fetch available tools.
@@ -582,7 +567,7 @@ class MCPToolset(AsyncToolset):
             elif reload:
                 self._mcp_server.invalidate_cache()
 
-            tools = await self._mcp_server.list_tools(resolve_options=self._resolve_options)
+            tools = await self._mcp_server.list_tools(tool_options=self._tool_options)
             self._tools = list(tools)
             self._initialized = True
             return self

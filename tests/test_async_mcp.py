@@ -101,13 +101,21 @@ def test_flags_and_on_duplicate_pass_through_independently() -> None:
     assert not _has_run_context_param(tool)
 
 
-def test_resolve_options_prefers_named_then_blocking_default() -> None:
-    booking = MCPToolOptions(flags=ToolFlag.CANCELLABLE, forward_progress=True)
-    ts = MCPToolset(id="m", mcp_server=_FakeMCPServer(), tool_options={"book_flight": booking})
+@pytest.mark.asyncio
+async def test_list_tools_applies_named_options_else_blocking() -> None:
+    server = _FakeMCPServer(["get_weather", "book_flight"])
+    tools = await server.list_tools(
+        tool_options={
+            "book_flight": MCPToolOptions(flags=ToolFlag.CANCELLABLE, forward_progress=True),
+        }
+    )
 
-    assert ts._resolve_options("book_flight") is booking
+    by_name = {t.info.name: t for t in tools}
+    assert ToolFlag.CANCELLABLE in by_name["book_flight"].info.flags
+    assert _has_run_context_param(by_name["book_flight"])
     # unlisted tools fall back to a plain blocking call
-    assert ts._resolve_options("get_weather") == MCPToolOptions()
+    assert by_name["get_weather"].info.flags == ToolFlag.NONE
+    assert not _has_run_context_param(by_name["get_weather"])
 
 
 @pytest.mark.asyncio
@@ -160,11 +168,9 @@ async def test_list_tools_caches_raw_fetch() -> None:
 async def test_list_tools_rebuilds_per_options() -> None:
     server = _FakeMCPServer(["echo"])
 
-    blocking = await server.list_tools(resolve_options=lambda _name: MCPToolOptions())
+    blocking = await server.list_tools()
     cancellable = await server.list_tools(
-        resolve_options=lambda _name: MCPToolOptions(
-            flags=ToolFlag.CANCELLABLE, forward_progress=True
-        )
+        tool_options={"echo": MCPToolOptions(flags=ToolFlag.CANCELLABLE, forward_progress=True)}
     )
 
     assert blocking[0] is not cancellable[0]

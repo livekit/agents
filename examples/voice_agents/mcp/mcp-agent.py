@@ -49,8 +49,7 @@ async def entrypoint(ctx: JobContext):
                     # book_flight takes ~70s; bump the per-request timeout above that.
                     client_session_timeout_seconds=120,
                 ),
-                # get_weather blocks (the default); book_flight is long-running, so
-                # forward its progress to ctx.update() and let it be cancelled.
+                # book_flight is long-running: forward progress and allow cancellation
                 tool_options={
                     "book_flight": mcp.MCPToolOptions(
                         flags=ToolFlag.CANCELLABLE,
