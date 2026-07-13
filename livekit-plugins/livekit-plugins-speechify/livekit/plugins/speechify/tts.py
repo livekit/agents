@@ -232,7 +232,9 @@ def _raise_from(e: Exception) -> None:
         ) from None
     if isinstance(e, asyncio.TimeoutError):
         raise APITimeoutError() from None
-    raise APIConnectionError() from e
+    if isinstance(e, ConnectionError):
+        raise APIConnectionError() from e
+    raise e
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -304,6 +306,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if timed:
                     output_emitter.push_timed_transcript(timed)
                 output_emitter.push(audio)
+                output_emitter.flush()
                 offset += len(audio) / (2 * SAMPLE_RATE * NUM_CHANNELS)
 
             output_emitter.end_segment()
