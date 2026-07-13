@@ -701,10 +701,11 @@ class DetectionMonitor(rtc.EventEmitter[EventTypes]):
                     analysis=True,
                 )
 
+                if forced:
+                    self._force_pending = False
+
                 if self._opts.mode == "sampled":
-                    if forced:
-                        self._force_pending = False
-                    else:
+                    if not forced:
                         self._samples_taken += 1
                         cooldown_until = stream_pos + self._opts.sample_interval_seconds
                         if self._samples_taken >= self._opts.samples:
@@ -783,6 +784,9 @@ class DetectionMonitor(rtc.EventEmitter[EventTypes]):
             raw=item,
         )
         self._results.append(result)
+        # Concurrent API calls can finish out of order; agreement is defined over audio
+        # windows, not request completion order.
+        self._results.sort(key=lambda detection: detection.window_index)
         logger.debug(
             "detect window analyzed",
             extra={

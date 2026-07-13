@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -36,6 +38,48 @@ class _FakeTransport:
                 "consistency": self._consistency,
             },
         }
+
+
+class _OutOfOrderTransport:
+    async def submit(
+        self,
+        pcm16: bytes,
+        *,
+        frame_length: int,
+        request_timeout: float,
+    ) -> dict[str, Any]:
+        del frame_length, request_timeout
+        index = pcm16[0]
+        await asyncio.sleep((4 - index) * 0.01)
+        score = (0.92, 0.91, 0.05, 0.04)[index]
+        return {
+            "uuid": f"detect-{index}",
+            "status": "completed",
+            "metrics": {
+                "score": [score],
+                "aggregated_score": score,
+                "label": "fake" if score >= 0.7 else "real",
+                "consistency": 92.0,
+            },
+        }
+
+
+class _FakeAudioStream:
+    def __init__(self, *chunks: bytes) -> None:
+        self._events = iter(SimpleNamespace(frame=SimpleNamespace(data=chunk)) for chunk in chunks)
+        self.closed = False
+
+    def __aiter__(self) -> _FakeAudioStream:
+        return self
+
+    async def __anext__(self) -> Any:
+        try:
+            return next(self._events)
+        except StopIteration:
+            raise StopAsyncIteration from None
+
+    async def aclose(self) -> None:
+        self.closed = True
 
 
 class DetectionMonitorPolicyTests(unittest.IsolatedAsyncioTestCase):
@@ -108,6 +152,53 @@ class DetectionMonitorPolicyTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(confirmed_hits), 1)
         self.assertTrue(confirmed_hits[0].forced)
+
+    async def test_forced_check_only_marks_one_window_in_non_sampled_modes(self) -> None:
+        window = b"\x01\x00" * 32000
+
+        for mode in ("continuous", "first_n"):
+            with self.subTest(mode=mode):
+                transport = _FakeTransport(0.1, 0.1)
+                monitor = DetectionMonitor(
+                    transport=transport,
+                    mode=mode,
+                    window_seconds=2.0,
+                    analysis_budget_seconds=4.0,
+                    silence_rms_threshold=0,
+                )
+                stream = _FakeAudioStream(window, window)
+
+                monitor.check_now()
+                await monitor._consume(stream, "caller")  # type: ignore[arg-type]
+
+                self.assertEqual([result.forced for result in monitor.results], [True, False])
+                self.assertFalse(monitor._force_pending)
+                self.assertTrue(stream.closed)
+
+    async def test_concurrent_results_use_chronological_window_order(self) -> None:
+        monitor = DetectionMonitor(
+            transport=_OutOfOrderTransport(),
+            agreement_window=2,
+            min_fake_results=2,
+        )
+        confirmed_hits = []
+        monitor.on("synthetic_detected", confirmed_hits.append)
+
+        await asyncio.gather(
+            *(
+                monitor._analyze_window(
+                    bytes((index, 0)),
+                    index=index,
+                    window_start=index * 4.0,
+                    participant_identity="caller",
+                )
+                for index in range(4)
+            )
+        )
+
+        self.assertEqual([result.window_index for result in monitor.results], [0, 1, 2, 3])
+        self.assertEqual(confirmed_hits, [])
+        self.assertEqual(monitor.verdict.label, "inconclusive")
 
     async def test_final_verdict_preserves_confirmed_synthetic_alert(self) -> None:
         transport = _FakeTransport(0.91, 0.92, 0.02)
