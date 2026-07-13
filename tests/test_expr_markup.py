@@ -356,3 +356,76 @@ def test_to_dict_strip_markup_is_expr_only_and_assistant_only() -> None:
     # default keeps the raw content for persistence
     items = chat_ctx.to_dict()["items"]
     assert items[1]["content"] == [MIXED]
+
+
+# ---------------------------------------------------------------------------
+# steering_instructions: SpeechSteeringOptions -> per-provider delivery guidelines
+# ---------------------------------------------------------------------------
+
+
+def test_steering_nonverbals_gated_per_provider() -> None:
+    from livekit.agents.tts._provider_format import steering_instructions
+    from livekit.agents.voice.agent_session import NonverbalOptions, SpeechSteeringOptions
+
+    steering = SpeechSteeringOptions(
+        nonverbal_sounds=NonverbalOptions(breathing=True, laughing=True)
+    )
+
+    inworld = steering_instructions("inworld", steering)
+    assert '<expr type="sound" label="laugh"/>' in inworld
+    assert '<expr type="sound" label="breathe"/>' in inworld
+    # disabled sounds are explicitly forbidden, not just omitted
+    assert "Never use these sound labels: cough." in inworld
+
+    xai = steering_instructions("xai", steering)
+    assert '<expr type="sound" label="chuckle"/>' in xai
+    assert '<expr type="sound" label="breath"/>' in xai
+    # xAI has no cough sound, so nothing to forbid
+    assert "Never use" not in xai
+
+    # cartesia has no non-verbal sounds at all
+    assert steering_instructions("cartesia", steering) == ""
+
+
+def test_steering_disfluencies_and_pace() -> None:
+    from livekit.agents.tts._provider_format import steering_instructions
+    from livekit.agents.voice.agent_session import SpeechSteeringOptions
+
+    on = steering_instructions("cartesia", SpeechSteeringOptions(disfluencies=True, pace="slow"))
+    assert "fillers (um, uh)" in on
+    assert "slow overall speaking pace" in on
+
+    off = steering_instructions("inworld", SpeechSteeringOptions(disfluencies=False))
+    assert "No fillers (um, uh)." in off
+
+    # "normal" pace and unset fields render nothing
+    assert steering_instructions("inworld", SpeechSteeringOptions(pace="normal")) == ""
+    assert steering_instructions("inworld", SpeechSteeringOptions()) == ""
+
+
+def test_steering_resolves_into_template() -> None:
+    from livekit.agents.voice.agent_session import (
+        DEFAULT_EXPRESSIVE_OPTIONS,
+        ExpressiveOptions,
+        NonverbalOptions,
+        SpeechSteeringOptions,
+        resolve_expressive_options,
+    )
+
+    expr = ExpressiveOptions(
+        speech_steering=SpeechSteeringOptions(
+            disfluencies=True, nonverbal_sounds=NonverbalOptions(breathing=True)
+        ),
+        tts_instructions_append="Never mention pricing.",
+    )
+    resolved = resolve_expressive_options(
+        expr, provider_key="inworld", default=DEFAULT_EXPRESSIVE_OPTIONS
+    )
+    body = resolved["tts_instructions_template"].common
+    # base template + steering fragment + user append, in that order
+    base_pos = body.index("{tts.markup.llm_instructions}")
+    steering_pos = body.index("Delivery guidelines:")
+    append_pos = body.index("Never mention pricing.")
+    assert base_pos < steering_pos < append_pos
+    assert '<expr type="sound" label="breathe"/>' in body
+    assert "tts_instructions_append" not in resolved

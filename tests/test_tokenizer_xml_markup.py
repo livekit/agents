@@ -191,18 +191,6 @@ class TestXaiDialect:
         assert pf.convert_markup("xai", raw) == "[laugh] [pause] [long-pause] <whisper>hi</whisper>"
         assert pf.normalize_markup("xai", raw) == raw
 
-    def test_presets_registered_for_xai(self) -> None:
-        from livekit.agents.voice import presets
-        from livekit.agents.voice.agent_session import DEFAULT_EXPRESSIVE_OPTIONS
-
-        for preset in (presets.CUSTOMER_SERVICE, presets.CASUAL):
-            opts = presets.resolve_options(
-                preset, provider_key="xai", default=DEFAULT_EXPRESSIVE_OPTIONS
-            )
-            body = opts["tts_instructions_template"].common
-            # tuned body, not the agnostic default (which has no xai marker reference)
-            assert '<expr type="prosody" label="whisper">' in body
-
 
 # ===========================================================================
 # Batch sentence tokenizer

@@ -84,7 +84,6 @@ if TYPE_CHECKING:
     from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput
     from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
-    from .presets import Preset
     from .transcription.text_transforms import TextTransforms
 
 
@@ -141,23 +140,49 @@ class SessionConnectOptions:
     """Maximum number of consecutive unrecoverable errors from llm or tts."""
 
 
+@dataclass
+class NonverbalOptions:
+    """Non-verbal vocalizations the TTS may produce (sounds that aren't words).
+
+    Fields default to off. Each field may later widen to ``bool | <Sound>Options``
+    (e.g. ``laughing: bool | LaughingOptions``) for per-sound control without
+    breaking existing callers.
+    """
+
+    laughing: bool = False
+    coughing: bool = False
+    breathing: bool = False
+
+
+class SpeechSteeringOptions(TypedDict, total=False):
+    """Steers verbal delivery and non-verbal sounds in generated speech.
+
+    ``nonverbal_sounds`` is atomic: passing it replaces the default value
+    entirely rather than merging field-by-field.
+    """
+
+    disfluencies: bool
+    """Filler words such as "um" / "uh"."""
+    nonverbal_sounds: NonverbalOptions
+    pace: Literal["slow", "normal", "fast"]
+
+
 class ExpressiveOptions(TypedDict, total=False):
     """Configuration for the expressive pipeline (framework-internal, not publicly exposed).
 
     Controls how TTS markup instructions are injected into the LLM when expressive is
     enabled. All keys are optional; common shapes:
 
-    - ``{"preset": Preset.CASUAL}`` — a domain preset, resolved to the active
-      TTS provider's tuned tags (see ``voice.presets``).
-    - ``{"preset": ..., "tts_instructions_append": "..."}`` — a preset plus your own
-      rules appended after it resolves.
+    - ``{"speech_steering": {...}}`` — steer delivery and non-verbal sounds on top of
+      the provider-agnostic default instructions.
     - ``{"tts_instructions_template": "..."}`` — a fully custom prompt.
+    - ``{"tts_instructions_append": "..."}`` — your own rules appended to the template.
 
-    Any explicit template overrides the corresponding part of the resolved preset; unset
-    parts fall back to the resolved preset (or the provider-agnostic default).
+    Any explicit template overrides the default; unset parts fall back to the
+    provider-agnostic default.
     """
 
-    preset: Preset
+    speech_steering: SpeechSteeringOptions
     tts_instructions_template: Instructions | str
     tts_instructions_append: str
 
@@ -169,6 +194,40 @@ DEFAULT_EXPRESSIVE_OPTIONS: ExpressiveOptions = ExpressiveOptions(
         "{tts.markup.llm_instructions}"
     ),
 )
+
+
+def _append_instructions(template: Instructions | str, extra: str) -> Instructions:
+    # concatenate the *raw* template text so any {placeholders} survive until render()
+    if isinstance(template, Instructions):
+        return Instructions(
+            template.common + "\n\n" + extra, audio=template.audio, text=template.text
+        )
+    return Instructions(template + "\n\n" + extra)
+
+
+def resolve_expressive_options(
+    expr: ExpressiveOptions, *, provider_key: str, default: ExpressiveOptions
+) -> ExpressiveOptions:
+    """Resolve a user ``ExpressiveOptions`` to a concrete options dict for a provider.
+
+    Starts from ``default``, renders ``speech_steering`` into per-provider delivery
+    guidelines appended to the template, then applies any explicit
+    ``tts_instructions_template`` override and ``tts_instructions_append`` (last, so
+    the user's free-form rules always win). The returned dict always has
+    ``tts_instructions_template`` and never the helper keys.
+    """
+    from ..tts import _provider_format
+
+    tts_tmpl = expr.get("tts_instructions_template", default["tts_instructions_template"])
+
+    if steering := expr.get("speech_steering"):
+        if fragment := _provider_format.steering_instructions(provider_key, steering):
+            tts_tmpl = _append_instructions(tts_tmpl, fragment)
+
+    if append := expr.get("tts_instructions_append"):
+        tts_tmpl = _append_instructions(tts_tmpl, append)
+
+    return {"tts_instructions_template": tts_tmpl}
 
 
 @dataclass

@@ -2440,18 +2440,17 @@ class AgentActivity(RecognitionHooks):
           it "active" would enable xml-aware chunking with nothing to chunk and
           re-introduce the stray-``<`` streaming stall.
         """
-        from . import presets
-        from .agent_session import DEFAULT_EXPRESSIVE_OPTIONS
+        from .agent_session import DEFAULT_EXPRESSIVE_OPTIONS, resolve_expressive_options
 
         if not isinstance(self.tts, inference.TTS) or self.tts.markup.llm_instructions() is None:
             return None
 
         expr = self._session._expressive
         if isinstance(expr, dict):
-            # a `preset` selector resolves to the active TTS provider's tuned preset
-            # (falling back to the agnostic default); explicit fields override on top
+            # speech_steering renders per-provider delivery guidelines on top of the
+            # provider-agnostic default; explicit templates override
             provider_key = self.tts.markup._provider_key() if self.tts else ""
-            return presets.resolve_options(
+            return resolve_expressive_options(
                 expr, provider_key=provider_key, default=DEFAULT_EXPRESSIVE_OPTIONS
             )
         if expr:
