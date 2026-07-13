@@ -112,7 +112,9 @@ class TTS(tts.TTS):
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
             connect_cb=self._connect_pooled_ws,
             close_cb=self._close_pooled_ws,
-            max_session_duration=3600,
+            # xAI's TTS server enforces an undocumented ~2100s deadline per websocket
+            # connection; stay below it so connections rotate before the server kills them
+            max_session_duration=1800,
             mark_refreshed_on_get=False,
         )
 
