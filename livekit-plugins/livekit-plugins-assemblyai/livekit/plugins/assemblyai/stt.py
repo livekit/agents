@@ -148,14 +148,13 @@ class STT(stt.STT):
             min_turn_silence: Minimum silence in ms before a confident end-of-turn is finalized.
             min_end_of_turn_silence_when_confident: Deprecated. Use min_turn_silence instead.
             continuous_partials: Whether to emit additional partial transcripts during long
-                turns at a steady ~3 second cadence. By default, partials are emitted at
-                two points: one at 750 ms after turn start (configurable via
-                `interruption_delay`), and one each time silence exceeds
-                `min_turn_silence` without ending the turn. When enabled (default in
-                LiveKit; AssemblyAI server defaults to False), additional partials covering
-                the full turn transcript are emitted approximately every 3 seconds while
-                speech continues, on top of those baseline partials. Only supported with
-                the Universal-3 Pro family models.
+                turns at a steady ~3 second cadence, on top of the baseline partials
+                (one at 750 ms after turn start, configurable via `interruption_delay`,
+                and one each time silence exceeds `min_turn_silence` without ending the
+                turn). Leave unset to use AssemblyAI's server defaults: enabled, except
+                when `speaker_labels` is on, where the server disables it so turns break
+                cleanly at speaker changes. Only supported with the Universal-3 Pro
+                family models.
             interruption_delay: How soon the first early partial is emitted, in ms.
                 Range 0–1000, default 500. Lower values produce faster time-to-first-token
                 for barge-in; higher values produce more confident first partials. Only
@@ -238,12 +237,6 @@ class STT(stt.STT):
                         f"The {_param_name!r} parameter is only supported with the "
                         f"{', '.join(_U3_PRO_MODELS)} models."
                     )
-
-        # LiveKit defaults continuous_partials to True (vs. AssemblyAI's server default of
-        # False) for steady-cadence partials. This parameter is only supported for
-        # the Universal-3 Pro family, enforced by the validation above.
-        if not is_given(continuous_partials) and model in _U3_PRO_MODELS:
-            continuous_partials = True
 
         self._base_url = base_url
         assemblyai_api_key = api_key if is_given(api_key) else os.environ.get("ASSEMBLYAI_API_KEY")
