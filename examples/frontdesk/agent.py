@@ -68,13 +68,15 @@ logger = logging.getLogger("front-desk")
 
 
 class FrontDeskAgent(Agent):
-    def __init__(self, *, timezone: str, now: Callable[[], datetime.datetime]) -> None:
+    def __init__(
+        self, *, timezone: str, now: Callable[[], datetime.datetime] | None = None
+    ) -> None:
         self.tz = ZoneInfo(timezone)
         # the calendar's clock, so the agent's sense of "today" matches the
-        # availability it sees (fixed under simulation, wall-clock otherwise).
-        # Exposed to the model through the get_current_time tool rather than baked
-        # into these instructions, keeping the prompt-cache prefix stable.
-        self._now = now
+        # availability it sees. Defaults to wall-clock; the simulation entrypoint
+        # passes the calendar's pinned clock. Exposed to the model via the
+        # get_current_time tool rather than baked into the (cached) instructions.
+        self._now = now or (lambda: datetime.datetime.now(self.tz))
 
         super().__init__(
             instructions=(
