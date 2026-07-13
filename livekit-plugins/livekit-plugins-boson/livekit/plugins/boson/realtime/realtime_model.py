@@ -351,10 +351,13 @@ class RealtimeSession(openai_rt.RealtimeSession):
             )
 
     def _on_session_reconnected(self, _event: llm.RealtimeSessionReconnectedEvent) -> None:
-        # Per-connection state the base _reconnect doesn't know about.
+        # Per-connection state the base _reconnect doesn't know about. Response
+        # ids discarded on the old connection will never see their
+        # response.done, so drop them with it.
         self._pushed_duration_s = 0.0
         self._current_response_id = None
         self._suppress_next_response_cancel = False
+        self._boson_discarded_response_ids.clear()
         logger.info("reconnected to Boson realtime session", extra={"session_id": self._session_id})
 
     def _handle_conversion_item_added(self, event: ConversationItemAdded) -> None:
