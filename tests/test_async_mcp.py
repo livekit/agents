@@ -1,98 +1,92 @@
 from __future__ import annotations
 
+from typing import Any, get_type_hints
+
 import pytest
 
-from livekit.agents.llm.async_toolset import (
-    AsyncToolset,
-    _has_async_context_param,
-    cancel_task,
-    get_running_tasks,
-)
+from livekit.agents.llm.async_toolset import AsyncToolset
 from livekit.agents.llm.mcp import MCPServer, MCPToolset
-from livekit.agents.llm.tool_context import is_raw_function_tool
+from livekit.agents.llm.tool_context import DuplicateMode, ToolFlag, is_raw_function_tool
+from livekit.agents.llm.utils import is_context_type
+from livekit.agents.voice.tool_executor import has_cancellable_tool
+
+pytestmark = pytest.mark.unit
+
+
+class _FakeToolDesc:
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.description = "echo back"
+        self.inputSchema: dict[str, Any] = {"type": "object", "properties": {}}
+        self.meta = None
+
+
+class _FakeListToolsResult:
+    def __init__(self, names: list[str]) -> None:
+        self.tools = [_FakeToolDesc(n) for n in names]
+
+
+class _FakeClient:
+    def __init__(self, names: list[str]) -> None:
+        self._names = names
+
+    async def list_tools(self) -> _FakeListToolsResult:
+        return _FakeListToolsResult(self._names)
 
 
 class _FakeMCPServer(MCPServer):
-    """Minimal MCPServer subclass for tests — no real client streams."""
+    """Minimal MCPServer with a fake client — no real streams or network."""
 
-    def __init__(self) -> None:
+    def __init__(self, tool_names: list[str] | None = None) -> None:
         super().__init__(client_session_timeout_seconds=5)
+        self._client = _FakeClient(tool_names or ["echo"])  # type: ignore[assignment]
 
-    def client_streams(self):  # not used in these tests
+    def client_streams(self):  # type: ignore[no-untyped-def]  # not used in these tests
         raise NotImplementedError
 
 
-def _build_mcp_tool(server: _FakeMCPServer, *, async_mode: bool):
-    """Bypass real client setup; directly call _make_function_tool."""
+def _has_run_context_param(tool: object) -> bool:
+    hints = get_type_hints(tool)
+    return any(is_context_type(h, allow_subclasses=True) for h in hints.values())
+
+
+def _build_mcp_tool(
+    server: _FakeMCPServer, *, nonblocking: bool, on_duplicate: DuplicateMode = "confirm"
+):
     return server._make_function_tool(
         name="echo",
         description="echo back",
         input_schema={"type": "object", "properties": {}},
         meta=None,
-        async_mode=async_mode,
+        nonblocking=nonblocking,
+        on_duplicate=on_duplicate,
     )
 
 
-def test_mcp_toolset_is_async_toolset_subclass():
+def test_mcp_toolset_is_async_toolset_subclass() -> None:
     assert issubclass(MCPToolset, AsyncToolset)
 
 
-def test_mcp_tool_default_signature_has_no_async_context_param():
-    server = _FakeMCPServer()
-    tool = _build_mcp_tool(server, async_mode=False)
+def test_blocking_tool_has_no_run_context_and_is_not_cancellable() -> None:
+    tool = _build_mcp_tool(_FakeMCPServer(), nonblocking=False)
 
     assert is_raw_function_tool(tool)
-    assert not _has_async_context_param(tool)
+    assert not _has_run_context_param(tool)
+    assert ToolFlag.CANCELLABLE not in tool.info.flags
+    # blocking tools always fall back to "allow" — no duplicate management
+    assert tool.info.on_duplicate == "allow"
 
 
-def test_mcp_tool_async_mode_signature_has_async_context_param():
-    server = _FakeMCPServer()
-    tool = _build_mcp_tool(server, async_mode=True)
+def test_nonblocking_tool_has_run_context_and_is_cancellable() -> None:
+    tool = _build_mcp_tool(_FakeMCPServer(), nonblocking=True, on_duplicate="reject")
 
     assert is_raw_function_tool(tool)
-    assert _has_async_context_param(tool)
+    assert _has_run_context_param(tool)
+    assert ToolFlag.CANCELLABLE in tool.info.flags
+    assert tool.info.on_duplicate == "reject"
 
 
-def test_mcp_toolset_blocking_does_not_expose_helper_tools():
-    server = _FakeMCPServer()
-    ts = MCPToolset(id="m", mcp_server=server, nonblocking_tools=False)
-
-    exposed = list(ts.tools)
-    assert get_running_tasks not in exposed
-    assert cancel_task not in exposed
-
-
-def test_mcp_toolset_default_exposes_helper_tools():
-    """Default is nonblocking_tools=True — helpers should be exposed."""
-    server = _FakeMCPServer()
-    ts = MCPToolset(id="m", mcp_server=server)
-
-    exposed = list(ts.tools)
-    assert get_running_tasks in exposed
-    assert cancel_task in exposed
-
-
-def test_mcp_toolset_nonblocking_list_exposes_helper_tools():
-    """A non-empty list also enables async helpers."""
-    server = _FakeMCPServer()
-    ts = MCPToolset(id="m", mcp_server=server, nonblocking_tools=["book_flight"])
-
-    exposed = list(ts.tools)
-    assert get_running_tasks in exposed
-    assert cancel_task in exposed
-
-
-def test_mcp_toolset_empty_list_hides_helper_tools():
-    """An empty list is equivalent to False — no tools are non-blocking."""
-    server = _FakeMCPServer()
-    ts = MCPToolset(id="m", mcp_server=server, nonblocking_tools=[])
-
-    exposed = list(ts.tools)
-    assert get_running_tasks not in exposed
-    assert cancel_task not in exposed
-
-
-def test_mcp_toolset_stores_nonblocking_tools_flag():
+def test_mcp_toolset_stores_nonblocking_tools_flag() -> None:
     server = _FakeMCPServer()
 
     assert MCPToolset(id="a", mcp_server=server)._nonblocking_tools is True
@@ -104,79 +98,72 @@ def test_mcp_toolset_stores_nonblocking_tools_flag():
     )._nonblocking_tools == frozenset({"book_flight", "search"})
 
 
-def test_mcp_server_list_tools_cache_keyed_by_nonblocking_tools():
-    """Switching nonblocking_tools should rebuild the tool list (cache miss)."""
-    server = _FakeMCPServer()
-
-    # Seed the cache as if a prior list_tools call ran with nonblocking_tools=False
-    legacy_tool = _build_mcp_tool(server, async_mode=False)
-    server._lk_tools = [legacy_tool]
-    server._lk_tools_nonblocking = False
-    server._cache_dirty = False
-
-    # Same key — cache hit
-    assert server._lk_tools_nonblocking is False
-
-    # Switching to True invalidates: simulate cache-miss check
-    cache_hit_for_true = (
-        not server._cache_dirty
-        and server._lk_tools is not None
-        and server._lk_tools_nonblocking == True  # noqa: E712
-    )
-    assert cache_hit_for_true is False
-
-    # A different frozenset also invalidates
-    cache_hit_for_set = (
-        not server._cache_dirty
-        and server._lk_tools is not None
-        and server._lk_tools_nonblocking == frozenset({"book_flight"})
-    )
-    assert cache_hit_for_set is False
-
-
 @pytest.mark.asyncio
-async def test_mcp_toolset_setup_wraps_nonblocking_tools():
-    """With nonblocking_tools=True, MCP tools are wrapped — their outer
-    signature is the AsyncToolset wrapper (RunContext, raw_arguments), not the
-    inner AsyncRunContext signature."""
-    server = _FakeMCPServer()
-
-    # Pre-populate the server's cache so setup() bypasses real I/O
-    raw_tool = _build_mcp_tool(server, async_mode=True)
-    server._lk_tools = [raw_tool]
-    server._lk_tools_nonblocking = True
-    server._cache_dirty = False
-
-    class _DummyClient:
-        pass
-
-    server._client = _DummyClient()  # type: ignore[assignment]
-
-    ts = MCPToolset(id="m", mcp_server=server)
+async def test_setup_default_exposes_cancellable_tools() -> None:
+    ts = MCPToolset(id="m", mcp_server=_FakeMCPServer(["echo"]))  # nonblocking_tools=True
     await ts.setup()
 
-    # _tools holds the wrapped tools — outer signature is RunContext
     assert len(ts._tools) == 1
-    assert not _has_async_context_param(ts._tools[0])
+    assert _has_run_context_param(ts._tools[0])
+    assert has_cancellable_tool(ts.tools)
 
 
 @pytest.mark.asyncio
-async def test_mcp_toolset_setup_passes_through_blocking_tools():
-    """With nonblocking_tools=False, tools are not wrapped (no AsyncRunContext to wrap)."""
-    server = _FakeMCPServer()
-
-    raw_tool = _build_mcp_tool(server, async_mode=False)
-    server._lk_tools = [raw_tool]
-    server._lk_tools_nonblocking = False
-    server._cache_dirty = False
-
-    class _DummyClient:
-        pass
-
-    server._client = _DummyClient()  # type: ignore[assignment]
-
-    ts = MCPToolset(id="m", mcp_server=server, nonblocking_tools=False)
+async def test_setup_blocking_has_no_cancellable_tools() -> None:
+    ts = MCPToolset(id="m", mcp_server=_FakeMCPServer(["echo"]), nonblocking_tools=False)
     await ts.setup()
 
-    # _wrap_tool is a no-op for tools without AsyncRunContext, so identity holds
-    assert ts._tools == [raw_tool]
+    assert len(ts._tools) == 1
+    assert not _has_run_context_param(ts._tools[0])
+    assert not has_cancellable_tool(ts.tools)
+
+
+@pytest.mark.asyncio
+async def test_setup_empty_list_is_all_blocking() -> None:
+    ts = MCPToolset(id="m", mcp_server=_FakeMCPServer(["echo"]), nonblocking_tools=[])
+    await ts.setup()
+
+    assert not has_cancellable_tool(ts.tools)
+
+
+@pytest.mark.asyncio
+async def test_setup_named_list_selects_nonblocking_tools() -> None:
+    ts = MCPToolset(
+        id="m",
+        mcp_server=_FakeMCPServer(["get_weather", "book_flight"]),
+        nonblocking_tools=["book_flight"],
+    )
+    await ts.setup()
+
+    by_name = {t.info.name: t for t in ts._tools}
+    assert ToolFlag.CANCELLABLE in by_name["book_flight"].info.flags
+    assert _has_run_context_param(by_name["book_flight"])
+    assert ToolFlag.CANCELLABLE not in by_name["get_weather"].info.flags
+    assert not _has_run_context_param(by_name["get_weather"])
+    assert has_cancellable_tool(ts.tools)
+
+
+@pytest.mark.asyncio
+async def test_list_tools_cache_keyed_by_nonblocking_tools() -> None:
+    server = _FakeMCPServer(["echo"])
+
+    blocking = await server.list_tools(nonblocking_tools=False)
+    # same key → cache hit → same list object
+    assert (await server.list_tools(nonblocking_tools=False)) is blocking
+
+    # different key → cache miss → rebuilt with different behavior
+    nonblocking = await server.list_tools(nonblocking_tools=True)
+    assert nonblocking is not blocking
+    assert ToolFlag.CANCELLABLE in nonblocking[0].info.flags
+    assert ToolFlag.CANCELLABLE not in blocking[0].info.flags
+
+
+@pytest.mark.asyncio
+async def test_list_tools_cache_keyed_by_on_duplicate() -> None:
+    server = _FakeMCPServer(["echo"])
+
+    confirm = await server.list_tools(nonblocking_tools=True, on_duplicate="confirm")
+    reject = await server.list_tools(nonblocking_tools=True, on_duplicate="reject")
+
+    assert reject is not confirm
+    assert reject[0].info.on_duplicate == "reject"

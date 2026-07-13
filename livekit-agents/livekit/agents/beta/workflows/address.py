@@ -11,7 +11,7 @@ from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given
 from ...voice.agent import AgentTask
 from ...voice.events import RunContext
-from .utils import InstructionParts
+from .utils import WorkflowInstructions
 
 if TYPE_CHECKING:
     from ...voice.turn import TurnDetectionMode
@@ -26,7 +26,7 @@ class GetAddressTask(AgentTask[GetAddressResult]):
     def __init__(
         self,
         *,
-        instructions: NotGivenOr[InstructionParts | Instructions | str] = NOT_GIVEN,
+        instructions: NotGivenOr[WorkflowInstructions | Instructions | str] = NOT_GIVEN,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
@@ -36,18 +36,19 @@ class GetAddressTask(AgentTask[GetAddressResult]):
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         require_confirmation: NotGivenOr[bool] = NOT_GIVEN,
+        require_explicit_ask: bool = False,
         # deprecated
         extra_instructions: str = "",
     ) -> None:
         if not is_given(instructions):
-            instructions = InstructionParts(persona=PERSONA, extra=extra_instructions)
+            instructions = WorkflowInstructions(persona=PERSONA, extra=extra_instructions)
         elif extra_instructions:
             logger.warning("`extra_instructions` will be ignored when `instructions` is provided")
 
-        if isinstance(instructions, InstructionParts):
-            instructions = Instructions(INSTRUCTIONS_TEMPLATE).format(
-                persona=instructions.persona if is_given(instructions.persona) else PERSONA,
-                extra=instructions.extra,
+        if isinstance(instructions, WorkflowInstructions):
+            instructions = instructions.resolve(
+                template=INSTRUCTIONS_TEMPLATE,
+                default_persona=PERSONA,
                 _modality_specific=Instructions(audio=AUDIO_SPECIFIC, text=TEXT_SPECIFIC),
                 _confirmation=Instructions(
                     # confirmation is enabled by default for audio, disabled by default for text
@@ -56,12 +57,16 @@ class GetAddressTask(AgentTask[GetAddressResult]):
                 ),
             )
 
-        assert is_given(instructions)  # for type checking
+        assert isinstance(instructions, (str, Instructions))  # for type checking
+        self._current_address = ""
+        self._require_confirmation = require_confirmation
+        self._require_explicit_ask = require_explicit_ask
+
         super().__init__(
             instructions=instructions,
             chat_ctx=chat_ctx,
             turn_detection=turn_detection,
-            tools=tools or [],
+            tools=[*(tools or []), self._build_update_address_tool()],
             stt=stt,
             vad=vad,
             llm=llm,
@@ -69,24 +74,44 @@ class GetAddressTask(AgentTask[GetAddressResult]):
             allow_interruptions=allow_interruptions,
         )
 
-        self._current_address = ""
-        self._require_confirmation = require_confirmation
-
     async def on_enter(self) -> None:
         self.session.generate_reply(instructions="Ask the user to provide their address.")
 
-    @function_tool()
-    async def update_address(
-        self, street_address: str, unit_number: str, locality: str, country: str, ctx: RunContext
-    ) -> str | None:
-        """Update the address provided by the user.
+    def _build_update_address_tool(self) -> llm.FunctionTool:
+        # Built dynamically so we can apply IGNORE_ON_ENTER per-instance
+        # based on require_explicit_ask.
+        flags = ToolFlag.IGNORE_ON_ENTER if self._require_explicit_ask else ToolFlag.NONE
 
-        Args:
-            street_address (str): Dependent on country, may include fields like house number, street name, block, or district
-            unit_number (str): The unit number, for example Floor 1 or Apartment 12. If there is no unit number, return ''
-            locality (str): Dependent on country, may include fields like city, zip code, or province
-            country (str): The country the user lives in spelled out fully
-        """
+        @function_tool(flags=flags)
+        async def update_address(
+            street_address: str,
+            unit_number: str,
+            locality: str,
+            country: str,
+            ctx: RunContext,
+        ) -> str | None:
+            """Update the address provided by the user.
+
+            Args:
+                street_address (str): Dependent on country, may include fields like house number, street name, block, or district
+                unit_number (str): The unit number, for example Floor 1 or Apartment 12. If there is no unit number, return ''
+                locality (str): Dependent on country, may include fields like city, zip code, or province
+                country (str): The country the user lives in spelled out fully
+            """
+            return await self._update_address_impl(
+                street_address, unit_number, locality, country, ctx
+            )
+
+        return update_address
+
+    async def _update_address_impl(
+        self,
+        street_address: str,
+        unit_number: str,
+        locality: str,
+        country: str,
+        ctx: RunContext,
+    ) -> str | None:
         address_fields = (
             [street_address, unit_number, locality, country]
             if unit_number.strip()

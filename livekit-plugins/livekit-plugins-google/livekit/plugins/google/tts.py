@@ -77,7 +77,7 @@ class TTS(tts.TTS):
         model_name: NotGivenOr[GeminiTTSModels | str] = NOT_GIVEN,
         prompt: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: int = 24000,
-        pitch: int = 0,
+        pitch: float = 0,
         effects_profile_id: str = "",
         speaking_rate: float = 1.0,
         volume_gain_db: float = 0.0,

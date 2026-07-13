@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from datetime import timedelta
@@ -17,8 +17,6 @@ from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStre
 from typing_extensions import Self
 
 from ..log import logger
-from .async_toolset import AsyncRunContext, AsyncToolset, cancel_task, get_running_tasks
-from .tool_context import Tool, Toolset
 
 try:
     import httpx
@@ -35,9 +33,13 @@ except ImportError as e:
     ) from e
 
 
+from ..voice.events import RunContext
+from .async_toolset import AsyncToolset
 from .tool_context import (
+    DuplicateMode,
     RawFunctionTool,
     ToolError,
+    ToolFlag,
     function_tool,
     get_function_info,
     get_raw_function_info,
@@ -89,6 +91,7 @@ class MCPServer(ABC):
         self._cache_dirty = True
         self._lk_tools: list[MCPTool] | None = None
         self._lk_tools_nonblocking: bool | frozenset[str] = False
+        self._lk_tools_on_duplicate: DuplicateMode = "allow"
 
         self._client_task: asyncio.Task[None] | None = None
         self._closing_ev = asyncio.Event()
@@ -143,7 +146,10 @@ class MCPServer(ABC):
             self._closing_ev.clear()
 
     async def list_tools(
-        self, *, nonblocking_tools: bool | frozenset[str] = False
+        self,
+        *,
+        nonblocking_tools: bool | frozenset[str] = False,
+        on_duplicate: DuplicateMode = "confirm",
     ) -> list[MCPTool]:
         if self._client is None:
             raise RuntimeError("MCPServer isn't initialized")
@@ -152,6 +158,7 @@ class MCPServer(ABC):
             not self._cache_dirty
             and self._lk_tools is not None
             and self._lk_tools_nonblocking == nonblocking_tools
+            and self._lk_tools_on_duplicate == on_duplicate
         ):
             return self._lk_tools
 
@@ -167,13 +174,15 @@ class MCPServer(ABC):
                 tool.description,
                 tool.inputSchema,
                 tool.meta,
-                async_mode=_is_nonblocking(tool.name),
+                nonblocking=_is_nonblocking(tool.name),
+                on_duplicate=on_duplicate,
             )
             for tool in tools.tools
         ]
 
         self._lk_tools = lk_tools
         self._lk_tools_nonblocking = nonblocking_tools
+        self._lk_tools_on_duplicate = on_duplicate
         self._cache_dirty = False
         return lk_tools
 
@@ -184,7 +193,8 @@ class MCPServer(ABC):
         input_schema: dict[str, Any],
         meta: dict[str, Any] | None,
         *,
-        async_mode: bool = False,
+        nonblocking: bool = False,
+        on_duplicate: DuplicateMode = "allow",
     ) -> MCPTool:
         async def _resolve(
             tool_result: mcp.types.CallToolResult, raw_arguments: dict[str, Any]
@@ -202,10 +212,12 @@ class MCPServer(ABC):
                 resolved = await resolved
             return resolved
 
-        if async_mode:
-
-            async def _tool_called_async(
-                ctx: AsyncRunContext, raw_arguments: dict[str, Any]
+        if nonblocking:
+            # routed through the AsyncToolset executor: MCP progress notifications
+            # become ctx.update() calls, so the first update releases the reply loop
+            # and the tool keeps running in the background until it returns.
+            async def _tool_called_nonblocking(
+                ctx: RunContext, raw_arguments: dict[str, Any]
             ) -> Any:
                 if self._client is None:
                     raise ToolError(
@@ -216,24 +228,26 @@ class MCPServer(ABC):
                 async def _on_progress(
                     progress: float, total: float | None, message: str | None
                 ) -> None:
-                    if message:
-                        logger.debug(
-                            "MCPTool progress callback",
-                            extra={
-                                "tool_name": name,
-                                "progress": progress,
-                                "total": total,
-                                "progress_message": message,
-                            },
-                        )
-                        await ctx.update(message)
+                    if not message:
+                        return
+                    logger.debug(
+                        "MCPTool progress",
+                        extra={
+                            "tool_name": name,
+                            "progress": progress,
+                            "total": total,
+                            "progress_message": message,
+                        },
+                    )
+                    await ctx.update(message)
 
                 tool_result = await self._client.call_tool(
                     name, raw_arguments, progress_callback=_on_progress
                 )
                 return await _resolve(tool_result, raw_arguments)
 
-            impl: Callable[..., Awaitable[Any]] = _tool_called_async
+            impl: Callable[..., Awaitable[Any]] = _tool_called_nonblocking
+            flags = ToolFlag.CANCELLABLE
         else:
 
             async def _tool_called(raw_arguments: dict[str, Any]) -> Any:
@@ -248,6 +262,7 @@ class MCPServer(ABC):
                 return await _resolve(tool_result, raw_arguments)
 
             impl = _tool_called
+            flags = ToolFlag.NONE
 
         raw_schema = {
             "name": name,
@@ -257,7 +272,12 @@ class MCPServer(ABC):
         if meta:
             raw_schema["meta"] = meta
 
-        return function_tool(impl, raw_schema=raw_schema)
+        return function_tool(
+            impl,
+            raw_schema=raw_schema,
+            flags=flags,
+            on_duplicate=on_duplicate if nonblocking else "allow",
+        )
 
     async def aclose(self) -> None:
         self._closing_ev.set()
@@ -416,12 +436,17 @@ class MCPServerHTTP(MCPServer):
             )
 
     async def list_tools(
-        self, *, nonblocking_tools: bool | frozenset[str] = False
+        self,
+        *,
+        nonblocking_tools: bool | frozenset[str] = False,
+        on_duplicate: DuplicateMode = "confirm",
     ) -> list[MCPTool]:
         """
         List tools from the MCP server, filtered by allowed_tools if specified.
         """
-        all_tools = await super().list_tools(nonblocking_tools=nonblocking_tools)
+        all_tools = await super().list_tools(
+            nonblocking_tools=nonblocking_tools, on_duplicate=on_duplicate
+        )
 
         # If no filter is set, return all tools
         if self._allowed_tools is None:
@@ -502,17 +527,17 @@ class MCPToolset(AsyncToolset):
     use by an ``Agent``. On ``setup()``, it connects to the MCP server (if not
     already connected), fetches the available tools, and caches them locally.
 
-    The ``nonblocking_tools`` parameter controls which MCP tools run as
-    background tasks (with :class:`AsyncRunContext` so MCP progress
-    notifications are forwarded via ``ctx.update()``) versus blocking the
-    agent's reply loop until completion:
+    ``nonblocking_tools`` selects which MCP tools run in the background instead of
+    blocking the agent's reply loop until they return. A non-blocking tool forwards
+    the MCP server's progress notifications through ``ctx.update()`` (so the agent
+    can narrate progress) and is cancellable via ``lk_agents_cancel_task``:
 
-    * ``True`` (default) — all MCP tools are non-blocking.
-    * ``False`` — all MCP tools block.
+    * ``True`` (default) — every MCP tool is non-blocking.
+    * ``False`` — every MCP tool blocks.
     * ``list[str]`` — only the named tools are non-blocking; the rest block.
 
-    When at least one tool is non-blocking, the toolset also exposes
-    ``get_running_tasks`` and ``cancel_task`` to the LLM.
+    When at least one tool is non-blocking, ``lk_agents_get_running_tasks`` and
+    ``lk_agents_cancel_task`` are exposed to the LLM automatically.
     """
 
     def __init__(
@@ -521,26 +546,18 @@ class MCPToolset(AsyncToolset):
         id: str,
         mcp_server: MCPServer,
         nonblocking_tools: bool | list[str] = True,
-        on_duplicate_call: AsyncToolset.DuplicateMode = "confirm",
+        on_duplicate: DuplicateMode = "confirm",
     ) -> None:
-        super().__init__(id=id, on_duplicate_call=on_duplicate_call)
+        super().__init__(id=id)
         self._mcp_server = mcp_server
         self._nonblocking_tools: bool | frozenset[str] = (
             nonblocking_tools
             if isinstance(nonblocking_tools, bool)
             else frozenset(nonblocking_tools)
         )
+        self._on_duplicate: DuplicateMode = on_duplicate
         self._initialized = False
         self._lock = asyncio.Lock()
-
-    @property
-    def tools(self) -> Sequence[Tool | Toolset]:
-        # Only expose the AsyncToolset helper tools when at least one MCP tool
-        # runs non-blocking; otherwise the LLM would see `get_running_tasks` /
-        # `cancel_task` without anything to manage.
-        if self._nonblocking_tools:
-            return [*self._tools, get_running_tasks, cancel_task]
-        return list(self._tools)
 
     async def setup(self, *, reload: bool = False) -> Self:
         """Initialize the MCP server connection and fetch available tools.
@@ -563,8 +580,11 @@ class MCPToolset(AsyncToolset):
             elif reload:
                 self._mcp_server.invalidate_cache()
 
-            tools = await self._mcp_server.list_tools(nonblocking_tools=self._nonblocking_tools)
-            self._tools = [self._wrap_tool(tool) for tool in tools]
+            tools = await self._mcp_server.list_tools(
+                nonblocking_tools=self._nonblocking_tools,
+                on_duplicate=self._on_duplicate,
+            )
+            self._tools = list(tools)
             self._initialized = True
             return self
 

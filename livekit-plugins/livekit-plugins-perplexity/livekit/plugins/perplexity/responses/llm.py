@@ -14,7 +14,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 from livekit.plugins import openai
 
-from ..models import PerplexityChatModels
+from ..models import PerplexityResponsesModels
 from ..version import __version__
 
 PERPLEXITY_RESPONSES_BASE_URL = "https://api.perplexity.ai/v1"
@@ -50,7 +50,7 @@ class LLM(openai.responses.LLM):
     def __init__(
         self,
         *,
-        model: str | PerplexityChatModels = "sonar-pro",
+        model: str | PerplexityResponsesModels = "perplexity/sonar",
         api_key: str | None = None,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         user: NotGivenOr[str] = NOT_GIVEN,

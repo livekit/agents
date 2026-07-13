@@ -14,7 +14,7 @@ from livekit.agents import (
 
 from .errors import AnamException
 from .log import logger
-from .types import PersonaConfig
+from .types import PersonaConfig, SessionOptions
 
 DEFAULT_API_URL = "https://api.anam.ai"
 
@@ -62,15 +62,24 @@ class AnamAPI:
             await self._session.close()
 
     async def create_session_token(
-        self, persona_config: PersonaConfig, livekit_url: str, livekit_token: str
+        self,
+        persona_config: PersonaConfig,
+        livekit_url: str,
+        livekit_token: str,
+        session_options: SessionOptions | None = None,
     ) -> str:
         """
         Creates a session token to authorize starting an engine session.
 
+        Args:
+            session_options: Optional per-session output options (e.g. explicit
+                video dimensions) forwarded to Anam as ``sessionOptions``. When
+                ``None``, Anam uses the avatar model's default output.
+
         Returns:
             The created session token (a JWT string).
         """
-        persona_config_payload = {
+        persona_config_payload: dict[str, Any] = {
             "type": "ephemeral",
             "name": persona_config.name,
             "avatarId": persona_config.avatarId,
@@ -80,13 +89,39 @@ class AnamAPI:
         if persona_config.avatarModel:
             persona_config_payload["avatarModel"] = persona_config.avatarModel
 
-        payload = {
+        if persona_config.directorNotes is not None:
+            # drop unset (None) ones so Anam falls back to its model/cue defaults.
+            director_notes = {
+                k: v for k, v in vars(persona_config.directorNotes).items() if v is not None
+            }
+            if director_notes:
+                persona_config_payload["directorNotes"] = director_notes
+
+        payload: dict[str, Any] = {
             "personaConfig": persona_config_payload,
         }
         payload["environment"] = {
             "livekitUrl": livekit_url,
             "livekitToken": livekit_token,
         }
+
+        if session_options is not None and (
+            session_options.video_width is not None or session_options.video_height is not None
+        ):
+            # Anam's public API speaks camelCase pixel dimensions and wants them
+            # as a matched pair: it rejects a lone width/height (and any
+            # unsupported pair) with an HTTP 400, surfaced below as
+            # APIStatusError, rather than downgrading. Fail fast on a half pair
+            # rather than round-tripping a 400.
+            if session_options.video_width is None or session_options.video_height is None:
+                raise ValueError(
+                    "video_width and video_height must be set together (both or neither)"
+                )
+            payload["sessionOptions"] = {
+                "videoWidth": session_options.video_width,
+                "videoHeight": session_options.video_height,
+            }
+
         headers = {
             "Authorization": f"Bearer {self._api_key}",  # Use API Key here
             "Content-Type": "application/json",

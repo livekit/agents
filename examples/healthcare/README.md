@@ -1,6 +1,6 @@
 # Healthcare Example
 
-A full healhcare assistant providing secure appointment management, billing handling, and lab result retrieval.
+A full healhcare assistant providing secure appointment management and billing handling.
 
 For setup instructions and more details, see the [main examples README](https://github.com/livekit/agents/blob/main/examples/README.md).
 
@@ -38,9 +38,3 @@ https://github.com/livekit/agents/blob/8283a5a5c9863a07bcf030ee90e8ab780e1e569b/
 
 `GetCreditCardTask()` is showcased here. The user's details are verified, and a balance is generated and connected to their profile.
 https://github.com/livekit/agents/blob/8283a5a5c9863a07bcf030ee90e8ab780e1e569b/examples/healthcare/healthcare_agent.py#L734-L748
-
-### Lab Result Retrieval
-
-We use OpenAI's provider tool, `FileSearch`, to read through an uploaded lab report (mock_checkup_report.pdf). 
-https://github.com/livekit/agents/blob/8283a5a5c9863a07bcf030ee90e8ab780e1e569b/examples/healthcare/healthcare_agent.py#L734-L780
-

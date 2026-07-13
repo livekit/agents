@@ -20,11 +20,39 @@ make check            # Run all checks (format-check, lint, type-check)
 
 ### Testing
 ```bash
-uv run pytest                           # Run all tests
+uv run pytest --unit                    # Run all unit tests
 uv run pytest tests/test_tools.py       # Run a single test file
-uv run pytest tests/test_tools.py -k "test_name"  # Run specific test
-cd tests && make unit-tests             # Run unit tests that doesn't require cloud accounts
+make unit-tests                         # Run unit tests that don't require cloud accounts
 ```
+
+#### Test categories
+
+Every test module declares exactly one category via a module-level marker, and
+each category has a matching `--<category>` selection flag. Selection happens
+*before* import, so a category run never imports (or fails on) modules outside
+it.
+
+| Marker | Flag | Meaning |
+|--------|------|---------|
+| `pytest.mark.unit` | `--unit` | fast, hermetic, no external providers/credentials/network |
+| `pytest.mark.audio_eot` | `--audio_eot` | hermetic audio end-of-turn / turn-detection suite |
+| `pytest.mark.plugin("name")` | `--plugin [name]` | provider integration test (needs that provider's deps/keys) |
+| `pytest.mark.stt` | `--stt` | cross-provider speech-to-text suite (`tests/test_stt.py`) |
+| `pytest.mark.tts` | `--tts` | cross-provider text-to-speech suite (`tests/test_tts.py`) |
+| `pytest.mark.realtime("name")` | `--realtime [name]` | realtime-model test |
+| `pytest.mark.evals` | `--evals` | behavioral evals against the LiveKit inference gateway |
+| `pytest.mark.docs` | `--docs` | tests for the docs-build tooling under `.github/` |
+
+```bash
+uv run pytest --unit                    # the CI unit gate (no cloud accounts)
+uv run pytest --plugin openai           # only the openai provider tests
+uv run pytest --list-categories         # list every module grouped by category, then exit
+```
+
+**Adding a test:** give the new module a category marker (`pytestmark =
+pytest.mark.unit`, etc.) — collection fails with a hint if it lacks one. Run
+pytest with the `--allow-uncategorized` option to temporarily disable this rule
+(CI keeps it on by default).
 
 ### Running Agents
 ```bash

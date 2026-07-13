@@ -3,6 +3,21 @@
 
 Auto-discovers all plugin packages in livekit-plugins/ and runs mypy on them.
 Uses mypy's incremental mode (.mypy_cache) for fast re-checks after the first run.
+Passes given arguments to mypy. Arguments after `--` passed to `uv run`.
+
+Third-party type stubs are declared in the `typing` dependency group in
+pyproject.toml and locked in uv.lock. We intentionally do NOT use
+`mypy --install-types`: it requires pip, installs unpinned stubs,
+and requires a forward pass in most cases.
+
+When a dependency introduces a stub not declared yet, mypy records
+the complete set of stub packages it wants in `.mypy_cache/missing_stubs`,
+the same list `--install-types` consumes.
+See https://github.com/python/mypy/issues/10600#issuecomment-2481074163.
+
+We read that file for the full set, then fail with the
+exact `uv add` command to declare and lock them. The script never installs stubs
+itself, so every run is a single deterministic pass..
 """
 
 import subprocess
@@ -16,20 +31,17 @@ EXCLUDED_PLUGINS = [
     "rtzr",
 ]
 
-_TYPES_MARKER = ".mypy_cache/.types_installed"
+# mypy records the full set of stub packages it wants here, one per line.
+_MISSING_STUBS = ".mypy_cache/missing_stubs"
 
 
-def _run_or_exit(cmd: list[str], cwd: Path, label: str) -> None:
-    result = subprocess.run(cmd, capture_output=True, cwd=cwd)
-    if result.returncode != 0:
-        stdout = result.stdout.decode("utf-8").rstrip()
-        stderr = result.stderr.decode("utf-8").rstrip()
-        if stdout:
-            print(stdout, file=sys.stderr)
-        if stderr:
-            print(stderr, file=sys.stderr)
-        print(f"{label} failed (exit code {result.returncode})", file=sys.stderr)
-        sys.exit(result.returncode)
+INSTALL_STUBS_MESSAGE = """
+check_types: mypy needs type stubs that aren't currently installed.
+
+Make sure to add them to the `typing` group and lock them with:
+
+    uv add --group typing {}
+"""
 
 
 def get_packages(repo_root: Path) -> list[str]:
@@ -49,57 +61,53 @@ def get_packages(repo_root: Path) -> list[str]:
     return packages
 
 
-def ensure_types_installed(repo_root: Path, pkg_args: list[str]) -> None:
-    """Install missing type stubs, re-running only when uv.lock has changed."""
-    marker = repo_root / _TYPES_MARKER
-    lock_file = repo_root / "uv.lock"
-
-    marker_mtime = marker.stat().st_mtime if marker.exists() else 0.0
-    lock_mtime = lock_file.stat().st_mtime if lock_file.exists() else 0.0
-
-    if marker_mtime >= lock_mtime > 0:
-        return
-
-    # Ensure pip is available (required for mypy --install-types)
-    _run_or_exit(["uv", "pip", "install", "pip"], repo_root, "pip install")
-
-    # mypy --install-types installs type stubs but also runs the type checker (doubled runtime)
-    # https://github.com/python/mypy/issues/10600
-    _run_or_exit(
-        [
-            "uv",
-            "run",
-            "mypy",
-            "--install-types",
-            "--non-interactive",
-            "--untyped-calls-exclude=smithy_aws_core",
-            *pkg_args,
-        ],
-        repo_root,
-        "mypy install types",
-    )
-
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.touch()
+def read_missing_stubs(repo_root: Path) -> list[str]:
+    """The full stub-package list mypy recorded in .mypy_cache/missing_stubs."""
+    marker = repo_root / _MISSING_STUBS
+    if not marker.exists():
+        return []
+    return sorted(set(map(str.strip, marker.read_text().splitlines())))
 
 
 def main() -> None:
+    """
+    Command:
+        `python scripts/check_types.py --verbose -- --no-sync`
+    Translates to:
+        `uv run --no-sync mypy ... --verbose`
+    """
     repo_root = Path(__file__).parent.parent
     packages = get_packages(repo_root)
+
+    try:
+        mypy_args_end = sys.argv.index("--")
+    except ValueError:
+        mypy_args, uv_run_args = sys.argv[1:], []
+    else:
+        mypy_args, uv_run_args = sys.argv[1:mypy_args_end], sys.argv[mypy_args_end + 1 :]
 
     pkg_args: list[str] = []
     for pkg in packages:
         pkg_args.extend(["-p", pkg])
 
-    ensure_types_installed(repo_root, pkg_args)
-
-    # mypy's incremental mode reads/writes .mypy_cache and skips unchanged
-    # modules, making the second and subsequent runs much faster (~1s vs 30s+).
-    _run_or_exit(
-        ["uv", "run", "mypy", "--untyped-calls-exclude=smithy_aws_core", *pkg_args],
-        repo_root,
+    command = [
+        "uv",
+        "run",
+        "--group",
+        "typing",
+        *uv_run_args,
         "mypy",
-    )
+        "--untyped-calls-exclude=smithy_aws_core",
+        *pkg_args,
+        *mypy_args,
+    ]
+    print(*command, "\n")
+    returncode = subprocess.run(command, cwd=repo_root).returncode
+
+    if returncode and (missing := read_missing_stubs(repo_root)):
+        print(INSTALL_STUBS_MESSAGE.format(" ".join(missing)), file=sys.stderr)
+
+    sys.exit(returncode)
 
 
 if __name__ == "__main__":

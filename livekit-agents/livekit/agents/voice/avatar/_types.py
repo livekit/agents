@@ -93,16 +93,6 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
                 "release resources when the job shuts down"
             )
 
-        if agent_session._started and (audio_output := agent_session.output.audio) is not None:
-            logger.warning(
-                (
-                    "AvatarSession.start() was called after AgentSession.start(); "
-                    "the existing audio output may be replaced by the avatar. "
-                    "Please start the avatar session before AgentSession.start() to avoid this."
-                ),
-                extra={"audio_output": audio_output.label},
-            )
-
         self._room = room
         self._agent_session = agent_session
         self._agent_session.on("conversation_item_added", self._on_conversation_item_added)
@@ -112,7 +102,41 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
         else:
             self._room.on("connection_state_changed", self._on_connection_state_changed)
 
+    async def wait_for_join(self, *, timeout: float | None = 30.0) -> None:
+        """Wait until the avatar participant has joined the room and
+        published its video track.
+
+        Raises ``asyncio.TimeoutError`` if it doesn't arrive within
+        ``timeout`` seconds. Pass ``timeout=None`` to wait indefinitely.
+        """
+        if self._wait_avatar_join_task is None:
+            # TODO(long): fix when this called before the room is connected
+            return
+        if timeout is None:
+            await self._wait_avatar_join_task
+            return
+        await asyncio.wait_for(asyncio.shield(self._wait_avatar_join_task), timeout=timeout)
+
     async def aclose(self) -> None:
+        if self._room is not None and self._room.isconnected():
+            job_ctx = get_job_context(required=False)
+            if job_ctx is not None:
+                try:
+                    from livekit import api
+
+                    await job_ctx.api.room.remove_participant(
+                        api.RoomParticipantIdentity(
+                            room=self._room.name,
+                            identity=self.avatar_identity,
+                        )
+                    )
+                except Exception:
+                    logger.warning(
+                        "failed to remove avatar participant",
+                        extra={"identity": self.avatar_identity},
+                        exc_info=True,
+                    )
+
         if self._agent_session:
             self._agent_session.off("conversation_item_added", self._on_conversation_item_added)
             self._agent_session = None

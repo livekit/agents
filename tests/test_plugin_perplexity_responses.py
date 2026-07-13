@@ -5,6 +5,8 @@ import pytest
 from livekit.plugins.perplexity import __version__, responses
 from livekit.plugins.perplexity.responses.llm import PERPLEXITY_RESPONSES_BASE_URL
 
+pytestmark = pytest.mark.plugin("perplexity")
+
 
 def test_default_model_base_url_and_transport(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PERPLEXITY_API_KEY", "test-key")

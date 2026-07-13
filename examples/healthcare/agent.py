@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -7,7 +8,6 @@ from typing import Annotated
 
 from dotenv import load_dotenv
 from fake_database import FakeDatabase
-from openai import AsyncOpenAI
 from pydantic import Field
 
 from livekit.agents import (
@@ -33,7 +33,7 @@ from livekit.agents.beta.workflows import (
     WarmTransferTask,
 )
 from livekit.agents.llm import ToolError, function_tool
-from livekit.plugins import openai, silero
+from livekit.agents.voice import UserStateChangedEvent
 
 logger = logging.getLogger("HealthcareAgent")
 
@@ -53,9 +53,6 @@ GLOBAL_INSTRUCTIONS = "Be succinct and to the point when assisting the user. Nev
 class UserData:
     database: FakeDatabase
     profile: dict | None
-    oai_client: AsyncOpenAI | None = None
-    vector_store_id: str | None = None
-    file_id: str | None = None
 
 
 @dataclass
@@ -183,7 +180,7 @@ _MODIFY_APPT_TEXT_SPECIFIC = (
 _HEALTHCARE_AGENT_BASE_INSTRUCTIONS = (
     "You are a healthcare agent offering assistance to users. Maintain a friendly disposition. "
     "If the user refuses to provide any requested information or does not cooperate, call EndCallTool.\n"
-    "Before scheduling/modifying appointments and retrieving lab results, you will be authenticating the user's information and checking for an existing profile. "
+    "Before scheduling/modifying appointments, you will be authenticating the user's information and checking for an existing profile. "
     "Do not preemptively ask for information (ex. birthday) unless instructed to.\n"
     "Call 'schedule_appointment' to schedule a new appointment. If the user requests to reschedule or cancel their appointment, call 'modify_appointment'.\n"
     "{modality_specific}\n" + GLOBAL_INSTRUCTIONS
@@ -568,7 +565,11 @@ class HealthcareAgent(Agent):
 
     async def on_enter(self) -> None:
         await self.session.generate_reply(
-            instructions="Greet the user and gather the reason for their call."
+            instructions=(
+                "Warmly welcome the user to the healthcare clinic and ask how you can help "
+                'them today, e.g. "Welcome to the healthcare clinic, how can I help you?" '
+                "Then gather the reason for their call."
+            )
         )
 
     async def task_completed_callback(self, event, task_group):
@@ -691,40 +692,6 @@ class HealthcareAgent(Agent):
         return confirmation_message
 
     @function_tool()
-    async def retrieve_lab_results(self):
-        """Call if the user wishes to see their latest lab results"""
-        await self.profile_authenticator()
-
-        userdata = self.session.userdata
-        if userdata.oai_client is None:
-            pdf_path = os.path.join(os.path.dirname(__file__), "mock_checkup_report.pdf")
-            if not os.path.isfile(pdf_path):
-                logger.warning(
-                    "To try out this task, 'mock_checkup_report.pdf' must be in the same directory as agent.py."
-                )
-                return "No report was found"
-            await self.session.generate_reply(
-                instructions="Inform the user you are fetching their report."
-            )
-            userdata.oai_client = AsyncOpenAI()
-            vector_store = await userdata.oai_client.vector_stores.create(name="lab_reports")
-            userdata.vector_store_id = vector_store.id
-            with open(pdf_path, "rb") as f:
-                file = await userdata.oai_client.files.create(file=f, purpose="assistants")
-            userdata.file_id = file.id
-            await userdata.oai_client.vector_stores.files.create_and_poll(
-                vector_store_id=userdata.vector_store_id, file_id=userdata.file_id
-            )
-
-            filesearch_tool = openai.tools.FileSearch(vector_store_ids=[userdata.vector_store_id])
-            current_tools = [t for t in self.tools if not isinstance(t, openai.tools.FileSearch)]
-            current_tools.append(filesearch_tool)
-            await self.update_tools(current_tools)
-        await self.session.generate_reply(
-            instructions="You now are able to access the user's report, invite any queries regarding it. Keep descriptions short and succinct unless requested otherwise."
-        )
-
-    @function_tool()
     async def retrieve_available_doctors(self) -> None:
         """Call if the user inquires about the available doctors in the network"""
         await self.session.generate_reply(
@@ -790,28 +757,39 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         userdata=userdata,
         stt=inference.STT("deepgram/nova-3", language="multi"),
-        llm=openai.responses.LLM(),
-        tts=inference.TTS("inworld/inworld-tts-1"),
-        vad=silero.VAD.load(),
+        llm=inference.LLM("google/gemma-4-31b-it"),
+        tts=inference.TTS(
+            "inworld/inworld-tts-2",
+            voice="Luna",
+            extra_kwargs={"delivery_mode": "CREATIVE", "speaking_rate": 1.1},
+        ),
         preemptive_generation=True,
+        # Flip user_state to "away" after 10s of mutual silence so we can
+        # check whether they're still there (default is 15s).
+        user_away_timeout=10.0,
     )
 
-    async def on_session_close() -> None:
-        if userdata.oai_client is None:
-            return
-        try:
-            if userdata.vector_store_id is not None:
-                await userdata.oai_client.vector_stores.delete(userdata.vector_store_id)
-        except Exception:
-            logger.exception("failed to delete vector store")
-        try:
-            if userdata.file_id is not None:
-                await userdata.oai_client.files.delete(userdata.file_id)
-        except Exception:
-            logger.exception("failed to delete file")
-        await userdata.oai_client.close()
+    idle_task: asyncio.Task[None] | None = None
 
-    ctx.add_shutdown_callback(on_session_close)
+    async def _nudge_while_idle() -> None:
+        # Nudge every 10s until the user speaks again — speaking flips
+        # user_state out of "away", which cancels this task below.
+        while True:
+            logger.info("user idle — checking if they're still there")
+            await session.generate_reply(
+                instructions="The user has been idle, see if they're still there"
+            )
+            await asyncio.sleep(10)
+
+    @session.on("user_state_changed")
+    def _on_user_state_changed(ev: UserStateChangedEvent) -> None:
+        nonlocal idle_task
+        if ev.new_state == "away":
+            if idle_task is None or idle_task.done():
+                idle_task = asyncio.create_task(_nudge_while_idle())
+        elif idle_task is not None:
+            idle_task.cancel()
+            idle_task = None
 
     await session.start(
         agent=HealthcareAgent(database=db),

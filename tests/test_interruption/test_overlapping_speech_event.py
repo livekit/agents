@@ -1,6 +1,9 @@
 import numpy as np
+import pytest
 
 from livekit.agents.inference import OverlappingSpeechEvent
+
+pytestmark = pytest.mark.unit
 
 
 def test_interruption_event_serialization() -> None:

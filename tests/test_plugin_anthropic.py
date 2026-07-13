@@ -3,6 +3,12 @@
 from __future__ import annotations
 
 import httpx
+import pytest
+
+from livekit.agents import APIConnectOptions, llm
+from livekit.plugins.anthropic.llm import LLMStream
+
+pytestmark = pytest.mark.plugin("anthropic")
 
 
 def _make_llm(**kwargs):
@@ -57,3 +63,47 @@ class TestHttpxTimeoutCustom:
         # timeout= argument should have no effect here
         llm = _make_llm(client=tight_client, timeout=httpx.Timeout(5.0, read=999.0))
         assert llm._client._client.timeout.read == 1.0
+
+
+class _EmptyAnthropicStream:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        raise StopAsyncIteration
+
+
+class TestAnthropicStreamRetry:
+    @pytest.mark.asyncio
+    async def test_retry_creates_a_fresh_stream_awaitable(self) -> None:
+        calls = 0
+
+        async def failing_stream():
+            raise RuntimeError("transient connect failure")
+
+        async def empty_stream():
+            return _EmptyAnthropicStream()
+
+        def create_stream():
+            nonlocal calls
+            calls += 1
+            return failing_stream() if calls == 1 else empty_stream()
+
+        stream = LLMStream(
+            _make_llm(),
+            create_anthropic_stream=create_stream,
+            chat_ctx=llm.ChatContext.empty(),
+            tools=[],
+            conn_options=APIConnectOptions(max_retry=1, retry_interval=0),
+        )
+
+        response = await stream.collect()
+
+        assert calls == 2
+        assert response.usage is not None

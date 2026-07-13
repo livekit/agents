@@ -40,7 +40,7 @@ available through the `perplexity.responses` submodule.
 from livekit.plugins import perplexity
 
 llm = perplexity.responses.LLM(
-    model="sonar-pro",
+    model="perplexity/sonar",
     # api_key picked up from PERPLEXITY_API_KEY if omitted
 )
 ```

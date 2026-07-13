@@ -33,6 +33,7 @@ from openai.types.responses import (
     ResponseFailedEvent,
     ResponseInputParam,
     ResponseOutputItemDoneEvent,
+    ResponseOutputMessage,
     ResponseTextDeltaEvent,
     ToolParam,
     response_create_params,
@@ -42,6 +43,7 @@ from openai.types.shared_params import ResponsesModel
 
 from ..log import logger
 from ..models import _supports_reasoning_effort
+from ..tools import OpenAITool
 
 ServiceTier = Literal["auto", "default", "flex", "scale", "priority"]
 Verbosity = Literal["low", "medium", "high"]
@@ -93,7 +95,19 @@ class _ResponsesWebsocket:
     async def generate_response(self, msg: dict) -> AsyncGenerator[dict, None]:
         def _default(o: object) -> object:
             if isinstance(o, openai.BaseModel):
-                return o.model_dump(mode="json")
+                # exclude_none is load-bearing, not cosmetic. This hand-rolled WS
+                # transport serializes request models itself instead of going
+                # through the openai SDK (which omits unset fields). Without
+                # exclude_none, every Optional field the model defaults to None
+                # is emitted as an explicit `null` on the wire. The Responses API
+                # rejects explicit nulls on fields that expect an enum: e.g. after
+                # openai-python added `Reasoning.mode` (default None), a plain
+                # `Reasoning(effort=...)` began serializing `"mode": null`, which
+                # the API 400s with "Invalid type for 'reasoning.mode': expected
+                # one of 'standard' or 'pro', but got null instead." Omitting None
+                # mirrors the SDK's on-the-wire shape and is forward-compatible
+                # with future Optional additions to these models.
+                return o.model_dump(mode="json", exclude_none=True)
             raise TypeError(f"unexpected type {type(o)}")
 
         try:
@@ -151,6 +165,10 @@ class _LLMOptions:
 
 
 class LLM(llm.LLM):
+    # the plugin's ProviderTool subclass; subclasses (e.g. xAI) override this so server-side
+    # provider tools are recognized when serializing the request. See to_responses_fnc_ctx.
+    _provider_tool_type: type[llm.ProviderTool] = OpenAITool
+
     def __init__(
         self,
         *,
@@ -180,7 +198,7 @@ class LLM(llm.LLM):
         super().__init__()
 
         if not is_given(reasoning) and _supports_reasoning_effort(model):
-            if model in ["gpt-5.1", "gpt-5.2", "gpt-5.4"]:
+            if model in ["gpt-5.1", "gpt-5.2", "gpt-5.4", "gpt-5.4-mini"]:
                 reasoning = Reasoning(effort="none")
             else:
                 reasoning = Reasoning(effort="minimal")
@@ -406,7 +424,9 @@ class LLMStream(llm.LLMStream):
         tool_schemas = cast(
             list[ToolParam],
             self._tool_ctx.parse_function_tools(
-                "openai.responses", strict=self._strict_tool_schema
+                "openai.responses",
+                strict=self._strict_tool_schema,
+                provider_tool_type=self._llm._provider_tool_type,
             ),
         )
 
@@ -488,7 +508,14 @@ class LLMStream(llm.LLMStream):
 
         event_type = event.get("type", "")
         if event_type == "error":
-            return ResponseErrorEvent.model_validate({**event.get("error", {}), **event})
+            # Top-level protocol error frames (e.g. a request-validation 400) do
+            # NOT carry `sequence_number`, which ResponseErrorEvent marks required.
+            # Validating them as-is raises a pydantic ValidationError that masks
+            # the real API message ("... 1 validation error ... sequence_number
+            # Field required ..."). Default the field so the genuine error
+            # surfaces as a clean APIStatusError via _handle_error instead.
+            merged = {"sequence_number": -1, **event.get("error", {}), **event}
+            return ResponseErrorEvent.model_validate(merged)
         elif event_type == "response.created":
             return ResponseCreatedEvent.model_validate(event)
         elif event_type == "response.output_item.done":
@@ -540,6 +567,21 @@ class LLMStream(llm.LLMStream):
         self._response_id = event.response.id
 
     def _handle_response_completed(self, event: ResponseCompletedEvent) -> llm.ChatChunk | None:
+        for item in event.response.output:
+            # Every item.type is a discriminator of openai's ResponseOutputItem union.
+            # Of those, only these are produced/consumed by the agent itself; all other
+            # members of the union are tools the Responses API runs server-side (e.g.
+            # openai web_search, xAI web_search and x_search's custom_tool_call subcalls),
+            # so anything not in this set is a provider-executed tool.
+            if item.type not in ("message", "reasoning", "function_call", "function_call_output"):
+                logger.info(
+                    "provider tool executed",
+                    extra={
+                        "tool_type": item.type,
+                        "result": item.model_dump(exclude_none=True),
+                    },
+                )
+
         self._response_completed = True
         self._llm._prev_chat_ctx = self._full_chat_ctx
         self._llm._prev_resp_id = self._response_id
@@ -579,6 +621,17 @@ class LLMStream(llm.LLMStream):
                 ),
             )
             self._pending_tool_calls.add(event.item.call_id)
+        elif isinstance(event.item, ResponseOutputMessage) and event.item.phase is not None:
+            # Models like gpt-5.3-codex label assistant messages as intermediate
+            # `commentary` or the `final_answer`
+            chunk = llm.ChatChunk(
+                id=self._response_id,
+                delta=llm.ChoiceDelta(
+                    role="assistant",
+                    content=None,
+                    extra={"openai": {"phase": event.item.phase}},
+                ),
+            )
         return chunk
 
     def _handle_response_output_text_delta(

@@ -210,6 +210,12 @@ SarvamTTSSpeakers = Literal[
     # bulbul:v3-beta International
     "amelia",
     "sophia",
+    # bulbul:v3
+    "suhani",
+    "rupali",
+    "tanya",
+    "shruti",
+    "kavitha",
 ]
 
 # Model-Speaker compatibility mapping
@@ -290,6 +296,11 @@ MODEL_SPEAKER_COMPATIBILITY = {
             "roopa",
             "amelia",
             "sophia",
+            "suhani",
+            "rupali",
+            "tanya",
+            "shruti",
+            "kavitha",
         ],
         "male": [
             "shubh",
@@ -333,6 +344,11 @@ MODEL_SPEAKER_COMPATIBILITY = {
             "advait",
             "amelia",
             "sophia",
+            "suhani",
+            "rupali",
+            "tanya",
+            "shruti",
+            "kavitha",
         ],
     },
 }

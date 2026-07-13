@@ -139,10 +139,17 @@ class LLM(llm.LLM):
         if is_given(self._opts.model):
             opts["modelId"] = self._opts.model
 
-        def _get_tool_config() -> dict[str, Any] | None:
-            nonlocal tool_choice
+        effective_tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
 
+        def _get_tool_config() -> dict[str, Any] | None:
             if not tools:
+                return None
+
+            # Bedrock's toolChoice only accepts auto/any/tool — no "none" equivalent.
+            # When the caller wants no tools for this turn, drop toolConfig entirely;
+            # orphan toolUse/toolResult blocks in history are stripped below so
+            # Bedrock doesn't reject the request.
+            if is_given(effective_tool_choice) and effective_tool_choice == "none":
                 return None
 
             tools_list = llm.ToolContext(tools).parse_function_tools("aws")
@@ -150,22 +157,26 @@ class LLM(llm.LLM):
                 tools_list.append({"cachePoint": {"type": "default"}})
 
             tool_config: dict[str, Any] = {"tools": tools_list}
-            tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
-            if is_given(tool_choice):
-                if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
-                    tool_config["toolChoice"] = {"tool": {"name": tool_choice["function"]["name"]}}
-                elif tool_choice == "required":
+            if is_given(effective_tool_choice):
+                if (
+                    isinstance(effective_tool_choice, dict)
+                    and effective_tool_choice.get("type") == "function"
+                ):
+                    tool_config["toolChoice"] = {
+                        "tool": {"name": effective_tool_choice["function"]["name"]}
+                    }
+                elif effective_tool_choice == "required":
                     tool_config["toolChoice"] = {"any": {}}
-                elif tool_choice == "auto":
+                elif effective_tool_choice == "auto":
                     tool_config["toolChoice"] = {"auto": {}}
-                else:
-                    return None
 
             return tool_config
 
         tool_config = _get_tool_config()
         if tool_config:
             opts["toolConfig"] = tool_config
+        else:
+            chat_ctx = chat_ctx.copy(exclude_function_call=True)
         messages, extra_data = chat_ctx.to_provider_format(format="aws")
         opts["messages"] = messages
         if extra_data.system_messages:
@@ -286,9 +297,6 @@ class LLMStream(llm.LLMStream):
             )
         elif "contentBlockStop" in chunk:
             if self._tool_call_id:
-                if self._tool_call_id is None:
-                    logger.warning("aws bedrock llm: no tool call id in the response")
-                    return None
                 if self._fnc_name is None:
                     logger.warning("aws bedrock llm: no function name in the response")
                     return None

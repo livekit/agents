@@ -17,6 +17,35 @@ project:
   subdomain: examples-wfxyig8v
 
 examples:
+  frontdesk:
+    title: Front Desk
+    description: A receptionist agent wired up to a live calendar. Answers questions about availability, books appointments in real time, and confirms back to the caller.
+    # brand palette — indigo-500
+    accent: "#1F44F9"
+    agent_id: CA_9TqkLsnwhjmE
+    entry: agent.py
+    github: "https://github.com/livekit/agents/tree/main/examples/frontdesk"
+    tags: [tools, scheduling]
+    icon:
+      # Calendar with the top header strip in the highlight tone.
+      size: 12
+      pixels: |
+        000000000000
+        000100010000
+        001111111000
+        012222222100
+        011111111100
+        010000000100
+        010000000100
+        010000000100
+        010000000100
+        010000000100
+        001111111000
+        000000000000
+    views:
+      - rpc: set_appointment_status
+        title: "\uf073 Schedule"
+
   healthcare:
     title: Healthcare
     description: A medical front-desk agent that handles intake, authenticates returning patients, books appointments, and hands the conversation off to a human when it needs to.
@@ -68,35 +97,6 @@ examples:
         011000000000
         010000000000
         000000000000
-
-  frontdesk:
-    title: Front Desk
-    description: A receptionist agent wired up to a live calendar. Answers questions about availability, books appointments in real time, and confirms back to the caller.
-    # brand palette — indigo-500
-    accent: "#1F44F9"
-    agent_id: CA_9TqkLsnwhjmE
-    entry: agent.py
-    github: "https://github.com/livekit/agents/tree/main/examples/frontdesk"
-    tags: [tools, scheduling]
-    icon:
-      # Calendar with the top header strip in the highlight tone.
-      size: 12
-      pixels: |
-        000000000000
-        000100010000
-        001111111000
-        012222222100
-        011111111100
-        010000000100
-        010000000100
-        010000000100
-        010000000100
-        010000000100
-        001111111000
-        000000000000
-    views:
-      - rpc: set_appointment_status
-        title: "\uf073 Schedule"
 
   drive-thru:
     title: Drive Thru
@@ -187,7 +187,7 @@ examples:
         type: textarea
         label: System prompt
         # Keep in sync with INSTRUCTIONS in examples/inference/agent.py.
-        default: "You're a friendly agent in the LiveKit Playground. The person talking to you is prototyping their own voice agent — they can edit this prompt in the side panel and swap the STT / LLM / TTS models live. Keep replies short, natural, and conversational. If asked which models you're using, answer honestly."
+        default: "You're a friendly agent in the LiveKit Playground. The person talking to you is prototyping their own voice agent — they can edit this prompt in the side panel and swap the STT / LLM / TTS models live. Keep replies short, natural, and conversational, and be expressive so they can hear what the selected voice can do. If the conversation lulls or they're not sure what to try, offer to tell them a short joke — and if they say yes, deliver it with good comic timing. If asked which models you're using, answer honestly."
         rows: 8
       - rpc: set_stt_model
         label: STT
@@ -207,8 +207,9 @@ examples:
           - { value: xai/stt-1, label: xAI Speech-to-Text }
       - rpc: set_llm_model
         label: LLM
-        default: openai/gpt-4.1-mini
+        default: google/gemma-4-31b-it
         options:
+          - { value: google/gemma-4-31b-it, label: Gemma 4 31B }
           - { value: openai/gpt-4.1, label: OpenAI GPT-4.1 }
           - { value: openai/gpt-4.1-mini, label: OpenAI GPT-4.1 mini }
           - { value: openai/gpt-4.1-nano, label: OpenAI GPT-4.1 nano }
@@ -248,7 +249,7 @@ examples:
           - { value: moonshotai/kimi-k2.5, label: Kimi K2.5 }
       - rpc: set_tts_model
         label: TTS
-        default: cartesia/sonic-3
+        default: inworld/inworld-tts-2
         options:
           - { value: cartesia/sonic, label: Cartesia Sonic }
           - { value: cartesia/sonic-2, label: Cartesia Sonic-2 }
@@ -292,3 +293,81 @@ examples:
       - rpc: __transcript
         source: transcript
         title: "\uf075 Transcript"
+
+  hotel_receptionist:
+    title: Hotel Receptionist
+    description: A hotel front-desk agent that books rooms and restaurant reservations, modifies and verifies existing bookings, and confirms guest details — all backed by a live database.
+    # brand palette — teal-500
+    accent: "#14B8A6"
+    agent_id: CA_ZVVNHj3sPjJ5
+    entry: agent.py
+    github: "https://github.com/livekit/agents/tree/main/examples/hotel_receptionist"
+    tags: [multi-agent, tools]
+    icon:
+      # Concierge service bell: domed bell with a top-left specular
+      # highlight, sitting on a full-width base plate.
+      size: 12
+      pixels: |
+        000000000000
+        000000000000
+        000001100000
+        000011110000
+        000221111000
+        002211111100
+        011111111110
+        011111111110
+        111111111111
+        000000000000
+        000000000000
+        000000000000
+
+  avatar:
+    title: Avatar
+    description: Talk to a LemonSlice avatar. Pick anyone from the dropdown to swap who you're chatting with, from Leila to a Pixar fox.
+    # LemonSlice brand \u2014 yellow-500 from the LK palette.
+    accent: "#F9E71F"
+    agent_id: CA_dzjZwsBsRKzZ
+    entry: agent.py
+    github: "https://github.com/livekit/agents/tree/main/examples/avatar"
+    tags: [avatar, video, multi-persona]
+    # Tells the jukebox frontend to render the AvatarFrame and drive
+    # the connect-time orb \u2192 video reveal animation. Without this
+    # flag the example renders like every other one (orb only).
+    avatar: true
+    icon:
+      # Head + shoulders. Head is filled with '2' (highlight tone) and
+      # the shoulders are '1' (full accent), so the two regions read as
+      # two distinct shades instead of a single blob.
+      size: 12
+      pixels: |
+        000000000000
+        000022220000
+        000222222000
+        002222222200
+        002222222200
+        002222222200
+        000222222000
+        000022220000
+        000000000000
+        001111111100
+        011111111110
+        111111111111
+    # The playground reads these `controls` and renders one widget
+    # per entry. The persona dropdown fires `set_avatar` on the
+    # agent with the chosen id as the payload value. The agent
+    # updates voice + system prompt live; the avatar image stays
+    # on the current persona until the session reconnects.
+    controls:
+      - rpc: set_avatar
+        label: Persona
+        default: leila
+        options:
+          - { value: leila, label: Leila }
+          - { value: jess, label: Jess }
+          - { value: software_engineer, label: Software Engineer }
+          - { value: social_worker, label: Social Worker }
+          - { value: ai_therapist, label: AI Therapist }
+          - { value: management_consultant, label: Management Consultant }
+          - { value: shopping_assistant, label: Shopping Assistant }
+          - { value: cat_girl, label: Cat Girl }
+          - { value: mr_fox, label: Mr Fox }

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import ctypes
 import queue
 import threading
 import time
@@ -16,7 +15,9 @@ import numpy as np
 
 from livekit import rtc
 
+from ... import utils
 from ...log import logger
+from ...utils.audio import silence_frame as _create_silence_frame
 from .. import io
 
 if TYPE_CHECKING:
@@ -49,6 +50,7 @@ class RecorderIO:
         self._lock = asyncio.Lock()
         self._close_fut: asyncio.Future[None] = self._loop.create_future()
         self._output_path: Path | None = None
+        self._forward_atask: asyncio.Task[None] | None = None
 
         self._skip_padding_warning = False
 
@@ -78,6 +80,10 @@ class RecorderIO:
         async with self._lock:
             if not self._started:
                 return
+
+            if self._forward_atask is not None:
+                await utils.aio.cancel_and_wait(self._forward_atask)
+                self._forward_atask = None
 
             self._in_q.put_nowait(None)
             self._out_q.put_nowait(None)
@@ -196,85 +202,102 @@ class RecorderIO:
 
             return pos
 
-        with container:
-            while True:
-                input_buf = self._in_q.get()
-                output_buf = self._out_q.get()
+        try:
+            with container:
+                while True:
+                    input_buf = self._in_q.get()
+                    output_buf = self._out_q.get()
 
-                if input_buf is None or output_buf is None:
-                    break
+                    if input_buf is None or output_buf is None:
+                        break
 
-                # lazy creation of the resamplers
-                if in_resampler is None and len(input_buf):
-                    input_rate, num_channels = input_buf[0].sample_rate, input_buf[0].num_channels
-                    in_resampler = rtc.AudioResampler(
-                        input_rate=input_rate,
-                        output_rate=self._sample_rate,
-                        num_channels=num_channels,
+                    # lazy creation of the resamplers
+                    if in_resampler is None and len(input_buf):
+                        input_rate, num_channels = (
+                            input_buf[0].sample_rate,
+                            input_buf[0].num_channels,
+                        )
+                        in_resampler = rtc.AudioResampler(
+                            input_rate=input_rate,
+                            output_rate=self._sample_rate,
+                            num_channels=num_channels,
+                        )
+
+                    if out_resampler is None and len(output_buf):
+                        input_rate, num_channels = (
+                            output_buf[0].sample_rate,
+                            output_buf[0].num_channels,
+                        )
+                        out_resampler = rtc.AudioResampler(
+                            input_rate=input_rate,
+                            output_rate=self._sample_rate,
+                            num_channels=num_channels,
+                        )
+
+                    input_resampled = []
+                    for frame in input_buf:
+                        assert in_resampler is not None
+                        input_resampled.extend(in_resampler.push(frame))
+
+                    output_resampled = []
+                    for frame in output_buf:
+                        assert out_resampler is not None
+                        output_resampled.extend(out_resampler.push(frame))
+
+                    if output_buf:
+                        assert out_resampler is not None
+                        # the output is sent per-segment. Always flush when the playback is done
+                        output_resampled.extend(out_resampler.flush())
+
+                    len_left = remix_and_resample(input_resampled, 0)
+                    len_right = remix_and_resample(output_resampled, 1)
+
+                    if len_left != len_right:
+                        diff = abs(len_right - len_left)
+                        if len_left < len_right:
+                            if not self._skip_padding_warning:
+                                logger.warning(
+                                    f"Input is shorter by {diff} samples; silence has been prepended "
+                                    "to align the input channel. The resulting recording may not "
+                                    "accurately reflect the original audio. This is expected if the "
+                                    "input device or audio input is disabled. This warning will only "
+                                    "be shown once."
+                                )
+                                self._skip_padding_warning = True
+
+                            stereo_buf[0, diff : diff + len_left] = stereo_buf[0, :len_left]
+                            stereo_buf[0, :diff] = 0.0
+                            len_left = len_right
+                        else:
+                            stereo_buf[1, diff : diff + len_right] = stereo_buf[1, :len_right]
+                            stereo_buf[1, :diff] = 0.0
+                            len_right = len_left
+
+                    max_len = max(len_left, len_right)
+                    if max_len <= 0:
+                        continue
+
+                    stereo_slice = stereo_buf[:, :max_len]
+                    av_frame = av.AudioFrame.from_ndarray(
+                        stereo_slice, format="fltp", layout="stereo"
                     )
+                    av_frame.sample_rate = self._sample_rate
 
-                if out_resampler is None and len(output_buf):
-                    input_rate, num_channels = output_buf[0].sample_rate, output_buf[0].num_channels
-                    out_resampler = rtc.AudioResampler(
-                        input_rate=input_rate,
-                        output_rate=self._sample_rate,
-                        num_channels=num_channels,
-                    )
+                    for packet in stream.encode(av_frame):
+                        container.mux(packet)
 
-                input_resampled = []
-                for frame in input_buf:
-                    assert in_resampler is not None
-                    input_resampled.extend(in_resampler.push(frame))
-
-                output_resampled = []
-                for frame in output_buf:
-                    assert out_resampler is not None
-                    output_resampled.extend(out_resampler.push(frame))
-
-                if output_buf:
-                    assert out_resampler is not None
-                    # the output is sent per-segment. Always flush when the playback is done
-                    output_resampled.extend(out_resampler.flush())
-
-                len_left = remix_and_resample(input_resampled, 0)
-                len_right = remix_and_resample(output_resampled, 1)
-
-                if len_left != len_right:
-                    diff = abs(len_right - len_left)
-                    if len_left < len_right:
-                        if not self._skip_padding_warning:
-                            logger.warning(
-                                f"Input is shorter by {diff} samples; silence has been prepended to "
-                                "align the input channel. The resulting recording may not accurately "
-                                "reflect the original audio. This is expected if the input device "
-                                "or audio input is disabled. This warning will only be shown once."
-                            )
-                            self._skip_padding_warning = True
-
-                        stereo_buf[0, diff : diff + len_left] = stereo_buf[0, :len_left]
-                        stereo_buf[0, :diff] = 0.0
-                        len_left = len_right
-                    else:
-                        stereo_buf[1, diff : diff + len_right] = stereo_buf[1, :len_right]
-                        stereo_buf[1, :diff] = 0.0
-                        len_right = len_left
-
-                max_len = max(len_left, len_right)
-                if max_len <= 0:
-                    continue
-
-                stereo_slice = stereo_buf[:, :max_len]
-                av_frame = av.AudioFrame.from_ndarray(stereo_slice, format="fltp", layout="stereo")
-                av_frame.sample_rate = self._sample_rate
-
-                for packet in stream.encode(av_frame):
+                for packet in stream.encode(None):
                     container.mux(packet)
+        except Exception:
+            logger.exception("recorder encode thread failed; recording may be incomplete")
+        finally:
 
-            for packet in stream.encode(None):
-                container.mux(packet)
+            def resolve_close_fut() -> None:
+                if not self._close_fut.done():
+                    self._close_fut.set_result(None)
 
-        with contextlib.suppress(RuntimeError):
-            self._loop.call_soon_threadsafe(self._close_fut.set_result, None)
+            with contextlib.suppress(RuntimeError):
+                self._loop.call_soon_threadsafe(resolve_close_fut)
 
 
 class RecorderAudioInput(io.AudioInput):
@@ -348,7 +371,6 @@ class RecorderAudioOutput(io.AudioOutput):
         super().__init__(
             label="RecorderIO",
             next_in_chain=audio_output,
-            sample_rate=audio_output.sample_rate if audio_output else None,
             # TODO: support pause
             capabilities=io.AudioOutputCapabilities(pause=True),  # depends on the next_in_chain
         )
@@ -362,6 +384,12 @@ class RecorderAudioOutput(io.AudioOutput):
         # pause tracking
         self.__current_pause_start: float | None = None
         self.__pause_wall_times: list[tuple[float, float]] = []
+
+    @property
+    def sample_rate(self) -> int | None:
+        if self._sample_rate is not None:
+            return self._sample_rate
+        return self.next_in_chain.sample_rate if self.next_in_chain else None
 
     @property
     def started_wall_time(self) -> float | None:
@@ -533,16 +561,6 @@ class RecorderAudioOutput(io.AudioOutput):
             self.next_in_chain.clear_buffer()
 
 
-def _create_silence_frame(duration: float, sample_rate: int, num_channels: int) -> rtc.AudioFrame:
-    samples = int(duration * sample_rate)
-    return rtc.AudioFrame(
-        data=b"\x00\x00" * samples * num_channels,
-        num_channels=num_channels,
-        samples_per_channel=samples,
-        sample_rate=sample_rate,
-    )
-
-
 def _split_frame(frame: rtc.AudioFrame, position: float) -> tuple[rtc.AudioFrame, rtc.AudioFrame]:
     if position <= 0.0:
         return rtc.AudioFrame(
@@ -560,25 +578,25 @@ def _split_frame(frame: rtc.AudioFrame, position: float) -> tuple[rtc.AudioFrame
             sample_rate=frame.sample_rate,
         )
 
-    samples_needed = int(position * frame.sample_rate)
-    bytes_per_sample = frame.num_channels * ctypes.sizeof(ctypes.c_int16)
+    samples_needed = min(int(position * frame.sample_rate), frame.samples_per_channel)
 
-    data_x, data_y = (
-        frame.data[: samples_needed * bytes_per_sample],
-        frame.data[samples_needed * bytes_per_sample :],
-    )
+    # `frame.data` is a memoryview of int16 samples (format "h"), so it is indexed in
+    # samples, not bytes. The split point in that buffer is `samples_per_channel` worth
+    # of interleaved samples across all channels.
+    split = samples_needed * frame.num_channels
+    data = frame.data
 
     return (
         rtc.AudioFrame(
-            data=data_x,
+            data=bytes(data[:split]),
             num_channels=frame.num_channels,
-            samples_per_channel=len(data_x) // bytes_per_sample,
+            samples_per_channel=samples_needed,
             sample_rate=frame.sample_rate,
         ),
         rtc.AudioFrame(
-            data=data_y,
+            data=bytes(data[split:]),
             num_channels=frame.num_channels,
-            samples_per_channel=len(data_y) // bytes_per_sample,
+            samples_per_channel=frame.samples_per_channel - samples_needed,
             sample_rate=frame.sample_rate,
         ),
     )
