@@ -408,6 +408,11 @@ class STT(stt.STT):
             if not is_given(min_turn_silence):
                 min_turn_silence = min_end_of_turn_silence_when_confident
 
+        # Validate/normalize before mutating any option so a ValueError from a
+        # bad language_codes list cannot leave _opts partially updated.
+        if is_given(language_codes):
+            language_codes = _normalize_language_codes(list(language_codes))
+
         if is_given(buffer_size_seconds):
             self._opts.buffer_size_seconds = buffer_size_seconds
         if is_given(end_of_turn_confidence_threshold):
@@ -426,7 +431,6 @@ class STT(stt.STT):
             keyterms_prompt = list(dict.fromkeys([*self._user_keyterms, *self._session_keyterms]))
             self._opts.keyterms_prompt = keyterms_prompt
         if is_given(language_codes):
-            language_codes = _normalize_language_codes(list(language_codes))
             self._opts.language_codes = language_codes
         if is_given(vad_threshold):
             self._opts.vad_threshold = vad_threshold
@@ -534,6 +538,11 @@ class SpeechStream(stt.SpeechStream):
             if not is_given(min_turn_silence):
                 min_turn_silence = min_end_of_turn_silence_when_confident
 
+        # Validate/normalize before mutating any option so a ValueError from a
+        # bad language_codes list cannot leave _opts partially updated.
+        if is_given(language_codes):
+            language_codes = _normalize_language_codes(list(language_codes))
+
         if is_given(buffer_size_seconds):
             self._opts.buffer_size_seconds = buffer_size_seconds
         if is_given(end_of_turn_confidence_threshold):
@@ -549,7 +558,6 @@ class SpeechStream(stt.SpeechStream):
         if is_given(keyterms_prompt):
             self._opts.keyterms_prompt = keyterms_prompt
         if is_given(language_codes):
-            language_codes = _normalize_language_codes(list(language_codes))
             self._opts.language_codes = language_codes
         if is_given(vad_threshold):
             self._opts.vad_threshold = vad_threshold
