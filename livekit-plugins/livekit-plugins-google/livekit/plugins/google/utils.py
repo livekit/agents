@@ -38,9 +38,7 @@ def create_tools_config(
     if function_tools:
         gemini_tools.append(types.Tool(function_declarations=function_tools))
 
-    provider_tools = [
-        tool.to_tool_config() for tool in tool_ctx.provider_tools if isinstance(tool, GeminiTool)
-    ]
+    provider_tools = [tool for tool in tool_ctx.provider_tools if isinstance(tool, GeminiTool)]
     # generateContent only supports combining built-in tools with function tools
     # on Gemini 3 models: https://ai.google.dev/gemini-api/docs/tool-combination
     if function_tools and provider_tools and not allow_mixed_tools:
@@ -50,7 +48,8 @@ def create_tools_config(
         )
         return gemini_tools
 
-    gemini_tools.extend(provider_tools)
+    # only convert tools we actually send, so a dropped tool can't break the request
+    gemini_tools.extend(tool.to_tool_config() for tool in provider_tools)
     return gemini_tools
 
 

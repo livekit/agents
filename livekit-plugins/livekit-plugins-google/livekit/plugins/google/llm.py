@@ -455,21 +455,6 @@ class LLMStream(llm.LLMStream):
             tools_config = create_tools_config(
                 tool_context, allow_mixed_tools=_is_gemini_3_model(self._model)
             )
-            # When built-in tools are combined with function tools in the
-            # same request, Gemini requires `tool_config.include_server_side_tool_invocations`
-            # to be enabled
-            has_function_tools = bool(tool_context.function_tools)
-            has_provider_tools = any(
-                isinstance(tool, GeminiTool) for tool in tool_context.provider_tools
-            )
-            if has_function_tools and has_provider_tools and _is_gemini_3_model(self._model):
-                tool_config = self._extra_kwargs.get("tool_config")
-                if isinstance(tool_config, types.ToolConfig):
-                    tool_config.include_server_side_tool_invocations = True
-                else:
-                    self._extra_kwargs["tool_config"] = types.ToolConfig(
-                        include_server_side_tool_invocations=True
-                    )
             # Gemini's API rejects `generateContent` requests that pass
             # `cached_content` together with `system_instruction`, `tools`,
             # or `tool_config` — those fields must live INSIDE the
@@ -478,6 +463,32 @@ class LLMStream(llm.LLMStream):
             # here we just suppress the duplicates on the outgoing request
             # whenever a cache is attached.
             using_cache = "cached_content" in self._extra_kwargs
+            # combining built-in + function tools requires include_server_side_tool_invocations
+            # (skip when caching: tool_config must be baked into the cache, dropped below)
+            has_function_tools = bool(tool_context.function_tools)
+            has_provider_tools = any(
+                isinstance(tool, GeminiTool) for tool in tool_context.provider_tools
+            )
+            if (
+                not using_cache
+                and has_function_tools
+                and has_provider_tools
+                and _is_gemini_3_model(self._model)
+            ):
+                tool_config = self._extra_kwargs.get("tool_config")
+                if not isinstance(tool_config, types.ToolConfig):
+                    tool_config = types.ToolConfig()
+                    self._extra_kwargs["tool_config"] = tool_config
+                tool_config.include_server_side_tool_invocations = True
+                # AUTO is unsupported alongside built-in tools; VALIDATED keeps the same
+                # behavior. https://ai.google.dev/gemini-api/docs/tool-combination
+                fcc = tool_config.function_calling_config
+                if fcc is not None and fcc.mode == types.FunctionCallingConfigMode.AUTO:
+                    logger.debug(
+                        "upgrading function_calling_config AUTO->VALIDATED: AUTO is "
+                        "unsupported when combining built-in and function tools"
+                    )
+                    fcc.mode = types.FunctionCallingConfigMode.VALIDATED
             if tools_config and not using_cache:
                 self._extra_kwargs["tools"] = tools_config
             elif using_cache:
