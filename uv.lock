@@ -2577,7 +2577,7 @@ requires-dist = [
     { name = "google-auth", specifier = ">=2,<3" },
     { name = "google-cloud-speech", specifier = ">=2,<3" },
     { name = "google-cloud-texttospeech", specifier = ">=2.32,<3" },
-    { name = "google-genai", marker = "python_full_version >= '3.10'", specifier = ">=1.67" },
+    { name = "google-genai", marker = "python_full_version >= '3.10'", specifier = ">=1.68" },
     { name = "livekit-agents", editable = "livekit-agents" },
 ]
 
