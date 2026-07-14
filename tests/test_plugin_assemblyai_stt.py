@@ -1224,3 +1224,82 @@ async def test_language_code_singular_not_in_update_options():
     assert "language_code" not in inspect.signature(SpeechStream.update_options).parameters
     assert "language_codes" in inspect.signature(STT.update_options).parameters
     assert "language_codes" in inspect.signature(SpeechStream.update_options).parameters
+
+
+# ---------------------------------------------------------------------------
+# agent_context server cap (1750 chars) + agent_context_carryover default
+#
+# The server rejects `agent_context` longer than 1750 chars, and an invalid
+# UpdateConfiguration cancels the whole streaming session — so the plugin
+# enforces the cap client-side. The auto-carryover path truncates (keeping the
+# tail: the end of the agent's reply is what the user responds to); explicit
+# developer input fails fast with ValueError instead of being silently
+# mangled.
+# ---------------------------------------------------------------------------
+
+
+def _assistant_item_event(text: str):
+    from livekit.agents.llm import ChatMessage
+    from livekit.agents.voice.events import ConversationItemAddedEvent
+
+    return ConversationItemAddedEvent(item=ChatMessage(role="assistant", content=[text]))
+
+
+async def test_agent_context_at_cap_accepted():
+    """agent_context of exactly 1750 chars is accepted everywhere."""
+    from livekit.plugins.assemblyai import STT
+
+    text = "x" * 1750
+    stt = STT(api_key="test-key", agent_context=text)
+    assert stt._opts.agent_context == text
+
+    stt.update_options(agent_context=text)
+    assert stt._opts.agent_context == text
+
+
+async def test_agent_context_over_cap_raises_in_constructor():
+    """Explicit oversize agent_context fails fast instead of killing the session later."""
+    from livekit.plugins.assemblyai import STT
+
+    with pytest.raises(ValueError, match="agent_context"):
+        STT(api_key="test-key", agent_context="x" * 1751)
+
+
+async def test_agent_context_over_cap_raises_in_stt_update_options():
+    """STT.update_options rejects oversize agent_context without mutating any option."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", vad_threshold=0.5)
+    with pytest.raises(ValueError, match="agent_context"):
+        stt.update_options(vad_threshold=0.9, agent_context="x" * 1751)
+
+    # the same call must not have applied its other updates (no partial update)
+    assert stt._opts.vad_threshold == 0.5
+    assert stt._opts.agent_context is NOT_GIVEN
+
+
+async def test_agent_context_over_cap_raises_in_stream_update_options():
+    """SpeechStream.update_options rejects oversize agent_context."""
+    stream = _make_stream_for_unit_test()
+
+    with pytest.raises(ValueError, match="agent_context"):
+        stream.update_options(agent_context="x" * 1751)
+
+
+async def test_carryover_forwards_short_reply_verbatim():
+    """_push_conversation_item forwards assistant text within the cap unchanged."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key")
+    stt._push_conversation_item(_assistant_item_event("Your room is booked for Tuesday."))
+    assert stt._opts.agent_context == "Your room is booked for Tuesday."
+
+
+async def test_carryover_truncates_oversize_reply_keeping_tail():
+    """_push_conversation_item truncates oversize replies to the last 1750 chars."""
+    from livekit.plugins.assemblyai import STT
+
+    text = "a" * 2000 + "b" * 1750
+    stt = STT(api_key="test-key")
+    stt._push_conversation_item(_assistant_item_event(text))
+    assert stt._opts.agent_context == "b" * 1750

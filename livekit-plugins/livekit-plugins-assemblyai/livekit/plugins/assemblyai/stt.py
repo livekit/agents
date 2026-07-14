@@ -111,6 +111,22 @@ def _normalize_language_codes(language_codes: list[str]) -> list[str]:
     return normalized
 
 
+# Server-side cap on `agent_context` length (mirrors the AssemblyAI streaming
+# API's MAX_PROMPT_CHARS). Oversize values sent mid-stream make the server
+# cancel the whole session, so the cap is enforced client-side.
+_MAX_AGENT_CONTEXT_CHARS = 1750
+
+
+def _validate_agent_context(agent_context: str) -> str:
+    """Reject explicit agent_context longer than the server cap."""
+    if len(agent_context) > _MAX_AGENT_CONTEXT_CHARS:
+        raise ValueError(
+            f"agent_context exceeds maximum length of {_MAX_AGENT_CONTEXT_CHARS} "
+            f"characters (got {len(agent_context)})"
+        )
+    return agent_context
+
+
 class STT(stt.STT):
     def __init__(
         self,
@@ -194,7 +210,8 @@ class STT(stt.STT):
             agent_context: Free-text context describing what the agent said, used to bias
                 transcription of the user's reply. Set at construction or updated per-turn
                 via `update_options(agent_context=...)`. Only supported with the
-                Universal-3 Pro family models (max 1500 characters).
+                Universal-3 Pro family models (max 1750 characters; longer values raise
+                ValueError).
             previous_context_n_turns: Maximum number of prior conversation entries (user
                 transcripts and any `agent_context` values) carried forward as context for
                 each transcription. Set to 0 to disable automatic context carryover
@@ -232,6 +249,8 @@ class STT(stt.STT):
                 "language_code and language_codes are mutually exclusive; "
                 "use language_codes (language_code is shorthand for a one-element list)"
             )
+        if is_given(agent_context):
+            _validate_agent_context(agent_context)
         # agent_context carryover is only available on the u3-rt-pro family
         # ("u3-pro" is normalized to "u3-rt-pro" below) and is opt-in via the user
         supports_carryover = model in _U3_PRO_MODELS or model == "u3-pro"
@@ -409,9 +428,11 @@ class STT(stt.STT):
                 min_turn_silence = min_end_of_turn_silence_when_confident
 
         # Validate/normalize before mutating any option so a ValueError from a
-        # bad language_codes list cannot leave _opts partially updated.
+        # bad value cannot leave _opts partially updated.
         if is_given(language_codes):
             language_codes = _normalize_language_codes(list(language_codes))
+        if is_given(agent_context):
+            _validate_agent_context(agent_context)
 
         if is_given(buffer_size_seconds):
             self._opts.buffer_size_seconds = buffer_size_seconds
@@ -468,9 +489,18 @@ class STT(stt.STT):
         if (
             (chat_item := ev.item).type == "message"
             and chat_item.role == "assistant"
-            and chat_item.text_content
+            and (text := chat_item.text_content)
         ):
-            self.update_options(agent_context=chat_item.text_content)
+            if len(text) > _MAX_AGENT_CONTEXT_CHARS:
+                # Keep the tail: the end of the reply (the question posed to
+                # the user) has the most biasing value for their next utterance.
+                logger.debug(
+                    "truncating agent_context carryover from %d to %d chars",
+                    len(text),
+                    _MAX_AGENT_CONTEXT_CHARS,
+                )
+                text = text[-_MAX_AGENT_CONTEXT_CHARS:]
+            self.update_options(agent_context=text)
 
 
 class SpeechStream(stt.SpeechStream):
@@ -539,9 +569,11 @@ class SpeechStream(stt.SpeechStream):
                 min_turn_silence = min_end_of_turn_silence_when_confident
 
         # Validate/normalize before mutating any option so a ValueError from a
-        # bad language_codes list cannot leave _opts partially updated.
+        # bad value cannot leave _opts partially updated.
         if is_given(language_codes):
             language_codes = _normalize_language_codes(list(language_codes))
+        if is_given(agent_context):
+            _validate_agent_context(agent_context)
 
         if is_given(buffer_size_seconds):
             self._opts.buffer_size_seconds = buffer_size_seconds
