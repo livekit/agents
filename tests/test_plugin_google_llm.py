@@ -10,6 +10,7 @@ from livekit.agents.llm import ChatContext, function_tool
 from livekit.agents.types import APIConnectOptions
 from livekit.plugins.google.llm import LLM, LLMStream
 from livekit.plugins.google.realtime.realtime_api import RealtimeModel, RealtimeSession
+from livekit.plugins.google.tools import GoogleSearch
 
 pytestmark = pytest.mark.plugin("google")
 
@@ -333,3 +334,140 @@ class TestMediaResolution:
 
         assert config.generation_config
         assert config.generation_config.media_resolution is None
+
+
+class TestMixedToolsRequestConstruction:
+    """Combining built-in (provider) tools with function tools is only supported on the
+    Gemini 3 Developer API (not Vertex). These tests drive ``chat()`` against a stubbed
+    ``generate_content_stream`` and assert on the resulting request config."""
+
+    @staticmethod
+    async def _single_response_async_iter():
+        yield types.GenerateContentResponse(
+            candidates=[
+                types.Candidate(
+                    content=types.Content(role="model", parts=[types.Part(text="ok")]),
+                    finish_reason=types.FinishReason.STOP,
+                )
+            ],
+        )
+
+    @classmethod
+    async def _capture_config(cls, llm_: LLM, **chat_kwargs):
+        captured: dict = {}
+
+        async def fake_stream(**kwargs):
+            captured["config"] = kwargs.get("config")
+            return cls._single_response_async_iter()
+
+        fake = AsyncMock(side_effect=fake_stream)
+        with patch.object(llm_._client.aio.models, "generate_content_stream", fake):
+            stream = llm_.chat(chat_ctx=ChatContext.empty(), **chat_kwargs)
+            try:
+                async for _ in stream:
+                    pass
+            finally:
+                await stream.aclose()
+        return captured["config"]
+
+    @staticmethod
+    def _weather_tool():
+        @function_tool
+        async def get_weather(city: str) -> str:
+            """Look up the weather."""
+            return city
+
+        return get_weather
+
+    @staticmethod
+    def _has_google_search(config) -> bool:
+        return bool(config.tools) and any(getattr(t, "google_search", None) for t in config.tools)
+
+    @staticmethod
+    def _has_function_declarations(config) -> bool:
+        return bool(config.tools) and any(t.function_declarations for t in config.tools)
+
+    @staticmethod
+    def _server_side_enabled(config) -> bool:
+        return bool(config.tool_config and config.tool_config.include_server_side_tool_invocations)
+
+    @pytest.mark.asyncio
+    async def test_dev_api_enables_server_side_invocations(self) -> None:
+        """Gemini 3 Developer API: both tool types are sent and the circulation flag is set."""
+        llm_ = LLM(model="gemini-3-flash-preview", api_key="test")
+        config = await self._capture_config(llm_, tools=[self._weather_tool(), GoogleSearch()])
+
+        assert self._server_side_enabled(config)
+        assert self._has_function_declarations(config)
+        assert self._has_google_search(config)
+
+    @pytest.mark.asyncio
+    async def test_auto_mode_kept_for_mixed_tools(self) -> None:
+        """``tool_choice='auto'`` is passed through as AUTO alongside the circulation flag.
+        Verified live against the Gemini 3 Developer API: AUTO + built-in tools is accepted,
+        so no VALIDATED upgrade is applied."""
+        llm_ = LLM(model="gemini-3-flash-preview", api_key="test")
+        config = await self._capture_config(
+            llm_, tools=[self._weather_tool(), GoogleSearch()], tool_choice="auto"
+        )
+
+        assert self._server_side_enabled(config)
+        assert (
+            config.tool_config.function_calling_config.mode == types.FunctionCallingConfigMode.AUTO
+        )
+
+    @pytest.mark.asyncio
+    async def test_non_gemini_3_drops_provider_tool(self) -> None:
+        """Below Gemini 3 the provider tool is dropped and no flag is set."""
+        llm_ = LLM(model="gemini-2.5-flash", api_key="test")
+        config = await self._capture_config(llm_, tools=[self._weather_tool(), GoogleSearch()])
+
+        assert not self._server_side_enabled(config)
+        assert self._has_function_declarations(config)
+        assert not self._has_google_search(config)
+
+    @pytest.mark.asyncio
+    async def test_vertex_gemini_3_drops_provider_tool(self) -> None:
+        """Vertex AI does not support mixing, even on Gemini 3: provider tool is dropped."""
+        from google.auth.credentials import AnonymousCredentials
+
+        llm_ = LLM(
+            model="gemini-3-flash-preview",
+            vertexai=True,
+            project="test-project",
+            location="us-central1",
+            credentials=AnonymousCredentials(),
+        )
+        assert llm_._client.vertexai is True
+
+        config = await self._capture_config(llm_, tools=[self._weather_tool(), GoogleSearch()])
+
+        assert not self._server_side_enabled(config)
+        assert self._has_function_declarations(config)
+        assert not self._has_google_search(config)
+
+    @pytest.mark.asyncio
+    async def test_provider_only_does_not_set_flag(self) -> None:
+        """The circulation flag requires BOTH function and provider tools; a provider tool
+        alone is sent without it."""
+        llm_ = LLM(model="gemini-3-flash-preview", api_key="test")
+        config = await self._capture_config(llm_, tools=[GoogleSearch()])
+
+        assert not self._server_side_enabled(config)
+        assert self._has_google_search(config)
+
+    @pytest.mark.asyncio
+    async def test_cached_content_via_extra_kwargs_suppresses_tools(self) -> None:
+        """cached_content passed through ``extra_kwargs`` (not just the constructor) must
+        still skip building tools/tool_config, so the request isn't rejected for combining
+        them with a cache."""
+        llm_ = LLM(model="gemini-3-flash-preview", api_key="test")
+        config = await self._capture_config(
+            llm_,
+            tools=[self._weather_tool(), GoogleSearch()],
+            extra_kwargs={"cached_content": "cachedContents/abc123"},
+        )
+
+        assert config.cached_content == "cachedContents/abc123"
+        assert config.tools is None
+        assert config.tool_config is None

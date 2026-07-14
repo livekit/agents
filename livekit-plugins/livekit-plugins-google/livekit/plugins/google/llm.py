@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -36,7 +37,6 @@ from livekit.agents.utils import is_given
 
 from .log import logger
 from .models import ChatModels
-from .tools import GeminiTool
 from .utils import create_tools_config, to_response_format
 from .version import __version__
 
@@ -44,6 +44,27 @@ from .version import __version__
 def _is_gemini_3_model(model: str) -> bool:
     """Check if model is Gemini 3 series"""
     return "gemini-3" in model.lower() or model.lower().startswith("gemini-3")
+
+
+def _function_calling_config(
+    tool_choice: NotGivenOr[ToolChoice], function_tools: Iterable[str]
+) -> types.FunctionCallingConfig | None:
+    """Map a LiveKit `tool_choice` to Gemini's FunctionCallingConfig (None if unset)."""
+    if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
+        return types.FunctionCallingConfig(
+            mode=types.FunctionCallingConfigMode.ANY,
+            allowed_function_names=[tool_choice["function"]["name"]],
+        )
+    if tool_choice == "required":
+        return types.FunctionCallingConfig(
+            mode=types.FunctionCallingConfigMode.ANY,
+            allowed_function_names=list(function_tools) or None,
+        )
+    if tool_choice == "auto":
+        return types.FunctionCallingConfig(mode=types.FunctionCallingConfigMode.AUTO)
+    if tool_choice == "none":
+        return types.FunctionCallingConfig(mode=types.FunctionCallingConfigMode.NONE)
+    return None
 
 
 def _is_gemini_3_flash_model(model: str) -> bool:
@@ -275,57 +296,44 @@ class LLM(llm.LLM):
             extra.update(extra_kwargs)
 
         tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
-        retrieval_config = (
-            self._opts.retrieval_config if is_given(self._opts.retrieval_config) else None
-        )
-        if isinstance(retrieval_config, dict):
-            retrieval_config = types.RetrievalConfig.model_validate(retrieval_config)
+        tool_ctx = llm.ToolContext(tools or [])
+        # Mixing built-in (provider) tools with function tools is only supported on the
+        # Gemini 3 Developer API (not Vertex).
+        # https://ai.google.dev/gemini-api/docs/tool-combination
+        is_gemini_3_api = _is_gemini_3_model(self._opts.model) and not self._client.vertexai
 
-        if is_given(tool_choice):
-            gemini_tool_choice: types.ToolConfig
-            if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
-                gemini_tool_choice = types.ToolConfig(
-                    function_calling_config=types.FunctionCallingConfig(
-                        mode=types.FunctionCallingConfigMode.ANY,
-                        allowed_function_names=[tool_choice["function"]["name"]],
-                    ),
-                    retrieval_config=retrieval_config,
+        # cached_content may arrive from the constructor or via extra_kwargs; `_run()` keys
+        # off the merged request, so match it here.
+        using_cache = is_given(self._opts.cached_content) or "cached_content" in extra
+        if using_cache:
+            # tools/tool_config/system_instruction must be baked into the CachedContent
+            # resource, not sent on the request, so we don't build them here.
+            if tool_ctx.function_tools or tool_ctx.provider_tools:
+                logger.warning(
+                    "gemini llm: ignoring tools; bake them into the CachedContent resource",
+                    extra={"model": self._opts.model},
                 )
-                extra["tool_config"] = gemini_tool_choice
-            elif tool_choice == "required":
-                tool_names = []
-                for tool in tools or []:
-                    if isinstance(tool, (llm.FunctionTool, llm.RawFunctionTool)):
-                        tool_names.append(tool.info.name)
-
-                gemini_tool_choice = types.ToolConfig(
-                    function_calling_config=types.FunctionCallingConfig(
-                        mode=types.FunctionCallingConfigMode.ANY,
-                        allowed_function_names=tool_names or None,
-                    ),
-                    retrieval_config=retrieval_config,
-                )
-                extra["tool_config"] = gemini_tool_choice
-            elif tool_choice == "auto":
-                gemini_tool_choice = types.ToolConfig(
-                    function_calling_config=types.FunctionCallingConfig(
-                        mode=types.FunctionCallingConfigMode.AUTO,
-                    ),
-                    retrieval_config=retrieval_config,
-                )
-                extra["tool_config"] = gemini_tool_choice
-            elif tool_choice == "none":
-                gemini_tool_choice = types.ToolConfig(
-                    function_calling_config=types.FunctionCallingConfig(
-                        mode=types.FunctionCallingConfigMode.NONE,
-                    ),
-                    retrieval_config=retrieval_config,
-                )
-                extra["tool_config"] = gemini_tool_choice
-        elif retrieval_config:
-            extra["tool_config"] = types.ToolConfig(
-                retrieval_config=retrieval_config,
+        else:
+            retrieval_config = (
+                self._opts.retrieval_config if is_given(self._opts.retrieval_config) else None
             )
+            if isinstance(retrieval_config, dict):
+                retrieval_config = types.RetrievalConfig.model_validate(retrieval_config)
+
+            # create_tools_config is the single authority on whether built-in and function
+            # tools are actually combined; `mixed` gates the server-side invocation flag.
+            tools_config, mixed = create_tools_config(tool_ctx, allow_mixed_tools=is_gemini_3_api)
+            fcc = _function_calling_config(tool_choice, tool_ctx.function_tools)
+
+            if fcc is not None or retrieval_config or mixed:
+                extra["tool_config"] = types.ToolConfig(
+                    function_calling_config=fcc,
+                    retrieval_config=retrieval_config,
+                    include_server_side_tool_invocations=mixed or None,
+                )
+
+            if tools_config:
+                extra["tools"] = tools_config
 
         if is_given(response_format):
             extra["response_schema"] = to_response_format(response_format)
@@ -451,61 +459,10 @@ class LLMStream(llm.LLMStream):
             )
 
             turns = [types.Content.model_validate(turn) for turn in turns_dict]
-            tool_context = llm.ToolContext(self._tools)
-            tools_config = create_tools_config(
-                tool_context, allow_mixed_tools=_is_gemini_3_model(self._model)
-            )
-            # Gemini's API rejects `generateContent` requests that pass
-            # `cached_content` together with `system_instruction`, `tools`,
-            # or `tool_config` — those fields must live INSIDE the
-            # CachedContent resource, not on the request. The application
-            # bakes them into the cache via `client.caches.create(...)`;
-            # here we just suppress the duplicates on the outgoing request
-            # whenever a cache is attached.
+            # Request shaping (tools/tool_config) is done in `chat()`. When a cache is
+            # attached, `system_instruction` must also live inside the CachedContent
+            # resource, so it's dropped from the outgoing request below.
             using_cache = "cached_content" in self._extra_kwargs
-            # combining built-in + function tools requires include_server_side_tool_invocations
-            # (skip when caching: tool_config must be baked into the cache, dropped below)
-            has_function_tools = bool(tool_context.function_tools)
-            has_provider_tools = any(
-                isinstance(tool, GeminiTool) for tool in tool_context.provider_tools
-            )
-            if (
-                not using_cache
-                and has_function_tools
-                and has_provider_tools
-                and _is_gemini_3_model(self._model)
-            ):
-                tool_config = self._extra_kwargs.get("tool_config")
-                if not isinstance(tool_config, types.ToolConfig):
-                    tool_config = types.ToolConfig()
-                    self._extra_kwargs["tool_config"] = tool_config
-                tool_config.include_server_side_tool_invocations = True
-                # AUTO is unsupported alongside built-in tools; VALIDATED keeps the same
-                # behavior. https://ai.google.dev/gemini-api/docs/tool-combination
-                fcc = tool_config.function_calling_config
-                if fcc is not None and fcc.mode == types.FunctionCallingConfigMode.AUTO:
-                    logger.debug(
-                        "upgrading function_calling_config AUTO->VALIDATED: AUTO is "
-                        "unsupported when combining built-in and function tools"
-                    )
-                    fcc.mode = types.FunctionCallingConfigMode.VALIDATED
-            if tools_config and not using_cache:
-                self._extra_kwargs["tools"] = tools_config
-            elif using_cache:
-                dropped = [k for k in ("tools", "tool_config") if k in self._extra_kwargs]
-                if tools_config and "tools" not in dropped:
-                    dropped.append("tools")
-                if extra_data.system_messages:
-                    dropped.append("system_instruction")
-                if dropped:
-                    logger.warning(
-                        "dropping %s from Gemini request because cached_content=%r is set; "
-                        "these fields must be baked into the CachedContent resource",
-                        dropped,
-                        self._extra_kwargs.get("cached_content"),
-                    )
-                self._extra_kwargs.pop("tools", None)
-                self._extra_kwargs.pop("tool_config", None)
             if is_given(self._llm._opts.http_options):
                 http_options = self._llm._opts.http_options.model_copy()
                 if http_options.timeout is None:

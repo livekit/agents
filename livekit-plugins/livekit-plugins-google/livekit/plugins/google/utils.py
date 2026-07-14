@@ -24,7 +24,13 @@ def create_tools_config(
     tool_behavior: NotGivenOr[types.Behavior] = NOT_GIVEN,
     use_parameters_json_schema: bool = True,
     allow_mixed_tools: bool = True,
-) -> list[types.Tool]:
+) -> tuple[list[types.Tool], bool]:
+    """Build the Gemini tools list.
+
+    Returns ``(tools, mixed)`` where ``mixed`` is True when both function tools and
+    provider (built-in) tools were emitted together — the single source of truth the
+    caller uses to enable ``include_server_side_tool_invocations``.
+    """
     gemini_tools: list[types.Tool] = []
 
     function_tools = [
@@ -39,18 +45,18 @@ def create_tools_config(
         gemini_tools.append(types.Tool(function_declarations=function_tools))
 
     provider_tools = [tool for tool in tool_ctx.provider_tools if isinstance(tool, GeminiTool)]
-    # generateContent only supports combining built-in tools with function tools
-    # on Gemini 3 models: https://ai.google.dev/gemini-api/docs/tool-combination
+    # generateContent only supports combining built-in tools with function tools on the
+    # Gemini 3 Developer API: https://ai.google.dev/gemini-api/docs/tool-combination
     if function_tools and provider_tools and not allow_mixed_tools:
         logger.warning(
-            "this model does not support combining provider tools with function tools; "
-            "ignoring provider tools (combining them requires a Gemini 3 model)"
+            "ignoring provider tools; combining them with function tools requires the "
+            "Gemini 3 Developer API (Vertex AI is not supported)"
         )
-        return gemini_tools
+        return gemini_tools, False
 
     # only convert tools we actually send, so a dropped tool can't break the request
     gemini_tools.extend(tool.to_tool_config() for tool in provider_tools)
-    return gemini_tools
+    return gemini_tools, bool(function_tools and provider_tools)
 
 
 def create_function_response(
