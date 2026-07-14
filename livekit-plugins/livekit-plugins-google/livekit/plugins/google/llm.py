@@ -451,7 +451,7 @@ class LLMStream(llm.LLMStream):
 
             turns = [types.Content.model_validate(turn) for turn in turns_dict]
             tool_context = llm.ToolContext(self._tools)
-            tools_config = create_tools_config(tool_context, _only_single_type=True)
+            tools_config = create_tools_config(tool_context)
             # Gemini's API rejects `generateContent` requests that pass
             # `cached_content` together with `system_instruction`, `tools`,
             # or `tool_config` — those fields must live INSIDE the

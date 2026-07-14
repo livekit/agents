@@ -22,7 +22,6 @@ def create_tools_config(
     *,
     tool_behavior: NotGivenOr[types.Behavior] = NOT_GIVEN,
     use_parameters_json_schema: bool = True,
-    _only_single_type: bool = False,
 ) -> list[types.Tool]:
     gemini_tools: list[types.Tool] = []
 
@@ -36,10 +35,6 @@ def create_tools_config(
     ]
     if function_tools:
         gemini_tools.append(types.Tool(function_declarations=function_tools))
-
-    # Some Google LLMs do not support multiple tool types (either function tools or builtin tools).
-    if _only_single_type and gemini_tools:
-        return gemini_tools
 
     for tool in tool_ctx.provider_tools:
         if isinstance(tool, GeminiTool):
