@@ -63,8 +63,36 @@ def _silent_frames(duration: float) -> list[rtc.AudioFrame]:
     return [frame] * int(duration * 100)
 
 
-async def test_markup_fragments_add_no_pacing_delay() -> None:
-    opts = _TextSyncOptions(
+# Cartesia-style timed words: alignment searches for each spoken word inside the raw
+# sent text, so a word that follows markup carries the full tag as a prefix. The
+# silence before the second tag keeps the annotated target behind the forwarded text,
+# so the tag's fragments hit the catch-up (negative) branch of the pacing math — with
+# markup counted as syllables there, each fragment is paced as multi-second speech.
+TIMED_AUDIO_DURATION = 5.5
+TIMED_WORDS = [
+    (
+        '<expr type="expression" label="speak with warm surprise and bright energy"/> Hello ',
+        0.0,
+        0.35,
+    ),
+    ("there ", 0.35, 0.7),
+    ("my ", 0.7, 1.0),
+    ("friend! ", 1.0, 1.4),
+    # 1.4 -> 4.4: silence before the expressive sentence
+    (
+        '<expr type="expression" label="speak calmly and evenly, unhurried and relaxed, '
+        'with a gentle reassuring warmth in every word"/> How ',
+        4.4,
+        4.7,
+    ),
+    ("are ", 4.7, 4.9),
+    ("you ", 4.9, 5.1),
+    ("today?", 5.1, 5.5),
+]
+
+
+def _make_opts() -> _TextSyncOptions:
+    return _TextSyncOptions(
         speed=1.0,
         hyphenate_word=tokenize.basic.hyphenate_word,
         word_tokenizer=tokenize.basic.WordTokenizer(
@@ -72,6 +100,10 @@ async def test_markup_fragments_add_no_pacing_delay() -> None:
         ),
         speaking_rate_detector=SpeakingRateDetector(),
     )
+
+
+async def test_markup_fragments_add_no_pacing_delay() -> None:
+    opts = _make_opts()
     collector = _CollectorTextOutput()
     impl = _SegmentSynchronizerImpl(opts, next_in_chain=collector)
     try:
@@ -97,6 +129,37 @@ async def test_markup_fragments_add_no_pacing_delay() -> None:
         # audio duration; with markup fragments paced as speech it exceeds 12s
         assert elapsed < AUDIO_DURATION + 3.0, (
             f"transcript took {elapsed:.1f}s — markup is being paced as spoken text"
+        )
+    finally:
+        await impl.aclose()
+
+
+async def test_annotated_rate_ignores_markup_in_timed_string() -> None:
+    """TTS timing annotations pace via character-offset slices of the raw pushed text;
+    the hyphen count of a slice must ignore markup, matching the stripped word_hyphens."""
+    opts = _make_opts()
+    collector = _CollectorTextOutput()
+    impl = _SegmentSynchronizerImpl(opts, next_in_chain=collector)
+    try:
+        for frame in _silent_frames(TIMED_AUDIO_DURATION):
+            impl.push_audio(frame)
+        impl.end_audio_input()
+        for text, start_time, end_time in TIMED_WORDS:
+            impl.push_text(io.TimedString(text, start_time=start_time, end_time=end_time))
+        impl.end_text_input()
+
+        start = time.monotonic()
+        impl.on_playback_started(time.time())
+
+        await impl._main_atask
+        await impl._capture_atask
+        elapsed = time.monotonic() - start
+
+        assert "".join(collector.words) == "".join(text for text, _, _ in TIMED_WORDS)
+
+        assert elapsed < TIMED_AUDIO_DURATION + 2.0, (
+            f"transcript took {elapsed:.1f}s — markup is being paced as spoken text "
+            "in annotated rate path"
         )
     finally:
         await impl.aclose()

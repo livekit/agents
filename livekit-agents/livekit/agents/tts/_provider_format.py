@@ -821,8 +821,21 @@ def split_all_markup(text: str) -> tuple[str, list[ExpressiveTag]]:
     return clean, expr_tags + [{"type": tag, "value": value} for tag, value in raw_tags]
 
 
-def strip_all_markup(text: str) -> str:
-    """:func:`split_all_markup` returning only the clean text (tags discarded)."""
+def strip_all_markup(text: str, *, drop_open_tail: bool = False) -> str:
+    """:func:`split_all_markup` returning only the clean text (tags discarded).
+
+    ``drop_open_tail`` also drops a trailing unterminated tag, for callers slicing
+    text at arbitrary character offsets that may fall inside a tag.
+    """
+    if drop_open_tail:
+        last_lt = text.rfind("<")
+        if last_lt > text.rfind(">"):
+            nxt = text[last_lt + 1 : last_lt + 2]
+            if not nxt or nxt == "/" or nxt.isalpha():
+                text = text[:last_lt]
+        last_bracket = text.rfind("[")
+        if last_bracket > text.rfind("]"):
+            text = text[:last_bracket]
     return split_all_markup(text)[0]
 
 

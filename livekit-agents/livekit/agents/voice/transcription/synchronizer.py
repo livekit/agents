@@ -401,12 +401,7 @@ class _SegmentSynchronizerImpl:
                 # use the actual speaking rate
                 target_len = int(annotated.accumulate_to(elapsed))
                 forwarded_len = len(self._text_data.forwarded_text)
-                if target_len >= forwarded_len:
-                    d_text = self._text_data.pushed_text[forwarded_len:target_len]
-                    d_hyphens = len(self._calc_hyphens(d_text))
-                else:
-                    d_text = self._text_data.pushed_text[target_len:forwarded_len]
-                    d_hyphens = -len(self._calc_hyphens(d_text))
+                d_hyphens = self._visible_hyphens(target_len) - self._visible_hyphens(forwarded_len)
 
             elif self._speed_on_speaking_unit:
                 # use the estimated speed from speaking rate
@@ -428,6 +423,16 @@ class _SegmentSynchronizerImpl:
 
             self._text_data.forwarded_hyphens += word_hyphens
             self._text_data.forwarded_text += word
+
+    def _visible_hyphens(self, length: int) -> int:
+        """Hyphen count of the visible text within ``pushed_text[:length]``.
+
+        The annotated-rate offsets live in raw-text space (timing annotations count raw
+        characters, markup included) and may fall inside a tag; the hyphen count must
+        match ``word_hyphens``' unit — markup-stripped text.
+        """
+        prefix = self._text_data.pushed_text[:length]
+        return len(self._calc_hyphens(strip_all_markup(prefix, drop_open_tail=True)))
 
     def _calc_hyphens(self, text: str) -> list[str]:
         """Calculate hyphens for text."""
