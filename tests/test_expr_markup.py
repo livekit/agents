@@ -155,7 +155,7 @@ def test_convert_stray_expr_never_reaches_tts() -> None:
 @pytest.mark.parametrize("provider", ["xai", "inworld", "cartesia"])
 def test_split_markup_strips_expr(provider: str) -> None:
     clean, tags = split_markup(provider, JOKE)
-    assert clean.strip() == "Why did the burger go to the gym?  Because it wanted better buns!"
+    assert clean.strip() == "Why did the burger go to the gym? Because it wanted better buns!"
     assert tags == [
         {"type": "expression", "value": "say playfully"},
         {"type": "break", "value": "500ms"},
@@ -190,7 +190,7 @@ def test_expr_regex_does_not_match_native_expression_tag() -> None:
     # must keep the native Inworld tag on the generic strip path with its own type
     text = '<expression value="speak calmly"/> Hi <expr type="break" label="1s"/> there.'
     clean, tags = split_markup("inworld", text)
-    assert clean == " Hi  there."
+    assert clean == "Hi there."
     assert {"type": "expression", "value": "speak calmly"} in tags
     assert {"type": "break", "value": "1s"} in tags
     # conversion must also leave the native tag for the provider pipeline, not eat it
@@ -209,9 +209,26 @@ def test_transcript_stripper_streaming_chunks() -> None:
     ]:
         out += stripper.push(chunk)
     out += stripper.flush()
-    assert out == " Hello world!"
+    assert out == "Hello world!"
     assert stripper.tags[0] == {"type": "expression", "value": "say playfully"}
     assert {"type": "prosody", "value": "whisper"} in stripper.tags
+
+
+def test_transcript_stripper_no_leftover_spaces() -> None:
+    # the room output splits expr markers into their own chunks, so the space that
+    # separated a marker from the text arrives in the NEXT chunk — it must not
+    # surface as a leading or doubled space in the transcript
+    stripper = TranscriptMarkupStripper()
+    out = ""
+    for chunk in ['<expr type="expression" label="warm"/>', " What dates were you looking at?"]:
+        out += stripper.push(chunk)
+    assert out == "What dates were you looking at?"
+
+    stripper = TranscriptMarkupStripper()
+    out = ""
+    for chunk in ["All checked! ", '<expr type="sound" label="laugh"/>', " What dates?"]:
+        out += stripper.push(chunk)
+    assert out == "All checked! What dates?"
 
 
 def test_expression_attribute_from_expr() -> None:
