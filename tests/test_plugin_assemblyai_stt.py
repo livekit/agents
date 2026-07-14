@@ -904,31 +904,42 @@ async def test_mode_connect_time_only():
 
 
 # ---------------------------------------------------------------------------
-# language_code (language steering)
+# language_code / language_codes (language steering)
 #
-# `language_code` biases transcription toward a single language (e.g. "en",
-# "es") instead of automatic detection/code-switching. Steering is only applied
-# by the u3-pro ASR, so — like `mode` and the context/voice-focus params — it is
-# u3-rt-pro-family-only and connect-time only (not exposed via update_options,
-# matching the AssemblyAI streaming API, where `language_code` is a connect-time
-# parameter and not part of UpdateConfiguration).
+# `language_codes` biases transcription toward one or more expected languages
+# (e.g. ["en", "es"]) instead of automatic detection/code-switching across all
+# supported languages. `language_code` is shorthand for a one-element list;
+# both normalize into `_opts.language_codes`. Steering is only applied by the
+# u3-pro ASR, so — like `mode` and the context/voice-focus params — both are
+# u3-rt-pro-family-only at construction. `language_codes` (unlike the
+# singular) can also be re-steered mid-session via update_options, matching
+# the AssemblyAI streaming API's UpdateConfiguration; an empty list clears
+# steering back to the model default.
 # ---------------------------------------------------------------------------
 
 
-async def test_language_code_default():
-    """language_code is unset by default (automatic detection applies)."""
+async def test_language_codes_default():
+    """language_codes is unset by default (automatic detection applies)."""
     from livekit.plugins.assemblyai import STT
 
     stt = STT(api_key="test-key")
-    assert stt._opts.language_code is NOT_GIVEN
+    assert stt._opts.language_codes is NOT_GIVEN
 
 
 async def test_language_code_set():
-    """language_code can be set in the constructor."""
+    """The singular language_code is stored as a one-element language_codes list."""
     from livekit.plugins.assemblyai import STT
 
     stt = STT(api_key="test-key", model="u3-rt-pro", language_code="es")
-    assert stt._opts.language_code == "es"
+    assert stt._opts.language_codes == ["es"]
+
+
+async def test_language_codes_set():
+    """language_codes can be set in the constructor."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model="u3-rt-pro", language_codes=["en", "es"])
+    assert stt._opts.language_codes == ["en", "es"]
 
 
 async def test_language_code_normalized_to_iso_639_1():
@@ -944,7 +955,74 @@ async def test_language_code_normalized_to_iso_639_1():
         ("pt-BR", "pt"),
     ):
         stt = STT(api_key="test-key", model="u3-rt-pro", language_code=raw)
-        assert stt._opts.language_code == expected
+        assert stt._opts.language_codes == [expected]
+
+
+async def test_language_codes_normalized_and_deduped():
+    """Each entry is normalized; duplicates after normalization are dropped,
+    preserving first-seen order."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(
+        api_key="test-key",
+        model="u3-rt-pro",
+        language_codes=["en-US", "en-GB", "Spanish", "es"],
+    )
+    assert stt._opts.language_codes == ["en", "es"]
+
+
+async def test_language_code_and_language_codes_mutually_exclusive():
+    """Passing both spellings raises — they fill the same server field."""
+    from livekit.plugins.assemblyai import STT
+
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        STT(api_key="test-key", model="u3-rt-pro", language_code="en", language_codes=["es"])
+
+
+async def test_language_codes_max_10():
+    """More than 10 codes after normalization/dedup raises (server limit)."""
+    from livekit.plugins.assemblyai import STT
+
+    codes = ["en", "es", "fr", "de", "it", "pt", "nl", "pl", "ru", "ja", "ko"]
+    with pytest.raises(ValueError, match="at most 10"):
+        STT(api_key="test-key", model="u3-rt-pro", language_codes=codes)
+
+
+async def test_language_codes_max_10_applies_after_dedup():
+    """11 raw entries that dedup to 10 codes are accepted — the client is never
+    stricter than what it actually sends to the server."""
+    from livekit.plugins.assemblyai import STT
+
+    codes = ["en-US", "en-GB", "es", "fr", "de", "it", "pt", "nl", "pl", "ru", "ja"]
+    stt = STT(api_key="test-key", model="u3-rt-pro", language_codes=codes)
+    assert stt._opts.language_codes == [
+        "en",
+        "es",
+        "fr",
+        "de",
+        "it",
+        "pt",
+        "nl",
+        "pl",
+        "ru",
+        "ja",
+    ]
+
+
+async def test_language_codes_multi_cannot_be_combined():
+    """'multi' routes to the unsteered multilingual model and must be sent alone."""
+    from livekit.plugins.assemblyai import STT
+
+    with pytest.raises(ValueError, match="multi"):
+        STT(api_key="test-key", model="u3-rt-pro", language_codes=["multi", "en"])
+
+
+async def test_language_codes_multi_alone_is_allowed():
+    """'multi' by itself is valid and passes through un-mangled."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model="u3-rt-pro", language_codes=["multi"])
+    assert stt._opts.language_codes == ["multi"]
 
 
 async def test_language_code_requires_u3_pro_family():
@@ -955,17 +1033,53 @@ async def test_language_code_requires_u3_pro_family():
         STT(api_key="test-key", model="universal-streaming-multilingual", language_code="es")
 
 
-async def test_language_code_allowed_for_all_u3_pro_family_models():
-    """language_code is accepted for every u3-rt-pro-family model, not just the default."""
+async def test_language_codes_requires_u3_pro_family():
+    """language_codes raises ValueError when used with a non-u3-rt-pro-family model."""
+    from livekit.plugins.assemblyai import STT
+
+    with pytest.raises(ValueError, match="language_codes"):
+        STT(
+            api_key="test-key",
+            model="universal-streaming-multilingual",
+            language_codes=["es"],
+        )
+
+
+async def test_language_codes_allowed_for_all_u3_pro_family_models():
+    """language_codes is accepted for every u3-rt-pro-family model, not just the default."""
     from livekit.plugins.assemblyai import STT
 
     for model in ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro"):
-        stt = STT(api_key="test-key", model=model, language_code="en")
-        assert stt._opts.language_code == "en"
+        stt = STT(api_key="test-key", model=model, language_codes=["en", "es"])
+        assert stt._opts.language_codes == ["en", "es"]
 
 
-async def test_language_code_in_connect_config():
-    """language_code is sent in the connect config query."""
+async def test_language_codes_in_connect_config():
+    """language_codes is sent as a JSON array in the connect config query."""
+    import json
+    from urllib.parse import parse_qs, urlparse
+
+    from livekit.plugins.assemblyai import STT
+
+    captured: dict = {}
+
+    async def _fake_ws_connect(url, **kwargs):
+        captured["url"] = url
+        return MagicMock()
+
+    stt = STT(api_key="test-key", model="universal-3-5-pro", language_codes=["en", "es"])
+    stream = _make_stream_for_unit_test(stt)
+    stream._session.ws_connect = _fake_ws_connect
+    await stream._connect_ws()
+
+    query = parse_qs(urlparse(captured["url"]).query)
+    assert json.loads(query["language_codes"][0]) == ["en", "es"]
+
+
+async def test_language_code_singular_in_connect_config():
+    """A singular language_code is sent as a one-element language_codes JSON
+    array — the server aliases both names to the same field."""
+    import json
     from urllib.parse import parse_qs, urlparse
 
     from livekit.plugins.assemblyai import STT
@@ -982,11 +1096,12 @@ async def test_language_code_in_connect_config():
     await stream._connect_ws()
 
     query = parse_qs(urlparse(captured["url"]).query)
-    assert query["language_code"] == ["es"]
+    assert json.loads(query["language_codes"][0]) == ["es"]
+    assert "language_code" not in query
 
 
-async def test_language_code_absent_from_connect_config_when_unset():
-    """language_code key is omitted from the connect config when not set."""
+async def test_language_codes_absent_from_connect_config_when_unset():
+    """language_codes key is omitted from the connect config when not set."""
     from urllib.parse import parse_qs, urlparse
 
     from livekit.plugins.assemblyai import STT
@@ -1003,6 +1118,7 @@ async def test_language_code_absent_from_connect_config_when_unset():
     await stream._connect_ws()
 
     query = parse_qs(urlparse(captured["url"]).query)
+    assert "language_codes" not in query
     assert "language_code" not in query
 
 

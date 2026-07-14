@@ -60,7 +60,7 @@ class STTOptions:
         "universal-3-5-pro",
     ] = "universal-3-5-pro"
     language_detection: NotGivenOr[bool] = NOT_GIVEN
-    language_code: NotGivenOr[str] = NOT_GIVEN
+    language_codes: NotGivenOr[list[str]] = NOT_GIVEN
     end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN
     min_turn_silence: NotGivenOr[int] = NOT_GIVEN
     max_turn_silence: NotGivenOr[int] = NOT_GIVEN
@@ -86,6 +86,30 @@ class STTOptions:
 # defaults. Mirrors the server-side `SpeechModel.is_u3_pro`.
 _U3_PRO_MODELS = ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro")
 
+# Server-side cap on the number of steering codes, mirrored client-side so bad
+# input fails at construction/update time instead of as a websocket error.
+_MAX_LANGUAGE_CODES = 10
+
+
+def _normalize_language_codes(language_codes: list[str]) -> list[str]:
+    """Normalize each code to bare ISO 639-1 and dedup preserving order.
+
+    Mirrors the AssemblyAI streaming API's validation rules: at most 10 codes,
+    and 'multi' (the unsteered multilingual default) must be sent alone.
+    """
+    normalized = list(dict.fromkeys(LanguageCode(code).language for code in language_codes))
+    if len(normalized) > _MAX_LANGUAGE_CODES:
+        raise ValueError(
+            f"language_codes accepts at most {_MAX_LANGUAGE_CODES} codes "
+            f"(got {len(normalized)} after normalization)"
+        )
+    if "multi" in normalized and len(normalized) > 1:
+        raise ValueError(
+            "language_code 'multi' routes to the unsteered multilingual model "
+            "and cannot be combined with other codes"
+        )
+    return normalized
+
 
 class STT(stt.STT):
     def __init__(
@@ -104,6 +128,7 @@ class STT(stt.STT):
         ] = "universal-3-5-pro",
         language_detection: NotGivenOr[bool] = NOT_GIVEN,
         language_code: NotGivenOr[str] = NOT_GIVEN,
+        language_codes: NotGivenOr[list[str]] = NOT_GIVEN,
         end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
         min_turn_silence: NotGivenOr[int] = NOT_GIVEN,
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
@@ -195,6 +220,11 @@ class STT(stt.STT):
                 Leave unset to use the server default. Only supported with the Universal-3 Pro
                 family models. Set at construction (connect) time only.
         """
+        if is_given(language_code) and is_given(language_codes):
+            raise ValueError(
+                "language_code and language_codes are mutually exclusive; "
+                "use language_codes (language_code is shorthand for a one-element list)"
+            )
         # agent_context carryover is only available on the u3-rt-pro family
         # ("u3-pro" is normalized to "u3-rt-pro" below) and is opt-in via the user
         supports_carryover = model in _U3_PRO_MODELS or model == "u3-pro"
@@ -230,6 +260,7 @@ class STT(stt.STT):
                 "voice_focus_threshold": voice_focus_threshold,
                 "mode": mode,
                 "language_code": language_code,
+                "language_codes": language_codes,
             }
             for _param_name, _param_value in _u3_pro_only_params.items():
                 if is_given(_param_value):
@@ -264,11 +295,14 @@ class STT(stt.STT):
         if not is_given(min_turn_silence) and not is_given(mode):
             min_turn_silence = 100
 
-        # Normalize to a bare ISO 639-1 code (e.g. "es-ES" / "Spanish" -> "es"),
-        # the form AssemblyAI's language steering expects.
-        normalized_language_code: NotGivenOr[str] = NOT_GIVEN
+        # Normalize to bare ISO 639-1 codes (e.g. "es-ES" / "Spanish" -> "es"),
+        # the form AssemblyAI's language steering expects. The singular
+        # language_code is shorthand for a one-element list.
+        normalized_language_codes: NotGivenOr[list[str]] = NOT_GIVEN
         if is_given(language_code):
-            normalized_language_code = LanguageCode(language_code).language
+            normalized_language_codes = _normalize_language_codes([language_code])
+        elif is_given(language_codes):
+            normalized_language_codes = _normalize_language_codes(list(language_codes))
 
         self._opts = STTOptions(
             sample_rate=sample_rate,
@@ -276,7 +310,7 @@ class STT(stt.STT):
             encoding=encoding,
             speech_model=model,
             language_detection=language_detection,
-            language_code=normalized_language_code,
+            language_codes=normalized_language_codes,
             end_of_turn_confidence_threshold=end_of_turn_confidence_threshold,
             min_turn_silence=min_turn_silence,
             max_turn_silence=max_turn_silence,
@@ -720,8 +754,8 @@ class SpeechStream(stt.SpeechStream):
             if "multilingual" in self._opts.speech_model
             or self._opts.speech_model in _U3_PRO_MODELS
             else False,
-            "language_code": self._opts.language_code
-            if is_given(self._opts.language_code)
+            "language_codes": json.dumps(self._opts.language_codes)
+            if is_given(self._opts.language_codes) and self._opts.language_codes
             else None,
             "prompt": self._opts.prompt if is_given(self._opts.prompt) else None,
             "agent_context": self._opts.agent_context
