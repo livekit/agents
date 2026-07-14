@@ -104,9 +104,6 @@ class Instructions:
         """
         any_instructions = any(isinstance(v, Instructions) for v in kwargs.values())
         if any_instructions:
-            common_kw: dict[str, object] = {
-                k: str(v) if isinstance(v, Instructions) else v for k, v in kwargs.items()
-            }
             audio_kw: dict[str, object] = {
                 # an explicit "" removes the section; only None falls back to common
                 k: (v.audio if v.audio is not None else str(v))
@@ -118,11 +115,15 @@ class Instructions:
                 k: (v.text if v.text is not None else str(v)) if isinstance(v, Instructions) else v
                 for k, v in kwargs.items()
             }
-            return Instructions(
-                common=utils.misc.safe_render(template, common_kw),
-                audio=utils.misc.safe_render(template, audio_kw),
-                text=utils.misc.safe_render(template, text_kw),
-            )
+            # audio/text hold fully rendered variants of the whole template, so they go in
+            # place of common (which render() would otherwise prepend, doubling the template).
+            audio = utils.misc.safe_render(template, audio_kw)
+            text = utils.misc.safe_render(template, text_kw)
+            if audio == text:
+                # no modality-specific differences; a single common variant renders correctly
+                # with or without a modality
+                return Instructions(common=audio)
+            return Instructions(common="", audio=audio, text=text)
         else:
             rendered = utils.misc.safe_render(template, kwargs)
             return Instructions(common=rendered)

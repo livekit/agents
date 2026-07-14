@@ -689,3 +689,52 @@ def test_instructions_render():
     empty_common = Instructions("", audio="audio only", text="text only")
     assert empty_common.render(modality="audio") == "audio only"
     assert empty_common.render(modality="text") == "text only"
+
+
+def test_resolve_template_no_double_render():
+    """resolve_template with Instructions kwargs renders each variant exactly once."""
+    from livekit.agents.llm.chat_context import Instructions
+
+    instr = Instructions.resolve_template(
+        "{persona}\n\n{modality_specific}",
+        persona="You are a helpful assistant.",
+        modality_specific=Instructions(
+            audio="Handle noisy voice input.", text="Handle typed input."
+        ),
+    )
+
+    # each modality resolves to a single copy of the template, not two
+    assert instr.render(modality="audio") == (
+        "You are a helpful assistant.\n\nHandle noisy voice input."
+    )
+    assert instr.render(modality="text") == ("You are a helpful assistant.\n\nHandle typed input.")
+    # persona (and everything else) appears exactly once per modality
+    assert instr.render(modality="audio").count("You are a helpful assistant.") == 1
+
+
+def test_resolve_template_plain_kwargs():
+    """resolve_template without Instructions kwargs is a plain common-only render."""
+    from livekit.agents.llm.chat_context import Instructions
+
+    instr = Instructions.resolve_template("Hello {name}", name="Alex")
+    assert instr.common == "Hello Alex"
+    assert instr.audio is None
+    assert instr.text is None
+    assert instr.render() == "Hello Alex"
+    assert instr.render(modality="audio") == "Hello Alex"
+
+
+def test_resolve_template_identical_variants_collapse():
+    """When modality variants are identical, resolve_template collapses to common-only."""
+    from livekit.agents.llm.chat_context import Instructions
+
+    # an Instructions kwarg with no modality-specific parts yields identical variants
+    instr = Instructions.resolve_template(
+        "{persona}\n\n{note}",
+        persona="You are a helpful assistant.",
+        note=Instructions("shared note"),
+    )
+    assert instr.audio is None
+    assert instr.text is None
+    assert instr.render() == "You are a helpful assistant.\n\nshared note"
+    assert instr.render(modality="audio") == "You are a helpful assistant.\n\nshared note"
