@@ -12,6 +12,7 @@ from livekit.agents.llm import utils as llm_utils
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
+from .log import logger
 from .tools import GeminiTool
 
 __all__ = ["create_tools_config"]
@@ -22,6 +23,7 @@ def create_tools_config(
     *,
     tool_behavior: NotGivenOr[types.Behavior] = NOT_GIVEN,
     use_parameters_json_schema: bool = True,
+    allow_mixed_tools: bool = True,
 ) -> list[types.Tool]:
     gemini_tools: list[types.Tool] = []
 
@@ -36,10 +38,19 @@ def create_tools_config(
     if function_tools:
         gemini_tools.append(types.Tool(function_declarations=function_tools))
 
-    for tool in tool_ctx.provider_tools:
-        if isinstance(tool, GeminiTool):
-            gemini_tools.append(tool.to_tool_config())
+    provider_tools = [
+        tool.to_tool_config() for tool in tool_ctx.provider_tools if isinstance(tool, GeminiTool)
+    ]
+    # generateContent only supports combining built-in tools with function tools
+    # on Gemini 3 models: https://ai.google.dev/gemini-api/docs/tool-combination
+    if function_tools and provider_tools and not allow_mixed_tools:
+        logger.warning(
+            "this model does not support combining provider tools with function tools; "
+            "ignoring provider tools (combining them requires a Gemini 3 model)"
+        )
+        return gemini_tools
 
+    gemini_tools.extend(provider_tools)
     return gemini_tools
 
 
