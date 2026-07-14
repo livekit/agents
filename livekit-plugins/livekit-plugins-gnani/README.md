@@ -17,7 +17,7 @@ This will also install the [`websockets`](https://pypi.org/project/websockets/) 
 
 ## Prerequisites
 
-You need a Gnani API key from [app.gnani.ai/voice](https://app.gnani.ai/voice) (Gnani APIs).
+You need a Gnani API key. [Gnani APIs](https://app.gnani.ai/voice) have this.
 
 ### Authentication
 
