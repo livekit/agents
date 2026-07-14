@@ -68,9 +68,14 @@ def to_chat_ctx(
                     "args": json.loads(msg.arguments or "{}"),
                 }
             }
-            # Inject thought_signature if available (Gemini 3 multi-turn function calling)
-            if thought_signatures and (sig := thought_signatures.get(msg.call_id)):
-                fc_part["thought_signature"] = sig
+            # Gemini 2.5+ requires a thought_signature for every multi-turn
+            # function_call part. When a previous tool call came from another
+            # provider (for example through FallbackAdapter), we do not have a
+            # real signature, so use Google's documented validator-bypass sentinel.
+            if thought_signatures is not None:
+                fc_part["thought_signature"] = thought_signatures.get(
+                    msg.call_id, b"skip_thought_signature_validator"
+                )
             parts.append(fc_part)
         elif msg.type == "function_call_output":
             response = {"output": msg.output} if not msg.is_error else {"error": msg.output}
