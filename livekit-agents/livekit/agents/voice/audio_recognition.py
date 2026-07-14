@@ -177,28 +177,29 @@ class _STTPipeline:
         """Iterate the STT node and forward events into *event_ch*.
 
         Owns the generator lifecycle — never cancelled during handoff, only the
-        consumer is swapped. On an unrecoverable error the long-lived stream is
+        consumer is swapped. On a connection failure the long-lived stream is
         recreated after a backoff; the session tolerance is what closes it.
         """
         from .agent import ModelSettings
 
         while True:
-            node = self._stt_node(self._audio_ch, ModelSettings())
-            if asyncio.iscoroutine(node):
-                node = await node
-
-            if not isinstance(node, AsyncIterable):
-                # None or a non-streaming node: nothing to iterate or recover
-                return
-
             try:
+                node = self._stt_node(self._audio_ch, ModelSettings())
+                if asyncio.iscoroutine(node):
+                    node = await node
+
+                if not isinstance(node, AsyncIterable):
+                    # None or a non-streaming node: nothing to iterate or recover
+                    return
+
                 async for ev in node:
                     assert isinstance(ev, stt.SpeechEvent), (
                         f"STT node must yield SpeechEvent, got: {type(ev)}"
                     )
                     self._event_ch.send_nowait(ev)
-            except Exception:
-                # the error is already emitted and counted by the session; recreate to resume
+            except APIError:
+                # only a connection failure is retried (it was emitted and counted by the
+                # session); any other error propagates and stops the pump
                 if self._is_closing():
                     return
                 logger.warning(

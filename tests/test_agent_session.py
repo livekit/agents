@@ -14,6 +14,7 @@ from livekit.agents import (
     Agent,
     AgentFalseInterruptionEvent,
     AgentStateChangedEvent,
+    APIConnectionError,
     ConversationItemAddedEvent,
     FlushSentinel,
     LanguageCode,
@@ -1210,7 +1211,7 @@ async def test_stt_pipeline_recreates_stream_after_unrecoverable_error(
         nonlocal attempts
         attempts += 1
         if attempts == 1:
-            raise RuntimeError("stt unavailable")
+            raise APIConnectionError("stt unavailable")
 
         yield SpeechEvent(
             type=SpeechEventType.FINAL_TRANSCRIPT,
@@ -1222,12 +1223,44 @@ async def test_stt_pipeline_recreates_stream_after_unrecoverable_error(
 
     pipeline = _STTPipeline(stt_node)
     try:
-        # the first stream dies unrecoverably; the pump must recreate it and
-        # forward the transcript produced by the second stream
+        # the first stream dies on a connection error; the pump must recreate it
+        # and forward the transcript produced by the second stream
         ev = await asyncio.wait_for(pipeline.event_ch.recv(), timeout=5)
         assert ev.type == SpeechEventType.FINAL_TRANSCRIPT
         assert ev.alternatives[0].text == "recovered"
         assert attempts == 2
+    finally:
+        await pipeline.aclose()
+
+
+async def test_stt_pipeline_does_not_recreate_on_non_connection_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.agents.voice import audio_recognition
+    from livekit.agents.voice.audio_recognition import _STTPipeline
+
+    monkeypatch.setattr(audio_recognition, "_STT_RECONNECT_INTERVAL", 0.0)
+
+    attempts = 0
+
+    async def stt_node(audio, model_settings):  # type: ignore[no-untyped-def]
+        nonlocal attempts
+        attempts += 1
+        raise ValueError("bug in stt_node")
+        yield  # pragma: no cover - makes this an async generator
+
+    # a non-connection error is not retried: the pump stops instead of looping
+    pipeline = _STTPipeline(stt_node)
+    try:
+        events: list[SpeechEvent] = []
+
+        async def _collect() -> None:
+            async for ev in pipeline.event_ch:
+                events.append(ev)
+
+        await asyncio.wait_for(_collect(), timeout=5)
+        assert events == []
+        assert attempts == 1
     finally:
         await pipeline.aclose()
 
@@ -1246,7 +1279,7 @@ async def test_stt_pipeline_does_not_recreate_stream_while_closing(
         nonlocal attempts
         attempts += 1
         if attempts == 1:
-            raise RuntimeError("stt unavailable")
+            raise APIConnectionError("stt unavailable")
 
         yield SpeechEvent(
             type=SpeechEventType.FINAL_TRANSCRIPT,
