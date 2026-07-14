@@ -6,7 +6,7 @@ import pytest
 from google.genai import types
 
 from livekit.agents import llm
-from livekit.agents.llm import ChatContext, function_tool
+from livekit.agents.llm import ChatContext, FunctionCall, FunctionCallOutput, function_tool
 from livekit.agents.types import APIConnectOptions
 from livekit.plugins.google.llm import LLM, LLMStream
 from livekit.plugins.google.realtime.realtime_api import RealtimeModel, RealtimeSession
@@ -69,6 +69,21 @@ class TestParsePartFunctionCall:
         chunk = llm_stream._parse_part("test-id", part)
 
         assert chunk is None
+
+    def test_signature_stored_even_when_cache_is_none(self, llm_stream: LLMStream):
+        llm_stream._model = "gemini-2.5-flash"
+        llm_stream._llm._thought_signatures = None
+        part = types.Part(
+            function_call=types.FunctionCall(
+                id="call_1", name="get_weather", args={"city": "Paris"}
+            ),
+            thought_signature=b"real_signature",
+        )
+
+        chunk = llm_stream._parse_part("test-id", part)
+
+        assert chunk is not None
+        assert llm_stream._llm._thought_signatures == {"call_1": b"real_signature"}
 
 
 class TestCachedContentOption:
@@ -271,6 +286,53 @@ class TestCachedContentRequestSuppression:
         assert "livekit-agents/" in config.http_options.headers["x-goog-api-client"]
         assert caller_http_options.timeout is None
         assert caller_http_options.headers == {"X-Vertex-Test": "1"}
+
+
+class TestThoughtSignatureRequests:
+    """Request-level thought_signature behaviour (issue #6135): Gemini 2.5+
+    must receive Google's validator-skip sentinel for function calls made by
+    another provider (e.g. through FallbackAdapter), while pre-2.5 models must
+    never be sent the field."""
+
+    @staticmethod
+    def _ctx_with_function_call(call_id: str) -> ChatContext:
+        ctx = ChatContext.empty()
+        ctx.add_message(role="user", content="hello")
+        ctx.insert(FunctionCall(call_id=call_id, name="tool", arguments="{}"))
+        ctx.insert(FunctionCallOutput(call_id=call_id, name="tool", output="ok", is_error=False))
+        return ctx
+
+    @staticmethod
+    async def _drain(stream) -> None:
+        try:
+            async for _ in stream:
+                pass
+        finally:
+            await stream.aclose()
+
+    @pytest.mark.asyncio
+    async def test_gemini_25_sends_sentinel_when_cache_is_none(self) -> None:
+        llm = LLM(model="gemini-2.5-flash", api_key="test")
+        llm._thought_signatures = None
+
+        fake, captured = TestCachedContentRequestSuppression._patched_stream_capture()
+        with patch.object(llm._client.aio.models, "generate_content_stream", fake):
+            await self._drain(llm.chat(chat_ctx=self._ctx_with_function_call("call_from_openai")))
+
+        function_call_part = captured["contents"][1].parts[0]
+        assert function_call_part.thought_signature == b"skip_thought_signature_validator"
+
+    @pytest.mark.asyncio
+    async def test_pre_gemini_25_omits_thought_signature_even_with_cached_signature(self) -> None:
+        llm = LLM(model="gemini-2.0-flash", api_key="test")
+        llm._thought_signatures = {"call_1": b"real_signature"}
+
+        fake, captured = TestCachedContentRequestSuppression._patched_stream_capture()
+        with patch.object(llm._client.aio.models, "generate_content_stream", fake):
+            await self._drain(llm.chat(chat_ctx=self._ctx_with_function_call("call_1")))
+
+        function_call_part = captured["contents"][1].parts[0]
+        assert function_call_part.thought_signature is None
 
 
 class TestMediaResolution:

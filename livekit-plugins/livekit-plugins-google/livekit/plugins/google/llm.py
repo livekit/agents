@@ -441,10 +441,12 @@ class LLMStream(llm.LLMStream):
         request_id = utils.shortuuid()
 
         try:
-            # Pass thought_signatures for Gemini 2.5+ multi-turn function calling
-            thought_sigs = (
-                self._llm._thought_signatures if _requires_thought_signatures(self._model) else None
-            )
+            # Pass thought_signatures for Gemini 2.5+ multi-turn function calling.
+            # The cache may be None on a fresh instance; pass an empty mapping so
+            # the formatter can still inject the fallback sentinel.
+            thought_sigs: dict[str, bytes] | None = None
+            if _requires_thought_signatures(self._model):
+                thought_sigs = getattr(self._llm, "_thought_signatures", None) or {}
             turns_dict, extra_data = self._chat_ctx.to_provider_format(
                 format="google", thought_signatures=thought_sigs
             )
@@ -614,6 +616,8 @@ class LLMStream(llm.LLMStream):
                 and hasattr(part, "thought_signature")
                 and part.thought_signature
             ):
+                if getattr(self._llm, "_thought_signatures", None) is None:
+                    self._llm._thought_signatures = {}
                 self._llm._thought_signatures[tool_call.call_id] = part.thought_signature
 
             chat_chunk = llm.ChatChunk(
