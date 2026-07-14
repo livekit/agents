@@ -190,6 +190,7 @@ class InworldOptions(TypedDict, total=False):
 
 class XaiOptions(TypedDict, total=False):
     bit_rate: Literal[32000, 64000, 96000, 128000, 192000]
+    speed: float  # speaking-rate multiplier, default 1.0
 
 
 TTSEncoding = Literal["pcm_s16le"]
