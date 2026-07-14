@@ -386,6 +386,7 @@ class STT(stt.STT):
         prompt: NotGivenOr[str] = NOT_GIVEN,
         agent_context: NotGivenOr[str] = NOT_GIVEN,
         keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
+        language_codes: NotGivenOr[list[str]] = NOT_GIVEN,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         continuous_partials: NotGivenOr[bool] = NOT_GIVEN,
         interruption_delay: NotGivenOr[int] = NOT_GIVEN,
@@ -417,6 +418,9 @@ class STT(stt.STT):
             # re-merge with the active session keyterms so a user update doesn't drop them
             keyterms_prompt = list(dict.fromkeys([*self._user_keyterms, *self._session_keyterms]))
             self._opts.keyterms_prompt = keyterms_prompt
+        if is_given(language_codes):
+            language_codes = _normalize_language_codes(list(language_codes))
+            self._opts.language_codes = language_codes
         if is_given(vad_threshold):
             self._opts.vad_threshold = vad_threshold
         if is_given(continuous_partials):
@@ -433,6 +437,7 @@ class STT(stt.STT):
                 prompt=prompt,
                 agent_context=agent_context,
                 keyterms_prompt=keyterms_prompt,
+                language_codes=language_codes,
                 vad_threshold=vad_threshold,
                 continuous_partials=continuous_partials,
                 interruption_delay=interruption_delay,
@@ -507,6 +512,7 @@ class SpeechStream(stt.SpeechStream):
         prompt: NotGivenOr[str] = NOT_GIVEN,
         agent_context: NotGivenOr[str] = NOT_GIVEN,
         keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
+        language_codes: NotGivenOr[list[str]] = NOT_GIVEN,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         continuous_partials: NotGivenOr[bool] = NOT_GIVEN,
         interruption_delay: NotGivenOr[int] = NOT_GIVEN,
@@ -535,6 +541,9 @@ class SpeechStream(stt.SpeechStream):
             self._opts.agent_context = agent_context
         if is_given(keyterms_prompt):
             self._opts.keyterms_prompt = keyterms_prompt
+        if is_given(language_codes):
+            language_codes = _normalize_language_codes(list(language_codes))
+            self._opts.language_codes = language_codes
         if is_given(vad_threshold):
             self._opts.vad_threshold = vad_threshold
         if is_given(continuous_partials):
@@ -550,6 +559,8 @@ class SpeechStream(stt.SpeechStream):
             config_msg["agent_context"] = agent_context
         if is_given(keyterms_prompt):
             config_msg["keyterms_prompt"] = keyterms_prompt
+        if is_given(language_codes):
+            config_msg["language_codes"] = language_codes
         if is_given(max_turn_silence):
             config_msg["max_turn_silence"] = max_turn_silence
         if is_given(min_turn_silence):

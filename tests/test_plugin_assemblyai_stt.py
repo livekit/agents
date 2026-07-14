@@ -1122,8 +1122,99 @@ async def test_language_codes_absent_from_connect_config_when_unset():
     assert "language_code" not in query
 
 
-async def test_language_code_connect_time_only():
-    """language_code is connect-time only — not exposed via update_options."""
+async def test_language_codes_stream_sends_update_configuration():
+    """SpeechStream.update_options enqueues an UpdateConfiguration message
+    containing language_codes."""
+    stream = _make_stream_for_unit_test()
+
+    stream.update_options(language_codes=["en", "es"])
+
+    assert stream._opts.language_codes == ["en", "es"]
+    msg = stream._config_update_queue.get_nowait()
+    assert msg["type"] == "UpdateConfiguration"
+    assert msg["language_codes"] == ["en", "es"]
+
+
+async def test_language_codes_update_normalizes_input():
+    """Mid-session updates get the same normalization/dedup as the constructor."""
+    stream = _make_stream_for_unit_test()
+
+    stream.update_options(language_codes=["en-US", "Spanish"])
+
+    msg = stream._config_update_queue.get_nowait()
+    assert msg["language_codes"] == ["en", "es"]
+
+
+async def test_language_codes_update_validates_input():
+    """Mid-session updates get the same fail-fast validation as the constructor."""
+    stream = _make_stream_for_unit_test()
+
+    with pytest.raises(ValueError, match="multi"):
+        stream.update_options(language_codes=["multi", "en"])
+
+
+async def test_language_codes_empty_list_clears_steering():
+    """An explicit empty list is forwarded (the server's documented 'clear
+    steering back to model default' form), not dropped by a truthiness check."""
+    stream = _make_stream_for_unit_test()
+
+    stream.update_options(language_codes=[])
+
+    assert stream._opts.language_codes == []
+    msg = stream._config_update_queue.get_nowait()
+    assert msg["type"] == "UpdateConfiguration"
+    assert msg["language_codes"] == []
+
+
+async def test_language_codes_propagates_from_stt_to_active_stream():
+    """STT.update_options(language_codes=...) propagates to an already-active
+    stream and sends it over that stream's websocket queue."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", http_session=MagicMock())
+
+    def _fake_create_task(coro, *args, **kwargs):
+        coro.close()
+        return MagicMock()
+
+    with patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=_fake_create_task):
+        stream = stt.stream()
+
+    stt.update_options(language_codes=["en", "es"])
+
+    assert stt._opts.language_codes == ["en", "es"]
+    assert stream._opts.language_codes == ["en", "es"]
+    msg = stream._config_update_queue.get_nowait()
+    assert msg["type"] == "UpdateConfiguration"
+    assert msg["language_codes"] == ["en", "es"]
+
+
+async def test_cleared_language_codes_omitted_on_reconnect():
+    """After clearing ([]), a (re)connect omits the language_codes param —
+    consistent with the cleared state."""
+    from urllib.parse import parse_qs, urlparse
+
+    from livekit.plugins.assemblyai import STT
+
+    captured: dict = {}
+
+    async def _fake_ws_connect(url, **kwargs):
+        captured["url"] = url
+        return MagicMock()
+
+    stt = STT(api_key="test-key", model="universal-3-5-pro", language_codes=["en", "es"])
+    stream = _make_stream_for_unit_test(stt)
+    stream.update_options(language_codes=[])
+    stream._session.ws_connect = _fake_ws_connect
+    await stream._connect_ws()
+
+    query = parse_qs(urlparse(captured["url"]).query)
+    assert "language_codes" not in query
+
+
+async def test_language_code_singular_not_in_update_options():
+    """The singular language_code is constructor-only; mid-session re-steering
+    goes through language_codes."""
     import inspect
 
     from livekit.plugins.assemblyai import STT
@@ -1131,3 +1222,5 @@ async def test_language_code_connect_time_only():
 
     assert "language_code" not in inspect.signature(STT.update_options).parameters
     assert "language_code" not in inspect.signature(SpeechStream.update_options).parameters
+    assert "language_codes" in inspect.signature(STT.update_options).parameters
+    assert "language_codes" in inspect.signature(SpeechStream.update_options).parameters
