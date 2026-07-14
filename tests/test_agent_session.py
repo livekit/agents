@@ -37,7 +37,7 @@ from livekit.agents.llm import (
     Toolset,
 )
 from livekit.agents.llm.chat_context import ChatContext, ChatMessage
-from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
+from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType, STTError
 from livekit.agents.utils import aio
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.audio_recognition import AudioRecognition, _EndOfTurnInfo
@@ -1125,6 +1125,148 @@ async def test_interruption_detection_error_is_not_session_error() -> None:
         fallback.assert_called_once_with(unrecoverable)
     finally:
         await _close_test_session(session)
+
+
+async def test_stt_errors_use_unrecoverable_error_tolerance() -> None:
+    from livekit.agents.voice.agent_session import SessionConnectOptions
+
+    session = create_session(
+        FakeActions(),
+        extra_kwargs={"conn_options": SessionConnectOptions(max_unrecoverable_errors=1)},
+    )
+
+    def _stt_error() -> STTError:
+        return STTError(
+            timestamp=time.time(),
+            label="test",
+            error=RuntimeError("stt unavailable"),
+            recoverable=False,
+        )
+
+    try:
+        # first unrecoverable error is tolerated, like llm/tts
+        session._on_error(_stt_error())
+        assert session._closing_task is None
+        assert session._stt_error_counts == 1
+
+        # exceeding the tolerance closes the session
+        session._on_error(_stt_error())
+        assert session._closing_task is not None
+        await session._closing_task
+    finally:
+        await _close_test_session(session)
+
+
+async def test_stt_error_count_resets_on_user_transcript() -> None:
+    from livekit.agents.voice.agent_session import SessionConnectOptions
+
+    session = create_session(
+        FakeActions(),
+        extra_kwargs={"conn_options": SessionConnectOptions(max_unrecoverable_errors=1)},
+    )
+
+    def _stt_error() -> STTError:
+        return STTError(
+            timestamp=time.time(),
+            label="test",
+            error=RuntimeError("stt unavailable"),
+            recoverable=False,
+        )
+
+    try:
+        session._on_error(_stt_error())
+        assert session._stt_error_counts == 1
+
+        # a real transcript means the stt recovered -> tolerance resets
+        session._user_input_transcribed(
+            UserInputTranscribedEvent(transcript="hello", is_final=True)
+        )
+        assert session._stt_error_counts == 0
+
+        # an empty placeholder transcript is not a recovery -> no reset
+        session._on_error(_stt_error())
+        session._user_input_transcribed(UserInputTranscribedEvent(transcript="", is_final=False))
+        assert session._stt_error_counts == 1
+
+        # tolerance still trips once the (reset) budget is exhausted again
+        session._on_error(_stt_error())
+        assert session._closing_task is not None
+        await session._closing_task
+    finally:
+        await _close_test_session(session)
+
+
+async def test_stt_pipeline_recreates_stream_after_unrecoverable_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.agents.voice import audio_recognition
+    from livekit.agents.voice.audio_recognition import _STTPipeline
+
+    monkeypatch.setattr(audio_recognition, "_STT_RECONNECT_INTERVAL", 0.0)
+
+    attempts = 0
+
+    async def stt_node(audio, model_settings):  # type: ignore[no-untyped-def]
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("stt unavailable")
+
+        yield SpeechEvent(
+            type=SpeechEventType.FINAL_TRANSCRIPT,
+            alternatives=[SpeechData(text="recovered", language="en")],
+        )
+        # stay open like a live stream until the pipeline is closed
+        async for _ in audio:
+            pass
+
+    pipeline = _STTPipeline(stt_node)
+    try:
+        # the first stream dies unrecoverably; the pump must recreate it and
+        # forward the transcript produced by the second stream
+        ev = await asyncio.wait_for(pipeline.event_ch.recv(), timeout=5)
+        assert ev.type == SpeechEventType.FINAL_TRANSCRIPT
+        assert ev.alternatives[0].text == "recovered"
+        assert attempts == 2
+    finally:
+        await pipeline.aclose()
+
+
+async def test_stt_pipeline_does_not_recreate_stream_while_closing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.agents.voice import audio_recognition
+    from livekit.agents.voice.audio_recognition import _STTPipeline
+
+    monkeypatch.setattr(audio_recognition, "_STT_RECONNECT_INTERVAL", 0.0)
+
+    attempts = 0
+
+    async def stt_node(audio, model_settings):  # type: ignore[no-untyped-def]
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("stt unavailable")
+
+        yield SpeechEvent(
+            type=SpeechEventType.FINAL_TRANSCRIPT,
+            alternatives=[SpeechData(text="recovered", language="en")],
+        )
+
+    # session already closing: the pump must not spawn a replacement stream
+    pipeline = _STTPipeline(stt_node, is_closing=lambda: True)
+    try:
+        events: list[SpeechEvent] = []
+
+        async def _collect() -> None:
+            async for ev in pipeline.event_ch:
+                events.append(ev)
+
+        await asyncio.wait_for(_collect(), timeout=5)
+        assert events == []
+        assert attempts == 1
+    finally:
+        await pipeline.aclose()
 
 
 async def test_vad_fallback_uses_next_vad_inference_event(

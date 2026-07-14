@@ -53,6 +53,8 @@ if TYPE_CHECKING:
 MIN_LANGUAGE_DETECTION_LENGTH = 5
 # Mirrors turn_detector.base.MAX_HISTORY_TURNS for tracing
 _EOU_MAX_HISTORY_TURNS = 6
+# backoff before recreating the stt stream after an unrecoverable error
+_STT_RECONNECT_INTERVAL = 0.5
 
 
 @dataclass
@@ -149,8 +151,12 @@ class _STTPipeline:
     It is never cancelled during handoff — only the consumer is swapped.
     """
 
-    def __init__(self, stt_node: io.STTNode) -> None:
+    def __init__(
+        self, stt_node: io.STTNode, *, is_closing: Callable[[], bool] | None = None
+    ) -> None:
         self._stt_node = stt_node
+        # don't recreate the stream while the session is closing
+        self._is_closing = is_closing or (lambda: False)
         self._audio_ch = aio.Chan[rtc.AudioFrame]()
         self._event_ch = aio.Chan[stt.SpeechEvent]()
         self._pump_task = asyncio.create_task(self._stt_pump())
@@ -168,26 +174,45 @@ class _STTPipeline:
 
     @utils.log_exceptions(logger=logger)
     async def _stt_pump(self) -> None:
-        """Iterate the STT generator and forward events into *event_ch*.
+        """Iterate the STT node and forward events into *event_ch*.
 
-        This task owns the generator lifecycle and is never cancelled during
-        handoff — only the consumer is swapped.
+        Owns the generator lifecycle — never cancelled during handoff, only the
+        consumer is swapped. On an unrecoverable error the long-lived stream is
+        recreated after a backoff; the session tolerance is what closes it.
         """
         from .agent import ModelSettings
 
-        node = self._stt_node(self._audio_ch, ModelSettings())
-        if asyncio.iscoroutine(node):
-            node = await node
+        while True:
+            node = self._stt_node(self._audio_ch, ModelSettings())
+            if asyncio.iscoroutine(node):
+                node = await node
 
-        if node is None:
-            return
+            if not isinstance(node, AsyncIterable):
+                # None or a non-streaming node: nothing to iterate or recover
+                return
 
-        if isinstance(node, AsyncIterable):
-            async for ev in node:
-                assert isinstance(ev, stt.SpeechEvent), (
-                    f"STT node must yield SpeechEvent, got: {type(ev)}"
+            try:
+                async for ev in node:
+                    assert isinstance(ev, stt.SpeechEvent), (
+                        f"STT node must yield SpeechEvent, got: {type(ev)}"
+                    )
+                    self._event_ch.send_nowait(ev)
+            except Exception:
+                # the error is already emitted and counted by the session; recreate to resume
+                if self._is_closing():
+                    return
+                logger.warning(
+                    "STT stream ended on an unrecoverable error, recreating",
+                    exc_info=True,
                 )
-                self._event_ch.send_nowait(ev)
+                await asyncio.sleep(_STT_RECONNECT_INTERVAL)
+                # the session may have started closing during the backoff
+                if self._is_closing():
+                    return
+                continue
+
+            # node ended without error (audio input closed): stop
+            return
 
     async def aclose(self) -> None:
         await aio.cancel_and_wait(self._pump_task)
@@ -748,7 +773,11 @@ class AudioRecognition:
     def _update_stt(self, stt: io.STTNode | None, *, pipeline: _STTPipeline | None = None) -> None:
         self._stt = stt
         if pipeline is None and stt is not None:
-            pipeline = _STTPipeline(stt)
+            # _closing_task is set synchronously at close, earlier than _closing
+            session = self._session
+            pipeline = _STTPipeline(
+                stt, is_closing=lambda: session._closing_task is not None or session._closing
+            )
 
         if pipeline is not None:
             self._stt_consumer_atask = asyncio.create_task(
