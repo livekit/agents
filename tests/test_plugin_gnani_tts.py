@@ -36,26 +36,28 @@ def test_tts_accepts_api_key_from_env():
 
 
 def test_tts_default_voice():
-    """TTS defaults to 'Karan' voice."""
+    """TTS defaults to 'Pranav' voice."""
     from livekit.plugins.gnani import TTS
 
     tts = TTS(api_key="test-key")
-    assert tts._opts.voice == "Karan"
+    assert tts._opts.voice == "Pranav"
 
 
 def test_tts_custom_voice():
     """TTS accepts custom voice."""
     from livekit.plugins.gnani import TTS
 
-    tts = TTS(api_key="test-key", voice="Raju")
-    assert tts._opts.voice == "Raju"
+    tts = TTS(api_key="test-key", voice="Deepak")
+    assert tts._opts.voice == "Deepak"
 
 
 def test_tts_all_voices_accepted():
     """TTS accepts all documented voices."""
     from livekit.plugins.gnani import TTS
 
-    voices = ["Karan", "Simran", "Nara", "Riya", "Viraj", "Raju"]
+    voices = [
+        "Pranav", "Kaveri", "Shubhra", "Deepak",
+    ]
     for voice in voices:
         tts = TTS(api_key="test-key", voice=voice)
         assert tts._opts.voice == voice
@@ -81,7 +83,7 @@ def test_tts_model_v3():
     """TTS uses vachana-voice-v3 model."""
     from livekit.plugins.gnani import TTS
 
-    tts = TTS(api_key="test-key", voice="Simran")
+    tts = TTS(api_key="test-key", voice="Kaveri")
     assert tts._opts.model == "vachana-voice-v3"
     assert tts.model == "vachana-voice-v3"
 
@@ -90,7 +92,7 @@ def test_tts_model_explicit_override():
     """Explicit model parameter overrides default."""
     from livekit.plugins.gnani import TTS
 
-    tts = TTS(api_key="test-key", voice="Karan", model="custom-model")
+    tts = TTS(api_key="test-key", voice="Pranav", model="custom-model")
     assert tts._opts.model == "custom-model"
 
 
@@ -163,18 +165,18 @@ def test_tts_update_options_voice():
     """update_options can change voice."""
     from livekit.plugins.gnani import TTS
 
-    tts = TTS(api_key="test-key", voice="Karan")
-    tts.update_options(voice="Simran")
-    assert tts._opts.voice == "Simran"
+    tts = TTS(api_key="test-key", voice="Pranav")
+    tts.update_options(voice="Kaveri")
+    assert tts._opts.voice == "Kaveri"
 
 
 def test_tts_update_options_voice_and_model():
     """update_options with both voice and model uses the explicit model."""
     from livekit.plugins.gnani import TTS
 
-    tts = TTS(api_key="test-key", voice="Karan")
-    tts.update_options(voice="Riya", model="custom-model")
-    assert tts._opts.voice == "Riya"
+    tts = TTS(api_key="test-key", voice="Pranav")
+    tts.update_options(voice="Shubhra", model="custom-model")
+    assert tts._opts.voice == "Shubhra"
     assert tts._opts.model == "custom-model"
 
 
@@ -397,9 +399,9 @@ def test_tts_update_options_preserves_other_fields():
     """update_options only changes specified fields."""
     from livekit.plugins.gnani import TTS
 
-    tts = TTS(api_key="test-key", voice="Karan")
-    tts.update_options(voice="Raju")
-    assert tts._opts.voice == "Raju"
+    tts = TTS(api_key="test-key", voice="Pranav")
+    tts.update_options(voice="Deepak")
+    assert tts._opts.voice == "Deepak"
     assert tts._opts.model == "vachana-voice-v3"
     assert tts._opts.encoding == "linear_pcm"
 

@@ -60,13 +60,13 @@ speech_stream = stt.stream()
 from livekit.plugins.gnani import TTS
 
 # REST (default) - single-request batch synthesis
-tts_rest = TTS(voice="Karan")
+tts_rest = TTS(voice="Pranav")
 
 # SSE - chunked synthesis via Server-Sent Events (lower latency)
-tts_sse = TTS(voice="Karan", synthesize_method="sse")
+tts_sse = TTS(voice="Pranav", synthesize_method="sse")
 
 # WebSocket - chunked synthesis over WS (lowest latency)
-tts_ws = TTS(voice="Karan", synthesize_method="websocket")
+tts_ws = TTS(voice="Pranav", synthesize_method="websocket")
 ```
 
 All three modes work with the standard LiveKit voice agent pipeline.
@@ -98,7 +98,7 @@ stt = STT(
 from livekit.plugins.gnani import TTS
 
 tts = TTS(
-    voice="Karan",                    # Default: "Karan" (also: Simran, Nara, Riya, Viraj, Raju)
+    voice="Pranav",                    # Default: "Pranav" (also: Kaveri, Shubhra, Deepak)
     model="vachana-voice-v3",         # Default: "vachana-voice-v3"
     sample_rate=16000,                # Default: 16000 (also: 8000, 22050, 44100)
     encoding="linear_pcm",           # Default: "linear_pcm" (also: "oggopus")
@@ -142,7 +142,7 @@ Frames must be sent at **real-time cadence**. See **[STT Realtime — PCM Specif
 - **REST synthesis** — single-request batch audio generation (`synthesize_method="rest"`)
 - **SSE streaming** — lower-latency chunked synthesis via Server-Sent Events (`synthesize_method="sse"`)
 - **WebSocket synthesis** — lowest-latency synthesis via `synthesize_method="websocket"` or the `stream()` method
-- **6 voices** — Karan, Simran, Nara, Riya, Viraj, Raju
+- **4 voices** — Pranav, Kaveri, Shubhra, Deepak (see [Available Voices](https://docs.gnani.ai/api/TTS/tts-sse#available-voices))
 - **Configurable output** — sample rate (8000–44100), encoding (linear_pcm, oggopus), container (raw, mp3, wav, mulaw, ogg)
 - **Runtime updates** — change voice or model via `update_options()`
 
@@ -165,12 +165,10 @@ For the full list of supported languages, see **[TTS — Supported Languages](ht
 
 | Voice   | ID        | Gender | Description              |
 |---------|-----------|--------|--------------------------|
-| Karan   | `Karan`   | Male   | Bold, Trustworthy        |
-| Simran  | `Simran`  | Female | Confident, Bright        |
-| Nara    | `Nara`    | Female | Gentle, Expressive       |
-| Riya    | `Riya`    | Female | Cheerful, Energetic      |
-| Viraj   | `Viraj`   | Male   | Commanding, Dynamic      |
-| Raju    | `Raju`    | Male   | Grounded, Conversational |
+| Pranav  | `Pranav`  | Male   | Bold, Trustworthy        |
+| Kaveri  | `Kaveri`  | Female | Confident, Bright        |
+| Shubhra | `Shubhra` | Female | Gentle, Expressive       |
+| Deepak  | `Deepak`  | Male   | Grounded, Conversational |
 
 ## Architecture
 
