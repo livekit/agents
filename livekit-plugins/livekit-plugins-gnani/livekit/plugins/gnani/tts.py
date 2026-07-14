@@ -45,6 +45,7 @@ from livekit.agents import (
     utils,
 )
 
+from ._compat import ws_header_kwargs as _ws_header_kwargs
 from .log import logger
 
 GNANI_TTS_BASE_URL = "https://api.vachana.ai"
@@ -72,22 +73,6 @@ GnaniTTSSynthesizeMethod = Literal["rest", "sse", "websocket"]
 SUPPORTED_SAMPLE_RATES = (8000, 16000, 22050, 44100)
 
 _WAV_HEADER_SIZE = 44
-
-
-def _ws_header_kwargs(headers: dict[str, str]) -> dict[str, Any]:
-    """Return the correct ``connect()`` header kwarg for the installed websockets.
-
-    websockets >= 13 renamed ``extra_headers`` to ``additional_headers``. Support
-    both so WebSocket TTS works when another dependency pins websockets < 13.
-    """
-    import websockets
-
-    try:
-        major = int(websockets.__version__.split(".", 1)[0])
-    except (AttributeError, ValueError):
-        major = 13
-    key = "additional_headers" if major >= 13 else "extra_headers"
-    return {key: headers}
 
 
 @dataclass

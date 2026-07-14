@@ -101,6 +101,7 @@ def test_stt_rejects_invalid_language():
     with pytest.raises(ValueError, match="Unsupported language_code"):
         STT(api_key="test-key", language="xx-XX")
 
+
 def test_stt_capabilities():
     """STT reports streaming=True, interim_results=False."""
     from livekit.plugins.gnani import STT

@@ -1,5 +1,6 @@
 .PHONY: help install format format-check lint lint-fix check type-check test test-unit test-docker clean build \
-        link-rtc link-rtc-local link-rtc-version unlink-rtc status doctor
+        link-rtc link-rtc-local link-rtc-version unlink-rtc status doctor \
+        format-gnani format-check-gnani lint-gnani lint-fix-gnani type-check-gnani check-gnani fix-gnani test-gnani
 
 # Colors for output
 CYAN := \033[36m
@@ -12,6 +13,9 @@ BOLD := \033[1m
 # Paths (computed as absolute paths)
 MAKEFILE_DIR := $(shell pwd)
 AGENTS_PROJECT := $(MAKEFILE_DIR)/livekit-agents
+GNANI_PLUGIN_DIR := livekit-plugins/livekit-plugins-gnani
+GNANI_PLUGIN_LIVEKIT := $(GNANI_PLUGIN_DIR)/livekit
+GNANI_TESTS := tests/test_plugin_gnani_stt.py tests/test_plugin_gnani_tts.py
 PYTHON_RTC := $(MAKEFILE_DIR)/../python-sdks/livekit-rtc
 RUST_SUBMODULE := $(MAKEFILE_DIR)/../python-sdks/livekit-rtc/rust-sdks
 PACKAGE_NAME := livekit
@@ -30,7 +34,7 @@ help: ## Show this help message
 	@grep -E '^(link-rtc|link-rtc-local|link-rtc-version|unlink-rtc|status|doctor):.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(CYAN)%-20s$(RESET) %s\n", $$1, $$2}'
 	@echo ""
 	@echo "$(BOLD)Code Quality:$(RESET)"
-	@grep -E '^(format|format-check|lint|lint-fix|type-check|check):.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(CYAN)%-20s$(RESET) %s\n", $$1, $$2}'
+	@grep -E '^(format|format-check|lint|lint-fix|type-check|check|check-gnani|test-gnani):.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(CYAN)%-20s$(RESET) %s\n", $$1, $$2}'
 	@echo ""
 	@echo "$(BOLD)Other:$(RESET)"
 	@grep -E '^(install|clean|build):.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(CYAN)%-20s$(RESET) %s\n", $$1, $$2}'
@@ -81,6 +85,53 @@ check: format-check lint type-check ## Run all checks (format, lint, type-check)
 	@echo "$(BOLD)$(GREEN)✓ All checks passed!$(RESET)"
 
 fix: format lint-fix ## Run format and lint checks and fix issues automatically (format, lint)
+
+format-gnani: ## Format Gnani plugin + tests
+	@echo "$(BOLD)$(CYAN)Formatting Gnani plugin...$(RESET)"
+	@uv run ruff format $(GNANI_PLUGIN_LIVEKIT) $(GNANI_TESTS)
+	@echo "$(BOLD)$(GREEN)✓ Gnani plugin formatted$(RESET)"
+
+format-check-gnani: ## Check Gnani plugin formatting
+	@echo "$(BOLD)$(CYAN)Checking Gnani plugin formatting...$(RESET)"
+	@if uv run ruff format --check $(GNANI_PLUGIN_LIVEKIT) $(GNANI_TESTS); then \
+		echo "$(BOLD)$(GREEN)✓ Gnani formatting is correct$(RESET)"; \
+	else \
+		echo "$(BOLD)$(RED)✗ Gnani formatting issues found. Run 'make format-gnani'.$(RESET)"; \
+		exit 1; \
+	fi
+
+lint-gnani: ## Run ruff on Gnani plugin + tests
+	@echo "$(BOLD)$(CYAN)Linting Gnani plugin...$(RESET)"
+	@if uv run ruff check $(GNANI_PLUGIN_LIVEKIT) $(GNANI_TESTS); then \
+		echo "$(BOLD)$(GREEN)✓ Gnani lint passed$(RESET)"; \
+	else \
+		echo "$(BOLD)$(RED)✗ Gnani lint failed. Run 'make fix-gnani'.$(RESET)"; \
+		exit 1; \
+	fi
+
+lint-fix-gnani: ## Auto-fix Gnani ruff issues
+	@echo "$(BOLD)$(CYAN)Fixing Gnani lint issues...$(RESET)"
+	@uv run ruff check --fix $(GNANI_PLUGIN_LIVEKIT) $(GNANI_TESTS)
+	@echo "$(BOLD)$(GREEN)✓ Gnani lint fixes applied$(RESET)"
+
+type-check-gnani: ## Strict mypy on livekit.plugins.gnani
+	@echo "$(BOLD)$(CYAN)Type-checking Gnani plugin (strict)...$(RESET)"
+	@if uv run mypy --untyped-calls-exclude=smithy_aws_core -p livekit.plugins.gnani; then \
+		echo "$(BOLD)$(GREEN)✓ Gnani type check passed$(RESET)"; \
+	else \
+		echo "$(BOLD)$(RED)✗ Gnani type check failed$(RESET)"; \
+		exit 1; \
+	fi
+
+check-gnani: format-check-gnani lint-gnani type-check-gnani test-gnani ## Gnani: format + lint + strict mypy + tests
+	@echo "$(BOLD)$(GREEN)✓ Gnani checks passed!$(RESET)"
+
+fix-gnani: format-gnani lint-fix-gnani ## Auto-fix Gnani format + lint
+
+test-gnani: ## Run Gnani plugin unit tests
+	@echo "$(BOLD)$(CYAN)Running Gnani plugin tests...$(RESET)"
+	@PYTHONPATH="$(MAKEFILE_DIR)" uv run pytest $(GNANI_TESTS) -v --import-mode=importlib -p tests.concurrency
+	@echo "$(BOLD)$(GREEN)✓ Gnani tests passed$(RESET)"
 
 unit-tests: ## Run unit tests (modules marked with `pytestmark = pytest.mark.unit`)
 	@echo "$(BOLD)$(CYAN)Running unit tests...$(RESET)"

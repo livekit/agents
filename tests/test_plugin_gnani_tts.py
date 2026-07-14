@@ -56,7 +56,10 @@ def test_tts_all_voices_accepted():
     from livekit.plugins.gnani import TTS
 
     voices = [
-        "Pranav", "Kaveri", "Shubhra", "Deepak",
+        "Pranav",
+        "Kaveri",
+        "Shubhra",
+        "Deepak",
     ]
     for voice in voices:
         tts = TTS(api_key="test-key", voice=voice)

@@ -46,6 +46,7 @@ from livekit.agents.utils.misc import is_given
 if TYPE_CHECKING:
     from livekit.agents.utils import AudioBuffer
 
+from ._compat import ws_header_kwargs as _ws_header_kwargs
 from .log import logger
 
 GnaniSTTFormat = Literal["verbatim", "transcribe"]
@@ -125,22 +126,6 @@ def _validate_rest_language_code(language_code: str) -> None:
         f"Choose from: {', '.join(sorted(REST_SINGLE_LANGUAGES))} "
         f"or a comma-separated combination of these for auto-detection."
     )
-
-
-def _ws_header_kwargs(headers: dict[str, str]) -> dict[str, Any]:
-    """Return the correct ``connect()`` header kwarg for the installed websockets.
-
-    websockets >= 13 renamed ``extra_headers`` to ``additional_headers``. Support
-    both so WebSocket STT works when another dependency pins websockets < 13.
-    """
-    import websockets
-
-    try:
-        major = int(websockets.__version__.split(".", 1)[0])
-    except (AttributeError, ValueError):
-        major = 13
-    key = "additional_headers" if major >= 13 else "extra_headers"
-    return {key: headers}
 
 
 @dataclass
