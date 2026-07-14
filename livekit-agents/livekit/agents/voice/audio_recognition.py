@@ -527,6 +527,24 @@ class AudioRecognition:
         )
 
     @property
+    def current_speech_duration(self) -> float | None:
+        """Duration (s) of the current or most recent user speech segment.
+
+        Returns None when no speech start has been tracked (e.g. VAD produced no
+        events for this segment), meaning the duration is unknown.
+        """
+        if self._speech_start_time is None:
+            return None
+
+        if self._speaking:
+            return max(time.time() - self._speech_start_time, 0.0)
+
+        if self._last_speaking_time is None or self._last_speaking_time < self._speech_start_time:
+            return None
+
+        return self._last_speaking_time - self._speech_start_time
+
+    @property
     def _speaking(self) -> bool:
         return not self._user_silence_ev.is_set()
 

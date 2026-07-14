@@ -403,6 +403,51 @@ async def test_interruption_options() -> None:
     check_timestamp(playback_finished_events[0].playback_position, 5.0, speed_factor=speed)
 
 
+async def test_min_interruption_duration_applies_to_stt_transcripts() -> None:
+    """Regression test for https://github.com/livekit/agents/issues/3515.
+
+    STTs that stream continuous interim results (e.g. Amazon Transcribe) used to
+    trigger an interruption on the first non-empty interim transcript, bypassing
+    ``interruption.min_duration`` entirely (it was only enforced on the VAD path).
+    The interruption must not fire before the user has spoken for min_duration.
+    """
+    speed = 1
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Tell me a story.")
+    actions.add_llm("Here is a long story for you ... the end.")
+    actions.add_tts(10.0)  # playout starts at 3.5s
+    # user speaks for 4s while interim transcripts stream every 0.3s;
+    # the first interim lands at ~5.3s, min_duration is reached at 7.0s
+    actions.add_user_speech(
+        5.0, 9.0, "please stop talking right now", stt_delay=0.2, interim_interval=0.3
+    )
+
+    session = create_session(
+        actions,
+        speed_factor=speed,
+        turn_handling={"interruption": {"min_duration": 2.0}},
+    )
+    agent_state_events: list[AgentStateChangedEvent] = []
+    playback_finished_events: list[PlaybackFinishedEvent] = []
+    session.on("agent_state_changed", agent_state_events.append)
+    session.output.audio.on("playback_finished", playback_finished_events.append)
+
+    t_origin = await asyncio.wait_for(run_session(session, MyAgent()), timeout=SESSION_TIMEOUT)
+
+    assert len(playback_finished_events) == 1
+    assert playback_finished_events[0].interrupted is True
+    # interrupted at 7.0s (5.0 + min_duration), i.e. 3.5s into the playout —
+    # not at ~5.3s when the first interim transcript arrived
+    check_timestamp(playback_finished_events[0].playback_position, 3.5, speed_factor=speed)
+
+    interrupted_at = next(
+        ev.created_at
+        for ev in agent_state_events
+        if ev.new_state == "listening" and ev.old_state == "speaking"
+    )
+    check_timestamp(interrupted_at - t_origin, 7.0, speed_factor=speed)
+
+
 async def test_interruption_by_text_input() -> None:
     speed = 1
     actions = FakeActions()
@@ -1140,6 +1185,9 @@ async def test_vad_fallback_uses_next_vad_inference_event(
     )
 
     audio_recognition = MagicMock()
+    # unknown speech duration: the min_duration gate lets it through (the VAD
+    # event below carries its own speech_duration check)
+    audio_recognition.current_speech_duration = None
     current_speech = MagicMock()
     current_speech.interrupted = False
     current_speech.allow_interruptions = True

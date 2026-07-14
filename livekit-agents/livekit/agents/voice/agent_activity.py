@@ -1808,7 +1808,10 @@ class AgentActivity(RecognitionHooks):
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
 
     def _interrupt_by_audio_activity(
-        self, *, ignore_user_transcript_until: float | None = None
+        self,
+        *,
+        ignore_user_transcript_until: float | None = None,
+        enforce_min_duration: bool = True,
     ) -> None:
         """
         Interrupt the current speech or generation, and optionally ignore the user transcript until the given timestamp.
@@ -1816,6 +1819,9 @@ class AgentActivity(RecognitionHooks):
         Args:
             ignore_user_transcript_until: The timestamp until which the user transcript should be ignored.
                 If None, the user transcript will be ignored until the current time.
+            enforce_min_duration: Whether to enforce ``interruption.min_duration`` against the
+                tracked user speech duration. Set to False by callers that already made an
+                explicit interruption decision (e.g. the interruption detection model).
         """
         if not self._interruption_by_audio_activity_enabled:
             return
@@ -1839,6 +1845,20 @@ class AgentActivity(RecognitionHooks):
             # TODO(long): better word splitting for multi-language
             if len(split_words(text, split_character=True)) < interruption_options["min_words"]:
                 return
+
+        # enforce min_duration on every audio-activity trigger, not only the VAD path;
+        # STT interim/final transcripts would otherwise interrupt regardless of how
+        # short the user speech was (https://github.com/livekit/agents/issues/3515).
+        # an unknown duration (None) is allowed through to keep the VAD-failure
+        # failsafe in on_final_transcript working.
+        if (
+            enforce_min_duration
+            and interruption_options["min_duration"] > 0
+            and self._audio_recognition is not None
+            and (speech_duration := self._audio_recognition.current_speech_duration) is not None
+            and speech_duration < interruption_options["min_duration"]
+        ):
+            return
 
         if self._rt_session is not None:
             self._rt_session.start_user_activity()
@@ -1972,10 +1992,13 @@ class AgentActivity(RecognitionHooks):
             self._user_silence_event.set()
 
     def on_interruption(self, ev: inference.OverlappingSpeechEvent) -> None:
-        # restore interruption by audio activity and then immediately interrupt
+        # restore interruption by audio activity and then immediately interrupt.
+        # the interruption detection model already decided this is a real interruption,
+        # so min_duration is not re-checked here.
         self._restore_interruption_by_audio_activity()
         self._interrupt_by_audio_activity(
-            ignore_user_transcript_until=ev.overlap_started_at or ev.detected_at
+            ignore_user_transcript_until=ev.overlap_started_at or ev.detected_at,
+            enforce_min_duration=False,
         )
         # flush held transcripts again if possible
         if self._audio_recognition:

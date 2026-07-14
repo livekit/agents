@@ -32,12 +32,17 @@ class FakeUserSpeech(BaseModel):
     end_time: float
     transcript: str  # empty string fires VAD SOS/EOS only — no STT events
     stt_delay: float
+    interim_interval: float | None = None
+    """If set, stream growing interim transcripts every ``interim_interval`` seconds
+    while the user is speaking (like providers that emit continuous partial results)."""
 
     def speed_up(self, factor: float) -> FakeUserSpeech:
         obj = copy.deepcopy(self)
         obj.start_time /= factor
         obj.end_time /= factor
         obj.stt_delay /= factor
+        if obj.interim_interval is not None:
+            obj.interim_interval /= factor
         return obj
 
 
@@ -221,6 +226,20 @@ class FakeRecognizeStream(RecognizeStream):
                 if curr_time() < final_transcript_time:
                     await asyncio.sleep(final_transcript_time - curr_time())
                 continue
+
+            if fake_speech.interim_interval is not None:
+                # stream growing interim transcripts while the user is speaking
+                words = fake_speech.transcript.split()
+                num_sent = 0
+                next_interim_time = fake_speech.start_time + fake_speech.interim_interval
+                while next_interim_time < fake_speech.end_time:
+                    if curr_time() < next_interim_time:
+                        await asyncio.sleep(next_interim_time - curr_time())
+                    num_sent += 1
+                    prefix = " ".join(words[: min(num_sent, len(words))])
+                    self.send_fake_transcript(prefix, is_final=False)
+                    next_interim_time += fake_speech.interim_interval
+
             interim_transcript_time = fake_speech.end_time + fake_speech.stt_delay * 0.5
             if curr_time() < interim_transcript_time:
                 await asyncio.sleep(interim_transcript_time - curr_time())
