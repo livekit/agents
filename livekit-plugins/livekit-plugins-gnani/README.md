@@ -17,19 +17,19 @@ This will also install the [`websockets`](https://pypi.org/project/websockets/) 
 
 ## Prerequisites
 
-You need a Gnani API key. Email **[speechstack@gnani.ai](mailto:speechstack@gnani.ai)** to get started — all new accounts receive free credits, no credit card required.
+You need a Gnani API key from [app.gnani.ai/voice](https://app.gnani.ai/voice) (Gnani APIs).
 
 ### Authentication
 
 All APIs require a single API key — no `organization_id` or `user_id` needed.
 
-**Option 1 — Environment variable (recommended):**
+Set your credentials as environment variables:
 
 ```bash
 export GNANI_API_KEY="your-api-key"
 ```
 
-**Option 2 — Constructor argument:**
+**Or pass the key in the constructor:**
 
 ```python
 stt = STT(api_key="your-api-key", language="hi-IN")
