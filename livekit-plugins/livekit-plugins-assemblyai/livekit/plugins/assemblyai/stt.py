@@ -211,7 +211,10 @@ class STT(stt.STT):
                 transcription of the user's reply. Set at construction or updated per-turn
                 via `update_options(agent_context=...)`. Only supported with the
                 Universal-3 Pro family models (max 1750 characters; longer values raise
-                ValueError).
+                ValueError). With ``agent_context_carryover`` enabled — the default on
+                Universal-3 Pro family models — each assistant reply replaces this value
+                automatically; pass ``agent_context_carryover=False`` to manage it
+                manually.
             previous_context_n_turns: Maximum number of prior conversation entries (user
                 transcripts and any `agent_context` values) carried forward as context for
                 each transcription. Set to 0 to disable automatic context carryover

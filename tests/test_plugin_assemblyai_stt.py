@@ -1279,11 +1279,16 @@ async def test_agent_context_over_cap_raises_in_stt_update_options():
 
 
 async def test_agent_context_over_cap_raises_in_stream_update_options():
-    """SpeechStream.update_options rejects oversize agent_context."""
+    """SpeechStream.update_options rejects oversize agent_context without
+    mutating options or enqueuing an UpdateConfiguration."""
     stream = _make_stream_for_unit_test()
 
     with pytest.raises(ValueError, match="agent_context"):
-        stream.update_options(agent_context="x" * 1751)
+        stream.update_options(vad_threshold=0.9, agent_context="x" * 1751)
+
+    assert stream._opts.agent_context is NOT_GIVEN
+    assert stream._opts.vad_threshold is NOT_GIVEN
+    assert stream._config_update_queue.empty()
 
 
 async def test_carryover_forwards_short_reply_verbatim():
@@ -1305,11 +1310,46 @@ async def test_carryover_truncates_oversize_reply_keeping_tail():
     assert stt._opts.agent_context == "b" * 1750
 
 
+async def test_carryover_ignores_non_assistant_items():
+    """_push_conversation_item ignores user messages and textless assistant items
+    — the shapes it receives now that carryover is on by default."""
+    from livekit.agents.llm import ChatMessage
+    from livekit.agents.voice.events import ConversationItemAddedEvent
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key")
+
+    stt._push_conversation_item(
+        ConversationItemAddedEvent(item=ChatMessage(role="user", content=["hi there"]))
+    )
+    assert stt._opts.agent_context is NOT_GIVEN
+
+    stt._push_conversation_item(
+        ConversationItemAddedEvent(item=ChatMessage(role="assistant", content=[]))
+    )
+    assert stt._opts.agent_context is NOT_GIVEN
+
+
+async def test_carryover_ignores_agent_handoff_items():
+    """_push_conversation_item ignores non-message items (e.g. AgentHandoff),
+    which have `.type != "message"` and no `text_content`."""
+    from livekit.agents.llm import AgentHandoff
+    from livekit.agents.voice.events import ConversationItemAddedEvent
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key")
+
+    stt._push_conversation_item(
+        ConversationItemAddedEvent(item=AgentHandoff(new_agent_id="agent-2"))
+    )
+    assert stt._opts.agent_context is NOT_GIVEN
+
+
 async def test_carryover_defaults_on_for_u3_pro_family():
     """agent_context_carryover defaults to enabled on models that support it."""
     from livekit.plugins.assemblyai import STT
 
-    for model in ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro"):
+    for model in ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro", "u3-pro"):
         stt = STT(api_key="test-key", model=model)
         assert stt.capabilities.chat_context is True
 
