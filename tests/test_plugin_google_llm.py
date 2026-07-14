@@ -471,3 +471,27 @@ class TestMixedToolsRequestConstruction:
         assert config.cached_content == "cachedContents/abc123"
         assert config.tools is None
         assert config.tool_config is None
+
+    @pytest.mark.asyncio
+    async def test_cached_content_strips_raw_tools_from_extra_kwargs(self) -> None:
+        """Raw ``tools``/``tool_config`` placed directly in ``extra_kwargs`` must also be
+        stripped when a cache is active — otherwise Gemini rejects the request for
+        combining them with cached_content."""
+        llm_ = LLM(
+            model="gemini-3-flash-preview", api_key="test", cached_content="cachedContents/abc"
+        )
+        config = await self._capture_config(
+            llm_,
+            extra_kwargs={
+                "tools": [types.Tool(google_search=types.GoogleSearch())],
+                "tool_config": types.ToolConfig(
+                    function_calling_config=types.FunctionCallingConfig(
+                        mode=types.FunctionCallingConfigMode.AUTO
+                    )
+                ),
+            },
+        )
+
+        assert config.cached_content == "cachedContents/abc"
+        assert config.tools is None
+        assert config.tool_config is None

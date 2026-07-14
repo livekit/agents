@@ -307,8 +307,12 @@ class LLM(llm.LLM):
         using_cache = is_given(self._opts.cached_content) or "cached_content" in extra
         if using_cache:
             # tools/tool_config/system_instruction must be baked into the CachedContent
-            # resource, not sent on the request, so we don't build them here.
-            if tool_ctx.function_tools or tool_ctx.provider_tools:
+            # resource, not sent on the request. Don't build them here, and drop any the
+            # caller passed directly via extra_kwargs.
+            dropped = [k for k in ("tools", "tool_config") if k in extra]
+            for key in dropped:
+                extra.pop(key, None)
+            if tool_ctx.function_tools or tool_ctx.provider_tools or dropped:
                 logger.warning(
                     "gemini llm: ignoring tools; bake them into the CachedContent resource",
                     extra={"model": self._opts.model},
