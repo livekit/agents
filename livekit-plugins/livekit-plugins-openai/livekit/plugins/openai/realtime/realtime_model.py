@@ -988,8 +988,10 @@ class RealtimeSession(
                 reconnecting = True
         finally:
             # the session loop has exited (fatal server error, retries exhausted, or
-            # close); fail any pending generate_reply futures so callers don't wait
+            # close); close any in-progress generation and fail any pending
+            # generate_reply futures so consumers don't hang and callers don't wait
             # out their timeout
+            self._close_current_generation("session closed")
             for fut in self._response_created_futures.values():
                 if not fut.done():
                     fut.set_exception(llm.RealtimeError("realtime session closed"))
