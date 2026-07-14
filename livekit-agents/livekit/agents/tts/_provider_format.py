@@ -381,6 +381,35 @@ _PROVIDER_PROSODY: dict[str, list[str]] = {
     "xai": _XAI_WRAPPING,
 }
 
+# Sound label -> when a real speaker would make it. The sounds guideline is composed
+# from the hints of whichever labels survived steering, so the LLM only ever reads
+# usage advice for sounds it's allowed to make. Labels sharing a hint (the laugh
+# family) collapse to one clause; labels without an entry fall back to the generic
+# sentence. Keyed by label, not NonverbalOptions field, so it's provider-agnostic.
+_SOUND_USAGE_HINTS: dict[str, str] = {
+    "laugh": "a laugh at something obviously funny",
+    "chuckle": "a chuckle at something subtly humorous",
+    "giggle": "a chuckle at something subtly humorous",
+    "sigh": "a sigh when commiserating",
+    "inhale": "a sharp inhale before a big reveal",
+    "lip-smack": "a lip-smack or tongue-click as a tiny beat of thought",
+    "tongue-click": "a lip-smack or tongue-click as a tiny beat of thought",
+    "tsk": "a tsk for mock-disapproval",
+}
+
+
+def _sound_guidance(sounds: list[str]) -> str:
+    """The sparing-use guideline, illustrated only with the allowed sounds."""
+    hints: list[str] = []
+    for sound in sounds:
+        hint = _SOUND_USAGE_HINTS.get(sound)
+        if hint and hint not in hints:
+            hints.append(hint)
+    line = "Non-verbal sounds: use one only where the moment genuinely earns it"
+    if hints:
+        line += " — " + ", ".join(hints)
+    return line + ". Most turns have none; never repeat the same sound twice in a row."
+
 
 def steering_instructions(provider: str, steering: SpeechSteeringOptions) -> str:
     """Render a ``SpeechSteeringOptions`` into delivery guidelines for *provider*.
@@ -392,11 +421,10 @@ def steering_instructions(provider: str, steering: SpeechSteeringOptions) -> str
     """
     lines: list[str] = []
 
-    if steering.get("nonverbal_sounds") is not None and _allowed_sounds(provider, steering):
-        lines.append(
-            "Non-verbal sounds: use one only where the moment genuinely earns it; "
-            "most turns have none."
-        )
+    if steering.get("nonverbal_sounds") is not None and (
+        allowed := _allowed_sounds(provider, steering)
+    ):
+        lines.append(_sound_guidance(allowed))
 
     if (disfluencies := steering.get("disfluencies")) is not None:
         lines.append(
@@ -421,6 +449,9 @@ def steering_instructions(provider: str, steering: SpeechSteeringOptions) -> str
 _MAX_INPUT_LEN: dict[str, int] = {
     "inworld": 900,
     "cartesia": 400,
+    # well under xAI's 15,000-char request limit; sized as an expressive batch
+    # target (https://docs.x.ai/developers/model-capabilities/audio/text-to-speech)
+    "xai": 1000,
 }
 
 
