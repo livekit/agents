@@ -140,18 +140,28 @@ class SessionConnectOptions:
     """Maximum number of consecutive unrecoverable errors from llm or tts."""
 
 
-@dataclass
-class NonverbalOptions:
+class NonverbalOptions(TypedDict, total=False):
     """Non-verbal vocalizations the TTS may produce (sounds that aren't words).
 
-    Fields default to off. Each field may later widen to ``bool | <Sound>Options``
-    (e.g. ``laughing: bool | LaughingOptions``) for per-sound control without
+    Omitted keys default to off, and together the keys cover every sound the
+    providers offer — a sound whose key is off is never advertised to the LLM.
+    Each key may later widen to ``bool | <Sound>Options`` (e.g.
+    ``laughing: bool | LaughingOptions``) for per-sound control without
     breaking existing callers.
     """
 
-    laughing: bool = False
-    coughing: bool = False
-    breathing: bool = False
+    laughing: bool
+    """laugh, chuckle, giggle — and laugh-speak delivery"""
+    breathing: bool
+    """audible breath, inhale, exhale"""
+    sighing: bool
+    crying: bool
+    vocalizing: bool
+    """non-lexical voiced sounds — humming a tune, sing-song or sung delivery"""
+    mouth_sounds: bool
+    """tsk, tongue-click, lip-smack"""
+    reflex_sounds: bool
+    """cough, clearing the throat, yawn"""
 
 
 class SpeechSteeringOptions(TypedDict, total=False):
@@ -214,7 +224,9 @@ def resolve_expressive_options(
     guidelines appended to the template, then applies any explicit
     ``tts_instructions_template`` override and ``tts_instructions_append`` (last, so
     the user's free-form rules always win). The returned dict always has
-    ``tts_instructions_template`` and never the helper keys.
+    ``tts_instructions_template`` and never ``tts_instructions_append``;
+    ``speech_steering`` passes through so injection can filter the advertised
+    markup vocabulary (``Markup.llm_instructions``) with it.
     """
     from ..tts import _provider_format
 
@@ -227,7 +239,10 @@ def resolve_expressive_options(
     if append := expr.get("tts_instructions_append"):
         tts_tmpl = _append_instructions(tts_tmpl, append)
 
-    return {"tts_instructions_template": tts_tmpl}
+    resolved: ExpressiveOptions = {"tts_instructions_template": tts_tmpl}
+    if steering := expr.get("speech_steering"):
+        resolved["speech_steering"] = steering
+    return resolved
 
 
 @dataclass

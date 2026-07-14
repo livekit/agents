@@ -146,14 +146,15 @@ def _xai_break_to_bracket(match: re.Match[str]) -> str:
 # solely so hallucinated native markup is still stripped/converted instead of leaking.
 
 _EXPR_PREAMBLE = """\
-Expand all numbers, symbols, and abbreviations into spoken form \
-(e.g. $42.50 to forty-two dollars and fifty cents, Dr. to Doctor).
-
 You control speech delivery with a single XML marker tag: <expr/>. Every marker has a \
-type attribute. The types below are the ONLY ones this voice supports, and where a type \
-lists a label vocabulary, use only those labels. Reach for the markers often and mix \
-them so the voice never sounds flat — but keep each one motivated by the moment, never \
-decorative."""
+type attribute. Use only the marker types listed below, and where a type lists a label \
+vocabulary, only those labels. Use the markers often and diversify them so the voice \
+never sounds flat while ensuring the markers are appropriate for the moment.
+
+Just as important is knowing when NOT to reach for a marker. Reserve surprise openers \
+like "oh" or "ah" for genuine surprise — an ordinary request isn't one. Don't stack markers \
+on short replies or decorate every sentence. If a reaction wouldn't happen in a real \
+conversation, skip it — there's always another genuine beat to lean into."""
 
 _CARTESIA_EXPR_LLM_INSTRUCTIONS = (
     _EXPR_PREAMBLE
@@ -191,91 +192,193 @@ Examples:
   Your code is <expr type="spell">A7X9</expr>. <expr type="break" label="1s"/> <expr type="expression" label="calm"/> Got it?"""
 )
 
-_INWORLD_EXPR_LLM_INSTRUCTIONS = (
-    _EXPR_PREAMBLE
-    + """
+_INWORLD_SOUNDS = ["laugh", "sigh", "breathe", "clear throat", "cough", "yawn"]
 
-1. Delivery - controls how a sentence sounds. Self-closing; place before EVERY sentence.
+_INWORLD_EXAMPLES = [
+    '<expr type="expression" label="say playfully"/> Okay okay, why did the burger go to the gym? <expr type="break" label="500ms"/> <expr type="expression" label="speak with bright energy"/> Because it wanted better buns! <expr type="sound" label="laugh"/>',  # noqa: E501
+    '<expr type="expression" label="sound concerned"/> Ah man, yeah that\'s on us. <expr type="expression" label="speak calmly"/> Lemme see what I can do.',  # noqa: E501
+    '<expr type="sound" label="sigh"/> <expr type="expression" label="speak softly, gently"/> I know it\'s been a rough week.',  # noqa: E501
+]
+
+
+def _sound_examples(examples: list[str], allowed: list[str], vocabulary: list[str]) -> list[str]:
+    """Drop example lines that demonstrate a *vocabulary* label not in *allowed*."""
+    removed = [s for s in vocabulary if s not in allowed]
+    return [ex for ex in examples if not any(f'label="{s}"' in ex for s in removed)]
+
+
+def _numbered_sections(sections: list[str]) -> str:
+    return "\n\n".join(f"{i}. {section}" for i, section in enumerate(sections, 1))
+
+
+def _inworld_expr_llm_instructions(sounds: list[str]) -> str:
+    sections = [
+        """Delivery - controls how a sentence sounds. Self-closing; place before EVERY sentence.
    <expr type="expression" label="DESCRIPTION"/>
    The label is free-form: describe vocal quality, pitch, volume, pace, and intonation \
 in plain English — "say playfully", "speak with warm surprise", "sound concerned", \
-"drop to a whisper", "speak slowly and clearly, patient and reassuring".
-
-2. Sounds - a non-verbal sound between sentences. Self-closing.
-   <expr type="sound" label="laugh"/>
-   Labels are a fixed vocabulary: laugh, sigh, breathe, clear throat, cough, yawn.
-
-3. Pauses - insert silence when appropriate. Self-closing.
+"drop to a whisper", "speak slowly and clearly, patient and reassuring"."""
+    ]
+    if sounds:
+        sections.append(
+            f"""Sounds - a non-verbal sound between sentences. Self-closing.
+   <expr type="sound" label="{sounds[0]}"/>
+   Labels are a fixed vocabulary: {", ".join(sounds)}."""
+        )
+    sections.append(
+        """Pauses - insert silence when appropriate. Self-closing.
    <expr type="break" label="500ms"/> or <expr type="break" label="1s"/> (max 10s).
    A period or an ellipsis (...) already creates a pause, so don't put a break marker \
-right next to one — pick one or the other.
+right next to one — pick one or the other."""
+    )
 
-There is no wrapping prosody marker for this voice — put pace, pitch, and volume in \
-the expression label instead.
+    parts = [
+        _EXPR_PREAMBLE,
+        _numbered_sections(sections),
+        "There is no wrapping prosody marker for this voice — put pace, pitch, and volume in "
+        "the expression label instead.",
+    ]
+    if examples := _sound_examples(_INWORLD_EXAMPLES, sounds, _INWORLD_SOUNDS):
+        parts.append("Examples:\n" + "\n".join(f"  {ex}" for ex in examples))
+    return "\n\n".join(parts)
 
-Examples:
-  <expr type="expression" label="say playfully"/> Okay okay, why did the burger go to the gym? <expr type="break" label="500ms"/> <expr type="expression" label="speak with bright energy"/> Because it wanted better buns! <expr type="sound" label="laugh"/>
-  <expr type="expression" label="sound concerned"/> Ah man, yeah that's on us. <expr type="expression" label="speak calmly"/> Lemme see what I can do.
-  <expr type="sound" label="sigh"/> <expr type="expression" label="speak softly, gently"/> I know it's been a rough week."""
-)
 
-_XAI_EXPR_LLM_INSTRUCTIONS = (
-    _EXPR_PREAMBLE
-    + """
+_XAI_EXAMPLES = [
+    'So I walked in and <expr type="break" label="500ms"/> there it was! <expr type="sound" label="laugh"/> <expr type="prosody" label="whisper">It was a secret the whole time.</expr>',  # noqa: E501
+    '<expr type="prosody" label="build-intensity">This is going to be so good</expr> — <expr type="prosody" label="loud">I can\'t wait!</expr> <expr type="sound" label="chuckle"/>',  # noqa: E501
+    '<expr type="prosody" label="soft">Hey.</expr> <expr type="sound" label="sigh"/> <expr type="prosody" label="lower-pitch">I know it\'s been a rough week.</expr> I\'m right here.',  # noqa: E501
+    '<expr type="prosody" label="laugh-speak">You did not just say that</expr> <expr type="sound" label="giggle"/> okay, <expr type="prosody" label="fast">tell me everything.</expr>',  # noqa: E501
+    # sound-free, so at least one example survives any steering filter
+    '<expr type="prosody" label="emphasis">Everything</expr> is confirmed for Thursday. <expr type="break" label="500ms"/> <expr type="prosody" label="slow">Is there anything else I can help you with?</expr>',  # noqa: E501
+]
 
-1. Sounds - a non-verbal vocalization at the exact point where it happens. Self-closing.
-   <expr type="sound" label="laugh"/>
-   Labels are a fixed vocabulary: """
-    + ", ".join(_XAI_INLINE)
-    + """.
 
-2. Pauses - insert a beat. Self-closing.
-   <expr type="break" label="500ms"/> a brief pause    <expr type="break" label="1s"/> a longer, dramatic pause
-
-3. Prosody - wraps the exact words it affects to shape HOW they're said.
+def _xai_expr_llm_instructions(sounds: list[str], prosody: list[str]) -> str:
+    sections = []
+    if sounds:
+        sections.append(
+            f"""Sounds - a non-verbal vocalization at the exact point where it happens. Self-closing.
+   <expr type="sound" label="{sounds[0]}"/>
+   Labels are a fixed vocabulary: {", ".join(sounds)}."""
+        )
+    sections.append(
+        """Pauses - insert a beat. Self-closing.
+   <expr type="break" label="500ms"/> a brief pause    <expr type="break" label="1s"/> a longer, dramatic pause"""  # noqa: E501
+    )
+    sections.append(
+        f"""Prosody - wraps the exact words it affects to shape HOW they're said.
    <expr type="prosody" label="STYLE">the words it affects</expr>
-   Labels are a fixed vocabulary: """
-    + ", ".join(_XAI_WRAPPING)
-    + """.
-   Never nest one prosody marker inside another, and always close it with </expr>.
+   Labels are a fixed vocabulary: {", ".join(prosody)}.
+   Never nest one prosody marker inside another, and always close it with </expr>."""
+    )
 
-This voice has no free-form delivery descriptions — shape delivery entirely through \
-prosody markers, sounds, pauses, punctuation, and word choice.
-
-To stress a word, wrap it in <expr type="prosody" label="emphasis">...</expr> — do NOT \
+    parts = [
+        _EXPR_PREAMBLE,
+        _numbered_sections(sections),
+        "This voice has no free-form delivery descriptions — shape delivery entirely through "
+        + ("prosody markers, sounds, pauses" if sounds else "prosody markers, pauses")
+        + ", punctuation, and word choice.",
+        """To stress a word, wrap it in <expr type="prosody" label="emphasis">...</expr> — do NOT \
 write it in all-caps, which is read out as individual letters. Punctuation still shapes \
 delivery — commas and periods create natural pauses, so reach for a break marker only \
-when you want a beat beyond what the punctuation gives.
+when you want a beat beyond what the punctuation gives.""",
+        """ALWAYS wrap numbers, dates, times, amounts, addresses, and names of specific things in \
+<expr type="prosody" label="emphasis">...</expr> so they stand out to the listener — this is \
+the one marker that is mandatory, not optional. When the detail is dense or easy to mishear, \
+wrap it in <expr type="prosody" label="slow">...</expr> instead, and read codes or reference \
+numbers character by character, spelled out with spaces, so each one lands.""",
+        """VERY IMPORTANT: Always put <expr type="break" label="750ms"/> right before any number, \
+code of any kind, or address — people naturally take a beat before saying one, and it cues \
+the listener to catch what comes next.""",
+    ]
+    if examples := _sound_examples(_XAI_EXAMPLES, sounds + prosody, _XAI_INLINE + _XAI_WRAPPING):
+        parts.append("Examples:\n" + "\n".join(f"  {ex}" for ex in examples))
+    return "\n\n".join(parts)
 
-Examples:
-  So I walked in and <expr type="break" label="500ms"/> there it was! <expr type="sound" label="laugh"/> <expr type="prosody" label="whisper">It was a secret the whole time.</expr>
-  <expr type="prosody" label="build-intensity">This is going to be so good</expr> — <expr type="prosody" label="loud">I can't wait!</expr> <expr type="sound" label="chuckle"/>
-  <expr type="prosody" label="soft">Hey.</expr> <expr type="sound" label="sigh"/> <expr type="prosody" label="lower-pitch">I know it's been a rough week.</expr> I'm right here.
-  <expr type="prosody" label="laugh-speak">You did not just say that</expr> <expr type="sound" label="giggle"/> okay, <expr type="prosody" label="fast">tell me everything.</expr>"""
-)
 
-_EXPR_LLM_INSTRUCTIONS: dict[str, str] = {
-    "cartesia": _CARTESIA_EXPR_LLM_INSTRUCTIONS,
-    "inworld": _INWORLD_EXPR_LLM_INSTRUCTIONS,
-    "xai": _XAI_EXPR_LLM_INSTRUCTIONS,
+# Every provider's full expr sound vocabulary (the advertised labels before any
+# speech_steering filtering). Providers absent here have no non-verbal sounds.
+_PROVIDER_SOUNDS: dict[str, list[str]] = {
+    "inworld": _INWORLD_SOUNDS,
+    "xai": _XAI_INLINE,
 }
+
+
+def _steering_removed(
+    table: dict[str, dict[str, list[str]]], provider: str, steering: SpeechSteeringOptions | None
+) -> set[str]:
+    """Labels from a per-provider governance table that *steering* disables."""
+    nonverbals = steering.get("nonverbal_sounds") if steering else None
+    labels = table.get(provider)
+    if nonverbals is None or labels is None:
+        return set()
+    flags = dict(nonverbals)
+    return {lb for f, lbs in labels.items() if not flags.get(f, False) for lb in lbs}
+
+
+def _allowed_sounds(provider: str, steering: SpeechSteeringOptions | None) -> list[str]:
+    """The provider's sound vocabulary minus labels steering disables.
+
+    Every label is governed by a ``NonverbalOptions`` field, so passing
+    ``nonverbal_sounds`` with everything off returns an empty list — the
+    instruction builders then omit the Sounds section entirely.
+    """
+    removed = _steering_removed(_NONVERBAL_SOUND_LABELS, provider, steering)
+    return [s for s in _PROVIDER_SOUNDS.get(provider, []) if s not in removed]
+
+
+def _allowed_prosody(provider: str, steering: SpeechSteeringOptions | None) -> list[str]:
+    """The provider's wrapping-prosody vocabulary minus labels steering disables.
+
+    Unlike sounds, only the vocal-style labels (laugh-speak, singing, ...) are
+    governed — neutral delivery controls (emphasis, whisper, pitch, pace) always
+    survive, so the result is never empty.
+    """
+    removed = _steering_removed(_NONVERBAL_PROSODY_LABELS, provider, steering)
+    return [p for p in _PROVIDER_PROSODY.get(provider, []) if p not in removed]
 
 
 # NonverbalOptions field -> the provider's expr sound labels it governs. A provider
 # absent here (cartesia) has no non-verbal sounds; an empty list means the provider
-# has no sound for that field (nothing to enable or forbid). Must stay consistent
-# with the sound vocabularies advertised in the expr instruction blocks above.
+# has no sound for that field (nothing to filter). _allowed_sounds uses this to
+# remove disabled labels from the advertised vocabulary, so a sound steering turns
+# off is never exposed to the LLM in the first place. Every label in
+# _PROVIDER_SOUNDS must be governed by exactly one field, so a preset controls
+# the full vocabulary.
 _NONVERBAL_SOUND_LABELS: dict[str, dict[str, list[str]]] = {
     "inworld": {
         "laughing": ["laugh"],
-        "coughing": ["cough"],
         "breathing": ["breathe"],
+        "sighing": ["sigh"],
+        "crying": [],
+        "vocalizing": [],
+        "mouth_sounds": [],
+        "reflex_sounds": ["cough", "clear throat", "yawn"],
     },
     "xai": {
         "laughing": ["laugh", "chuckle", "giggle"],
-        "coughing": [],  # xAI has no cough sound
         "breathing": ["breath", "inhale", "exhale"],
+        "sighing": ["sigh"],
+        "crying": ["cry"],
+        "vocalizing": ["hum-tune"],  # non-lexical voiced sounds
+        "mouth_sounds": ["tsk", "tongue-click", "lip-smack"],
+        "reflex_sounds": [],  # xAI has no cough/yawn sounds
     },
+}
+
+# NonverbalOptions field -> the provider's wrapping-prosody labels it governs.
+# Sparse on purpose: only vocal-style prosody (talking through a laugh, singing)
+# is steerable; neutral delivery controls are never filtered.
+_NONVERBAL_PROSODY_LABELS: dict[str, dict[str, list[str]]] = {
+    "xai": {
+        "laughing": ["laugh-speak"],
+        "vocalizing": ["sing-song", "singing"],
+    },
+}
+
+# Every provider's full wrapping-prosody vocabulary (only xAI has one).
+_PROVIDER_PROSODY: dict[str, list[str]] = {
+    "xai": _XAI_WRAPPING,
 }
 
 
@@ -283,26 +386,17 @@ def steering_instructions(provider: str, steering: SpeechSteeringOptions) -> str
     """Render a ``SpeechSteeringOptions`` into delivery guidelines for *provider*.
 
     Only set fields produce output, so an empty dict adds nothing on top of the
-    base template. Sounds are gated per provider: only labels the provider's expr
-    vocabulary actually has are mentioned, and disabled sounds get an explicit
-    prohibition (the base instructions advertise the full vocabulary, so silence
-    would leave the LLM free to use them).
+    base template. Disabled sounds never appear here: ``llm_instructions`` filters
+    them out of the advertised vocabulary (via ``_allowed_sounds``), so the only
+    sound guidance left is how sparingly to use what remains.
     """
     lines: list[str] = []
 
-    nonverbals = steering.get("nonverbal_sounds")
-    labels = _NONVERBAL_SOUND_LABELS.get(provider)
-    if nonverbals is not None and labels is not None:
-        enabled = [lb for f, lbs in labels.items() if getattr(nonverbals, f) for lb in lbs]
-        disabled = [lb for f, lbs in labels.items() if not getattr(nonverbals, f) for lb in lbs]
-        if enabled:
-            lines.append(
-                "Non-verbal sounds: you may use "
-                + ", ".join(f'<expr type="sound" label="{lb}"/>' for lb in enabled)
-                + ". Use one only where the moment genuinely earns it; most turns have none."
-            )
-        if disabled:
-            lines.append("Never use these sound labels: " + ", ".join(disabled) + ".")
+    if steering.get("nonverbal_sounds") is not None and _allowed_sounds(provider, steering):
+        lines.append(
+            "Non-verbal sounds: use one only where the moment genuinely earns it; "
+            "most turns have none."
+        )
 
     if (disfluencies := steering.get("disfluencies")) is not None:
         lines.append(
@@ -478,15 +572,25 @@ def _convert_expr(provider: str, text: str) -> str:
     return text
 
 
-def llm_instructions(provider: str) -> str | None:
+def llm_instructions(provider: str, steering: SpeechSteeringOptions | None = None) -> str | None:
     """Return LLM instruction text for a TTS provider.
 
     Each markup-capable provider gets its own expr instruction block — shared marker
     syntax, but only the types and label vocabularies that provider actually supports;
     ``convert_markup`` lowers the markers to native syntax. Expr is the only dialect
-    the LLM is ever taught.
+    the LLM is ever taught. When *steering* disables a non-verbal sound, its labels
+    (and any example demonstrating them) are omitted from the block entirely rather
+    than advertised and then revoked.
     """
-    return _EXPR_LLM_INSTRUCTIONS.get(provider)
+    if provider == "cartesia":
+        return _CARTESIA_EXPR_LLM_INSTRUCTIONS
+    if provider == "inworld":
+        return _inworld_expr_llm_instructions(_allowed_sounds(provider, steering))
+    if provider == "xai":
+        return _xai_expr_llm_instructions(
+            _allowed_sounds(provider, steering), _allowed_prosody(provider, steering)
+        )
+    return None
 
 
 # Per-provider markup spec: (xml tag names, whether square-bracket tags are used).

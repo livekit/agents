@@ -13,7 +13,8 @@ PROFESSIONAL_VERBAL_PRESET: SpeechSteeringOptions = {
     "disfluencies": True,
     "nonverbal_sounds": NonverbalOptions(breathing=True),
 }
-"""Composed, natural delivery: audible breathing and light fillers, no laughter."""
+"""Composed, natural delivery: audible breathing and light fillers; no laughter,
+sighing, or any other non-verbal sound."""
 
 CASUAL_VERBAL_PRESET: SpeechSteeringOptions = {
     "disfluencies": True,

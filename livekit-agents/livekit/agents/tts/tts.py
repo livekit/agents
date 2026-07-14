@@ -29,6 +29,7 @@ from ..types import (
 from ..utils import aio, audio, codecs, log_exceptions, shortuuid
 
 if TYPE_CHECKING:
+    from ..voice.agent_session import SpeechSteeringOptions
     from ..voice.io import TimedString
     from ._provider_format import ExpressiveTag
 
@@ -94,15 +95,17 @@ class TTS(
             """
             return ""
 
-        def llm_instructions(self) -> str | None:
+        def llm_instructions(self, steering: SpeechSteeringOptions | None = None) -> str | None:
             """Return instructions for the LLM describing available markup tags.
 
             The framework injects this into the LLM system prompt when
             ``expressive=True``.  Returns ``None`` if this TTS has no markup support.
+            When *steering* is given, sounds it disables are omitted from the
+            advertised vocabulary.
             """
             from ._provider_format import llm_instructions
 
-            return llm_instructions(self._provider_key())
+            return llm_instructions(self._provider_key(), steering)
 
         def _split(self, text: str) -> tuple[str, list[ExpressiveTag]]:
             """Strip markup and collect the stripped tags in one pass."""

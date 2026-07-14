@@ -127,8 +127,10 @@ class TestXaiDialect:
 
         # every prosody label the expr instructions offer must be in _XAI_TAGS,
         # or a hallucinated native form would leak into the user-visible transcript
+        instructions = pf.llm_instructions("xai")
+        assert instructions is not None
         for tag in pf._XAI_WRAPPING:
-            assert tag in pf._XAI_EXPR_LLM_INSTRUCTIONS, f"{tag} not documented"
+            assert tag in instructions, f"{tag} not documented"
             assert tag in pf._XAI_TAGS
             clean, _ = pf.split_markup("xai", f"<{tag}>hello there</{tag}>")
             assert clean.strip() == "hello there", f"{tag} not stripped: {clean!r}"
@@ -148,9 +150,11 @@ class TestXaiDialect:
 
         # nonverbals from xAI's docs, incl. the ones the user called out; documented in
         # the expr sound-label vocabulary (lowered to [NAME] for the TTS in convert_markup)
+        instructions = pf.llm_instructions("xai")
+        assert instructions is not None
         for name in ("tsk", "lip-smack", "tongue-click", "chuckle", "giggle", "hum-tune"):
             assert name in pf._XAI_INLINE
-            assert name in pf._XAI_EXPR_LLM_INSTRUCTIONS
+            assert name in instructions
 
     def test_pitch_volume_intensity_speed_present(self) -> None:
         from livekit.agents.tts import _provider_format as pf
