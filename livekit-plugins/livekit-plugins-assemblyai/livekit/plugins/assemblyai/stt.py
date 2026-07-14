@@ -163,13 +163,20 @@ class STT(stt.STT):
                 0 and 1 that determines how sensitive the VAD is. Lower values make the VAD
                 more sensitive (detects quieter speech). Higher values make it less sensitive.
                 Defaults to 0.4.
-            language_code: Steer transcription toward a specific language (e.g. 'en', 'es',
-                'fr'). Accepts any common format ('en', 'en-US', 'english'); it is normalized
-                to a bare ISO 639-1 code before being sent. When set, the model is biased
-                toward this language instead of automatically detecting/code-switching across
-                the supported languages. Leave unset to use the model's default multilingual
-                behavior. Only supported with the Universal-3 Pro family models. Set at
-                construction (connect) time only.
+            language_code: Shorthand for a one-element ``language_codes`` list
+                (e.g. 'en'); mutually exclusive with it. Constructor-only.
+            language_codes: Steer transcription toward one or more expected languages
+                (e.g. ['en', 'es']). Each entry accepts any common format ('en',
+                'en-US', 'english') and is normalized to a bare ISO 639-1 code before
+                being sent; duplicates after normalization are dropped, preserving
+                order. One code biases the model toward that language — several codes,
+                toward that set — instead of automatically detecting/code-switching
+                across all supported languages. At most 10 codes; 'multi' (the
+                unsteered multilingual default) cannot be combined with other codes.
+                Leave unset to use the model's default multilingual behavior. Only
+                supported with the Universal-3 Pro family models. Can be updated
+                mid-session via ``update_options``; pass an empty list there to clear
+                steering back to the model default.
             min_turn_silence: Minimum silence in ms before a confident end-of-turn is finalized.
             min_end_of_turn_silence_when_confident: Deprecated. Use min_turn_silence instead.
             continuous_partials: Whether to emit additional partial transcripts during long
