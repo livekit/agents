@@ -1303,3 +1303,50 @@ async def test_carryover_truncates_oversize_reply_keeping_tail():
     stt = STT(api_key="test-key")
     stt._push_conversation_item(_assistant_item_event(text))
     assert stt._opts.agent_context == "b" * 1750
+
+
+async def test_carryover_defaults_on_for_u3_pro_family():
+    """agent_context_carryover defaults to enabled on models that support it."""
+    from livekit.plugins.assemblyai import STT
+
+    for model in ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro"):
+        stt = STT(api_key="test-key", model=model)
+        assert stt.capabilities.chat_context is True
+
+
+async def test_carryover_defaults_off_for_unsupported_models_without_warning(caplog):
+    """On non-U3-Pro models the default is silently off — no 'ignoring' warning."""
+    import logging
+
+    from livekit.plugins.assemblyai import STT
+
+    with caplog.at_level(logging.WARNING):
+        stt = STT(api_key="test-key", model="universal-streaming-english")
+
+    assert stt.capabilities.chat_context is False
+    assert "agent_context_carryover" not in caplog.text
+
+
+async def test_carryover_explicit_true_on_unsupported_model_warns(caplog):
+    """Explicitly enabling carryover on an unsupported model keeps today's warning."""
+    import logging
+
+    from livekit.plugins.assemblyai import STT
+
+    with caplog.at_level(logging.WARNING):
+        stt = STT(
+            api_key="test-key",
+            model="universal-streaming-english",
+            agent_context_carryover=True,
+        )
+
+    assert stt.capabilities.chat_context is False
+    assert "agent_context_carryover" in caplog.text
+
+
+async def test_carryover_explicit_false_disables():
+    """agent_context_carryover=False opts out on a supported model."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", agent_context_carryover=False)
+    assert stt.capabilities.chat_context is False

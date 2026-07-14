@@ -155,7 +155,7 @@ class STT(stt.STT):
         prompt: NotGivenOr[str] = NOT_GIVEN,
         agent_context: NotGivenOr[str] = NOT_GIVEN,
         previous_context_n_turns: NotGivenOr[int] = NOT_GIVEN,
-        agent_context_carryover: bool = False,
+        agent_context_carryover: NotGivenOr[bool] = NOT_GIVEN,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         speaker_labels: NotGivenOr[bool] = NOT_GIVEN,
         max_speakers: NotGivenOr[int] = NOT_GIVEN,
@@ -220,9 +220,12 @@ class STT(stt.STT):
                 (connect) time only; it cannot be changed via `update_options`.
             agent_context_carryover: When the model supports it, let an ``AgentSession`` push each
                 assistant reply into ``agent_context`` so it is carried into the model's
-                conversation context. Defaults to False; set True to enable. Prior user turns are
-                carried automatically by the model regardless of this flag. Ignored on models
-                without context support.
+                conversation context. Enabled by default on models that support it (the
+                Universal-3 Pro family); pass False to opt out. On other models it is off;
+                explicitly passing True logs a warning and is ignored. Prior user turns are
+                carried automatically by the model regardless of this flag. Replies longer
+                than the 1750-character server cap are truncated (keeping the tail) before
+                being sent.
             voice_focus: Voice Focus isolates the primary voice and suppresses background
                 noise (chatter, keyboard clicks, fan hum, room echo) before the audio reaches
                 the model. Use 'near-field' for headsets, handsets, and close-talking
@@ -252,13 +255,17 @@ class STT(stt.STT):
         if is_given(agent_context):
             _validate_agent_context(agent_context)
         # agent_context carryover is only available on the u3-rt-pro family
-        # ("u3-pro" is normalized to "u3-rt-pro" below) and is opt-in via the user
+        # ("u3-pro" is normalized to "u3-rt-pro" below). Unset means "on where
+        # supported"; only an explicit True on an unsupported model warns.
         supports_carryover = model in _U3_PRO_MODELS or model == "u3-pro"
-        if agent_context_carryover and not supports_carryover:
+        if is_given(agent_context_carryover) and agent_context_carryover and not supports_carryover:
             logger.warning(
                 "agent_context_carryover is enabled but model %r does not support it; ignoring",
                 model,
             )
+        carryover_enabled = (
+            agent_context_carryover if is_given(agent_context_carryover) else supports_carryover
+        )
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
@@ -267,7 +274,7 @@ class STT(stt.STT):
                 offline_recognize=False,
                 diarization=is_given(speaker_labels) and speaker_labels is True,
                 keyterms=True,
-                chat_context=agent_context_carryover and supports_carryover,
+                chat_context=carryover_enabled and supports_carryover,
             ),
         )
         if model == "u3-pro":
