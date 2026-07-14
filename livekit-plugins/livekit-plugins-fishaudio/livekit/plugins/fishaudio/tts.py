@@ -31,12 +31,6 @@ DEFAULT_BASE_URL = "https://api.fish.audio"
 NUM_CHANNELS = 1
 USER_AGENT = f"livekit-plugins-fishaudio/{__version__}"
 
-# Hold the first N audio chunks before releasing any audio, so playout starts with
-# enough buffered to ride out the gap after Fish's small first chunk (else jitter
-# underruns it into a crackle). Internal stopgap for Fish's cold-start pacing; drop
-# to 1 once inference streams the opening chunks smoothly. Values <= 1 disable it.
-_PREBUFFER_CHUNKS = 2
-
 # Fish Audio's default sample rate per output format. Opus only supports 48 kHz;
 # the other formats default to 24 kHz, which matches the previous plugin default.
 _DEFAULT_SAMPLE_RATE: dict[OutputFormat, int] = {
@@ -428,33 +422,6 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             await ws.send_bytes(msgpack.packb({"event": "stop"}, use_bin_type=True))
 
-        prebuffer_chunks = _PREBUFFER_CHUNKS
-        prebuffer = bytearray()
-        chunks_seen = 0
-        prebuffering = prebuffer_chunks > 1
-
-        def push_audio(audio: bytes) -> None:
-            nonlocal prebuffering, chunks_seen
-            if prebuffering:
-                prebuffer.extend(audio)
-                chunks_seen += 1
-                if chunks_seen < prebuffer_chunks:
-                    return
-                output_emitter.push(bytes(prebuffer))
-                prebuffer.clear()
-                prebuffering = False
-            else:
-                output_emitter.push(audio)
-
-        def flush_prebuffer() -> None:
-            # Stream ended before we reached `prebuffer_chunks` (short utterance) —
-            # release whatever is held so nothing is dropped or left hanging.
-            nonlocal prebuffering
-            if prebuffering and prebuffer:
-                output_emitter.push(bytes(prebuffer))
-                prebuffer.clear()
-            prebuffering = False
-
         async def recv_task() -> None:
             # No per-receive timeout: Fish has natural inter-sentence gaps that
             # can exceed `_conn_options.timeout` when the LLM is slow. Dead
@@ -482,7 +449,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if event == "audio":
                     audio = data.get("audio")
                     if audio:
-                        push_audio(audio)
+                        output_emitter.push(audio)
                 elif event == "finish":
                     reason = data.get("reason")
                     if reason == "error":
@@ -492,7 +459,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                             request_id=None,
                             body=str(data),
                         )
-                    flush_prebuffer()
                     break
                 else:
                     logger.debug("unknown Fish Audio event: %s", data)
