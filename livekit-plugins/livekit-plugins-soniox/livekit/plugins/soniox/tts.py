@@ -52,6 +52,9 @@ MIN_SPEED = 0.7
 MAX_SPEED = 1.3
 KEEPALIVE_INTERVAL = 10  # seconds
 KEEPALIVE_MESSAGE = json.dumps({"keep_alive": True})
+# End an open stream_id before Soniox's per-stream request timeout (~8–18s observed)
+# when the LLM stalls mid-turn. See github.com/livekit/agents/issues/6225.
+DEFAULT_STREAM_IDLE_TIMEOUT = 5.0
 
 
 def _audio_format_to_mime_type(audio_format: str) -> str:
@@ -81,6 +84,7 @@ class TTS(tts.TTS):
         sample_rate: int = DEFAULT_SAMPLE_RATE,
         bitrate: int | None = None,
         speed: float = DEFAULT_SPEED,
+        stream_idle_timeout: float = DEFAULT_STREAM_IDLE_TIMEOUT,
         api_key: str | None = None,
         websocket_url: str = WEBSOCKET_URL,
         http_session: aiohttp.ClientSession | None = None,
@@ -96,6 +100,11 @@ class TTS(tts.TTS):
             bitrate (int): Codec bitrate in bps for compressed formats. Optional.
             speed (float): Speaking rate. 1.0 is the normal rate; values below 1.0 slow speech
                 down and values above 1.0 speed it up. Range is [0.7, 1.3]. Defaults to 1.0.
+            stream_idle_timeout (float): Seconds of silence on an open Soniox ``stream_id``
+                (no new text and no ``FlushSentinel``) before sending ``text_end`` and
+                starting a new ``stream_id`` when text resumes. Prevents Soniox per-stream
+                408 request timeouts during LLM stalls. Set to ``0`` to disable. Defaults
+                to 5.0.
             api_key (str): Soniox API key. If not provided, will look for SONIOX_API_KEY env variable.
             websocket_url (str): Base WebSocket URL for Soniox TTS API.
             http_session (aiohttp.ClientSession): Optional aiohttp.ClientSession to use for requests.
@@ -112,6 +121,8 @@ class TTS(tts.TTS):
 
         if not MIN_SPEED <= speed <= MAX_SPEED:
             raise ValueError(f"speed must be between {MIN_SPEED} and {MAX_SPEED}, but got {speed}")
+        if stream_idle_timeout < 0:
+            raise ValueError(f"stream_idle_timeout must be >= 0, but got {stream_idle_timeout}")
 
         self._opts = _TTSOptions(
             model=model,
@@ -121,6 +132,7 @@ class TTS(tts.TTS):
             sample_rate=sample_rate,
             bitrate=bitrate,
             speed=speed,
+            stream_idle_timeout=stream_idle_timeout,
             websocket_url=websocket_url,
             api_key=api_key,
         )
@@ -173,6 +185,7 @@ class TTS(tts.TTS):
         language: NotGivenOr[str] = NOT_GIVEN,
         voice: NotGivenOr[str] = NOT_GIVEN,
         speed: NotGivenOr[float] = NOT_GIVEN,
+        stream_idle_timeout: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         """
         Args:
@@ -180,6 +193,8 @@ class TTS(tts.TTS):
             language: Language code to use.
             voice: Voice to use.
             speed: Speaking rate in the range [0.7, 1.3]; 1.0 is the normal rate.
+            stream_idle_timeout: Idle seconds before ending the active Soniox stream_id.
+                Set to ``0`` to disable idle rotation.
         """
         if is_given(model):
             self._opts.model = model
@@ -193,6 +208,12 @@ class TTS(tts.TTS):
                     f"speed must be between {MIN_SPEED} and {MAX_SPEED}, but got {speed}"
                 )
             self._opts.speed = speed
+        if is_given(stream_idle_timeout):
+            if stream_idle_timeout < 0:
+                raise ValueError(f"stream_idle_timeout must be >= 0, but got {stream_idle_timeout}")
+            self._opts.stream_idle_timeout = stream_idle_timeout
+            for stream in list(self._streams):
+                stream._opts.stream_idle_timeout = stream_idle_timeout
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -265,7 +286,16 @@ class SynthesizeStream(tts.SynthesizeStream):
         await super().aclose()
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        """Register with the connection, stream text, await the completion future."""
+        """Register with the connection, stream text, await segment completion.
+
+        Ends the active Soniox ``stream_id`` (``text_end``) when input goes idle for
+        ``stream_idle_timeout`` or when a ``FlushSentinel`` arrives after text was
+        sent, then lazily starts a new ``stream_id`` when text resumes. This matches
+        Soniox's multiplexed-stream model and avoids per-stream 408 timeouts during
+        LLM stalls (see livekit/agents#6225, #6425).
+        """
+        from livekit.agents.utils.aio.channel import ChanClosed
+
         request_id = utils.shortuuid()
         self._stream_id = utils.shortuuid()
 
@@ -295,33 +325,90 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         self._connection = connection
 
-        waiter: asyncio.Future[None] = asyncio.get_event_loop().create_future()
+        loop = asyncio.get_running_loop()
+        waiter: asyncio.Future[None] = loop.create_future()
         connection.register_stream(self._stream_id, output_emitter, waiter, opts=self._opts)
+        stream_registered = True
+
+        async def _end_active_stream(*, send_text_end: bool) -> None:
+            """Finish the current Soniox stream_id (keep the AudioEmitter segment open)."""
+            nonlocal waiter, stream_registered
+            if not stream_registered:
+                return
+            if send_text_end:
+                connection.send_text(self._stream_id, "", text_end=True)
+            try:
+                await waiter
+            except APIStatusError:
+                raise
+            except Exception as e:
+                raise APIConnectionError() from e
+            finally:
+                connection.unregister_stream(self._stream_id)
+                stream_registered = False
+
+        def _start_next_stream() -> None:
+            """Allocate and register a new stream_id for the next text chunk."""
+            nonlocal waiter, stream_registered
+            self._stream_id = utils.shortuuid()
+            waiter = loop.create_future()
+            connection.register_stream(self._stream_id, output_emitter, waiter, opts=self._opts)
+            stream_registered = True
 
         async def _input_task() -> None:
-            async for data in self._input_ch:
-                if self._cancelled.is_set():
-                    break
-                if isinstance(data, self._FlushSentinel):
+            nonlocal waiter
+            segment_has_text = False
+            need_new_stream = False
+            idle_timeout = self._opts.stream_idle_timeout
+
+            while not self._cancelled.is_set():
+                try:
+                    if segment_has_text and idle_timeout > 0:
+                        data = await asyncio.wait_for(self._input_ch.recv(), timeout=idle_timeout)
+                    else:
+                        data = await self._input_ch.recv()
+                except asyncio.TimeoutError:
+                    # Input stalled while a stream_id is open — end it before Soniox 408s.
+                    await _end_active_stream(send_text_end=True)
+                    segment_has_text = False
+                    need_new_stream = True
                     continue
+                except ChanClosed:
+                    break
+
+                if isinstance(data, self._FlushSentinel):
+                    if segment_has_text:
+                        await _end_active_stream(send_text_end=True)
+                        segment_has_text = False
+                        need_new_stream = True
+                    continue
+
+                if need_new_stream:
+                    _start_next_stream()
+                    need_new_stream = False
+
                 self._mark_started()
                 connection.send_text(self._stream_id, data, text_end=False)
+                segment_has_text = True
 
-            if not self._cancelled.is_set():
-                connection.send_text(self._stream_id, "", text_end=True)
+            if not self._cancelled.is_set() and stream_registered:
+                # Input finished: end the open stream if any text was (or would be) active.
+                await _end_active_stream(send_text_end=True)
 
         input_t = asyncio.create_task(_input_task(), name="soniox-tts-stream-input")
 
         try:
-            await waiter
+            await input_t
         except APIStatusError:
             raise
         except Exception as e:
             raise APIConnectionError() from e
         finally:
-            output_emitter.end_segment()
             await utils.aio.gracefully_cancel(input_t)
-            connection.unregister_stream(self._stream_id)
+            output_emitter.end_segment()
+            if stream_registered:
+                connection.unregister_stream(self._stream_id)
+                stream_registered = False
 
 
 @dataclass
@@ -333,6 +420,7 @@ class _TTSOptions:
     sample_rate: int
     bitrate: int | None
     speed: float
+    stream_idle_timeout: float
     websocket_url: str
     api_key: str
 
