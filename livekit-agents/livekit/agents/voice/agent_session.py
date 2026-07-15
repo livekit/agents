@@ -1266,8 +1266,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 to the STT. Auto-detected keyterms are left untouched.
             expressive (NotGivenOr[bool | ExpressiveOptions], optional): Turn expressive TTS
                 delivery on/off or switch its preset/options mid-session. Takes effect on the
-                next reply. An ``expressive`` set on the active :class:`Agent` overrides the
-                session value. When a turn runs with expressive off, markup left in past
+                next reply. When a turn runs with expressive off, markup left in past
                 assistant messages is stripped from the chat history so the LLM doesn't
                 imitate tags nothing downstream converts.
             min_endpointing_delay: Deprecated, use ``endpointing_opts`` instead.
@@ -1275,7 +1274,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         """
         if is_given(expressive):
             # mypy can't narrow NotGiven out of the TypedDict union here
-            self._opts.expressive = cast("bool | ExpressiveOptions", expressive)
+            self._expressive = cast("bool | ExpressiveOptions", expressive)
         if is_given(keyterms):
             self._keyterm_detector.set_static_keyterms(keyterms)
         if is_given(min_endpointing_delay) or is_given(max_endpointing_delay):

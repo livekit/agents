@@ -2847,8 +2847,8 @@ class AgentActivity(RecognitionHooks):
         if _expr_opts is not None:
             self._inject_expressive_instructions(chat_ctx, _expr_opts, speech_handle)
         else:
-            # expressive is off for this turn (toggled off via update_options, an agent
-            # override, or a handoff to a TTS without a markup dialect): remove the
+            # expressive is off for this turn (toggled off via update_options or a
+            # handoff to a TTS without a markup dialect): remove the
             # injected markup guide and scrub markup left in past assistant turns so
             # the LLM isn't instructed or few-shotted into emitting tags nothing
             # downstream converts or strips — an unsupported tag would reach the TTS

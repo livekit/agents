@@ -54,20 +54,23 @@ def test_strip_assistant_markup() -> None:
 
 
 def test_update_options_expressive() -> None:
-    session = AgentSession(expressive=presets.CUSTOMER_SERVICE)
-    assert session.options.expressive == presets.CUSTOMER_SERVICE
+    session = AgentSession()
+    assert session._expressive is False
+
+    session.update_options(expressive={"speech_steering": presets.FORMAL})
+    assert session._expressive == {"speech_steering": presets.FORMAL}
 
     # turn off
     session.update_options(expressive=False)
-    assert session.options.expressive is False
+    assert session._expressive is False
 
     # turn back on with a different preset
-    session.update_options(expressive=presets.CASUAL)
-    assert session.options.expressive == presets.CASUAL
+    session.update_options(expressive={"speech_steering": presets.CASUAL})
+    assert session._expressive == {"speech_steering": presets.CASUAL}
 
     # untouched when not given
     session.update_options()
-    assert session.options.expressive == presets.CASUAL
+    assert session._expressive == {"speech_steering": presets.CASUAL}
 
 
 def test_update_and_remove_expressive_instructions() -> None:
@@ -93,7 +96,8 @@ async def test_expressive_off_turn_scrubs_history() -> None:
 
     # FakeTTS has no markup dialect, so expressive resolves to off even though the
     # session asks for it — same situation as a handoff to a non-expressive TTS.
-    session = create_session(actions, extra_kwargs={"expressive": presets.CUSTOMER_SERVICE})
+    session = create_session(actions)
+    session._expressive = {"speech_steering": presets.FORMAL}
 
     # seed history as if previous turns ran expressive: marked-up assistant text +
     # the injected markup guide
