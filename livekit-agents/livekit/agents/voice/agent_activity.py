@@ -70,6 +70,7 @@ from .generation import (
     _AudioOutput,
     _ForwardOutput,
     _inject_running_tool_calls,
+    _strip_assistant_markup,
     _strip_running_tool_calls,
     _TextOutput,
     _TTSGenerationData,
@@ -79,7 +80,9 @@ from .generation import (
     perform_text_forwarding,
     perform_tool_executions,
     perform_tts_inference,
+    remove_expressive_instructions,
     remove_instructions,
+    update_expressive_instructions,
     update_instructions,
 )
 from .speech_handle import DEFAULT_INPUT_DETAILS, InputDetails, SpeechHandle
@@ -2486,7 +2489,9 @@ class AgentActivity(RecognitionHooks):
                 },
             )
             if text.strip():
-                chat_ctx.add_message(role="system", content=text)
+                # keyed message: re-injection replaces last turn's guide instead of
+                # stacking copies, and an expressive-off turn removes it again
+                update_expressive_instructions(chat_ctx, text=text)
 
     def _on_pipeline_reply_done(self, _: asyncio.Task[None]) -> None:
         if not self._speech_q and (not self._current_speech or self._current_speech.done()):
@@ -2841,6 +2846,20 @@ class AgentActivity(RecognitionHooks):
         _expr_opts = self._resolve_expressive_options()
         if _expr_opts is not None:
             self._inject_expressive_instructions(chat_ctx, _expr_opts, speech_handle)
+        else:
+            # expressive is off for this turn (toggled off via update_options, an agent
+            # override, or a handoff to a TTS without a markup dialect): remove the
+            # injected markup guide and scrub markup left in past assistant turns so
+            # the LLM isn't instructed or few-shotted into emitting tags nothing
+            # downstream converts or strips — an unsupported tag would reach the TTS
+            # as literal text and be spoken.
+            remove_expressive_instructions(chat_ctx)
+            _strip_assistant_markup(chat_ctx)
+            if chat_ctx is not self._agent._chat_ctx:
+                # user turns run on a copy of the agent's history; clean the stored
+                # history too so stale markup doesn't survive into future snapshots
+                remove_expressive_instructions(self._agent._chat_ctx)
+                _strip_assistant_markup(self._agent._chat_ctx)
 
         # TODO(theomonnom): since pause is closing STT/LLM/TTS, we have issues for SpeechHandle still in queue  # noqa: E501
         # I should implement a retry mechanism?
