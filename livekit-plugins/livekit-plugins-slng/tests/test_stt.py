@@ -586,3 +586,74 @@ async def test_stt_options_reconnect_disarms_final_watchdog(
         await asyncio.wait_for(reader, timeout=3)
 
     assert finals == ["hello world"]
+
+
+@pytest.mark.asyncio
+async def test_stt_options_reconnect_closes_speech_bracket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An options-change reconnect must close a dangling START_OF_SPEECH so
+    the next utterance on the new connection opens a fresh bracket."""
+    ws1, ws2 = _InterimOnlySttWs(), _AnsweringSttWs()
+    sockets: list = [ws1, ws2]
+
+    async def fake_connect(self, *, model_endpoint: str, model: str | None):
+        del self, model_endpoint, model
+        return sockets.pop(0)
+
+    monkeypatch.setattr(slng.stt.SpeechStream, "_connect_ws", fake_connect)
+    async with aiohttp.ClientSession() as session:
+        stt = slng.STT(api_key="test-key", model="deepgram/nova:3", http_session=session)
+        stream = stt.stream(conn_options=APIConnectOptions(max_retry=0))
+
+        events: list = []
+        got_final = asyncio.Event()
+
+        async def read() -> None:
+            async for ev in stream:
+                events.append(ev.type)
+                if ev.type == SpeechEventType.FINAL_TRANSCRIPT:
+                    got_final.set()
+
+        reader = asyncio.create_task(read())
+
+        # First turn: ws1 answers the finalize with an interim only, which
+        # opens a START_OF_SPEECH bracket that never closes on ws1.
+        stream._input_ch.send_nowait(SimpleNamespace(data=memoryview(b"\x00\x01" * 1600)))
+        stt.notify_user_state("speaking")
+        stt.notify_user_state("listening")
+        async with asyncio.timeout(2):
+            while SpeechEventType.INTERIM_TRANSCRIPT not in events:
+                await asyncio.sleep(0.01)
+
+        # Options change triggers the reconnect mid-utterance.
+        stream.update_options(language="id")
+        await asyncio.sleep(0.2)  # let the reconnect settle
+
+        # Second turn completes normally on ws2.
+        stream._input_ch.send_nowait(SimpleNamespace(data=memoryview(b"\x00\x01" * 1600)))
+        stt.notify_user_state("speaking")
+        stt.notify_user_state("listening")
+        await asyncio.wait_for(got_final.wait(), timeout=3)
+        stream.end_input()
+        await asyncio.wait_for(reader, timeout=3)
+
+    speech_events = [
+        ev
+        for ev in events
+        if ev
+        in (
+            SpeechEventType.START_OF_SPEECH,
+            SpeechEventType.INTERIM_TRANSCRIPT,
+            SpeechEventType.FINAL_TRANSCRIPT,
+            SpeechEventType.END_OF_SPEECH,
+        )
+    ]
+    assert speech_events == [
+        SpeechEventType.START_OF_SPEECH,
+        SpeechEventType.INTERIM_TRANSCRIPT,
+        SpeechEventType.END_OF_SPEECH,
+        SpeechEventType.START_OF_SPEECH,
+        SpeechEventType.FINAL_TRANSCRIPT,
+        SpeechEventType.END_OF_SPEECH,
+    ]

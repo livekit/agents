@@ -1163,6 +1163,15 @@ class SpeechStream(stt.SpeechStream):
                         # not trigger a spurious failover on the new connection.
                         awaiting_final = False
                         cancel_final_timeout()
+                        pending_non_empty_transcript = False
+                        # Close the speech bracket for the abandoned utterance
+                        # so clients never see a dangling START_OF_SPEECH and
+                        # the next utterance opens a fresh one.
+                        if speech_started:
+                            speech_started = False
+                            self._event_ch.send_nowait(
+                                stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                            )
                         await utils.aio.gracefully_cancel(
                             *[
                                 task
