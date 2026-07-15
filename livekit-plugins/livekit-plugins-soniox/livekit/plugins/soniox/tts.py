@@ -20,7 +20,7 @@ import json
 import os
 import time
 import weakref
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import aiohttp
@@ -28,8 +28,10 @@ import aiohttp
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
+    tokenize,
     tts,
     utils,
 )
@@ -52,6 +54,10 @@ MIN_SPEED = 0.7
 MAX_SPEED = 1.3
 KEEPALIVE_INTERVAL = 10  # seconds
 KEEPALIVE_MESSAGE = json.dumps({"keep_alive": True})
+DEFAULT_STREAM_IDLE_TIMEOUT = 5.0  # seconds
+# Rotate to a fresh stream at a sentence boundary
+# well before Soniox's fixed 2-minute per-stream cap.
+MAX_STREAM_AGE = 90.0  # seconds
 
 
 def _audio_format_to_mime_type(audio_format: str) -> str:
@@ -84,6 +90,8 @@ class TTS(tts.TTS):
         api_key: str | None = None,
         websocket_url: str = WEBSOCKET_URL,
         http_session: aiohttp.ClientSession | None = None,
+        tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        stream_idle_timeout: float = DEFAULT_STREAM_IDLE_TIMEOUT,
     ) -> None:
         """Initialize instance of Soniox Text-to-Speech API service.
 
@@ -99,6 +107,12 @@ class TTS(tts.TTS):
             api_key (str): Soniox API key. If not provided, will look for SONIOX_API_KEY env variable.
             websocket_url (str): Base WebSocket URL for Soniox TTS API.
             http_session (aiohttp.ClientSession): Optional aiohttp.ClientSession to use for requests.
+            tokenizer (tokenize.SentenceTokenizer): Tokenizer used to buffer input into complete
+                sentences before sending. Defaults to
+                `livekit.agents.tokenize.blingfire.SentenceTokenizer`.
+            stream_idle_timeout (float): Seconds without a new sentence before the current
+                stream is finalized; the next sentence starts a fresh stream. Prevents slow
+                LLM gaps from hitting the server's per-stream timeout. Defaults to 5.0.
         """
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
@@ -123,8 +137,14 @@ class TTS(tts.TTS):
             speed=speed,
             websocket_url=websocket_url,
             api_key=api_key,
+            stream_idle_timeout=stream_idle_timeout,
         )
         self._session = http_session
+        self._sentence_tokenizer = (
+            tokenizer
+            if is_given(tokenizer)
+            else tokenize.blingfire.SentenceTokenizer(retain_format=True)
+        )
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
         # One persistent connection shared across streams (see _Connection).
@@ -233,6 +253,19 @@ class TTS(tts.TTS):
             self.__current_connection = None
 
 
+@dataclass
+class _ActiveStream:
+    """One Soniox stream carrying a batch of sentences; kept for replay on failure."""
+
+    connection: _Connection
+    stream_id: str
+    waiter: asyncio.Future[None]
+    opened_at: float
+    baseline: float  # emitter duration at open; audio beyond it belongs to this stream
+    attempt: int = 0
+    texts: list[str] = field(default_factory=list)
+
+
 class SynthesizeStream(tts.SynthesizeStream):
     """Streaming TTS implementation on a shared _Connection."""
 
@@ -265,9 +298,16 @@ class SynthesizeStream(tts.SynthesizeStream):
         await super().aclose()
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        """Register with the connection, stream text, await the completion future."""
+        """Feed sentences into a shared stream, rotating on idle gaps and age.
+
+        Soniox keeps prosody continuous only within a stream, so sentences are
+        pushed into one open stream while the LLM produces them steadily. When
+        no sentence arrives for ``stream_idle_timeout``, the stream is
+        finalized (text_end) before the server's own timer can kill it
+        mid-synthesis; the next sentence starts a fresh stream. Only complete
+        sentences are ever sent, so every rotation lands on a natural boundary.
+        """
         request_id = utils.shortuuid()
-        self._stream_id = utils.shortuuid()
 
         output_emitter.initialize(
             request_id=request_id,
@@ -278,6 +318,87 @@ class SynthesizeStream(tts.SynthesizeStream):
         )
         output_emitter.start_segment(segment_id=utils.shortuuid())
 
+        sent_stream = self._tts._sentence_tokenizer.stream()
+
+        async def _input_task() -> None:
+            async for data in self._input_ch:
+                if self._cancelled.is_set():
+                    break
+                if isinstance(data, self._FlushSentinel):
+                    sent_stream.flush()
+                    continue
+                sent_stream.push_text(data)
+            sent_stream.end_input()
+
+        input_t = asyncio.create_task(_input_task(), name="soniox-tts-stream-input")
+
+        active: _ActiveStream | None = None
+        next_task: asyncio.Future[tokenize.TokenData] | None = None
+        sent_iter = sent_stream.__aiter__()
+
+        try:
+            while not self._cancelled.is_set():
+                if next_task is None:
+                    next_task = asyncio.ensure_future(sent_iter.__anext__())
+
+                waiters: set[asyncio.Future[Any]] = {next_task}
+                if active is not None:
+                    waiters.add(active.waiter)
+                await asyncio.wait(
+                    waiters,
+                    timeout=self._opts.stream_idle_timeout if active is not None else None,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+
+                if active is not None and active.waiter.done():
+                    active = await self._settle_stream(active, output_emitter, request_id)
+                    continue
+
+                if not next_task.done():
+                    # LLM stalled: finalize before the server times the stream out
+                    if active is not None:
+                        await self._finalize_stream(active, output_emitter, request_id)
+                        active = None
+                    continue
+
+                try:
+                    ev = next_task.result()
+                except StopAsyncIteration:
+                    break
+                finally:
+                    next_task = None
+
+                if not ev.token.strip():
+                    continue
+
+                self._mark_started()
+
+                # rotate to a new stream before the fixed 2-minute stream lifespan
+                if active is not None and time.monotonic() - active.opened_at > MAX_STREAM_AGE:
+                    await self._finalize_stream(active, output_emitter, request_id)
+                    active = None
+
+                if active is None:
+                    active = await self._open_stream(output_emitter, request_id)
+
+                active.texts.append(ev.token)
+                active.connection.send_text(active.stream_id, ev.token, text_end=False)
+
+            if active is not None and not self._cancelled.is_set():
+                await self._finalize_stream(active, output_emitter, request_id)
+                active = None
+        finally:
+            if next_task is not None:
+                await utils.aio.gracefully_cancel(next_task)
+            if active is not None:
+                active.connection.unregister_stream(active.stream_id)
+            output_emitter.end_segment()
+            await utils.aio.gracefully_cancel(input_t)
+            await sent_stream.aclose()
+
+    async def _open_stream(
+        self, output_emitter: tts.AudioEmitter, request_id: str, *, attempt: int = 0
+    ) -> _ActiveStream:
         try:
             (
                 connection,
@@ -294,34 +415,90 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise APIConnectionError() from e
 
         self._connection = connection
+        self._stream_id = stream_id = utils.shortuuid()
 
         waiter: asyncio.Future[None] = asyncio.get_event_loop().create_future()
-        connection.register_stream(self._stream_id, output_emitter, waiter, opts=self._opts)
+        connection.register_stream(stream_id, output_emitter, waiter, opts=self._opts)
+        return _ActiveStream(
+            connection=connection,
+            stream_id=stream_id,
+            waiter=waiter,
+            opened_at=time.monotonic(),
+            baseline=output_emitter.pushed_duration(),
+            attempt=attempt,
+        )
 
-        async def _input_task() -> None:
-            async for data in self._input_ch:
-                if self._cancelled.is_set():
-                    break
-                if isinstance(data, self._FlushSentinel):
-                    continue
-                self._mark_started()
-                connection.send_text(self._stream_id, data, text_end=False)
+    async def _finalize_stream(
+        self, active: _ActiveStream, output_emitter: tts.AudioEmitter, request_id: str
+    ) -> None:
+        """Send text_end and wait for termination, replaying the batch if it fails."""
+        current: _ActiveStream | None = active
+        while current is not None:
+            current.connection.send_text(current.stream_id, "", text_end=True)
+            current = await self._settle_stream(current, output_emitter, request_id)
 
-            if not self._cancelled.is_set():
-                connection.send_text(self._stream_id, "", text_end=True)
+    async def _settle_stream(
+        self, active: _ActiveStream, output_emitter: tts.AudioEmitter, request_id: str
+    ) -> _ActiveStream | None:
+        """Wait for the stream's terminal event and interpret it.
 
-        input_t = asyncio.create_task(_input_task(), name="soniox-tts-stream-input")
-
+        Returns None when the stream ended cleanly (everything sent was
+        spoken), or a fresh stream with the batch replayed when it failed
+        transiently.
+        """
+        failure: APIError | None = None
         try:
-            await waiter
-        except APIStatusError:
-            raise
+            await active.waiter
+        except APIError as e:
+            failure = e
         except Exception as e:
             raise APIConnectionError() from e
         finally:
-            output_emitter.end_segment()
-            await utils.aio.gracefully_cancel(input_t)
-            connection.unregister_stream(self._stream_id)
+            # release before any replay so only one stream is ever registered
+            active.connection.unregister_stream(active.stream_id)
+
+        if failure is None:
+            return None
+        return await self._retry_stream(active, output_emitter, request_id, failure)
+
+    async def _retry_stream(
+        self,
+        active: _ActiveStream,
+        output_emitter: tts.AudioEmitter,
+        request_id: str,
+        exc: APIError,
+    ) -> _ActiveStream:
+        """Replay the failed stream's sentences on a fresh stream_id.
+
+        The framework never retries once any audio reached the user, so a
+        transient failure would otherwise mute the rest of the reply. Replaying
+        is safe only while the failed stream itself produced no audio.
+        """
+        can_retry = (
+            exc.retryable
+            and output_emitter.pushed_duration() == active.baseline
+            and active.attempt < self._conn_options.max_retry
+            and not self._cancelled.is_set()
+        )
+        if not can_retry:
+            raise exc
+
+        retry_interval = self._conn_options._interval_for_retry(active.attempt)
+        logger.warning(
+            "Soniox TTS stream failed: %s, retrying in %ss",
+            exc,
+            retry_interval,
+            extra={"stream_id": active.stream_id, "attempt": active.attempt + 1},
+        )
+        await asyncio.sleep(retry_interval)
+
+        replacement = await self._open_stream(
+            output_emitter, request_id, attempt=active.attempt + 1
+        )
+        for text in active.texts:
+            replacement.texts.append(text)
+            replacement.connection.send_text(replacement.stream_id, text, text_end=False)
+        return replacement
 
 
 @dataclass
@@ -335,6 +512,7 @@ class _TTSOptions:
     speed: float
     websocket_url: str
     api_key: str
+    stream_idle_timeout: float
 
 
 @dataclass
