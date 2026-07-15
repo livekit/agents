@@ -550,9 +550,7 @@ class SpeechStream(stt.SpeechStream):
             tuple[Literal["hard_fail", "timeout"], BaseException | None, float | None] | None
         ) = None
         pending_replay: bytes | None = None
-        # True when a finalize was sent for the buffered audio and no final
-        # transcript arrived before failover; the replay must resend it.
-        pending_replay_finalize = False
+        finalize_requested_for_buffer = False
         pending_switch_succeeded: (
             tuple[str | None, str | None, Literal["hard_fail", "timeout"], float | None] | None
         ) = None
@@ -641,9 +639,11 @@ class SpeechStream(stt.SpeechStream):
             reason: str,
         ) -> bool:
             nonlocal last_client_send_at, sent_audio_since_finalize
+            nonlocal finalize_requested_for_buffer
             async with send_lock:
                 if not sent_audio_since_finalize:
                     return False
+                finalize_requested_for_buffer = True
                 await ws.send_str(_FINALIZE_MSG)
                 last_client_send_at = asyncio.get_running_loop().time()
                 sent_audio_since_finalize = False
@@ -688,10 +688,13 @@ class SpeechStream(stt.SpeechStream):
             count_usage: bool,
         ) -> None:
             nonlocal last_client_send_at, sent_audio_since_finalize
+            nonlocal finalize_requested_for_buffer
             async with send_lock:
                 await ws.send_bytes(payload)
                 last_client_send_at = asyncio.get_running_loop().time()
                 sent_audio_since_finalize = True
+                if count_usage:
+                    finalize_requested_for_buffer = False
             if count_usage:
                 self._speech_duration += audio_duration_from_bytes(payload)
 
@@ -724,7 +727,7 @@ class SpeechStream(stt.SpeechStream):
             nonlocal input_finished, closing, protocol_close_sent
             nonlocal pending_non_empty_transcript, pending_replay
             nonlocal pending_switch_succeeded, sent_audio_since_finalize
-            nonlocal candidate_attempts, pending_replay_finalize
+            nonlocal candidate_attempts
             from_model = current_model()
             exc_info = (
                 (type(exc), exc, exc.__traceback__)
@@ -781,10 +784,6 @@ class SpeechStream(stt.SpeechStream):
             closing = False
             protocol_close_sent = False
             pending_non_empty_transcript = False
-            # A cleared sent_audio_since_finalize with buffered audio still held
-            # means the utterance was finalized but never answered; the replay
-            # on the next candidate must resend the finalize boundary.
-            pending_replay_finalize = bool(buffered_audio) and not sent_audio_since_finalize
             sent_audio_since_finalize = False
             with contextlib.suppress(Exception):
                 self._candidate_state.select(self._active_endpoint_index)
@@ -806,7 +805,6 @@ class SpeechStream(stt.SpeechStream):
         ) -> None:
             nonlocal awaiting_final, input_finished, pending_replay
             nonlocal pending_user_state_finalize, recover_primary_after_final
-            nonlocal pending_replay_finalize
             samples_per_buffer = self._samples_per_buffer()
             bytes_per_sample = _BYTES_PER_SAMPLE
             audio_bstream = utils.audio.AudioByteStream(
@@ -823,8 +821,7 @@ class SpeechStream(stt.SpeechStream):
                     await send_audio_payload(
                         ws, replay_data[i : i + chunk_bytes], count_usage=False
                     )
-                if pending_replay_finalize:
-                    pending_replay_finalize = False
+                if finalize_requested_for_buffer:
                     await send_finalize_if_needed(ws, reason="failover_replay")
                 if awaiting_final and self._final_timeout_s is not None:
                     start_final_timeout(self._final_timeout_s)
@@ -908,6 +905,7 @@ class SpeechStream(stt.SpeechStream):
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> bool:
             nonlocal awaiting_final, pending_non_empty_transcript, speech_started
             nonlocal recover_primary_after_final, candidate_attempts
+            nonlocal finalize_requested_for_buffer
             while True:
                 msg = await ws.receive()
                 if msg.type in (
@@ -995,6 +993,7 @@ class SpeechStream(stt.SpeechStream):
                                 cancel_final_timeout()
                             self._has_spoken_since_last_response = False
                             buffered_audio.clear()
+                            finalize_requested_for_buffer = False
                             if speech_started:
                                 # Close the bracket opened by an earlier interim so
                                 # clients never see a dangling START_OF_SPEECH.
@@ -1020,6 +1019,7 @@ class SpeechStream(stt.SpeechStream):
                         self._has_spoken_since_last_response = False
                         pending_non_empty_transcript = False
                         buffered_audio.clear()
+                        finalize_requested_for_buffer = False
 
                         start_time = words[0].get("start", 0.0) if words else 0.0
                         end_time = words[-1].get("end", 0.0) if words else 0.0

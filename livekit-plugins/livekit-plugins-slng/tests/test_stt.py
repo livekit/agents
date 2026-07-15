@@ -327,12 +327,13 @@ async def test_stt_deepgram_results_keep_words_and_language(
 
 
 class _DyingSttWs:
-    """Dies (server close, no final) right after it receives the finalize."""
+    """Closes after receiving a finalize, or audio when requested."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, die_after_audio: bool = False) -> None:
         self.sent_texts: list[dict] = []
         self.audio_frames = 0
         self._die = asyncio.Event()
+        self._die_after_audio = die_after_audio
 
     async def send_str(self, msg: str) -> None:
         frame = json.loads(msg)
@@ -343,6 +344,8 @@ class _DyingSttWs:
     async def send_bytes(self, payload: bytes) -> None:
         del payload
         self.audio_frames += 1
+        if self._die_after_audio:
+            self._die.set()
 
     async def receive(self, timeout=None):
         del timeout
@@ -359,6 +362,7 @@ class _AnsweringSttWs:
     def __init__(self) -> None:
         self.sent_texts: list[dict] = []
         self.audio_frames = 0
+        self.audio_received = asyncio.Event()
         self._q: asyncio.Queue = asyncio.Queue()
 
     def _put(self, payload: dict) -> None:
@@ -381,6 +385,7 @@ class _AnsweringSttWs:
     async def send_bytes(self, payload: bytes) -> None:
         del payload
         self.audio_frames += 1
+        self.audio_received.set()
 
     async def receive(self, timeout=None):
         del timeout
@@ -435,6 +440,48 @@ async def test_stt_failover_replays_audio_and_finalize(
     assert any(f.get("type") == "finalize" for f in ws2.sent_texts), (
         "finalize boundary was not replayed to the fallback"
     )
+
+
+@pytest.mark.asyncio
+async def test_stt_failover_does_not_invent_finalize(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failover with no outstanding finalize must not replay one: a second
+    connect failure must not turn buffered audio into a premature turn end."""
+    first = _DyingSttWs(die_after_audio=True)
+    third = _AnsweringSttWs()
+    attempts = 0
+
+    async def fake_connect(self, *, model_endpoint: str, model: str | None):
+        nonlocal attempts
+        del self, model_endpoint, model
+        attempts += 1
+        if attempts == 1:
+            return first
+        if attempts == 2:
+            raise APIConnectionError("connect failed")
+        return third
+
+    monkeypatch.setattr(slng.stt.SpeechStream, "_connect_ws", fake_connect)
+    async with aiohttp.ClientSession() as session:
+        stt = slng.STT(
+            api_key="test-key",
+            connections=["deepgram/nova:3", "deepgram/nova:2", "deepgram/nova:1"],
+            http_session=session,
+        )
+        stream = stt.stream(conn_options=APIConnectOptions(max_retry=0))
+        stream._input_ch.send_nowait(SimpleNamespace(data=memoryview(b"\x00\x01" * 1600)))
+
+        async def drain() -> None:
+            async for _ in stream:
+                pass
+
+        reader = asyncio.create_task(drain())
+        await asyncio.wait_for(third.audio_received.wait(), timeout=3)
+        assert not any(f.get("type") == "finalize" for f in third.sent_texts)
+
+        stream.end_input()
+        await asyncio.wait_for(reader, timeout=3)
 
 
 class _InterimOnlySttWs:

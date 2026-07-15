@@ -50,6 +50,14 @@ class _FakeStream:
         pass
 
 
+class _HangingStream(_FakeStream):
+    def __init__(self) -> None:
+        super().__init__([])
+
+    async def __anext__(self):
+        await asyncio.Event().wait()
+
+
 def test_tts_requires_voice() -> None:
     with pytest.raises(TypeError):
         slng.TTS(api_key="test-key", model="deepgram/aura:2")  # type: ignore[call-arg]
@@ -104,12 +112,16 @@ async def test_tts_fails_over_before_first_audio() -> None:
                 voice="voice-b",
             ),
         ],
+        first_audio_timeout_s=0.01,
     )
     first, second = tts._candidate_tts
+    first_attempts = 0
 
     def first_stream(self, *, conn_options):
+        nonlocal first_attempts
         del self, conn_options
-        return _FakeStream([APIStatusError("failed")])
+        first_attempts += 1
+        return _HangingStream()
 
     audio = object()
 
@@ -120,12 +132,41 @@ async def test_tts_fails_over_before_first_audio() -> None:
     first._stream_candidate = MethodType(first_stream, first)  # type: ignore[method-assign]
     second._stream_candidate = MethodType(second_stream, second)  # type: ignore[method-assign]
 
-    stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
+    stream = tts.stream(conn_options=APIConnectOptions(max_retry=3))
     await stream.__aenter__()
     stream.push_text("hello")
     stream.end_input()
     assert await stream.__anext__() is audio
+    assert first_attempts == 1
     assert tts._active_candidate_index == 1
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_single_tts_candidate_times_out_and_emits_exhausted() -> None:
+    tts = slng.TTS(
+        api_key="test-key",
+        model="provider/model:1",
+        voice="voice-a",
+        first_audio_timeout_s=0.01,
+    )
+    candidate = tts._candidate_tts[0]
+    events = []
+    tts.on("slng_event", events.append)
+
+    def hanging_stream(self, *, conn_options):
+        del self, conn_options
+        return _HangingStream()
+
+    candidate._stream_candidate = MethodType(hanging_stream, candidate)  # type: ignore[method-assign]
+    stream = tts.stream(conn_options=APIConnectOptions(max_retry=3))
+    await stream.__aenter__()
+    stream.push_text("hello")
+
+    with pytest.raises(TimeoutError):
+        await stream.__anext__()
+
+    assert [event.name for event in events] == ["fallback.exhausted"]
     await stream.aclose()
 
 

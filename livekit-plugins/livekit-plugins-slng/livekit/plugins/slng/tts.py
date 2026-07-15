@@ -684,7 +684,7 @@ class TTS(tts.TTS):
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> ChunkedStream:
-        if len(self._candidate_tts) > 1 and not self._is_candidate:
+        if not self._is_candidate:
             return _FallbackChunkedStream(
                 parent=self,
                 text=text,
@@ -703,7 +703,7 @@ class TTS(tts.TTS):
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
-        if len(self._candidate_tts) > 1 and not self._is_candidate:
+        if not self._is_candidate:
             return _FallbackSynthesizeStream(
                 parent=self,
                 conn_options=conn_options,
@@ -1312,6 +1312,11 @@ class _FallbackStreamBase:
                     raise
                 await self._handle_failure(APIConnectionError("TTS produced no audio"))
                 continue
+            except TimeoutError as exc:
+                if self._started or self._deadline is None:
+                    raise
+                await self._handle_failure(exc, allow_retry=False)
+                continue
             except Exception as exc:
                 if self._started:
                     raise
@@ -1328,7 +1333,7 @@ class _FallbackStreamBase:
             with contextlib.suppress(Exception):
                 await stream.aclose()
 
-    async def _handle_failure(self, exc: BaseException) -> None:
+    async def _handle_failure(self, exc: BaseException, *, allow_retry: bool = True) -> None:
         candidate = self._parent._candidate_tts[self._index]
         if is_payload_too_large(exc):
             # Every candidate receives the same oversized request body, so
@@ -1341,7 +1346,11 @@ class _FallbackStreamBase:
                 error=str(exc),
             )
             raise exc
-        if not is_non_retryable_client_error(exc) and self._attempts < self._conn_options.max_retry:
+        if (
+            allow_retry
+            and not is_non_retryable_client_error(exc)
+            and self._attempts < self._conn_options.max_retry
+        ):
             self._attempts += 1
             self._parent._emit_plugin_event(
                 "fallback.attempt_failed",
