@@ -74,7 +74,9 @@ class TestParsePartFunctionCall:
     def test_thought_summary_part_returns_none(self, llm_stream: LLMStream):
         # include_thoughts streams reasoning back as parts flagged thought=True; these
         # must be dropped so TTS never speaks the model's internal reasoning.
-        part = types.Part(text="**Calculating Refill Dates** I'm processing the timeline", thought=True)
+        part = types.Part(
+            text="**Calculating Refill Dates** I'm processing the timeline", thought=True
+        )
 
         chunk = llm_stream._parse_part("test-id", part)
 
