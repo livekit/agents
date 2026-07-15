@@ -80,6 +80,25 @@ def test_validate_response_format_injects_defaults_in_tuple_items() -> None:
     assert response == Response(pair=("k", Child(x=1)))
 
 
+def test_validate_response_format_preserves_genuine_null_declared_via_enum() -> None:
+    # nullability can be expressed through enum membership instead of type
+    class Response(BaseModel):
+        value: Literal["x", None] = "x"
+
+    response = validate_response_format(Response, {"value": None})
+
+    assert response.value is None
+
+
+def test_validate_response_format_injects_default_when_enum_excludes_null() -> None:
+    class Response(BaseModel):
+        value: Literal["x", "y"] = "x"
+
+    response = validate_response_format(Response, {"value": None})
+
+    assert response.value == "x"
+
+
 def test_validate_response_format_selects_union_variant_by_payload_keys() -> None:
     class PointsA(BaseModel):
         common: int

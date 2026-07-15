@@ -393,28 +393,52 @@ def _inject_schema_defaults(value: Any, *, schema: dict[str, Any], root: dict[st
 def _json_schema_allows_null(
     schema: dict[str, Any], *, root: dict[str, Any], seen_refs: set[str] | None = None
 ) -> bool:
+    """Whether ``null`` is a valid instance of ``schema``.
+
+    JSON schema keywords are conjunctive: null must satisfy every constraint
+    present (type, enum, const, allOf, unions, $ref), so any keyword that
+    rejects null makes the whole schema reject it.
+    """
     ref = schema.get("$ref")
-    if isinstance(ref, str) and ref not in (seen_refs or set()):
+    if isinstance(ref, str):
+        if ref in (seen_refs or set()):
+            return False
         resolved = _strict.resolve_ref(root=root, ref=ref)
-        if isinstance(resolved, dict) and _json_schema_allows_null(
+        if isinstance(resolved, dict) and not _json_schema_allows_null(
             resolved, root=root, seen_refs={*(seen_refs or set()), ref}
         ):
-            return True
+            return False
 
     typ = schema.get("type")
-    if typ == "null" or isinstance(typ, list) and "null" in typ:
-        return True
+    if isinstance(typ, str) and typ != "null":
+        return False
+    if isinstance(typ, list) and "null" not in typ:
+        return False
+
+    if "const" in schema and schema["const"] is not None:
+        return False
+    enum = schema.get("enum")
+    if isinstance(enum, list) and None not in enum:
+        return False
+
+    all_of = schema.get("allOf")
+    if isinstance(all_of, list) and not all(
+        _json_schema_allows_null(variant, root=root, seen_refs=seen_refs)
+        for variant in all_of
+        if isinstance(variant, dict)
+    ):
+        return False
 
     for union_key in ("anyOf", "oneOf"):
         variants = schema.get(union_key)
-        if isinstance(variants, list) and any(
+        if isinstance(variants, list) and not any(
             isinstance(variant, dict)
             and _json_schema_allows_null(variant, root=root, seen_refs=seen_refs)
             for variant in variants
         ):
-            return True
+            return False
 
-    return False
+    return True
 
 
 def _json_schema_matches(value: Any, schema: dict[str, Any], *, root: dict[str, Any]) -> bool:
