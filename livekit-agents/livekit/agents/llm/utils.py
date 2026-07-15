@@ -356,18 +356,36 @@ def _inject_schema_defaults(value: Any, *, schema: dict[str, Any], root: dict[st
 
     if isinstance(value, dict):
         properties = schema.get("properties")
-        if isinstance(properties, dict):
-            return {
-                key: _inject_schema_defaults(item, schema=properties[key], root=root)
-                if key in properties and isinstance(properties[key], dict)
-                else item
-                for key, item in value.items()
-            }
+        additional = schema.get("additionalProperties")
+        if isinstance(properties, dict) or isinstance(additional, dict):
+            # additionalProperties only governs keys not declared in properties
+            def _inject_entry(key: str, item: Any) -> Any:
+                prop = properties.get(key) if isinstance(properties, dict) else None
+                if isinstance(prop, dict):
+                    return _inject_schema_defaults(item, schema=prop, root=root)
+                if isinstance(additional, dict):
+                    return _inject_schema_defaults(item, schema=additional, root=root)
+                return item
+
+            return {key: _inject_entry(key, item) for key, item in value.items()}
 
     if isinstance(value, list):
+        prefix_items = schema.get("prefixItems")
         items = schema.get("items")
-        if isinstance(items, dict):
-            return [_inject_schema_defaults(item, schema=items, root=root) for item in value]
+        if isinstance(prefix_items, list) or isinstance(items, dict):
+            # prefixItems covers positional slots (fixed tuples); items the rest
+            def _inject_item(i: int, item: Any) -> Any:
+                if (
+                    isinstance(prefix_items, list)
+                    and i < len(prefix_items)
+                    and isinstance(prefix_items[i], dict)
+                ):
+                    return _inject_schema_defaults(item, schema=prefix_items[i], root=root)
+                if isinstance(items, dict):
+                    return _inject_schema_defaults(item, schema=items, root=root)
+                return item
+
+            return [_inject_item(i, item) for i, item in enumerate(value)]
 
     return value
 

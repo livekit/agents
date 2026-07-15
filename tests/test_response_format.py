@@ -56,6 +56,30 @@ def test_validate_response_format_injects_nested_defaults() -> None:
     assert response == Response(items=[PrimaryItem(kind="primary", color="red", note=None)])
 
 
+def test_validate_response_format_injects_defaults_in_dict_values() -> None:
+    class Child(BaseModel):
+        x: int = 1
+
+    class Response(BaseModel):
+        children: dict[str, Child]
+
+    response = validate_response_format(Response, {"children": {"k": {"x": None}}})
+
+    assert response == Response(children={"k": Child(x=1)})
+
+
+def test_validate_response_format_injects_defaults_in_tuple_items() -> None:
+    class Child(BaseModel):
+        x: int = 1
+
+    class Response(BaseModel):
+        pair: tuple[str, Child]
+
+    response = validate_response_format(Response, {"pair": ["k", {"x": None}]})
+
+    assert response == Response(pair=("k", Child(x=1)))
+
+
 def test_validate_response_format_selects_union_variant_by_payload_keys() -> None:
     class PointsA(BaseModel):
         common: int
