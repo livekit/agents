@@ -2442,7 +2442,7 @@ class AgentActivity(RecognitionHooks):
         """
         from .agent_session import DEFAULT_EXPRESSIVE_OPTIONS, resolve_expressive_options
 
-        if not isinstance(self.tts, inference.TTS) or self.tts.markup.llm_instructions() is None:
+        if not isinstance(self.tts, inference.TTS) or not self.tts.markup.capabilities.expressive:
             return None
 
         expr = self._session._expressive

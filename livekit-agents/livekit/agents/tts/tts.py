@@ -6,7 +6,7 @@ import os
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import TracebackType
 from typing import TYPE_CHECKING, ClassVar, Generic, Literal, TypeVar
 
@@ -58,6 +58,16 @@ class TTSCapabilities:
     """Whether this TTS supports aligned transcripts with word timestamps"""
 
 
+@dataclass
+class MarkupCapabilities:
+    """What the expressive markup pipeline can do with a given voice."""
+
+    expressive: bool = False
+    """Whether this TTS declares an expressive markup dialect"""
+    nonverbals: dict[str, list[str]] = field(default_factory=dict)
+    """``NonverbalOptions`` field -> the labels it governs; an absent field is a no-op"""
+
+
 class TTSError(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     type: Literal["tts_error"] = "tts_error"
@@ -94,6 +104,17 @@ class TTS(
             to override ``_provider_key``.
             """
             return ""
+
+        @property
+        def capabilities(self) -> MarkupCapabilities:
+            """The queryable markup capabilities matrix for this voice."""
+            from ._provider_format import llm_instructions, supported_nonverbals
+
+            key = self._provider_key()
+            return MarkupCapabilities(
+                expressive=llm_instructions(key) is not None,
+                nonverbals=supported_nonverbals(key),
+            )
 
         def llm_instructions(self, steering: SpeechSteeringOptions | None = None) -> str | None:
             """Return instructions for the LLM describing available markup tags.

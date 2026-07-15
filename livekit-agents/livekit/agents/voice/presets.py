@@ -5,6 +5,15 @@ A preset is a plain :class:`SpeechSteeringOptions` value — pass it as
 (``{**presets.CASUAL, "pace": "slow"}``). The framework renders it into
 per-provider delivery guidelines at resolution time, so the same preset
 works on any markup-capable TTS provider.
+
+Careful with ``nonverbal_sounds``: it is atomic, so overriding it replaces the
+preset's sounds wholesale — ``{**presets.CASUAL, "nonverbal_sounds": {"laughing": True}}``
+turns everything else OFF. To adjust a single sound, spread one level deeper::
+
+    {
+        **presets.CASUAL,
+        "nonverbal_sounds": {**presets.CASUAL["nonverbal_sounds"], "laughing": True},
+    }
 """
 
 from .agent_session import NonverbalOptions, SpeechSteeringOptions

@@ -381,6 +381,17 @@ _PROVIDER_PROSODY: dict[str, list[str]] = {
     "xai": _XAI_WRAPPING,
 }
 
+
+def supported_nonverbals(provider: str) -> dict[str, list[str]]:
+    """``NonverbalOptions`` field -> the sound/prosody labels it governs for *provider*."""
+    merged: dict[str, list[str]] = {}
+    for table in (_NONVERBAL_SOUND_LABELS, _NONVERBAL_PROSODY_LABELS):
+        for field, labels in table.get(provider, {}).items():
+            if labels:
+                merged.setdefault(field, []).extend(labels)
+    return merged
+
+
 # Sound label -> when a real speaker would make it. The sounds guideline is composed
 # from the hints of whichever labels survived steering, so the LLM only ever reads
 # usage advice for sounds it's allowed to make. Labels sharing a hint (the laugh
