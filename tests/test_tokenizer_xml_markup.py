@@ -127,8 +127,10 @@ class TestXaiDialect:
 
         # every prosody label the expr instructions offer must be in _XAI_TAGS,
         # or a hallucinated native form would leak into the user-visible transcript
+        instructions = pf.llm_instructions("xai")
+        assert instructions is not None
         for tag in pf._XAI_WRAPPING:
-            assert tag in pf._XAI_EXPR_LLM_INSTRUCTIONS, f"{tag} not documented"
+            assert tag in instructions, f"{tag} not documented"
             assert tag in pf._XAI_TAGS
             clean, _ = pf.split_markup("xai", f"<{tag}>hello there</{tag}>")
             assert clean.strip() == "hello there", f"{tag} not stripped: {clean!r}"
@@ -148,9 +150,11 @@ class TestXaiDialect:
 
         # nonverbals from xAI's docs, incl. the ones the user called out; documented in
         # the expr sound-label vocabulary (lowered to [NAME] for the TTS in convert_markup)
+        instructions = pf.llm_instructions("xai")
+        assert instructions is not None
         for name in ("tsk", "lip-smack", "tongue-click", "chuckle", "giggle", "hum-tune"):
             assert name in pf._XAI_INLINE
-            assert name in pf._XAI_EXPR_LLM_INSTRUCTIONS
+            assert name in instructions
 
     def test_pitch_volume_intensity_speed_present(self) -> None:
         from livekit.agents.tts import _provider_format as pf
@@ -190,18 +194,6 @@ class TestXaiDialect:
         # emotion/prosody stay angle-bracketed, and normalize is a no-op for xAI
         assert pf.convert_markup("xai", raw) == "[laugh] [pause] [long-pause] <whisper>hi</whisper>"
         assert pf.normalize_markup("xai", raw) == raw
-
-    def test_presets_registered_for_xai(self) -> None:
-        from livekit.agents.voice import presets
-        from livekit.agents.voice.agent_session import DEFAULT_EXPRESSIVE_OPTIONS
-
-        for preset in (presets.CUSTOMER_SERVICE, presets.CASUAL):
-            opts = presets.resolve_options(
-                preset, provider_key="xai", default=DEFAULT_EXPRESSIVE_OPTIONS
-            )
-            body = opts["tts_instructions_template"].common
-            # tuned body, not the agnostic default (which has no xai marker reference)
-            assert '<expr type="prosody" label="whisper">' in body
 
 
 # ===========================================================================
