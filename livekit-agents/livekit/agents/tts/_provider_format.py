@@ -1149,9 +1149,12 @@ _EXPR_CLOSE_RE = re.compile(LEADING_WS + r"</expr\s*>")
 # any expr marker, opening or self-closing or closing; ``attrs`` is None for a closing one
 _EXPR_ANY_RE = re.compile(LEADING_WS + r"(?:<expr\b(?P<attrs>[^>]*?)/?\s*>|</expr\s*>)")
 _EXPR_SELF_RE = re.compile(LEADING_WS + r"<expr\b(?P<attrs>[^>]*?)/\s*>")
-# a wrapping marker (prosody/spell) and its span; non-greedy, instructed not to nest
+# a wrapping marker (prosody/spell) and its span; non-greedy, instructed not to nest.
+# the opening tag must not itself be self-closing, or a self-closing prosody point
+# control ahead of a later wrapping marker gets mistaken for that marker's opener,
+# swallowing everything up to the next </expr> into its span.
 _EXPR_WRAP_RE = re.compile(
-    LEADING_WS + r'<expr\b(?=[^>]*type="(?:prosody|spell)")(?P<attrs>[^>]*?)>'
+    LEADING_WS + r'<expr\b(?=[^>]*type="(?:prosody|spell)")(?P<attrs>[^>]*?)(?<!/)>'
     r"(?P<inner>.*?)</expr\s*>",
     re.DOTALL,
 )
