@@ -1,4 +1,6 @@
-livekit-agents[evals]>=1.6.0
+# Expressive mode (PR #6116) is merged but unreleased - install the SDK from
+# GitHub until it ships in a PyPI release, then revert to `>=` that version.
+livekit-agents @ git+https://github.com/livekit/agents.git@31e4eeb668d94f805a40ff33cbd40acd4cb56d5e#subdirectory=livekit-agents
 livekit-plugins-silero>=1.6.0
 livekit-plugins-turn-detector>=1.6.0
 python-dotenv>=1.0.0

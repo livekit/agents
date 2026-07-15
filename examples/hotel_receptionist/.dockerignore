@@ -39,6 +39,7 @@
 
 # Project docs and misc
 README.md
+CONTRIBUTING.md
 LICENSE
 
 # Project tests
@@ -46,3 +47,27 @@ test/
 tests/
 eval/
 evals/
+
+# Coding agent files
+.claude/
+.codex/
+.cursor/
+.windsurf/
+.gemini/
+.cline/
+.clinerules
+.clinerules/
+.aider*
+.cursorrules
+.cursorignore
+.cursorindexingignore
+.clineignore
+.codeiumignore
+.geminiignore
+.windsurfrules
+CLAUDE.md
+AGENTS.md
+GEMINI.md
+.github/copilot-instructions.md
+.github/personal-instructions.md
+.github/instructions/

@@ -24,7 +24,7 @@ def build_lookup_policy_tool() -> RawFunctionTool:
     policies: dict[str, str] = {}
     index: list[str] = []
     for path in sorted(_POLICY_DIR.glob("*.md")):
-        description, _, body = path.read_text().partition("\n")
+        description, _, body = path.read_text(encoding="utf-8").partition("\n")
         policies[path.stem] = body.strip()
         index.append(f"- {path.stem}: {description.strip()}")
 

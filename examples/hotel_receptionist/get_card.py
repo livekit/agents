@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-
-from hotel_db import TODAY
-from persona import COMMON_INSTRUCTIONS
+from datetime import date
 
 from livekit.agents import NOT_GIVEN, NotGivenOr
 from livekit.agents.llm import ChatContext
 from livekit.agents.llm.tool_context import ToolError, ToolFlag, function_tool
 from livekit.agents.voice.agent import AgentTask
+
+from .persona import common_instructions
 
 _ISSUERS = {"3": "American Express", "4": "Visa", "5": "Mastercard", "6": "Discover"}
 
@@ -53,14 +53,15 @@ class GetCardTask(AgentTask[GetCardResult]):
     model with instructions to re-ask just that field; one verbal read-back
     (last four + expiry) gates confirm_card()."""
 
-    def __init__(self, *, chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN) -> None:
+    def __init__(self, today: date, *, chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN) -> None:
+        self._today = today
         self._card_number: str = ""
         self._expiration: str = ""
         self._security_code: str = ""
         self._first_name: str = ""
         self._last_name: str = ""
         super().__init__(
-            instructions=f"{COMMON_INSTRUCTIONS}\n\n{_CARD_INSTRUCTIONS}",
+            instructions=f"{common_instructions(today)}\n\n{_CARD_INSTRUCTIONS}",
             chat_ctx=chat_ctx,
         )
 
@@ -121,7 +122,7 @@ class GetCardTask(AgentTask[GetCardResult]):
             raise ToolError("that expiration month is invalid - ask the caller to repeat it")
         if not 0 <= year <= 99:
             raise ToolError("that expiration year is invalid - ask the caller to repeat it")
-        if (2000 + year, month) < (TODAY.year, TODAY.month):
+        if (2000 + year, month) < (self._today.year, self._today.month):
             raise ToolError("that date is in the past, the card is expired - ask for another card")
         self._expiration = f"{month:02d}/{year:02d}"
         return f"expiration recorded | {self._status()}"

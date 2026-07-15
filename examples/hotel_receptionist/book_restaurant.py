@@ -3,15 +3,17 @@ from __future__ import annotations
 from datetime import date, time
 from typing import Annotated
 
-from context import speech_only
-from hotel_db import MAX_PARTY_SIZE, TODAY, HotelDB, RestaurantReservation, Unavailable, speak_time
-from persona import COMMON_INSTRUCTIONS
 from pydantic import Field
 
 from livekit.agents import NOT_GIVEN, NotGivenOr, beta
 from livekit.agents.llm import ChatContext
 from livekit.agents.llm.tool_context import ToolError, ToolFlag, function_tool
 from livekit.agents.voice.agent import AgentTask
+
+from .context import speech_only
+from .hotel import MAX_PARTY_SIZE, RestaurantReservation, Unavailable, format_date, speak_time
+from .hotel_db import HotelDB
+from .persona import PHONE_READBACK_INSTRUCTIONS, common_instructions
 
 _BOOK_RESTAURANT_INSTRUCTIONS = """\
 You're handling a restaurant reservation from start to finish. Collect details in whatever order the caller offers them - don't follow a fixed script, and never re-ask something already given.
@@ -33,8 +35,11 @@ class BookRestaurantTask(AgentTask[RestaurantReservation]):
     the draft so a later hiccup never re-asks it), and `confirm_reservation()` books the
     table."""
 
-    def __init__(self, db: HotelDB, *, chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN) -> None:
+    def __init__(
+        self, db: HotelDB, today: date, *, chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN
+    ) -> None:
         self._db = db
+        self._today = today
         self._date: date | None = None
         self._party_size: int | None = None
         self._time: time | None = None
@@ -44,7 +49,7 @@ class BookRestaurantTask(AgentTask[RestaurantReservation]):
         self._last_name: str | None = None
         self._phone: str | None = None
         super().__init__(
-            instructions=f"{COMMON_INSTRUCTIONS}\n\n{_BOOK_RESTAURANT_INSTRUCTIONS}",
+            instructions=f"{common_instructions(today)}\n\n{_BOOK_RESTAURANT_INSTRUCTIONS}",
             chat_ctx=chat_ctx,
         )
 
@@ -75,7 +80,7 @@ class BookRestaurantTask(AgentTask[RestaurantReservation]):
             on_date: Reservation date in ISO YYYY-MM-DD format (e.g. "2026-01-20").
             party_size: Number of guests, exactly as the caller stated it - never shrink it to fit; if it's too big to seat, that's handled below.
         """
-        if on_date < TODAY:
+        if on_date < self._today:
             raise ToolError("the date can't be in the past")
         if party_size > MAX_PARTY_SIZE:
             # The largest table seats MAX_PARTY_SIZE; a bigger party (and the
@@ -95,14 +100,14 @@ class BookRestaurantTask(AgentTask[RestaurantReservation]):
         if not open_times:
             # Same reasoning as BookRoomTask.set_stay: don't persist a
             # fully-booked date - the caller needs to pick another.
-            return f"fully booked on {on_date.strftime('%A, %B %-d')} for {party_size} - date not recorded; ask for another date"
+            return f"fully booked on {format_date(on_date)} for {party_size} - date not recorded; ask for another date"
 
         self._date, self._party_size = on_date, party_size
         self._open_times = open_times
         if self._time and self._time not in self._open_times:
             self._time = None  # prior slot no longer open for the new date/party
         labels = ", ".join(speak_time(t) for t in sorted(self._open_times))
-        return f"party recorded ({on_date.strftime('%A, %B %-d')}, {party_size} guests); open times: {labels} | {self._status()}"
+        return f"party recorded ({format_date(on_date)}, {party_size} guests); open times: {labels} | {self._status()}"
 
     @function_tool()
     async def choose_time(self, at_time: time, notes: str | None = None) -> str:
@@ -129,7 +134,7 @@ class BookRestaurantTask(AgentTask[RestaurantReservation]):
             first_name=True,
             last_name=True,
             chat_ctx=speech_only(self.chat_ctx),
-            extra_instructions=COMMON_INSTRUCTIONS,
+            extra_instructions=common_instructions(self._today),
         )
         self._first_name, self._last_name = r.first_name or "", r.last_name or ""
         return f"name recorded: {self._first_name} {self._last_name} | {self._status()}"
@@ -138,7 +143,8 @@ class BookRestaurantTask(AgentTask[RestaurantReservation]):
     async def open_phone_dialog(self) -> str:
         """Open the phone dialog. It collects the guest's phone number (read back and confirmed) from the caller."""
         r = await beta.workflows.GetPhoneNumberTask(
-            chat_ctx=speech_only(self.chat_ctx), extra_instructions=COMMON_INSTRUCTIONS
+            chat_ctx=speech_only(self.chat_ctx),
+            extra_instructions=common_instructions(self._today) + PHONE_READBACK_INSTRUCTIONS,
         )
         self._phone = r.phone_number
         return f"phone recorded: {self._phone} | {self._status()}"

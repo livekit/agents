@@ -12,13 +12,14 @@ from __future__ import annotations
 import json
 import logging
 import os
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from hotel_db import HotelDB
-
     from livekit.agents import JobContext
     from livekit.agents.voice.report import SessionReport
+
+    from .hotel_db import HotelDB
 
 logger = logging.getLogger("hotel-receptionist")
 
@@ -29,10 +30,10 @@ def dump_run_artifacts(ctx: JobContext, report: SessionReport, db: HotelDB) -> N
     if not report_dir:
         return
 
+    directory = Path(report_dir)
     room = ctx.room.name
     try:
-        with open(os.path.join(report_dir, f"final_db-{room}.sqlite"), "wb") as f:
-            f.write(db.serialize())
+        (directory / f"final_db-{room}.sqlite").write_bytes(db.serialize())
     except Exception:
         logger.exception("error dumping final DB state")
 
@@ -42,7 +43,7 @@ def dump_run_artifacts(ctx: JobContext, report: SessionReport, db: HotelDB) -> N
         report_dict["evaluations"] = ctx.tagger.evaluations
         report_dict["outcome"] = ctx.tagger.outcome
         report_dict["outcome_reason"] = ctx.tagger.outcome_reason
-        with open(os.path.join(report_dir, f"session_report-{room}.json"), "w") as f:
+        with (directory / f"session_report-{room}.json").open("w", encoding="utf-8") as f:
             json.dump(report_dict, f, indent=2)
     except Exception:
         logger.exception("error dumping session report")

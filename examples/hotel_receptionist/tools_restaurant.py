@@ -1,30 +1,28 @@
 from __future__ import annotations
 
 import logging
-import os
-import sys
 from datetime import date, time
 from typing import Annotated
 
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
-from book_restaurant import BookRestaurantTask
-from common import Userdata, _speak_code
-from context import speech_only
-from hotel_db import (
-    MAX_PARTY_SIZE,
-    TODAY,
-    Unavailable,
-    speak_time,
-)
 from pydantic import Field
 
 from livekit.agents import RunContext, ToolError, function_tool
 
+from .book_restaurant import BookRestaurantTask
+from .common import Userdata, _speak_code
+from .context import speech_only
+from .hotel import (
+    MAX_PARTY_SIZE,
+    Unavailable,
+    format_date,
+    speak_time,
+)
+from .hotel_agent import HotelAgent
+
 logger = logging.getLogger("hotel-receptionist")
 
 
-class RestaurantToolsMixin:
+class RestaurantToolsMixin(HotelAgent):
     @function_tool
     async def check_restaurant_availability(
         self,
@@ -38,23 +36,25 @@ class RestaurantToolsMixin:
             on_date: The date to check, in ISO YYYY-MM-DD format (e.g. "2026-01-20").
             party_size: Number of guests (must be >= 1; ask the caller if not specified).
         """
+        if on_date < ctx.userdata.today:
+            raise ToolError("date can't be in the past")
         slots = await ctx.userdata.db.list_restaurant_availability(
             on_date=on_date, party_size=party_size
         )
         open_slots = [s for s in slots if s.available_table_ids]
         if not open_slots:
-            return f"fully booked on {on_date.strftime('%A, %B %-d')}"
+            return f"fully booked on {format_date(on_date)}"
         return ", ".join(speak_time(s.time) for s in open_slots)
 
     @function_tool
     async def start_restaurant_booking(self, ctx: RunContext[Userdata]) -> str | None:
         """Start the restaurant-reservation flow. Call it the moment the caller wants a table - the flow collects date, party size, time, name, and phone itself. Its return is the FINAL result of the reservation: relay it and move on - nothing further to confirm or call afterwards."""
         reservation = await BookRestaurantTask(
-            db=ctx.userdata.db, chat_ctx=speech_only(self.chat_ctx)
+            ctx.userdata.db, ctx.userdata.today, chat_ctx=speech_only(self.chat_ctx)
         )
         return (
             f"You're set for {speak_time(reservation.time)} on "
-            f"{reservation.date.strftime('%A, %B %-d')} for "
+            f"{format_date(reservation.date)} for "
             f"{reservation.party_size} guest{'s' if reservation.party_size != 1 else ''}. "
             f"Confirmation code: {_speak_code(reservation.code)}. "
             "| reservation complete - relay this to the caller; no further tool call is needed."
@@ -84,7 +84,7 @@ class RestaurantToolsMixin:
         notes_part = f", note: {reservation.notes}" if reservation.notes else ""
         return (
             f"Reservation for {reservation.first_name} {reservation.last_name}, "
-            f"{speak_time(reservation.time)} on {reservation.date.strftime('%A, %B %-d')}, "
+            f"{speak_time(reservation.time)} on {format_date(reservation.date)}, "
             f"party of {reservation.party_size}{notes_part}."
         )
 
@@ -110,7 +110,7 @@ class RestaurantToolsMixin:
         await ctx.userdata.db.cancel_restaurant_reservation(reservation.code)
         return (
             f"Reservation for {speak_time(reservation.time)} on "
-            f"{reservation.date.strftime('%A, %B %-d')} cancelled."
+            f"{format_date(reservation.date)} cancelled."
         )
 
     @function_tool
@@ -135,7 +135,7 @@ class RestaurantToolsMixin:
             new_time: the new time, in 24-hour HH:MM format (e.g. "18:00").
             new_party_size: new number of guests; omit to keep the current party size.
         """
-        if new_date < TODAY:
+        if new_date < ctx.userdata.today:
             raise ToolError("the new date can't be in the past")
         code = confirmation_code.replace(" ", "").upper()
         reservation = await ctx.userdata.db.find_restaurant_reservation(
@@ -157,11 +157,11 @@ class RestaurantToolsMixin:
         except Unavailable:
             raise ToolError(
                 f"No table for a party of {new_party_size or reservation.party_size} "
-                f"at {speak_time(at_time)} on {new_date.strftime('%A, %B %-d')}."
+                f"at {speak_time(at_time)} on {format_date(new_date)}."
             ) from None
         return (
             f"Done - your reservation is now {speak_time(updated.time)} on "
-            f"{updated.date.strftime('%A, %B %-d')} for "
+            f"{format_date(updated.date)} for "
             f"{updated.party_size} guest{'s' if updated.party_size != 1 else ''}, "
             f"under confirmation code {_speak_code(updated.code)}."
         )

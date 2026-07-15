@@ -15,10 +15,12 @@ missing, or altered row anywhere) still surfaces.
 from __future__ import annotations
 
 import collections
+from datetime import date
 from typing import Any
 
 import apsw
-from hotel_db import HotelDB
+
+from .hotel_db import HotelDB
 
 # Transactional tables the agent's tools mutate. Static reference data
 # (hotel_rooms, restaurant_tables), the UI table (lk_descriptions), and
@@ -119,12 +121,12 @@ def diff_databases(
     return diffs
 
 
-async def build_expected(seed_bytes: bytes, expected_state: list[str]) -> HotelDB:
+async def build_expected(seed_bytes: bytes, today: date, expected_state: list[str]) -> HotelDB:
     """Construct the expected end state by applying `expected_state` SQL to a fresh
     seed. The agent's DB is compared against this by *state* (see diff_databases) —
     the agent does NOT have to reproduce these statements. The seed is pinned to a
     fixed date for simulations (HOTEL_TODAY), so dates are plain literals."""
-    db = HotelDB.from_bytes(seed_bytes)
+    db = HotelDB.from_bytes(seed_bytes, today)
     for stmt in expected_state:
         db.connection.execute(stmt)
     return db

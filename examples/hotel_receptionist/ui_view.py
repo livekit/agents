@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import logging
+from collections.abc import Callable
 
 import apsw
 
@@ -26,6 +27,8 @@ class UiView:
         self._schema_sql = ""
         self._subscribers: set[str] = set()
         self._lock = asyncio.Lock()
+        self._registered_rpc_methods: set[str] = set()
+        self._disconnect_handler: Callable[[rtc.RemoteParticipant], None] | None = None
 
     async def start(self) -> None:
         self._session = self._open_session()
@@ -37,11 +40,15 @@ class UiView:
         )
         lp = self._room.local_participant
         lp.register_rpc_method(_RPC_SUBSCRIBE, self._handle_subscribe)
+        self._registered_rpc_methods.add(_RPC_SUBSCRIBE)
         lp.register_rpc_method(_RPC_REBASE, self._handle_rebase)
+        self._registered_rpc_methods.add(_RPC_REBASE)
 
-        @self._room.on("participant_disconnected")
         def _on_disconnect(p: rtc.RemoteParticipant) -> None:
             self._subscribers.discard(p.identity)
+
+        self._room.on("participant_disconnected", _on_disconnect)
+        self._disconnect_handler = _on_disconnect
 
         logger.info("ui_view started")
 
@@ -63,13 +70,21 @@ class UiView:
             if self._session is not None:
                 self._session.close()
                 self._session = None
+            registered_rpc_methods = self._registered_rpc_methods
+            self._registered_rpc_methods = set()
+            disconnect_handler = self._disconnect_handler
+            self._disconnect_handler = None
+            self._subscribers.clear()
+
+        if disconnect_handler is not None:
+            self._room.off("participant_disconnected", disconnect_handler)
+
         lp = self._room.local_participant
-        for method in (_RPC_SUBSCRIBE, _RPC_REBASE):
+        for method in registered_rpc_methods:
             try:
                 lp.unregister_rpc_method(method)
             except Exception:
                 pass
-        self._subscribers.clear()
 
     def _open_session(self) -> apsw.Session:
         s = apsw.Session(self._conn, "main")

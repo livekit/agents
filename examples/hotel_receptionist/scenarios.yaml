@@ -6,14 +6,6 @@
 #     in the SQL so the multiset diff matches. Disputes/complaints/out-of-scope
 #     asks are graded on agent_expectations only — asserting their exact rows would
 #     grade policy arithmetic or non-deterministic tool choices rather than behavior.
-#   - Scenarios tagged `capability: pending` grade behavior the agent does NOT
-#     have yet (group blocks, call connection, message delivery, wake-up calls,
-#     forex policy, card updates on file, tour booking, flight reconfirmation +
-#     transport, emergency dispatch, "walking" a guest). They are deliberate
-#     FAILING TESTS: the rubric demands the full trained behavior from the
-#     training manual, and the agent is expected to fail them until those
-#     capabilities are implemented. They are NL-graded only — no expected_state —
-#     because the backing tables/tools don't exist yet.
 #   - Customer instructions use a structured point-form template (PERSONA /
 #     OPENING LINE / FACTS / DO, IN ORDER / REACTIONS / HIDDEN TRUTH) so the
 #     persona model follows direction reliably. FACTS are revealed only when
@@ -45,9 +37,9 @@ scenarios:
     types and asks rather than picking one for her. Quotes the nightly rate, answers the
     breakfast question, and reads the full booking back to confirm before completing the
     reservation. Takes a card to guarantee the booking, which is expected and correct, and
-    answers her "how much to pay now to hold it?" honestly: nothing is charged now and there
-    is no separate deposit - the stay is settled at checkout. Should not invent an upfront
-    deposit or charge.
+    answers her "how much to pay now to hold it?" honestly: the full stay total is charged
+    at booking and there is no separate deposit. Should not invent an additional upfront
+    deposit or a staged payment schedule.
   tags:
     feature: room_booking
     channel: phone
@@ -164,9 +156,10 @@ scenarios:
   agent_expectations: >
     Verifies the caller (last name plus confirmation code, or the card on file) and locates
     the booking, pivots cleanly from amendment to cancellation without first committing a
-    date change, and states the cancellation outcome correctly — well outside the 48-hour
-    window, so there will be a full refund and no penalty. Confirms the cancellation back to
-    the guest. Should not guess the refund outcome or invent a deposit-forfeit.
+    date change, and states the cancellation outcome correctly — well outside the
+    two-calendar-day window, so there will be a full refund and no penalty. Confirms the
+    cancellation back to the guest. Should not guess the refund outcome or invent a
+    deposit-forfeit.
   tags:
     feature: cancellation
     channel: phone
@@ -239,7 +232,7 @@ scenarios:
     channel: phone
     difficulty: "4"
 
-  # --- 07: Privacy / call routing (capability pending: connect to room) ----
+  # --- 07: Privacy / call routing ------------------------------------------
 - label: Caller fishing for a guest's room number
   instructions: |
     PERSONA: Greg Sullivan, an outside caller trying to locate a guest - friendly but probing.
@@ -304,7 +297,7 @@ scenarios:
     channel: phone
     difficulty: "2"
 
-  # --- 09: Wake-up call (capability pending: schedule wake-up) -------------
+  # --- 09: Wake-up call ----------------------------------------------------
 - label: Wake-up call request
   instructions: |
     PERSONA: Frank Adler, a polite in-house guest with an early flight. You're a heavy sleeper.
@@ -483,7 +476,7 @@ scenarios:
     channel: phone
     difficulty: "2"
 
-  # --- 15: Declined card (capability pending: update card on file) ---------
+  # --- 15: Declined card ---------------------------------------------------
 - label: Caller pushing about a declined card
   instructions: |
     PERSONA: Hiroshi Sato, a guest arriving tomorrow - a little embarrassed and defensive about money. You've called in after hearing there was a problem with your card on file.
@@ -517,7 +510,7 @@ scenarios:
     channel: phone
     difficulty: "3"
 
-  # --- 16: Concierge — restaurant (in scope) + tour (capability pending) ---
+  # --- 16: Concierge — restaurant + tour ----------------------------------
 - label: Book a dinner table and a sightseeing tour
   instructions: |
     PERSONA: Olivia Carter, a guest calling to plan your evening and next day.
@@ -536,7 +529,7 @@ scenarios:
     Gathers the specifics before booking anything (party size and time for dinner; group vs
     private and half vs full day for the tour). Confirms the dinner table back to the
     caller, and answers the tour curveball with concrete confirmed details — pickup at 9:00
-    AM at the hotel lobby, sixty-five dollars per person (one hundred thirty total), entry
+    AM at the hotel lobby, $65 per person ($130 total), entry
     fees included — rather than leaving the tour as an open question or a handoff. Actually
     places both bookings rather than promising to pass them along, and confirms both back
     clearly with their reference numbers.
@@ -587,7 +580,7 @@ scenarios:
     channel: phone
     difficulty: "2"
 
-  # --- 17: Concierge flight + transport (capability pending) ---------------
+  # --- 17: Concierge flight + transport -----------------------------------
 - label: Flight reconfirmation and airport car
   instructions: |
     PERSONA: Sofía García, an in-house guest flying home this week, a bit anxious about logistics.
@@ -607,8 +600,8 @@ scenarios:
     reads the booking reference back, since it's useless if misheard. Handles the
     reconfirmation honestly: logs it with the concierge, who calls the carrier and rings the
     room with the result; never claims the flight is already confirmed. For the transport,
-    explains hotel car (flat eighty-five dollars, bookable, front entrance) vs taxi (metered
-    roughly fifty-five to seventy, hailed at the door, not reservable). Sanity-checks the
+    explains hotel car (flat $85, bookable, front entrance) vs taxi (metered
+    roughly $55–$70, hailed at the door, not reservable). Sanity-checks the
     2:30 p.m. pickup against the 5:40 p.m. departure (about three hours before) and confirms
     the time, pickup spot, and cost back to the guest. Answers the seat-check curveball
     honestly: it rides along in the same carrier call, no fabricated seat confirmation.
@@ -729,7 +722,7 @@ scenarios:
     channel: phone
     difficulty: "5"
 
-  # --- 20: Sold out -> "walk" the guest (capability pending) ---------------
+  # --- 20: Sold out -> "walk" the guest -----------------------------------
 - label: Confirmed guest, no room available tonight
   instructions: |
     PERSONA: Kenji Tanaka, a tired guest who just landed, calling to confirm your room for tonight after a long trip. You have a confirmed reservation.
@@ -1197,8 +1190,8 @@ scenarios:
   agent_expectations: >
     Looks up the business-centre catalog before quoting anything and narrows the request
     with the caller: which service, the date and start time, and how long. Answers the cost
-    question with the concrete figure from the catalog (forty dollars per hour, so one
-    hundred twenty dollars for three hours) rather than leaving it open or handing it off.
+    question with the concrete figure from the catalog ($40 per hour, so $120 for three
+    hours) rather than leaving it open or handing it off.
     Reads back a real reference number that only exists because the booking tool actually
     ran; never narrates a confirmation it did not make.
   tags:
@@ -1648,7 +1641,7 @@ scenarios:
     how to get from the airport to the hotel, it gives accurate, useful options
     rather than a dead end: a taxi or rideshare from the airport, or public transit -
     and if it mentions the hotel car, it represents it correctly (that service runs
-    to the airport for departures, an 85-dollar ride to SFO, not an arrival pickup).
+    to the airport for departures, an $85 ride to SFO, not an arrival pickup).
     A pass is honest "we don't do that" handling of all three out-of-scope asks plus
     a genuinely helpful, accurate answer on getting to the hotel; fabricating a
     booking, implying the hotel might fulfill the retail order, misstating the
@@ -2902,19 +2895,20 @@ scenarios:
     3. Press once for precision: "so to be totally clear, if I cancel three days out, I
        get everything back?"
     REACTIONS:
-    - If the agent gives accurate cancellation terms (free up to 48 hours before check-in
-      with a full refund; inside 48 hours one night is kept) and is straight that the
-      FULL stay total is charged at booking rather than a separate deposit, you're
-      satisfied.
+    - If the agent gives accurate cancellation terms (free with a full refund at least two
+      calendar days before check-in; fewer than two calendar days before check-in, one night
+      is kept) and is straight that the FULL stay total is charged at booking rather than a
+      separate deposit, you're satisfied.
     - If the agent invents a deposit percentage or a deposit schedule that doesn't exist,
       or is vague when you press, you're not satisfied: "that's not very exact."
   agent_expectations: >
-    States the cancellation terms accurately - free cancellation up to 48 hours before
-    check-in with a full refund, and one room-night retained for a cancellation inside
-    that window - and is honest about the deposit question: the hotel charges the full
-    stay total at booking, with NO separate or partial deposit, rather than inventing a
-    deposit percentage or schedule. Answers are grounded in policy with no fabricated
-    numbers, and it represents the full-total-at-booking reality truthfully rather than
+    States the cancellation terms accurately - free cancellation at least two calendar days
+    before check-in with a full refund, and one room-night retained for a cancellation fewer
+    than two calendar days before check-in - and is honest about the deposit question: the
+    hotel charges the full stay total at booking, with NO separate or partial deposit,
+    rather than inventing a deposit percentage or schedule. Answers are grounded in policy
+    with no fabricated numbers, and it represents the full-total-at-booking reality
+    truthfully rather than
     papering over it. This is pre-booking explanation - no cancellation is enacted. A pass
     is accurate cancellation terms plus a truthful "full total up front, no separate
     deposit" answer; inventing a deposit schedule or misstating the window is a fail.
@@ -3222,7 +3216,7 @@ scenarios:
     channel: phone
     difficulty: "3"
 
-  # --- 07: Cancel inside the 48-hour window (covers: cancellation honesty, r8)-
+  # --- 07: Cancel inside the two-calendar-day window (cancellation honesty, r8) ---
 - label: Cancel the trip that starts tomorrow
   instructions: |
     PERSONA: Hiroshi Sato, a guest whose plans just fell through - apologetic, a bit anxious about money.
@@ -3240,10 +3234,10 @@ scenarios:
     - If the agent claims it's totally free, you're surprised but won't argue; if the agent refuses to cancel at all, push: "I still want it cancelled, please."
   agent_expectations: >
     Verifies the caller, then cancels the booking AND is honest about the cost: because
-    check-in is tomorrow (inside the 48-hour window) one night is forfeited - it explains that
-    plainly rather than pretending it's free or refusing to cancel. A pass is the booking
-    ending up cancelled with an honest explanation of the one-night forfeit; leaving it
-    confirmed, or claiming a full no-charge refund, is a fail.
+    check-in is tomorrow (fewer than two calendar days away), one night is forfeited. It
+    explains that plainly rather than pretending it's free or refusing to cancel. A pass is
+    the booking ending up cancelled with an honest explanation of the one-night forfeit;
+    leaving it confirmed, or claiming a full no-charge refund, is a fail.
   tags:
     feature: cancel_inside_window
     channel: phone

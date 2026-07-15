@@ -3,23 +3,24 @@ from __future__ import annotations
 from datetime import date
 from typing import Annotated
 
-from hotel_db import (
-    MAX_PARTY_SIZE,
-    TODAY,
-    HotelDB,
-    RoomBooking,
-    RoomExtra,
-    RoomType,
-    Unavailable,
-    speak_usd,
-)
-from persona import COMMON_INSTRUCTIONS
 from pydantic import Field
 
 from livekit.agents import NOT_GIVEN, NotGivenOr
 from livekit.agents.llm import ChatContext
 from livekit.agents.llm.tool_context import ToolError, ToolFlag, function_tool
 from livekit.agents.voice.agent import AgentTask
+
+from .hotel import (
+    MAX_PARTY_SIZE,
+    RoomBooking,
+    RoomExtra,
+    RoomType,
+    Unavailable,
+    format_date,
+    speak_usd,
+)
+from .hotel_db import HotelDB
+from .persona import common_instructions
 
 _MODIFY_INSTRUCTIONS = """\
 You're modifying an existing room booking. The caller has been verified and the booking is loaded - dates, room, extras, and party size are pre-filled with the current values. Your job is to apply ONLY the changes the caller asks for, then call confirm_changes().
@@ -50,11 +51,13 @@ class ModifyBookingTask(AgentTask[RoomBooking]):
         self,
         db: HotelDB,
         existing: RoomBooking,
+        today: date,
         *,
         chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
     ) -> None:
         self._db = db
         self._existing = existing
+        self._today = today
         # Draft state - starts as a copy of the booking; tools mutate it.
         self._check_in: date = existing.check_in
         self._check_out: date = existing.check_out
@@ -76,14 +79,14 @@ class ModifyBookingTask(AgentTask[RoomBooking]):
         booking_facts = (
             f"\nThe loaded booking: {existing.first_name} {existing.last_name}, "
             f"{existing.room_type.replace('_', ' ')}, "
-            f"check-in {existing.check_in.strftime('%A, %B %-d')}, "
-            f"check-out {existing.check_out.strftime('%A, %B %-d')}, "
+            f"check-in {format_date(existing.check_in)}, "
+            f"check-out {format_date(existing.check_out)}, "
             f"{existing.guests} guest{'s' if existing.guests != 1 else ''}, "
             f"extras: {extras}, total {speak_usd(existing.total)}. "
             "These are the ONLY facts to read back - never invent dates or amounts."
         )
         super().__init__(
-            instructions=f"{COMMON_INSTRUCTIONS}\n\n{_MODIFY_INSTRUCTIONS}{booking_facts}",
+            instructions=f"{common_instructions(today)}\n\n{_MODIFY_INSTRUCTIONS}{booking_facts}",
             chat_ctx=chat_ctx,
         )
 
@@ -133,7 +136,7 @@ class ModifyBookingTask(AgentTask[RoomBooking]):
         # A future check-in can't be in the past, but if the booking is
         # in-house already its existing check_in IS in the past, and the
         # caller should be able to keep it while shifting check_out.
-        if check_in < TODAY and check_in != self._existing.check_in:
+        if check_in < self._today and check_in != self._existing.check_in:
             raise ToolError("check-in can't be in the past")
 
         avail = await self._db.list_room_types_available(
@@ -171,7 +174,7 @@ class ModifyBookingTask(AgentTask[RoomBooking]):
         self,
         room_type: RoomType,
         extras: list[RoomExtra],
-        smoking_room: bool = False,
+        smoking_room: bool | None = None,
         view: str | None = None,
     ) -> str:
         """Update the chosen room type, extras, smoking preference, and view on the booking being modified.
@@ -183,19 +186,21 @@ class ModifyBookingTask(AgentTask[RoomBooking]):
         Args:
             room_type: Room type for the booking (king / queen_2beds / double_queen / suite / penthouse).
             extras: Full new list of extras after the caller's change.
-            smoking_room: True if the caller wants a smoking-permitted room.
+            smoking_room: True or false to change the smoking preference; omit to keep the
+                booking's current preference.
             view: The view the caller asked for (city / garden / ocean), ONLY if they stated one - omit entirely otherwise.
         """
+        smoking = self._smoking if smoking_room is None else smoking_room
         avail = await self._db.list_room_types_available(
             check_in=self._check_in,
             check_out=self._check_out,
             guests=self._guests,
-            smoking=smoking_room,
+            smoking=smoking,
             exclude_booking_code=self._existing.code,
         )
         chosen = next((a for a in avail if a.type == room_type), None)
         if chosen is None:
-            kind = "smoking " if smoking_room else ""
+            kind = "smoking " if smoking else ""
             offer = ", ".join(sorted(a.type for a in avail)) or "nothing for those dates"
             raise ToolError(f"no {kind}{room_type} available; offer one of: {offer}")
         # Models sometimes send placeholder strings for optional args they
@@ -223,11 +228,11 @@ class ModifyBookingTask(AgentTask[RoomBooking]):
         self._room_type = room_type
         self._view = view
         self._extras = list(extras)
-        self._smoking = smoking_room
+        self._smoking = smoking
         # A stated view re-picks the room, so it's a change even when the type
         # is unchanged (the whole point of moving an unhappy guest's room).
         self._set_changed("room", room_type != self._existing.room_type or view is not None)
-        self._set_changed("smoking", smoking_room != self._existing.smoking)
+        self._set_changed("smoking", smoking != self._existing.smoking)
         self._set_changed("extras", sorted(extras) != sorted(self._existing.extras))
         view_part = f" with a {view} view" if view else ""
         extras_part = f", extras: {', '.join(extras)}" if extras else ", no extras"

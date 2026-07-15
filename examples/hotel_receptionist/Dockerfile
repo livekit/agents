@@ -1,8 +1,4 @@
 # syntax=docker/dockerfile:1
-#
-# Shared Dockerfile for every example under examples/. Byte-identical
-# across the tree — each example's entry script is named `agent.py`,
-# so there's no per-example variation left.
 ARG PYTHON_VERSION=3.13
 FROM python:${PYTHON_VERSION}-slim AS base
 
@@ -35,12 +31,16 @@ WORKDIR /app
 USER appuser
 
 COPY requirements.txt ./
-RUN pip install --user --no-cache-dir -r requirements.txt
+# GIT_LFS_SKIP_SMUDGE: the livekit/agents monorepo has an LFS object missing
+# from GitHub's LFS storage, which fails any smudging clone. The skipped files
+# are example assets and background-audio resources this agent never loads;
+# the plugins' model weights come from PyPI wheels, not the git install.
+RUN GIT_LFS_SKIP_SMUDGE=1 pip install --user --no-cache-dir -r requirements.txt
 
 # Pre-download model weights plugins ship (silero VAD, turn-detector, …)
 # so the container is ready to take traffic without a cold-download stall.
 RUN python -m livekit.agents download-files
 
-COPY . .
+COPY . ./hotel_receptionist
 
-CMD ["python", "agent.py", "start"]
+CMD ["python", "-m", "hotel_receptionist.agent", "start"]

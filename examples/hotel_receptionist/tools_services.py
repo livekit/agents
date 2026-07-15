@@ -1,30 +1,29 @@
 from __future__ import annotations
 
 import logging
-import os
-import sys
 from datetime import date, time
 from typing import Annotated, Literal
 
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
-from common import Userdata, _speak_code
-from hotel_db import (
-    MAX_PARTY_SIZE,
-    FollowupKind,
-    NotFound,
-    Unavailable,
-    speak_time,
-    speak_usd,
-)
 from pydantic import Field
 
 from livekit.agents import RunContext, ToolError, function_tool
 
+from .common import Userdata, _speak_code
+from .hotel import (
+    MAX_PARTY_SIZE,
+    FollowupKind,
+    NotFound,
+    Unavailable,
+    format_date,
+    speak_time,
+    speak_usd,
+)
+from .hotel_agent import HotelAgent
+
 logger = logging.getLogger("hotel-receptionist")
 
 
-class ServicesToolsMixin:
+class ServicesToolsMixin(HotelAgent):
     @function_tool
     async def flag_late_arrival(self, ctx: RunContext[Userdata], note: str) -> str:
         """Flag a confirmed booking with an expected late-arrival note ("checking in around 1 AM", "redeye lands at 11 PM"). Verifies the caller first. The note goes onto the booking so the front desk holds the room and doesn't no-show it.
@@ -129,7 +128,7 @@ class ServicesToolsMixin:
         except Unavailable as e:
             raise ToolError(f"can't schedule that: {e} - re-confirm the date") from None
         return (
-            f"wake-up call set for room {room}, {call_date.strftime('%A, %B %-d')} at "
+            f"wake-up call set for room {room}, {format_date(call_date)} at "
             f"{speak_time(call_time)}; reference {_speak_code(code)} | confirm it's set. If the "
             "caller worries about sleeping through: a second call comes about five minutes later "
             "if there's no answer, and no response to that sends staff up for an in-person room "
@@ -218,7 +217,7 @@ class ServicesToolsMixin:
         except (NotFound, Unavailable) as e:
             raise ToolError(str(e)) from None
         return (
-            f"{t.name} booked for {party_size} on {on_date.strftime('%A, %B %-d')}; reference "
+            f"{t.name} booked for {party_size} on {format_date(on_date)}; reference "
             f"{_speak_code(code)}. Pickup {speak_time(t.pickup_time)} at the {t.pickup_location}; "
             f"total {speak_usd(total)} ({t.description}) | confirm the pickup time, spot, and "
             "total to the caller - these are fixed, give them as facts; no further tool call "
@@ -260,7 +259,7 @@ class ServicesToolsMixin:
         except (NotFound, Unavailable) as e:
             raise ToolError(str(e)) from None
         return (
-            f"{s.name} booked for {party_size} on {on_date.strftime('%A, %B %-d')} at "
+            f"{s.name} booked for {party_size} on {format_date(on_date)} at "
             f"{speak_time(at_time)}; reference {_speak_code(code)}. {s.duration_min} minutes, "
             f"total {speak_usd(total)} ({s.description}) | confirm the service, date, time, and "
             "total to the caller; no further tool call is needed for this appointment."
@@ -277,7 +276,7 @@ class ServicesToolsMixin:
         guest_name: str,
         guest_phone: str,
     ) -> str:
-        """Book a business-centre service - a meeting room, secretarial help, or a printing job. The catalog (rates, hours, what's included) is in lookup_policy topic "business_center" - look it up first and narrow with the caller (which service, the date and start time, and how long) before booking. The options are for the CALLER to pick from, never pick for them. Once they pick and agree, THIS CALL is the booking - saying "I'll get that set up" books nothing; nothing exists until this returns a reference.
+        """Book a business-centre service, available 24/7 - a meeting room, secretarial help, or a printing job. The catalog (rates and what's included) is in lookup_policy topic "business_center" - look it up first and narrow with the caller (which service, the date and start time, and how long) before booking. The options are for the CALLER to pick from, never pick for them. Once they pick and agree, THIS CALL is the booking - saying "I'll get that set up" books nothing; nothing exists until this returns a reference.
 
         Args:
             service: The service the caller picked.
@@ -299,7 +298,7 @@ class ServicesToolsMixin:
         except (NotFound, Unavailable) as e:
             raise ToolError(str(e)) from None
         return (
-            f"{s.name} booked for {on_date.strftime('%A, %B %-d')} at {speak_time(at_time)}; "
+            f"{s.name} booked for {format_date(on_date)} at {speak_time(at_time)}; "
             f"reference {_speak_code(code)}. Total {speak_usd(total)} ({s.description}) | confirm "
             "the service, start time, and total to the caller - these are fixed, give them as "
             "facts; no further tool call is needed."
@@ -339,7 +338,7 @@ class ServicesToolsMixin:
             raise ToolError(str(e)) from None
         return (
             f"{a.name} ordered for delivery to {deliver_to} on "
-            f"{on_date.strftime('%A, %B %-d')}; reference {_speak_code(code)}; total "
+            f"{format_date(on_date)}; reference {_speak_code(code)}; total "
             f"{speak_usd(total)} | confirm the arrangement, where it's going, the date, and the "
             "total to the caller - no further tool call is needed for this order."
         )
@@ -445,7 +444,7 @@ class ServicesToolsMixin:
         pickup_time: time,
         passengers: Annotated[int, Field(ge=1, le=4)],
     ) -> str:
-        """Book the hotel car to the airport for an in-house guest: flat eighty-five dollars to SFO, seats up to four with luggage, charged to the room. (Taxis are hailed at the door, metered roughly fifty-five to seventy dollars, and can't be reserved ahead - cost comparison in lookup_policy topic "location_and_transport".) Sanity-check the pickup time against the flight when you know it - about three hours before departure is right for international.
+        """Book the hotel car to the airport for an in-house guest: flat $85 to SFO, seats up to four with luggage, charged to the room. (Taxis are hailed at the door, metered roughly $55–$70, and can't be reserved ahead - cost comparison in lookup_policy topic "location_and_transport".) Sanity-check the pickup time against the flight when you know it - about three hours before departure is right for international.
 
         Args:
             room: The guest's room number.
@@ -466,8 +465,8 @@ class ServicesToolsMixin:
             raise ToolError(f"can't book that: {e} - re-confirm the date") from None
         return (
             f"hotel car booked; reference {_speak_code(code)}. Pickup "
-            f"{pickup_date.strftime('%A, %B %-d')} at {speak_time(pickup_time)}, front entrance, "
-            f"{passengers} passenger{'s' if passengers != 1 else ''}, flat eighty-five dollars "
+            f"{format_date(pickup_date)} at {speak_time(pickup_time)}, front entrance, "
+            f"{passengers} passenger{'s' if passengers != 1 else ''}, flat $85 "
             "charged to the room | confirm the time, the front-entrance pickup, the cost, and "
             "the reference to the caller; no further tool call is needed for the car."
         )

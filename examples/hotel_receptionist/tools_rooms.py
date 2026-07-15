@@ -1,34 +1,34 @@
 from __future__ import annotations
 
 import logging
-import os
-import sys
 from datetime import date
 from typing import Annotated, Literal
 
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from pydantic import Field
 
-from book_room import BookRoomTask
-from common import Userdata, _count_caller_turns, _speak_code
-from context import speech_only
-from get_card import GetCardTask
-from hotel_db import (
+from livekit.agents import RunContext, ToolError, function_tool
+
+from .book_room import BookRoomTask
+from .common import Userdata, _count_caller_turns, _speak_code
+from .context import speech_only
+from .get_card import GetCardTask
+from .hotel import (
     DISPUTE_POLICIES,
     MAX_PARTY_SIZE,
     PRICING,
-    TODAY,
     DisputeCategory,
     DisputePolicy,
     NotFound,
-    RoomBooking,
     Unavailable,
+    cancellation_penalty_applies,
+    format_date,
+    format_month_day,
+    format_room_type_availability,
     speak_usd,
 )
-from modify_booking import ModifyBookingTask
-from pydantic import Field
-from verify_booking import VerifyBookingTask
-
-from livekit.agents import RunContext, ToolError, function_tool
+from .hotel_agent import HotelAgent
+from .modify_booking import ModifyBookingTask
+from .verify_booking import VerifyBookingTask
 
 logger = logging.getLogger("hotel-receptionist")
 
@@ -103,7 +103,7 @@ def _say_dispute_outcome(
     return f"Logged. Case number {_speak_code(case_number)}."
 
 
-class RoomToolsMixin:
+class RoomToolsMixin(HotelAgent):
     @function_tool
     async def resolve_room_conflict(self, ctx: RunContext[Userdata]) -> str:
         """Fix a double-booked / no-room situation on the caller's verified booking - run this when lookup_booking warned the room is double-booked. It applies the house procedure in fixed order: move the guest to a free room of the same or better category (an upgrade is free), and only if nothing in the house fits, arrange the walk (partner hotel tonight on us, covered taxi, their room back from the return date). Returns the concrete facts; deliver them following the guest_walks policy (own the overbooking, explain plainly why it happened, "at no extra cost to you"). Full procedure: lookup_policy topic "guest_walks"."""
@@ -125,7 +125,7 @@ class RoomToolsMixin:
         return (
             f"no room in the house fits (every room was checked) - walk arranged at "
             f"{r.walk_partner} (two blocks away, room and taxi both on us), guest's room back "
-            f"here {r.walk_return_date.strftime('%A, %B %-d')} | deliver this per the guest_walks "
+            f"here {format_date(r.walk_return_date)} | deliver this per the guest_walks "
             "policy: own the overbooking and explain plainly why it happened, then the plan above, "
             "all at no extra cost to them. The guest is angry and will interrupt - give it in short "
             "pieces and make sure every piece lands before the call ends, resuming any that got "
@@ -154,6 +154,8 @@ class RoomToolsMixin:
         """
         if check_out <= check_in:
             raise ToolError("check-out must be after check-in")
+        if check_in < ctx.userdata.today:
+            raise ToolError("check-in can't be in the past")
         smoking_filter = {"smoking": True, "non_smoking": False, "no_preference": None}[smoking]
         avail = await ctx.userdata.db.list_room_types_available(
             check_in=check_in, check_out=check_out, guests=guests, smoking=smoking_filter
@@ -167,9 +169,7 @@ class RoomToolsMixin:
             what = f"{kind}{room_type.replace('_', ' ')}" if room_type != "any" else f"{kind}rooms"
             return f"no {what} available for those dates"
         return " | ".join(
-            f"{a.type.replace('_', ' ')}: {speak_usd(a.nightly_rate)} per night, "
-            f"{' or '.join(a.views)} view{'s' if len(a.views) > 1 else ''}"
-            for a in avail
+            f"{a.type.replace('_', ' ')}: {format_room_type_availability(a)}" for a in avail
         )
 
     @function_tool
@@ -199,7 +199,9 @@ class RoomToolsMixin:
                 "room, ask them to confirm that first; otherwise just ask if there's anything else."
             )
 
-        booking = await BookRoomTask(db=ctx.userdata.db, chat_ctx=speech_only(self.chat_ctx))
+        booking = await BookRoomTask(
+            ctx.userdata.db, ctx.userdata.today, chat_ctx=speech_only(self.chat_ctx)
+        )
         ctx.userdata.last_room_booking = booking
         ctx.userdata.caller_turns_at_last_booking = _count_caller_turns(self.session.history)
         logger.info("[stub] would email confirmation to %s for %s", booking.email, booking.code)
@@ -211,16 +213,6 @@ class RoomToolsMixin:
             "no further tool call is needed for this booking."
         )
 
-    async def _verified_booking(self, ctx: RunContext[Userdata]) -> RoomBooking:
-        """Verify the caller once per call. Tools that mutate the booking
-        (modify, cancel) update or clear the cache themselves."""
-        if ctx.userdata.verified_booking is None:
-            verify = await VerifyBookingTask(
-                db=ctx.userdata.db, chat_ctx=speech_only(self.chat_ctx)
-            )
-            ctx.userdata.verified_booking = verify.booking
-        return ctx.userdata.verified_booking
-
     @function_tool
     async def start_card_update(self, ctx: RunContext[Userdata]) -> str:
         """Replace the card on file for an existing room booking - the path when a guest's card isn't going through or they want a different card charged. Verifies the caller first, then a focused sub-task collects the replacement card (number, expiry, security code, cardholder) with its own read-back - never collect card digits yourself. Call this as your response once the caller offers a new card. Keep the money talk discreet throughout: the card "isn't going through at the moment - possibly a technical issue", never "declined" or "rejected" (full policy: lookup_policy topic "payments_and_currency")."""
@@ -229,7 +221,7 @@ class RoomToolsMixin:
             raise ToolError(
                 f"booking {booking.code} is {booking.status} - there's no active booking to update"
             )
-        card = await GetCardTask(chat_ctx=speech_only(self.chat_ctx))
+        card = await GetCardTask(ctx.userdata.today, chat_ctx=speech_only(self.chat_ctx))
         await ctx.userdata.db.update_booking_card(
             booking_code=booking.code, card_last4=card.card_number[-4:]
         )
@@ -245,11 +237,11 @@ class RoomToolsMixin:
         booking = await self._verified_booking(ctx)
         if booking.status != "confirmed":
             raise ToolError("that booking was cancelled - nothing to modify")
-        if booking.check_out < TODAY:
+        if booking.check_out < ctx.userdata.today:
             raise ToolError("that stay already ended - can't modify a past booking")
 
         updated = await ModifyBookingTask(
-            db=ctx.userdata.db, existing=booking, chat_ctx=speech_only(self.chat_ctx)
+            ctx.userdata.db, booking, ctx.userdata.today, chat_ctx=speech_only(self.chat_ctx)
         )
         # Cache the post-modify booking so subsequent tools (lookup, cancel)
         # don't re-verify and don't see the pre-modify state.
@@ -286,14 +278,14 @@ class RoomToolsMixin:
         smoking = "smoking-permitted" if b.smoking else "non-smoking"
         info = (
             f"Booking for {b.first_name} {b.last_name}, {b.room_type.replace('_', ' ')} ({smoking}), "
-            f"checking in {b.check_in.strftime('%A %B %-d')} and out {b.check_out.strftime('%A %B %-d')} "
+            f"checking in {format_date(b.check_in)} and out {format_date(b.check_out)} "
             f"({nights} night{'s' if nights != 1 else ''}, {b.guests} guest{'s' if b.guests != 1 else ''}), "
             f"extras: {extras}. Total {speak_usd(b.total)} on card ending in {b.card_last4}."
         )
         if conflict := await ctx.userdata.db.room_conflict(booking_code=b.code):
             info += (
-                f" | WARNING: the room is double-booked {conflict[0].strftime('%B %-d')} to "
-                f"{conflict[1].strftime('%B %-d')} - no room is assigned to this booking for that "
+                f" | WARNING: the room is double-booked {format_month_day(conflict[0])} to "
+                f"{format_month_day(conflict[1])} - no room is assigned to this booking for that "
                 "period. Break the news with ownership and an apology, then run "
                 'resolve_room_conflict to fix it (procedure: lookup_policy topic "guest_walks"). '
                 "Don't pretend the booking is fine."
@@ -320,9 +312,9 @@ class RoomToolsMixin:
                 f"question from it: {ctx.userdata.last_cancel_message}"
             )
         booking = await self._verified_booking(ctx)
-        if booking.check_in < TODAY:
+        if booking.check_in < ctx.userdata.today:
             raise ToolError("this booking's check-in has already passed; can't cancel a past stay")
-        within = (booking.check_in - TODAY).days * 24 < PRICING.cancellation_window_hours
+        within = cancellation_penalty_applies(check_in=booking.check_in, today=ctx.userdata.today)
         forfeit = booking.nightly_rate if within else 0
         await ctx.userdata.db.cancel_room_booking(booking.code)
         # Booking is no longer confirmed; the next tool needing a verified
@@ -331,14 +323,14 @@ class RoomToolsMixin:
         ctx.userdata.verified_booking = None
         if within:
             msg = (
-                f"Cancelled. Because the booking's inside the {PRICING.cancellation_window_hours}-hour "
-                f"window, one room-night ({speak_usd(forfeit)}) is forfeited; "
+                f"Cancelled. Because check-in is fewer than {PRICING.cancellation_window_days} "
+                f"calendar days away, one room-night ({speak_usd(forfeit)}) is forfeited; "
                 f"I'll refund {speak_usd(booking.total - forfeit)} to the card on file."
             )
         else:
             msg = (
-                f"Cancelled - well outside the {PRICING.cancellation_window_hours}-hour window, so "
-                f"there's no penalty and no deposit is lost. I'll refund the full "
+                f"Cancelled at least {PRICING.cancellation_window_days} calendar days before "
+                "check-in, so there's no penalty and no deposit is lost. I'll refund the full "
                 f"{speak_usd(booking.total)} to the card on file - usually two to five business days."
             )
         # Remember the outcome + when it happened, so an immediate re-invocation (above)
@@ -351,7 +343,10 @@ class RoomToolsMixin:
     async def reinstate_booking(self, ctx: RunContext[Userdata]) -> str:
         """Bring back a room booking the caller previously CANCELLED and now wants reactivated. Verifies the caller first - this is the one flow that verifies against a cancelled booking - then checks the booking's original room is still free for its dates and flips it back to confirmed. If the room's been taken since the cancellation, say so honestly and offer to look at other rooms/dates; never silently rebook a different room and call it reinstated. Not for editing a confirmed booking (start_booking_modification) or making a brand-new one (start_room_booking)."""
         verify = await VerifyBookingTask(
-            db=ctx.userdata.db, allow_cancelled=True, chat_ctx=speech_only(self.chat_ctx)
+            ctx.userdata.db,
+            ctx.userdata.today,
+            allow_cancelled=True,
+            chat_ctx=speech_only(self.chat_ctx),
         )
         booking = verify.booking
         if booking.status == "confirmed":
@@ -359,7 +354,7 @@ class RoomToolsMixin:
                 f"That booking, {_speak_code(booking.code)}, is already active - nothing to "
                 "reinstate. Reassure the caller it's all set."
             )
-        if booking.check_in < TODAY:
+        if booking.check_in < ctx.userdata.today:
             raise ToolError(
                 "that stay's dates have already passed, so it can't be reinstated - offer a new booking"
             )
@@ -374,8 +369,8 @@ class RoomToolsMixin:
         ctx.userdata.verified_booking = None
         return (
             f"Reinstated. Booking {_speak_code(booking.code)} is active again - "
-            f"{booking.check_in.strftime('%A, %B %-d')} to "
-            f"{booking.check_out.strftime('%A, %B %-d')}, total {speak_usd(booking.total)} "
+            f"{format_date(booking.check_in)} to "
+            f"{format_date(booking.check_out)}, total {speak_usd(booking.total)} "
             f"on the card ending {booking.card_last4}. | relay this and move on; nothing "
             "further to call."
         )

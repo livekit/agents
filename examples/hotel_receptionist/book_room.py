@@ -3,25 +3,26 @@ from __future__ import annotations
 from datetime import date
 from typing import Annotated
 
-from context import speech_only
-from get_card import GetCardTask
-from hotel_db import (
-    MAX_PARTY_SIZE,
-    TODAY,
-    HotelDB,
-    RoomBooking,
-    RoomExtra,
-    RoomType,
-    Unavailable,
-    speak_usd,
-)
-from persona import COMMON_INSTRUCTIONS
 from pydantic import Field
 
 from livekit.agents import NOT_GIVEN, NotGivenOr, beta
 from livekit.agents.llm import ChatContext
 from livekit.agents.llm.tool_context import ToolError, ToolFlag, function_tool
 from livekit.agents.voice.agent import AgentTask
+
+from .context import speech_only
+from .get_card import GetCardTask
+from .hotel import (
+    MAX_PARTY_SIZE,
+    RoomBooking,
+    RoomExtra,
+    RoomType,
+    Unavailable,
+    format_room_type_availability,
+    speak_usd,
+)
+from .hotel_db import HotelDB
+from .persona import PHONE_READBACK_INSTRUCTIONS, common_instructions
 
 _BOOK_ROOM_INSTRUCTIONS = """\
 You're handling a room booking from start to finish. Collect details in whatever order the caller offers them - don't follow a fixed script, and never re-ask something already given.
@@ -31,8 +32,6 @@ Before asking anything, scan the conversation so far. If dates, room type, party
 Run set_stay before choose_room - available rooms depend on the dates. set_stay's options are for YOU to offer, not to act on: name the room types to the caller and let them pick (ask about any preference they've hinted at, like a view) before calling choose_room. Before calling confirm_booking, make sure you've collected the stay, the room choice, plus the caller's name, email, phone, and card - then read the whole booking back in one short sentence (dates, room type and extras, total, card last four) and let the caller say "go ahead" or correct something. confirm_booking only fires once they've agreed to the read-back.
 
 Each tool's return ends with a directive for the next action (e.g. "next: call open_email_dialog"). Follow that directive immediately - don't narrate what the tool just did. When the directive says "call confirm_booking() now", call it - the call IS the next action, no filler turn.
-
-If the room sells out at the last second, just pick another - everything else stays captured.
 
 A booking is not complete unless "confirm_booking" is called. Bookings are only valid once you call "confirm_booking."
 
@@ -47,8 +46,11 @@ class BookRoomTask(AgentTask[RoomBooking]):
     offered, storing it on the draft so a later hiccup never re-asks it.
     `confirm_booking()` takes the card, writes the booking, and completes with it."""
 
-    def __init__(self, db: HotelDB, *, chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN) -> None:
+    def __init__(
+        self, db: HotelDB, today: date, *, chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN
+    ) -> None:
         self._db = db
+        self._today = today
         self._check_in: date | None = None
         self._check_out: date | None = None
         self._guests: int | None = None
@@ -66,7 +68,7 @@ class BookRoomTask(AgentTask[RoomBooking]):
         self._card_last4: str | None = None
         self._quoted_total: int | None = None
         super().__init__(
-            instructions=f"{COMMON_INSTRUCTIONS}\n\n{_BOOK_ROOM_INSTRUCTIONS}",
+            instructions=f"{common_instructions(today)}\n\n{_BOOK_ROOM_INSTRUCTIONS}",
             chat_ctx=chat_ctx,
         )
 
@@ -123,7 +125,7 @@ class BookRoomTask(AgentTask[RoomBooking]):
             raise ToolError("check-out must be after check-in")
         if (check_out - check_in).days > 30:
             raise ToolError("the max stay is 30 nights")
-        if check_in < TODAY:
+        if check_in < self._today:
             raise ToolError("check-in can't be in the past")
 
         avail = await self._db.list_room_types_available(
@@ -140,9 +142,7 @@ class BookRoomTask(AgentTask[RoomBooking]):
         if self._room_type and self._room_type not in available_types:
             self._room_type = None  # prior choice no longer fits the new dates
         options = " | ".join(
-            f"{a.type.replace('_', ' ')} ({speak_usd(a.nightly_rate)}/night, "
-            f"{' or '.join(a.views)} view{'s' if len(a.views) > 1 else ''})"
-            for a in avail
+            f"{a.type.replace('_', ' ')} ({format_room_type_availability(a)})" for a in avail
         )
         return f"stay recorded ({check_in} to {check_out}, {guests} guests); options: {options} | {self._status()}"
 
@@ -222,7 +222,7 @@ class BookRoomTask(AgentTask[RoomBooking]):
             first_name=True,
             last_name=True,
             chat_ctx=speech_only(self.chat_ctx),
-            extra_instructions=COMMON_INSTRUCTIONS,
+            extra_instructions=common_instructions(self._today),
         )
         self._first_name, self._last_name = r.first_name or "", r.last_name or ""
         return f"name recorded: {self._first_name} {self._last_name} | {self._status()}"
@@ -231,7 +231,7 @@ class BookRoomTask(AgentTask[RoomBooking]):
     async def open_email_dialog(self) -> str:
         """Open the email dialog. It collects the guest's email address (read back and confirmed) from the caller."""
         r = await beta.workflows.GetEmailTask(
-            chat_ctx=speech_only(self.chat_ctx), extra_instructions=COMMON_INSTRUCTIONS
+            chat_ctx=speech_only(self.chat_ctx), extra_instructions=common_instructions(self._today)
         )
         self._email = r.email_address
         return f"email recorded: {self._email} | {self._status()}"
@@ -240,7 +240,8 @@ class BookRoomTask(AgentTask[RoomBooking]):
     async def open_phone_dialog(self) -> str:
         """Open the phone dialog. It collects the guest's phone number (read back and confirmed) from the caller."""
         r = await beta.workflows.GetPhoneNumberTask(
-            chat_ctx=speech_only(self.chat_ctx), extra_instructions=COMMON_INSTRUCTIONS
+            chat_ctx=speech_only(self.chat_ctx),
+            extra_instructions=common_instructions(self._today) + PHONE_READBACK_INSTRUCTIONS,
         )
         self._phone = r.phone_number
         return f"phone recorded: {self._phone} | {self._status()}"
@@ -248,7 +249,7 @@ class BookRoomTask(AgentTask[RoomBooking]):
     @function_tool()
     async def open_credit_card_dialog(self) -> str:
         """Open the credit-card dialog. It collects the card number, expiry, security code, and cardholder name from the caller in one focused step."""
-        card = await GetCardTask(chat_ctx=speech_only(self.chat_ctx))
+        card = await GetCardTask(self._today, chat_ctx=speech_only(self.chat_ctx))
         self._card_last4 = card.card_number[-4:]
         return f"card recorded (ending {self._card_last4}) | {self._status()}"
 

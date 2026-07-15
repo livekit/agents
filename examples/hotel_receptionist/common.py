@@ -1,19 +1,28 @@
 from __future__ import annotations
 
 import os
-import sys
 from dataclasses import dataclass, field
-
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
-from hotel_db import HotelDB, RoomBooking
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 from livekit.agents import llm
+
+from .hotel import RoomBooking
+from .hotel_db import HotelDB
+
+
+def resolve_today() -> date:
+    """The hotel's local date (it's in San Francisco, the server may not be).
+    Set HOTEL_TODAY=YYYY-MM-DD to pin it for deterministic sim runs."""
+    if pinned := os.environ.get("HOTEL_TODAY"):
+        return date.fromisoformat(pinned)
+    return datetime.now(ZoneInfo("America/Los_Angeles")).date()
 
 
 @dataclass
 class Userdata:
     db: HotelDB
+    today: date
     # Departments already transferred to this call - guards against a duplicate transfer
     # row when the agent re-calls transfer_call after the caller's reaction.
     transferred_to: set[str] = field(default_factory=set)
@@ -31,9 +40,9 @@ class Userdata:
 
 
 def _speak_code(code: str) -> str:
-    # Spell character by character, with "-" spoken as the single word "dash" -
-    # NOT spelled D, A, S, H (that reads as four more code characters).
-    return ", ".join("dash" if c == "-" else c for c in code.upper())
+    # Hand the raw code to the TTS - its own parser reads alphanumeric codes
+    # correctly; we don't pre-spell it character by character.
+    return code.upper()
 
 
 def _count_caller_turns(chat_ctx: llm.ChatContext) -> int:

@@ -1,17 +1,14 @@
 from __future__ import annotations
 
-import os
-import sys
+from datetime import date
 
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
-from hotel_db import MAX_PARTY_SIZE, PRICING, format_usd
-from persona import COMMON_INSTRUCTIONS
+from .hotel import MAX_PARTY_SIZE, PRICING, format_usd
+from .persona import common_instructions
 
 
-def build_instructions() -> str:
+def build_instructions(today: date) -> str:
     return f"""\
-{COMMON_INSTRUCTIONS}
+{common_instructions(today)}
 
 You're the lead receptionist, holding the whole call and routing each request to the right tool. Help the caller with whatever they bring - if a request fits a tool, run it; if it's general (a policy, a fact, recalling their stay), answer from what you know.
 
@@ -22,7 +19,7 @@ You're the lead receptionist, holding the whole call and routing each request to
 - Smoking: smoking-permitted rooms on request; {format_usd(PRICING.smoking_cleaning_fee)} cleaning fee for smoking in a non-smoking room.
 - Self-parking free; valet {format_usd(PRICING.valet_per_night)} per night.
 - Wi-Fi free. Pool, gym, sauna 6 AM to 10 PM, towels provided, free for guests.
-- Cancellation: free up to {PRICING.cancellation_window_hours} hours before check-in; inside that window, one night is forfeited. Tax is {PRICING.tax_rate_pct}% on room and extras.
+- Cancellation: free at least {PRICING.cancellation_window_days} calendar days before check-in; later cancellations forfeit one night. Tax is {PRICING.tax_rate_pct}% on room and extras.
 - Breakfast buffet in the restaurant, 6:30 to 10:30 AM, {format_usd(PRICING.breakfast_per_night)} a night when added as a room extra.
 - Restaurant: on-site, dinner only, 5:30 to 9 PM last seating.
 - Luggage hold at the front desk before check-in and after check-out, no charge.

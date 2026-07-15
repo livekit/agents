@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-
-from hotel_db import HotelDB, RoomBooking
-from persona import COMMON_INSTRUCTIONS
+from datetime import date
 
 from livekit.agents import NOT_GIVEN, NotGivenOr
 from livekit.agents.llm import ChatContext
 from livekit.agents.llm.tool_context import ToolError, ToolFlag, function_tool
 from livekit.agents.voice.agent import AgentTask
+
+from .hotel import RoomBooking
+from .hotel_db import HotelDB
+from .persona import common_instructions
 
 _VERIFY_INSTRUCTIONS = """\
 The caller wants to look up an existing reservation - verify them first.
@@ -32,6 +34,7 @@ class VerifyBookingTask(AgentTask[VerifyBookingResult]):
     def __init__(
         self,
         db: HotelDB,
+        today: date,
         *,
         allow_cancelled: bool = False,
         chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
@@ -42,7 +45,7 @@ class VerifyBookingTask(AgentTask[VerifyBookingResult]):
         # cancelled record; every other flow only accepts a confirmed booking.
         self._allow_cancelled = allow_cancelled
         super().__init__(
-            instructions=f"{COMMON_INSTRUCTIONS}\n\n{_VERIFY_INSTRUCTIONS}",
+            instructions=f"{common_instructions(today)}\n\n{_VERIFY_INSTRUCTIONS}",
             chat_ctx=chat_ctx,
         )
 
@@ -97,11 +100,10 @@ class VerifyBookingTask(AgentTask[VerifyBookingResult]):
             )
 
     def _handle(self, booking: RoomBooking | None, kind: str) -> str | None:
-        accept = booking is not None and (
+        if booking is not None and (
             booking.status == "confirmed"
             or (self._allow_cancelled and booking.status == "cancelled")
-        )
-        if accept:
+        ):
             if not self.done():
                 self.complete(VerifyBookingResult(booking=booking))
             return None
