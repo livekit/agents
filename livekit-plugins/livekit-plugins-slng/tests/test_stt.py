@@ -11,6 +11,8 @@ from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError
 from livekit.agents.stt import SpeechEventType
 from livekit.plugins import slng
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.mark.parametrize("model", ["", "nova", "deepgram/", "/nova:3", "deepgram/nova:"])
 def test_stt_rejects_invalid_explicit_model(model: str) -> None:

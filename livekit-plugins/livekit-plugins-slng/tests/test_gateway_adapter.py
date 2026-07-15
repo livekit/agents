@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from livekit.agents import APIStatusError
 from livekit.plugins.slng.connection import (
     CandidateState,
@@ -12,6 +14,8 @@ from livekit.plugins.slng.gateway_adapter import (
     is_payload_too_large,
     normalize_region_override,
 )
+
+pytestmark = pytest.mark.unit
 
 
 def test_bridge_endpoint_and_model_round_trip() -> None:

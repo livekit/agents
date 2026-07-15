@@ -13,6 +13,8 @@ from livekit import rtc
 from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError
 from livekit.plugins import slng
 
+pytestmark = pytest.mark.unit
+
 
 class _FakeStream:
     def __init__(self, results: list[Any]) -> None:
