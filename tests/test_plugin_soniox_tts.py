@@ -3,6 +3,9 @@
 Covers the #6225 / #6425 fix: ending an open ``stream_id`` with ``text_end`` when
 input stalls or a FlushSentinel arrives, then using a new ``stream_id`` when text
 resumes (idle path). Flush ends the Soniox stream so the segment completes cleanly.
+
+Idle-timeout tests use ``virtual_time`` so ``asyncio.sleep`` / ``wait_for`` timers
+advance deterministically (no wall-clock flake).
 """
 
 from __future__ import annotations
@@ -16,7 +19,11 @@ from livekit.agents import APIConnectOptions
 from livekit.agents.tts import AudioEmitter
 from livekit.plugins.soniox import tts as soniox_tts
 
-pytestmark = pytest.mark.plugin("soniox")
+pytestmark = [
+    pytest.mark.plugin("soniox"),
+    pytest.mark.virtual_time,
+    pytest.mark.no_concurrent,
+]
 
 # 10 ms of mono s16le silence at 24 kHz — enough for AudioEmitter to emit frames.
 _SILENCE_PCM = b"\x00\x00" * 240
@@ -95,7 +102,7 @@ async def _consume_stream(stream: soniox_tts.SynthesizeStream) -> None:
 async def test_flush_sentinel_sends_text_end() -> None:
     """FlushSentinel must send text_end (previously a no-op on Soniox)."""
     fake_conn = _FakeConnection()
-    tts = soniox_tts.TTS(api_key="test-key", stream_idle_timeout=0)
+    tts = soniox_tts.TTS(api_key="test-key")
     _patch_connection(tts, fake_conn)
     stream = soniox_tts.SynthesizeStream(
         tts=tts, conn_options=APIConnectOptions(max_retry=0, timeout=1.0)
@@ -120,7 +127,7 @@ async def test_flush_sentinel_sends_text_end() -> None:
 @pytest.mark.asyncio
 async def test_flush_before_any_text_does_not_send_text_end() -> None:
     fake_conn = _FakeConnection()
-    tts = soniox_tts.TTS(api_key="test-key", stream_idle_timeout=0)
+    tts = soniox_tts.TTS(api_key="test-key")
     _patch_connection(tts, fake_conn)
     stream = soniox_tts.SynthesizeStream(
         tts=tts, conn_options=APIConnectOptions(max_retry=0, timeout=1.0)
@@ -144,7 +151,7 @@ async def test_flush_before_any_text_does_not_send_text_end() -> None:
 @pytest.mark.asyncio
 async def test_idle_timeout_sends_text_end_and_rotates_stream_id() -> None:
     fake_conn = _FakeConnection()
-    tts = soniox_tts.TTS(api_key="test-key", stream_idle_timeout=0.05)
+    tts = soniox_tts.TTS(api_key="test-key", stream_idle_timeout=1.0)
     _patch_connection(tts, fake_conn)
     stream = soniox_tts.SynthesizeStream(
         tts=tts, conn_options=APIConnectOptions(max_retry=0, timeout=1.0)
@@ -153,7 +160,8 @@ async def test_idle_timeout_sends_text_end_and_rotates_stream_id() -> None:
     consumer = asyncio.create_task(_consume_stream(stream))
     await asyncio.sleep(0)
     stream.push_text("before idle")
-    await asyncio.sleep(0.15)
+    # Virtual time autojumps past the 1s idle timeout.
+    await asyncio.sleep(2.0)
     stream.push_text(" after idle")
     stream.end_input()
     await consumer
@@ -182,7 +190,8 @@ async def test_stream_idle_timeout_zero_disables_idle_rotation() -> None:
     consumer = asyncio.create_task(_consume_stream(stream))
     await asyncio.sleep(0)
     stream.push_text("chunk1")
-    await asyncio.sleep(0.12)
+    # With idle disabled, a long virtual pause must not rotate stream_id.
+    await asyncio.sleep(5.0)
     stream.push_text(" chunk2")
     stream.end_input()
     await consumer
@@ -193,6 +202,12 @@ async def test_stream_idle_timeout_zero_disables_idle_rotation() -> None:
     assert len(texts) == 2
     assert texts[0][0] == texts[1][0]
     assert len(text_ends) == 1
+
+
+def test_stream_idle_timeout_default_is_disabled() -> None:
+    tts = soniox_tts.TTS(api_key="test-key")
+    assert tts._opts.stream_idle_timeout == 0.0  # noqa: SLF001
+    assert soniox_tts.DEFAULT_STREAM_IDLE_TIMEOUT == 0.0
 
 
 def test_stream_idle_timeout_rejects_negative() -> None:
@@ -219,15 +234,15 @@ async def test_update_options_applies_to_in_flight_stream_idle() -> None:
     consumer = asyncio.create_task(_consume_stream(stream))
     await asyncio.sleep(0)
     stream.push_text("before")
-    await asyncio.sleep(0.12)
+    await asyncio.sleep(2.0)
     # Still one stream_id — idle was disabled.
     assert len(_text_calls(fake_conn)) == 1
     assert len(_text_end_calls(fake_conn)) == 0
 
-    tts.update_options(stream_idle_timeout=0.05)
+    tts.update_options(stream_idle_timeout=1.0)
     # Wake the blocked unlimited recv so the next wait re-reads the new timeout.
     stream.push_text(" mid")
-    await asyncio.sleep(0.15)
+    await asyncio.sleep(2.0)
     stream.push_text(" after")
     stream.end_input()
     await consumer

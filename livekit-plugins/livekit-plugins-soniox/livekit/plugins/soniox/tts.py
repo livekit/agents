@@ -53,9 +53,10 @@ MIN_SPEED = 0.7
 MAX_SPEED = 1.3
 KEEPALIVE_INTERVAL = 10  # seconds
 KEEPALIVE_MESSAGE = json.dumps({"keep_alive": True})
-# End an open stream_id before Soniox's per-stream request timeout (~8–18s observed)
-# when the LLM stalls mid-turn. See github.com/livekit/agents/issues/6225.
-DEFAULT_STREAM_IDLE_TIMEOUT = 5.0
+# Idle stream_id rotation is opt-in (0 = disabled). Callers who hit Soniox mid-turn 408s
+# during LLM stalls should set ~5.0s (under Soniox's observed ~8–18s per-stream timeout).
+# See github.com/livekit/agents/issues/6225.
+DEFAULT_STREAM_IDLE_TIMEOUT = 0.0
 
 
 def _audio_format_to_mime_type(audio_format: str) -> str:
@@ -104,8 +105,8 @@ class TTS(tts.TTS):
             stream_idle_timeout (float): Seconds of silence on an open Soniox ``stream_id``
                 (no new text and no ``FlushSentinel``) before sending ``text_end`` and
                 starting a new ``stream_id`` when text resumes. Prevents Soniox per-stream
-                408 request timeouts during LLM stalls. Set to ``0`` to disable. Defaults
-                to 5.0.
+                408 request timeouts during LLM stalls. ``0`` disables (default); ``5.0``
+                is a typical value under Soniox's observed per-stream timeout.
             api_key (str): Soniox API key. If not provided, will look for SONIOX_API_KEY env variable.
             websocket_url (str): Base WebSocket URL for Soniox TTS API.
             http_session (aiohttp.ClientSession): Optional aiohttp.ClientSession to use for requests.
@@ -195,7 +196,7 @@ class TTS(tts.TTS):
             voice: Voice to use.
             speed: Speaking rate in the range [0.7, 1.3]; 1.0 is the normal rate.
             stream_idle_timeout: Idle seconds before ending the active Soniox stream_id.
-                Set to ``0`` to disable idle rotation.
+                ``0`` disables idle rotation.
         """
         if is_given(model):
             self._opts.model = model
@@ -255,6 +256,70 @@ class TTS(tts.TTS):
             self.__current_connection = None
 
 
+class _StreamLifecycle:
+    """Owns Soniox ``stream_id`` registration / rotation for one ``SynthesizeStream``.
+
+    The LiveKit AudioEmitter stays on a single segment; this only rotates the Soniox
+    multiplexed ``stream_id`` on idle stall or flush.
+    """
+
+    def __init__(
+        self,
+        *,
+        stream: SynthesizeStream,
+        connection: _Connection,
+        output_emitter: tts.AudioEmitter,
+        opts: _TTSOptions,
+    ) -> None:
+        self._stream = stream
+        self._connection = connection
+        self._output_emitter = output_emitter
+        self._opts = opts
+        self._loop = asyncio.get_running_loop()
+        self._waiter: asyncio.Future[None] = self._loop.create_future()
+        self._registered = False
+
+    @property
+    def registered(self) -> bool:
+        return self._registered
+
+    def start(self) -> None:
+        """Allocate and register a new Soniox stream_id."""
+        self._stream._stream_id = utils.shortuuid()
+        self._waiter = self._loop.create_future()
+        self._connection.register_stream(
+            self._stream._stream_id,
+            self._output_emitter,
+            self._waiter,
+            opts=self._opts,
+        )
+        self._registered = True
+
+    async def end(self, *, send_text_end: bool) -> None:
+        """Finish the current Soniox stream_id (AudioEmitter segment stays open)."""
+        if not self._registered:
+            return
+        if send_text_end:
+            self._connection.send_text(self._stream._stream_id, "", text_end=True)
+        try:
+            await self._waiter
+        except (APIStatusError, APIConnectionError, asyncio.TimeoutError):
+            raise
+        except aiohttp.ClientError as e:
+            raise APIConnectionError() from e
+        finally:
+            self.unregister()
+
+    def unregister(self) -> None:
+        if not self._registered:
+            return
+        self._connection.unregister_stream(self._stream._stream_id)
+        self._registered = False
+
+    def send_text(self, text: str, *, text_end: bool = False) -> None:
+        self._connection.send_text(self._stream._stream_id, text, text_end=text_end)
+
+
 class SynthesizeStream(tts.SynthesizeStream):
     """Streaming TTS implementation on a shared _Connection."""
 
@@ -299,7 +364,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         a single segment for the life of this ``SynthesizeStream``.
         """
         request_id = utils.shortuuid()
-        self._stream_id = utils.shortuuid()
 
         output_emitter.initialize(
             request_id=request_id,
@@ -326,39 +390,15 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise APIConnectionError() from e
 
         self._connection = connection
-
-        loop = asyncio.get_running_loop()
-        waiter: asyncio.Future[None] = loop.create_future()
-        connection.register_stream(self._stream_id, output_emitter, waiter, opts=self._opts)
-        stream_registered = True
-
-        async def _end_active_stream(*, send_text_end: bool) -> None:
-            """Finish the current Soniox stream_id (keep the AudioEmitter segment open)."""
-            nonlocal waiter, stream_registered
-            if not stream_registered:
-                return
-            if send_text_end:
-                connection.send_text(self._stream_id, "", text_end=True)
-            try:
-                await waiter
-            except (APIStatusError, APIConnectionError, asyncio.TimeoutError):
-                raise
-            except aiohttp.ClientError as e:
-                raise APIConnectionError() from e
-            finally:
-                connection.unregister_stream(self._stream_id)
-                stream_registered = False
-
-        def _start_next_stream() -> None:
-            """Allocate and register a new stream_id for the next text chunk."""
-            nonlocal waiter, stream_registered
-            self._stream_id = utils.shortuuid()
-            waiter = loop.create_future()
-            connection.register_stream(self._stream_id, output_emitter, waiter, opts=self._opts)
-            stream_registered = True
+        lifecycle = _StreamLifecycle(
+            stream=self,
+            connection=connection,
+            output_emitter=output_emitter,
+            opts=self._opts,
+        )
+        lifecycle.start()
 
         async def _input_task() -> None:
-            nonlocal waiter
             segment_has_text = False
             need_new_stream = False
 
@@ -372,7 +412,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         data = await self._input_ch.recv()
                 except asyncio.TimeoutError:
                     # Input stalled while a stream_id is open — end it before Soniox 408s.
-                    await _end_active_stream(send_text_end=True)
+                    await lifecycle.end(send_text_end=True)
                     segment_has_text = False
                     need_new_stream = True
                     continue
@@ -381,22 +421,22 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                 if isinstance(data, self._FlushSentinel):
                     if segment_has_text:
-                        await _end_active_stream(send_text_end=True)
+                        await lifecycle.end(send_text_end=True)
                         segment_has_text = False
                         need_new_stream = True
                     continue
 
                 if need_new_stream:
-                    _start_next_stream()
+                    lifecycle.start()
                     need_new_stream = False
 
                 self._mark_started()
-                connection.send_text(self._stream_id, data, text_end=False)
+                lifecycle.send_text(data, text_end=False)
                 segment_has_text = True
 
-            if not self._cancelled.is_set() and stream_registered:
+            if not self._cancelled.is_set() and lifecycle.registered:
                 # Input finished: end the open stream if any text was (or would be) active.
-                await _end_active_stream(send_text_end=True)
+                await lifecycle.end(send_text_end=True)
 
         input_t = asyncio.create_task(_input_task(), name="soniox-tts-stream-input")
 
@@ -409,9 +449,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         finally:
             await utils.aio.gracefully_cancel(input_t)
             output_emitter.end_segment()
-            if stream_registered:
-                connection.unregister_stream(self._stream_id)
-                stream_registered = False
+            lifecycle.unregister()
 
 
 @dataclass
