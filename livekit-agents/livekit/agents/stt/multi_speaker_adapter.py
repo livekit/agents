@@ -270,7 +270,7 @@ class _PrimarySpeakerDetector:
 
         start = int((self._pushed_duration - start_time) / self._frame_size)
         end = int((self._pushed_duration - end_time) / self._frame_size)
-        start = len(self._rms_buffer) - start - 1
+        start = len(self._rms_buffer) - start
         end = len(self._rms_buffer) - end
 
         if end < 0 or start >= len(self._rms_buffer):
