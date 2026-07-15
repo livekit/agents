@@ -142,6 +142,18 @@ def test_convert_expr_cartesia_prosody_unknown_label_unwraps() -> None:
     assert convert_markup("cartesia", text) == "keep it secret"
 
 
+def test_convert_expr_cartesia_self_closing_prosody_before_spell() -> None:
+    # a self-closing point control ahead of a later wrapping marker must not be
+    # mistaken for that marker's opening tag — each converts independently
+    text = (
+        'Say it slow: <expr type="prosody" label="slow"/> '
+        'and now spell it: <expr type="spell">A7X9</expr> done.'
+    )
+    assert convert_markup("cartesia", text) == (
+        'Say it slow: <speed ratio="0.85"/> and now spell it: <spell>A7X9</spell> done.'
+    )
+
+
 def test_convert_stray_expr_never_reaches_tts() -> None:
     # an unpaired prosody open/close (e.g. split across stream chunks) is dropped,
     # keeping the words
