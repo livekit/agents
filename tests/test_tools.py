@@ -466,11 +466,41 @@ class TestToolExecution:
         output = await agent.mock_tool_in_agent(*args, **kwargs)
         assert output == {"arg1": "test", "opt_arg2": None}
 
+    async def test_null_uses_default_for_non_optional_param(self):
+        @function_tool
+        async def tool(arg1: str, count: int = 5) -> int:
+            """Tool with a defaulted non-optional parameter"""
+            return count
+
+        args, kwargs = prepare_function_arguments(
+            fnc=tool, json_arguments='{"arg1": "test", "count": null}'
+        )
+        assert args == ("test", 5)
+        assert kwargs == {}
+
+    async def test_null_uses_default_in_nested_model_arg(self):
+        class Preferences(BaseModel):
+            color: str = "red"
+            note: str | None = None
+
+        @function_tool
+        async def set_prefs(prefs: Preferences) -> str:
+            """Tool with a nested model argument"""
+            return prefs.color
+
+        args, kwargs = prepare_function_arguments(
+            fnc=set_prefs, json_arguments='{"prefs": {"color": null, "note": null}}'
+        )
+        assert args == (Preferences(color="red", note=None),)
+        assert kwargs == {}
+
     def test_unexpected_arguments(self):
         with pytest.raises(ToolError, match="validation error"):
             prepare_function_arguments(fnc=mock_tool_1, json_arguments='{"opt_arg2": "test2"}')
 
-        with pytest.raises(ToolError, match="Received no value for required parameter"):
+        # a null for a required parameter with no default stays null and is
+        # rejected by pydantic validation
+        with pytest.raises(ToolError, match="validation error"):
             prepare_function_arguments(fnc=mock_tool_2, json_arguments='{"arg1": null}')
 
         with pytest.raises(ToolError, match="validation error"):

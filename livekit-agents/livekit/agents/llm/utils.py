@@ -6,14 +6,12 @@ import copy
 import inspect
 import json
 import re
-import types
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import (
     TYPE_CHECKING,
     Annotated,
     Any,
-    Union,
     cast,
     get_args,
     get_origin,
@@ -684,22 +682,11 @@ def _prepare_function_arguments(
     if isinstance(fnc, FunctionTool):
         model_type = function_arguments_to_pydantic_model(fnc)
 
-        # Function arguments with default values are treated as optional
-        # when converted to strict LLM function descriptions. (e.g., we convert default
-        # parameters to type: ["string", "null"]).
-        # The following make sure to use the default value when we receive None.
-        # (Only if the type can't be Optional)
-        for param_name, param in signature.parameters.items():
-            type_hint = type_hints[param_name]
-            if param_name in args_dict and args_dict[param_name] is None:
-                if not _is_optional_type(type_hint):
-                    if param.default is not inspect.Parameter.empty:
-                        args_dict[param_name] = param.default
-                    else:
-                        raise ValueError(
-                            f"Received no value for required parameter '{param_name}': "
-                            "this argument cannot be None and no default is available."
-                        )
+        # Strict LLM schemas represent defaulted fields as nullable (see
+        # _ensure_strict_json_schema): null means "use the default". Resolve
+        # the sentinel, including in nested models, before validation.
+        schema = model_type.model_json_schema()
+        args_dict = _inject_schema_defaults(args_dict, schema=schema, root=schema)
 
         model = model_type.model_validate(args_dict)  # can raise ValidationError
         raw_fields = _shallow_model_dump(model)
@@ -731,18 +718,6 @@ def _prepare_function_arguments(
     bound = signature.bind(**{**raw_fields, **context_dict})
     bound.apply_defaults()
     return bound.args, bound.kwargs
-
-
-def _is_optional_type(hint: Any) -> bool:
-    if get_origin(hint) is Annotated:
-        hint = get_args(hint)[0]
-
-    origin = get_origin(hint)
-
-    is_union = origin is Union
-    is_union = is_union or origin is types.UnionType
-
-    return is_union and type(None) in get_args(hint)
 
 
 def _shallow_model_dump(model: BaseModel, *, by_alias: bool = False) -> dict[str, Any]:
