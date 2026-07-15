@@ -114,25 +114,18 @@ def _ensure_strict_json_schema(
                 for i, entry in enumerate(all_of)
             ]
 
+    # popped before the default handling below so a wrapped schema doesn't retain them
+    json_schema.pop("title", None)
+    json_schema.pop("discriminator", None)
+
     # strict mode doesn't support default
     if "default" in json_schema:
         json_schema.pop("default", None)
 
         # Strict schemas require all fields, but LLMs cannot see or apply Python defaults.
-        # Allow null as a sentinel; validate_response_format and tool preparation replace it.
-        t = json_schema.get("type")
-        if isinstance(t, str):
-            json_schema["type"] = [t, "null"]
-
-        elif isinstance(t, list):
-            types = t.copy()
-            if "null" not in types:
-                types.append("null")
-
-            json_schema["type"] = types
-
-    json_schema.pop("title", None)
-    json_schema.pop("discriminator", None)
+        # Let the field additionally accept null as a sentinel; validate_response_format and
+        # tool preparation swap a returned null back for the field's default.
+        _add_null_sentinel(json_schema)
 
     # we can't use `$ref`s if there are also other properties defined, e.g.
     # `{"$ref": "...", "description": "my description"}`
@@ -182,6 +175,43 @@ def _ensure_strict_json_schema(
             break
 
     return json_schema
+
+
+def _add_null_sentinel(json_schema: dict[str, Any]) -> None:
+    """Make a defaulted field additionally accept ``null``, preserving its original
+    constraints.
+
+    Appending ``"null"`` to a bare ``type`` only works when the schema has a direct type
+    and no value constraints. Literals (``const``/``enum``), unions (``anyOf``), and
+    ``$ref``-ed models need a full null branch instead, otherwise the wire schema either
+    contradicts itself or never advertises the sentinel at all.
+    """
+    typ = json_schema.get("type")
+    if typ == "null" or (is_list(typ) and "null" in typ):
+        return  # already nullable via type
+
+    for union_key in ("anyOf", "oneOf"):
+        variants = json_schema.get(union_key)
+        if is_list(variants):
+            if not any(variant == {"type": "null"} for variant in variants):
+                variants.append({"type": "null"})
+            return
+
+    has_value_constraint = "const" in json_schema or "enum" in json_schema
+    if isinstance(typ, str) and not has_value_constraint:
+        json_schema["type"] = [typ, "null"]
+        return
+    if is_list(typ) and not has_value_constraint:
+        json_schema["type"] = [*typ, "null"]
+        return
+
+    # const / enum / $ref / allOf: wrap so null is a valid instance without violating
+    # the original constraints. An empty schema already accepts null — leave it.
+    inner = dict(json_schema)
+    if not inner:
+        return
+    json_schema.clear()
+    json_schema["anyOf"] = [inner, {"type": "null"}]
 
 
 def resolve_ref(*, root: dict[str, object], ref: str) -> object:

@@ -5,9 +5,18 @@ from typing import Literal
 import pytest
 from pydantic import BaseModel
 
-from livekit.agents.llm.utils import to_openai_response_format, validate_response_format
+from livekit.agents.llm.utils import (
+    _json_schema_allows_null,  # verified null-acceptance checker; asserts the wire schema
+    to_openai_response_format,
+    validate_response_format,
+)
 
 pytestmark = pytest.mark.unit
+
+
+def _wire_property(response_format: type, field: str) -> tuple[dict, dict]:
+    schema = to_openai_response_format(response_format)["json_schema"]["schema"]
+    return schema["properties"][field], schema
 
 
 class _ResponseFormat(BaseModel):
@@ -54,6 +63,39 @@ def test_validate_response_format_injects_nested_defaults() -> None:
     )
 
     assert response == Response(items=[PrimaryItem(kind="primary", color="red", note=None)])
+
+
+def test_response_format_encodes_literal_default_as_nullable() -> None:
+    # a Literal carries const/enum, which reject null even when the type lists it
+    class Response(BaseModel):
+        label: Literal["a", "b"] = "a"
+
+    prop, root = _wire_property(Response, "label")
+    assert _json_schema_allows_null(prop, root=root)
+    assert validate_response_format(Response, {"label": None}).label == "a"
+
+
+def test_response_format_encodes_union_default_as_nullable() -> None:
+    # a top-level anyOf has no direct type to append null to
+    class Response(BaseModel):
+        value: int | str = 5
+
+    prop, root = _wire_property(Response, "value")
+    assert _json_schema_allows_null(prop, root=root)
+    assert validate_response_format(Response, {"value": None}).value == 5
+
+
+def test_response_format_encodes_nested_model_default_as_nullable() -> None:
+    # a defaulted nested model is a $ref with a sibling default
+    class Child(BaseModel):
+        x: int = 1
+
+    class Response(BaseModel):
+        child: Child = Child()
+
+    prop, root = _wire_property(Response, "child")
+    assert _json_schema_allows_null(prop, root=root)
+    assert validate_response_format(Response, {"child": None}).child == Child(x=1)
 
 
 def test_validate_response_format_injects_defaults_in_dict_values() -> None:
