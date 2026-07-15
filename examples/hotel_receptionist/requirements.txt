@@ -1,6 +1,5 @@
-# Expressive mode (PR #6116) is merged but unreleased - install the SDK from
-# GitHub until it ships in a PyPI release, then revert to `>=` that version.
-livekit-agents @ git+https://github.com/livekit/agents.git@31e4eeb668d94f805a40ff33cbd40acd4cb56d5e#subdirectory=livekit-agents
+# Pin tina/demo-expressive-mode until it ships in a PyPI release.
+livekit-agents @ git+https://github.com/livekit/agents.git@ade35d11e9ae2b4075192e79e0c718a7e1a8e58d#subdirectory=livekit-agents
 livekit-plugins-silero>=1.6.0
 livekit-plugins-turn-detector>=1.6.0
 python-dotenv>=1.0.0
