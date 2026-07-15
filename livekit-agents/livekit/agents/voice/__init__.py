@@ -5,6 +5,7 @@ from .agent_session import (
     NonverbalOptions,
     RecordingOptions,
     SpeechSteeringOptions,
+    SpeechSteeringPreset,
     VoiceActivityVideoSampler,
 )
 from .audio_recognition import AudioRecognition
@@ -46,6 +47,7 @@ __all__ = [
     "NonverbalOptions",
     "RecordingOptions",
     "SpeechSteeringOptions",
+    "SpeechSteeringPreset",
     "RunOutputOptions",
     "VoiceActivityVideoSampler",
     "Agent",
