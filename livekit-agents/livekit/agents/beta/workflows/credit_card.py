@@ -35,6 +35,9 @@ _CARD_NUMBER_AUDIO_SPECIFIC = """
 Handle input as noisy voice transcription. Expect users to read the card number digit by digit.
 Normalize spoken digits silently: 'four' → 4, 'zero' / 'oh' → 0.
 Filter out filler words or hesitations.
+Users may read the number in groups (for example four digits at a time), pausing for you between groups.
+Support this: acknowledge each group briefly without repeating any digits (for example 'Okay, and the next four?') and keep collecting until the whole number has been read.
+Keep the groups in the order they were given and treat them as one number.
 """
 
 _CARD_NUMBER_TEXT_SPECIFIC = """
@@ -217,9 +220,10 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
         @function_tool(flags=flags)
         async def update_card_number(context: RunContext, card_number: str) -> str | None:
             """Call to record the user's card number. Only call once the entire number has been given, do not call in increments.
+            If the user read the number in groups across several turns, concatenate all groups in the order they were given and call this once with the complete number.
 
             Args:
-                card_number (str): The credit card number as a string with no dashes or spaces
+                card_number (str): The complete credit card number as a string with no dashes or spaces
             """
             return await self._update_card_number_impl(context, card_number)
 
