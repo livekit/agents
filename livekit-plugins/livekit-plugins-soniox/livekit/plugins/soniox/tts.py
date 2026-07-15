@@ -54,6 +54,7 @@ MIN_SPEED = 0.7
 MAX_SPEED = 1.3
 KEEPALIVE_INTERVAL = 10  # seconds
 KEEPALIVE_MESSAGE = json.dumps({"keep_alive": True})
+# Must stay under Soniox's observed ~8-18s per-stream timeout (livekit/agents#6225).
 DEFAULT_STREAM_IDLE_TIMEOUT = 5.0  # seconds
 # Rotate to a fresh stream at a sentence boundary
 # well before Soniox's fixed 2-minute per-stream cap.
@@ -112,7 +113,8 @@ class TTS(tts.TTS):
                 `livekit.agents.tokenize.blingfire.SentenceTokenizer`.
             stream_idle_timeout (float): Seconds without a new sentence before the current
                 stream is finalized; the next sentence starts a fresh stream. Prevents slow
-                LLM gaps from hitting the server's per-stream timeout. Defaults to 5.0.
+                LLM gaps from hitting the server's per-stream timeout (observed ~8-18s).
+                Defaults to 5.0.
         """
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
@@ -126,6 +128,9 @@ class TTS(tts.TTS):
 
         if not MIN_SPEED <= speed <= MAX_SPEED:
             raise ValueError(f"speed must be between {MIN_SPEED} and {MAX_SPEED}, but got {speed}")
+
+        if stream_idle_timeout <= 0:
+            raise ValueError(f"stream_idle_timeout must be > 0, but got {stream_idle_timeout}")
 
         self._opts = _TTSOptions(
             model=model,
@@ -193,6 +198,7 @@ class TTS(tts.TTS):
         language: NotGivenOr[str] = NOT_GIVEN,
         voice: NotGivenOr[str] = NOT_GIVEN,
         speed: NotGivenOr[float] = NOT_GIVEN,
+        stream_idle_timeout: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         """
         Args:
@@ -200,6 +206,7 @@ class TTS(tts.TTS):
             language: Language code to use.
             voice: Voice to use.
             speed: Speaking rate in the range [0.7, 1.3]; 1.0 is the normal rate.
+            stream_idle_timeout: Idle seconds before the current stream is finalized.
         """
         if is_given(model):
             self._opts.model = model
@@ -213,6 +220,13 @@ class TTS(tts.TTS):
                     f"speed must be between {MIN_SPEED} and {MAX_SPEED}, but got {speed}"
                 )
             self._opts.speed = speed
+        if is_given(stream_idle_timeout):
+            if stream_idle_timeout <= 0:
+                raise ValueError(f"stream_idle_timeout must be > 0, but got {stream_idle_timeout}")
+            self._opts.stream_idle_timeout = stream_idle_timeout
+            # _run re-reads this every loop iteration, so live streams pick it up
+            for stream in list(self._streams):
+                stream._opts.stream_idle_timeout = stream_idle_timeout
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
