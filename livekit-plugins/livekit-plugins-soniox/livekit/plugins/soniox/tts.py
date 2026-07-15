@@ -35,6 +35,7 @@ from livekit.agents import (
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
+from livekit.agents.utils.aio.channel import ChanClosed
 
 from .log import logger
 
@@ -293,9 +294,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         sent, then lazily starts a new ``stream_id`` when text resumes. This matches
         Soniox's multiplexed-stream model and avoids per-stream 408 timeouts during
         LLM stalls (see livekit/agents#6225, #6425).
-        """
-        from livekit.agents.utils.aio.channel import ChanClosed
 
+        Soniox ``stream_id`` may rotate on idle/flush, but the AudioEmitter stays on
+        a single segment for the life of this ``SynthesizeStream``.
+        """
         request_id = utils.shortuuid()
         self._stream_id = utils.shortuuid()
 
@@ -339,9 +341,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                 connection.send_text(self._stream_id, "", text_end=True)
             try:
                 await waiter
-            except APIStatusError:
+            except (APIStatusError, APIConnectionError, asyncio.TimeoutError):
                 raise
-            except Exception as e:
+            except aiohttp.ClientError as e:
                 raise APIConnectionError() from e
             finally:
                 connection.unregister_stream(self._stream_id)
@@ -359,9 +361,10 @@ class SynthesizeStream(tts.SynthesizeStream):
             nonlocal waiter
             segment_has_text = False
             need_new_stream = False
-            idle_timeout = self._opts.stream_idle_timeout
 
             while not self._cancelled.is_set():
+                # Re-read each iteration so update_options(stream_idle_timeout=...) applies.
+                idle_timeout = self._opts.stream_idle_timeout
                 try:
                     if segment_has_text and idle_timeout > 0:
                         data = await asyncio.wait_for(self._input_ch.recv(), timeout=idle_timeout)
@@ -399,9 +402,9 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         try:
             await input_t
-        except APIStatusError:
+        except (APIStatusError, APIConnectionError, asyncio.TimeoutError):
             raise
-        except Exception as e:
+        except aiohttp.ClientError as e:
             raise APIConnectionError() from e
         finally:
             await utils.aio.gracefully_cancel(input_t)

@@ -204,3 +204,41 @@ def test_update_options_stream_idle_timeout() -> None:
     tts = soniox_tts.TTS(api_key="test-key", stream_idle_timeout=5.0)
     tts.update_options(stream_idle_timeout=2.5)
     assert tts._opts.stream_idle_timeout == 2.5  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_update_options_applies_to_in_flight_stream_idle() -> None:
+    """update_options must affect the active stream's next idle wait, not only TTS._opts."""
+    fake_conn = _FakeConnection()
+    # Start with idle disabled so the first pause does not rotate.
+    tts = soniox_tts.TTS(api_key="test-key", stream_idle_timeout=0)
+    _patch_connection(tts, fake_conn)
+    # Must go through TTS.stream() so update_options can find the live stream.
+    stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+
+    consumer = asyncio.create_task(_consume_stream(stream))
+    await asyncio.sleep(0)
+    stream.push_text("before")
+    await asyncio.sleep(0.12)
+    # Still one stream_id — idle was disabled.
+    assert len(_text_calls(fake_conn)) == 1
+    assert len(_text_end_calls(fake_conn)) == 0
+
+    tts.update_options(stream_idle_timeout=0.05)
+    # Wake the blocked unlimited recv so the next wait re-reads the new timeout.
+    stream.push_text(" mid")
+    await asyncio.sleep(0.15)
+    stream.push_text(" after")
+    stream.end_input()
+    await consumer
+    await stream.aclose()
+
+    texts = _text_calls(fake_conn)
+    text_ends = _text_end_calls(fake_conn)
+    assert len(texts) == 3
+    # "before" and " mid" share a stream_id; idle then rotates before " after".
+    assert texts[0][0] == texts[1][0]
+    assert texts[1][0] != texts[2][0]
+    assert len(text_ends) == 2
+    assert texts[0][0] == text_ends[0][0]
+    assert texts[2][0] == text_ends[1][0]
