@@ -7,13 +7,46 @@ from pydantic import BaseModel, TypeAdapter
 _T = TypeVar("_T")
 
 
-def to_strict_json_schema(model: type[BaseModel] | TypeAdapter[Any]) -> dict[str, Any]:
+def _model_json_schema(model: type[BaseModel] | TypeAdapter[Any]) -> dict[str, Any]:
     if isinstance(model, TypeAdapter):
-        schema = model.json_schema()
-    else:
-        schema = model.model_json_schema()
+        return model.json_schema()
+    return model.model_json_schema()
+
+
+def to_strict_json_schema(model: type[BaseModel] | TypeAdapter[Any]) -> dict[str, Any]:
+    schema = _model_json_schema(model)
 
     return _ensure_strict_json_schema(schema, path=(), root=schema)
+
+
+def to_strict_tool_json_schema(model: type[BaseModel] | TypeAdapter[Any]) -> dict[str, Any]:
+    schema = _model_json_schema(model)
+    _make_defaults_nullable(schema)
+
+    return _ensure_strict_json_schema(schema, path=(), root=schema)
+
+
+def _make_defaults_nullable(json_schema: object) -> None:
+    """Encode defaulted tool arguments as nullable fields for strict schemas.
+
+    OpenAI strict schemas require every property and do not support JSON Schema defaults, so
+    ``null`` represents "use the Python default". Tool argument preparation replaces that value
+    before validation. Response formats intentionally skip this conversion because their output
+    is validated directly against the declared Pydantic nullability.
+    """
+    if isinstance(json_schema, dict):
+        if "default" in json_schema:
+            typ = json_schema.get("type")
+            if isinstance(typ, str):
+                json_schema["type"] = [typ, "null"]
+            elif isinstance(typ, list) and "null" not in typ:
+                json_schema["type"] = [*typ, "null"]
+
+        for value in json_schema.values():
+            _make_defaults_nullable(value)
+    elif isinstance(json_schema, list):
+        for value in json_schema:
+            _make_defaults_nullable(value)
 
 
 # from https://platform.openai.com/docs/guides/function-calling?api-mode=responses&strict-mode=disabled#strict-mode
@@ -117,19 +150,6 @@ def _ensure_strict_json_schema(
     # strict mode doesn't support default
     if "default" in json_schema:
         json_schema.pop("default", None)
-
-        # Treat any parameter with a default value as optional. If the parameter’s type doesn't
-        # support None, the default will be used instead.
-        t = json_schema.get("type")
-        if isinstance(t, str):
-            json_schema["type"] = [t, "null"]
-
-        elif isinstance(t, list):
-            types = t.copy()
-            if "null" not in types:
-                types.append("null")
-
-            json_schema["type"] = types
 
     json_schema.pop("title", None)
     json_schema.pop("discriminator", None)

@@ -239,7 +239,7 @@ def build_strict_openai_schema(
     """strict mode tool description"""
     model = function_arguments_to_pydantic_model(function_tool)
     info = function_tool.info
-    schema = _strict.to_strict_json_schema(model)
+    schema = _strict.to_strict_tool_json_schema(model)
 
     return {
         "type": "function",
