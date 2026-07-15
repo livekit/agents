@@ -54,3 +54,22 @@ def test_validate_response_format_injects_nested_defaults() -> None:
     )
 
     assert response == Response(items=[PrimaryItem(kind="primary", color="red", note=None)])
+
+
+def test_validate_response_format_selects_union_variant_by_payload_keys() -> None:
+    class PointsA(BaseModel):
+        common: int
+        a: int = 1
+
+    class PointsB(BaseModel):
+        common: int
+        b: str = "bee"
+
+    class Response(BaseModel):
+        item: PointsA | PointsB
+
+    # the payload carries PointsB's field; PointsA must not win just because
+    # its only required field is present and the extra key is ignored
+    response = validate_response_format(Response, {"item": {"common": 7, "b": None}})
+
+    assert response == Response(item=PointsB(common=7, b="bee"))

@@ -427,6 +427,14 @@ def _json_schema_matches(value: Any, schema: dict[str, Any], *, root: dict[str, 
             return False
         properties = schema.get("properties")
         if isinstance(properties, dict):
+            # the strict wire schema closes objects (additionalProperties: false),
+            # so a key outside the declared properties rules this variant out;
+            # otherwise a payload meant for a sibling union variant matches any
+            # variant that merely ignores the extra keys
+            if schema.get("additionalProperties") in (None, False) and any(
+                key not in properties for key in value
+            ):
+                return False
             for key, item in value.items():
                 property_schema = properties.get(key)
                 if isinstance(property_schema, dict) and not _json_schema_matches(
