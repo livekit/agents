@@ -227,6 +227,94 @@ async def test_stt_stream_language_override_is_applied() -> None:
         await stream.aclose()
 
 
+class _DeepgramResultsSttWs:
+    """Answers a finalize with a Deepgram-native Results frame."""
+
+    def __init__(self) -> None:
+        self.sent_texts: list[dict] = []
+        self.audio_frames = 0
+        self._q: asyncio.Queue = asyncio.Queue()
+
+    async def send_str(self, msg: str) -> None:
+        frame = json.loads(msg)
+        self.sent_texts.append(frame)
+        if frame.get("type") == "finalize":
+            payload = {
+                "type": "Results",
+                "is_final": True,
+                "channel": {
+                    "alternatives": [
+                        {
+                            "transcript": "halo dunia",
+                            "confidence": 0.97,
+                            "language": "id",
+                            "words": [
+                                {"word": "halo", "start": 1.2, "end": 1.5},
+                                {"word": "dunia", "start": 1.6, "end": 2.1},
+                            ],
+                        }
+                    ]
+                },
+            }
+            self._q.put_nowait(
+                SimpleNamespace(type=aiohttp.WSMsgType.TEXT, data=json.dumps(payload))
+            )
+        if frame.get("type") == "close":
+            self._q.put_nowait(SimpleNamespace(type=aiohttp.WSMsgType.CLOSED, data=None))
+
+    async def send_bytes(self, payload: bytes) -> None:
+        del payload
+        self.audio_frames += 1
+
+    async def receive(self, timeout=None):
+        del timeout
+        return await self._q.get()
+
+    async def close(self) -> None:
+        self._q.put_nowait(SimpleNamespace(type=aiohttp.WSMsgType.CLOSED, data=None))
+
+
+@pytest.mark.asyncio
+async def test_stt_deepgram_results_keep_words_and_language(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deepgram-native Results normalization must preserve word timings and
+    the provider-detected language for the emitted final event."""
+    ws = _DeepgramResultsSttWs()
+
+    async def fake_connect(self, *, model_endpoint: str, model: str | None):
+        del self, model_endpoint, model
+        return ws
+
+    monkeypatch.setattr(slng.stt.SpeechStream, "_connect_ws", fake_connect)
+    async with aiohttp.ClientSession() as session:
+        stt = slng.STT(
+            api_key="test-key",
+            model="deepgram/nova:3",
+            language="en",
+            http_session=session,
+        )
+        stream = stt.stream(conn_options=APIConnectOptions(max_retry=0))
+        stream._input_ch.send_nowait(SimpleNamespace(data=memoryview(b"\x00\x01" * 1600)))
+        stream.flush()
+        stream.end_input()
+
+        finals: list = []
+
+        async def drain() -> None:
+            async for ev in stream:
+                if ev.type == SpeechEventType.FINAL_TRANSCRIPT:
+                    finals.append(ev.alternatives[0])
+
+        await asyncio.wait_for(drain(), timeout=3)
+
+    assert len(finals) == 1
+    assert finals[0].text == "halo dunia"
+    assert finals[0].language == "id"
+    assert finals[0].start_time == 1.2
+    assert finals[0].end_time == 2.1
+
+
 class _DyingSttWs:
     """Dies (server close, no final) right after it receives the finalize."""
 

@@ -949,11 +949,15 @@ class SpeechStream(stt.SpeechStream):
                         if alternatives and isinstance(alternatives[0], dict)
                         else {}
                     )
+                    detected_language = data.get("language") or alt0.get("language")
                     data = {
                         "type": "final_transcript" if is_final else "partial_transcript",
                         "transcript": alt0.get("transcript", ""),
                         "confidence": alt0.get("confidence", 0.0),
+                        "words": alt0.get("words", []),
                     }
+                    if detected_language:
+                        data["language"] = detected_language
                     msg_type = data["type"]
 
                 if msg_type in ("Error", "error"):
