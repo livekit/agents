@@ -1050,14 +1050,17 @@ class SynthesizeStream(tts.SynthesizeStream):
                     text_buffer += piece
                     buffer_has_letter = buffer_has_letter or _contains_letter(word.token)
                     stripped = text_buffer.rstrip()
-                    if stripped and (
+                    at_boundary = stripped and (
                         stripped.endswith(_PHRASE_FLUSH_SUFFIXES)
                         or len(stripped) >= self._opts.phrase_max_chars
-                    ):
-                        if buffer_has_letter:
-                            await _emit_text(text_buffer)
+                    )
+                    if at_boundary and buffer_has_letter:
+                        await _emit_text(text_buffer)
                         text_buffer = ""
                         buffer_has_letter = False
+                    # A letterless buffer (bare numbers, punctuation) is kept at
+                    # a boundary so it joins the next phrase instead of being
+                    # dropped.
                     continue
 
                 if not text_buffer:

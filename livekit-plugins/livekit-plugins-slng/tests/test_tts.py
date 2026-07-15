@@ -309,6 +309,20 @@ async def test_tts_phrase_batching_flushes_on_punctuation(
 
 
 @pytest.mark.asyncio
+async def test_tts_phrase_batching_keeps_letterless_phrases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A phrase that is letterless at its punctuation boundary (bare numbers,
+    symbols) must carry forward into the next phrase, not be dropped."""
+    texts = await _sent_text_frames(
+        monkeypatch,
+        "4.5, million dollars.",
+        voice="aura-2-thalia-en",
+    )
+    assert texts == ["4.5, million dollars. "]
+
+
+@pytest.mark.asyncio
 async def test_tts_word_chunking_merges_letterless_tokens(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
