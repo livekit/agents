@@ -3387,7 +3387,19 @@ class AgentActivity(RecognitionHooks):
         if user_input is not None:
             chat_ctx = self._rt_session.chat_ctx.copy()
             msg = chat_ctx.add_message(role="user", content=user_input)
-            await self._rt_session.update_chat_ctx(chat_ctx)
+            try:
+                await self._rt_session.update_chat_ctx(chat_ctx)
+            except llm.RealtimeError as e:
+                # the push is best-effort (the items were sent; only the ack timed out),
+                # so still generate the reply rather than dropping the whole turn
+                logger.warning(
+                    "failed to update the chat context before generating the reply",
+                    extra={"error": str(e)},
+                )
+            except Exception as e:
+                logger.exception("failed to update the chat context before generating the reply")
+                speech_handle._mark_done(error=e)
+                return
             self._agent._chat_ctx._upsert_item(msg)
             self._session._conversation_item_added(msg)
 
