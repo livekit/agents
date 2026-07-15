@@ -62,14 +62,14 @@ async def _stream_tokenize_tiktoken(tok: SentenceTokenizer, text: str) -> list[s
 
 class TestStripXmlTags:
     def test_self_closing(self) -> None:
-        assert strip_xml_tags('<emotion value="happy"/> Hello!', ["emotion"]) == " Hello!"
+        assert strip_xml_tags('<emotion value="happy"/> Hello!', ["emotion"]) == "Hello!"
 
     def test_wrapping_preserves_content(self) -> None:
         assert strip_xml_tags("<spell>A.B.C.</spell> confirmed", ["spell"]) == "A.B.C. confirmed"
 
     def test_preserves_unrelated_tags(self) -> None:
         text = '<emotion value="happy"/> <custom>keep</custom>'
-        assert strip_xml_tags(text, ["emotion"]) == " <custom>keep</custom>"
+        assert strip_xml_tags(text, ["emotion"]) == "<custom>keep</custom>"
 
     def test_empty_tags_list(self) -> None:
         text = '<emotion value="happy"/> Hi'

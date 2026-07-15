@@ -16,6 +16,18 @@ def convert_expression_tags(text: str) -> str:
 _VALUE_ATTR_RE = re.compile(r'\b[\w-]+\s*=\s*"([^"]*)"')
 
 
+def vanish_trail(m: re.Match[str], trail: str) -> str:
+    """Trailing spaces of a fully removed tag.
+
+    A tag with nothing visible before it on the line takes its trailing spaces with
+    it (``"a <t/> b"`` -> ``"a b"``, ``"<t/> b"`` -> ``"b"``); one glued to the
+    preceding word keeps them as the word separator (``"a.<t/> b"`` -> ``"a. b"``).
+    """
+    if m.start() == 0 or m.string[m.start() - 1].isspace():
+        return ""
+    return trail
+
+
 def extract_and_strip(
     text: str, *, xml_tags: list[str], brackets: bool
 ) -> tuple[str, list[tuple[str, str]]]:
@@ -57,11 +69,12 @@ def extract_and_strip(
     if brackets:
         alternatives.append(r"\[(?P<bracket>[^\]]+)\]")
 
-    pattern = re.compile("|".join(alternatives), re.DOTALL)
+    pattern = re.compile(rf"(?:{'|'.join(alternatives)})(?P<trail>[ \t]*)", re.DOTALL)
     tags: list[tuple[str, str]] = []
 
     def _repl(m: re.Match[str]) -> str:
         groups = m.groupdict()
+        trail = groups.get("trail") or ""
         tag = groups.get("tag")
         if tag is not None:
             inner = groups.get("inner")
@@ -72,14 +85,14 @@ def extract_and_strip(
                 value = attr_match.group(1) if attr_match else ""
             tags.append((tag, value))
             # wrapping tags keep their inner content; self-closing/lone tags vanish
-            return inner if inner is not None else ""
+            return inner + trail if inner is not None else vanish_trail(m, trail)
 
         bracket = groups.get("bracket")
         if bracket is not None:
             tags.append(("", bracket.strip()))
-            return ""
+            return vanish_trail(m, trail)
 
-        return ""  # lone closing tag
+        return vanish_trail(m, trail)  # lone closing tag
 
     # iterate to a fixed point so nested wrapping tags are fully removed: a single pass
     # strips only the outer tag (e.g. <excited><loud>hi</loud></excited> -> keeps the
