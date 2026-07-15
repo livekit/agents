@@ -479,6 +479,126 @@ async def test_interim_transcript_no_translation_populates_source_runs():
     assert sd.target_texts is None
 
 
+# --- RECOGNITION_USAGE: output tokens ---------------------------------------
+
+
+async def test_usage_event_reports_final_tokens_as_output_tokens():
+    """Each final transcription token counts once toward `output_tokens`;
+    the `<end>` control token does not."""
+    stream = _make_stream(translation=None)
+
+    messages = [
+        {
+            "tokens": [
+                _final_token("Hello", "en"),
+                _final_token(" world.", "en"),
+                END_TOKEN_FINAL,
+            ],
+            "total_audio_proc_ms": 500,
+        }
+    ]
+
+    events = await _drive_recv(stream, messages, expect_events=3)
+    usage = next(e for e in events if e.type == SpeechEventType.RECOGNITION_USAGE)
+
+    assert usage.recognition_usage is not None
+    assert usage.recognition_usage.audio_duration == 0.5
+    assert usage.recognition_usage.output_tokens == 2
+
+
+async def test_usage_event_excludes_non_final_tokens():
+    """Non-final tokens are re-sent as final later — counting them would
+    double-bill. Only the final occurrences count."""
+    stream = _make_stream(translation=None)
+
+    messages = [
+        {
+            "tokens": [
+                _nonfinal_token("Hel", "en"),
+                _nonfinal_token("lo", "en"),
+            ],
+            "total_audio_proc_ms": 300,
+        },
+        {
+            "tokens": [
+                _final_token("Hello", "en"),
+                _final_token(" world.", "en"),
+                END_TOKEN_FINAL,
+            ],
+            "total_audio_proc_ms": 800,
+        },
+    ]
+
+    # message 1: START_OF_SPEECH + INTERIM; message 2: FINAL + END_OF_SPEECH + USAGE.
+    events = await _drive_recv(stream, messages, expect_events=5)
+    usage = next(e for e in events if e.type == SpeechEventType.RECOGNITION_USAGE)
+
+    assert usage.recognition_usage is not None
+    assert usage.recognition_usage.output_tokens == 2
+
+
+async def test_usage_events_report_incremental_output_tokens():
+    """A second endpoint reports only the tokens accumulated since the
+    previous usage event, mirroring the incremental audio_duration."""
+    stream = _make_stream(translation=None)
+
+    messages = [
+        {
+            "tokens": [
+                _final_token("First.", "en"),
+                END_TOKEN_FINAL,
+            ],
+            "total_audio_proc_ms": 1000,
+        },
+        {
+            "tokens": [
+                _final_token("Second", "en"),
+                _final_token(" utterance.", "en"),
+                END_TOKEN_FINAL,
+            ],
+            "total_audio_proc_ms": 2500,
+        },
+    ]
+
+    # Per endpoint: START_OF_SPEECH is not emitted before endpoint flush
+    # (tokens are final-only), so each message yields FINAL + END_OF_SPEECH + USAGE.
+    events = await _drive_recv(stream, messages, expect_events=6)
+    usages = [e for e in events if e.type == SpeechEventType.RECOGNITION_USAGE]
+
+    assert len(usages) == 2
+    assert usages[0].recognition_usage is not None
+    assert usages[0].recognition_usage.audio_duration == 1.0
+    assert usages[0].recognition_usage.output_tokens == 1
+    assert usages[1].recognition_usage is not None
+    assert usages[1].recognition_usage.audio_duration == 1.5
+    assert usages[1].recognition_usage.output_tokens == 2
+
+
+async def test_usage_event_counts_translation_tokens():
+    """In translation mode both original and translated final tokens are
+    provider output and count toward `output_tokens`."""
+    from livekit.plugins.soniox.stt import TranslationConfig
+
+    stream = _make_stream(translation=TranslationConfig(type="one_way", target_language="es"))
+
+    messages = [
+        {
+            "tokens": [
+                _final_token("Hello world.", "en", translation_status="original"),
+                _final_token("Hola mundo.", "es", translation_status="translation"),
+                END_TOKEN_FINAL,
+            ],
+            "total_audio_proc_ms": 500,
+        }
+    ]
+
+    events = await _drive_recv(stream, messages, expect_events=3)
+    usage = next(e for e in events if e.type == SpeechEventType.RECOGNITION_USAGE)
+
+    assert usage.recognition_usage is not None
+    assert usage.recognition_usage.output_tokens == 2
+
+
 async def test_recv_messages_raises_on_server_error_frame():
     stream = _make_stream(translation=None)
     stream._ws = _FakeWebSocket(
