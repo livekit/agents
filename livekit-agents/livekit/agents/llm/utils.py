@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import copy
 import inspect
 import json
 import re
@@ -239,7 +240,7 @@ def build_strict_openai_schema(
     """strict mode tool description"""
     model = function_arguments_to_pydantic_model(function_tool)
     info = function_tool.info
-    schema = _strict.to_strict_tool_json_schema(model)
+    schema = _strict.to_strict_json_schema(model)
 
     return {
         "type": "function",
@@ -308,6 +309,148 @@ def to_openai_response_format(response_format: type | dict[str, Any]) -> dict[st
             "strict": True,
         },
     }
+
+
+def validate_response_format(response_format: type[ResponseFormatT], value: Any) -> ResponseFormatT:
+    """Validate a structured response, applying defaults represented by ``null``.
+
+    Strict JSON schemas require every field and cannot communicate Python defaults to the LLM.
+    ``to_openai_response_format`` therefore makes a defaulted field nullable. When the field's
+    declared type is not nullable, a returned ``null`` means "use the default" and must be
+    replaced before Pydantic validation.
+    """
+    _, json_schema_type = to_response_format_param(response_format)
+    if isinstance(json_schema_type, TypeAdapter):
+        schema = json_schema_type.json_schema()
+    else:
+        schema = json_schema_type.model_json_schema()
+
+    value = _inject_response_format_defaults(value, schema=schema, root=schema)
+    if isinstance(json_schema_type, TypeAdapter):
+        return cast(ResponseFormatT, json_schema_type.validate_python(value))
+    return cast(ResponseFormatT, json_schema_type.model_validate(value))
+
+
+def _inject_response_format_defaults(
+    value: Any, *, schema: dict[str, Any], root: dict[str, Any]
+) -> Any:
+    ref = schema.get("$ref")
+    if isinstance(ref, str):
+        resolved = _strict.resolve_ref(root=root, ref=ref)
+        if isinstance(resolved, dict):
+            schema = {**resolved, **schema}
+
+    if value is None:
+        if "default" in schema and not _json_schema_allows_null(schema, root=root):
+            return copy.deepcopy(schema["default"])
+        return None
+
+    all_of = schema.get("allOf")
+    if isinstance(all_of, list):
+        for variant in all_of:
+            if isinstance(variant, dict):
+                value = _inject_response_format_defaults(value, schema=variant, root=root)
+
+    for union_key in ("anyOf", "oneOf"):
+        variants = schema.get(union_key)
+        if isinstance(variants, list):
+            for variant in variants:
+                if isinstance(variant, dict) and _json_schema_matches(value, variant, root=root):
+                    return _inject_response_format_defaults(value, schema=variant, root=root)
+
+    if isinstance(value, dict):
+        properties = schema.get("properties")
+        if isinstance(properties, dict):
+            return {
+                key: _inject_response_format_defaults(item, schema=properties[key], root=root)
+                if key in properties and isinstance(properties[key], dict)
+                else item
+                for key, item in value.items()
+            }
+
+    if isinstance(value, list):
+        items = schema.get("items")
+        if isinstance(items, dict):
+            return [
+                _inject_response_format_defaults(item, schema=items, root=root) for item in value
+            ]
+
+    return value
+
+
+def _json_schema_allows_null(schema: dict[str, Any], *, root: dict[str, Any]) -> bool:
+    ref = schema.get("$ref")
+    if isinstance(ref, str):
+        resolved = _strict.resolve_ref(root=root, ref=ref)
+        if isinstance(resolved, dict) and _json_schema_allows_null(resolved, root=root):
+            return True
+
+    typ = schema.get("type")
+    if typ == "null" or isinstance(typ, list) and "null" in typ:
+        return True
+
+    for union_key in ("anyOf", "oneOf"):
+        variants = schema.get(union_key)
+        if isinstance(variants, list) and any(
+            isinstance(variant, dict) and _json_schema_allows_null(variant, root=root)
+            for variant in variants
+        ):
+            return True
+
+    return False
+
+
+def _json_schema_matches(value: Any, schema: dict[str, Any], *, root: dict[str, Any]) -> bool:
+    ref = schema.get("$ref")
+    if isinstance(ref, str):
+        resolved = _strict.resolve_ref(root=root, ref=ref)
+        if isinstance(resolved, dict):
+            schema = {**resolved, **schema}
+
+    if "const" in schema and value != schema["const"]:
+        return False
+    enum = schema.get("enum")
+    if isinstance(enum, list) and value not in enum:
+        return False
+
+    typ = schema.get("type")
+    if isinstance(typ, list):
+        return any(_json_type_matches(value, item) for item in typ if isinstance(item, str))
+    if isinstance(typ, str) and not _json_type_matches(value, typ):
+        return False
+
+    if isinstance(value, dict):
+        required = schema.get("required")
+        if isinstance(required, list) and not all(key in value for key in required):
+            return False
+        properties = schema.get("properties")
+        if isinstance(properties, dict):
+            for key, item in value.items():
+                property_schema = properties.get(key)
+                if isinstance(property_schema, dict) and not _json_schema_matches(
+                    item, property_schema, root=root
+                ):
+                    return False
+
+    return True
+
+
+def _json_type_matches(value: Any, typ: str) -> bool:
+    if typ == "null":
+        return value is None
+    if typ == "object":
+        return isinstance(value, dict)
+    if typ == "array":
+        return isinstance(value, list)
+    if typ == "boolean":
+        return isinstance(value, bool)
+    if typ == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if typ == "number":
+        return isinstance(value, int | float) and not isinstance(value, bool)
+    if typ == "string":
+        return isinstance(value, str)
+    return True
 
 
 def function_arguments_to_pydantic_model(func: Callable[..., Any]) -> type[BaseModel]:
