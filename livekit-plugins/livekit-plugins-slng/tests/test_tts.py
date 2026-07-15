@@ -10,7 +10,7 @@ import aiohttp
 import pytest
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIStatusError
+from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError
 from livekit.plugins import slng
 
 
@@ -425,3 +425,34 @@ async def test_tts_fallback_chunked_supports_collect() -> None:
     combined = await stream.collect()
     assert combined.samples_per_channel == 240
     await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_tts_stream_retry_gets_fresh_segments_channel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A transient failure on the first attempt must not permanently close the
+    word-segment channel; the base-class retry must still produce audio."""
+    ws = _ScriptedTtsWs()
+    attempts = 0
+
+    async def fake_connect(self, timeout):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise APIConnectionError("transient connect failure")
+        return ws
+
+    monkeypatch.setattr(slng.tts.TTS, "_connect_ws", fake_connect)
+    tts = slng.TTS(api_key="test-key", model="deepgram/aura:2", voice="aura-2-thalia-en")
+    stream = tts.stream(conn_options=APIConnectOptions(max_retry=1, retry_interval=0.1))
+    stream.push_text("Hello there.")
+    stream.end_input()
+
+    frames = []
+    async for ev in stream:
+        frames.append(ev)
+    await stream.aclose()
+
+    assert attempts == 2
+    assert frames, "base-class retry produced no audio"

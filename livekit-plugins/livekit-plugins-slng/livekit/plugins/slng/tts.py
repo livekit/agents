@@ -863,10 +863,12 @@ class SynthesizeStream(tts.SynthesizeStream):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
-        self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
         logger.info("[TTS] SynthesizeStream.__init__ DONE")
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        # Create segments_ch per run so base-class retries after an error get a
+        # fresh channel (matching the Deepgram plugin pattern).
+        self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
         request_id = utils.shortuuid()
         logger.info(f"[TTS] _run starting: request_id={request_id}")
         output_emitter.initialize(
