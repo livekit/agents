@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from livekit.agents import APIConnectOptions
+from livekit.agents import APIConnectOptions, APIStatusError
 from livekit.agents.tts import AudioEmitter
 from livekit.plugins.soniox import tts as soniox_tts
 
@@ -257,3 +257,28 @@ async def test_update_options_applies_to_in_flight_stream_idle() -> None:
     assert len(text_ends) == 2
     assert texts[0][0] == text_ends[0][0]
     assert texts[2][0] == text_ends[1][0]
+
+
+@pytest.mark.asyncio
+async def test_server_error_surfaces_while_input_still_open() -> None:
+    """Server errors on the waiter must fail the stream before end_input (no prolonged silence)."""
+    fake_conn = _FakeConnection()
+    tts = soniox_tts.TTS(api_key="test-key", stream_idle_timeout=0)
+    _patch_connection(tts, fake_conn)
+    stream = soniox_tts.SynthesizeStream(
+        tts=tts, conn_options=APIConnectOptions(max_retry=0, timeout=1.0)
+    )
+
+    consumer = asyncio.create_task(_consume_stream(stream))
+    await asyncio.sleep(0)
+    stream.push_text("hello")
+    await asyncio.sleep(0)
+
+    assert len(fake_conn.registered_ids) == 1
+    slot = fake_conn._streams[fake_conn.registered_ids[0]]  # noqa: SLF001
+    slot.waiter.set_exception(APIStatusError("synthetic server error", status_code=500))
+
+    # Do not call end_input — error must surface from the concurrent waiter monitor.
+    with pytest.raises(APIStatusError, match="synthetic server error"):
+        await asyncio.wait_for(consumer, timeout=2.0)
+    await stream.aclose()

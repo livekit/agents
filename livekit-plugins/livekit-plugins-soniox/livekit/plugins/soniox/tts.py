@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import os
 import time
@@ -278,10 +279,16 @@ class _StreamLifecycle:
         self._loop = asyncio.get_running_loop()
         self._waiter: asyncio.Future[None] = self._loop.create_future()
         self._registered = False
+        self._registered_gate = asyncio.Event()
 
     @property
     def registered(self) -> bool:
         return self._registered
+
+    @property
+    def waiter(self) -> asyncio.Future[None] | None:
+        """Active completion future, or None between ``end`` and the next ``start``."""
+        return self._waiter if self._registered else None
 
     def start(self) -> None:
         """Allocate and register a new Soniox stream_id."""
@@ -294,6 +301,13 @@ class _StreamLifecycle:
             opts=self._opts,
         )
         self._registered = True
+        self._registered_gate.set()
+
+    async def wait_until_registered(self) -> None:
+        """Block until ``start()`` registers a stream_id (no busy-wait)."""
+        while not self._registered:
+            self._registered_gate.clear()
+            await self._registered_gate.wait()
 
     async def end(self, *, send_text_end: bool) -> None:
         """Finish the current Soniox stream_id (AudioEmitter segment stays open)."""
@@ -438,16 +452,73 @@ class SynthesizeStream(tts.SynthesizeStream):
                 # Input finished: end the open stream if any text was (or would be) active.
                 await lifecycle.end(send_text_end=True)
 
+        async def _monitor_server() -> None:
+            """Surface server errors promptly while input is still open (pre-rotation behavior).
+
+            On main, ``_run`` awaited the stream waiter concurrently with input. With
+            stream_id rotation we only ``await`` inside ``lifecycle.end``; without this
+            monitor, a mid-turn server error would sit on the Future until flush/idle/end.
+            """
+            while not self._cancelled.is_set():
+                if input_t.done():
+                    return
+
+                waiter = lifecycle.waiter
+                if waiter is None:
+                    # Between end() and the next start() — park until one of them happens.
+                    wait_reg = asyncio.create_task(
+                        lifecycle.wait_until_registered(),
+                        name="soniox-tts-wait-registered",
+                    )
+                    try:
+                        await asyncio.wait(
+                            {wait_reg, input_t},
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                    finally:
+                        if not wait_reg.done():
+                            wait_reg.cancel()
+                            with contextlib.suppress(asyncio.CancelledError):
+                                await wait_reg
+                    if input_t.done():
+                        return
+                    continue
+
+                done, _ = await asyncio.wait(
+                    {waiter, input_t},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if input_t in done and waiter not in done:
+                    return
+                if waiter in done:
+                    if waiter.cancelled():
+                        continue
+                    exc = waiter.exception()
+                    if exc is not None:
+                        raise exc
+                    # Successful completion (text_end drained) — watch the next stream_id.
+                    continue
+
         input_t = asyncio.create_task(_input_task(), name="soniox-tts-stream-input")
+        monitor_t = asyncio.create_task(_monitor_server(), name="soniox-tts-stream-monitor")
 
         try:
-            await input_t
+            done, _ = await asyncio.wait(
+                {input_t, monitor_t},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in done:
+                if task.cancelled():
+                    continue
+                exc = task.exception()
+                if exc is not None:
+                    raise exc
         except (APIStatusError, APIConnectionError, asyncio.TimeoutError):
             raise
         except aiohttp.ClientError as e:
             raise APIConnectionError() from e
         finally:
-            await utils.aio.gracefully_cancel(input_t)
+            await utils.aio.gracefully_cancel(input_t, monitor_t)
             output_emitter.end_segment()
             lifecycle.unregister()
 
