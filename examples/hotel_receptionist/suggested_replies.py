@@ -10,7 +10,12 @@ clickable nudge chips.
 
 The whole feature is one self-contained object attached in a single line:
 
-SuggestedReplies(session, ctx.room, llm=inference.LLM("google/gemma-4-31b-it")).attach()
+SuggestedReplies(
+    session,
+    ctx.room,
+    llm=inference.LLM("google/gemma-4-31b-it"),
+    expressive=expressive,
+).attach()
 
 """
 
@@ -51,6 +56,25 @@ reply like "Yes, that works" or a short clarifying question instead.
 - Always return at least one suggestion; never return an empty list.
 """
 
+_EXPRESSIVE_GUIDANCE = """\
+
+Expressive demo mode:
+- Give the receptionist a clear emotion to respond to at every turn. Put the emotion \
+in the guest's words, not only in the button label.
+- For an open-ended greeting, introduce varied situations such as:
+  - distressed: "My flight was cancelled and I have nowhere to sleep tonight."
+  - excited: "It's my birthday and I'm so excited to celebrate!"
+  - nervous: "I'm proposing tonight and I really want everything to be perfect."
+- Once a situation is established, continue its emotional thread instead of inventing \
+a new story. Even practical answers should carry it naturally: "It's Alex Morgan—thank \
+you, I'm so relieved."
+- Offer a mix of believable emotions across suggestions, without inventing hotel facts.
+"""
+
+
+def _system_prompt(*, expressive: bool) -> str:
+    return _SYSTEM_PROMPT + _EXPRESSIVE_GUIDANCE if expressive else _SYSTEM_PROMPT
+
 
 class SuggestedReplies:
     """Watches an ``AgentSession`` and publishes per-turn reply suggestions.
@@ -59,10 +83,18 @@ class SuggestedReplies:
     the call.
     """
 
-    def __init__(self, session: AgentSession, room: rtc.Room, *, llm: llm.LLM) -> None:
+    def __init__(
+        self,
+        session: AgentSession,
+        room: rtc.Room,
+        *,
+        llm: llm.LLM,
+        expressive: bool = False,
+    ) -> None:
         self._session = session
         self._room = room
         self._llm = llm
+        self._system_prompt = _system_prompt(expressive=expressive)
         self._task: asyncio.Task[None] | None = None
 
     def attach(self) -> SuggestedReplies:
@@ -95,7 +127,7 @@ class SuggestedReplies:
         await self._publish([])
 
         ctx = llm.ChatContext()
-        ctx.add_message(role="system", content=_SYSTEM_PROMPT)
+        ctx.add_message(role="system", content=self._system_prompt)
         ctx.add_message(role="user", content=f'The receptionist just said: "{assistant_line}"')
 
         stream = self._llm.chat(chat_ctx=ctx)

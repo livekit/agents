@@ -100,7 +100,12 @@ async def hotel_receptionist_agent(ctx: JobContext) -> None:
     )
     session.update_options(expressive={"speech_steering": presets.FORMAL} if expressive else False)
 
-    SuggestedReplies(session, ctx.room, llm=inference.LLM("google/gemma-4-31b-it")).attach()
+    SuggestedReplies(
+        session,
+        ctx.room,
+        llm=inference.LLM("google/gemma-4-31b-it"),
+        expressive=expressive,
+    ).attach()
 
     await session.start(agent=HotelReceptionistAgent(today=today), room=ctx.room)
 
