@@ -13,6 +13,7 @@ from livekit.plugins.slng.gateway_adapter import (
     build_tts_init_payload,
     is_payload_too_large,
     normalize_region_override,
+    normalize_world_part_override,
 )
 
 pytestmark = pytest.mark.unit
@@ -65,6 +66,12 @@ def test_candidate_state_recovers_primary_after_cooldown() -> None:
 
 def test_region_override_normalization() -> None:
     assert normalize_region_override(["EU-WEST-1", " us-east-1 "]) == ("eu-west-1, us-east-1")
+
+
+def test_world_part_override_normalization() -> None:
+    assert normalize_world_part_override(None) is None
+    assert normalize_world_part_override("  ") is None
+    assert normalize_world_part_override(" EU ") == "eu"
 
 
 def test_is_payload_too_large_matches_only_413() -> None:

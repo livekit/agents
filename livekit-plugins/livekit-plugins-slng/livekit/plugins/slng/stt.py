@@ -53,6 +53,7 @@ from .gateway_adapter import (
     is_non_retryable_client_error,
     is_payload_too_large,
     normalize_region_override,
+    normalize_world_part_override,
 )
 from .log import logger
 
@@ -140,6 +141,7 @@ class STT(stt.STT):
         provider_api_key: str | None = None,
         slng_base_url: str = "api.slng.ai",
         region_override: str | list[str] | None = None,
+        world_part_override: str | None = None,
         external_agent_id: str | None = None,
         external_session_id: str | None = None,
         sample_rate: int = 16000,
@@ -174,6 +176,11 @@ class STT(stt.STT):
             region_override: Optional gateway region override, sent as the
                 ``X-Region-Override`` header. Accepts a single region or a list
                 of preferred regions in priority order.
+            world_part_override: Optional gateway world-part override, sent as
+                the ``X-World-Part-Override`` header. Constrains routing to a
+                broad geographic zone (for example "eu", "na", "ap") when an
+                exact region is not required. ``region_override`` takes
+                precedence when both are set.
             external_agent_id: Optional tracking ID attached to usage events as
                 the ``X-SLNG-Agent-Id`` header (max 128 chars).
             external_session_id: Optional tracking ID attached to usage events as
@@ -300,6 +307,9 @@ class STT(stt.STT):
         region_override_header = normalize_region_override(region_override)
         if region_override_header:
             self._extra_headers.setdefault("X-Region-Override", region_override_header)
+        world_part_header = normalize_world_part_override(world_part_override)
+        if world_part_header:
+            self._extra_headers.setdefault("X-World-Part-Override", world_part_header)
         self._extra_headers.update(
             build_external_tracking_headers(
                 external_agent_id=external_agent_id,

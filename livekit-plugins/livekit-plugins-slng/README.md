@@ -62,6 +62,11 @@ tts = slng.TTS(
 )
 ```
 
+To constrain routing to a broad geographic zone instead of a specific region,
+use `world_part_override` (for example `"eu"`), which maps to the gateway's
+`X-World-Part-Override` header. `region_override` takes precedence when both
+are set.
+
 ## Migrating from 1.x
 
 Version 2.0 is a breaking change:

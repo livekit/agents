@@ -197,6 +197,16 @@ def test_tts_rejects_removed_model_endpoint_kwarg() -> None:
         )
 
 
+def test_tts_world_part_override_becomes_header() -> None:
+    tts = slng.TTS(
+        api_key="test-key",
+        model="deepgram/aura:2",
+        voice="aura-2-thalia-en",
+        world_part_override="EU",
+    )
+    assert tts._opts.extra_headers["X-World-Part-Override"] == "eu"
+
+
 def test_tts_provider_api_key_becomes_byok_header() -> None:
     tts = slng.TTS(
         api_key="test-key",

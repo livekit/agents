@@ -143,6 +143,13 @@ def normalize_region_override(region_override: str | list[str] | None) -> str | 
     return ", ".join(values) or None
 
 
+def normalize_world_part_override(world_part_override: str | None) -> str | None:
+    if world_part_override is None:
+        return None
+    value = world_part_override.strip().lower()
+    return value or None
+
+
 def _validate_external_tracking_id(value: str | None, *, name: str) -> str | None:
     if value is None:
         return None

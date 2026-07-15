@@ -109,6 +109,15 @@ def test_stt_rejects_removed_endpoint_kwargs() -> None:
         )
 
 
+def test_stt_world_part_override_becomes_header() -> None:
+    stt = slng.STT(
+        api_key="test-key",
+        model="deepgram/nova:3",
+        world_part_override="EU",
+    )
+    assert stt._extra_headers["X-World-Part-Override"] == "eu"
+
+
 def test_stt_provider_api_key_becomes_byok_header() -> None:
     stt = slng.STT(
         api_key="test-key",
