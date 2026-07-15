@@ -3373,7 +3373,9 @@ class AgentActivity(RecognitionHooks):
         if text is not None:
             try:
                 generation_ev = await self._rt_session.say(text)
-            except llm.RealtimeError as e:
+            except (llm.RealtimeError, APIError) as e:
+                # symmetric with the generate_reply await below: a transient reconnect
+                # discard (retryable APIError) must also land on the SpeechHandle
                 logger.error("failed to say text: %s", str(e))
                 speech_handle._mark_done(error=e)
                 return
