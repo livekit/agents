@@ -325,15 +325,13 @@ def validate_response_format(response_format: type[ResponseFormatT], value: Any)
     else:
         schema = json_schema_type.model_json_schema()
 
-    value = _inject_response_format_defaults(value, schema=schema, root=schema)
+    value = _inject_schema_defaults(value, schema=schema, root=schema)
     if isinstance(json_schema_type, TypeAdapter):
         return cast(ResponseFormatT, json_schema_type.validate_python(value))
     return cast(ResponseFormatT, json_schema_type.model_validate(value))
 
 
-def _inject_response_format_defaults(
-    value: Any, *, schema: dict[str, Any], root: dict[str, Any]
-) -> Any:
+def _inject_schema_defaults(value: Any, *, schema: dict[str, Any], root: dict[str, Any]) -> Any:
     ref = schema.get("$ref")
     if isinstance(ref, str):
         resolved = _strict.resolve_ref(root=root, ref=ref)
@@ -349,20 +347,20 @@ def _inject_response_format_defaults(
     if isinstance(all_of, list):
         for variant in all_of:
             if isinstance(variant, dict):
-                value = _inject_response_format_defaults(value, schema=variant, root=root)
+                value = _inject_schema_defaults(value, schema=variant, root=root)
 
     for union_key in ("anyOf", "oneOf"):
         variants = schema.get(union_key)
         if isinstance(variants, list):
             for variant in variants:
                 if isinstance(variant, dict) and _json_schema_matches(value, variant, root=root):
-                    return _inject_response_format_defaults(value, schema=variant, root=root)
+                    return _inject_schema_defaults(value, schema=variant, root=root)
 
     if isinstance(value, dict):
         properties = schema.get("properties")
         if isinstance(properties, dict):
             return {
-                key: _inject_response_format_defaults(item, schema=properties[key], root=root)
+                key: _inject_schema_defaults(item, schema=properties[key], root=root)
                 if key in properties and isinstance(properties[key], dict)
                 else item
                 for key, item in value.items()
@@ -371,9 +369,7 @@ def _inject_response_format_defaults(
     if isinstance(value, list):
         items = schema.get("items")
         if isinstance(items, dict):
-            return [
-                _inject_response_format_defaults(item, schema=items, root=root) for item in value
-            ]
+            return [_inject_schema_defaults(item, schema=items, root=root) for item in value]
 
     return value
 
