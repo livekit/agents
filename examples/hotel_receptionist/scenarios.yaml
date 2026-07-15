@@ -11,7 +11,7 @@
 #     persona model follows direction reliably. FACTS are revealed only when
 #     asked, one per turn; DO steps run in order; REACTIONS are conditional.
 
-name: LiveKit Hotel — remote front office
+name: Gilded Rose Hotel — remote front office
 
 scenarios:
   # --- 01: Simple room booking (in scope, deterministic) -------------------
