@@ -207,6 +207,19 @@ def test_tts_world_part_override_becomes_header() -> None:
     assert tts._opts.extra_headers["X-World-Part-Override"] == "eu"
 
 
+def test_tts_fallback_candidates_inherit_geo_overrides() -> None:
+    tts = slng.TTS(
+        api_key="test-key",
+        voice="aura-2-thalia-en",
+        connections=["deepgram/aura:2", "cartesia/sonic:3"],
+        region_override="eu-west-1",
+        world_part_override="eu",
+    )
+    fallback = tts._candidate_tts[1]
+    assert fallback._opts.extra_headers["X-Region-Override"] == "eu-west-1"
+    assert fallback._opts.extra_headers["X-World-Part-Override"] == "eu"
+
+
 def test_tts_provider_api_key_becomes_byok_header() -> None:
     tts = slng.TTS(
         api_key="test-key",

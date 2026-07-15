@@ -449,6 +449,7 @@ class TTS(tts.TTS):
                         voice=config.voice or voice,
                         slng_base_url=slng_base_url,
                         region_override=region_override,
+                        world_part_override=world_part_override,
                         external_agent_id=external_agent_id,
                         external_session_id=external_session_id,
                         language=language,
