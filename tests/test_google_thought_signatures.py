@@ -1,5 +1,6 @@
 import pytest
 
+from livekit.agents.llm import ChatContext, FunctionCall, FunctionCallOutput
 from livekit.plugins.google.llm import (
     _is_gemini_3_flash_model,
     _is_gemini_3_model,
@@ -7,6 +8,42 @@ from livekit.plugins.google.llm import (
 )
 
 pytestmark = pytest.mark.unit
+
+
+def _ctx_with_function_call(call_id: str) -> ChatContext:
+    ctx = ChatContext.empty()
+    ctx.add_message(role="user", content="hello")
+    ctx.insert(FunctionCall(call_id=call_id, name="tool", arguments="{}"))
+    ctx.insert(FunctionCallOutput(call_id=call_id, name="tool", output="ok", is_error=False))
+    return ctx
+
+
+class TestThoughtSignatureFormatting:
+    """Formatting of thought_signature on function_call parts (see #6135)."""
+
+    def test_stored_signature_is_passed_through(self):
+        ctx = _ctx_with_function_call("call_1")
+
+        turns, _ = ctx.to_provider_format(
+            format="google", thought_signatures={"call_1": b"real_signature"}
+        )
+
+        assert turns[1]["parts"][0]["thought_signature"] == b"real_signature"
+
+    def test_unknown_call_id_gets_skip_sentinel(self):
+        ctx = _ctx_with_function_call("call_from_another_provider")
+
+        turns, _ = ctx.to_provider_format(format="google", thought_signatures={})
+
+        part = turns[1]["parts"][0]
+        assert part["thought_signature"] == b"skip_thought_signature_validator"
+
+    def test_no_signature_mapping_omits_field(self):
+        ctx = _ctx_with_function_call("call_1")
+
+        turns, _ = ctx.to_provider_format(format="google")
+
+        assert "thought_signature" not in turns[1]["parts"][0]
 
 
 class TestGeminiModelDetection:
