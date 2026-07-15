@@ -432,7 +432,7 @@ class _SegmentSynchronizerImpl:
         match ``word_hyphens``' unit — markup-stripped text.
         """
         prefix = self._text_data.pushed_text[:length]
-        return len(self._calc_hyphens(strip_all_markup(prefix, drop_open_tail=True)))
+        return len(self._calc_hyphens(strip_all_markup(prefix)))
 
     def _calc_hyphens(self, text: str) -> list[str]:
         """Calculate hyphens for text."""

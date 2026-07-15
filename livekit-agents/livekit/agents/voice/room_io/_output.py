@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import time
 
 from google.protobuf.json_format import MessageToDict
@@ -17,6 +16,7 @@ from ...tts._provider_format import (
     TranscriptMarkupStripper,
     expression_attribute,
     split_all_markup,
+    split_expression_markers,
     strip_all_markup,
 )
 from ...types import (
@@ -29,9 +29,6 @@ from ...types import (
 )
 from .. import io
 from ..transcription import find_micro_track_id
-
-# a complete self-closing expressive marker (<expr/>, <expression/>, or <emotion/>)
-_EXPR_MARKER_SPLIT_RE = re.compile(r"(<(?:expr|expression|emotion)\b[^>]*?/\s*>)")
 
 
 class _ParticipantAudioOutput(io.AudioOutput):
@@ -547,9 +544,8 @@ class _ParticipantStreamTranscriptionOutput:
             if self._is_delta_stream:
                 # split at expression markers so text on each side of a marker lands
                 # in the right wire segment
-                for piece in _EXPR_MARKER_SPLIT_RE.split(text):
-                    if piece:
-                        await self._capture_delta(piece, text)
+                for piece in split_expression_markers(text):
+                    await self._capture_delta(piece, text)
             else:  # always create a new writer
                 clean_text, self._segment_tags = split_all_markup(text)
                 if not clean_text or not self._room.isconnected():
