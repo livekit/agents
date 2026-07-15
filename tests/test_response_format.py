@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 import pytest
 from pydantic import BaseModel
 
@@ -34,16 +36,21 @@ def test_validate_response_format_injects_defaults_for_non_nullable_fields() -> 
 
 
 def test_validate_response_format_injects_nested_defaults() -> None:
-    class Item(BaseModel):
+    class PrimaryItem(BaseModel):
+        kind: Literal["primary"]
         color: str = "red"
         note: str | None = "fallback"
 
+    class SecondaryItem(BaseModel):
+        kind: Literal["secondary"]
+        color: str = "blue"
+
     class Response(BaseModel):
-        items: list[Item]
+        items: list[PrimaryItem | SecondaryItem]
 
     response = validate_response_format(
         Response,
-        {"items": [{"color": None, "note": None}]},
+        {"items": [{"kind": "primary", "color": None, "note": None}]},
     )
 
-    assert response == Response(items=[Item(color="red", note=None)])
+    assert response == Response(items=[PrimaryItem(kind="primary", color="red", note=None)])

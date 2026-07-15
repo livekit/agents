@@ -378,11 +378,15 @@ def _inject_response_format_defaults(
     return value
 
 
-def _json_schema_allows_null(schema: dict[str, Any], *, root: dict[str, Any]) -> bool:
+def _json_schema_allows_null(
+    schema: dict[str, Any], *, root: dict[str, Any], seen_refs: set[str] | None = None
+) -> bool:
     ref = schema.get("$ref")
-    if isinstance(ref, str):
+    if isinstance(ref, str) and ref not in (seen_refs or set()):
         resolved = _strict.resolve_ref(root=root, ref=ref)
-        if isinstance(resolved, dict) and _json_schema_allows_null(resolved, root=root):
+        if isinstance(resolved, dict) and _json_schema_allows_null(
+            resolved, root=root, seen_refs={*(seen_refs or set()), ref}
+        ):
             return True
 
     typ = schema.get("type")
@@ -392,7 +396,8 @@ def _json_schema_allows_null(schema: dict[str, Any], *, root: dict[str, Any]) ->
     for union_key in ("anyOf", "oneOf"):
         variants = schema.get(union_key)
         if isinstance(variants, list) and any(
-            isinstance(variant, dict) and _json_schema_allows_null(variant, root=root)
+            isinstance(variant, dict)
+            and _json_schema_allows_null(variant, root=root, seen_refs=seen_refs)
             for variant in variants
         ):
             return True
@@ -406,6 +411,9 @@ def _json_schema_matches(value: Any, schema: dict[str, Any], *, root: dict[str, 
         resolved = _strict.resolve_ref(root=root, ref=ref)
         if isinstance(resolved, dict):
             schema = {**resolved, **schema}
+
+    if value is None and "default" in schema and not _json_schema_allows_null(schema, root=root):
+        return True
 
     if "const" in schema and value != schema["const"]:
         return False
