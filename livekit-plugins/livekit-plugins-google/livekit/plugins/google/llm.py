@@ -626,7 +626,7 @@ class LLMStream(llm.LLMStream):
         # Drop thought summaries: when include_thoughts is enabled Gemini streams its
         # reasoning back as parts flagged part.thought=True. These must not reach
         # ChoiceDelta.content, otherwise TTS would speak the model's internal reasoning.
-        if getattr(part, "thought", None):
+        if part.thought:
             return None
 
         return llm.ChatChunk(
