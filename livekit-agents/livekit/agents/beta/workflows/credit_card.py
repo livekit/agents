@@ -25,6 +25,7 @@ You are solely responsible for collecting the credit card number.
 {modality_specific}
 If the user refuses to provide a credit card number, call decline_card_capture().
 If the user wishes to start over the credit card collection process, call restart_card_collection().
+Always explicitly invoke a tool when applicable. Do not simulate tool usage, and never state that a value was recorded or confirmed unless the corresponding tool call succeeded.
 Avoid listing out questions with bullet points or numbers, use a natural conversational tone.
 Never repeat any sensitive information, such as the user's credit card number, back to the user.
 {confirmation_instructions}
@@ -46,6 +47,7 @@ You are solely responsible for collecting the user's card's security code.
 {modality_specific}
 If the user refuses to provide a code, call decline_card_capture().
 If the user wishes to start over the card collection process, call restart_card_collection().
+Always explicitly invoke a tool when applicable. Do not simulate tool usage, and never state that a value was recorded or confirmed unless the corresponding tool call succeeded.
 Avoid listing out questions with bullet points or numbers, use a natural conversational tone.
 Never repeat any sensitive information, such as the user's security code, back to the user.
 {confirmation_instructions}
@@ -67,6 +69,7 @@ You are solely responsible for collecting the user's card's expiration date.
 {modality_specific}
 If the user refuses to provide a date, call decline_card_capture().
 If the user wishes to start over the card collection process, call restart_card_collection().
+Always explicitly invoke a tool when applicable. Do not simulate tool usage, and never state that a value was recorded or confirmed unless the corresponding tool call succeeded.
 Avoid listing out questions with bullet points or numbers, use a natural conversational tone.
 Never repeat any sensitive information, such as the user's expiration date, back to the user.
 {confirmation_instructions}
@@ -229,6 +232,19 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
                 instructions="The length of the card number is invalid, ask the user to repeat their card number."
             )
             return None
+        elif (
+            self._card_number
+            and card_number == self._card_number
+            and self._confirmation_required(context)
+        ):
+            # The user repeated the same number for confirmation, but the LLM
+            # routed it back here instead of the confirm tool. Re-arming the
+            # confirmation would stall the task (the model then claims the
+            # number is confirmed without calling any tool), so redirect it.
+            raise ToolError(
+                "This card number is already recorded and awaiting confirmation. "
+                "Call `confirm_card_number` with the repeated number instead."
+            )
         else:
             self._card_number = card_number
 
@@ -253,6 +269,8 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
             return (
                 "The card number has been updated.\n"
                 "Ask them to repeat the number, do not repeat the number back to them.\n"
+                "If the user already repeated the card number earlier in the conversation, call "
+                "`confirm_card_number` with that repeated card number now instead of asking again.\n"
             )
 
     def _build_confirm_tool(self, *, card_number: str) -> llm.FunctionTool:
@@ -383,6 +401,17 @@ class GetSecurityCodeTask(AgentTask[GetSecurityCodeResult]):
                 instructions="The security code's length is invalid, ask the user to repeat or to provide a new card and start over."
             )
             return None
+        elif (
+            self._security_code
+            and stripped == self._security_code
+            and self._confirmation_required(context)
+        ):
+            # See _update_card_number_impl: redirect a repeated identical value
+            # to the confirm tool instead of silently re-arming confirmation.
+            raise ToolError(
+                "This security code is already recorded and awaiting confirmation. "
+                "Call `confirm_security_code` with the repeated code instead."
+            )
         else:
             self._security_code = stripped
 
@@ -398,8 +427,11 @@ class GetSecurityCodeTask(AgentTask[GetSecurityCodeResult]):
 
             return (
                 "The security code has been updated.\n"
+                "If the user already repeated the security code earlier in the conversation, call "
+                "`confirm_security_code` with that repeated security code now instead of asking again.\n"
                 "Do not repeat the security code back to the user, ask them to repeat themselves.\n"
-                "Call `confirm_security_code` once the user confirms, do not call it preemptively.\n"
+                "Call `confirm_security_code` once the user has repeated the code. Do not call it "
+                "preemptively, and do not treat the code as confirmed until that call succeeds.\n"
             )
 
     def _build_confirm_tool(self, *, security_code: str) -> llm.FunctionTool:
@@ -518,6 +550,17 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
                 instructions="The expiration date is in the past, the card is expired. Ask the user to provide another card."
             )
             return None
+        elif (
+            self._expiration_date
+            and f"{expiration_month:02d}/{expiration_year:02d}" == self._expiration_date
+            and self._confirmation_required(context)
+        ):
+            # See _update_card_number_impl: redirect a repeated identical value
+            # to the confirm tool instead of silently re-arming confirmation.
+            raise ToolError(
+                "This expiration date is already recorded and awaiting confirmation. "
+                "Call `confirm_expiration_date` with the repeated date instead."
+            )
         else:
             self._expiration_date = f"{expiration_month:02d}/{expiration_year:02d}"
 
@@ -535,8 +578,11 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
 
             return (
                 "The expiration date has been updated.\n"
+                "If the user already repeated the expiration date earlier in the conversation, call "
+                "`confirm_expiration_date` with that repeated expiration date now instead of asking again.\n"
                 "Do not repeat the expiration date back to the user, ask them to repeat themselves.\n"
-                "Call `confirm_expiration_date` once the user confirms, do not call it preemptively.\n"
+                "Call `confirm_expiration_date` once the user has repeated the date. Do not call it "
+                "preemptively, and do not treat the date as confirmed until that call succeeds.\n"
             )
 
     def _build_confirm_tool(

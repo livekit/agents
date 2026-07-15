@@ -111,3 +111,70 @@ async def test_get_dtmf_sip_event_with_confirmation() -> None:
             )
 
             assert result.final_output.user_input == "1 2 3 4 5 6 7 8 9 0"
+
+
+def _audio_run_context() -> object:
+    # Minimal stand-in for RunContext: the update_* impls only read
+    # ctx.speech_handle.input_details.modality (via _confirmation_required).
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        speech_handle=SimpleNamespace(input_details=SimpleNamespace(modality="audio"))
+    )
+
+
+@pytest.mark.asyncio
+async def test_credit_card_update_redirects_to_confirm_when_pending() -> None:
+    # A repeated identical value routed to update_* (instead of confirm_*)
+    # must raise a ToolError pointing at the confirm tool - re-arming the
+    # confirmation used to stall the task (AGT-3139).
+    from livekit.agents.beta.workflows.credit_card import (
+        GetCardNumberTask,
+        GetExpirationDateTask,
+        GetSecurityCodeTask,
+    )
+
+    ctx = _audio_run_context()
+
+    number_task = GetCardNumberTask()
+    assert await number_task._update_card_number_impl(ctx, "4242 4242 4242 4242")
+    with pytest.raises(ToolError, match="confirm_card_number"):
+        await number_task._update_card_number_impl(ctx, "4242424242424242")
+
+    code_task = GetSecurityCodeTask()
+    assert await code_task._update_security_code_impl(ctx, "123")
+    with pytest.raises(ToolError, match="confirm_security_code"):
+        await code_task._update_security_code_impl(ctx, "123")
+
+    date_task = GetExpirationDateTask()
+    assert await date_task._update_expiration_date_impl(ctx, 4, 99)
+    with pytest.raises(ToolError, match="confirm_expiration_date"):
+        await date_task._update_expiration_date_impl(ctx, 4, 99)
+
+    # A *different* value is a correction, not a confirmation: it must
+    # re-arm confirmation with the new value instead of raising.
+    assert await code_task._update_security_code_impl(ctx, "456")
+
+
+@pytest.mark.asyncio
+async def test_collect_security_code_repeat_back_completes() -> None:
+    # End-to-end: with audio-modality confirmation, repeating the code must
+    # complete the task in that same turn, whichever tool the LLM routes
+    # the repeat to (AGT-3139 stall regression).
+    from livekit.agents.beta.workflows.credit_card import (
+        GetSecurityCodeResult,
+        GetSecurityCodeTask,
+    )
+
+    async with _llm_model() as llm, AgentSession(llm=llm) as sess:
+        await sess.start(GetSecurityCodeTask())
+
+        await sess.run(user_input="The security code is 123", input_modality="audio")
+
+        result = await sess.run(
+            user_input="1 2 3",
+            output_type=GetSecurityCodeResult,
+            input_modality="audio",
+        )
+
+        assert result.final_output.security_code == "123"
