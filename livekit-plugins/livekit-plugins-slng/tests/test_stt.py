@@ -494,3 +494,86 @@ async def test_stt_interim_does_not_disarm_final_watchdog(
 
         with pytest.raises((TimeoutError, APIConnectionError)):
             await asyncio.wait_for(drain(), timeout=3)
+
+
+class _SilentSttWs:
+    """Records frames, never answers a finalize."""
+
+    def __init__(self) -> None:
+        self.sent_texts: list[dict] = []
+        self.audio_frames = 0
+        self._q: asyncio.Queue = asyncio.Queue()
+
+    async def send_str(self, msg: str) -> None:
+        self.sent_texts.append(json.loads(msg))
+
+    async def send_bytes(self, payload: bytes) -> None:
+        del payload
+        self.audio_frames += 1
+
+    async def receive(self, timeout=None):
+        del timeout
+        return await self._q.get()
+
+    async def close(self) -> None:
+        self._q.put_nowait(SimpleNamespace(type=aiohttp.WSMsgType.CLOSED, data=None))
+
+
+@pytest.mark.asyncio
+async def test_stt_options_reconnect_disarms_final_watchdog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An options-change reconnect while awaiting a final transcript must
+    disarm the watchdog; the stale timer must not fail over the new
+    connection."""
+    ws1, ws2 = _SilentSttWs(), _AnsweringSttWs()
+    sockets: list = [ws1, ws2]
+
+    async def fake_connect(self, *, model_endpoint: str, model: str | None):
+        del self, model_endpoint, model
+        return sockets.pop(0)
+
+    monkeypatch.setattr(slng.stt.SpeechStream, "_connect_ws", fake_connect)
+    async with aiohttp.ClientSession() as session:
+        stt = slng.STT(
+            api_key="test-key",
+            model="deepgram/nova:3",
+            final_timeout_s=0.4,
+            http_session=session,
+        )
+        stream = stt.stream(conn_options=APIConnectOptions(max_retry=0))
+
+        got_final = asyncio.Event()
+        finals: list[str] = []
+
+        async def read() -> None:
+            async for ev in stream:
+                if ev.type == SpeechEventType.FINAL_TRANSCRIPT:
+                    finals.append(ev.alternatives[0].text)
+                    got_final.set()
+
+        reader = asyncio.create_task(read())
+
+        # First turn: finalize goes to ws1, which never answers.
+        stream._input_ch.send_nowait(SimpleNamespace(data=memoryview(b"\x00\x01" * 1600)))
+        stt.notify_user_state("speaking")
+        stt.notify_user_state("listening")
+        async with asyncio.timeout(2):
+            while not any(f.get("type") == "finalize" for f in ws1.sent_texts):
+                await asyncio.sleep(0.01)
+
+        # Options change triggers a reconnect while the watchdog is armed.
+        stream.update_options(language="id")
+
+        # Wait past the final timeout: the stale timer must not fire a failover.
+        await asyncio.sleep(0.6)
+
+        # Second turn on the new connection completes normally.
+        stream._input_ch.send_nowait(SimpleNamespace(data=memoryview(b"\x00\x01" * 1600)))
+        stt.notify_user_state("speaking")
+        stt.notify_user_state("listening")
+        await asyncio.wait_for(got_final.wait(), timeout=3)
+        stream.end_input()
+        await asyncio.wait_for(reader, timeout=3)
+
+    assert finals == ["hello world"]

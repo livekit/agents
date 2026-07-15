@@ -1148,6 +1148,11 @@ class SpeechStream(stt.SpeechStream):
 
                     if wait_reconnect in done:
                         self._reconnect_event.clear()
+                        # An options-change reconnect abandons any in-flight
+                        # finalize; disarm the watchdog so the stale timer does
+                        # not trigger a spurious failover on the new connection.
+                        awaiting_final = False
+                        cancel_final_timeout()
                         await utils.aio.gracefully_cancel(
                             *[
                                 task
