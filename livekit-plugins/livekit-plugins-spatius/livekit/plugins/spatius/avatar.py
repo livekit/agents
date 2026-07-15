@@ -17,8 +17,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -43,11 +42,8 @@ from spatius import (
     OggOpusEncoderConfig,
     new_avatar_session,
 )
-from spatius.proto.generated import message_pb2 as _message_pb2
 
 from .log import logger
-
-message_pb2: Any = _message_pb2
 
 DEFAULT_REGION = "us-west"
 DEFAULT_SAMPLE_RATE = 24000
@@ -55,9 +51,6 @@ DEFAULT_AUDIO_FORMAT = AudioFormat.OGG_OPUS
 DEFAULT_OPUS_FRAME_DURATION_MS = 20
 DEFAULT_OPUS_APPLICATION = "audio"
 SUPPORTED_OPUS_SAMPLE_RATES = {8000, 12000, 16000, 24000, 48000}
-MIN_COMPLETION_TIMEOUT_SECONDS = 3.0
-COMPLETION_TIMEOUT_BUFFER_SECONDS = 2.0
-ACTIVE_SEGMENT_IDLE_END_SECONDS = 1.0
 DEFAULT_SESSION_TTL = timedelta(hours=1)
 LIVEKIT_AVATAR_PUBLISH_SOURCES = ["camera", "microphone"]
 _AVATAR_AGENT_IDENTITY = "spatius-avatar-agent"
@@ -70,13 +63,9 @@ class SpatiusException(Exception):
 
 @dataclass
 class _SegmentState:
-    request_ids: set[str] = field(default_factory=set)
-    completed_request_ids: set[str] = field(default_factory=set)
-    final_req_id: str | None = None
+    req_id: str
     pushed_duration: float = 0.0
     first_frame_at: float | None = None
-    completion_timeout_task: asyncio.Task[None] | None = None
-    finalized: bool = False
 
 
 class AvatarSession(BaseAvatarSession):
@@ -194,12 +183,7 @@ class AvatarSession(BaseAvatarSession):
         self._interrupt_task: asyncio.Task[None] | None = None
         self._main_task: asyncio.Task | None = None
         self._initialized = False
-        self._segments: list[_SegmentState] = []
-        self._request_segments: dict[str, _SegmentState] = {}
-        self._pending_segments: deque[_SegmentState] = deque()
         self._active_segment: _SegmentState | None = None
-        self._active_segment_last_frame_at: float | None = None
-        self._active_segment_idle_end_task: asyncio.Task[None] | None = None
         self._segment_finalize_lock = asyncio.Lock()
 
     @property
@@ -327,7 +311,6 @@ class AvatarSession(BaseAvatarSession):
                 bitrate=self._bitrate,
                 audio_format=self._audio_format,
                 ogg_opus_encoder=self._opus_encoder_config,
-                transport_frames=self._on_transport_frame,
             )
             await self._spatius_session.init()
             await self._spatius_session.start()
@@ -429,67 +412,17 @@ class AvatarSession(BaseAvatarSession):
         req_id = await self._spatius_session.send_audio(audio=bytes(frame.data), end=False)
         segment = self._active_segment
         if segment is None:
-            segment = _SegmentState(first_frame_at=time.time())
+            segment = _SegmentState(req_id=req_id, first_frame_at=time.time())
             self._active_segment = segment
-            self._segments.append(segment)
             logger.debug("Spatius avatar first audio frame", extra={"request_id": req_id})
-
-        self._associate_request(segment, req_id)
-        segment.pushed_duration += frame.duration
-        self._active_segment_last_frame_at = time.monotonic()
-        self._ensure_active_segment_idle_end_watchdog()
-
-    def _ensure_active_segment_idle_end_watchdog(self) -> None:
-        if self._active_segment_idle_end_task and not self._active_segment_idle_end_task.done():
-            return
-
-        self._active_segment_idle_end_task = asyncio.create_task(
-            self._watch_for_active_segment_idle_end(),
-            name="spatius_active_segment_idle_end",
-        )
-
-    def _cancel_active_segment_idle_end_watchdog(self) -> None:
-        task = self._active_segment_idle_end_task
-        self._active_segment_idle_end_task = None
-        self._active_segment_last_frame_at = None
-        if task and task is not asyncio.current_task() and not task.done():
-            task.cancel()
-
-    async def _watch_for_active_segment_idle_end(self) -> None:
-        current_task = asyncio.current_task()
-        try:
-            while self._active_segment is not None:
-                last_frame_at = self._active_segment_last_frame_at
-                if last_frame_at is None:
-                    return
-
-                remaining = last_frame_at + ACTIVE_SEGMENT_IDLE_END_SECONDS - time.monotonic()
-                if remaining > 0:
-                    await asyncio.sleep(remaining)
-                    continue
-
-                if self._audio_buffer:
-                    self._audio_buffer.flush()
-                    logger.warning(
-                        "Avatar segment end marker missing; queued an implicit segment end",
-                        extra={"idle_timeout": ACTIVE_SEGMENT_IDLE_END_SECONDS},
-                    )
-                return
-        except asyncio.CancelledError:
-            return
-        finally:
-            if self._active_segment_idle_end_task is current_task:
-                self._active_segment_idle_end_task = None
-
-    def _associate_request(self, segment: _SegmentState, req_id: str) -> None:
-        existing_segment = self._request_segments.get(req_id)
-        if existing_segment is not None and existing_segment is not segment:
+        elif segment.req_id != req_id:
             logger.warning(
-                "Spatius request ID reused across audio segments", extra={"request_id": req_id}
+                "Spatius request ID changed within LiveKit audio segment",
+                extra={"previous_request_id": segment.req_id, "request_id": req_id},
             )
+            segment.req_id = req_id
 
-        segment.request_ids.add(req_id)
-        self._request_segments[req_id] = segment
+        segment.pushed_duration += frame.duration
 
     async def _finalize_active_segment(self, *, source: str) -> bool:
         if self._active_segment is None or not self._spatius_session:
@@ -501,127 +434,20 @@ class AvatarSession(BaseAvatarSession):
                 return False
 
             req_id = await self._spatius_session.send_audio(audio=b"", end=True)
-            self._associate_request(segment, req_id)
-            segment.final_req_id = req_id
-            segment.finalized = True
+            if req_id != segment.req_id:
+                logger.warning(
+                    "Spatius request ID changed while finalizing audio segment",
+                    extra={"previous_request_id": segment.req_id, "request_id": req_id},
+                )
+                segment.req_id = req_id
+
             self._active_segment = None
-            self._cancel_active_segment_idle_end_watchdog()
-            self._pending_segments.append(segment)
-
-            if req_id in segment.completed_request_ids:
-                self._complete_segment(segment=segment, interrupted=False, reason="provider_end")
-            else:
-                self._mark_segment_waiting_for_completion(segment)
-
-            logger.debug(
-                "Spatius avatar segment finalized",
-                extra={"request_id": req_id, "source": source},
-            )
+            self._notify_segment_finished(segment, interrupted=False, reason=source)
             return True
 
-    def _mark_segment_waiting_for_completion(self, segment: _SegmentState) -> None:
-        if segment.completion_timeout_task and not segment.completion_timeout_task.done():
-            segment.completion_timeout_task.cancel()
-
-        timeout = self._compute_completion_timeout(segment)
-        segment.completion_timeout_task = asyncio.create_task(
-            self._wait_for_segment_completion_timeout(segment, timeout),
-            name=f"spatius_segment_timeout_{segment.final_req_id}",
-        )
-
-    @staticmethod
-    def _compute_completion_timeout(segment: _SegmentState) -> float:
-        if segment.first_frame_at is None:
-            return MIN_COMPLETION_TIMEOUT_SECONDS
-
-        expected_playback_end = segment.first_frame_at + segment.pushed_duration
-        remaining_playback = max(0.0, expected_playback_end - time.time())
-        return max(
-            MIN_COMPLETION_TIMEOUT_SECONDS,
-            remaining_playback + COMPLETION_TIMEOUT_BUFFER_SECONDS,
-        )
-
-    async def _wait_for_segment_completion_timeout(
-        self, segment: _SegmentState, timeout: float
+    def _notify_segment_finished(
+        self, segment: _SegmentState, *, interrupted: bool, reason: str
     ) -> None:
-        try:
-            await asyncio.sleep(timeout)
-        except asyncio.CancelledError:
-            return
-
-        if self._complete_segment(segment=segment, interrupted=False, reason="timeout"):
-            logger.warning(
-                "Avatar segment completion timed out, assuming playback finished",
-                extra={"request_id": segment.final_req_id, "timeout": timeout},
-            )
-
-    def _on_transport_frame(self, frame: bytes, is_last: bool) -> None:
-        if not is_last:
-            return
-
-        req_id = self._extract_req_id_from_transport_frame(frame)
-        if req_id is not None:
-            segment = self._request_segments.get(req_id)
-            if segment is None:
-                logger.debug("Completion event for unknown request", extra={"request_id": req_id})
-                return
-
-            segment.completed_request_ids.add(req_id)
-            if not segment.finalized or segment.final_req_id != req_id:
-                logger.debug(
-                    "Recording provider completion before local segment finalization",
-                    extra={"request_id": req_id},
-                )
-                return
-
-            self._complete_segment(segment=segment, interrupted=False, reason="provider_end")
-            return
-
-        if self._pending_segments:
-            segment = self._pending_segments[0]
-            if self._complete_segment(
-                segment=segment,
-                interrupted=False,
-                reason="provider_end_fallback",
-            ):
-                logger.warning(
-                    "Avatar completion event missing request ID; matched oldest pending segment",
-                    extra={"request_id": segment.final_req_id},
-                )
-
-    @staticmethod
-    def _extract_req_id_from_transport_frame(frame: bytes) -> str | None:
-        try:
-            envelope = message_pb2.Message()
-            envelope.ParseFromString(frame)
-        except Exception:
-            return None
-
-        if envelope.type != message_pb2.MESSAGE_SERVER_RESPONSE_ANIMATION:
-            return None
-
-        req_id = envelope.server_response_animation.req_id
-        return req_id or None
-
-    def _complete_segment(self, *, segment: _SegmentState, interrupted: bool, reason: str) -> bool:
-        if not any(candidate is segment for candidate in self._segments):
-            return False
-
-        self._segments = [candidate for candidate in self._segments if candidate is not segment]
-        self._pending_segments = deque(
-            candidate for candidate in self._pending_segments if candidate is not segment
-        )
-        for req_id in segment.request_ids:
-            if self._request_segments.get(req_id) is segment:
-                del self._request_segments[req_id]
-
-        if segment.completion_timeout_task and not segment.completion_timeout_task.done():
-            segment.completion_timeout_task.cancel()
-
-        if self._active_segment is segment:
-            self._active_segment = None
-            self._cancel_active_segment_idle_end_watchdog()
-
         playback_position = (
             self._estimate_interrupted_playback_position(segment)
             if interrupted
@@ -637,14 +463,13 @@ class AvatarSession(BaseAvatarSession):
         logger.debug(
             "Spatius avatar segment playback completed",
             extra={
-                "request_id": segment.final_req_id,
+                "request_id": segment.req_id,
                 "reason": reason,
                 "interrupted": interrupted,
                 "playback_position": playback_position,
                 "pushed_duration": segment.pushed_duration,
             },
         )
-        return True
 
     @staticmethod
     def _estimate_interrupted_playback_position(segment: _SegmentState) -> float:
@@ -654,14 +479,14 @@ class AvatarSession(BaseAvatarSession):
         elapsed = max(0.0, time.time() - segment.first_frame_at)
         return min(segment.pushed_duration, elapsed)
 
-    def _complete_all_segments(self, *, interrupted: bool, reason: str) -> None:
-        for segment in list(self._segments):
-            self._complete_segment(segment=segment, interrupted=interrupted, reason=reason)
+    def _complete_active_segment(self, *, interrupted: bool, reason: str) -> bool:
+        segment = self._active_segment
+        if segment is None:
+            return False
 
         self._active_segment = None
-        self._cancel_active_segment_idle_end_watchdog()
-        self._pending_segments.clear()
-        self._request_segments.clear()
+        self._notify_segment_finished(segment, interrupted=interrupted, reason=reason)
+        return True
 
     def _on_clear_buffer(self) -> None:
         self._schedule_interrupt()
@@ -676,7 +501,7 @@ class AvatarSession(BaseAvatarSession):
     def _schedule_interrupt(self) -> None:
         if not self._spatius_session:
             return
-        if self._active_segment is None and not self._segments:
+        if self._active_segment is None:
             return
         if self._interrupt_task and not self._interrupt_task.done():
             return
@@ -696,15 +521,7 @@ class AvatarSession(BaseAvatarSession):
             interrupted_id = await self._spatius_session.interrupt()
 
             async with self._segment_finalize_lock:
-                interrupted_segment = self._request_segments.get(interrupted_id)
-                if interrupted_segment is not None:
-                    self._complete_segment(
-                        segment=interrupted_segment,
-                        interrupted=True,
-                        reason="interrupt",
-                    )
-
-                self._complete_all_segments(interrupted=True, reason="interrupt_remaining")
+                self._complete_active_segment(interrupted=True, reason="interrupt")
 
             logger.debug("Spatius avatar interrupted", extra={"request_id": interrupted_id})
         except Exception as e:
@@ -730,7 +547,7 @@ class AvatarSession(BaseAvatarSession):
                 pass
             self._main_task = None
 
-        self._complete_all_segments(interrupted=True, reason="session_close")
+        self._complete_active_segment(interrupted=True, reason="session_close")
 
         if self._audio_buffer:
             await self._audio_buffer.aclose()
