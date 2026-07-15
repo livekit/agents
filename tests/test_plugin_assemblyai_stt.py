@@ -1212,6 +1212,31 @@ async def test_cleared_language_codes_omitted_on_reconnect():
     assert "language_codes" not in query
 
 
+async def test_language_codes_update_requires_u3_pro_family():
+    """update_options mirrors the constructor's family gate for language_codes."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model="universal-streaming-english")
+    with pytest.raises(ValueError, match="language_codes"):
+        stt.update_options(language_codes=["es"])
+
+    stream = _make_stream_for_unit_test(stt)
+    with pytest.raises(ValueError, match="language_codes"):
+        stream.update_options(language_codes=["es"])
+    assert stream._config_update_queue.empty()
+
+
+async def test_language_codes_empty_list_at_construction_is_unset():
+    """An explicit [] at construction equals unset — even on non-U3-Pro models."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model="universal-streaming-english", language_codes=[])
+    assert stt._opts.language_codes is NOT_GIVEN
+
+    stt_pro = STT(api_key="test-key", model="u3-rt-pro", language_codes=[])
+    assert stt_pro._opts.language_codes is NOT_GIVEN
+
+
 async def test_language_code_singular_not_in_update_options():
     """The singular language_code is constructor-only; mid-session re-steering
     goes through language_codes."""
@@ -1390,3 +1415,19 @@ async def test_carryover_explicit_false_disables():
 
     stt = STT(api_key="test-key", agent_context_carryover=False)
     assert stt.capabilities.chat_context is False
+
+
+async def test_carryover_disabled_by_previous_context_n_turns_zero():
+    """previous_context_n_turns=0 (documented 'disable carryover') suppresses the default."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", previous_context_n_turns=0)
+    assert stt.capabilities.chat_context is False
+
+
+async def test_carryover_explicit_true_wins_over_n_turns_zero():
+    """An explicit agent_context_carryover=True overrides the n_turns=0 suppression."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", previous_context_n_turns=0, agent_context_carryover=True)
+    assert stt.capabilities.chat_context is True

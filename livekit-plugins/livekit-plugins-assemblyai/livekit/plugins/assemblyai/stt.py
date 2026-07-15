@@ -105,8 +105,8 @@ def _normalize_language_codes(language_codes: list[str]) -> list[str]:
         )
     if "multi" in normalized and len(normalized) > 1:
         raise ValueError(
-            "language_code 'multi' routes to the unsteered multilingual model "
-            "and cannot be combined with other codes"
+            "'multi' routes to the unsteered multilingual model "
+            "and cannot be combined with other language codes"
         )
     return normalized
 
@@ -117,14 +117,13 @@ def _normalize_language_codes(language_codes: list[str]) -> list[str]:
 _MAX_AGENT_CONTEXT_CHARS = 1750
 
 
-def _validate_agent_context(agent_context: str) -> str:
+def _validate_agent_context(agent_context: str) -> None:
     """Reject explicit agent_context longer than the server cap."""
     if len(agent_context) > _MAX_AGENT_CONTEXT_CHARS:
         raise ValueError(
             f"agent_context exceeds maximum length of {_MAX_AGENT_CONTEXT_CHARS} "
             f"characters (got {len(agent_context)})"
         )
-    return agent_context
 
 
 class STT(stt.STT):
@@ -192,7 +191,8 @@ class STT(stt.STT):
                 Leave unset to use the model's default multilingual behavior. Only
                 supported with the Universal-3 Pro family models. Can be updated
                 mid-session via ``update_options``; pass an empty list there to clear
-                steering back to the model default.
+                steering back to the model default. At construction an empty list is
+                equivalent to leaving it unset.
             min_turn_silence: Minimum silence in ms before a confident end-of-turn is finalized.
             min_end_of_turn_silence_when_confident: Deprecated. Use min_turn_silence instead.
             continuous_partials: Whether to emit additional partial transcripts during long
@@ -225,10 +225,11 @@ class STT(stt.STT):
                 assistant reply into ``agent_context`` so it is carried into the model's
                 conversation context. Enabled by default on models that support it (the
                 Universal-3 Pro family); pass False to opt out. On other models it is off;
-                explicitly passing True logs a warning and is ignored. Prior user turns are
-                carried automatically by the model regardless of this flag. Replies longer
-                than the 1750-character server cap are truncated (keeping the tail) before
-                being sent.
+                explicitly passing True logs a warning and is ignored. Also disabled by
+                default when ``previous_context_n_turns=0`` (context carryover explicitly
+                turned off). Prior user turns are carried automatically by the model
+                regardless of this flag. Replies longer than the 1750-character server cap
+                are truncated (keeping the tail) before being sent.
             voice_focus: Voice Focus isolates the primary voice and suppresses background
                 noise (chatter, keyboard clicks, fan hum, room echo) before the audio reaches
                 the model. Use 'near-field' for headsets, handsets, and close-talking
@@ -255,6 +256,11 @@ class STT(stt.STT):
                 "language_code and language_codes are mutually exclusive; "
                 "use language_codes (language_code is shorthand for a one-element list)"
             )
+        # An explicit empty list is equivalent to unset at construction — the
+        # param is omitted from the connect query either way — so it is not
+        # subject to the U3-Pro-family gate below.
+        if is_given(language_codes) and not language_codes:
+            language_codes = NOT_GIVEN
         if is_given(agent_context):
             _validate_agent_context(agent_context)
         # agent_context carryover is only available on the u3-rt-pro family
@@ -266,8 +272,12 @@ class STT(stt.STT):
                 "agent_context_carryover is enabled but model %r does not support it; ignoring",
                 model,
             )
-        carryover_enabled = (
-            agent_context_carryover if is_given(agent_context_carryover) else supports_carryover
+        # previous_context_n_turns=0 is documented as "disable automatic context
+        # carryover" — honor it in the default resolution (an explicit
+        # agent_context_carryover=True still wins).
+        _context_disabled = is_given(previous_context_n_turns) and previous_context_n_turns == 0
+        carryover_enabled = supports_carryover and (
+            agent_context_carryover if is_given(agent_context_carryover) else not _context_disabled
         )
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -277,7 +287,7 @@ class STT(stt.STT):
                 offline_recognize=False,
                 diarization=is_given(speaker_labels) and speaker_labels is True,
                 keyterms=True,
-                chat_context=carryover_enabled and supports_carryover,
+                chat_context=carryover_enabled,
             ),
         )
         if model == "u3-pro":
@@ -440,6 +450,11 @@ class STT(stt.STT):
         # Validate/normalize before mutating any option so a ValueError from a
         # bad value cannot leave _opts partially updated.
         if is_given(language_codes):
+            if self._opts.speech_model not in _U3_PRO_MODELS:
+                raise ValueError(
+                    "The 'language_codes' parameter is only supported with the "
+                    f"{', '.join(_U3_PRO_MODELS)} models."
+                )
             language_codes = _normalize_language_codes(list(language_codes))
         if is_given(agent_context):
             _validate_agent_context(agent_context)
@@ -581,6 +596,11 @@ class SpeechStream(stt.SpeechStream):
         # Validate/normalize before mutating any option so a ValueError from a
         # bad value cannot leave _opts partially updated.
         if is_given(language_codes):
+            if self._opts.speech_model not in _U3_PRO_MODELS:
+                raise ValueError(
+                    "The 'language_codes' parameter is only supported with the "
+                    f"{', '.join(_U3_PRO_MODELS)} models."
+                )
             language_codes = _normalize_language_codes(list(language_codes))
         if is_given(agent_context):
             _validate_agent_context(agent_context)
