@@ -264,6 +264,9 @@ class _ResponseGeneration:
     """timestamp when the response was created"""
     _first_token_timestamp: float | None = None
     """timestamp when the first token was received"""
+    response_create_params: RealtimeResponseCreateParams | None = None
+    retry_count: int = 0
+    output_started: bool = False
 
     def _close(self) -> None:
         for msg in self.messages.values():
@@ -297,6 +300,26 @@ _FATAL_ERROR_CODES = frozenset(
 def _is_fatal_error(error: object | None) -> bool:
     code = getattr(error, "code", None) or getattr(error, "type", None)
     return isinstance(code, str) and code in _FATAL_ERROR_CODES
+
+
+def _response_done_error(*, provider_label: str, event: ResponseDoneEvent) -> APIError | None:
+    if event.response.status != "failed":
+        return None
+
+    if event.response.status_details and hasattr(event.response.status_details, "error"):
+        error_type = getattr(event.response.status_details.error, "type", "unknown")
+        error_body = event.response.status_details.error
+        message = f"{provider_label} response failed with error type: {error_type}"
+    else:
+        error_body = None
+        message = f"{provider_label} response failed with unknown error"
+
+    recoverable = not _is_fatal_error(error_body)
+    return APIError(
+        message=message,
+        body=error_body,
+        retryable=recoverable,
+    )
 
 
 class RealtimeModel(llm.RealtimeModel):
@@ -857,12 +880,14 @@ class RealtimeSession(
         self.send_event(self._create_session_update_event())
 
         self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
+        self._response_create_params: dict[str, RealtimeResponseCreateParams] = {}
         self._item_delete_future: dict[str, asyncio.Future] = {}
         self._item_create_future: dict[str, asyncio.Future] = {}
 
         # generate_reply event_ids cancelled or timed out before response.created arrived; the
         # response is cancelled by id and discarded when it finally arrives
         self._discarded_event_ids: set[str] = set()
+        self._response_retry_event_ids: set[str] = set()
 
         # accumulates partial input-audio transcripts per (item_id, content_index)
         self._input_transcript_accumulators: dict[str, dict[int, str]] = {}
@@ -1626,12 +1651,12 @@ class RealtimeSession(
         if is_given(tools):
             params.tools = self._convert_tools_to_oai(tools)  # type: ignore
 
-        self.send_event(
-            ResponseCreateEvent(type="response.create", event_id=event_id, response=params)
-        )
+        self._response_create_params[event_id] = params
+        self._send_response_create(event_id=event_id, params=params)
 
         def _on_timeout() -> None:
             self._response_created_futures.pop(event_id, None)
+            self._response_create_params.pop(event_id, None)
             if fut and not fut.done():
                 # discard the response if the server still creates it after the timeout
                 self._discarded_event_ids.add(event_id)
@@ -1642,6 +1667,7 @@ class RealtimeSession(
         def _on_fut_done(f: asyncio.Future[llm.GenerationCreatedEvent]) -> None:
             handle.cancel()
             self._response_created_futures.pop(event_id, None)
+            self._response_create_params.pop(event_id, None)
             if f.cancelled():
                 # response.create was already sent; cancel the response server-side
                 self.send_event(ResponseCancelEvent(type="response.cancel"))
@@ -1651,6 +1677,11 @@ class RealtimeSession(
 
         fut.add_done_callback(_on_fut_done)
         return fut
+
+    def _send_response_create(self, *, event_id: str, params: RealtimeResponseCreateParams) -> None:
+        self.send_event(
+            ResponseCreateEvent(type="response.create", event_id=event_id, response=params)
+        )
 
     @property
     def has_active_generation(self) -> bool:
@@ -1780,6 +1811,13 @@ class RealtimeSession(
         if isinstance(event.response.metadata, dict):
             client_event_id = event.response.metadata.get("client_event_id")
 
+        if client_event_id and client_event_id in self._response_retry_event_ids:
+            self._response_retry_event_ids.discard(client_event_id)
+            if isinstance(self._current_generation, _ResponseGeneration):
+                self._current_generation._created_timestamp = time.time()
+                self._current_generation._first_token_timestamp = None
+            return
+
         if client_event_id and client_event_id in self._discarded_event_ids:
             # interrupted or timed out before the server created it: cancel by id and mark it
             # discarded so its trailing events are skipped, instead of surfacing it
@@ -1795,6 +1833,9 @@ class RealtimeSession(
             message_ch=utils.aio.Chan(),
             function_ch=utils.aio.Chan(),
             messages={},
+            response_create_params=self._response_create_params.pop(client_event_id, None)
+            if client_event_id
+            else None,
             _created_timestamp=time.time(),
             _done_fut=asyncio.Future(),
         )
@@ -1819,6 +1860,7 @@ class RealtimeSession(
         if isinstance(self._current_generation, _DiscardedGeneration):
             return
         assert self._current_generation is not None, "current_generation is None"
+        self._current_generation.output_started = True
         assert (item_id := event.item.id) is not None, "item.id is None"
         assert (item_type := event.item.type) is not None, "item.type is None"
 
@@ -2077,6 +2119,9 @@ class RealtimeSession(
 
         assert self._current_generation is not None, "current_generation is None"
 
+        if self._maybe_retry_failed_response(event):
+            return
+
         created_timestamp = self._current_generation._created_timestamp
         first_token_timestamp = self._current_generation._first_token_timestamp
 
@@ -2152,6 +2197,54 @@ class RealtimeSession(
         self.emit("metrics_collected", metrics)
         self._handle_response_done_but_not_complete(event)
 
+    def _maybe_retry_failed_response(self, event: ResponseDoneEvent) -> bool:
+        if event.response.status != "failed":
+            return False
+        if not isinstance(self._current_generation, _ResponseGeneration):
+            return False
+        if self._current_generation.output_started:
+            return False
+        if self._current_generation.response_create_params is None:
+            return False
+
+        error = _response_done_error(
+            provider_label=self._realtime_model._provider_label, event=event
+        )
+        if error is None:
+            return False
+        if not error.retryable:
+            return False
+
+        max_retries = self._opts.conn_options.max_retry
+        if self._current_generation.retry_count >= max_retries:
+            return False
+
+        retry_count = self._current_generation.retry_count
+        retry_interval = self._opts.conn_options._interval_for_retry(retry_count)
+        self._current_generation.retry_count += 1
+
+        event_id = utils.shortuuid("response_retry_")
+        params = self._current_generation.response_create_params.model_copy(deep=True)
+        params.metadata = {"client_event_id": event_id}
+        self._response_retry_event_ids.add(event_id)
+        self._emit_error(error, recoverable=True)
+
+        async def _retry_response() -> None:
+            if retry_interval > 0:
+                await asyncio.sleep(retry_interval)
+            if self._msg_ch.closed or not isinstance(self._current_generation, _ResponseGeneration):
+                return
+            logger.warning(
+                "%s realtime response failed before output, retrying in %.1fs",
+                self._realtime_model._provider_label,
+                retry_interval,
+                extra={"attempt": retry_count, "max_retries": max_retries},
+            )
+            self._send_response_create(event_id=event_id, params=params)
+
+        asyncio.create_task(_retry_response(), name="RealtimeSession.retry_response")
+        return True
+
     def _handle_response_done_but_not_complete(self, event: ResponseDoneEvent) -> None:
         """Handle response done but not complete, i.e. cancelled, incomplete or failed.
 
@@ -2165,23 +2258,9 @@ class RealtimeSession(
 
         provider_label = self._realtime_model._provider_label
         if event.response.status == "failed":
-            if event.response.status_details and hasattr(event.response.status_details, "error"):
-                error_type = getattr(event.response.status_details.error, "type", "unknown")
-                error_body = event.response.status_details.error
-                message = f"{provider_label} response failed with error type: {error_type}"
-            else:
-                error_body = None
-                message = f"{provider_label} response failed with unknown error"
-            # failures are largely undocumented by openai, so we assume optimistically
-            # recoverable unless the code is a known-fatal one (quota / auth / billing),
-            # which is raised so the recv loop breaks and _main_task stops reconnecting
-            recoverable = not _is_fatal_error(error_body)
-            error = APIError(
-                message=message,
-                body=error_body,
-                retryable=recoverable,
-            )
-            if not recoverable:
+            error = _response_done_error(provider_label=provider_label, event=event)
+            assert error is not None
+            if not error.retryable:
                 raise error
             self._emit_error(error, recoverable=True)
         elif event.response.status in {"cancelled", "incomplete"}:
