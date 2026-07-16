@@ -3587,6 +3587,12 @@ class AgentActivity(RecognitionHooks):
             out: _ForwardOutput
 
         message_outputs: list[_MsgOutput] = []
+        # Set when a generated message is left out of message_outputs because the
+        # response was interrupted (never pulled, or pulled but only partially
+        # played). Those items may still exist server-side, so the update_chat_ctx
+        # cleanup below must run for them even though they never reach the
+        # any_skipped scan of message_outputs.
+        messages_abandoned = False
 
         async def _process_one_message(msg: MessageGeneration) -> _MsgOutput:
             """Resolve a message's audio/text sources, then forward and wait for playout."""
@@ -3664,14 +3670,19 @@ class AgentActivity(RecognitionHooks):
 
         @utils.log_exceptions(logger=logger)
         async def _process_messages() -> None:
+            nonlocal messages_abandoned
             async for msg in generation_ev.message_stream:
                 if speech_handle.interrupted:
                     # remaining messages are left out of message_outputs so
                     # update_chat_ctx below removes them server-side.
+                    messages_abandoned = True
                     break
                 entry = await _process_one_message(msg)
                 message_outputs.append(entry)
                 if entry.out.played == "partial":
+                    # a later message the server already created may never be
+                    # pulled, so flag the abandon here too.
+                    messages_abandoned = True
                     break
 
         process_msg_task = asyncio.create_task(
@@ -3816,7 +3827,11 @@ class AgentActivity(RecognitionHooks):
         # sync local chat ctx to the realtime server to remove any items the
         # model added but the user never heard (interrupted before we pulled
         # them, or message_outputs entries left in "skipped")
-        if speech_handle.interrupted and any_skipped and self.llm.capabilities.mutable_chat_context:
+        if (
+            speech_handle.interrupted
+            and (any_skipped or messages_abandoned)
+            and self.llm.capabilities.mutable_chat_context
+        ):
             try:
                 await self._rt_session.update_chat_ctx(self._agent._chat_ctx)
             except llm.RealtimeError as e:
