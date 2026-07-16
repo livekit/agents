@@ -98,8 +98,9 @@ stt = STT(
 from livekit.plugins.gnani import TTS
 
 tts = TTS(
-    voice="Pranav",                    # Default: "Pranav" (also: Kaveri, Shubhra, Deepak)
-    model="vachana-voice-v3",         # Default: "vachana-voice-v3"
+    voice="Pranav",                    # Default: "Pranav" (timbre-v2.0 voices: Kaveri, Shubhra, Deepak)
+    model="timbre-v2.0",              # Default: "timbre-v2.0" (also: "timbre-v2.5" with 42 voices)
+    language=None,                    # timbre-v2.5 only — e.g. "hi-IN", "en-IN"
     sample_rate=16000,                # Default: 16000 (also: 8000, 22050, 44100)
     encoding="linear_pcm",           # Default: "linear_pcm" (also: "oggopus")
     container="wav",                  # Default: "wav" (also: "raw", "mp3", "mulaw", "ogg")
@@ -142,9 +143,11 @@ Frames must be sent at **real-time cadence**. See **[STT Realtime — PCM Specif
 - **REST synthesis** — single-request batch audio generation (`synthesize_method="rest"`)
 - **SSE streaming** — lower-latency chunked synthesis via Server-Sent Events (`synthesize_method="sse"`)
 - **WebSocket synthesis** — lowest-latency synthesis via `synthesize_method="websocket"` or the `stream()` method
-- **4 voices** — Pranav, Kaveri, Shubhra, Deepak (see [Available Voices](https://docs.gnani.ai/api/TTS/tts-sse#available-voices))
+- **4 voices (timbre-v2.0)** — Pranav, Kaveri, Shubhra, Deepak (see [Available Voices](https://docs.gnani.ai/api/TTS/tts-sse#available-voices))
+- **42 voices (timbre-v2.5)** — expanded catalog with optional `language` parameter
+- **Model** — Timbre (`timbre-v2.0` default, `timbre-v2.5` expanded catalog)
 - **Configurable output** — sample rate (8000–44100), encoding (linear_pcm, oggopus), container (raw, mp3, wav, mulaw, ogg)
-- **Runtime updates** — change voice or model via `update_options()`
+- **Runtime updates** — change voice, model, or language via `update_options()`
 
 ## Supported Languages
 
@@ -159,9 +162,13 @@ Prisma uses BCP-47 locale codes (e.g. `hi-IN`). Supported:
 
 ### TTS Languages (Timbre)
 
-For the full list of supported languages, see **[TTS — Supported Languages](https://docs.gnani.ai/api/TTS/tts-inference#supported-languages)**.
+The optional `language` parameter is supported for **`timbre-v2.5` only**. For the full list of supported languages, see **[TTS — Supported Languages](https://docs.gnani.ai/api/TTS/tts-inference#supported-languages)**.
+
+> **Migration:** The former model name `vachana-voice-v3` has been renamed to **`timbre-v2.0`**. Update any `model="vachana-voice-v3"` calls to `model="timbre-v2.0"` (or omit `model` to use the default).
 
 ## Available Voices
+
+### timbre-v2.0 (default)
 
 | Voice   | ID        | Gender | Description              |
 |---------|-----------|--------|--------------------------|
@@ -170,9 +177,13 @@ For the full list of supported languages, see **[TTS — Supported Languages](ht
 | Shubhra | `Shubhra` | Female | Gentle, Expressive       |
 | Deepak  | `Deepak`  | Male   | Grounded, Conversational |
 
+### timbre-v2.5
+
+42 voices across Indian languages. Use `model="timbre-v2.5"` with an optional `language` parameter. See the [official voice list](https://docs.gnani.ai/api/TTS/tts-sse#available-voices) for the full catalog.
+
 ## Architecture
 
-This plugin directly implements the Gnani REST and WebSocket APIs using `aiohttp` (for REST STT/TTS) and `websockets` (for streaming STT/TTS), adapting them into LiveKit's `stt.STT` and `tts.TTS` base classes. It uses the **Prisma** model for speech-to-text and the **Timbre** model for text-to-speech. No external SDK is required — all connection logic, authentication, and audio format handling is self-contained. Authentication uses a single `api_key` passed via the `X-API-Key-ID` header.
+This plugin wraps the `gnani-vachana` SDK into LiveKit's `stt.STT` and `tts.TTS` base classes. It uses the **Prisma** model for speech-to-text and the **Timbre** model for text-to-speech. Voice lists, language constants, and model definitions are shared with the core SDK. Authentication uses a single `api_key` passed via the `X-API-Key-ID` header.
 
 ## Documentation
 

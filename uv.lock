@@ -989,6 +989,19 @@ wheels = [
 ]
 
 [[package]]
+name = "gnani-vachana"
+version = "0.7.7"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "requests" },
+    { name = "websockets" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/2a/fe/d0141e48cdd073719c6afbe1b06a637b864ff87a27a5b74e1de51164b1cc/gnani_vachana-0.7.7.tar.gz", hash = "sha256:a2083f200a6bb1154856ac688bbfc27393cc81eb86080e508287d00df27b119c", size = 22563, upload-time = "2026-07-15T19:42:03.721Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/74/40/52f5f23687b47490b889de7a18ce8acbfbfdde34bdc3ad8a740bc27520a3/gnani_vachana-0.7.7-py3-none-any.whl", hash = "sha256:17e59c59404e262bfb3ffc7f59a4030ac98903087c41c61535629cc26f832130", size = 24938, upload-time = "2026-07-15T19:42:02.423Z" },
+]
+
+[[package]]
 name = "google-api-core"
 version = "2.31.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2551,12 +2564,14 @@ requires-dist = [
 name = "livekit-plugins-gnani"
 source = { editable = "livekit-plugins/livekit-plugins-gnani" }
 dependencies = [
+    { name = "gnani-vachana" },
     { name = "livekit-agents", extra = ["codecs"] },
     { name = "websockets" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "gnani-vachana", specifier = ">=0.7.7,<1.0" },
     { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
     { name = "websockets", specifier = ">=12.0,<16.0" },
 ]

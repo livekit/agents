@@ -23,10 +23,27 @@ See https://docs.livekit.io/agents/integrations/stt/gnani/ for more information.
 """
 
 from .stt import STT, SpeechStream
-from .tts import TTS, SynthesizeStream
+from .tts import (
+    DEFAULT_MODEL,
+    SUPPORTED_TTS_LANGUAGES,
+    TIMBRE_V20_VOICES,
+    TIMBRE_V25_VOICES,
+    TTS,
+    SynthesizeStream,
+)
 from .version import __version__
 
-__all__ = ["STT", "TTS", "SpeechStream", "SynthesizeStream", "__version__"]
+__all__ = [
+    "DEFAULT_MODEL",
+    "STT",
+    "SUPPORTED_TTS_LANGUAGES",
+    "TIMBRE_V20_VOICES",
+    "TIMBRE_V25_VOICES",
+    "TTS",
+    "SpeechStream",
+    "SynthesizeStream",
+    "__version__",
+]
 
 
 from livekit.agents import Plugin

@@ -70,33 +70,33 @@ def test_tts_rejects_invalid_voice():
     """TTS rejects unsupported voices."""
     from livekit.plugins.gnani import TTS
 
-    with pytest.raises(ValueError, match="not supported"):
+    with pytest.raises(ValueError, match="Unsupported voice"):
         TTS(api_key="test-key", voice="nonexistent")
 
 
 def test_tts_default_model():
-    """TTS defaults to vachana-voice-v3 for the default v3 voice."""
+    """TTS defaults to timbre-v2.0."""
     from livekit.plugins.gnani import TTS
 
     tts = TTS(api_key="test-key")
-    assert tts._opts.model == "vachana-voice-v3"
+    assert tts._opts.model == "timbre-v2.0"
 
 
-def test_tts_model_v3():
-    """TTS uses vachana-voice-v3 model."""
+def test_tts_model_v20():
+    """TTS uses timbre-v2.0 model by default."""
     from livekit.plugins.gnani import TTS
 
     tts = TTS(api_key="test-key", voice="Kaveri")
-    assert tts._opts.model == "vachana-voice-v3"
-    assert tts.model == "vachana-voice-v3"
+    assert tts._opts.model == "timbre-v2.0"
+    assert tts.model == "timbre-v2.0"
 
 
 def test_tts_model_explicit_override():
     """Explicit model parameter overrides default."""
     from livekit.plugins.gnani import TTS
 
-    tts = TTS(api_key="test-key", voice="Pranav", model="custom-model")
-    assert tts._opts.model == "custom-model"
+    tts = TTS(api_key="test-key", voice="Nalini", model="timbre-v2.5")
+    assert tts._opts.model == "timbre-v2.5"
 
 
 def test_tts_model_property():
@@ -104,7 +104,7 @@ def test_tts_model_property():
     from livekit.plugins.gnani import TTS
 
     tts = TTS(api_key="test-key")
-    assert tts.model == "vachana-voice-v3"
+    assert tts.model == "timbre-v2.0"
 
 
 def test_tts_provider_property():
@@ -178,9 +178,9 @@ def test_tts_update_options_voice_and_model():
     from livekit.plugins.gnani import TTS
 
     tts = TTS(api_key="test-key", voice="Pranav")
-    tts.update_options(voice="Shubhra", model="custom-model")
-    assert tts._opts.voice == "Shubhra"
-    assert tts._opts.model == "custom-model"
+    tts.update_options(voice="Nalini", model="timbre-v2.5")
+    assert tts._opts.voice == "Nalini"
+    assert tts._opts.model == "timbre-v2.5"
 
 
 def test_tts_update_options_rejects_invalid_voice():
@@ -188,7 +188,7 @@ def test_tts_update_options_rejects_invalid_voice():
     from livekit.plugins.gnani import TTS
 
     tts = TTS(api_key="test-key")
-    with pytest.raises(ValueError, match="not supported"):
+    with pytest.raises(ValueError, match="Unsupported voice"):
         tts.update_options(voice="nonexistent")
 
 
@@ -197,8 +197,8 @@ def test_tts_update_options_model():
     from livekit.plugins.gnani import TTS
 
     tts = TTS(api_key="test-key")
-    tts.update_options(model="custom-model")
-    assert tts._opts.model == "custom-model"
+    tts.update_options(model="timbre-v2.5", voice="Nalini")
+    assert tts._opts.model == "timbre-v2.5"
 
 
 def test_tts_default_synthesize_method():
@@ -405,8 +405,64 @@ def test_tts_update_options_preserves_other_fields():
     tts = TTS(api_key="test-key", voice="Pranav")
     tts.update_options(voice="Deepak")
     assert tts._opts.voice == "Deepak"
-    assert tts._opts.model == "vachana-voice-v3"
+    assert tts._opts.model == "timbre-v2.0"
     assert tts._opts.encoding == "linear_pcm"
+
+
+def test_tts_timbre_v25_voice_nalini_accepted():
+    """timbre-v2.5 accepts Nalini voice."""
+    from livekit.plugins.gnani import TTS
+
+    tts = TTS(api_key="test-key", model="timbre-v2.5", voice="Nalini")
+    assert tts._opts.voice == "Nalini"
+    assert tts._opts.model == "timbre-v2.5"
+
+
+def test_tts_timbre_v25_rejects_shubhra():
+    """timbre-v2.5 rejects Shubhra (v20-only voice)."""
+    from livekit.plugins.gnani import TTS
+
+    with pytest.raises(ValueError, match="Unsupported voice"):
+        TTS(api_key="test-key", model="timbre-v2.5", voice="Shubhra")
+
+
+def test_tts_timbre_v20_rejects_language():
+    """timbre-v2.0 rejects language param."""
+    from livekit.plugins.gnani import TTS
+
+    with pytest.raises(ValueError, match="language is only supported"):
+        TTS(api_key="test-key", language="hi-IN")
+
+
+def test_tts_timbre_v25_accepts_language():
+    """timbre-v2.5 accepts language."""
+    from livekit.plugins.gnani import TTS
+
+    tts = TTS(
+        api_key="test-key",
+        model="timbre-v2.5",
+        voice="Nalini",
+        language="hi-IN",
+    )
+    assert tts._opts.language == "hi-IN"
+
+
+def test_tts_invalid_model_raises():
+    """Invalid model raises Unsupported model."""
+    from livekit.plugins.gnani import TTS
+
+    with pytest.raises(ValueError, match="Unsupported model"):
+        TTS(api_key="test-key", model="invalid-model")
+
+
+def test_tts_update_options_preserves_timbre_v20_default():
+    """update_options preserves timbre-v2.0 default when only voice changes."""
+    from livekit.plugins.gnani import TTS
+
+    tts = TTS(api_key="test-key", voice="Pranav")
+    tts.update_options(voice="Kaveri")
+    assert tts._opts.voice == "Kaveri"
+    assert tts._opts.model == "timbre-v2.0"
 
 
 def test_tts_websocket_chunked_stream_ws_url():
