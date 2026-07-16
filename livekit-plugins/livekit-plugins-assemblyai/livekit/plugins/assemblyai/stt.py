@@ -91,12 +91,18 @@ _U3_PRO_MODELS = ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro")
 _MAX_LANGUAGE_CODES = 10
 
 
-def _normalize_language_codes(language_codes: list[str]) -> list[str]:
-    """Normalize each code to bare ISO 639-1 and dedup preserving order.
+def _normalize_language_codes(language_codes: str | list[str]) -> list[str]:
+    """Normalize code(s) to bare ISO 639-1 and dedup preserving order.
 
+    Accepts a single code or a list, mirroring the server, which takes either.
     Mirrors the AssemblyAI streaming API's validation rules: at most 10 codes,
     and 'multi' (the unsteered multilingual default) must be sent alone.
     """
+    if isinstance(language_codes, str):
+        # A bare code is shorthand for a one-element list; wrapping here (the
+        # single choke point for every input path) keeps a stray string from
+        # being iterated per-character. "" means "no codes", like [].
+        language_codes = [language_codes] if language_codes else []
     normalized = list(dict.fromkeys(LanguageCode(code).language for code in language_codes))
     if len(normalized) > _MAX_LANGUAGE_CODES:
         raise ValueError(
@@ -143,7 +149,7 @@ class STT(stt.STT):
         ] = "universal-3-5-pro",
         language_detection: NotGivenOr[bool] = NOT_GIVEN,
         language_code: NotGivenOr[str] = NOT_GIVEN,
-        language_codes: NotGivenOr[list[str]] = NOT_GIVEN,
+        language_codes: NotGivenOr[str | list[str]] = NOT_GIVEN,
         end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
         min_turn_silence: NotGivenOr[int] = NOT_GIVEN,
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
@@ -178,21 +184,22 @@ class STT(stt.STT):
                 0 and 1 that determines how sensitive the VAD is. Lower values make the VAD
                 more sensitive (detects quieter speech). Higher values make it less sensitive.
                 Defaults to 0.4.
-            language_code: Shorthand for a one-element ``language_codes`` list
-                (e.g. 'en'); mutually exclusive with it. Constructor-only.
-            language_codes: Steer transcription toward one or more expected languages
-                (e.g. ['en', 'es']). Each entry accepts any common format ('en',
-                'en-US', 'english') and is normalized to a bare ISO 639-1 code before
-                being sent; duplicates after normalization are dropped, preserving
-                order. One code biases the model toward that language — several codes,
-                toward that set — instead of automatically detecting/code-switching
-                across all supported languages. At most 10 codes; 'multi' (the
-                unsteered multilingual default) cannot be combined with other codes.
-                Leave unset to use the model's default multilingual behavior. Only
-                supported with the Universal-3 Pro family models. Can be updated
-                mid-session via ``update_options``; pass an empty list there to clear
-                steering back to the model default. At construction an empty list is
-                equivalent to leaving it unset.
+            language_code: Deprecated — use ``language_codes`` instead (it accepts a
+                single code directly). Mutually exclusive with ``language_codes``.
+            language_codes: Steer transcription toward one or more expected languages.
+                Accepts a single code ('es') or a list (['en', 'es']). Each entry
+                accepts any common format ('en', 'en-US', 'english') and is normalized
+                to a bare ISO 639-1 code before being sent; duplicates after
+                normalization are dropped, preserving order. One code biases the model
+                toward that language — several codes, toward that set — instead of
+                automatically detecting/code-switching across all supported languages.
+                At most 10 codes; 'multi' (the unsteered multilingual default) cannot
+                be combined with other codes. Leave unset to use the model's default
+                multilingual behavior. Only supported with the Universal-3 Pro family
+                models. Can be updated mid-session via ``update_options``; pass an
+                empty list (or empty string) there to clear steering back to the model
+                default. At construction an empty value is equivalent to leaving it
+                unset.
             min_turn_silence: Minimum silence in ms before a confident end-of-turn is finalized.
             min_end_of_turn_silence_when_confident: Deprecated. Use min_turn_silence instead.
             continuous_partials: Whether to emit additional partial transcripts during long
@@ -254,11 +261,13 @@ class STT(stt.STT):
         if is_given(language_code) and is_given(language_codes):
             raise ValueError(
                 "language_code and language_codes are mutually exclusive; "
-                "use language_codes (language_code is shorthand for a one-element list)"
+                "use language_codes (it accepts a single code directly)"
             )
-        # An explicit empty list is equivalent to unset at construction — the
-        # param is omitted from the connect query either way — so it is not
-        # subject to the U3-Pro-family gate below.
+        if is_given(language_code):
+            logger.warning("'language_code' is deprecated, use 'language_codes' instead.")
+        # An explicit empty value ([] or "") is equivalent to unset at
+        # construction — the param is omitted from the connect query either
+        # way — so it is not subject to the U3-Pro-family gate below.
         if is_given(language_codes) and not language_codes:
             language_codes = NOT_GIVEN
         if is_given(agent_context):
@@ -346,9 +355,9 @@ class STT(stt.STT):
         # language_code is shorthand for a one-element list.
         normalized_language_codes: NotGivenOr[list[str]] = NOT_GIVEN
         if is_given(language_code):
-            normalized_language_codes = _normalize_language_codes([language_code])
+            normalized_language_codes = _normalize_language_codes(language_code)
         elif is_given(language_codes):
-            normalized_language_codes = _normalize_language_codes(list(language_codes))
+            normalized_language_codes = _normalize_language_codes(language_codes)
 
         self._opts = STTOptions(
             sample_rate=sample_rate,
@@ -432,7 +441,7 @@ class STT(stt.STT):
         prompt: NotGivenOr[str] = NOT_GIVEN,
         agent_context: NotGivenOr[str] = NOT_GIVEN,
         keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
-        language_codes: NotGivenOr[list[str]] = NOT_GIVEN,
+        language_codes: NotGivenOr[str | list[str]] = NOT_GIVEN,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         continuous_partials: NotGivenOr[bool] = NOT_GIVEN,
         interruption_delay: NotGivenOr[int] = NOT_GIVEN,
@@ -455,7 +464,7 @@ class STT(stt.STT):
                     "The 'language_codes' parameter is only supported with the "
                     f"{', '.join(_U3_PRO_MODELS)} models."
                 )
-            language_codes = _normalize_language_codes(list(language_codes))
+            language_codes = _normalize_language_codes(language_codes)
         if is_given(agent_context):
             _validate_agent_context(agent_context)
 
@@ -578,7 +587,7 @@ class SpeechStream(stt.SpeechStream):
         prompt: NotGivenOr[str] = NOT_GIVEN,
         agent_context: NotGivenOr[str] = NOT_GIVEN,
         keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
-        language_codes: NotGivenOr[list[str]] = NOT_GIVEN,
+        language_codes: NotGivenOr[str | list[str]] = NOT_GIVEN,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         continuous_partials: NotGivenOr[bool] = NOT_GIVEN,
         interruption_delay: NotGivenOr[int] = NOT_GIVEN,
@@ -601,7 +610,7 @@ class SpeechStream(stt.SpeechStream):
                     "The 'language_codes' parameter is only supported with the "
                     f"{', '.join(_U3_PRO_MODELS)} models."
                 )
-            language_codes = _normalize_language_codes(list(language_codes))
+            language_codes = _normalize_language_codes(language_codes)
         if is_given(agent_context):
             _validate_agent_context(agent_context)
 

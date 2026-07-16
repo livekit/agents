@@ -1237,6 +1237,73 @@ async def test_language_codes_empty_list_at_construction_is_unset():
     assert stt_pro._opts.language_codes is NOT_GIVEN
 
 
+async def test_language_codes_accepts_bare_string():
+    """language_codes accepts a single code directly, normalized like a list entry."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model="u3-rt-pro", language_codes="es")
+    assert stt._opts.language_codes == ["es"]
+
+    stt_norm = STT(api_key="test-key", model="u3-rt-pro", language_codes="Spanish")
+    assert stt_norm._opts.language_codes == ["es"]
+
+
+async def test_language_codes_empty_string_at_construction_is_unset():
+    """An explicit "" at construction equals unset, like []."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model="universal-streaming-english", language_codes="")
+    assert stt._opts.language_codes is NOT_GIVEN
+
+
+async def test_language_code_singular_logs_deprecation_warning(caplog):
+    """The singular language_code still works but logs a deprecation warning."""
+    import logging
+
+    from livekit.plugins.assemblyai import STT
+
+    with caplog.at_level(logging.WARNING):
+        stt = STT(api_key="test-key", model="u3-rt-pro", language_code="es")
+
+    assert stt._opts.language_codes == ["es"]
+    assert "'language_code' is deprecated" in caplog.text
+
+
+async def test_language_codes_no_deprecation_warning(caplog):
+    """The plural spelling does not trigger the deprecation warning."""
+    import logging
+
+    from livekit.plugins.assemblyai import STT
+
+    with caplog.at_level(logging.WARNING):
+        STT(api_key="test-key", model="u3-rt-pro", language_codes=["es"])
+
+    assert "deprecated" not in caplog.text
+
+
+async def test_language_codes_update_accepts_bare_string():
+    """update_options accepts a single code directly and sends it as a list."""
+    stream = _make_stream_for_unit_test()
+
+    stream.update_options(language_codes="en-US")
+
+    assert stream._opts.language_codes == ["en"]
+    msg = stream._config_update_queue.get_nowait()
+    assert msg["type"] == "UpdateConfiguration"
+    assert msg["language_codes"] == ["en"]
+
+
+async def test_language_codes_update_empty_string_clears_steering():
+    """An explicit "" mid-session clears steering, same as []."""
+    stream = _make_stream_for_unit_test()
+
+    stream.update_options(language_codes="")
+
+    assert stream._opts.language_codes == []
+    msg = stream._config_update_queue.get_nowait()
+    assert msg["language_codes"] == []
+
+
 async def test_language_code_singular_not_in_update_options():
     """The singular language_code is constructor-only; mid-session re-steering
     goes through language_codes."""
