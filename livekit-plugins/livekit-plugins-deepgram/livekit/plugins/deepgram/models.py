@@ -142,3 +142,10 @@ TTSModels = Literal[
     "aura-helios-en",
     "aura-zeus-en",
 ]
+
+# Flux TTS voices, served on the /v2/speak endpoint.
+# https://developers.deepgram.com/docs/flux-tts/overview
+# Model names follow the `flux-{voice}-{language}` format; seeded with the
+# documented example and kept open via `FluxTTSModels | str` so new voices
+# work without a code change.
+FluxTTSModels = Literal["flux-alexis-en"]
