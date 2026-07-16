@@ -15,9 +15,11 @@ from livekit.plugins.openai.realtime.realtime_model import RealtimeSession, _is_
 pytestmark = pytest.mark.unit
 
 
-def _create_response_retry_session() -> RealtimeSession:
+def _create_response_retry_session(*, retry_interval: float = 0) -> RealtimeSession:
     session = RealtimeSession.__new__(RealtimeSession)
-    session._opts = SimpleNamespace(conn_options=APIConnectOptions(max_retry=1, retry_interval=0))
+    session._opts = SimpleNamespace(
+        conn_options=APIConnectOptions(max_retry=1, retry_interval=retry_interval)
+    )
     session._realtime_model = SimpleNamespace(
         _provider_label="openai",
         _label="openai",
@@ -29,6 +31,7 @@ def _create_response_retry_session() -> RealtimeSession:
     session._response_created_futures = {}
     session._response_create_params = {}
     session._response_retry_event_ids = set()
+    session._response_retry_generations = {}
     session._discarded_event_ids = set()
     session._current_generation = None
     session._instructions = None
@@ -221,3 +224,26 @@ async def test_response_done_failed_does_not_retry_after_output_started() -> Non
 
     assert len(session._sent_events) == 1
     assert session._current_generation is None
+
+
+async def test_response_done_failed_does_not_retry_against_new_generation() -> None:
+    session = _create_response_retry_session(retry_interval=0.05)
+
+    fut = session.generate_reply(instructions="say hi")
+    create_event = session._sent_events[-1]
+    client_event_id = create_event.response.metadata["client_event_id"]
+    session._handle_response_created(_response_created(client_event_id=client_event_id))
+    await fut
+
+    session._handle_response_done(_response_failed())
+    old_generation = session._current_generation
+    session._handle_response_created(
+        _response_created(client_event_id="unrelated_turn", response_id="resp_new")
+    )
+    assert session._current_generation is not old_generation
+
+    await asyncio.sleep(0.5)
+
+    assert len(session._sent_events) == 1
+    assert session._response_retry_event_ids == set()
+    assert session._response_retry_generations == {}

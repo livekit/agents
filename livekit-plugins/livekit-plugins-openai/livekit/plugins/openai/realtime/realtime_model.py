@@ -888,6 +888,7 @@ class RealtimeSession(
         # response is cancelled by id and discarded when it finally arrives
         self._discarded_event_ids: set[str] = set()
         self._response_retry_event_ids: set[str] = set()
+        self._response_retry_generations: dict[str, _ResponseGeneration] = {}
 
         # accumulates partial input-audio transcripts per (item_id, content_index)
         self._input_transcript_accumulators: dict[str, dict[int, str]] = {}
@@ -1813,9 +1814,13 @@ class RealtimeSession(
 
         if client_event_id and client_event_id in self._response_retry_event_ids:
             self._response_retry_event_ids.discard(client_event_id)
-            if isinstance(self._current_generation, _ResponseGeneration):
-                self._current_generation._created_timestamp = time.time()
-                self._current_generation._first_token_timestamp = None
+            retry_generation = self._response_retry_generations.pop(client_event_id, None)
+            if not isinstance(retry_generation, _ResponseGeneration) or (
+                retry_generation is not self._current_generation
+            ):
+                return
+            retry_generation._created_timestamp = time.time()
+            retry_generation._first_token_timestamp = None
             return
 
         if client_event_id and client_event_id in self._discarded_event_ids:
@@ -2222,17 +2227,21 @@ class RealtimeSession(
         retry_count = self._current_generation.retry_count
         retry_interval = self._opts.conn_options._interval_for_retry(retry_count)
         self._current_generation.retry_count += 1
+        retry_generation = self._current_generation
 
         event_id = utils.shortuuid("response_retry_")
         params = self._current_generation.response_create_params.model_copy(deep=True)
         params.metadata = {"client_event_id": event_id}
         self._response_retry_event_ids.add(event_id)
+        self._response_retry_generations[event_id] = retry_generation
         self._emit_error(error, recoverable=True)
 
         async def _retry_response() -> None:
             if retry_interval > 0:
                 await asyncio.sleep(retry_interval)
-            if self._msg_ch.closed or not isinstance(self._current_generation, _ResponseGeneration):
+            if self._msg_ch.closed or self._current_generation is not retry_generation:
+                self._response_retry_event_ids.discard(event_id)
+                self._response_retry_generations.pop(event_id, None)
                 return
             logger.warning(
                 "%s realtime response failed before output, retrying in %.1fs",
