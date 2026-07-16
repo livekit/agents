@@ -49,6 +49,15 @@ avatar = runway.AvatarSession(
 )
 ```
 
+### Sessions longer than 5 minutes
+
+Runway enforces a hard 5-minute limit on realtime avatar sessions at runtime,
+independent of `max_duration`. The plugin renews automatically: it starts a
+replacement realtime session before the cap (waiting for the current agent
+speech to finish when possible) under the same participant identity, so the
+visible gap is just the track switchover. Each replacement session is billed
+separately.
+
 ## Configuration
 
 | Parameter | Env var | Description |
@@ -57,6 +66,6 @@ avatar = runway.AvatarSession(
 | `api_url` | `RUNWAYML_BASE_URL` | API base URL (default: `https://api.dev.runwayml.com`) |
 | `avatar_id` | — | Custom avatar ID (mutually exclusive with `preset_id`) |
 | `preset_id` | — | Preset avatar slug (mutually exclusive with `avatar_id`) |
-| `max_duration` | — | Maximum session duration in seconds |
+| `max_duration` | — | Maximum billed session duration in seconds |
 
 LiveKit credentials (`LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`) are read from environment variables or can be passed to `avatar.start()`.
