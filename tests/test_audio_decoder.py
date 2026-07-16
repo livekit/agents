@@ -401,6 +401,71 @@ async def test_wav_inline_decoder():
     await decoder.aclose()
 
 
+def _make_wav_with_ancillary(
+    sample_rate: int, num_channels: int, num_samples: int, ancillary_size: int
+) -> bytes:
+    """PCM16 WAV with an ancillary (LIST) chunk inserted before the `data` chunk.
+
+    RIFF requires odd-sized chunks to be followed by a pad byte that is not
+    counted in the chunk size; an odd ``ancillary_size`` therefore appends one.
+    """
+    bits_per_sample = 16
+    byte_rate = sample_rate * num_channels * bits_per_sample // 8
+    block_align = num_channels * bits_per_sample // 8
+    data_size = num_samples * num_channels * (bits_per_sample // 8)
+
+    fmt = struct.pack(
+        "<HHIIHH", 1, num_channels, sample_rate, byte_rate, block_align, bits_per_sample
+    )
+    anc = b"\x00" * ancillary_size
+    if ancillary_size % 2 == 1:
+        anc += b"\x00"  # RIFF word-alignment pad byte
+
+    body = (
+        b"fmt "
+        + struct.pack("<I", len(fmt))
+        + fmt
+        + b"LIST"
+        + struct.pack("<I", ancillary_size)
+        + anc
+        + b"data"
+        + struct.pack("<I", data_size)
+        + b"\x00" * data_size
+    )
+    return b"RIFF" + struct.pack("<I", 4 + len(body)) + b"WAVE" + body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ancillary_size", [4, 3])  # even (no pad byte), odd (pad byte)
+async def test_wav_inline_decoder_odd_ancillary_chunk(ancillary_size: int):
+    """An odd-sized ancillary chunk before `data` must not misalign the parser.
+
+    RIFF pads an odd-sized chunk with a trailing byte; if the decoder does not
+    skip it, the following `data` header is read one byte early and all audio is
+    silently dropped (0 frames, no error).
+    """
+    sample_rate = 24000
+    num_channels = 1
+    num_samples = 2400  # 100ms
+
+    wav_bytes = _make_wav_with_ancillary(sample_rate, num_channels, num_samples, ancillary_size)
+
+    decoder = AudioStreamDecoder(
+        sample_rate=sample_rate, num_channels=num_channels, format="audio/wav"
+    )
+    # feed byte-by-byte so the incremental state machine crosses the pad byte
+    for b in wav_bytes:
+        decoder.push(bytes([b]))
+    decoder.end_input()
+
+    total_samples = 0
+    async for frame in decoder:
+        total_samples += frame.samples_per_channel
+
+    assert total_samples == num_samples
+    await decoder.aclose()
+
+
 @pytest.mark.asyncio
 async def test_wav_inline_decoder_with_resampling():
     """WAV inline decoder should correctly resample to a different output rate."""
