@@ -35,6 +35,25 @@ tts = slng.TTS(
 
 Additional keyword arguments are forwarded to the gateway and applied according to the selected model's contract. Failover across multiple models or endpoints is available via `connections=[...]`; see [docs.slng.ai](https://docs.slng.ai/) for details.
 
+## End of turn finalization
+
+For the lowest STT turn latency, let the plugin know when the user stops speaking. The plugin then sends a finalize signal so the provider returns the final transcript immediately instead of waiting for its own endpointing:
+
+```python
+session = AgentSession(stt=stt, ...)
+stt.attach_to_session(session)
+```
+
+Or wire it manually:
+
+```python
+@session.on("user_state_changed")
+def _on_user_state_changed(ev):
+    stt.notify_user_state(ev.new_state)
+```
+
+Without this hook the plugin still works, but end of turn detection relies entirely on the provider's endpointing, which typically adds a few hundred milliseconds per turn.
+
 ## Region override
 
 The plugin supports gateway region routing via the `region_override` option on both `STT` and `TTS`.

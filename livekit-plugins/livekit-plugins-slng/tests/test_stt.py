@@ -127,6 +127,40 @@ def test_stt_provider_api_key_becomes_byok_header() -> None:
     assert stt._extra_headers["X-Slng-Provider-Key"] == "provider-secret"
 
 
+def test_stt_attach_to_session_forwards_user_state() -> None:
+    class _RecordingSTT(slng.STT):
+        def __init__(self) -> None:
+            super().__init__(api_key="test-key", model="deepgram/nova:3")
+            self.states: list[str] = []
+
+        def notify_user_state(self, new_state: str) -> None:
+            self.states.append(new_state)
+            super().notify_user_state(new_state)
+
+    class _FakeSession:
+        def __init__(self) -> None:
+            self.handlers: dict[str, object] = {}
+
+        def on(self, event: str, callback: object | None = None) -> object:
+            assert callback is None
+
+            def register(cb: object) -> object:
+                self.handlers[event] = cb
+                return cb
+
+            return register
+
+    stt = _RecordingSTT()
+    session = _FakeSession()
+    stt.attach_to_session(session)  # type: ignore[arg-type]
+
+    handler = session.handlers["user_state_changed"]
+    assert callable(handler)
+    handler(SimpleNamespace(new_state="listening"))
+    handler(SimpleNamespace(new_state="away"))
+    assert stt.states == ["listening", "away"]
+
+
 @pytest.mark.asyncio
 async def test_stt_413_is_terminal_without_chain_walk(
     monkeypatch: pytest.MonkeyPatch,

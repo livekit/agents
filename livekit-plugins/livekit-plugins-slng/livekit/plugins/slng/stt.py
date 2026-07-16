@@ -23,7 +23,7 @@ import warnings
 import weakref
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import aiohttp
 
@@ -56,6 +56,9 @@ from .gateway_adapter import (
     normalize_world_part_override,
 )
 from .log import logger
+
+if TYPE_CHECKING:
+    from livekit.agents import AgentSession, UserStateChangedEvent
 
 # Only pcm_s16le is supported: LiveKit AudioFrames carry 16-bit PCM and the
 # plugin sends those bytes verbatim (no transcoding is performed).
@@ -432,6 +435,18 @@ class STT(stt.STT):
                 stream.notify_user_state(normalized)
             except Exception:
                 logger.debug("Failed to notify STT stream of user_state change", exc_info=True)
+
+    def attach_to_session(self, session: AgentSession) -> None:
+        """Forward the session's user state changes to this STT instance.
+
+        Registers a ``user_state_changed`` handler on the given ``AgentSession`` so
+        end-of-turn finalization works without manual wiring. Equivalent to calling
+        ``notify_user_state(ev.new_state)`` from your own handler.
+        """
+
+        @session.on("user_state_changed")
+        def _on_user_state_changed(ev: UserStateChangedEvent) -> None:
+            self.notify_user_state(ev.new_state)
 
     def set_final_timeout_allowed(self, allowed: bool) -> None:
         for stream in list(self._streams):
