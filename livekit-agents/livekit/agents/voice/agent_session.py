@@ -1746,7 +1746,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         if state == "speaking" and self._user_speaking_span is None:
             self._user_speaking_span = tracer.start_span(
-                "user_speaking", start_time=last_speaking_time_ns
+                "user_speaking", context=self._root_span_context, start_time=last_speaking_time_ns
             )
 
             if self._room_io and self._room_io.linked_participant:
