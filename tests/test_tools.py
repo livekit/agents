@@ -304,6 +304,36 @@ class TestToolContext:
         ctx6 = ToolContext([mock_tool_1, mock_tool_2])
         assert ctx5 != ctx6
 
+    def test_exclude_hides_toolset_member_but_keeps_toolset(self):
+        toolset = MockToolset1()  # contains mock_tool_1, mock_tool_2
+        ctx = ToolContext([toolset, mock_tool_3])
+
+        ctx._exclude([mock_tool_1])
+
+        # the excluded member is no longer callable / no longer visible to the LLM
+        assert "mock_tool_1" not in ctx.function_tools
+        assert mock_tool_1 not in ctx.flatten()
+        # its sibling and the top-level tool remain callable
+        assert "mock_tool_2" in ctx.function_tools
+        assert "mock_tool_3" in ctx.function_tools
+        # the toolset itself stays so executor routing and lifecycle are unaffected
+        assert toolset in ctx.toolsets
+
+    def test_exclude_empty_is_noop(self):
+        ctx = ToolContext([mock_tool_1, mock_tool_2])
+        ctx._exclude([])
+        assert set(ctx.function_tools) == {"mock_tool_1", "mock_tool_2"}
+
+
+def test_end_call_tool_ignore_on_enter_flag():
+    from livekit.agents.beta import EndCallTool
+
+    (tool,) = EndCallTool().tools  # defaults to ignore_on_enter=False
+    assert not (tool.info.flags & ToolFlag.IGNORE_ON_ENTER)
+
+    (tool,) = EndCallTool(ignore_on_enter=True).tools
+    assert tool.info.flags & ToolFlag.IGNORE_ON_ENTER
+
 
 class TestToolExecution:
     def test_function_arguments_to_pydantic_model(self):

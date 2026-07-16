@@ -142,13 +142,13 @@ class SessionConnectOptions:
 
 
 class ExpressiveOptions(TypedDict, total=False):
-    """Configuration for the expressive pipeline.
+    """Configuration for the expressive pipeline (framework-internal, not publicly exposed).
 
     Controls how TTS markup instructions are injected into the LLM when expressive is
     enabled. All keys are optional; common shapes:
 
     - ``{"preset": Preset.CASUAL}`` — a domain preset, resolved to the active
-      TTS provider's tuned tags (see ``voice.presets``). Prefer the ``presets.*`` constants.
+      TTS provider's tuned tags (see ``voice.presets``).
     - ``{"preset": ..., "tts_instructions_append": "..."}`` — a preset plus your own
       rules appended after it resolves.
     - ``{"tts_instructions_template": "..."}`` — a fully custom prompt.
@@ -185,7 +185,6 @@ class AgentSessionOptions:
     ivr_detection: bool
     aec_warmup_duration: float | None
     session_close_transcript_timeout: float
-    expressive: bool | ExpressiveOptions
 
     @property
     def endpointing(self) -> EndpointingOptions:
@@ -274,8 +273,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
         min_consecutive_speech_delay: float = 0.0,
-        # Expressive
-        expressive: bool | ExpressiveOptions = False,
         # Misc settings
         userdata: NotGivenOr[Userdata_T] = NOT_GIVEN,
         video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
@@ -437,8 +434,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             ),
             aec_warmup_duration=aec_warmup_duration,
             session_close_transcript_timeout=session_close_transcript_timeout,
-            expressive=expressive,
         )
+        # expressive mode is not publicly exposed; the pipeline stays disabled
+        self._expressive: bool | ExpressiveOptions = False
         self._conn_options = conn_options or SessionConnectOptions()
         self._started = False
 
@@ -1796,7 +1794,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _conversation_item_added(self, message: llm.ChatMessage) -> None:
         self._chat_ctx.insert(message)
-        if text := message.text_content:
+        if text := message.raw_text_content:
             logger.debug(
                 "conversation_item_added",
                 extra={"role": message.role, "lk.pii.text": text},

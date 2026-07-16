@@ -75,6 +75,7 @@ class _RealtimeOptions:
     no_input_poke_sec: NotGivenOr[float]
     no_input_poke_text: NotGivenOr[str]
     no_input_end_conversation_sec: NotGivenOr[float]
+    additional_params: NotGivenOr[dict[str, typing.Any]]
     forbid_speech_after_tool_call: NotGivenOr[list[str]]
     conn_options: APIConnectOptions
     instructions: NotGivenOr[str] = NOT_GIVEN
@@ -131,6 +132,7 @@ class RealtimeModel(llm.RealtimeModel):
         no_input_poke_sec: NotGivenOr[float] = NOT_GIVEN,
         no_input_poke_text: NotGivenOr[str] = NOT_GIVEN,
         no_input_end_conversation_sec: NotGivenOr[float] = NOT_GIVEN,
+        additional_params: NotGivenOr[dict[str, typing.Any]] = NOT_GIVEN,
         forbid_speech_after_tool_call: NotGivenOr[list[str]] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
@@ -164,6 +166,7 @@ class RealtimeModel(llm.RealtimeModel):
             no_input_poke_text: Custom poke message text. Ignored when
                 ``generate_no_input_poke_text`` is True.
             no_input_end_conversation_sec: Seconds of silence before ending the conversation.
+            additional_params: Additional runtime parameters forwarded to Phonic.
             forbid_speech_after_tool_call: Names of tools after which Phonic should NOT
                 auto-generate a spoken reply. Use for tools that always hand off / trigger an
                 agent switch (e.g. advancing a task in a workflow). After such a tool, the
@@ -229,6 +232,7 @@ class RealtimeModel(llm.RealtimeModel):
             no_input_poke_sec=no_input_poke_sec,
             no_input_poke_text=no_input_poke_text,
             no_input_end_conversation_sec=no_input_end_conversation_sec,
+            additional_params=additional_params,
             forbid_speech_after_tool_call=forbid_speech_after_tool_call,
             conn_options=conn_options,
         )
@@ -334,8 +338,8 @@ class RealtimeSession(llm.RealtimeSession):
                 item
                 for item in chat_ctx.items
                 if isinstance(item, llm.ChatMessage)
-                and item.text_content
-                and item.text_content.strip()
+                and item.raw_text_content
+                and item.raw_text_content.strip()
             ]
             if messages:
                 turn_history = self._build_turn_history(chat_ctx)
@@ -378,7 +382,7 @@ class RealtimeSession(llm.RealtimeSession):
                         forbid_speech = True
 
             if isinstance(item, llm.ChatMessage) and item.role in ("system", "developer"):
-                text = item.text_content
+                text = item.raw_text_content
                 if text:
                     logger.debug(
                         "Sending add system message", extra={"lk.pii.system_message": text}
@@ -395,7 +399,7 @@ class RealtimeSession(llm.RealtimeSession):
                 and item.role == "user"
                 and item_id == last_item_id
             ):
-                text = item.text_content
+                text = item.raw_text_content
                 if text:
                     logger.info("Received user text input", extra={"lk.pii.text": text})
                     self._pending_user_text = text
@@ -511,9 +515,11 @@ class RealtimeSession(llm.RealtimeSession):
         messages = [
             item
             for item in chat_ctx.items
-            if isinstance(item, llm.ChatMessage) and item.text_content and item.text_content.strip()
+            if isinstance(item, llm.ChatMessage)
+            and item.raw_text_content
+            and item.raw_text_content.strip()
         ]
-        return "\n".join(f"{m.role}: {m.text_content}" for m in messages)
+        return "\n".join(f"{m.role}: {m.raw_text_content}" for m in messages)
 
     def _build_config_options(
         self, *, system_prompt: str, tools_payload: list[dict | str]
@@ -539,6 +545,7 @@ class RealtimeSession(llm.RealtimeSession):
             "no_input_poke_sec": self._opts.no_input_poke_sec,
             "no_input_poke_text": self._opts.no_input_poke_text,
             "no_input_end_conversation_sec": self._opts.no_input_end_conversation_sec,
+            "additional_params": self._opts.additional_params,
         }
         # Filter out NOT_GIVEN values
         return {k: v for k, v in options.items() if v is not NOT_GIVEN}

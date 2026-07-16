@@ -223,7 +223,7 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         if remote_item := self._remote_chat_ctx.get(event.item_id):
             if (
                 remote_item.item.type == "message"
-                and remote_item.item.text_content == event.transcript
+                and remote_item.item.raw_text_content == event.transcript
             ):
                 remote_item.item.content.clear()
         super()._handle_conversion_item_input_audio_transcription_completed(event)

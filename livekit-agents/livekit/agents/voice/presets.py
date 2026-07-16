@@ -1,23 +1,13 @@
-"""Public expressive presets.
+"""Expressive presets (framework-internal, not publicly exposed).
 
-A preset is a *use-case* (customer service, casual) that is
-provider-agnostic at the call site:
-
-    from livekit.agents.voice import presets
-
-    session = AgentSession(tts=inference.TTS("inworld/inworld-tts-2"), expressive=presets.CASUAL)
-
-Each ``presets.*`` constant is just an :class:`~livekit.agents.voice.ExpressiveOptions`
-carrying a ``preset``. At session start the framework resolves it against the active TTS
+A preset is a *use-case* (customer service, casual) that is provider-agnostic:
+each ``presets.*`` constant is just an ``ExpressiveOptions`` carrying a ``preset``.
+When expressive mode is active the framework resolves it against the active TTS
 provider (via ``tts.markup._provider_key()``) and injects the variant tuned for that
 provider's markup tags. A provider with no tuned preset falls back to the agnostic default,
 which still injects that provider's tag reference through the
 ``{tts.markup.llm_instructions}`` placeholder — so a preset always does something sensible
 and can never disagree with the markup pipeline (both read the same provider key).
-
-Customize by spreading a constant into a new dict (don't mutate the constant in place):
-
-    expressive={**presets.CUSTOMER_SERVICE, "tts_instructions_append": "Confirm the name."}
 """
 
 from __future__ import annotations

@@ -148,6 +148,12 @@ class TTS(tts.TTS):
         )
 
         self._session = http_session
+        self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
+            connect_cb=self._connect_ws,
+            close_cb=self._close_ws,
+            max_session_duration=300,
+            mark_refreshed_on_get=True,
+        )
         # min_sentence_len=1 emits each sentence as soon as the next one starts,
         # rather than batching short sentences together — minimizes TTFB on the
         # first sentence and keeps Fish synthesizing continuously.
@@ -183,6 +189,27 @@ class TTS(tts.TTS):
             self._session = utils.http_context.http_session()
         return self._session
 
+    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+        session = self._ensure_session()
+        return await asyncio.wait_for(
+            session.ws_connect(
+                self._opts.get_ws_url("/v1/tts/live"),
+                headers={
+                    "Authorization": f"Bearer {self._opts.api_key}",
+                    "User-Agent": USER_AGENT,
+                    "model": self._opts.model,
+                },
+                heartbeat=30.0,
+            ),
+            timeout,
+        )
+
+    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        await ws.close()
+
+    def prewarm(self) -> None:
+        self._pool.prewarm()
+
     def update_options(
         self,
         *,
@@ -193,8 +220,13 @@ class TTS(tts.TTS):
         speed: NotGivenOr[float] = NOT_GIVEN,
         volume: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
-        if is_given(model):
+        if is_given(model) and model != self._opts.model:
             self._opts.model = model
+            # The model is sent as a connection header at ws-handshake time, not in the
+            # per-request body, so a pooled socket keeps the old model. Drop pooled
+            # connections so the next stream reconnects with the new model. Other
+            # options ride in the per-request body and need no reconnect.
+            self._pool.invalidate()
         if is_given(voice_id):
             self._opts.voice_id = voice_id
         if is_given(latency_mode):
@@ -229,6 +261,7 @@ class TTS(tts.TTS):
         for stream in list(self._streams):
             await stream.aclose()
         self._streams.clear()
+        await self._pool.aclose()
 
 
 def _build_tts_request(opts: _TTSOptions, *, text: str = "") -> dict[str, Any]:
@@ -329,22 +362,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         )
         output_emitter.start_segment(segment_id=request_id)
 
-        ws: aiohttp.ClientWebSocketResponse | None = None
         try:
-            ws = await asyncio.wait_for(
-                self._tts._ensure_session().ws_connect(
-                    self._opts.get_ws_url("/v1/tts/live"),
-                    headers={
-                        "Authorization": f"Bearer {self._opts.api_key}",
-                        "User-Agent": USER_AGENT,
-                        "model": self._opts.model,
-                    },
-                    heartbeat=30.0,
-                ),
-                self._conn_options.timeout,
-            )
-
-            await self._run_ws(ws, output_emitter)
+            async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+                await self._run_ws(ws, output_emitter)
 
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
@@ -357,8 +377,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         except Exception as e:
             raise APIConnectionError() from e
         finally:
-            if ws is not None:
-                await ws.close()
             output_emitter.end_segment()
 
     async def _run_ws(

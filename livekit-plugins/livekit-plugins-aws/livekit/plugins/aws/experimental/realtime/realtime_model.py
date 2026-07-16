@@ -959,10 +959,10 @@ class RealtimeSession(  # noqa: F811
                 if (
                     last_item.type == "message"
                     and last_item.role == "user"
-                    and last_item.text_content
-                    and last_item.text_content.strip()
+                    and last_item.raw_text_content
+                    and last_item.raw_text_content.strip()
                 ):
-                    interactive_user_text = last_item.text_content.strip()
+                    interactive_user_text = last_item.raw_text_content.strip()
                     restart_ctx = restart_ctx.copy()
                     restart_ctx.items.pop()
                     logger.debug(
@@ -1791,17 +1791,17 @@ class RealtimeSession(  # noqa: F811
             ):
                 # Check if this is an audio message (already transcribed by Nova)
                 if item.id not in self._audio_message_ids:
-                    if item.text_content and item.text_content.strip():
+                    if item.raw_text_content and item.raw_text_content.strip():
                         logger.debug(
                             "Sending user message as interactive text",
-                            extra={"lk.pii.text_content": item.text_content},
+                            extra={"lk.pii.text_content": item.raw_text_content},
                         )
                         # Send interactive text to Nova Sonic (triggers generation)
                         # This is the flow for generate_reply(user_input=...) from the framework
                         fut = asyncio.Future[llm.GenerationCreatedEvent]()
                         self._pending_generation_fut = fut
 
-                        text = item.text_content
+                        text = item.raw_text_content
 
                         async def _send_user_text(
                             text: str = text, fut: asyncio.Future = fut
@@ -1822,8 +1822,13 @@ class RealtimeSession(  # noqa: F811
                     self._chat_ctx.items.append(item)
                 else:
                     logger.debug(
+<<<<<<< HEAD
                         "Skipping user message (already in context from audio)",
                         extra={"lk.pii.text_content": item.text_content},
+=======
+                        "Skipping user message (already in context from audio): "
+                        f"{item.raw_text_content}"
+>>>>>>> main
                     )
                     self._sent_message_ids.add(item.id)
 
