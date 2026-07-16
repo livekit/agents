@@ -59,7 +59,6 @@ LIVEKIT_AVATAR_PUBLISH_SOURCES = ["camera", "microphone"]
 # Backend egress consumes this config attribute to route playback lifecycle RPCs
 # to the dispatched LiveKit Agents participant.
 LIVEKIT_AGENT_IDENTITY_ATTRIBUTE = "livekit_agent_identity"
-RPC_CLEAR_BUFFER = "lk.clear_buffer"
 RPC_PLAYBACK_FINISHED = "lk.playback_finished"
 RPC_PLAYBACK_STARTED = "lk.playback_started"
 _AVATAR_AGENT_IDENTITY = "spatius-avatar-agent"
@@ -186,7 +185,6 @@ class AvatarSession(BaseAvatarSession):
 
         self._spatius_session: SpatiusSDKSession | None = None
         self._agent_session: AgentSession | None = None
-        self._room: rtc.Room | None = None
         self._audio_buffer: QueueAudioOutput | None = None
         self._user_state_changed_handler_registered = False
         self._session_close_handler_registered = False
@@ -314,7 +312,6 @@ class AvatarSession(BaseAvatarSession):
             )
 
         self._agent_session = agent_session
-        self._room = room
 
         try:
             self._spatius_session = new_avatar_session(
@@ -632,16 +629,8 @@ class AvatarSession(BaseAvatarSession):
                 self._active_segment = None
 
         try:
-            if self._room:
-                await self._room.local_participant.perform_rpc(
-                    destination_identity=self._avatar_participant_identity,
-                    method=RPC_CLEAR_BUFFER,
-                    payload="",
-                )
-        except Exception as e:
-            logger.warning("Failed to send clear-buffer RPC to Spatius avatar", exc_info=e)
-
-        try:
+            # Keep the existing Spatius WebSocket interruption path. LiveKit RPCs
+            # are receive-only lifecycle signals for transcript synchronization.
             interrupted_id = await self._spatius_session.interrupt()
             logger.debug("Spatius avatar interrupted", extra={"request_id": interrupted_id})
         except Exception as e:
@@ -687,4 +676,3 @@ class AvatarSession(BaseAvatarSession):
 
         self._initialized = False
         self._agent_session = None
-        self._room = None
