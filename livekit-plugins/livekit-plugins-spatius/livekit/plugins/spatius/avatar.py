@@ -278,7 +278,9 @@ class AvatarSession(BaseAvatarSession):
                     room_join=True,
                     room=room_name,
                     can_subscribe=False,
-                    can_publish_data=False,
+                    # LiveKit RPC is carried over data packets. The avatar egress
+                    # participant must publish data to send playback lifecycle RPCs.
+                    can_publish_data=True,
                     can_publish_sources=LIVEKIT_AVATAR_PUBLISH_SOURCES,
                 )
             )
