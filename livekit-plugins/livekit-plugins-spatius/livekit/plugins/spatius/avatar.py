@@ -56,6 +56,9 @@ DEFAULT_OPUS_APPLICATION = "audio"
 SUPPORTED_OPUS_SAMPLE_RATES = {8000, 12000, 16000, 24000, 48000}
 DEFAULT_SESSION_TTL = timedelta(hours=1)
 LIVEKIT_AVATAR_PUBLISH_SOURCES = ["camera", "microphone"]
+# Backend egress consumes this config attribute to route playback lifecycle RPCs
+# to the dispatched LiveKit Agents participant.
+LIVEKIT_AGENT_IDENTITY_ATTRIBUTE = "livekit_agent_identity"
 RPC_CLEAR_BUFFER = "lk.clear_buffer"
 RPC_PLAYBACK_FINISHED = "lk.playback_finished"
 RPC_PLAYBACK_STARTED = "lk.playback_started"
@@ -250,11 +253,16 @@ class AvatarSession(BaseAvatarSession):
             extra={
                 "room": room_name,
                 "agent_room": agent_room_name,
+                "agent_identity": local_participant_identity,
                 "region": self._region,
             },
         )
 
         egress_attributes = {ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity}
+        spatius_egress_attributes = {
+            **egress_attributes,
+            LIVEKIT_AGENT_IDENTITY_ATTRIBUTE: local_participant_identity,
+        }
         livekit_token = (
             api.AccessToken(
                 api_key=str(resolved_livekit_api_key),
@@ -282,7 +290,7 @@ class AvatarSession(BaseAvatarSession):
             api_token=livekit_token,
             room_name=room_name,
             publisher_id=self._avatar_participant_identity,
-            extra_attributes=egress_attributes,
+            extra_attributes=spatius_egress_attributes,
             idle_timeout=self._idle_timeout_seconds,
         )
 
