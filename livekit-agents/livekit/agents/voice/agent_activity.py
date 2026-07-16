@@ -2446,16 +2446,16 @@ class AgentActivity(RecognitionHooks):
             return None
 
         expr = self._session._expressive
-        if isinstance(expr, dict):
-            # speech_steering renders per-provider delivery guidelines on top of the
-            # provider-agnostic default; explicit templates override
-            provider_key = self.tts.markup._provider_key() if self.tts else ""
-            return resolve_expressive_options(
-                expr, provider_key=provider_key, default=DEFAULT_EXPRESSIVE_OPTIONS
-            )
-        if expr:
-            return DEFAULT_EXPRESSIVE_OPTIONS
-        return None
+        if not expr and not isinstance(expr, dict):
+            return None
+        # speech_steering renders per-provider delivery guidelines on top of the
+        # provider-agnostic default; explicit templates override
+        provider_key = self.tts.markup._provider_key() if self.tts else ""
+        return resolve_expressive_options(
+            expr if isinstance(expr, dict) else {},
+            provider_key=provider_key,
+            default=DEFAULT_EXPRESSIVE_OPTIONS,
+        )
 
     def _inject_expressive_instructions(
         self,

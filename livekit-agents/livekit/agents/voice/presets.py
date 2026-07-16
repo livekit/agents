@@ -13,17 +13,17 @@ markup-capable TTS provider.
 from .agent_session import NonverbalOptions, SpeechSteeringOptions
 
 FORMAL: SpeechSteeringOptions = {
-    "disfluencies": True,
-    "nonverbal_sounds": NonverbalOptions(breathing=True),
+    "nonverbal_sounds": NonverbalOptions(),
 }
-"""Composed, natural delivery: audible breathing and light fillers; no laughter,
-sighing, or any other non-verbal sound."""
+"""Composed, natural delivery: no non-verbal sounds at all — the empty
+``NonverbalOptions()`` turns filtering on with every sound off. Light fillers
+come from the ``disfluencies`` default; override with ``disfluencies: False``."""
 
 CASUAL: SpeechSteeringOptions = {
-    "disfluencies": True,
     "nonverbal_sounds": NonverbalOptions(breathing=True, sighing=True),
 }
-"""Relaxed, friendly delivery: FORMAL plus sighs.
+"""Relaxed, friendly delivery: audible breathing and sighs; no laughter or any
+other non-verbal sound. Light fillers come from the ``disfluencies`` default.
 
 Laughter is deliberately excluded — current TTS laugh renditions sound
 unnatural; re-enable with ``laughing=True`` once they improve."""

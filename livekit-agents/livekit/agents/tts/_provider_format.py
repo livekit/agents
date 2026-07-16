@@ -149,7 +149,9 @@ _EXPR_PREAMBLE = """\
 You control speech delivery with a single XML marker tag: <expr/>. Every marker has a \
 type attribute. Use only the marker types listed below, and where a type lists a label \
 vocabulary, only those labels. Use the markers often and diversify them so the voice \
-never sounds flat while ensuring the markers are appropriate for the moment.
+never sounds flat while ensuring the markers are appropriate for the moment. Write the \
+words themselves the way people talk: use contractions ("I'm", "you're", "don't") — \
+spelled-out forms like "I am" or "do not" sound stiff when spoken.
 
 Just as important is knowing when NOT to reach for a marker. Reserve surprise openers \
 like "oh" or "ah" for genuine surprise — an ordinary request isn't one. Don't stack markers \
@@ -198,6 +200,8 @@ _INWORLD_EXAMPLES = [
     '<expr type="expression" label="say playfully"/> Okay okay, why did the burger go to the gym? <expr type="break" label="500ms"/> <expr type="expression" label="speak with bright energy"/> Because it wanted better buns! <expr type="sound" label="laugh"/>',  # noqa: E501
     '<expr type="expression" label="sound concerned"/> Ah man, yeah that\'s on us. <expr type="expression" label="speak calmly"/> Lemme see what I can do.',  # noqa: E501
     '<expr type="sound" label="sigh"/> <expr type="expression" label="speak softly, gently"/> I know it\'s been a rough week.',  # noqa: E501
+    '<expr type="expression" label="warm and welcoming"/> Welcome to the hotel. <expr type="expression" label="upbeat, warm questioning"/> How can I help you today?',  # noqa: E501
+    '<expr type="expression" label="easygoing and reassuring"/> That\'s all set. <expr type="break" label="300ms"/> <expr type="expression" label="slow and clearly enunciated"/> Your confirmation code is B 4 J 7.',  # noqa: E501
 ]
 
 
@@ -217,19 +221,63 @@ def _inworld_expr_llm_instructions(sounds: list[str]) -> str:
    <expr type="expression" label="DESCRIPTION"/>
    The label is free-form: describe vocal quality, pitch, volume, pace, and intonation \
 in plain English — "say playfully", "speak with warm surprise", "sound concerned", \
-"drop to a whisper", "speak slowly and clearly, patient and reassuring"."""
+"drop to a whisper", "speak slowly and clearly, patient and reassuring".
+   Match the expression tag's energy to the sentence's punctuation. An exclamation \
+needs a bright or upbeat label (e.g. "bright, upbeat energy"); a calm or reassuring \
+label flattens the "!". Never lead an exclamatory sentence with a calm tag.
+   Put each question in its own sentence — don't comma-splice it onto a statement. \
+Write "Welcome to the hotel. How can I help you today?", not "Welcome to the hotel, \
+how can I help you today?", so the question carries its own delivery tag instead of \
+inheriting the statement's.
+   Name a mood or speaking style, not a mechanical pitch contour. "upbeat, warm \
+questioning" steers far more reliably than "rising tone".
+   Use at most two adjectives per tag, and make sure they align — with the mood of \
+the sentence and with each other. Clashing descriptors ("calm, excited") cancel out \
+and muddy the delivery.
+   Don't open a turn with a "slow" tag. The first expression colors the whole turn, \
+and a slow lead flattens questions and drags the energy down. Keep the pace neutral \
+by default and reserve slow, clearly-enunciated delivery for the specific line that \
+needs it (a total, date, address, or confirmation code).
+   Rotate expression labels — don't reuse the same one two turns in a row, and vary \
+the descriptor. A starting palette:
+     greeting / warm open: "bright, genuine warmth" / "warm and welcoming" / \
+"cheerful, glad you called"
+     asking a question: "upbeat, warm questioning" / "warm and curious" / "bright \
+and inviting" / "gently curious, welcoming"
+     good news / exclamation: "bright, upbeat energy" / "delighted and warm" / \
+"pleased and bright"
+     reassuring / taking a request in stride: "calm and confident" / \
+"easygoing and reassuring" / "warm and grounded"
+     empathy / a problem or bad news: "soft, with genuine care" / \
+"sincere and concerned" / "gentle and steady"
+     reading back a total, date, or code: "slow and clearly enunciated\""""
     ]
     if sounds:
-        sections.append(
-            f"""Sounds - a non-verbal sound between sentences. Self-closing.
+        fits = " (a clear-throat when shifting to a new step or topic, for example)"
+        section = f"""Sounds - a non-verbal sound between sentences. Self-closing.
    <expr type="sound" label="{sounds[0]}"/>
-   Labels are a fixed vocabulary: {", ".join(sounds)}."""
-        )
+   Labels are a fixed vocabulary: {", ".join(sounds)}.
+   Use non-verbal sounds sparingly, and never the same one twice in a row — reach for \
+one only where it genuinely fits{fits if "clear throat" in sounds else ""}. An enabled \
+sound gets over-used otherwise."""
+        if "breathe" in sounds:
+            section += """
+   Use the "breathe" sound only for a real, gentle breath, never as filler — on this \
+model it easily reads as a weary or impatient sigh, which sounds wrong in a support \
+setting."""
+        sections.append(section)
     sections.append(
         """Pauses - insert silence when appropriate. Self-closing.
    <expr type="break" label="500ms"/> or <expr type="break" label="1s"/> (max 10s).
    A period or an ellipsis (...) already creates a pause, so don't put a break marker \
-right next to one — pick one or the other."""
+right next to one — pick one or the other.
+   Use only periods, commas, question marks, exclamation points, and ellipses for \
+pacing. Avoid semicolons and dashes; the model doesn't pace them reliably. Rewrite \
+them as separate sentences or commas.
+   After any <expr type="break"/>, give the sentence that follows its own expression \
+tag — a fresh one, not necessarily the same as before (a break is often where the mood \
+shifts). A break resets delivery to neutral, so an untagged sentence after a break is \
+spoken flat."""
     )
 
     parts = [
