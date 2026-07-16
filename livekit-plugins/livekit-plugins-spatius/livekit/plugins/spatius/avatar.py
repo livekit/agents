@@ -15,8 +15,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import math
 import os
 import time
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -53,6 +56,9 @@ DEFAULT_OPUS_APPLICATION = "audio"
 SUPPORTED_OPUS_SAMPLE_RATES = {8000, 12000, 16000, 24000, 48000}
 DEFAULT_SESSION_TTL = timedelta(hours=1)
 LIVEKIT_AVATAR_PUBLISH_SOURCES = ["camera", "microphone"]
+RPC_CLEAR_BUFFER = "lk.clear_buffer"
+RPC_PLAYBACK_FINISHED = "lk.playback_finished"
+RPC_PLAYBACK_STARTED = "lk.playback_started"
 _AVATAR_AGENT_IDENTITY = "spatius-avatar-agent"
 _AVATAR_AGENT_NAME = "spatius-avatar-agent"
 
@@ -177,6 +183,7 @@ class AvatarSession(BaseAvatarSession):
 
         self._spatius_session: SpatiusSDKSession | None = None
         self._agent_session: AgentSession | None = None
+        self._room: rtc.Room | None = None
         self._audio_buffer: QueueAudioOutput | None = None
         self._user_state_changed_handler_registered = False
         self._session_close_handler_registered = False
@@ -184,6 +191,7 @@ class AvatarSession(BaseAvatarSession):
         self._main_task: asyncio.Task | None = None
         self._initialized = False
         self._active_segment: _SegmentState | None = None
+        self._pending_segments: deque[_SegmentState] = deque()
         self._segment_finalize_lock = asyncio.Lock()
 
     @property
@@ -296,6 +304,7 @@ class AvatarSession(BaseAvatarSession):
             )
 
         self._agent_session = agent_session
+        self._room = room
 
         try:
             self._spatius_session = new_avatar_session(
@@ -315,9 +324,20 @@ class AvatarSession(BaseAvatarSession):
             await self._spatius_session.init()
             await self._spatius_session.start()
 
-            self._audio_buffer = QueueAudioOutput(sample_rate=resolved_sample_rate)
+            self._audio_buffer = QueueAudioOutput(
+                sample_rate=resolved_sample_rate,
+                wait_playback_start=True,
+            )
             await self._audio_buffer.start()
             self._audio_buffer.on("clear_buffer", self._on_clear_buffer)  # type: ignore[arg-type]
+            room.local_participant.register_rpc_method(
+                RPC_PLAYBACK_STARTED,
+                self._handle_playback_started_rpc,
+            )
+            room.local_participant.register_rpc_method(
+                RPC_PLAYBACK_FINISHED,
+                self._handle_playback_finished_rpc,
+            )
 
             agent_session.output.replace_audio_tail(self._audio_buffer)
             self._main_task = asyncio.create_task(
@@ -442,18 +462,82 @@ class AvatarSession(BaseAvatarSession):
                 segment.req_id = req_id
 
             self._active_segment = None
-            self._notify_segment_finished(segment, interrupted=False, reason=source)
+            self._pending_segments.append(segment)
+            logger.debug(
+                "Spatius avatar input segment ended; awaiting remote playback completion",
+                extra={"request_id": segment.req_id, "reason": source},
+            )
             return True
 
-    def _notify_segment_finished(
-        self, segment: _SegmentState, *, interrupted: bool, reason: str
-    ) -> None:
-        playback_position = (
-            self._estimate_interrupted_playback_position(segment)
-            if interrupted
-            else segment.pushed_duration
-        )
+    def _handle_playback_started_rpc(self, data: rtc.RpcInvocationData) -> str:
+        if data.caller_identity != self._avatar_participant_identity:
+            logger.warning(
+                "Spatius playback-started RPC received from unexpected participant",
+                extra={
+                    "caller_identity": data.caller_identity,
+                    "expected_identity": self._avatar_participant_identity,
+                },
+            )
+            return "reject"
 
+        if not self._audio_buffer:
+            return "reject"
+
+        self._audio_buffer.notify_playback_started()
+        logger.debug(
+            "Spatius avatar playback started",
+            extra={"caller_identity": data.caller_identity},
+        )
+        return "ok"
+
+    def _handle_playback_finished_rpc(self, data: rtc.RpcInvocationData) -> str:
+        if data.caller_identity != self._avatar_participant_identity:
+            logger.warning(
+                "Spatius playback-finished RPC received from unexpected participant",
+                extra={
+                    "caller_identity": data.caller_identity,
+                    "expected_identity": self._avatar_participant_identity,
+                },
+            )
+            return "reject"
+
+        try:
+            payload = json.loads(data.payload)
+            playback_position = float(payload["playback_position"])
+            interrupted = payload["interrupted"]
+            if not isinstance(interrupted, bool) or not math.isfinite(playback_position):
+                raise ValueError("invalid playback event")
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as e:
+            logger.warning(
+                "Invalid Spatius playback-finished RPC payload",
+                extra={"payload": data.payload, "error": str(e)},
+            )
+            return "reject"
+
+        if not self._pending_segments:
+            logger.warning(
+                "Spatius playback-finished RPC received without a pending segment",
+                extra={"playback_position": playback_position, "interrupted": interrupted},
+            )
+            return "ok"
+
+        segment = self._pending_segments.popleft()
+        self._notify_segment_finished(
+            segment,
+            playback_position=max(0.0, playback_position),
+            interrupted=interrupted,
+            reason="remote_playback_finished",
+        )
+        return "ok"
+
+    def _notify_segment_finished(
+        self,
+        segment: _SegmentState,
+        *,
+        playback_position: float,
+        interrupted: bool,
+        reason: str,
+    ) -> None:
         if self._audio_buffer:
             self._audio_buffer.notify_playback_finished(
                 playback_position=playback_position,
@@ -485,8 +569,23 @@ class AvatarSession(BaseAvatarSession):
             return False
 
         self._active_segment = None
-        self._notify_segment_finished(segment, interrupted=interrupted, reason=reason)
+        self._notify_segment_finished(
+            segment,
+            playback_position=self._estimate_interrupted_playback_position(segment),
+            interrupted=interrupted,
+            reason=reason,
+        )
         return True
+
+    def _complete_pending_segments(self, *, reason: str) -> None:
+        while self._pending_segments:
+            segment = self._pending_segments.popleft()
+            self._notify_segment_finished(
+                segment,
+                playback_position=self._estimate_interrupted_playback_position(segment),
+                interrupted=True,
+                reason=reason,
+            )
 
     def _on_clear_buffer(self) -> None:
         self._schedule_interrupt()
@@ -501,7 +600,7 @@ class AvatarSession(BaseAvatarSession):
     def _schedule_interrupt(self) -> None:
         if not self._spatius_session:
             return
-        if self._active_segment is None:
+        if self._active_segment is None and not self._pending_segments:
             return
         if self._interrupt_task and not self._interrupt_task.done():
             return
@@ -517,12 +616,23 @@ class AvatarSession(BaseAvatarSession):
         if not self._spatius_session:
             return
 
+        async with self._segment_finalize_lock:
+            if self._active_segment is not None:
+                self._pending_segments.append(self._active_segment)
+                self._active_segment = None
+
+        try:
+            if self._room:
+                await self._room.local_participant.perform_rpc(
+                    destination_identity=self._avatar_participant_identity,
+                    method=RPC_CLEAR_BUFFER,
+                    payload="",
+                )
+        except Exception as e:
+            logger.warning("Failed to send clear-buffer RPC to Spatius avatar", exc_info=e)
+
         try:
             interrupted_id = await self._spatius_session.interrupt()
-
-            async with self._segment_finalize_lock:
-                self._complete_active_segment(interrupted=True, reason="interrupt")
-
             logger.debug("Spatius avatar interrupted", extra={"request_id": interrupted_id})
         except Exception as e:
             logger.warning("Failed to interrupt Spatius avatar", exc_info=e)
@@ -548,6 +658,7 @@ class AvatarSession(BaseAvatarSession):
             self._main_task = None
 
         self._complete_active_segment(interrupted=True, reason="session_close")
+        self._complete_pending_segments(reason="session_close")
 
         if self._audio_buffer:
             await self._audio_buffer.aclose()
@@ -566,3 +677,4 @@ class AvatarSession(BaseAvatarSession):
 
         self._initialized = False
         self._agent_session = None
+        self._room = None
