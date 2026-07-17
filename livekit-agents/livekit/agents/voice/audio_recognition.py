@@ -774,11 +774,7 @@ class AudioRecognition:
     def _update_stt(self, stt: io.STTNode | None, *, pipeline: _STTPipeline | None = None) -> None:
         self._stt = stt
         if pipeline is None and stt is not None:
-            # _closing_task is set synchronously at close, earlier than _closing
-            session = self._session
-            pipeline = _STTPipeline(
-                stt, is_closing=lambda: session._closing_task is not None or session._closing
-            )
+            pipeline = _STTPipeline(stt, is_closing=self._session._is_closing)
 
         if pipeline is not None:
             self._stt_consumer_atask = asyncio.create_task(

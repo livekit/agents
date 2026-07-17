@@ -1007,6 +1007,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def shutdown(self, *, drain: bool = True) -> None:
         self._close_soon(error=None, drain=drain, reason=CloseReason.USER_INITIATED)
 
+    def _is_closing(self) -> bool:
+        # _closing_task is set synchronously when close begins, earlier than _closing
+        return self._closing_task is not None or self._closing
+
     @utils.log_exceptions(logger=logger)
     async def _aclose_impl(
         self,
