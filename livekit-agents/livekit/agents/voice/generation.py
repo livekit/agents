@@ -466,11 +466,10 @@ class _AudioOutput:
     own_segment_index: int | None = None
     """`AudioOutput.captured_playout_segments` read after the first counted `capture_frame`.
 
-    `None` until one of this segment's frames is confirmed counted. Unlike a delta
-    against `captured_segments_before`, this records the playout segment the frames
-    actually landed in, and stays `None` when every frame bailed at a pause/interrupt
-    gate without ever being counted — so it can be used as evidence of (partial)
-    playback of this segment.
+    `None` until one of this segment's frames is confirmed counted; stays `None` when
+    every frame bailed at a pause/interrupt gate without being counted. Evidence that
+    this segment's audio was accepted for playout, and that the playback event
+    `wait_for_playout()` returns is this segment's rather than a stale one.
     """
 
 
@@ -487,16 +486,16 @@ def perform_audio_forwarding(
 
     def _on_playback_started(ev: io.PlaybackStartedEvent) -> None:
         # The audio output is shared across overlapping segments and the event carries
-        # no segment identity (e.g. a stale `lk.playback_started` RPC from an avatar
-        # worker can arrive after its segment was interrupted and the next one started).
-        # Only honor the event while the output's segment counter still points at THIS
+        # no segment identity (a stale `lk.playback_started` RPC from an avatar worker
+        # can arrive after its segment was interrupted and the next one started). Only
+        # honor the event while the output's segment counter still points at THIS
         # segment. During the first capture_frame the event can arrive before
         # `own_segment_index` is recorded — sinks emit playback_started synchronously
         # inside the first counted capture, and chained outputs (transcript sync,
-        # recorder) forward the leaf's event before counting their own segment — so
-        # until then accept the snapshot and snapshot + 1. Ambiguous events afterwards
-        # are dropped (fail closed): genuine partial playback is then still committed
-        # through the playback-position evidence in the interrupted gates.
+        # recorder) forward the leaf's event before counting their own — so until then
+        # accept the snapshot and snapshot + 1. Ambiguous events are dropped (fail
+        # closed); partial playback still commits via the position evidence in the
+        # interrupted gates.
         counter = audio_output.captured_playout_segments
         if out.own_segment_index is not None:
             is_own_event = counter == out.own_segment_index
@@ -543,9 +542,6 @@ async def _audio_forwarding_task(
                     num_channels=frame.num_channels,
                 )
 
-            # mark before capturing so the playback_started emitted synchronously inside
-            # the first capture_frame is attributed to this segment (see the listener in
-            # `perform_audio_forwarding`)
             out.has_captured_own_frame = True
 
             if resampler:
@@ -554,9 +550,6 @@ async def _audio_forwarding_task(
             else:
                 await audio_output.capture_frame(frame)
 
-            # read the counter after the capture resolved: this records the playout
-            # segment the frame actually landed in, and stays unset if the frame bailed
-            # at a pause/interrupt gate without being counted
             if (
                 out.own_segment_index is None
                 and audio_output.captured_playout_segments > out.captured_segments_before
@@ -652,13 +645,8 @@ async def forward_generation(
             if audio_output is not None:
                 audio_output.clear_buffer()
                 playback_ev = await audio_output.wait_for_playout()
-                # A reported playback position is proof of partial playback even when
-                # the playback-started notification hasn't arrived yet (remote avatar
-                # outputs deliver it via RPC, which can race with the interruption).
-                # It only counts when one of THIS segment's frames was accepted into a
-                # counted playout segment (own_segment_index) — the same condition under
-                # which wait_for_playout waits for this segment's playback event instead
-                # of returning a stale one from a previous segment.
+                # a non-zero position proves partial playback even when the playback-started
+                # notification lost the race with the interruption (see own_segment_index)
                 played_own_frame = audio_out is not None and audio_out.own_segment_index is not None
                 if audio_out is not None and (
                     (audio_out.first_frame_fut.done() and not audio_out.first_frame_fut.cancelled())
