@@ -783,10 +783,15 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise
         except Exception as e:
             raise APIConnectionError(f"Gnani TTS WebSocket error: {e}") from e
-        finally:
-            pcm_processor.finalize(output_emitter)
-            output_emitter.flush()
-            output_emitter.end_segment()
+
+        # Only flush/close the segment on the success path. On error, flushing
+        # the coalescer's sub-frame remainder would push partial audio and set
+        # pushed_duration > 0.0, which makes the base retry logic skip an
+        # otherwise-retryable transient failure. The per-attempt output_emitter
+        # is discarded on retry, so end_segment() is unnecessary on error.
+        pcm_processor.finalize(output_emitter)
+        output_emitter.flush()
+        output_emitter.end_segment()
 
 
 __all__ = ["TTS", "SynthesizeStream"]

@@ -29,8 +29,11 @@ def _websockets_major_version() -> int:
 def ws_header_kwargs(headers: dict[str, str]) -> dict[str, Any]:
     """Return the correct ``connect()`` header kwarg for the installed websockets.
 
-    websockets >= 13 renamed ``extra_headers`` to ``additional_headers``. Support
-    both so WebSocket STT/TTS works when another dependency pins websockets < 13.
+    The new asyncio implementation uses ``additional_headers`` while the legacy
+    client uses ``extra_headers``. The top-level ``websockets.connect`` alias
+    (used by the STT/TTS clients) only switched to the asyncio implementation in
+    websockets 14.0 — in 12.x and 13.x it is still the legacy client. Select the
+    kwarg by that boundary so WebSocket STT/TTS works across ``websockets>=12``.
     """
-    key = "additional_headers" if _websockets_major_version() >= 13 else "extra_headers"
+    key = "additional_headers" if _websockets_major_version() >= 14 else "extra_headers"
     return {key: headers}
