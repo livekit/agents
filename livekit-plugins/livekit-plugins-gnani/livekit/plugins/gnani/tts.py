@@ -104,9 +104,12 @@ def _strip_wav_header(data: bytes) -> bytes:
             return data[data_start : data_start + chunk_size]
         offset += 8 + chunk_size
 
+    # No `data` sub-chunk could be located (truncated or non-standard header).
+    # Fall back to stripping a standard fixed-size WAV header so the PCM that
+    # follows it is preserved instead of dropped.
     if len(data) <= _WAV_HEADER_SIZE:
         return b""
-    return b""
+    return data[_WAV_HEADER_SIZE:]
 
 
 class _Pcm16Aligner:
