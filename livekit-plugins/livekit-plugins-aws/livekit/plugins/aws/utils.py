@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import warnings
-
 from aiobotocore.session import AioSession, get_session  # type: ignore
+
+from .log import logger
 
 DEFAULT_REGION = "us-east-1"
 
@@ -30,12 +30,10 @@ def _resolve_session(session: object | None) -> AioSession:
         aioboto3 = None
 
     if aioboto3 is not None and isinstance(session, aioboto3.Session):
-        warnings.warn(
+        logger.warning(
             "Passing an aioboto3.Session is deprecated; pass an "
             "aiobotocore.session.AioSession instead. The AWS plugin no longer depends "
-            "on aioboto3.",
-            DeprecationWarning,
-            stacklevel=3,
+            "on aioboto3."
         )
         return session._session
 
