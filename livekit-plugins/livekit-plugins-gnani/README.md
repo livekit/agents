@@ -21,7 +21,7 @@ Or with [uv](https://docs.astral.sh/uv/):
 uv add livekit-plugins-gnani
 ```
 
-This will also install the [`gnani-vachana`](https://pypi.org/project/gnani-vachana/) (>= 0.7.7) core SDK as a dependency. The Python import package name remains `gnani`.
+This will also install the [`websockets`](https://pypi.org/project/websockets/) and [`livekit-agents`](https://pypi.org/project/livekit-agents/) packages as dependencies.
 
 Install with the LiveKit Agents Gnani extra:
 
@@ -265,20 +265,17 @@ tts = TTS(model="timbre-v2.5", voice="Nalini", language="hi-IN")
 ## Architecture
 
 ```
-gnani-vachana (>=0.7.7)  ← Core SDK on PyPI (import as `gnani`)
-        ↑
 livekit-plugins-gnani    ← This package (LiveKit Agents adapter)
   ├── STT: REST + WebSocket
   └── TTS: REST + SSE + WebSocket
 ```
 
-This plugin wraps the `gnani-vachana` SDK into LiveKit's `stt.STT` and `tts.TTS` base classes. It uses the **Prisma** model for speech-to-text and the **Timbre** model for text-to-speech. Voice lists, language constants, and model definitions are shared with the core SDK. Authentication uses a single `api_key` passed via the `X-API-Key-ID` header.
+This plugin directly implements the Gnani REST and WebSocket APIs using `aiohttp` (for REST STT/TTS) and `websockets` (for streaming STT/TTS), adapting them into LiveKit's `stt.STT` and `tts.TTS` base classes. It uses the **Prisma** model for speech-to-text and the **Timbre** model for text-to-speech. No external SDK is required — all connection logic, authentication, and audio format handling is self-contained. Authentication uses a single `api_key` passed via the `X-API-Key-ID` header.
 
 ## Documentation
 
 - [Gnani API Docs](https://docs.gnani.ai/)
 - [LiveKit Agents Docs](https://docs.livekit.io/agents/)
-- [gnani-vachana SDK on PyPI](https://pypi.org/project/gnani-vachana/)
 - [Gnani STT Plugin Guide](https://docs.livekit.io/agents/integrations/stt/gnani/)
 - [Gnani TTS Plugin Guide](https://docs.livekit.io/agents/integrations/tts/gnani/)
 - [STT REST API](https://docs.gnani.ai/api/STT/speech-to-text)
@@ -289,7 +286,7 @@ This plugin wraps the `gnani-vachana` SDK into LiveKit's `stt.STT` and `tts.TTS`
 
 ## LiveKit Compatibility
 
-Tested with **LiveKit Agents v1.6.x** and **gnani-vachana v0.7.7**.
+Tested with **LiveKit Agents v1.6.x**.
 
 ## License
 

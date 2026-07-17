@@ -46,56 +46,14 @@ from livekit.agents.utils.misc import is_given
 if TYPE_CHECKING:
     from livekit.agents.utils import AudioBuffer
 
-from ._compat import ws_header_kwargs as _ws_header_kwargs
 from .log import logger
+from .models import GnaniSTTLanguages
+from .utils import ws_header_kwargs as _ws_header_kwargs
 
 GnaniSTTFormat = Literal["verbatim", "transcribe"]
 GnaniSTTRecognizeMethod = Literal["rest", "websocket"]
 
 GNANI_STT_BASE_URL = "https://api.vachana.ai"
-
-GnaniSTTLanguages = Literal[
-    "bn-IN",
-    "en-IN",
-    "gu-IN",
-    "hi-IN",
-    "kn-IN",
-    "ml-IN",
-    "mr-IN",
-    "pa-IN",
-    "ta-IN",
-    "te-IN",
-    "en-IN,hi-IN",
-]
-
-SUPPORTED_LANGUAGES: set[str] = {
-    "bn-IN",
-    "en-IN",
-    "gu-IN",
-    "hi-IN",
-    "kn-IN",
-    "ml-IN",
-    "mr-IN",
-    "pa-IN",
-    "ta-IN",
-    "te-IN",
-    "en-IN,hi-IN",
-}
-
-STREAM_SUPPORTED_LANGUAGES: set[str] = {
-    "bn-IN",
-    "en-IN",
-    "gu-IN",
-    "hi-IN",
-    "kn-IN",
-    "ml-IN",
-    "mr-IN",
-    "pa-IN",
-    "ta-IN",
-    "te-IN",
-}
-
-REST_SINGLE_LANGUAGES: set[str] = {code for code in SUPPORTED_LANGUAGES if "," not in code}
 
 SAMPLE_RATE_16K = 16000
 SAMPLE_RATE_8K = 8000
@@ -108,25 +66,6 @@ STREAM_SUPPORTED_SAMPLE_RATES = (
     SAMPLE_RATE_48K,
 )
 STREAM_CHUNK_BYTES = 1024
-
-
-def _validate_rest_language_code(language_code: str) -> None:
-    """Validate a REST language_code.
-
-    Accepts a single supported code, a pre-defined combo from
-    ``SUPPORTED_LANGUAGES``, or any comma-separated combination of supported
-    single codes (e.g. ``"en-IN,ta-IN"``) to enable auto-detection.
-    """
-    if language_code in SUPPORTED_LANGUAGES:
-        return
-    parts = [p.strip() for p in language_code.split(",") if p.strip()]
-    if len(parts) >= 2 and all(p in REST_SINGLE_LANGUAGES for p in parts):
-        return
-    raise ValueError(
-        f"Unsupported language_code '{language_code}'. "
-        f"Choose from: {', '.join(sorted(REST_SINGLE_LANGUAGES))} "
-        f"or a comma-separated combination of these for auto-detection."
-    )
 
 
 @dataclass
@@ -179,7 +118,7 @@ class STT(stt.STT):
     def __init__(
         self,
         *,
-        language: str = "en-IN",
+        language: GnaniSTTLanguages | str = "en-IN",
         api_key: str | None = None,
         sample_rate: int = SAMPLE_RATE_16K,
         base_url: str = GNANI_STT_BASE_URL,
@@ -209,8 +148,6 @@ class STT(stt.STT):
         if sample_rate not in STREAM_SUPPORTED_SAMPLE_RATES:
             allowed = ", ".join(str(r) for r in STREAM_SUPPORTED_SAMPLE_RATES)
             raise ValueError(f"sample_rate must be one of {allowed}, got {sample_rate}")
-
-        _validate_rest_language_code(language)
 
         self._opts = GnaniSTTOptions(
             api_key=self._api_key,

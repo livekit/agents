@@ -36,15 +36,6 @@ from typing import Any, Literal
 
 import aiohttp
 
-from gnani.tts.client import (  # type: ignore[import-untyped]
-    DEFAULT_MODEL,
-    SUPPORTED_TTS_LANGUAGES,  # noqa: F401 — re-exported via livekit.plugins.gnani
-    TIMBRE_V20_VOICES,
-    TIMBRE_V25_VOICES,
-    _validate_model,
-    _validate_timbre_options,
-    _validate_voice,
-)
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
@@ -55,22 +46,20 @@ from livekit.agents import (
     utils,
 )
 
-from ._compat import ws_header_kwargs as _ws_header_kwargs
 from .log import logger
+from .models import (
+    DEFAULT_MODEL,
+    GnaniTTSBitrates,
+    GnaniTTSContainers,
+    GnaniTTSEncodings,
+    GnaniTTSLanguages,
+    GnaniTTSModels,
+    GnaniTTSVoices,
+)
+from .utils import ws_header_kwargs as _ws_header_kwargs
 
 GNANI_TTS_BASE_URL = "https://api.vachana.ai"
 
-GnaniTTSVoices = Literal[
-    "Pranav",
-    "Kaveri",
-    "Shubhra",
-    "Deepak",
-]
-"""See https://docs.gnani.ai/api/TTS/tts-sse#available-voices"""
-
-GnaniTTSEncodings = Literal["linear_pcm", "oggopus"]
-GnaniTTSContainers = Literal["raw", "mp3", "wav", "mulaw", "ogg"]
-GnaniTTSBitrates = Literal["96k", "128k", "192k"]
 GnaniTTSSynthesizeMethod = Literal["rest", "sse", "websocket"]
 
 SUPPORTED_SAMPLE_RATES = (8000, 16000, 22050, 44100)
@@ -94,12 +83,6 @@ def _check_deprecated_tts_args(kwargs: dict[str, Any], *, caller: str = "TTS.__i
         raise TypeError(
             f"{caller}() got unexpected keyword argument(s): {', '.join(sorted(unknown))}"
         )
-
-
-def _validate_tts_config(*, voice: str, model: str, language: str | None) -> None:
-    _validate_model(model)
-    _validate_timbre_options(model, language=language)
-    _validate_voice(voice, model)
 
 
 def _strip_wav_header(data: bytes) -> bytes:
@@ -268,8 +251,8 @@ class TTS(tts.TTS):
         self,
         *,
         voice: GnaniTTSVoices | str = "Pranav",
-        model: str = DEFAULT_MODEL,
-        language: str | None = None,
+        model: GnaniTTSModels | str = DEFAULT_MODEL,
+        language: GnaniTTSLanguages | str | None = None,
         sample_rate: int = 16000,
         num_channels: int = 1,
         encoding: GnaniTTSEncodings | str = "linear_pcm",
@@ -299,8 +282,6 @@ class TTS(tts.TTS):
                 "Gnani API key is required. "
                 "Provide it directly or set GNANI_API_KEY environment variable."
             )
-
-        _validate_tts_config(voice=voice, model=model, language=language)
 
         self._opts = GnaniTTSOptions(
             api_key=self._api_key,
@@ -347,23 +328,12 @@ class TTS(tts.TTS):
     def update_options(
         self,
         *,
-        voice: str | None = None,
-        model: str | None = None,
-        language: str | None = None,
+        voice: GnaniTTSVoices | str | None = None,
+        model: GnaniTTSModels | str | None = None,
+        language: GnaniTTSLanguages | str | None = None,
         **kwargs: Any,
     ) -> None:
         _check_deprecated_tts_args(kwargs, caller="TTS.update_options")
-
-        next_voice = voice if voice is not None else self._opts.voice
-        next_model = model if model is not None else self._opts.model
-        next_language = language if language is not None else self._opts.language
-
-        if voice is not None or model is not None or language is not None:
-            _validate_tts_config(
-                voice=next_voice,
-                model=next_model,
-                language=next_language,
-            )
 
         if voice is not None:
             self._opts.voice = voice
@@ -810,11 +780,4 @@ class SynthesizeStream(tts.SynthesizeStream):
             output_emitter.end_segment()
 
 
-__all__ = [
-    "DEFAULT_MODEL",
-    "SUPPORTED_TTS_LANGUAGES",
-    "TIMBRE_V20_VOICES",
-    "TIMBRE_V25_VOICES",
-    "TTS",
-    "SynthesizeStream",
-]
+__all__ = ["TTS", "SynthesizeStream"]

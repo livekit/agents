@@ -33,7 +33,6 @@ classifiers = [
 ]
 dependencies = [
     "livekit-agents[codecs]>=1.6.5",
-    "gnani-vachana>=0.7.7,<1.0",
     "websockets>=12.0,<16.0",
 ]
 
