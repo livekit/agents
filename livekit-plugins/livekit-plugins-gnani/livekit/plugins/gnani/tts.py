@@ -502,10 +502,15 @@ class SSEChunkedStream(tts.ChunkedStream):
                     raw_line = raw_bytes.decode("utf-8").strip()
                     if not raw_line:
                         continue
-                    if raw_line.startswith("event:"):
+                    # Ignore SSE keep-alive comments (":") and non-data metadata
+                    # fields; appending them would corrupt the JSON accumulator
+                    # and drop the remaining audio for this request.
+                    if raw_line.startswith((":", "event:", "id:", "retry:")):
                         continue
                     if raw_line.startswith("data:"):
                         raw_line = raw_line[5:].strip()
+                        if not raw_line:
+                            continue
 
                     buf += raw_line
                     try:
