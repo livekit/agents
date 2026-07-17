@@ -24,7 +24,7 @@ classifiers = [
 ]
 dependencies = [
     "livekit-agents>=1.6.5",
-    "aioboto3>=14.1.0",
+    "aiobotocore>=3.0.0",
     "aws_sdk_transcribe_streaming>=0.2.0; python_version >= '3.12'",
 ]
 
