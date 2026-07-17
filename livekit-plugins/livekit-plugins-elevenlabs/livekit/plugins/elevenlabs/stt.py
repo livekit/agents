@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import math
 import os
 import weakref
 from dataclasses import dataclass
@@ -46,6 +47,25 @@ from .models import STTRealtimeSampleRates
 
 API_BASE_URL_V1 = "https://api.elevenlabs.io/v1"
 AUTHORIZATION_HEADER = "xi-api-key"
+
+
+def _speech_confidence(words: list[dict[str, Any]] | None) -> float:
+    """Aggregate ElevenLabs per-word logprobs into a [0, 1] transcription confidence.
+
+    Scribe returns a natural-log probability (``logprob``) per token; we average the
+    spoken-word logprobs and exponentiate to a probability (the geometric mean of the
+    token probabilities). Returns ``0.0`` when no per-word logprobs are available.
+    """
+    if not words:
+        return 0.0
+    logprobs = [
+        w["logprob"]
+        for w in words
+        if w.get("type") == "word" and isinstance(w.get("logprob"), (int, float))
+    ]
+    if not logprobs:
+        return 0.0
+    return min(1.0, max(0.0, math.exp(sum(logprobs) / len(logprobs))))
 
 
 class VADOptions(TypedDict, total=False):
@@ -284,6 +304,7 @@ class STT(stt.STT):
                     speaker_id=speaker_id,
                     start_time=start_time,
                     end_time=end_time,
+                    confidence=_speech_confidence(words),
                     words=[
                         TimedString(
                             text=word.get("text", ""),
@@ -591,6 +612,7 @@ class SpeechStream(stt.SpeechStream):
             text=text,
             start_time=start_time + self.start_time_offset,
             end_time=end_time + self.start_time_offset,
+            confidence=_speech_confidence(words),
         )
         if words:
             speech_data.words = [

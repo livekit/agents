@@ -167,3 +167,43 @@ def test_trace_id_from_headers() -> None:
     assert trace_id_from_headers(CIMultiDict({"X-Trace-Id": "trace-1"})) == "trace-1"
     assert trace_id_from_headers(CIMultiDict()) is None
     assert trace_id_from_headers(None) is None
+
+
+def test_speech_confidence_from_word_logprobs() -> None:
+    # confident transcription: word logprobs near 0 -> confidence near 1 (spacing tokens ignored)
+    words = [
+        {"type": "word", "logprob": -0.01},
+        {"type": "spacing", "logprob": -2.0},
+        {"type": "word", "logprob": -0.05},
+    ]
+    assert 0.9 < elevenlabs_stt._speech_confidence(words) <= 1.0
+
+
+def test_speech_confidence_flags_low_quality_transcription() -> None:
+    # uncertain transcription (very negative logprobs) -> low confidence
+    words = [{"type": "word", "logprob": -2.5}, {"type": "word", "logprob": -3.0}]
+    assert elevenlabs_stt._speech_confidence(words) < 0.2
+
+
+def test_speech_confidence_defaults_to_zero_without_logprobs() -> None:
+    # no words, or words without logprobs (e.g. non-timestamped commit) -> default 0.0
+    assert elevenlabs_stt._speech_confidence(None) == 0.0
+    assert elevenlabs_stt._speech_confidence([{"text": "hi", "start": 0.1, "end": 0.4}]) == 0.0
+
+
+def test_committed_transcript_sets_confidence() -> None:
+    stream = _new_stream(server_vad={"vad_silence_threshold_secs": 0.5})
+
+    stream._process_stream_event(
+        {
+            "message_type": "committed_transcript",
+            "text": "hello",
+            "words": [
+                {"text": "hello", "start": 0.1, "end": 0.4, "type": "word", "logprob": -0.02}
+            ],
+        }
+    )
+
+    final = stream._event_ch.events[1]
+    assert final.type == stt.SpeechEventType.FINAL_TRANSCRIPT
+    assert final.alternatives[0].confidence > 0.9
