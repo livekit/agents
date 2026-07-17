@@ -421,34 +421,39 @@ class SpeechStream(stt.SpeechStream):
             )
 
             has_ended = False
-            async for data in self._input_ch:
-                # Write audio bytes to buffer and get 50ms frames
-                frames: list[rtc.AudioFrame] = []
-                if isinstance(data, rtc.AudioFrame):
-                    frames.extend(audio_bstream.write(data.data.tobytes()))
-                elif isinstance(data, self._FlushSentinel):
-                    frames.extend(audio_bstream.flush())
-                    has_ended = True
+            try:
+                async for data in self._input_ch:
+                    # Write audio bytes to buffer and get 50ms frames
+                    frames: list[rtc.AudioFrame] = []
+                    if isinstance(data, rtc.AudioFrame):
+                        frames.extend(audio_bstream.write(data.data.tobytes()))
+                    elif isinstance(data, self._FlushSentinel):
+                        frames.extend(audio_bstream.flush())
+                        has_ended = True
 
-                for frame in frames:
-                    self._audio_duration_collector.push(frame.duration)
-                    audio_b64 = base64.b64encode(frame.data.tobytes()).decode("utf-8")
-                    await ws.send_str(
-                        json.dumps(
-                            {
-                                "message_type": "input_audio_chunk",
-                                "audio_base_64": audio_b64,
-                                "commit": False,
-                                "sample_rate": self._opts.sample_rate,
-                            }
+                    for frame in frames:
+                        self._audio_duration_collector.push(frame.duration)
+                        audio_b64 = base64.b64encode(frame.data.tobytes()).decode("utf-8")
+                        await ws.send_str(
+                            json.dumps(
+                                {
+                                    "message_type": "input_audio_chunk",
+                                    "audio_base_64": audio_b64,
+                                    "commit": False,
+                                    "sample_rate": self._opts.sample_rate,
+                                }
+                            )
                         )
-                    )
 
-                    if has_ended:
-                        self._audio_duration_collector.flush()
-                        has_ended = False
+                        if has_ended:
+                            self._audio_duration_collector.flush()
+                            has_ended = False
 
-            closing_ws = True
+                closing_ws = True
+            except (aiohttp.ClientError, ConnectionError) as e:
+                if closing_ws or self._session.closed:
+                    return
+                raise APIConnectionError("ElevenLabs STT connection closed unexpectedly") from e
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
