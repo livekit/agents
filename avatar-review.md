@@ -1,0 +1,25 @@
+# Review: `livekit-plugins-spatius/.../avatar.py`
+
+Overall the integration is in good shape and the RPC-based playback lifecycle is the right design. The notes below are about making it **correct** (a few real hang risks) and **simpler** (a large amount of the segment bookkeeping is redundant with the base `AudioOutput`). `avatar2.py` in the same folder is a reference implementation of these ideas — not a target to copy verbatim, just a concrete example.
+
+## Correctness
+
+**1. The Spatius SDK's `on_error` / `on_close` callbacks are never wired (`start()`, the `new_avatar_session(...)` call ~L317).** If the ingress WebSocket dies mid-session (idle timeout, exhausted credits, network drop), the read loop closes silently, `_run_main_task` stops on the next failed `send_audio`, and nothing tears the session down or reconciles outstanding segments — so `AgentSession.wait_for_playout()` hangs forever. Pass `on_error=` (log) and `on_close=` (schedule `aclose()`), and make `aclose()` release any still-pending playback so the turn can't hang.
+
+**2. Interruption has no fallback if the worker's `lk.playback_finished` never arrives.** `_handle_interrupt` (~L622) moves the active segment to `_pending_segments` and calls `spatius.interrupt()`, then relies entirely on the remote RPC to finish it. If that RPC is dropped or the server doesn't emit one for an interrupt, the segment sits in `_pending_segments` forever and `wait_for_playout()` hangs. Arm a short timeout on `clear_buffer` (see `DataStreamAudioOutput`'s `_clear_buffer_timeout` pattern, ~2s) that finishes the segment locally and calls `_reset_playback_count()` only if the RPC hasn't arrived.
+
+**3. `_handle_playback_finished_rpc` drops legitimate notifications when `_pending_segments` is empty (~L524-529).** It returns `"ok"` without calling `notify_playback_finished()` whenever the deque is empty. But the base `AudioOutput` tracks its own segment count independently, and the two desync easily (e.g. a segment whose frames were drained by `clear_buffer` before `_send_audio_frame` ever created a `_SegmentState`, so it's counted by the base class but absent from the deque). When that happens an incoming RPC is silently swallowed and the segment never finishes → hang. The base class already guards against *extra* `playback_finished` calls (it warns and no-ops), so forwarding every RPC straight to `notify_playback_finished()` is both simpler and strictly safer than gating on the deque.
+
+## Simplify
+
+**4. Most of the segment-tracking apparatus is redundant with the base class.** `_SegmentState`, `_active_segment`, `_pending_segments`, `_segment_finalize_lock`, `_estimate_interrupted_playback_position`, `_complete_active_segment`, `_complete_pending_segments` all exist to match segments to playback events — but `AudioOutput` already does that 1:1 accounting (it counts a segment per `flush`, enforces one `playback_finished` each), and the agent plays one segment at a time (`flush` → `wait_for_playout`), so there's never more than one segment outstanding to reconcile. The whole flow reduces to: a forwarder that pushes frames (`send_audio(end=False)`) and ends (`send_audio(end=True)`), RPC handlers that call `notify_playback_started/finished` directly, and the clear-buffer timeout from item 2. The `req_id` change-detection/logging in `_send_audio_frame` (~L445-450) can go too — `send_audio` reuses the id until `end=True` by contract, so it's just noise.
+
+**5. Drop the `user_state_changed` interrupt (`_on_user_state_changed`, ~L600).** The framework already calls `audio_output.clear_buffer()` on interruption, which you handle via the `clear_buffer` event. Interrupting again when the user starts speaking double-fires the interrupt to Spatius. `clear_buffer` alone is the interrupt signal (this is what `DataStreamAudioOutput` and the other avatar plugins rely on).
+
+**6. Collapse the teardown bookkeeping.** Two `_*_registered` booleans plus manual off-toggling can be a single `if self._closed: return; self._closed = True` idempotency guard at the top of `aclose()` (it's already re-entrant via the job shutdown callback, the session-close handler, and the SDK's `on_close`). Also `_on_session_close` (~L604) fires `asyncio.create_task(self.aclose())` without keeping a reference — hold it (or guard against a second scheduling) so it can't be GC'd mid-flight.
+
+## Minor
+
+**7. Validate config before `super().start()` (start begins ~L221).** The LiveKit-cred / `room_name` / `sample_rate` / identity checks run after `super().start()`, so a misconfiguration raises while the base's `_wait_avatar_join` task is already running (it only gets cancelled at job shutdown). Moving validation ahead of `super().start()` makes a bad config fail fast and clean.
+
+**8. `_format_error_reason` (~L400) manually unwinds the `__cause__` / `__context__` chain.** `raise SpatiusException(...) from e` plus logging `exc_info` already surfaces the root cause; the hand-rolled traversal can likely be dropped for a plain message. Optional.

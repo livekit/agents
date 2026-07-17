@@ -17,11 +17,15 @@
 from spatius import AudioFormat
 
 from .avatar import AvatarSession, SpatiusException
+
+# alternate implementation kept alongside AvatarSession for A/B testing
+from .avatar2 import AvatarSession as AvatarSessionV2
 from .version import __version__
 
 __all__ = [
     "AudioFormat",
     "AvatarSession",
+    "AvatarSessionV2",
     "SpatiusException",
     "__version__",
 ]
