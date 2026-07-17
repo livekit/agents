@@ -36,6 +36,27 @@ from .models import FluxTTSModels
 BASE_URL_V2 = "https://api.deepgram.com/v2/speak"
 NUM_CHANNELS = 1
 
+# Encodings the LiveKit pipeline can decode, mapped to their mime type. Deepgram Flux
+# also offers mulaw/alaw, but those aren't playable through the pipeline yet, so they're
+# intentionally omitted here.
+_ENCODING_TO_MIMETYPE: dict[str, str] = {
+    "linear16": "audio/pcm",
+    "mp3": "audio/mp3",
+    "opus": "audio/opus",
+    "flac": "audio/flac",
+    "aac": "audio/aac",
+}
+
+
+def _encoding_to_mimetype(encoding: str) -> str:
+    try:
+        return _ENCODING_TO_MIMETYPE[encoding]
+    except KeyError:
+        raise ValueError(
+            f"unsupported Deepgram Flux TTS encoding {encoding!r}; "
+            f"supported encodings are: {', '.join(_ENCODING_TO_MIMETYPE)}"
+        ) from None
+
 
 @dataclass
 class _TTSOptionsV2:
@@ -71,13 +92,19 @@ class TTSv2(tts.TTS):
                 Model names follow the `flux-{voice}-{language}` format.
                 See https://developers.deepgram.com/docs/flux-tts/overview for available voices.
             encoding (str): Audio encoding to use. Defaults to "linear16".
+                The streaming path (stream(), what voice agents use) only supports raw
+                "linear16" end-to-end through the LiveKit pipeline. Compressed encodings
+                (mp3/opus/flac/aac) are available on the batch synthesize() path only.
             sample_rate (int): Sample rate of audio. Defaults to 24000.
             bit_rate (int | None): Bit rate for compressed encodings (e.g. mp3). Defaults to None.
+                Applies to the batch synthesize() path only; it has no effect on the
+                linear16 streaming path.
             api_key (str): Deepgram API key. If not provided, will look for DEEPGRAM_API_KEY in environment.
             base_url (str): Base URL for Deepgram Flux TTS API. Defaults to "https://api.deepgram.com/v2/speak"
             word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to basic WordTokenizer.
             http_session (aiohttp.ClientSession): Optional aiohttp session to use for requests.
-            mip_opt_out (bool): Whether to take part in the model improvement program. Defaults to False.
+            mip_opt_out (bool): Opt out of the Deepgram Model Improvement Program. Defaults to
+                False (requests may be used to improve models). See https://dpgr.am/deepgram-mip
 
         """  # noqa: E501
         super().__init__(
@@ -123,14 +150,14 @@ class TTSv2(tts.TTS):
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
+        # Streaming only supports linear16 end-to-end, so bit_rate (compressed batch
+        # output only) is intentionally not forwarded here.
         config: dict = {
             "encoding": self._opts.encoding,
             "model": self._opts.model,
             "sample_rate": self._opts.sample_rate,
             "mip_opt_out": self._opts.mip_opt_out,
         }
-        if self._opts.bit_rate is not None:
-            config["bit_rate"] = self._opts.bit_rate
         ws = await asyncio.wait_for(
             session.ws_connect(
                 _to_deepgram_url(config, self._opts.base_url, websocket=True),
@@ -263,7 +290,7 @@ class ChunkedStreamv2(tts.ChunkedStream):
                     request_id=utils.shortuuid(),
                     sample_rate=self._opts.sample_rate,
                     num_channels=NUM_CHANNELS,
-                    mime_type="audio/pcm",
+                    mime_type=_encoding_to_mimetype(self._opts.encoding),
                 )
 
                 async for data, _ in resp.content.iter_chunks():
@@ -291,6 +318,14 @@ class SynthesizeStreamv2(tts.SynthesizeStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        # Only linear16 is playable end-to-end through the LiveKit pipeline on the
+        # streaming path. Fail fast with a clear message instead of at connect time.
+        if self._opts.encoding != "linear16":
+            raise ValueError(
+                f"Deepgram Flux TTS streaming only supports 'linear16' encoding, got "
+                f"{self._opts.encoding!r}. Use synthesize() for compressed batch output."
+            )
+
         segments_ch = utils.aio.Chan[tokenize.WordStream]()
         request_id = utils.shortuuid()
         output_emitter.initialize(
@@ -382,7 +417,9 @@ class SynthesizeStreamv2(tts.SynthesizeStream):
                     # https://developers.deepgram.com/docs/flux-tts/overview
                     if mtype == "SpeechMetadata":
                         # Authoritative end-of-turn marker: all audio for the turn has
-                        # been sent between SpeechStarted and this message.
+                        # been sent between SpeechStarted and this message. The server
+                        # emits a trailing Flushed frame after this; on a pooled reuse it
+                        # is harmlessly absorbed as a no-op at the top of the next turn.
                         output_emitter.end_segment()
                         break
                     elif mtype in ("Connected", "SpeechStarted", "Flushed", "SessionMetadata"):
@@ -390,8 +427,9 @@ class SynthesizeStreamv2(tts.SynthesizeStream):
                         pass
                     elif mtype == "Warning":
                         logger.warning(
-                            "Deepgram warning: %s",
+                            "Deepgram warning: %s (code: %s)",
                             resp.get("description") or resp.get("warn_msg"),
+                            resp.get("code"),
                         )
                     elif mtype in ("Error", "error"):
                         raise APIError(message="Deepgram Flux TTS returned error", body=resp)
