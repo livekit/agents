@@ -580,6 +580,7 @@ async def _upload_session_report(
 
     header_msg = proto_metrics.MetricsRecordingHeader(
         room_id=report.room_id,
+        job_id=report.job_id,
     )
     header_msg.start_time.FromMilliseconds(int((report.audio_recording_started_at or 0) * 1000))
     header_bytes = header_msg.SerializeToString()
