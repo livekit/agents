@@ -817,33 +817,40 @@ class SpeechStream(stt.SpeechStream):
                 samples_per_channel=self._opts.sample_rate // 20,  # 50ms
             )
 
-            async for ev in self._input_ch:
-                frames: list[rtc.AudioFrame] = []
-                if isinstance(ev, rtc.AudioFrame):
-                    if vad_stream is not None:
-                        vad_stream.push_frame(ev)
-                    frames.extend(audio_bstream.push(ev.data))
-                elif isinstance(ev, self._FlushSentinel):
-                    frames.extend(audio_bstream.flush())
+            try:
+                async for ev in self._input_ch:
+                    frames: list[rtc.AudioFrame] = []
+                    if isinstance(ev, rtc.AudioFrame):
+                        if vad_stream is not None:
+                            vad_stream.push_frame(ev)
+                        frames.extend(audio_bstream.push(ev.data))
+                    elif isinstance(ev, self._FlushSentinel):
+                        frames.extend(audio_bstream.flush())
 
-                for frame in frames:
-                    self._speech_duration += frame.duration
-                    audio_bytes = frame.data.tobytes()
-                    base64_audio = base64.b64encode(audio_bytes).decode("utf-8")
-                    audio_msg = {
-                        "type": "input_audio",
-                        "audio": base64_audio,
-                    }
-                    await ws.send_str(json.dumps(audio_msg))
+                    for frame in frames:
+                        self._speech_duration += frame.duration
+                        audio_bytes = frame.data.tobytes()
+                        base64_audio = base64.b64encode(audio_bytes).decode("utf-8")
+                        audio_msg = {
+                            "type": "input_audio",
+                            "audio": base64_audio,
+                        }
+                        await ws.send_str(json.dumps(audio_msg))
 
-            if vad_stream is not None:
-                vad_stream.end_input()
+                if vad_stream is not None:
+                    vad_stream.end_input()
 
-            closing_ws = True
-            finalize_msg = {
-                "type": "session.finalize",
-            }
-            await ws.send_str(json.dumps(finalize_msg))
+                closing_ws = True
+                finalize_msg = {
+                    "type": "session.finalize",
+                }
+                await ws.send_str(json.dumps(finalize_msg))
+            except (aiohttp.ClientError, ConnectionError) as e:
+                if closing_ws or http_session.closed:
+                    return
+                raise APIConnectionError(
+                    "LiveKit Inference STT connection closed unexpectedly"
+                ) from e
 
         @utils.log_exceptions(logger=logger)
         async def vad_task(ws: aiohttp.ClientWebSocketResponse, stream: vad.VADStream) -> None:

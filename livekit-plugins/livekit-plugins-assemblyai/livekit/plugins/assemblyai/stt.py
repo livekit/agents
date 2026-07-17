@@ -29,6 +29,7 @@ import aiohttp
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectionError,
     APIConnectOptions,
     APIStatusError,
     LanguageCode,
@@ -685,27 +686,32 @@ class SpeechStream(stt.SpeechStream):
             # forward inputs to AssemblyAI
             # if we receive a close message, signal it to AssemblyAI and break.
             # the recv task will then make sure to process the remaining audio and stop
-            async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
-                    frames = audio_bstream.flush()
-                else:
-                    frames = audio_bstream.write(data.data.tobytes())
+            try:
+                async for data in self._input_ch:
+                    if isinstance(data, self._FlushSentinel):
+                        frames = audio_bstream.flush()
+                    else:
+                        frames = audio_bstream.write(data.data.tobytes())
 
-                for frame in frames:
-                    if not anchored:
-                        # Anchor the stream's wall-clock to the moment just
-                        # before the first frame is sent — aligned with the
-                        # server's stream-relative zero used by
-                        # SpeechStarted.timestamp.
-                        self.start_time = time.time()
-                        anchored = True
-                    self._speech_duration += frame.duration
-                    await ws.send_bytes(frame.data.tobytes())
-                    self._last_frame_sent_at = time.time()
+                    for frame in frames:
+                        if not anchored:
+                            # Anchor the stream's wall-clock to the moment just
+                            # before the first frame is sent — aligned with the
+                            # server's stream-relative zero used by
+                            # SpeechStarted.timestamp.
+                            self.start_time = time.time()
+                            anchored = True
+                        self._speech_duration += frame.duration
+                        await ws.send_bytes(frame.data.tobytes())
+                        self._last_frame_sent_at = time.time()
 
-            closing_ws = True
-            logger.debug("AssemblyAI sending close message session=%s", self._session_id)
-            await ws.send_str(SpeechStream._CLOSE_MSG)
+                closing_ws = True
+                logger.debug("AssemblyAI sending close message session=%s", self._session_id)
+                await ws.send_str(SpeechStream._CLOSE_MSG)
+            except (aiohttp.ClientError, ConnectionError) as e:
+                if closing_ws or self._session.closed:
+                    return
+                raise APIConnectionError("AssemblyAI connection closed unexpectedly") from e
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
