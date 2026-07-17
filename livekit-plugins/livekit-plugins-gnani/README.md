@@ -63,7 +63,7 @@ from livekit.plugins import gnani, groq, silero
 session = AgentSession(
     stt=gnani.STT(
         language="en-IN",
-        recognize_method="websocket",
+        use_streaming=True,
     ),
     llm=groq.LLM(model="llama-3.1-8b-instant"),
     tts=gnani.TTS(
@@ -85,7 +85,7 @@ await session.start(
 )
 ```
 
-Swap `recognize_method` or `synthesize_method` for REST variants — see below. WebSocket STT + TTS is the default for lowest latency.
+Set `use_streaming=False` (STT) or swap `synthesize_method` (TTS) for REST variants — see below. WebSocket STT + TTS is the default for lowest latency.
 
 ## Service Construction
 
@@ -96,11 +96,11 @@ from livekit.plugins.gnani import STT
 
 stt = STT(
     language="hi-IN",
-    recognize_method="rest",
+    use_streaming=False,
 )
 ```
 
-REST mode requires a VAD in the pipeline. LiveKit wraps the STT with `stt.StreamAdapter` automatically when `recognize_method="rest"`.
+REST mode requires a VAD in the pipeline. LiveKit wraps the STT with `stt.StreamAdapter` automatically when `use_streaming=False`.
 
 ### Speech-to-Text (Streaming WebSocket)
 
@@ -109,7 +109,7 @@ from livekit.plugins.gnani import STT
 
 stt = STT(
     language="hi-IN",
-    recognize_method="websocket",
+    use_streaming=True,
     sample_rate=16000,
 )
 ```
@@ -158,8 +158,8 @@ The `stream()` method always uses WebSocket regardless of `synthesize_method`.
 
 | Mode | Parameter | Transport | Description |
 |------|-----------|-----------|-------------|
-| REST | `recognize_method="rest"` | POST `/stt/v3` | File/buffer transcription. Requires VAD. |
-| WebSocket | `recognize_method="websocket"` | `wss://api.vachana.ai/stt/v3/stream` | Real-time streaming with VAD. Default. |
+| REST | `use_streaming=False` | POST `/stt/v3` | File/buffer transcription. Requires VAD. |
+| WebSocket | `use_streaming=True` | `wss://api.vachana.ai/stt/v3/stream` | Real-time streaming with VAD. Default. |
 
 #### Streaming PCM Specification
 
@@ -196,7 +196,7 @@ stt = STT(
     sample_rate=16000,             # Default: 16000 (also: 8000, 44100, 48000)
     format="verbatim",             # Default: "verbatim" (also: "transcribe" for ITN)
     itn_native_numerals=False,     # Default: False
-    recognize_method="websocket",  # Default: "websocket" (also: "rest")
+    use_streaming=True,            # Default: True (WebSocket); False = REST + VAD
     api_key=None,                  # Default: None (reads GNANI_API_KEY env var)
     base_url="https://api.vachana.ai",
 )
