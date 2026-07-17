@@ -6,7 +6,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any, Literal, TypedDict, overload
+from typing import TYPE_CHECKING, Any, Literal, TypedDict, overload
 
 import aiohttp
 from typing_extensions import Required
@@ -31,6 +31,9 @@ from ..types import (
 )
 from ..utils import is_given
 from ._utils import create_access_token, get_default_inference_url, get_inference_headers
+
+if TYPE_CHECKING:
+    from ..voice.events import ConversationItemAddedEvent
 
 DeepgramModels = Literal[
     "deepgram/nova-3",
@@ -117,7 +120,8 @@ class AssemblyaiOptions(TypedDict, total=False):
     inactivity_timeout: float  # seconds
     prompt: str  # default: not specified (u3-rt-pro only, mutually exclusive with keyterms_prompt)
     speaker_labels: bool  # when True, enables speaker diarization (default off)
-    agent_context: str  # context to bias recognition (u3-rt-pro only, max 1500 chars)
+    agent_context: str  # context to bias recognition (u3-rt-pro only, max 1750 chars)
+    previous_context_n_turns: int  # prior turns carried as context; 0 disables (u3-rt-pro only)
     voice_focus: Literal["near-field", "far-field"]  # isolate primary voice (u3-rt-pro only)
     voice_focus_threshold: float  # background suppression strength (u3-rt-pro only)
     mode: Literal["min_latency", "balanced", "max_accuracy"]  # accuracy/latency preset (u3-rt-pro)
@@ -234,6 +238,19 @@ def _keyterms_extra_for_model(
     if isinstance(existing, str):
         existing = [existing]
     return {key: list(dict.fromkeys([*existing, *session_keyterms]))}
+
+
+_ASSEMBLYAI_CARRYOVER_MODELS = (
+    "assemblyai/u3-rt-pro",
+    "assemblyai/universal-3-5-pro",
+)
+
+_ASSEMBLYAI_MAX_AGENT_CONTEXT_CHARS = 1750
+
+
+def _supports_agent_context_carryover(model: NotGivenOr[STTModels | str]) -> bool:
+    """True if the model natively carries agent_context (AssemblyAI U3 Pro family)."""
+    return is_given(model) and isinstance(model, str) and model in _ASSEMBLYAI_CARRYOVER_MODELS
 
 
 STTLanguages = Literal["multi", "en", "de", "es", "fr", "ja", "pt", "zh", "hi"]
@@ -398,6 +415,7 @@ class STT(stt.STT):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[AssemblyaiOptions] = NOT_GIVEN,
+        agent_context_carryover: NotGivenOr[bool] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None: ...
@@ -484,6 +502,7 @@ class STT(stt.STT):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        agent_context_carryover: NotGivenOr[bool] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None: ...
@@ -510,6 +529,7 @@ class STT(stt.STT):
             | SpeechmaticsOptions
             | InworldOptions
         ] = NOT_GIVEN,
+        agent_context_carryover: NotGivenOr[bool] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
@@ -526,6 +546,15 @@ class STT(stt.STT):
             api_secret (str, optional): LIVEKIT_API_SECRET, if not provided, read from environment variable.
             http_session (aiohttp.ClientSession, optional): HTTP session to use.
             extra_kwargs (dict, optional): Extra kwargs to pass to the STT model.
+            agent_context_carryover (bool, optional): When the model supports it, let an
+                ``AgentSession`` push each assistant reply into AssemblyAI's ``agent_context``
+                so it biases recognition of the user's next turn. Enabled by default on models
+                that support it (the AssemblyAI Universal-3 Pro family: ``assemblyai/u3-rt-pro``,
+                ``assemblyai/universal-3-5-pro``); pass False to opt out. On other models it is
+                off; explicitly passing True logs a warning and is ignored. Also disabled by
+                default when ``extra_kwargs["previous_context_n_turns"]`` is 0 (carryover
+                explicitly turned off). Replies longer than AssemblyAI's 1750-character cap are
+                truncated (keeping the tail) before being sent.
             fallback (FallbackModelType, optional): Fallback models - either a list of model names,
                 a list of FallbackModel instances.
             conn_options (APIConnectOptions, optional): Connection options for request attempts.
@@ -549,6 +578,20 @@ class STT(stt.STT):
 
         vad = _resolve_vad_for_model(model, vad if is_given(vad) else None)
 
+        extra_dict = dict(extra_kwargs) if is_given(extra_kwargs) else None
+        supports_carryover = _supports_agent_context_carryover(model)
+        if is_given(agent_context_carryover) and agent_context_carryover and not supports_carryover:
+            logger.warning(
+                "agent_context_carryover is enabled but model %r does not support it; ignoring",
+                model,
+            )
+        context_disabled = (
+            extra_dict is not None and extra_dict.get("previous_context_n_turns") == 0
+        )
+        carryover_enabled = supports_carryover and (
+            agent_context_carryover if is_given(agent_context_carryover) else not context_disabled
+        )
+
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
@@ -557,6 +600,7 @@ class STT(stt.STT):
                 aligned_transcript="word",
                 offline_recognize=False,
                 keyterms=_keyterms_extra_for_model(model) is not None,
+                chat_context=carryover_enabled,
             ),
         )
 
@@ -717,6 +761,21 @@ class STT(stt.STT):
                 stream._pending_extra = keyterm_extra
             else:
                 stream.update_options(extra=keyterm_extra)
+
+    def _push_conversation_item(self, ev: ConversationItemAddedEvent) -> None:
+        if (
+            (chat_item := ev.item).type == "message"
+            and chat_item.role == "assistant"
+            and (text := chat_item.text_content)
+        ):
+            if len(text) > _ASSEMBLYAI_MAX_AGENT_CONTEXT_CHARS:
+                logger.debug(
+                    "truncating agent_context carryover from %d to %d chars",
+                    len(text),
+                    _ASSEMBLYAI_MAX_AGENT_CONTEXT_CHARS,
+                )
+                text = text[-_ASSEMBLYAI_MAX_AGENT_CONTEXT_CHARS:]
+            self.update_options(extra={"agent_context": text})
 
     def _sanitize_options(
         self, *, language: NotGivenOr[STTLanguages | str] = NOT_GIVEN
