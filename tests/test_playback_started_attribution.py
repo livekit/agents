@@ -1,9 +1,9 @@
-"""Tests for cross-segment attribution of playback_started events (AGT-3147).
+"""Tests for playback_started attribution and interrupted position evidence.
 
-The shared AudioOutput emits playback_started with no segment identity, so the
-per-segment listener in perform_audio_forwarding and the interrupted-commit gates
-must decide whether an event/position belongs to their own segment. See
-_AudioOutput.own_segment_index and the listener guard in perform_audio_forwarding.
+Mirrors agents-js#1966: the shared AudioOutput emits playback_started with no
+segment identity, so the per-segment listener only resolves after this segment
+has captured its own frame; interrupted commits also accept playback_position > 0
+when this segment bumped the output's segment counter.
 """
 
 from __future__ import annotations
@@ -105,14 +105,14 @@ async def test_own_playback_started_resolves_first_frame_fut() -> None:
     await task
 
     assert out.first_frame_fut.done()
-    assert out.own_segment_index == 1
+    assert audio_output.captured_playout_segments > out.captured_segments_before
     audio_output.clear_buffer()
 
 
 async def test_own_event_forwarded_before_wrapper_counts_still_resolves() -> None:
     # Chained outputs (transcript sync, recorder) forward the leaf's synchronous
     # playback_started before counting their own segment: the event must still be
-    # attributed to the segment whose first capture is in flight.
+    # attributed once has_captured_own_frame is set.
     audio_output = _ForwardFirstWrapper(FakeAudioOutput())
     frames_ch: asyncio.Queue[rtc.AudioFrame | None] = asyncio.Queue()
     task, out = await _drive_forwarding(audio_output, frames_ch)
@@ -122,7 +122,6 @@ async def test_own_event_forwarded_before_wrapper_counts_still_resolves() -> Non
     await task
 
     assert out.first_frame_fut.done()
-    assert out.own_segment_index == 1
     audio_output.clear_buffer()
 
 
@@ -143,38 +142,11 @@ async def test_stale_event_before_own_capture_is_ignored() -> None:
     out.first_frame_fut.cancel()
 
 
-async def test_event_after_foreign_segment_bump_is_ignored() -> None:
-    # Segment A captures into a paused output (counted, but nothing plays and no
-    # playback_started fires). A foreign segment then bumps the counter. A later
-    # event must NOT resolve A's future: the counter no longer points at A.
-    audio_output = FakeAudioOutput(can_pause=True)
-    frames_ch: asyncio.Queue[rtc.AudioFrame | None] = asyncio.Queue()
-    task, out = await _drive_forwarding(audio_output, frames_ch)
-    await asyncio.sleep(0)  # forwarding task calls resume(); pause after it
-    audio_output.pause()
-
-    frames_ch.put_nowait(_make_frame())
-    frames_ch.put_nowait(None)
-    await task
-
-    assert out.own_segment_index == 1
-    assert not out.first_frame_fut.done()
-
-    # a foreign segment (next speech) opens on the shared output
-    await audio_output.capture_frame(_make_frame())
-    assert audio_output.captured_playout_segments == 2
-
-    # the foreign segment's playback starts
-    audio_output.on_playback_started(created_at=time.time())
-
-    assert not out.first_frame_fut.done()
-    out.first_frame_fut.cancel()
-
-
 async def test_interrupted_commit_uses_position_evidence_without_started_event() -> None:
     # Avatar-style race: frames genuinely played, but the started notification
     # never arrived before the interruption. The playback position reported by
-    # the finished event is proof of partial playback.
+    # the finished event is proof of partial playback when this segment bumped
+    # the output's segment count.
     audio_output = _NoStartNotifyOutput()
     speech_handle = SpeechHandle.create()
 
@@ -203,14 +175,14 @@ async def test_interrupted_commit_uses_position_evidence_without_started_event()
 
     assert out.audio_out is not None
     assert not out.audio_out.first_frame_fut.done() or out.audio_out.first_frame_fut.cancelled()
-    assert out.audio_out.own_segment_index == 1
+    assert audio_output.captured_playout_segments > out.audio_out.captured_segments_before
     assert out.played == "partial"
     assert out.playback_position > 0
 
 
 async def test_interrupted_commit_stays_skipped_without_any_capture() -> None:
-    # Interrupted before any frame was counted: no started event, no position
-    # evidence — the segment must stay "skipped" (nothing reached the user).
+    # Interrupted before any frame was counted: no started event, no segment bump
+    # — the segment must stay "skipped" (nothing reached the user).
     audio_output = FakeAudioOutput()
     speech_handle = SpeechHandle.create()
 
@@ -234,5 +206,5 @@ async def test_interrupted_commit_stays_skipped_without_any_capture() -> None:
     out = await asyncio.wait_for(forward_task, timeout=5)
 
     assert out.audio_out is not None
-    assert out.audio_out.own_segment_index is None
+    assert audio_output.captured_playout_segments == out.audio_out.captured_segments_before
     assert out.played == "skipped"
