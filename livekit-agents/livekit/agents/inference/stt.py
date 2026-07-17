@@ -546,15 +546,8 @@ class STT(stt.STT):
             api_secret (str, optional): LIVEKIT_API_SECRET, if not provided, read from environment variable.
             http_session (aiohttp.ClientSession, optional): HTTP session to use.
             extra_kwargs (dict, optional): Extra kwargs to pass to the STT model.
-            agent_context_carryover (bool, optional): When the model supports it, let an
-                ``AgentSession`` push each assistant reply into AssemblyAI's ``agent_context``
-                so it biases recognition of the user's next turn. Enabled by default on models
-                that support it (the AssemblyAI Universal-3 Pro family: ``assemblyai/u3-rt-pro``,
-                ``assemblyai/universal-3-5-pro``); pass False to opt out. On other models it is
-                off; explicitly passing True logs a warning and is ignored. Also disabled by
-                default when ``extra_kwargs["previous_context_n_turns"]`` is 0 (carryover
-                explicitly turned off). Replies longer than AssemblyAI's 1750-character cap are
-                truncated (keeping the tail) before being sent.
+            agent_context_carryover (bool, optional): Let an ``AgentSession`` push each assistant
+                reply into AssemblyAI's ``agent_context``. Only the U3 Pro family supports it (on by default there).
             fallback (FallbackModelType, optional): Fallback models - either a list of model names,
                 a list of FallbackModel instances.
             conn_options (APIConnectOptions, optional): Connection options for request attempts.
