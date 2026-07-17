@@ -53,6 +53,8 @@ if TYPE_CHECKING:
 MIN_LANGUAGE_DETECTION_LENGTH = 5
 # Mirrors turn_detector.base.MAX_HISTORY_TURNS for tracing
 _EOU_MAX_HISTORY_TURNS = 6
+# backoff before recreating the stt stream after an unrecoverable error
+_STT_RECONNECT_INTERVAL = 0.5
 
 
 @dataclass
@@ -149,8 +151,12 @@ class _STTPipeline:
     It is never cancelled during handoff — only the consumer is swapped.
     """
 
-    def __init__(self, stt_node: io.STTNode) -> None:
+    def __init__(
+        self, stt_node: io.STTNode, *, is_closing: Callable[[], bool] | None = None
+    ) -> None:
         self._stt_node = stt_node
+        # don't recreate the stream while the session is closing
+        self._is_closing = is_closing or (lambda: False)
         self._audio_ch = aio.Chan[rtc.AudioFrame]()
         self._event_ch = aio.Chan[stt.SpeechEvent]()
         self._pump_task = asyncio.create_task(self._stt_pump())
@@ -168,26 +174,52 @@ class _STTPipeline:
 
     @utils.log_exceptions(logger=logger)
     async def _stt_pump(self) -> None:
-        """Iterate the STT generator and forward events into *event_ch*.
+        """Iterate the STT node and forward events into *event_ch*.
 
-        This task owns the generator lifecycle and is never cancelled during
-        handoff — only the consumer is swapped.
+        Owns the generator lifecycle — never cancelled during handoff, only the
+        consumer is swapped. On a connection failure the long-lived stream is
+        recreated after a backoff; the session tolerance is what closes it.
         """
         from .agent import ModelSettings
 
-        node = self._stt_node(self._audio_ch, ModelSettings())
-        if asyncio.iscoroutine(node):
-            node = await node
+        while True:
+            try:
+                node = self._stt_node(self._audio_ch, ModelSettings())
+                if asyncio.iscoroutine(node):
+                    node = await node
 
-        if node is None:
+                if not isinstance(node, AsyncIterable):
+                    # None or a non-streaming node: nothing to iterate or recover
+                    return
+
+                async for ev in node:
+                    assert isinstance(ev, stt.SpeechEvent), (
+                        f"STT node must yield SpeechEvent, got: {type(ev)}"
+                    )
+                    self._event_ch.send_nowait(ev)
+            except APIError:
+                # only a connection failure is retried (it was emitted and counted by the
+                # session); any other error propagates and stops the pump
+                if self._is_closing():
+                    return
+                logger.warning(
+                    "STT stream ended on an unrecoverable error, recreating",
+                    exc_info=True,
+                )
+                await asyncio.sleep(_STT_RECONNECT_INTERVAL)
+                # the session may have started closing during the backoff
+                if self._is_closing():
+                    return
+                continue
+
+            # node ended without error (audio input closed): stop
             return
 
-        if isinstance(node, AsyncIterable):
-            async for ev in node:
-                assert isinstance(ev, stt.SpeechEvent), (
-                    f"STT node must yield SpeechEvent, got: {type(ev)}"
-                )
-                self._event_ch.send_nowait(ev)
+    def _rebind_node(self, stt_node: io.STTNode) -> None:
+        # the pipeline outlives the agent that created it (reused across handoff);
+        # recreation must call the currently-active node, not the previous agent's
+        # bound node whose activity is torn down (would raise, stopping the pump)
+        self._stt_node = stt_node
 
     async def aclose(self) -> None:
         await aio.cancel_and_wait(self._pump_task)
@@ -765,7 +797,11 @@ class AudioRecognition:
         if reset_context:
             self.stt_context = None
         if pipeline is None and stt is not None:
-            pipeline = _STTPipeline(stt)
+            pipeline = _STTPipeline(stt, is_closing=self._session._is_closing)
+        elif pipeline is not None and stt is not None:
+            # reused pipeline: rebind to this activity's node so a recreation
+            # after an error doesn't call into the previous (torn-down) agent
+            pipeline._rebind_node(stt)
 
         if pipeline is not None:
             self._stt_consumer_atask = asyncio.create_task(
