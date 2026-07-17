@@ -250,6 +250,14 @@ class KeytermDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
         self._turn_count = 0
         session.on("conversation_item_added", self._on_conversation_item_added)
 
+    def swap_stt(self, stt: STT | None) -> None:
+        """Rebind the recognizer in place, keeping any running detection."""
+        if stt is self._stt:
+            return
+        self._stt = stt
+        if stt is not None and self.keyterms:
+            stt._update_session_keyterms(self.keyterms)
+
     async def aclose(self) -> None:
         """Stop detection for the current activity; keyterm state is kept."""
         if self._llm is not None:
