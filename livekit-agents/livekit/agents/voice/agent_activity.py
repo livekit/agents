@@ -588,16 +588,24 @@ class AgentActivity(RecognitionHooks):
                 self._session.off("conversation_item_added", old_stt._push_conversation_item)
 
             self._agent._stt = new_stt
+            resolved_stt = self.stt
             if self._audio_recognition is not None:
-                self._audio_recognition._update_stt(self._agent.stt_node if self.stt else None)
-            self._session._keyterm_detector.swap_stt(self.stt)
+                self._audio_recognition._update_stt(
+                    self._agent.stt_node if resolved_stt else None,
+                    model=resolved_stt.model if isinstance(resolved_stt, stt.STT) else None,
+                    provider=resolved_stt.provider if isinstance(resolved_stt, stt.STT) else None,
+                    reset_context=True,
+                )
+            self._session._keyterm_detector.swap_stt(resolved_stt)
 
-            if isinstance(self.stt, stt.STT):
-                self.stt.prewarm()
-                self.stt.on("metrics_collected", self._on_metrics_collected)
-                self.stt.on("error", self._on_error)
-                if self.stt.capabilities.chat_context:
-                    self._session.on("conversation_item_added", self.stt._push_conversation_item)
+            if isinstance(resolved_stt, stt.STT):
+                resolved_stt.prewarm()
+                resolved_stt.on("metrics_collected", self._on_metrics_collected)
+                resolved_stt.on("error", self._on_error)
+                if resolved_stt.capabilities.chat_context:
+                    self._session.on(
+                        "conversation_item_added", resolved_stt._push_conversation_item
+                    )
 
         if is_given(new_vad):
             old_vad = self.vad

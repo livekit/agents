@@ -745,8 +745,25 @@ class AudioRecognition:
             self._backchannel_boundary_timer = None
             self._backchannel_boundary_callback = None
 
-    def _update_stt(self, stt: io.STTNode | None, *, pipeline: _STTPipeline | None = None) -> None:
+    def _update_stt(
+        self,
+        stt: io.STTNode | None,
+        *,
+        pipeline: _STTPipeline | None = None,
+        model: NotGivenOr[str | None] = NOT_GIVEN,
+        provider: NotGivenOr[str | None] = NOT_GIVEN,
+        reset_context: bool = False,
+    ) -> None:
         self._stt = stt
+        # model/provider drive the user_turn span attributes; swapping to a different STT must
+        # refresh them (they default to unchanged for same-STT resets like _clear_user_turn)
+        if is_given(model):
+            self._stt_model = model
+        if is_given(provider):
+            self._stt_provider = provider
+        # speaker metadata belongs to the old stream; drop it so a new STT starts clean
+        if reset_context:
+            self.stt_context = None
         if pipeline is None and stt is not None:
             pipeline = _STTPipeline(stt)
 

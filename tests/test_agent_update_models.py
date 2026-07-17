@@ -171,3 +171,39 @@ async def test_update_models_running_rejects_swap_away_from_realtime() -> None:
         assert isinstance(agent.llm, FakeRealtimeModel)
     finally:
         await session.aclose()
+
+
+class _LabeledSTT(FakeSTT):
+    @property
+    def model(self) -> str:
+        return "new-model"
+
+    @property
+    def provider(self) -> str:
+        return "new-provider"
+
+
+@pytest.mark.asyncio
+async def test_update_models_stt_swap_refreshes_model_provider_and_context() -> None:
+    from pydantic import BaseModel
+
+    class _Ctx(BaseModel):
+        value: int = 1
+
+    agent = Agent(instructions="test", stt=FakeSTT(), vad=FakeVAD(), llm=FakeLLM(), tts=FakeTTS())
+    session = AgentSession(turn_handling={"turn_detection": None})
+    await session.start(agent)
+    try:
+        recognition = session._activity._audio_recognition
+        assert recognition is not None
+        # stand in for live speaker metadata captured from the old stream
+        recognition.stt_context = _Ctx()
+
+        agent.update_models(stt=_LabeledSTT())
+
+        # trace attributes and speaker context follow the new STT
+        assert recognition._stt_model == "new-model"
+        assert recognition._stt_provider == "new-provider"
+        assert recognition.stt_context is None
+    finally:
+        await session.aclose()
