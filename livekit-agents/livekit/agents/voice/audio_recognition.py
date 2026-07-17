@@ -795,12 +795,15 @@ class AudioRecognition:
     def _check_vad_silence_requirement(
         self,
         detector: NotGivenOr[_TurnDetector | _StreamingTurnDetector | None] = NOT_GIVEN,
+        vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
     ) -> None:
         if not is_given(detector):
             detector = self._turn_detector
-        if not isinstance(detector, _StreamingTurnDetector) or self._vad is None:
+        # validate a candidate vad (before it's applied) when given, else the active one
+        target_vad = vad if is_given(vad) else self._vad
+        if not isinstance(detector, _StreamingTurnDetector) or target_vad is None:
             return
-        if (current := getattr(self._vad, "min_silence_duration", None)) is None:
+        if (current := getattr(target_vad, "min_silence_duration", None)) is None:
             return
         required = (MIN_SILENCE_DURATION_MS + 50) / 1000
         if current < required:

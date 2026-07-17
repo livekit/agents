@@ -207,3 +207,35 @@ async def test_update_options_stt_swap_refreshes_model_provider_and_context() ->
         assert recognition.stt_context is None
     finally:
         await session.aclose()
+
+
+class _LowSilenceVAD(FakeVAD):
+    @property
+    def min_silence_duration(self) -> float:
+        return 0.0
+
+
+@pytest.mark.asyncio
+async def test_update_options_vad_check_is_atomic() -> None:
+    from unittest.mock import MagicMock
+
+    from livekit.agents.voice.turn import _StreamingTurnDetector
+
+    old_stt, old_vad = FakeSTT(), FakeVAD()
+    agent = Agent(instructions="test", stt=old_stt, vad=old_vad, llm=FakeLLM(), tts=FakeTTS())
+    session = AgentSession(turn_handling={"turn_detection": None})
+    await session.start(agent)
+    try:
+        recognition = session._activity._audio_recognition
+        assert recognition is not None
+        # a streaming turn detector constrains the VAD's min_silence_duration
+        recognition._turn_detector = MagicMock(spec=_StreamingTurnDetector)
+
+        with pytest.raises(ValueError, match="min_silence_duration"):
+            agent.update_options(stt=FakeSTT(), vad=_LowSilenceVAD())
+
+        # rejected before any mutation — STT and VAD are untouched
+        assert agent.stt is old_stt
+        assert agent.vad is old_vad
+    finally:
+        await session.aclose()

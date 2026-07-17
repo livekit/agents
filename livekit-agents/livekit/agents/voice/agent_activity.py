@@ -579,6 +579,9 @@ class AgentActivity(RecognitionHooks):
                 "cannot swap to or from a RealtimeModel while the agent is running, "
                 "use AgentSession.update_agent() instead"
             )
+        # a new vad must satisfy the streaming turn detector's min_silence requirement
+        if is_given(new_vad) and self._audio_recognition is not None:
+            self._audio_recognition._check_vad_silence_requirement(vad=new_vad)
 
         if is_given(new_stt):
             old_stt = self.stt
