@@ -450,11 +450,28 @@ class _AudioOutput:
     first_frame_fut: asyncio.Future[float]
     """Future that will be set with the timestamp of the first frame's capture"""
 
+    captured_segments_before: int
+    """`AudioOutput.captured_playout_segments` snapshot taken when forwarding was set up."""
+
     started_forwarding_at: float | None = None
 
-    def _resolve_first_frame_fut(self, ev: io.PlaybackStartedEvent) -> None:
-        if not self.first_frame_fut.done():
-            self.first_frame_fut.set_result(ev.created_at)
+    has_captured_own_frame: bool = False
+    """Whether this segment has pushed at least one of its own frames to `capture_frame`.
+
+    Set *before* the first `capture_frame` await: sinks emit `playback_started`
+    synchronously inside the first counted capture, so a flag set after the await
+    would miss the segment's own event.
+    """
+
+    own_segment_index: int | None = None
+    """`AudioOutput.captured_playout_segments` read after the first counted `capture_frame`.
+
+    `None` until one of this segment's frames is confirmed counted. Unlike a delta
+    against `captured_segments_before`, this records the playout segment the frames
+    actually landed in, and stays `None` when every frame bailed at a pause/interrupt
+    gate without ever being counted — so it can be used as evidence of (partial)
+    playback of this segment.
+    """
 
 
 def perform_audio_forwarding(
@@ -462,11 +479,36 @@ def perform_audio_forwarding(
     audio_output: io.AudioOutput,
     tts_output: AsyncIterable[rtc.AudioFrame],
 ) -> tuple[asyncio.Task[None], _AudioOutput]:
-    out = _AudioOutput(audio=[], first_frame_fut=asyncio.Future())
+    out = _AudioOutput(
+        audio=[],
+        first_frame_fut=asyncio.Future(),
+        captured_segments_before=audio_output.captured_playout_segments,
+    )
+
+    def _on_playback_started(ev: io.PlaybackStartedEvent) -> None:
+        # The audio output is shared across overlapping segments and the event carries
+        # no segment identity (e.g. a stale `lk.playback_started` RPC from an avatar
+        # worker can arrive after its segment was interrupted and the next one started).
+        # Only honor the event while the output's segment counter still points at THIS
+        # segment. During the first capture_frame the event can arrive before
+        # `own_segment_index` is recorded — sinks emit playback_started synchronously
+        # inside the first counted capture, and chained outputs (transcript sync,
+        # recorder) forward the leaf's event before counting their own segment — so
+        # until then accept the snapshot and snapshot + 1. Ambiguous events afterwards
+        # are dropped (fail closed): genuine partial playback is then still committed
+        # through the playback-position evidence in the interrupted gates.
+        counter = audio_output.captured_playout_segments
+        if out.own_segment_index is not None:
+            is_own_event = counter == out.own_segment_index
+        else:
+            is_own_event = counter <= out.captured_segments_before + 1
+        if out.has_captured_own_frame and is_own_event and not out.first_frame_fut.done():
+            out.first_frame_fut.set_result(ev.created_at)
+
     # out.first_frame_fut should be cancelled in the caller after the playout is finished or interrupted
-    audio_output.on("playback_started", out._resolve_first_frame_fut)
+    audio_output.on("playback_started", _on_playback_started)
     out.first_frame_fut.add_done_callback(
-        lambda _: audio_output.off("playback_started", out._resolve_first_frame_fut)
+        lambda _: audio_output.off("playback_started", _on_playback_started)
     )
     task = asyncio.create_task(_audio_forwarding_task(audio_output, tts_output, out))
     return task, out
@@ -501,11 +543,25 @@ async def _audio_forwarding_task(
                     num_channels=frame.num_channels,
                 )
 
+            # mark before capturing so the playback_started emitted synchronously inside
+            # the first capture_frame is attributed to this segment (see the listener in
+            # `perform_audio_forwarding`)
+            out.has_captured_own_frame = True
+
             if resampler:
                 for f in resampler.push(frame):
                     await audio_output.capture_frame(f)
             else:
                 await audio_output.capture_frame(frame)
+
+            # read the counter after the capture resolved: this records the playout
+            # segment the frame actually landed in, and stays unset if the frame bailed
+            # at a pause/interrupt gate without being counted
+            if (
+                out.own_segment_index is None
+                and audio_output.captured_playout_segments > out.captured_segments_before
+            ):
+                out.own_segment_index = audio_output.captured_playout_segments
 
         if resampler:
             for frame in resampler.flush():
@@ -596,10 +652,17 @@ async def forward_generation(
             if audio_output is not None:
                 audio_output.clear_buffer()
                 playback_ev = await audio_output.wait_for_playout()
-                if (
-                    audio_out is not None
-                    and audio_out.first_frame_fut.done()
-                    and not audio_out.first_frame_fut.cancelled()
+                # A reported playback position is proof of partial playback even when
+                # the playback-started notification hasn't arrived yet (remote avatar
+                # outputs deliver it via RPC, which can race with the interruption).
+                # It only counts when one of THIS segment's frames was accepted into a
+                # counted playout segment (own_segment_index) — the same condition under
+                # which wait_for_playout waits for this segment's playback event instead
+                # of returning a stale one from a previous segment.
+                played_own_frame = audio_out is not None and audio_out.own_segment_index is not None
+                if audio_out is not None and (
+                    (audio_out.first_frame_fut.done() and not audio_out.first_frame_fut.cancelled())
+                    or (played_own_frame and playback_ev.playback_position > 0)
                 ):
                     out.played = "partial"
                     out.playback_position = playback_ev.playback_position
