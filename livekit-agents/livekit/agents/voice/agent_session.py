@@ -138,7 +138,7 @@ class SessionConnectOptions:
     llm_conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     tts_conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     max_unrecoverable_errors: int = 3
-    """Maximum number of consecutive unrecoverable errors from llm or tts."""
+    """Maximum number of consecutive unrecoverable errors from stt, llm, or tts."""
 
 
 class ExpressiveOptions(TypedDict, total=False):
@@ -475,7 +475,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             tool_handling.get("async_options") if is_given(tool_handling) else None
         )
 
-        # unrecoverable error counts, reset after agent speaking
+        # unrecoverable error counts; stt resets on transcript, llm/tts on speaking
+        self._stt_error_counts = 0
         self._llm_error_counts = 0
         self._tts_error_counts = 0
 
@@ -1006,6 +1007,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def shutdown(self, *, drain: bool = True) -> None:
         self._close_soon(error=None, drain=drain, reason=CloseReason.USER_INITIATED)
 
+    def _is_closing(self) -> bool:
+        # _closing_task is set synchronously when close begins, earlier than _closing
+        return self._closing_task is not None or self._closing
+
     @utils.log_exceptions(logger=logger)
     async def _aclose_impl(
         self,
@@ -1119,6 +1124,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._cancel_user_away_timer()
             self._user_state = "listening"
             self._agent_state = "initializing"
+            self._stt_error_counts = 0
             self._llm_error_counts = 0
             self._tts_error_counts = 0
             self._root_span_context = None
@@ -1591,7 +1597,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._closing_task or error.recoverable:
             return
 
-        if error.type == "llm_error":
+        if error.type == "stt_error":
+            self._stt_error_counts += 1
+            if self._stt_error_counts <= self.conn_options.max_unrecoverable_errors:
+                return
+        elif error.type == "llm_error":
             self._llm_error_counts += 1
             if self._llm_error_counts <= self.conn_options.max_unrecoverable_errors:
                 return
@@ -1786,6 +1796,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._update_user_state("listening")
 
     def _user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
+        if ev.transcript:
+            # a transcript means stt recovered; reset its error tolerance
+            self._stt_error_counts = 0
+
         if self.user_state == "away" and ev.is_final:
             # reset user state from away to listening in case VAD has a miss detection
             self._update_user_state("listening")

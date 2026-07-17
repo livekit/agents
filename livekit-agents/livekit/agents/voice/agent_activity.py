@@ -563,6 +563,88 @@ class AgentActivity(RecognitionHooks):
                 turn_detection=turn_detection,
             )
 
+    def _update_models(
+        self,
+        *,
+        new_stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
+        new_vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
+        new_llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
+        new_tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
+    ) -> None:
+        # a RealtimeModel owns a live session; reject before mutating to stay all-or-nothing
+        if is_given(new_llm) and (
+            isinstance(new_llm, llm.RealtimeModel) or isinstance(self.llm, llm.RealtimeModel)
+        ):
+            raise RuntimeError(
+                "cannot swap to or from a RealtimeModel while the agent is running, "
+                "use AgentSession.update_agent() instead"
+            )
+        # a new vad must satisfy the streaming turn detector's min_silence requirement
+        if is_given(new_vad) and self._audio_recognition is not None:
+            self._audio_recognition._check_vad_silence_requirement(vad=new_vad)
+
+        if is_given(new_stt):
+            old_stt = self.stt
+            if isinstance(old_stt, stt.STT):
+                old_stt.off("metrics_collected", self._on_metrics_collected)
+                old_stt.off("error", self._on_error)
+                self._session.off("conversation_item_added", old_stt._push_conversation_item)
+
+            self._agent._stt = new_stt
+            resolved_stt = self.stt
+            if self._audio_recognition is not None:
+                self._audio_recognition._update_stt(
+                    self._agent.stt_node if resolved_stt else None,
+                    model=resolved_stt.model if isinstance(resolved_stt, stt.STT) else None,
+                    provider=resolved_stt.provider if isinstance(resolved_stt, stt.STT) else None,
+                    reset_context=True,
+                )
+            self._session._keyterm_detector.swap_stt(resolved_stt)
+
+            if isinstance(resolved_stt, stt.STT):
+                resolved_stt.prewarm()
+                resolved_stt.on("metrics_collected", self._on_metrics_collected)
+                resolved_stt.on("error", self._on_error)
+                if resolved_stt.capabilities.chat_context:
+                    self._session.on(
+                        "conversation_item_added", resolved_stt._push_conversation_item
+                    )
+
+        if is_given(new_vad):
+            old_vad = self.vad
+            if isinstance(old_vad, vad.VAD):
+                old_vad.off("metrics_collected", self._on_metrics_collected)
+
+            self._agent._vad = new_vad
+            if self._audio_recognition is not None:
+                self._audio_recognition._update_vad(self.vad)
+            if isinstance(self.vad, vad.VAD):
+                self.vad.on("metrics_collected", self._on_metrics_collected)
+
+        if is_given(new_llm):
+            old_llm = self.llm
+            if isinstance(old_llm, llm.LLM):
+                old_llm.off("metrics_collected", self._on_metrics_collected)
+                old_llm.off("error", self._on_error)
+
+            self._agent._llm = new_llm  # llm_node reads activity.llm per generation
+            if isinstance(self.llm, llm.LLM):
+                self.llm.prewarm()
+                self.llm.on("metrics_collected", self._on_metrics_collected)
+                self.llm.on("error", self._on_error)
+
+        if is_given(new_tts):
+            old_tts = self.tts
+            if isinstance(old_tts, tts.TTS):
+                old_tts.off("metrics_collected", self._on_metrics_collected)
+                old_tts.off("error", self._on_error)
+
+            self._agent._tts = new_tts  # tts_node reads activity.tts per synthesis
+            if isinstance(self.tts, tts.TTS):
+                self.tts.prewarm()
+                self.tts.on("metrics_collected", self._on_metrics_collected)
+                self.tts.on("error", self._on_error)
+
     def _create_speech_task(
         self,
         coro: Coroutine[Any, Any, Any],
