@@ -51,14 +51,6 @@ delivered with the agent dispatch and read by
 ``JobContext.simulation_context()``.
 """
 
-ATTRIBUTE_SIMULATOR_ACK = "lk.simulator.ack"
-"""
-Set by the agent on its own participant when it resolved a
-``SimulationContext``, valued with the simulation job id from the dispatch.
-The simulation harness preflights on this attribute to verify the scenario
-actually reached the agent before driving any turns.
-"""
-
 TOPIC_CHAT = "lk.chat"
 TOPIC_TRANSCRIPTION = "lk.transcription"
 
