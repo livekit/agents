@@ -1302,6 +1302,47 @@ async def test_stt_pipeline_does_not_recreate_stream_while_closing(
         await pipeline.aclose()
 
 
+async def test_stt_pipeline_recreation_uses_rebound_node(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.agents.voice import audio_recognition
+    from livekit.agents.voice.audio_recognition import _STTPipeline
+
+    monkeypatch.setattr(audio_recognition, "_STT_RECONNECT_INTERVAL", 0.0)
+
+    started_old = asyncio.Event()
+    fail_old = asyncio.Event()
+
+    async def old_node(audio, model_settings):  # type: ignore[no-untyped-def]
+        # the stream captured from the previous agent, still running at handoff
+        started_old.set()
+        await fail_old.wait()
+        raise APIConnectionError("stt unavailable")
+        yield  # pragma: no cover - makes this an async generator
+
+    async def new_node(audio, model_settings):  # type: ignore[no-untyped-def]
+        yield SpeechEvent(
+            type=SpeechEventType.FINAL_TRANSCRIPT,
+            alternatives=[SpeechData(text="recovered", language="en")],
+        )
+        async for _ in audio:
+            pass
+
+    # a handoff reuses the pipeline but rebinds it to the new agent's node; the
+    # recreation after the old stream fails must use that rebound node, not the
+    # previous agent's (whose activity would be torn down)
+    pipeline = _STTPipeline(old_node)
+    try:
+        await asyncio.wait_for(started_old.wait(), timeout=5)
+        pipeline._rebind_node(new_node)
+        fail_old.set()
+        ev = await asyncio.wait_for(pipeline.event_ch.recv(), timeout=5)
+        assert ev.type == SpeechEventType.FINAL_TRANSCRIPT
+        assert ev.alternatives[0].text == "recovered"
+    finally:
+        await pipeline.aclose()
+
+
 async def test_vad_fallback_uses_next_vad_inference_event(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

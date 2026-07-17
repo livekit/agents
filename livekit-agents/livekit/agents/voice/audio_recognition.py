@@ -215,6 +215,12 @@ class _STTPipeline:
             # node ended without error (audio input closed): stop
             return
 
+    def _rebind_node(self, stt_node: io.STTNode) -> None:
+        # the pipeline outlives the agent that created it (reused across handoff);
+        # recreation must call the currently-active node, not the previous agent's
+        # bound node whose activity is torn down (would raise, stopping the pump)
+        self._stt_node = stt_node
+
     async def aclose(self) -> None:
         await aio.cancel_and_wait(self._pump_task)
 
@@ -775,6 +781,10 @@ class AudioRecognition:
         self._stt = stt
         if pipeline is None and stt is not None:
             pipeline = _STTPipeline(stt, is_closing=self._session._is_closing)
+        elif pipeline is not None and stt is not None:
+            # reused pipeline: rebind to this activity's node so a recreation
+            # after an error doesn't call into the previous (torn-down) agent
+            pipeline._rebind_node(stt)
 
         if pipeline is not None:
             self._stt_consumer_atask = asyncio.create_task(
