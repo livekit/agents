@@ -133,6 +133,7 @@ class TextGenerationConfig(TypedDict, total=False):
 class ProviderData(TypedDict, total=False):
     """Root ``providerData`` object merged into the Inworld session config."""
 
+    auto_tool_response: bool
     stt: STTProviderData
     tts: TTSProviderData
     memory: MemoryProviderData

@@ -242,3 +242,34 @@ llm = inworld.realtime.RealtimeModel(
 
 See the [Inworld Realtime API Extensions](https://docs.inworld.ai/realtime/provider-data)
 reference for every field.
+
+#### Protocol debugging
+
+Inworld Realtime sessions expose the raw OpenAI-compatible protocol events
+`openai_client_event_queued` and `openai_server_event_received`. A model subclass can attach
+temporary logging to every session created by `AgentSession`:
+
+```python
+import logging
+
+from livekit.plugins import inworld
+
+logger = logging.getLogger("inworld-realtime")
+
+
+class DebugRealtimeModel(inworld.realtime.RealtimeModel):
+    def session(self):
+        session = super().session()
+        session.on(
+            "openai_client_event_queued",
+            lambda event: logger.debug("client -> server: %s", event),
+        )
+        session.on(
+            "openai_server_event_received",
+            lambda event: logger.debug("server -> client: %s", event),
+        )
+        return session
+```
+
+For voice sessions, filter or summarize `response.output_audio.delta` events to avoid logging
+large base64 audio payloads.

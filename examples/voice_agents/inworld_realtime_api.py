@@ -1,5 +1,3 @@
-import logging
-
 from dotenv import load_dotenv
 
 from livekit.agents import (
@@ -9,11 +7,10 @@ from livekit.agents import (
     JobContext,
     cli,
     function_tool,
+    llm,
     room_io,
 )
 from livekit.plugins.inworld.realtime import RealtimeModel
-
-logger = logging.getLogger("inworld-agent")
 
 load_dotenv()
 
@@ -23,16 +20,30 @@ class MyAgent(Agent):
         super().__init__(
             instructions="You are Jessica, a helpful assistant",
             llm=RealtimeModel(
-                model="inworld/gemma-4-31b-it",
+                model="google-ai-studio/gemini-3.1-flash-lite",
                 voice="Ashley",
                 tts_model="inworld-tts-2",
                 stt_model="inworld/inworld-stt-1",
+                modalities=["audio"],
+                provider_data={"auto_tool_response": False},
             ),
         )
 
     async def on_enter(self):
+        chat_history = [
+            {
+                "role": "user",
+                "content": "Hello. I'm just picking up.",
+            },
+        ]
+        # Google models require a user item to generate a response, so pass it through chat_ctx.
+        chat_ctx = llm.ChatContext.empty()
+        for item in chat_history:
+            chat_ctx.add_message(role=item["role"], content=item["content"])
+
         self.session.generate_reply(
-            instructions="introduce yourself very briefly and ask about the user's day"
+            instructions="introduce yourself very briefly and ask about the user's day",
+            chat_ctx=chat_ctx,
         )
 
     @function_tool
