@@ -19,8 +19,8 @@ from livekit.agents import (
 from livekit.agents.beta import EndCallTool
 from livekit.agents.llm import function_tool
 
-# uncomment to enable Krisp background voice/noise cancellation
-# from livekit.plugins import noise_cancellation
+# uncomment to enable Krisp voice isolation
+# from livekit.plugins import krisp
 
 logger = logging.getLogger("basic-agent")
 
@@ -129,8 +129,8 @@ async def entrypoint(ctx: JobContext) -> None:
         room=ctx.room,
         room_options=room_io.RoomOptions(
             audio_input=room_io.AudioInputOptions(
-                # uncomment to enable the Krisp BVC noise cancellation
-                # noise_cancellation=noise_cancellation.BVC(),
+                # uncomment to enable the Krisp Viva voice isolation
+                # noise_cancellation=krisp.KrispVivaFilterFrameProcessor()
             ),
         ),
     )

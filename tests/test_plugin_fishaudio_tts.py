@@ -69,6 +69,72 @@ def test_update_options_sets_speed_and_volume():
     assert _build_tts_request(tts._opts, text="hi")["prosody"] == {"speed": 0.9, "volume": 2.0}
 
 
+def test_sampling_and_encoding_defaults_unchanged():
+    """Without overrides the request keeps the plugin's historical defaults."""
+    from livekit.plugins.fishaudio.tts import _build_tts_request
+
+    request = _build_tts_request(TTS_opts(), text="hi")
+    assert request["temperature"] == 0.7
+    assert request["top_p"] == 0.7
+    assert request["mp3_bitrate"] == 64
+    assert request["opus_bitrate"] == 64000
+    assert request["normalize"] is True
+
+
+def test_constructor_sets_sampling_and_encoding_params():
+    """temperature/top_p/mp3_bitrate/opus_bitrate/normalize flow onto the request."""
+    from livekit.plugins.fishaudio import TTS
+    from livekit.plugins.fishaudio.tts import _build_tts_request
+
+    tts = TTS(
+        api_key="test-key",
+        temperature=0.3,
+        top_p=0.9,
+        mp3_bitrate=192,
+        opus_bitrate=32000,
+        normalize=False,
+    )
+    request = _build_tts_request(tts._opts, text="hi")
+    assert request["temperature"] == 0.3
+    assert request["top_p"] == 0.9
+    assert request["mp3_bitrate"] == 192
+    assert request["opus_bitrate"] == 32000
+    assert request["normalize"] is False
+
+
+def test_update_options_sets_sampling_and_encoding_params():
+    """update_options forwards the new params onto the request."""
+    from livekit.plugins.fishaudio import TTS
+    from livekit.plugins.fishaudio.tts import _build_tts_request
+
+    tts = TTS(api_key="test-key")
+    tts.update_options(
+        temperature=0.5, top_p=0.8, mp3_bitrate=128, opus_bitrate=-1000, normalize=False
+    )
+    request = _build_tts_request(tts._opts, text="hi")
+    assert request["temperature"] == 0.5
+    assert request["top_p"] == 0.8
+    assert request["mp3_bitrate"] == 128
+    assert request["opus_bitrate"] == -1000
+    assert request["normalize"] is False
+
+
+def test_temperature_and_top_p_validated():
+    """Out-of-range temperature/top_p raise, in the constructor and update_options."""
+    from livekit.plugins.fishaudio import TTS
+
+    with pytest.raises(ValueError):
+        TTS(api_key="test-key", temperature=1.5)
+    with pytest.raises(ValueError):
+        TTS(api_key="test-key", top_p=-0.1)
+
+    tts = TTS(api_key="test-key")
+    with pytest.raises(ValueError):
+        tts.update_options(temperature=1.5)
+    with pytest.raises(ValueError):
+        tts.update_options(top_p=-0.1)
+
+
 def TTS_opts(**overrides):
     """Build a _TTSOptions with sensible test defaults, overriding as needed."""
     from livekit.plugins.fishaudio.tts import DEFAULT_BASE_URL, DEFAULT_MODEL, _TTSOptions
@@ -84,6 +150,11 @@ def TTS_opts(**overrides):
         "chunk_length": 100,
         "speed": NOT_GIVEN,
         "volume": NOT_GIVEN,
+        "temperature": 0.7,
+        "top_p": 0.7,
+        "mp3_bitrate": 64,
+        "opus_bitrate": 64000,
+        "normalize": True,
     }
     opts.update(overrides)
     return _TTSOptions(**opts)

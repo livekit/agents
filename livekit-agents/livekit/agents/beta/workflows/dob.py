@@ -94,7 +94,7 @@ class GetDOBTask(AgentTask[GetDOBResult]):
 
         super().__init__(
             instructions=Instructions(
-                _BASE_INSTRUCTIONS.format(
+                audio=_BASE_INSTRUCTIONS.format(
                     modality_specific=_AUDIO_SPECIFIC,
                     time_instructions=time_instructions,
                     confirmation_instructions=(

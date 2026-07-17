@@ -133,7 +133,7 @@ class GetNameTask(AgentTask[GetNameResult]):
 
         super().__init__(
             instructions=Instructions(
-                _BASE_INSTRUCTIONS.format(
+                audio=_BASE_INSTRUCTIONS.format(
                     name_format=self._name_format,
                     modality_specific=_AUDIO_SPECIFIC,
                     spelling_instructions=spelling_instructions,

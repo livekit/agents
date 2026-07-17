@@ -14,6 +14,7 @@ from livekit.agents import (
     Agent,
     AgentFalseInterruptionEvent,
     AgentStateChangedEvent,
+    APIConnectionError,
     ConversationItemAddedEvent,
     FlushSentinel,
     LanguageCode,
@@ -27,9 +28,17 @@ from livekit.agents import (
     inference,
     vad,
 )
-from livekit.agents.llm import FunctionToolCall, InputTranscriptionCompleted
+from livekit.agents.llm import (
+    FunctionTool,
+    FunctionToolCall,
+    InputTranscriptionCompleted,
+    RawFunctionTool,
+    ToolContext,
+    ToolFlag,
+    Toolset,
+)
 from livekit.agents.llm.chat_context import ChatContext, ChatMessage
-from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
+from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType, STTError
 from livekit.agents.utils import aio
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.audio_recognition import AudioRecognition, _EndOfTurnInfo
@@ -694,6 +703,179 @@ async def test_generate_reply() -> None:
     assert agent.chat_ctx.items[7].type == "function_call_output"
 
 
+async def test_on_enter_hides_ignore_on_enter_tools() -> None:
+    """IGNORE_ON_ENTER tools (bare + toolset-nested) are hidden inside on_enter, restored after."""
+
+    class _Toolset(Toolset):
+        def __init__(self) -> None:
+            end_call = function_tool(
+                self._end_call,
+                name="end_call",
+                description="ends the call",
+                flags=ToolFlag.IGNORE_ON_ENTER,
+            )
+            keep = function_tool(self._keep, name="keep", description="a normal tool")
+            super().__init__(id="ts", tools=[end_call, keep])
+
+        async def _end_call(self) -> None: ...
+
+        async def _keep(self) -> None: ...
+
+    @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
+    async def bare_ignored() -> None:
+        """A bare flagged tool."""
+
+    class _Agent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="you are helpful", tools=[_Toolset(), bare_ignored])
+
+        async def on_enter(self) -> None:
+            self.session.generate_reply(instructions="instructions:say hello to the user")
+
+    actions = FakeActions()
+    actions.add_llm("Hello!", input="instructions:say hello to the user")
+    actions.add_tts(1.0)
+    actions.add_user_speech(2.0, 3.0, "hi there")
+    actions.add_llm("How can I help?")
+    actions.add_tts(1.0)
+
+    session = create_session(actions)
+
+    captured: list[set[str]] = []
+    orig_chat = session.llm.chat
+
+    def _recording_chat(*, chat_ctx, tools=None, **kwargs):  # type: ignore[no-untyped-def]
+        captured.append(
+            {t.info.name for t in (tools or []) if isinstance(t, (FunctionTool, RawFunctionTool))}
+        )
+        return orig_chat(chat_ctx=chat_ctx, tools=tools, **kwargs)
+
+    session.llm.chat = _recording_chat  # type: ignore[method-assign]
+
+    await asyncio.wait_for(run_session(session, _Agent()), timeout=SESSION_TIMEOUT)
+
+    assert len(captured) == 2
+    # on_enter reply: flagged tools hidden, normal tool still offered
+    assert captured[0] == {"keep"}
+    # a later (non-on_enter) turn sees every tool again
+    assert captured[1] == {"keep", "end_call", "bare_ignored"}
+
+
+async def test_on_enter_hides_tools_in_nested_tool_reply() -> None:
+    """When an on_enter reply calls a tool, the tool-response follow-up (a nested speech task)
+    also hides the flagged tools — proving the on_enter contextvar reaches nested tasks."""
+
+    class _Toolset(Toolset):
+        def __init__(self) -> None:
+            end_call = function_tool(
+                self._end_call, name="end_call", description="ends", flags=ToolFlag.IGNORE_ON_ENTER
+            )
+            keep = function_tool(self._keep, name="keep", description="a normal tool")
+            super().__init__(id="ts", tools=[end_call, keep])
+
+        async def _end_call(self) -> None: ...
+
+        async def _keep(self) -> str:
+            return "kept"
+
+    @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
+    async def bare_ignored() -> None:
+        """A bare flagged tool."""
+
+    class _Agent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="you are helpful", tools=[_Toolset(), bare_ignored])
+
+        async def on_enter(self) -> None:
+            self.session.generate_reply(instructions="instructions:say hello to the user")
+
+    actions = FakeActions()
+    # on_enter reply calls the visible `keep` tool instead of speaking, spawning a follow-up
+    actions.add_llm(
+        "",
+        tool_calls=[FunctionToolCall(name="keep", arguments="{}", call_id="1")],
+        input="instructions:say hello to the user",
+    )
+    # tool-response follow-up (keyed on the `keep` return value)
+    actions.add_llm("Hello there!", input="kept")
+    actions.add_tts(1.0)
+    # a user turn ends the run and confirms tools are restored afterwards
+    actions.add_user_speech(4.0, 5.0, "hi there")
+    actions.add_llm("How can I help?")
+    actions.add_tts(1.0)
+
+    session = create_session(actions)
+
+    captured: list[set[str]] = []
+    orig_chat = session.llm.chat
+
+    def _recording_chat(*, chat_ctx, tools=None, **kwargs):  # type: ignore[no-untyped-def]
+        captured.append(
+            {t.info.name for t in (tools or []) if isinstance(t, (FunctionTool, RawFunctionTool))}
+        )
+        return orig_chat(chat_ctx=chat_ctx, tools=tools, **kwargs)
+
+    session.llm.chat = _recording_chat  # type: ignore[method-assign]
+
+    await asyncio.wait_for(run_session(session, _Agent()), timeout=SESSION_TIMEOUT)
+
+    assert len(captured) == 3
+    greeting, tool_reply, user_turn = captured
+    # both the greeting reply and its nested tool-response follow-up hide the flagged tools
+    assert greeting == {"keep"}
+    assert tool_reply == {"keep"}
+    # the later (non-on_enter) user turn sees every tool again
+    assert user_turn == {"keep", "end_call", "bare_ignored"}
+
+
+def test_on_enter_ignored_tools() -> None:
+    """_on_enter_ignored_tools returns flagged tools only inside this agent/session's on_enter."""
+    from livekit.agents.voice.agent_activity import _OnEnterContextVar, _OnEnterData
+
+    class _Toolset(Toolset):
+        def __init__(self) -> None:
+            end_call = function_tool(
+                self._end_call, name="end_call", description="ends", flags=ToolFlag.IGNORE_ON_ENTER
+            )
+            ts_keep = function_tool(self._keep, name="ts_keep", description="normal")
+            super().__init__(id="ts", tools=[end_call, ts_keep])
+
+        async def _end_call(self) -> None: ...
+
+        async def _keep(self) -> None: ...
+
+    @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
+    async def bare_ignored() -> None:
+        """A flagged bare tool."""
+
+    @function_tool
+    async def bare_keep() -> None:
+        """A normal bare tool."""
+
+    activity = object.__new__(AgentActivity)
+    activity._agent = object()  # type: ignore[assignment]
+    activity._session = object()  # type: ignore[assignment]
+    tool_ctx = ToolContext([_Toolset(), bare_ignored, bare_keep])
+
+    # outside on_enter: nothing is ignored
+    assert activity._on_enter_ignored_tools(tool_ctx) == []
+
+    # inside this agent/session's on_enter: flagged tools (bare + nested) are returned
+    tk = _OnEnterContextVar.set(_OnEnterData(session=activity._session, agent=activity._agent))
+    try:
+        ignored = {t.info.name for t in activity._on_enter_ignored_tools(tool_ctx)}
+    finally:
+        _OnEnterContextVar.reset(tk)
+    assert ignored == {"end_call", "bare_ignored"}
+
+    # a different agent's on_enter must not leak in
+    tk = _OnEnterContextVar.set(_OnEnterData(session=activity._session, agent=object()))
+    try:
+        assert activity._on_enter_ignored_tools(tool_ctx) == []
+    finally:
+        _OnEnterContextVar.reset(tk)
+
+
 async def test_aec_warmup() -> None:
     """AEC warmup should block audio-activity-based interruptions during the warmup window.
 
@@ -797,7 +979,7 @@ async def test_backchannel_boundary_suppresses_start_boundary_backchannel() -> N
     )
 
     try:
-        recognition.on_start_of_agent_speech(started_at=time.time())
+        recognition._on_start_of_agent_speech(started_at=time.time())
         # backchannels during the cooldown are dropped (they are a no-op anyway,
         # but this guards against the gate firing on `on_interruption`)
         await recognition._on_overlap_speech_event(_backchannel_event())
@@ -838,7 +1020,7 @@ async def test_stt_eos_resets_active_vad_stream_without_restarting_vad() -> None
     recognition._vad_stream = resettable_stream
 
     try:
-        with patch.object(recognition, "update_vad") as update_vad:
+        with patch.object(recognition, "_update_vad") as update_vad:
             await recognition._on_stt_event(SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
 
         resettable_stream.flush.assert_called_once_with()
@@ -858,7 +1040,7 @@ async def test_stt_eos_falls_back_to_update_vad_when_no_active_stream() -> None:
     recognition._vad_stream = None
 
     try:
-        with patch.object(recognition, "update_vad") as update_vad:
+        with patch.object(recognition, "_update_vad") as update_vad:
             await recognition._on_stt_event(SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
 
         update_vad.assert_called_once_with(recognition._vad)
@@ -893,9 +1075,9 @@ async def test_backchannel_boundary_releases_end_boundary_transcript() -> None:
     try:
         # the agent speaks for a couple of seconds so the held transcript still lands
         # after the agent-speech start (the lower bound of the ignore window)
-        recognition.on_start_of_agent_speech(started_at=time.time() - 2.0)
+        recognition._on_start_of_agent_speech(started_at=time.time() - 2.0)
         speech_ended_at = time.time()
-        recognition.on_end_of_agent_speech(ignore_user_transcript_until=speech_ended_at)
+        recognition._on_end_of_agent_speech(ignore_user_transcript_until=speech_ended_at)
 
         assert not recognition._should_hold_stt_event(
             _final_transcript_event(
@@ -946,6 +1128,221 @@ async def test_interruption_detection_error_is_not_session_error() -> None:
         await _close_test_session(session)
 
 
+async def test_stt_errors_use_unrecoverable_error_tolerance() -> None:
+    from livekit.agents.voice.agent_session import SessionConnectOptions
+
+    session = create_session(
+        FakeActions(),
+        extra_kwargs={"conn_options": SessionConnectOptions(max_unrecoverable_errors=1)},
+    )
+
+    def _stt_error() -> STTError:
+        return STTError(
+            timestamp=time.time(),
+            label="test",
+            error=RuntimeError("stt unavailable"),
+            recoverable=False,
+        )
+
+    try:
+        # first unrecoverable error is tolerated, like llm/tts
+        session._on_error(_stt_error())
+        assert session._closing_task is None
+        assert session._stt_error_counts == 1
+
+        # exceeding the tolerance closes the session
+        session._on_error(_stt_error())
+        assert session._closing_task is not None
+        await session._closing_task
+    finally:
+        await _close_test_session(session)
+
+
+async def test_stt_error_count_resets_on_user_transcript() -> None:
+    from livekit.agents.voice.agent_session import SessionConnectOptions
+
+    session = create_session(
+        FakeActions(),
+        extra_kwargs={"conn_options": SessionConnectOptions(max_unrecoverable_errors=1)},
+    )
+
+    def _stt_error() -> STTError:
+        return STTError(
+            timestamp=time.time(),
+            label="test",
+            error=RuntimeError("stt unavailable"),
+            recoverable=False,
+        )
+
+    try:
+        session._on_error(_stt_error())
+        assert session._stt_error_counts == 1
+
+        # a real transcript means the stt recovered -> tolerance resets
+        session._user_input_transcribed(
+            UserInputTranscribedEvent(transcript="hello", is_final=True)
+        )
+        assert session._stt_error_counts == 0
+
+        # an empty placeholder transcript is not a recovery -> no reset
+        session._on_error(_stt_error())
+        session._user_input_transcribed(UserInputTranscribedEvent(transcript="", is_final=False))
+        assert session._stt_error_counts == 1
+
+        # tolerance still trips once the (reset) budget is exhausted again
+        session._on_error(_stt_error())
+        assert session._closing_task is not None
+        await session._closing_task
+    finally:
+        await _close_test_session(session)
+
+
+async def test_stt_pipeline_recreates_stream_after_unrecoverable_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.agents.voice import audio_recognition
+    from livekit.agents.voice.audio_recognition import _STTPipeline
+
+    monkeypatch.setattr(audio_recognition, "_STT_RECONNECT_INTERVAL", 0.0)
+
+    attempts = 0
+
+    async def stt_node(audio, model_settings):  # type: ignore[no-untyped-def]
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise APIConnectionError("stt unavailable")
+
+        yield SpeechEvent(
+            type=SpeechEventType.FINAL_TRANSCRIPT,
+            alternatives=[SpeechData(text="recovered", language="en")],
+        )
+        # stay open like a live stream until the pipeline is closed
+        async for _ in audio:
+            pass
+
+    pipeline = _STTPipeline(stt_node)
+    try:
+        # the first stream dies on a connection error; the pump must recreate it
+        # and forward the transcript produced by the second stream
+        ev = await asyncio.wait_for(pipeline.event_ch.recv(), timeout=5)
+        assert ev.type == SpeechEventType.FINAL_TRANSCRIPT
+        assert ev.alternatives[0].text == "recovered"
+        assert attempts == 2
+    finally:
+        await pipeline.aclose()
+
+
+async def test_stt_pipeline_does_not_recreate_on_non_connection_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.agents.voice import audio_recognition
+    from livekit.agents.voice.audio_recognition import _STTPipeline
+
+    monkeypatch.setattr(audio_recognition, "_STT_RECONNECT_INTERVAL", 0.0)
+
+    attempts = 0
+
+    async def stt_node(audio, model_settings):  # type: ignore[no-untyped-def]
+        nonlocal attempts
+        attempts += 1
+        raise ValueError("bug in stt_node")
+        yield  # pragma: no cover - makes this an async generator
+
+    # a non-connection error is not retried: the pump stops instead of looping
+    pipeline = _STTPipeline(stt_node)
+    try:
+        events: list[SpeechEvent] = []
+
+        async def _collect() -> None:
+            async for ev in pipeline.event_ch:
+                events.append(ev)
+
+        await asyncio.wait_for(_collect(), timeout=5)
+        assert events == []
+        assert attempts == 1
+    finally:
+        await pipeline.aclose()
+
+
+async def test_stt_pipeline_does_not_recreate_stream_while_closing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.agents.voice import audio_recognition
+    from livekit.agents.voice.audio_recognition import _STTPipeline
+
+    monkeypatch.setattr(audio_recognition, "_STT_RECONNECT_INTERVAL", 0.0)
+
+    attempts = 0
+
+    async def stt_node(audio, model_settings):  # type: ignore[no-untyped-def]
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise APIConnectionError("stt unavailable")
+
+        yield SpeechEvent(
+            type=SpeechEventType.FINAL_TRANSCRIPT,
+            alternatives=[SpeechData(text="recovered", language="en")],
+        )
+
+    # session already closing: the pump must not spawn a replacement stream
+    pipeline = _STTPipeline(stt_node, is_closing=lambda: True)
+    try:
+        events: list[SpeechEvent] = []
+
+        async def _collect() -> None:
+            async for ev in pipeline.event_ch:
+                events.append(ev)
+
+        await asyncio.wait_for(_collect(), timeout=5)
+        assert events == []
+        assert attempts == 1
+    finally:
+        await pipeline.aclose()
+
+
+async def test_stt_pipeline_recreation_uses_rebound_node(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.agents.voice import audio_recognition
+    from livekit.agents.voice.audio_recognition import _STTPipeline
+
+    monkeypatch.setattr(audio_recognition, "_STT_RECONNECT_INTERVAL", 0.0)
+
+    started_old = asyncio.Event()
+    fail_old = asyncio.Event()
+
+    async def old_node(audio, model_settings):  # type: ignore[no-untyped-def]
+        # the stream captured from the previous agent, still running at handoff
+        started_old.set()
+        await fail_old.wait()
+        raise APIConnectionError("stt unavailable")
+        yield  # pragma: no cover - makes this an async generator
+
+    async def new_node(audio, model_settings):  # type: ignore[no-untyped-def]
+        yield SpeechEvent(
+            type=SpeechEventType.FINAL_TRANSCRIPT,
+            alternatives=[SpeechData(text="recovered", language="en")],
+        )
+        async for _ in audio:
+            pass
+
+    # a handoff reuses the pipeline but rebinds it to the new agent's node; the
+    # recreation after the old stream fails must use that rebound node, not the
+    # previous agent's (whose activity would be torn down)
+    pipeline = _STTPipeline(old_node)
+    try:
+        await asyncio.wait_for(started_old.wait(), timeout=5)
+        pipeline._rebind_node(new_node)
+        fail_old.set()
+        ev = await asyncio.wait_for(pipeline.event_ch.recv(), timeout=5)
+        assert ev.type == SpeechEventType.FINAL_TRANSCRIPT
+        assert ev.alternatives[0].text == "recovered"
+    finally:
+        await pipeline.aclose()
+
+
 async def test_vad_fallback_uses_next_vad_inference_event(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -974,7 +1371,7 @@ async def test_vad_fallback_uses_next_vad_inference_event(
     try:
         activity._fallback_to_vad_interruption(error)
 
-        audio_recognition.update_interruption_detection.assert_called_once_with(None)
+        audio_recognition._update_interruption_detection.assert_called_once_with(None)
         current_speech.interrupt.assert_not_called()
         assert activity._interruption_detection_enabled is False
         assert activity._interruption_by_audio_activity_enabled is True

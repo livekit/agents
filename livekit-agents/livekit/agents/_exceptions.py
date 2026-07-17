@@ -1,6 +1,12 @@
 from __future__ import annotations
 
 
+class UnexpectedModelBehavior(RuntimeError):
+    """Raised when the model behaves in a way the run cannot recover from,
+    e.g. a run with an output_type ends without the expected output after
+    exhausting its retries."""
+
+
 class AssignmentTimeoutError(Exception):
     """Raised when accepting a job but not receiving an assignment within the specified timeout.
     The server may have chosen another worker to handle this job."""

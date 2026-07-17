@@ -30,12 +30,12 @@ class WatchClient:
     def __init__(
         self,
         worker: AgentServer,
-        reload_addr: str,
+        cli_addr: str,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         self._loop = loop or asyncio.get_event_loop()
         self._worker = worker
-        self._reload_addr = reload_addr
+        self._cli_addr = cli_addr
         self._main_task: asyncio.Task | None = None
 
     def start(self) -> None:
@@ -43,11 +43,21 @@ class WatchClient:
 
     @utils.log_exceptions(logger=logger)
     async def _run(self) -> None:
-        host, port_str = self._reload_addr.rsplit(":", 1)
+        host, port_str = self._cli_addr.rsplit(":", 1)
         reader, writer = await asyncio.open_connection(host, int(port_str))
 
         try:
-            # On startup: send GetRunningJobsRequest to Go, recv response, reload jobs
+            # On startup: tell the CLI about this agent server (agent name + URL) so
+            # it can surface things like a Cloud console link, then sync running jobs.
+            info = agent_dev.AgentDevMessage(
+                server_info=agent_dev.ServerInfo(
+                    agent_name=self._worker._agent_name,
+                    url=self._worker._ws_url,
+                )
+            )
+            await _send_proto(writer, info.SerializeToString())
+
+            # send GetRunningJobsRequest to Go, recv response, reload jobs
             req = agent_dev.AgentDevMessage(
                 get_running_jobs_request=agent_dev.GetRunningAgentJobsRequest()
             )

@@ -45,6 +45,11 @@ DEFAULT_LANGUAGE = "en"
 DEFAULT_VOICE = "Maya"
 DEFAULT_AUDIO_FORMAT = "pcm_s16le"
 DEFAULT_SAMPLE_RATE = 24000
+DEFAULT_SPEED = 1.0
+# Speaking rate bounds accepted by the Soniox TTS API (values below 1.0 slow
+# speech down, above 1.0 speed it up).
+MIN_SPEED = 0.7
+MAX_SPEED = 1.3
 KEEPALIVE_INTERVAL = 10  # seconds
 KEEPALIVE_MESSAGE = json.dumps({"keep_alive": True})
 
@@ -75,6 +80,7 @@ class TTS(tts.TTS):
         audio_format: str = DEFAULT_AUDIO_FORMAT,
         sample_rate: int = DEFAULT_SAMPLE_RATE,
         bitrate: int | None = None,
+        speed: float = DEFAULT_SPEED,
         api_key: str | None = None,
         websocket_url: str = WEBSOCKET_URL,
         http_session: aiohttp.ClientSession | None = None,
@@ -88,6 +94,8 @@ class TTS(tts.TTS):
             audio_format (str): Audio format (e.g., "pcm_s16le", "mp3"). Defaults to "pcm_s16le".
             sample_rate (int): Sample rate in Hz. Required for raw audio formats. Defaults to 24000.
             bitrate (int): Codec bitrate in bps for compressed formats. Optional.
+            speed (float): Speaking rate. 1.0 is the normal rate; values below 1.0 slow speech
+                down and values above 1.0 speed it up. Range is [0.7, 1.3]. Defaults to 1.0.
             api_key (str): Soniox API key. If not provided, will look for SONIOX_API_KEY env variable.
             websocket_url (str): Base WebSocket URL for Soniox TTS API.
             http_session (aiohttp.ClientSession): Optional aiohttp.ClientSession to use for requests.
@@ -102,6 +110,9 @@ class TTS(tts.TTS):
         if not api_key:
             raise ValueError("Soniox API key is required. Set SONIOX_API_KEY or provide api_key.")
 
+        if not MIN_SPEED <= speed <= MAX_SPEED:
+            raise ValueError(f"speed must be between {MIN_SPEED} and {MAX_SPEED}, but got {speed}")
+
         self._opts = _TTSOptions(
             model=model,
             language=language,
@@ -109,6 +120,7 @@ class TTS(tts.TTS):
             audio_format=audio_format,
             sample_rate=sample_rate,
             bitrate=bitrate,
+            speed=speed,
             websocket_url=websocket_url,
             api_key=api_key,
         )
@@ -160,12 +172,14 @@ class TTS(tts.TTS):
         model: NotGivenOr[str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
         voice: NotGivenOr[str] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         """
         Args:
             model: TTS model to use.
             language: Language code to use.
             voice: Voice to use.
+            speed: Speaking rate in the range [0.7, 1.3]; 1.0 is the normal rate.
         """
         if is_given(model):
             self._opts.model = model
@@ -173,6 +187,12 @@ class TTS(tts.TTS):
             self._opts.language = language
         if is_given(voice):
             self._opts.voice = voice
+        if is_given(speed):
+            if not MIN_SPEED <= speed <= MAX_SPEED:
+                raise ValueError(
+                    f"speed must be between {MIN_SPEED} and {MAX_SPEED}, but got {speed}"
+                )
+            self._opts.speed = speed
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -312,6 +332,7 @@ class _TTSOptions:
     audio_format: str
     sample_rate: int
     bitrate: int | None
+    speed: float
     websocket_url: str
     api_key: str
 
@@ -486,6 +507,7 @@ class _Connection:
                         "voice": msg.opts.voice,
                         "audio_format": msg.opts.audio_format,
                         "sample_rate": msg.opts.sample_rate,
+                        "speed": msg.opts.speed,
                         "stream_id": msg.stream_id,
                     }
                     if msg.opts.bitrate is not None:

@@ -64,7 +64,7 @@ from .ivr import IVRActivity
 from .keyterm_detection import KeytermDetector, KeytermsOptions, _resolve_keyterms_options
 from .recorder_io import RecorderIO
 from .remote_session import RoomSessionTransport, SessionHost, SessionTransport
-from .run_result import RunResult
+from .run_result import RunOutputOptions, RunResult
 from .speech_handle import InputDetails, SpeechHandle
 from .tool_executor import ToolHandlingOptions, _resolve_async_tool_options
 from .turn import (
@@ -84,6 +84,7 @@ if TYPE_CHECKING:
     from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput
     from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
+    from .presets import Preset
     from .transcription.text_transforms import TextTransforms
 
 
@@ -137,7 +138,37 @@ class SessionConnectOptions:
     llm_conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     tts_conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     max_unrecoverable_errors: int = 3
-    """Maximum number of consecutive unrecoverable errors from llm or tts."""
+    """Maximum number of consecutive unrecoverable errors from stt, llm, or tts."""
+
+
+class ExpressiveOptions(TypedDict, total=False):
+    """Configuration for the expressive pipeline (framework-internal, not publicly exposed).
+
+    Controls how TTS markup instructions are injected into the LLM when expressive is
+    enabled. All keys are optional; common shapes:
+
+    - ``{"preset": Preset.CASUAL}`` — a domain preset, resolved to the active
+      TTS provider's tuned tags (see ``voice.presets``).
+    - ``{"preset": ..., "tts_instructions_append": "..."}`` — a preset plus your own
+      rules appended after it resolves.
+    - ``{"tts_instructions_template": "..."}`` — a fully custom prompt.
+
+    Any explicit template overrides the corresponding part of the resolved preset; unset
+    parts fall back to the resolved preset (or the provider-agnostic default).
+    """
+
+    preset: Preset
+    tts_instructions_template: Instructions | str
+    tts_instructions_append: str
+
+
+DEFAULT_EXPRESSIVE_OPTIONS: ExpressiveOptions = ExpressiveOptions(
+    tts_instructions_template=Instructions(
+        "You can control how you speak using the following formatting tags. "
+        "Use them when appropriate to make your speech more expressive and natural:\n\n"
+        "{tts.markup.llm_instructions}"
+    ),
+)
 
 
 @dataclass
@@ -404,6 +435,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             aec_warmup_duration=aec_warmup_duration,
             session_close_transcript_timeout=session_close_transcript_timeout,
         )
+        # expressive mode is not publicly exposed; the pipeline stays disabled
+        self._expressive: bool | ExpressiveOptions = False
         self._conn_options = conn_options or SessionConnectOptions()
         self._started = False
 
@@ -442,7 +475,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             tool_handling.get("async_options") if is_given(tool_handling) else None
         )
 
-        # unrecoverable error counts, reset after agent speaking
+        # unrecoverable error counts; stt resets on transcript, llm/tts on speaking
+        self._stt_error_counts = 0
         self._llm_error_counts = 0
         self._tts_error_counts = 0
 
@@ -616,11 +650,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         user_input: str,
         input_modality: Literal["text", "audio"] = "text",
         output_type: type[Run_T] | None = None,
+        output_options: NotGivenOr[RunOutputOptions | None] = NOT_GIVEN,
     ) -> RunResult[Run_T]:
         if self._global_run_state is not None and not self._global_run_state.done():
             raise RuntimeError("nested runs are not supported")
 
-        run_state = RunResult(user_input=user_input, output_type=output_type)
+        run_state = RunResult(
+            user_input=user_input,
+            output_type=output_type,
+            output_options=output_options,
+            session=self,
+        )
         self._global_run_state = run_state
         self.generate_reply(user_input=user_input, input_modality=input_modality)
         return run_state
@@ -967,6 +1007,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def shutdown(self, *, drain: bool = True) -> None:
         self._close_soon(error=None, drain=drain, reason=CloseReason.USER_INITIATED)
 
+    def _is_closing(self) -> bool:
+        # _closing_task is set synchronously when close begins, earlier than _closing
+        return self._closing_task is not None or self._closing
+
     @utils.log_exceptions(logger=logger)
     async def _aclose_impl(
         self,
@@ -1034,7 +1078,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     and (audio_recognition := activity._audio_recognition) is not None
                 ):
                     # wait for the user transcript to be committed
-                    audio_recognition.commit_user_turn(
+                    audio_recognition._commit_user_turn(
                         audio_detached=True,
                         transcript_timeout=self._opts.session_close_transcript_timeout,
                     )
@@ -1080,6 +1124,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._cancel_user_away_timer()
             self._user_state = "listening"
             self._agent_state = "initializing"
+            self._stt_error_counts = 0
             self._llm_error_counts = 0
             self._tts_error_counts = 0
             self._root_span_context = None
@@ -1552,7 +1597,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._closing_task or error.recoverable:
             return
 
-        if error.type == "llm_error":
+        if error.type == "stt_error":
+            self._stt_error_counts += 1
+            if self._stt_error_counts <= self.conn_options.max_unrecoverable_errors:
+                return
+        elif error.type == "llm_error":
             self._llm_error_counts += 1
             if self._llm_error_counts <= self.conn_options.max_unrecoverable_errors:
                 return
@@ -1747,6 +1796,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._update_user_state("listening")
 
     def _user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
+        if ev.transcript:
+            # a transcript means stt recovered; reset its error tolerance
+            self._stt_error_counts = 0
+
         if self.user_state == "away" and ev.is_final:
             # reset user state from away to listening in case VAD has a miss detection
             self._update_user_state("listening")
@@ -1755,7 +1808,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _conversation_item_added(self, message: llm.ChatMessage) -> None:
         self._chat_ctx.insert(message)
-        if text := message.text_content:
+        if text := message.raw_text_content:
             logger.debug(
                 "conversation_item_added",
                 extra={"role": message.role, "text": text},

@@ -5,7 +5,7 @@ import datetime
 import os
 import time
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterable, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator
 from dataclasses import dataclass
 from types import TracebackType
 from typing import TYPE_CHECKING, ClassVar, Generic, Literal, TypeVar
@@ -30,6 +30,7 @@ from ..utils import aio, audio, codecs, log_exceptions, shortuuid
 
 if TYPE_CHECKING:
     from ..voice.io import TimedString
+    from ._provider_format import ExpressiveTag
 
 lk_dump_tts = int(os.getenv("LK_DUMP_TTS", 0))
 
@@ -73,6 +74,110 @@ class TTS(
     rtc.EventEmitter[Literal["metrics_collected", "error"] | TEvent],
     Generic[TEvent],
 ):
+    class Markup:
+        """Declares TTS markup capabilities for the expressive pipeline.
+
+        Plugins override this inner class to declare what markup tags the TTS supports
+        and how to convert marked-up text back to plain text.
+        """
+
+        def __init__(self, tts: TTS) -> None:
+            self._tts = tts
+
+        def _provider_key(self) -> str:
+            """Key into the shared ``_provider_format`` markup tables, or "" for none.
+
+            Plugins override this to opt into markup support; the default ("") means
+            no markup instructions, stripping, normalization, or conversion are applied.
+            The other markup methods delegate through this key, so a plugin only needs
+            to override ``_provider_key``.
+            """
+            return ""
+
+        def llm_instructions(self) -> str | None:
+            """Return instructions for the LLM describing available markup tags.
+
+            The framework injects this into the LLM system prompt when
+            ``expressive=True``.  Returns ``None`` if this TTS has no markup support.
+            """
+            from ._provider_format import llm_instructions
+
+            return llm_instructions(self._provider_key())
+
+        def _split(self, text: str) -> tuple[str, list[ExpressiveTag]]:
+            """Strip markup and collect the stripped tags in one pass."""
+            from ._provider_format import split_markup
+
+            return split_markup(self._provider_key(), text)
+
+        def to_text(self, text: str) -> str:
+            """Strip TTS-specific markup from *text*, returning plain text.
+
+            Used for transcripts streamed to the user and for chat history storage.
+            The TTS itself receives the original marked-up text.
+            """
+            return self._split(text)[0]
+
+        async def to_text_stream(
+            self, text_stream: AsyncIterable[str], *, tags_out: list[ExpressiveTag] | None = None
+        ) -> AsyncGenerator[str, None]:
+            """Strip TTS markup from a stream of text chunks.
+
+            Buffers partial XML tags across chunks so that each buffer is stripped as a
+            whole. When ``tags_out`` is given, the stripped tags are appended to it (in
+            document order) as a byproduct of the same pass — no second scan.
+            """
+            buf = ""
+            async for chunk in text_stream:
+                buf += chunk
+                # hold the buffer only for a *tag-shaped* trailing "<" (a partial tag
+                # arriving across chunks); a bare "<" as in "3 < 5" is plain text and
+                # must not stall the transcript until the next ">" or flush
+                last_open = buf.rfind("<")
+                if last_open > buf.rfind(">"):
+                    nxt = buf[last_open + 1 : last_open + 2]
+                    if not nxt or nxt == "/" or nxt.isalpha():
+                        continue
+                stripped, tags = self._split(buf)
+                buf = ""
+                if tags_out is not None:
+                    tags_out.extend(tags)
+                if stripped:
+                    yield stripped
+
+            if buf:
+                stripped, tags = self._split(buf)
+                if tags_out is not None:
+                    tags_out.extend(tags)
+                if stripped:
+                    yield stripped
+
+        def extract_tags(self, text: str) -> list[ExpressiveTag]:
+            """Extract the markup tags that :meth:`to_text` would strip, in order.
+
+            Lets the framework surface stripped expressive tags (e.g. as transcription
+            attributes for the frontend) instead of discarding them. Returns ``[]`` when
+            the provider declares no markup.
+            """
+            return self._split(text)[1]
+
+        def normalize(self, text: str) -> str:
+            """Fix common LLM markup mistakes (e.g. unclosed self-closing tags)."""
+            from ._provider_format import normalize_markup
+
+            return normalize_markup(self._provider_key(), text)
+
+        def convert(self, text: str) -> str:
+            """Convert framework-standard markup to the provider's native format.
+
+            Called before text is sent to the TTS; a no-op when the provider declares
+            no markup. Plugins that use non-XML formats (e.g. square brackets) opt in
+            via ``_provider_key`` so ``<expression value="..."/>`` becomes native syntax.
+            """
+            from ._provider_format import convert_markup
+
+            return convert_markup(self._provider_key(), text)
+
     def __init__(
         self,
         *,
@@ -85,6 +190,26 @@ class TTS(
         self._sample_rate = sample_rate
         self._num_channels = num_channels
         self._label = f"{type(self).__module__}.{type(self).__name__}"
+        self._markup = self.Markup(self)
+        # Whether expressive is active for the current turn, set by the framework
+        # before each synthesis. TTS implementations that tokenize their own input
+        # read this to batch into larger chunks (continuous prosody); False (the
+        # default) means per-sentence chunking. See `_set_expressive`.
+        self._expressive: bool = False
+
+    @property
+    def markup(self) -> Markup:
+        """Access TTS markup capabilities (instructions for LLM, text stripping)."""
+        return self._markup
+
+    def _set_expressive(self, enabled: bool) -> None:
+        """Framework-internal: mark whether expressive is active for this turn.
+
+        Called by the voice pipeline before each synthesis. TTS implementations widen
+        their input chunking when enabled; a no-op for TTS that don't tokenize their
+        own input.
+        """
+        self._expressive = enabled
 
     @property
     def label(self) -> str:
@@ -315,16 +440,29 @@ class ChunkedStream(ABC):
                 if isinstance(e, APIStatusError) and e.status_code == 499:
                     return
 
-                retry_interval = self._conn_options._interval_for_retry(i)
-                if self._conn_options.max_retry == 0 or self._conn_options.max_retry == i:
+                # settle the emitter so no frames from this attempt are delivered after
+                # the retry starts; the retry restarts the synthesis under a fresh
+                # request_id, signaling downstream that any partial audio is stale
+                await output_emitter.aclose()
+
+                should_retry = (
+                    e.retryable
+                    and self._conn_options.max_retry > 0
+                    and i < self._conn_options.max_retry
+                )
+
+                if not should_retry:
                     self._emit_error(e, recoverable=False)
                     raise
-                else:
-                    self._emit_error(e, recoverable=True)
-                    logger.warning(
-                        f"failed to synthesize speech: {e}, retrying in {retry_interval}s",
-                        extra={"tts": self._tts._label, "attempt": i + 1, "streamed": False},
-                    )
+
+                retry_interval = self._conn_options._interval_for_retry(i)
+                self._emit_error(e, recoverable=True)
+                logger.warning(
+                    "failed to synthesize speech: %s, retrying in %ss",
+                    e,
+                    retry_interval,
+                    extra={"tts": self._tts._label, "attempt": i + 1, "streamed": False},
+                )
 
                 await asyncio.sleep(retry_interval)
                 # Reset the flag when retrying
