@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from typing import Any, Literal, cast
@@ -50,6 +51,45 @@ ServiceTier = Literal["auto", "default", "flex", "scale", "priority"]
 Verbosity = Literal["low", "medium", "high"]
 
 OPENAI_RESPONSES_WS_URL = "wss://api.openai.com/v1/responses"
+
+
+# --- internal tool-call scaffolding leak detection -----------------------------
+# The gpt-5.4 series intermittently emits its INTERNAL tool-call wire format as
+# assistant TEXT instead of as structured function calls, e.g.
+#   to=multi_tool_use.parallel {"tool_uses":[{"recipient_name":"functions.foo",
+#   "parameters":{...}}, ...]}
+# frequently interleaved with memorized training-data spam. `multi_tool_use.parallel`
+# / `recipient_name` / `tool_uses` are old ChatGPT plugin-era internal constructs and
+# must never reach the caller as content.
+#
+# We do NOT try to interpret the corrupt payload (reconstructing tool calls from
+# garbage tokens risks acting on a misread). Instead we detect the signature at the
+# very start of the assistant text -- before any of it is streamed -- and raise a
+# retryable error, so the LLMStream retry loop re-issues the request for a fresh,
+# clean generation. Because we raise before emitting anything, `response.completed`
+# never runs, so no corrupt state is committed and previous_response_id chaining is
+# untouched.
+_SCAFFOLD_MARKERS = re.compile(
+    r"multi_tool_use|recipient_name|\"tool_uses\"|to\s*=\s*functions\.",
+)
+# Leading assistant-text chars buffered per output item before it is declared clean.
+# The signature appears at the very start of a corrupted item, so a small head catches
+# it before any is streamed; the latency impact is negligible and touches only the
+# first tokens of each message item -- and only for the affected model.
+_SCAFFOLD_HEAD_CHARS = 40
+
+# Scope the guard to the affected family ONLY. Every other model the Responses plugin
+# serves keeps the original, verbatim streaming path: no buffering, no detection, no
+# behavior change.
+_SCAFFOLD_AFFECTED_RE = re.compile(r"gpt-5\.4")
+
+
+def _model_may_leak_scaffolding(model: str) -> bool:
+    return bool(model) and _SCAFFOLD_AFFECTED_RE.search(model) is not None
+
+
+def _looks_like_tool_scaffolding(text: str) -> bool:
+    return bool(text) and _SCAFFOLD_MARKERS.search(text) is not None
 
 
 class _ResponsesWebsocket:
@@ -408,6 +448,17 @@ class LLMStream(llm.LLMStream):
         self._response_id: str = ""
         self._response_completed: bool = False
         self._pending_tool_calls = set[str]()
+        # Per-output-item scaffolding-leak guard (see _handle_response_output_text_delta):
+        # item_id -> buffered leading text, and item_id -> verdict ("clean").
+        # _emitted_content records whether any assistant text has already been streamed
+        # this response -- if so a detected leak can't be retried safely (would
+        # double-emit), so it's raised non-retryable instead.
+        self._text_head: dict[str, str] = {}
+        self._text_verdict: dict[str, str] = {}
+        self._emitted_content: bool = False
+        # Guard is active ONLY for the affected model family; for every other model the
+        # text stream below takes the original verbatim path.
+        self._scaffold_guard: bool = _model_may_leak_scaffolding(str(model))
 
         self._client = client
         self._llm: LLM = llm
@@ -429,6 +480,10 @@ class LLMStream(llm.LLMStream):
 
     async def _run_impl(self) -> None:
         self._response_completed = False
+        # Fresh scaffolding-guard state per attempt (this method re-runs on retry).
+        self._text_head.clear()
+        self._text_verdict.clear()
+        self._emitted_content = False
         chat_ctx, _ = self._chat_ctx.to_provider_format(format="openai.responses")
         self._tool_ctx = llm.ToolContext(self.tools)
         tool_schemas = cast(
@@ -631,23 +686,108 @@ class LLMStream(llm.LLMStream):
                 ),
             )
             self._pending_tool_calls.add(event.item.call_id)
-        elif isinstance(event.item, ResponseOutputMessage) and event.item.phase is not None:
-            # Models like gpt-5.3-codex label assistant messages as intermediate
-            # `commentary` or the `final_answer`
-            chunk = llm.ChatChunk(
-                id=self._response_id,
-                delta=llm.ChoiceDelta(
-                    role="assistant",
-                    content=None,
-                    extra={"openai": {"phase": event.item.phase}},
-                ),
-            )
+        elif isinstance(event.item, ResponseOutputMessage):
+            if self._scaffold_guard:
+                # Affected model: finalize through the leak handler (flush clean
+                # buffered head; raise retryable if the item text is corrupt).
+                chunk = self._finalize_message_item(event.item)
+            elif event.item.phase is not None:
+                # Unaffected model -- original behavior: models like gpt-5.3-codex
+                # label assistant messages `commentary` / `final_answer`.
+                chunk = llm.ChatChunk(
+                    id=self._response_id,
+                    delta=llm.ChoiceDelta(
+                        role="assistant",
+                        content=None,
+                        extra={"openai": {"phase": event.item.phase}},
+                    ),
+                )
         return chunk
+
+    def _raise_scaffolding_leak(self) -> None:
+        """Detected the internal tool-call format in assistant text. Raise so the
+        retry loop re-issues a fresh generation. Retryable ONLY if no content has been
+        streamed yet this response (otherwise a retry would double-emit what the caller
+        already received, so fail the turn instead)."""
+        retryable = not self._emitted_content
+        logger.warning(
+            "internal tool-call scaffolding leaked into assistant text (model=%s); %s",
+            self._model,
+            "raising retryable error to re-generate"
+            if retryable
+            else "content already streamed -- failing turn (cannot retry safely)",
+        )
+        raise APIStatusError(
+            "internal tool-call format leaked into assistant text",
+            status_code=502,
+            retryable=retryable,
+        )
+
+    def _finalize_message_item(self, item: ResponseOutputMessage) -> llm.ChatChunk | None:
+        item_id = getattr(item, "id", "") or ""
+        phase = item.phase
+        extra = {"openai": {"phase": phase}} if phase is not None else None
+        full_text = "".join(
+            getattr(c, "text", "") or ""
+            for c in (item.content or [])
+            if getattr(c, "type", "") == "output_text"
+        )
+
+        # Belt for coalesced deltas: if the complete item text trips the signature
+        # (and the streaming head somehow didn't), raise here.
+        if _looks_like_tool_scaffolding(full_text):
+            self._raise_scaffolding_leak()
+
+        # Clean, but short enough that the head was still buffered and never streamed --
+        # flush it now (carrying the phase marker if present).
+        if item_id in self._text_head:
+            head = self._text_head.pop(item_id, "")
+            self._text_verdict[item_id] = "clean"
+            if head:
+                self._emitted_content = True
+                return llm.ChatChunk(
+                    id=self._response_id,
+                    delta=llm.ChoiceDelta(role="assistant", content=head, extra=extra),
+                )
+
+        # Clean and already fully streamed -- forward the phase marker (the original
+        # behavior) if there is one.
+        if extra is not None:
+            return llm.ChatChunk(
+                id=self._response_id,
+                delta=llm.ChoiceDelta(role="assistant", content=None, extra=extra),
+            )
+        return None
 
     def _handle_response_output_text_delta(
         self, event: ResponseTextDeltaEvent
     ) -> llm.ChatChunk | None:
-        return llm.ChatChunk(
-            id=self._response_id,
-            delta=llm.ChoiceDelta(content=event.delta, role="assistant"),
-        )
+        if not self._scaffold_guard:
+            # Unaffected model -- original verbatim behavior.
+            return llm.ChatChunk(
+                id=self._response_id,
+                delta=llm.ChoiceDelta(content=event.delta, role="assistant"),
+            )
+        item_id = event.item_id
+        if self._text_verdict.get(item_id) == "clean":
+            self._emitted_content = True
+            return llm.ChatChunk(
+                id=self._response_id,
+                delta=llm.ChoiceDelta(content=event.delta, role="assistant"),
+            )
+        # Deciding: buffer a bounded head, emitting nothing, until the item is ruled
+        # clean or trips the signature.
+        head = self._text_head.get(item_id, "") + (event.delta or "")
+        self._text_head[item_id] = head
+        if _looks_like_tool_scaffolding(head):
+            # Leak caught before any of it was streamed -- re-generate (retryable).
+            self._raise_scaffolding_leak()
+        if len(head) >= _SCAFFOLD_HEAD_CHARS:
+            self._text_verdict[item_id] = "clean"
+            self._text_head.pop(item_id, None)
+            self._emitted_content = True
+            return llm.ChatChunk(
+                id=self._response_id,
+                delta=llm.ChoiceDelta(content=head, role="assistant"),
+            )
+        return None  # keep buffering the head
