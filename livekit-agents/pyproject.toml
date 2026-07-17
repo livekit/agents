@@ -51,7 +51,7 @@ dependencies = [
     "prometheus-client>=0.22",
     "openai>=2",
     "aiofiles>=24",
-    "json-repair==0.59.10",
+    "json-repair==0.60.1",
     "pyyaml>=6.0.3",
     # Required by the deprecated rich CLI (`cli.run_app`); drop when it is removed.
     "typer>=0.15.1",
