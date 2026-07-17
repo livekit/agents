@@ -14,7 +14,7 @@ from typing import Any, Literal
 from urllib.parse import urlparse
 
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
-from typing_extensions import Self
+from typing_extensions import Self, TypedDict
 
 from ..log import logger
 
@@ -50,22 +50,32 @@ from .tool_context import (
 MCPTool = RawFunctionTool
 
 
-@dataclass(frozen=True)
-class MCPToolOptions:
-    """Per-tool behavior for MCP tools exposed by an :class:`MCPToolset`.
+class MCPToolOptions(TypedDict, total=False):
+    """Per-tool behavior for MCP tools exposed by an :class:`MCPToolset`."""
 
-    ``flags`` and ``on_duplicate`` mirror ``@function_tool``. ``forward_progress``
-    forwards the server's ``report_progress`` to ``ctx.update()``, so the tool runs in
-    the background and the agent can narrate.
-    """
+    flags: ToolFlag
+    """Flags passed to the @function_tool decorator, e.g. ToolFlag.CANCELLABLE."""
 
-    flags: ToolFlag = ToolFlag.NONE
-    on_duplicate: DuplicateMode = "allow"
-    forward_progress: bool = False
+    on_duplicate: DuplicateMode
+    """Behavior when a tool is called multiple times in the same context."""
+
+    report_progress: bool
+    """Whether to forward the tool's progress notifications to ctx.update()."""
 
 
 # default for tools not listed in tool_options
-_DEFAULT_TOOL_OPTIONS = MCPToolOptions()
+_DEFAULT_TOOL_OPTIONS: MCPToolOptions = {
+    "flags": ToolFlag.NONE,
+    "on_duplicate": "allow",
+    "report_progress": False,
+}
+
+
+def _resolve_tool_options(config: MCPToolOptions | None = None) -> MCPToolOptions:
+    """Fill in defaults for missing keys."""
+    if config is None:
+        return MCPToolOptions(**_DEFAULT_TOOL_OPTIONS)
+    return MCPToolOptions(**{**_DEFAULT_TOOL_OPTIONS, **config})
 
 
 @dataclass
@@ -183,7 +193,7 @@ class MCPServer(ABC):
                 tool.description,
                 tool.inputSchema,
                 tool.meta,
-                options=options.get(tool.name, _DEFAULT_TOOL_OPTIONS),
+                options=_resolve_tool_options(options.get(tool.name)),
             )
             for tool in await self._list_raw_tools()
         ]
@@ -213,7 +223,7 @@ class MCPServer(ABC):
                 resolved = await resolved
             return resolved
 
-        if options.forward_progress:
+        if options["report_progress"]:
             # forward MCP progress as ctx.update(); the first update frees the reply loop
             async def _tool_called_nonblocking(
                 ctx: RunContext, raw_arguments: dict[str, Any]
@@ -272,8 +282,8 @@ class MCPServer(ABC):
         return function_tool(
             impl,
             raw_schema=raw_schema,
-            flags=options.flags,
-            on_duplicate=options.on_duplicate,
+            flags=options["flags"],
+            on_duplicate=options["on_duplicate"],
         )
 
     async def aclose(self) -> None:
@@ -527,7 +537,7 @@ class MCPToolset(AsyncToolset):
             mcp_server=MCPServerHTTP(url="...", client_session_timeout_seconds=120),
             tool_options={
                 "book_flight": MCPToolOptions(
-                    flags=ToolFlag.CANCELLABLE, on_duplicate="confirm", forward_progress=True
+                    flags=ToolFlag.CANCELLABLE, on_duplicate="confirm", report_progress=True
                 ),
             },
         )

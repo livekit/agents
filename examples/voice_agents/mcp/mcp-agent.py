@@ -51,11 +51,11 @@ async def entrypoint(ctx: JobContext):
                 ),
                 # book_flight is long-running: forward progress and allow cancellation
                 tool_options={
-                    "book_flight": mcp.MCPToolOptions(
-                        flags=ToolFlag.CANCELLABLE,
-                        on_duplicate="confirm",
-                        forward_progress=True,
-                    ),
+                    "book_flight": {
+                        "flags": ToolFlag.CANCELLABLE,
+                        "on_duplicate": "confirm",
+                        "report_progress": True,
+                    },
                 },
             )
         ],

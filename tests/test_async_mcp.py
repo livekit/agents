@@ -5,7 +5,12 @@ from typing import Any, get_type_hints
 import pytest
 
 from livekit.agents.llm.async_toolset import AsyncToolset
-from livekit.agents.llm.mcp import MCPServer, MCPToolOptions, MCPToolset
+from livekit.agents.llm.mcp import (
+    MCPServer,
+    MCPToolOptions,
+    MCPToolset,
+    _resolve_tool_options,
+)
 from livekit.agents.llm.tool_context import ToolFlag, is_raw_function_tool
 from livekit.agents.llm.utils import is_context_type
 from livekit.agents.voice.tool_executor import has_cancellable_tool
@@ -58,7 +63,7 @@ def _build_mcp_tool(server: _FakeMCPServer, options: MCPToolOptions):
         description="echo back",
         input_schema={"type": "object", "properties": {}},
         meta=None,
-        options=options,
+        options=_resolve_tool_options(options),
     )
 
 
@@ -75,22 +80,22 @@ def test_default_options_build_a_plain_blocking_tool() -> None:
     assert tool.info.on_duplicate == "allow"
 
 
-def test_forward_progress_adds_run_context_param() -> None:
-    blocking = _build_mcp_tool(_FakeMCPServer(), MCPToolOptions(forward_progress=False))
-    progress = _build_mcp_tool(_FakeMCPServer(), MCPToolOptions(forward_progress=True))
+def test_report_progress_adds_run_context_param() -> None:
+    blocking = _build_mcp_tool(_FakeMCPServer(), MCPToolOptions(report_progress=False))
+    progress = _build_mcp_tool(_FakeMCPServer(), MCPToolOptions(report_progress=True))
 
     assert not _has_run_context_param(blocking)
     assert _has_run_context_param(progress)
 
 
 def test_flags_and_on_duplicate_pass_through_independently() -> None:
-    # flags / on_duplicate are decoupled from forward_progress
+    # flags / on_duplicate are decoupled from report_progress
     tool = _build_mcp_tool(
         _FakeMCPServer(),
         MCPToolOptions(
             flags=ToolFlag.CANCELLABLE | ToolFlag.IGNORE_ON_ENTER,
             on_duplicate="reject",
-            forward_progress=False,
+            report_progress=False,
         ),
     )
 
@@ -106,7 +111,7 @@ async def test_list_tools_applies_named_options_else_blocking() -> None:
     server = _FakeMCPServer(["get_weather", "book_flight"])
     tools = await server.list_tools(
         tool_options={
-            "book_flight": MCPToolOptions(flags=ToolFlag.CANCELLABLE, forward_progress=True),
+            "book_flight": MCPToolOptions(flags=ToolFlag.CANCELLABLE, report_progress=True),
         }
     )
 
@@ -125,7 +130,7 @@ async def test_setup_applies_per_tool_options() -> None:
         mcp_server=_FakeMCPServer(["get_weather", "book_flight"]),
         tool_options={
             "book_flight": MCPToolOptions(
-                flags=ToolFlag.CANCELLABLE, on_duplicate="confirm", forward_progress=True
+                flags=ToolFlag.CANCELLABLE, on_duplicate="confirm", report_progress=True
             ),
         },
     )
@@ -170,7 +175,7 @@ async def test_list_tools_rebuilds_per_options() -> None:
 
     blocking = await server.list_tools()
     cancellable = await server.list_tools(
-        tool_options={"echo": MCPToolOptions(flags=ToolFlag.CANCELLABLE, forward_progress=True)}
+        tool_options={"echo": MCPToolOptions(flags=ToolFlag.CANCELLABLE, report_progress=True)}
     )
 
     assert blocking[0] is not cancellable[0]
