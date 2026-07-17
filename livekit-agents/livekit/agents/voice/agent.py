@@ -260,7 +260,7 @@ class Agent:
             chat_ctx, exclude_invalid_function_calls=exclude_invalid_function_calls
         )
 
-    def update_models(
+    def update_options(
         self,
         *,
         stt: NotGivenOr[stt.STT | STTModels | str | None] = NOT_GIVEN,

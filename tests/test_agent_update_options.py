@@ -13,14 +13,14 @@ from .fake_vad import FakeVAD
 pytestmark = [pytest.mark.unit]
 
 
-def test_update_models_not_running_replaces_fields() -> None:
+def test_update_options_not_running_replaces_fields() -> None:
     stt1, stt2 = FakeSTT(), FakeSTT()
     vad1, vad2 = FakeVAD(), FakeVAD()
     llm1, llm2 = FakeLLM(), FakeLLM()
     tts1, tts2 = FakeTTS(), FakeTTS()
 
     agent = Agent(instructions="test", stt=stt1, vad=vad1, llm=llm1, tts=tts1)
-    agent.update_models(stt=stt2, vad=vad2, llm=llm2, tts=tts2)
+    agent.update_options(stt=stt2, vad=vad2, llm=llm2, tts=tts2)
 
     assert agent.stt is stt2
     assert agent.vad is vad2
@@ -28,13 +28,13 @@ def test_update_models_not_running_replaces_fields() -> None:
     assert agent.tts is tts2
 
 
-def test_update_models_not_running_only_touches_given() -> None:
+def test_update_options_not_running_only_touches_given() -> None:
     stt1 = FakeSTT()
     llm1 = FakeLLM()
     agent = Agent(instructions="test", stt=stt1, llm=llm1)
 
     tts_new = FakeTTS()
-    agent.update_models(tts=tts_new)
+    agent.update_options(tts=tts_new)
 
     assert agent.stt is stt1  # untouched
     assert agent.llm is llm1  # untouched
@@ -42,7 +42,7 @@ def test_update_models_not_running_only_touches_given() -> None:
 
 
 @pytest.mark.asyncio
-async def test_update_models_running_swaps_tts() -> None:
+async def test_update_options_running_swaps_tts() -> None:
     old_tts, new_tts = FakeTTS(), FakeTTS()
     agent = Agent(instructions="test", llm=FakeLLM(), tts=old_tts)
     session = AgentSession(turn_handling={"turn_detection": None})
@@ -51,7 +51,7 @@ async def test_update_models_running_swaps_tts() -> None:
         activity = session._activity
         assert activity is not None and activity.tts is old_tts
 
-        agent.update_models(tts=new_tts)
+        agent.update_options(tts=new_tts)
 
         assert agent.tts is new_tts
         assert activity.tts is new_tts
@@ -63,7 +63,7 @@ async def test_update_models_running_swaps_tts() -> None:
 
 
 @pytest.mark.asyncio
-async def test_update_models_running_swaps_llm() -> None:
+async def test_update_options_running_swaps_llm() -> None:
     old_llm, new_llm = FakeLLM(), FakeLLM()
     agent = Agent(instructions="test", llm=old_llm)
     session = AgentSession(turn_handling={"turn_detection": None})
@@ -72,7 +72,7 @@ async def test_update_models_running_swaps_llm() -> None:
         activity = session._activity
         assert activity is not None and activity.llm is old_llm
 
-        agent.update_models(llm=new_llm)
+        agent.update_options(llm=new_llm)
 
         assert agent.llm is new_llm
         assert activity.llm is new_llm
@@ -83,7 +83,7 @@ async def test_update_models_running_swaps_llm() -> None:
 
 
 @pytest.mark.asyncio
-async def test_update_models_running_swaps_stt_rewires_pipeline() -> None:
+async def test_update_options_running_swaps_stt_rewires_pipeline() -> None:
     old_stt, new_stt = FakeSTT(), FakeSTT()
     agent = Agent(instructions="test", stt=old_stt, vad=FakeVAD(), llm=FakeLLM(), tts=FakeTTS())
     session = AgentSession(turn_handling={"turn_detection": None})
@@ -95,7 +95,7 @@ async def test_update_models_running_swaps_stt_rewires_pipeline() -> None:
         assert recognition is not None
         old_pipeline = recognition._stt_pipeline
 
-        agent.update_models(stt=new_stt)
+        agent.update_options(stt=new_stt)
 
         assert agent.stt is new_stt
         assert activity.stt is new_stt
@@ -108,7 +108,7 @@ async def test_update_models_running_swaps_stt_rewires_pipeline() -> None:
 
 
 @pytest.mark.asyncio
-async def test_update_models_running_swaps_vad() -> None:
+async def test_update_options_running_swaps_vad() -> None:
     old_vad, new_vad = FakeVAD(), FakeVAD()
     agent = Agent(instructions="test", stt=FakeSTT(), vad=old_vad, llm=FakeLLM(), tts=FakeTTS())
     session = AgentSession(turn_handling={"turn_detection": None})
@@ -117,7 +117,7 @@ async def test_update_models_running_swaps_vad() -> None:
         activity = session._activity
         assert activity is not None and activity.vad is old_vad
 
-        agent.update_models(vad=new_vad)
+        agent.update_options(vad=new_vad)
 
         assert agent.vad is new_vad
         assert activity.vad is new_vad
@@ -128,7 +128,7 @@ async def test_update_models_running_swaps_vad() -> None:
 
 
 @pytest.mark.asyncio
-async def test_update_models_running_disable_stt() -> None:
+async def test_update_options_running_disable_stt() -> None:
     agent = Agent(instructions="test", stt=FakeSTT(), vad=FakeVAD(), llm=FakeLLM(), tts=FakeTTS())
     session = AgentSession(turn_handling={"turn_detection": None})
     await session.start(agent)
@@ -136,7 +136,7 @@ async def test_update_models_running_disable_stt() -> None:
         activity = session._activity
         assert activity is not None
 
-        agent.update_models(stt=None)
+        agent.update_options(stt=None)
 
         assert agent.stt is None
         assert activity.stt is None
@@ -147,13 +147,13 @@ async def test_update_models_running_disable_stt() -> None:
 
 
 @pytest.mark.asyncio
-async def test_update_models_running_rejects_swap_to_realtime() -> None:
+async def test_update_options_running_rejects_swap_to_realtime() -> None:
     agent = Agent(instructions="test", llm=FakeLLM())
     session = AgentSession(turn_handling={"turn_detection": None})
     await session.start(agent)
     try:
         with pytest.raises(RuntimeError, match="RealtimeModel"):
-            agent.update_models(llm=FakeRealtimeModel())
+            agent.update_options(llm=FakeRealtimeModel())
         # nothing was swapped
         assert isinstance(agent.llm, FakeLLM)
     finally:
@@ -161,13 +161,13 @@ async def test_update_models_running_rejects_swap_to_realtime() -> None:
 
 
 @pytest.mark.asyncio
-async def test_update_models_running_rejects_swap_away_from_realtime() -> None:
+async def test_update_options_running_rejects_swap_away_from_realtime() -> None:
     agent = Agent(instructions="test", llm=FakeRealtimeModel())
     session = AgentSession(turn_handling={"turn_detection": None})
     await session.start(agent)
     try:
         with pytest.raises(RuntimeError, match="RealtimeModel"):
-            agent.update_models(llm=FakeLLM())
+            agent.update_options(llm=FakeLLM())
         assert isinstance(agent.llm, FakeRealtimeModel)
     finally:
         await session.aclose()
@@ -184,7 +184,7 @@ class _LabeledSTT(FakeSTT):
 
 
 @pytest.mark.asyncio
-async def test_update_models_stt_swap_refreshes_model_provider_and_context() -> None:
+async def test_update_options_stt_swap_refreshes_model_provider_and_context() -> None:
     from pydantic import BaseModel
 
     class _Ctx(BaseModel):
@@ -199,7 +199,7 @@ async def test_update_models_stt_swap_refreshes_model_provider_and_context() -> 
         # stand in for live speaker metadata captured from the old stream
         recognition.stt_context = _Ctx()
 
-        agent.update_models(stt=_LabeledSTT())
+        agent.update_options(stt=_LabeledSTT())
 
         # trace attributes and speaker context follow the new STT
         assert recognition._stt_model == "new-model"
