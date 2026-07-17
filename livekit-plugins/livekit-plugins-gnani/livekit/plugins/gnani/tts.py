@@ -30,7 +30,6 @@ import asyncio
 import base64
 import json
 import os
-import struct
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
@@ -64,10 +63,6 @@ GnaniTTSSynthesizeMethod = Literal["rest", "sse", "websocket"]
 
 SUPPORTED_SAMPLE_RATES = (8000, 16000, 22050, 44100)
 
-_WAV_HEADER_SIZE = 44
-# Match RoomIO _ParticipantAudioOutput target frame size (sample_rate // 20).
-_STREAM_FRAME_MS = 50
-
 
 _DEPRECATED_TTS_KWARGS = frozenset(("http_session",))
 
@@ -83,137 +78,6 @@ def _check_deprecated_tts_args(kwargs: dict[str, Any], *, caller: str = "TTS.__i
         raise TypeError(
             f"{caller}() got unexpected keyword argument(s): {', '.join(sorted(unknown))}"
         )
-
-
-def _strip_wav_header(data: bytes) -> bytes:
-    """Strip a RIFF/WAV container if present, returning only PCM samples.
-
-    Gnani streaming sends the WAV header as the first chunk (often with zero
-    PCM bytes) and then raw PCM continuations without per-chunk headers. A
-    header-only first chunk must not be emitted as audio.
-    """
-    if len(data) < 12 or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
-        return data
-
-    offset = 12
-    while offset + 8 <= len(data):
-        chunk_id = data[offset : offset + 4]
-        chunk_size = struct.unpack_from("<I", data, offset + 4)[0]
-        if chunk_id == b"data":
-            data_start = offset + 8
-            return data[data_start : data_start + chunk_size]
-        offset += 8 + chunk_size
-
-    # No `data` sub-chunk could be located (truncated or non-standard header).
-    # Fall back to stripping a standard fixed-size WAV header so the PCM that
-    # follows it is preserved instead of dropped.
-    if len(data) <= _WAV_HEADER_SIZE:
-        return b""
-    return data[_WAV_HEADER_SIZE:]
-
-
-class _Pcm16Aligner:
-    """Ensure emitted PCM chunks contain whole 16-bit samples."""
-
-    def __init__(self) -> None:
-        self._remainder = b""
-
-    def reset(self) -> None:
-        self._remainder = b""
-
-    def align(self, audio: bytes) -> bytes:
-        audio = self._remainder + audio
-        aligned_len = len(audio) - (len(audio) % 2)
-        self._remainder = audio[aligned_len:]
-        return audio[:aligned_len]
-
-
-class _TtsPcmProcessor:
-    """Strip WAV containers and align PCM for one streaming utterance."""
-
-    def __init__(self) -> None:
-        self._aligner = _Pcm16Aligner()
-        self._wav_pending = b""
-
-    def reset(self) -> None:
-        self._aligner.reset()
-        self._wav_pending = b""
-
-    def process(self, audio: bytes) -> bytes:
-        if self._wav_pending or (len(audio) >= 4 and audio[:4] == b"RIFF"):
-            buf = self._wav_pending + audio
-            self._wav_pending = b""
-
-            if buf[:4] == b"RIFF" and len(buf) < _WAV_HEADER_SIZE:
-                self._wav_pending = buf
-                return b""
-
-            pcm = _strip_wav_header(buf)
-            return self._aligner.align(pcm)
-
-        return self._aligner.align(audio)
-
-
-class _PcmCoalescer:
-    """Buffer PCM and push in stable frame-sized blocks matching AudioEmitter."""
-
-    def __init__(
-        self,
-        *,
-        sample_rate: int,
-        num_channels: int,
-        sample_width: int = 2,
-        frame_ms: int = _STREAM_FRAME_MS,
-    ) -> None:
-        self._target_bytes = sample_rate * num_channels * sample_width * frame_ms // 1000
-        self._buffer = bytearray()
-
-    def push(self, pcm: bytes, output_emitter: tts.AudioEmitter) -> None:
-        if not pcm:
-            return
-        self._buffer.extend(pcm)
-        while len(self._buffer) >= self._target_bytes:
-            output_emitter.push(bytes(self._buffer[: self._target_bytes]))
-            del self._buffer[: self._target_bytes]
-
-    def flush(self, output_emitter: tts.AudioEmitter) -> None:
-        if self._buffer:
-            output_emitter.push(bytes(self._buffer))
-            self._buffer.clear()
-
-
-class _StreamingAudioPusher:
-    """Strip/align API audio, coalesce to steady frames, then push to AudioEmitter.
-
-    Other LiveKit TTS plugins (Deepgram, Cartesia) push raw PCM directly in
-    larger chunks. Gnani's API delivers many small bursts; coalescing here
-    avoids AudioEmitter flush_if_delayed resets that cause live volume pumping.
-    """
-
-    def __init__(
-        self,
-        *,
-        sample_rate: int,
-        num_channels: int,
-    ) -> None:
-        self._processor = _TtsPcmProcessor()
-        self._coalescer = _PcmCoalescer(sample_rate=sample_rate, num_channels=num_channels)
-
-    def push(self, output_emitter: tts.AudioEmitter, audio: bytes) -> None:
-        pcm = self._processor.process(audio)
-        if pcm:
-            self._coalescer.push(pcm, output_emitter)
-
-    def finalize(self, output_emitter: tts.AudioEmitter) -> None:
-        self._coalescer.flush(output_emitter)
-
-
-def _process_and_push(
-    pusher: _StreamingAudioPusher,
-    output_emitter: tts.AudioEmitter,
-    audio: bytes,
-) -> None:
-    pusher.push(output_emitter, audio)
 
 
 @dataclass
@@ -376,13 +240,6 @@ def _build_payload(opts: GnaniTTSOptions, text: str) -> dict:
     return payload
 
 
-def _streaming_payload_opts(opts: GnaniTTSOptions) -> GnaniTTSOptions:
-    """Streaming transports request raw PCM — no per-chunk WAV containers."""
-    if opts.container == "raw":
-        return opts
-    return replace(opts, container="raw")
-
-
 def _build_headers(opts: GnaniTTSOptions) -> dict[str, str]:
     return {
         "X-API-Key-ID": opts.api_key,
@@ -457,9 +314,10 @@ class RESTChunkedStream(tts.ChunkedStream):
 class SSEChunkedStream(tts.ChunkedStream):
     """SSE-based chunked TTS — POST /api/v1/tts/sse.
 
-    Each SSE chunk decodes to a complete WAV file. This class strips per-chunk
-    WAV headers and emits only raw PCM so the LiveKit pipeline receives a
-    single contiguous audio stream.
+    Each SSE ``audio`` payload carries container-encoded audio (WAV by
+    default). Bytes are pushed straight to the ``AudioEmitter``, whose built-in
+    ``AudioStreamDecoder`` decodes and re-frames them into a single contiguous
+    PCM stream.
     """
 
     def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
@@ -469,15 +327,10 @@ class SSEChunkedStream(tts.ChunkedStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
-        pcm_processor = _StreamingAudioPusher(
-            sample_rate=self._tts.sample_rate,
-            num_channels=self._tts.num_channels,
-        )
-        stream_opts = _streaming_payload_opts(self._opts)
         try:
             async with self._tts._ensure_session().post(
                 url=f"{self._opts.base_url}/api/v1/tts/sse",
-                json=_build_payload(stream_opts, self._input_text),
+                json=_build_payload(self._opts, self._input_text),
                 headers=_build_headers(self._opts),
                 timeout=aiohttp.ClientTimeout(
                     total=self._conn_options.timeout,
@@ -498,7 +351,7 @@ class SSEChunkedStream(tts.ChunkedStream):
                     request_id=request_id,
                     sample_rate=self._tts.sample_rate,
                     num_channels=self._tts.num_channels,
-                    mime_type="audio/pcm",
+                    mime_type=_mime_type(self._opts),
                 )
 
                 buf = ""
@@ -534,22 +387,13 @@ class SSEChunkedStream(tts.ChunkedStream):
                     if payload.get("is_final", False):
                         audio_b64 = payload.get("audio", "")
                         if audio_b64:
-                            _process_and_push(
-                                pcm_processor,
-                                output_emitter,
-                                base64.b64decode(audio_b64),
-                            )
+                            output_emitter.push(base64.b64decode(audio_b64))
                         break
 
                     audio_b64 = payload.get("audio", "")
                     if audio_b64:
-                        _process_and_push(
-                            pcm_processor,
-                            output_emitter,
-                            base64.b64decode(audio_b64),
-                        )
+                        output_emitter.push(base64.b64decode(audio_b64))
 
-                pcm_processor.finalize(output_emitter)
                 output_emitter.flush()
 
         except asyncio.TimeoutError as e:
@@ -569,8 +413,9 @@ class WebSocketChunkedStream(tts.ChunkedStream):
     """WebSocket-based chunked TTS — wss://api.vachana.ai/api/v1/tts.
 
     Wraps the WebSocket endpoint into the ChunkedStream interface so that
-    ``synthesize()`` can use it when ``synthesize_method="websocket"``.
-    Requests raw PCM from the API and coalesces frames for LiveKit playback.
+    ``synthesize()`` can use it when ``synthesize_method="websocket"``. Audio
+    bytes are pushed straight to the ``AudioEmitter``, whose built-in
+    ``AudioStreamDecoder`` decodes and re-frames them for LiveKit playback.
     """
 
     def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
@@ -592,11 +437,6 @@ class WebSocketChunkedStream(tts.ChunkedStream):
         import websockets
 
         request_id = utils.shortuuid()
-        pcm_processor = _StreamingAudioPusher(
-            sample_rate=self._tts.sample_rate,
-            num_channels=self._tts.num_channels,
-        )
-        stream_opts = _streaming_payload_opts(self._opts)
         try:
             ws_url = self._build_ws_url()
             async with websockets.connect(
@@ -606,19 +446,19 @@ class WebSocketChunkedStream(tts.ChunkedStream):
                 ping_timeout=20,
                 close_timeout=10,
             ) as ws:
-                request_body = _build_payload(stream_opts, self._input_text)
+                request_body = _build_payload(self._opts, self._input_text)
                 await ws.send(json.dumps(request_body))
 
                 output_emitter.initialize(
                     request_id=request_id,
                     sample_rate=self._tts.sample_rate,
                     num_channels=self._tts.num_channels,
-                    mime_type="audio/pcm",
+                    mime_type=_mime_type(self._opts),
                 )
 
                 async for msg in ws:
                     if isinstance(msg, bytes):
-                        _process_and_push(pcm_processor, output_emitter, msg)
+                        output_emitter.push(msg)
                         continue
 
                     payload = json.loads(msg)
@@ -628,22 +468,14 @@ class WebSocketChunkedStream(tts.ChunkedStream):
                         inner = payload.get("data", {})
                         audio_b64 = inner.get("audio", "")
                         if audio_b64:
-                            _process_and_push(
-                                pcm_processor,
-                                output_emitter,
-                                base64.b64decode(audio_b64),
-                            )
+                            output_emitter.push(base64.b64decode(audio_b64))
 
                     elif msg_type == "complete":
                         inner = payload.get("data")
                         if inner is not None:
                             audio_b64 = inner.get("audio", "")
                             if audio_b64:
-                                _process_and_push(
-                                    pcm_processor,
-                                    output_emitter,
-                                    base64.b64decode(audio_b64),
-                                )
+                                output_emitter.push(base64.b64decode(audio_b64))
                         break
 
                     elif msg_type == "error":
@@ -655,7 +487,6 @@ class WebSocketChunkedStream(tts.ChunkedStream):
                             body=error_msg,
                         )
 
-                pcm_processor.finalize(output_emitter)
                 output_emitter.flush()
 
         except websockets.exceptions.ConnectionClosed as e:
@@ -699,7 +530,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             request_id=request_id,
             sample_rate=self._tts.sample_rate,
             num_channels=self._tts.num_channels,
-            mime_type="audio/pcm",
+            mime_type=_mime_type(self._opts),
             stream=True,
         )
 
@@ -717,11 +548,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         segment_id = utils.shortuuid()
         output_emitter.start_segment(segment_id=segment_id)
 
-        pcm_processor = _StreamingAudioPusher(
-            sample_rate=self._tts.sample_rate,
-            num_channels=self._tts.num_channels,
-        )
-        stream_opts = _streaming_payload_opts(self._opts)
         try:
             ws_url = self._build_ws_url()
             async with websockets.connect(
@@ -731,14 +557,14 @@ class SynthesizeStream(tts.SynthesizeStream):
                 ping_timeout=20,
                 close_timeout=10,
             ) as ws:
-                request_body = _build_payload(stream_opts, full_text)
+                request_body = _build_payload(self._opts, full_text)
                 await ws.send(json.dumps(request_body))
 
                 self._mark_started()
 
                 async for msg in ws:
                     if isinstance(msg, bytes):
-                        _process_and_push(pcm_processor, output_emitter, msg)
+                        output_emitter.push(msg)
                         continue
 
                     payload = json.loads(msg)
@@ -748,22 +574,14 @@ class SynthesizeStream(tts.SynthesizeStream):
                         inner = payload.get("data", {})
                         audio_b64 = inner.get("audio", "")
                         if audio_b64:
-                            _process_and_push(
-                                pcm_processor,
-                                output_emitter,
-                                base64.b64decode(audio_b64),
-                            )
+                            output_emitter.push(base64.b64decode(audio_b64))
 
                     elif msg_type == "complete":
                         inner = payload.get("data")
                         if inner is not None:
                             audio_b64 = inner.get("audio", "")
                             if audio_b64:
-                                _process_and_push(
-                                    pcm_processor,
-                                    output_emitter,
-                                    base64.b64decode(audio_b64),
-                                )
+                                output_emitter.push(base64.b64decode(audio_b64))
                         break
 
                     elif msg_type == "error":
@@ -784,12 +602,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         except Exception as e:
             raise APIConnectionError(f"Gnani TTS WebSocket error: {e}") from e
 
-        # Only flush/close the segment on the success path. On error, flushing
-        # the coalescer's sub-frame remainder would push partial audio and set
-        # pushed_duration > 0.0, which makes the base retry logic skip an
-        # otherwise-retryable transient failure. The per-attempt output_emitter
-        # is discarded on retry, so end_segment() is unnecessary on error.
-        pcm_processor.finalize(output_emitter)
+        # Only flush/close the segment on the success path. On error the
+        # per-attempt output_emitter is discarded before retry, so flushing or
+        # ending the segment here would only add an unnecessary final frame.
         output_emitter.flush()
         output_emitter.end_segment()
 
