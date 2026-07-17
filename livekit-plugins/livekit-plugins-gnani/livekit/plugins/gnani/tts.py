@@ -239,7 +239,8 @@ class TTS(tts.TTS):
     Supports REST, SSE, and WebSocket synthesis modes.
 
     Args:
-        voice: Voice to use for synthesis (see https://docs.gnani.ai/api/TTS/tts-sse#available-voices).
+        voice: Voice to use for synthesis
+            (see https://docs.gnani.ai/api/TTS/tts-sse#available-voices).
         model: TTS model name (default: timbre-v2.0; also: timbre-v2.5).
         language: BCP-47 language code for timbre-v2.5 only (e.g. "hi-IN").
         sample_rate: Audio output sample rate (8000-44100).
