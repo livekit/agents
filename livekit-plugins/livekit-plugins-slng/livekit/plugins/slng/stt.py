@@ -941,7 +941,11 @@ class SpeechStream(stt.SpeechStream):
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     continue
 
-                data = json.loads(msg.data)
+                try:
+                    data = json.loads(msg.data)
+                except json.JSONDecodeError:
+                    logger.debug("[SLNG STT] ignoring non-JSON text frame: %s", msg.data[:200])
+                    continue
                 if not isinstance(data, dict):
                     continue
 
@@ -1367,7 +1371,7 @@ class SpeechStream(stt.SpeechStream):
                 ),
                 self._conn_options.timeout,
             )
-        except (TimeoutError, aiohttp.ClientConnectorError) as e:
+        except (TimeoutError, asyncio.TimeoutError, aiohttp.ClientConnectorError) as e:
             raise APIConnectionError("failed to connect to SLNG STT") from e
 
         if connection.init is not None:
@@ -1403,7 +1407,7 @@ class SpeechStream(stt.SpeechStream):
                     ws.receive(),
                     timeout=self._conn_options.timeout,
                 )
-            except TimeoutError as exc:
+            except (TimeoutError, asyncio.TimeoutError) as exc:
                 raise APIConnectionError("timed out waiting for SLNG STT ready") from exc
 
             if msg.type in (

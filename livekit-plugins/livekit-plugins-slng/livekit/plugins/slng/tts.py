@@ -76,7 +76,7 @@ _PHRASE_FLUSH_SUFFIXES = (".", "!", "?", ",", ";", ":")
 async def _close_ws(ws: aiohttp.ClientWebSocketResponse, *, context: str) -> None:
     try:
         await asyncio.wait_for(ws.close(), timeout=WS_CLOSE_TIMEOUT_S)
-    except TimeoutError:
+    except (TimeoutError, asyncio.TimeoutError):
         logger.warning(
             "[TTS] websocket close timed out",
             extra={"context": context, "timeout_s": WS_CLOSE_TIMEOUT_S},
@@ -715,10 +715,10 @@ class TTS(tts.TTS):
         *,
         conn_options: APIConnectOptions,
     ) -> SynthesizeStream:
-        logger.info("[TTS] TTS.stream() called, creating SynthesizeStream")
+        logger.debug("[TTS] TTS.stream() called, creating SynthesizeStream")
         stream = SynthesizeStream(tts=self, conn_options=conn_options)
         self._streams.add(stream)
-        logger.info("[TTS] TTS.stream() returning stream")
+        logger.debug("[TTS] TTS.stream() returning stream")
         return stream
 
     def prewarm(self) -> None:
@@ -844,7 +844,7 @@ class ChunkedStream(tts.ChunkedStream):
                     )
                 else:
                     logger.debug("[TTS] ignoring unknown message: %s", resp)
-        except TimeoutError:
+        except (TimeoutError, asyncio.TimeoutError):
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
@@ -870,18 +870,18 @@ class SynthesizeStream(tts.SynthesizeStream):
     _CLOSE_MSG: str = json.dumps({"type": "close"})
 
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
-        logger.info("[TTS] SynthesizeStream.__init__ STARTING")
+        logger.debug("[TTS] SynthesizeStream.__init__ STARTING")
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
-        logger.info("[TTS] SynthesizeStream.__init__ DONE")
+        logger.debug("[TTS] SynthesizeStream.__init__ DONE")
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         # Create segments_ch per run so base-class retries after an error get a
         # fresh channel (matching the Deepgram plugin pattern).
         self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
         request_id = utils.shortuuid()
-        logger.info(f"[TTS] _run starting: request_id={request_id}")
+        logger.debug(f"[TTS] _run starting: request_id={request_id}")
         output_emitter.initialize(
             request_id=request_id,
             sample_rate=self._opts.sample_rate,
@@ -892,36 +892,36 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def _tokenize_input() -> None:
             # Converts incoming text into WordStreams and sends them into _segments_ch
-            logger.info("[TTS] _tokenize_input starting, waiting for input...")
+            logger.debug("[TTS] _tokenize_input starting, waiting for input...")
             word_stream = None
             text_count = 0
             async for the_input in self._input_ch:
                 if isinstance(the_input, str):
                     text_count += 1
                     if text_count == 1:
-                        logger.info(f"[TTS] First text received: '{the_input[:50]}...'")
+                        logger.debug(f"[TTS] First text received: '{the_input[:50]}...'")
                     if word_stream is None:
                         word_stream = self._opts.word_tokenizer.stream()
                         self._segments_ch.send_nowait(word_stream)
-                        logger.info("[TTS] New word_stream created")
+                        logger.debug("[TTS] New word_stream created")
                     word_stream.push_text(the_input)
                 elif isinstance(the_input, self._FlushSentinel):
-                    logger.info(f"[TTS] Flush sentinel received after {text_count} texts")
+                    logger.debug(f"[TTS] Flush sentinel received after {text_count} texts")
                     if word_stream:
                         word_stream.end_input()
                     word_stream = None
 
-            logger.info(f"[TTS] _tokenize_input done: {text_count} total texts")
+            logger.debug(f"[TTS] _tokenize_input done: {text_count} total texts")
             self._segments_ch.close()
 
         async def _run_segments() -> None:
-            logger.info("[TTS] _run_segments starting, waiting for word_streams...")
+            logger.debug("[TTS] _run_segments starting, waiting for word_streams...")
             segment_count = 0
             async for word_stream in self._segments_ch:
                 segment_count += 1
-                logger.info(f"[TTS] Processing segment {segment_count}")
+                logger.debug(f"[TTS] Processing segment {segment_count}")
                 await self._run_ws(word_stream, output_emitter)
-            logger.info(f"[TTS] _run_segments done: {segment_count} segments")
+            logger.debug(f"[TTS] _run_segments done: {segment_count} segments")
 
         tasks = [
             asyncio.create_task(_tokenize_input()),
@@ -929,7 +929,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         ]
         try:
             await asyncio.gather(*tasks)
-        except TimeoutError:
+        except (TimeoutError, asyncio.TimeoutError):
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
@@ -949,7 +949,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         self, word_stream: tokenize.WordStream, output_emitter: tts.AudioEmitter
     ) -> None:
         segment_id = utils.shortuuid()
-        logger.info(f"[TTS] _run_ws starting: segment_id={segment_id}")
+        logger.debug(f"[TTS] _run_ws starting: segment_id={segment_id}")
         segment_started_at = time.perf_counter()
         output_emitter.start_segment(segment_id=segment_id)
         input_sent_event = asyncio.Event()
@@ -1055,7 +1055,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             async for word in word_stream:
                 word_count += 1
                 if word_count == 1:
-                    logger.info(f"[TTS] send_task: first word '{word.token}'")
+                    logger.debug(f"[TTS] send_task: first word '{word.token}'")
                 piece = f"{word.token} "
                 if phrase_batching:
                     text_buffer += piece
@@ -1097,7 +1097,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             if text_buffer and buffer_has_letter:
                 await _emit_text(text_buffer)
 
-            logger.info(f"[TTS] send_task: sent {word_count} words, flushing")
+            logger.debug(f"[TTS] send_task: sent {word_count} words, flushing")
             await ws.send_str(self._FLUSH_MSG)
             input_sent_event.set()
 
@@ -1211,7 +1211,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                             audio_chunks_seen += 1
                             mark_first_audio_seen()
                             output_emitter.push(event.audio)
-                        logger.info(f"[TTS] recv_task: audio_end after {audio_chunks_seen} chunks")
+                        logger.debug(f"[TTS] recv_task: audio_end after {audio_chunks_seen} chunks")
                         audio_end_ms = audio_end_ms or _elapsed_ms(segment_started_at)
                         output_emitter.end_segment()
                         break
@@ -1312,7 +1312,7 @@ class _FallbackStreamBase:
                     raise
                 await self._handle_failure(APIConnectionError("TTS produced no audio"))
                 continue
-            except TimeoutError as exc:
+            except (TimeoutError, asyncio.TimeoutError) as exc:
                 if self._started or self._deadline is None:
                     raise
                 await self._handle_failure(exc, allow_retry=False)
