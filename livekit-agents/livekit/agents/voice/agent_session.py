@@ -15,7 +15,6 @@ from typing import (
     Literal,
     Protocol,
     TypeVar,
-    cast,
     overload,
     runtime_checkable,
 )
@@ -1155,7 +1154,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         endpointing_opts: NotGivenOr[EndpointingOptions] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
-        expressive: NotGivenOr[bool | ExpressiveOptions] = NOT_GIVEN,
         # deprecated
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
@@ -1169,18 +1167,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 when the user has finished speaking. ``None`` reverts to automatic selection.
             keyterms (NotGivenOr[list[str]], optional): Replace the user-defined keyterms applied
                 to the STT. Auto-detected keyterms are left untouched.
-            expressive (NotGivenOr[bool | ExpressiveOptions], optional): Turn expressive TTS
-                delivery on/off or switch its preset/options mid-session. Takes effect on the
-                next reply. An ``expressive`` set on the active :class:`Agent` overrides the
-                session value. When a turn runs with expressive off, markup left in past
-                assistant messages is stripped from the chat history so the LLM doesn't
-                imitate tags nothing downstream converts.
             min_endpointing_delay: Deprecated, use ``endpointing_opts`` instead.
             max_endpointing_delay: Deprecated, use ``endpointing_opts`` instead.
         """
-        if is_given(expressive):
-            # mypy can't narrow NotGiven out of the TypedDict union here
-            self._opts.expressive = cast("bool | ExpressiveOptions", expressive)
         if is_given(keyterms):
             self._keyterm_detector.set_static_keyterms(keyterms)
         if is_given(min_endpointing_delay) or is_given(max_endpointing_delay):
