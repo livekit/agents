@@ -2046,7 +2046,7 @@ requires-dist = [
     { name = "eval-type-backport" },
     { name = "json-repair", specifier = "==0.60.1" },
     { name = "livekit", specifier = "==1.1.13" },
-    { name = "livekit-api", specifier = ">=1.1.1,<2" },
+    { name = "livekit-api", specifier = ">=1.2.0,<2" },
     { name = "livekit-blingfire", specifier = "~=1.1,<2" },
     { name = "livekit-local-inference", specifier = ">=0.2.6" },
     { name = "livekit-plugins-anam", marker = "extra == 'anam'", editable = "livekit-plugins/livekit-plugins-anam" },
