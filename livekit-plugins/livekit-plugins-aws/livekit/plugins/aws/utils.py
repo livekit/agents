@@ -37,7 +37,7 @@ def _resolve_session(session: object | None) -> AioSession:
             DeprecationWarning,
             stacklevel=3,
         )
-        return session._session  # type: ignore[attr-defined]
+        return session._session
 
     raise TypeError(
         "session must be an aiobotocore.session.AioSession "
