@@ -21,10 +21,11 @@ supporting both REST recognition and real-time streaming (WebSocket).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 from dataclasses import dataclass, replace
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import aiohttp
 
@@ -40,12 +41,16 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
-from livekit.agents.utils import AudioBuffer
 from livekit.agents.utils.misc import is_given
 
+if TYPE_CHECKING:
+    from livekit.agents.utils import AudioBuffer
+
+from ._compat import ws_header_kwargs as _ws_header_kwargs
 from .log import logger
 
 GnaniSTTFormat = Literal["verbatim", "transcribe"]
+GnaniSTTRecognizeMethod = Literal["rest", "websocket"]
 
 GNANI_STT_BASE_URL = "https://api.vachana.ai"
 
@@ -90,9 +95,38 @@ STREAM_SUPPORTED_LANGUAGES: set[str] = {
     "te-IN",
 }
 
+REST_SINGLE_LANGUAGES: set[str] = {code for code in SUPPORTED_LANGUAGES if "," not in code}
+
 SAMPLE_RATE_16K = 16000
 SAMPLE_RATE_8K = 8000
+SAMPLE_RATE_44K = 44100
+SAMPLE_RATE_48K = 48000
+STREAM_SUPPORTED_SAMPLE_RATES = (
+    SAMPLE_RATE_8K,
+    SAMPLE_RATE_16K,
+    SAMPLE_RATE_44K,
+    SAMPLE_RATE_48K,
+)
 STREAM_CHUNK_BYTES = 1024
+
+
+def _validate_rest_language_code(language_code: str) -> None:
+    """Validate a REST language_code.
+
+    Accepts a single supported code, a pre-defined combo from
+    ``SUPPORTED_LANGUAGES``, or any comma-separated combination of supported
+    single codes (e.g. ``"en-IN,ta-IN"``) to enable auto-detection.
+    """
+    if language_code in SUPPORTED_LANGUAGES:
+        return
+    parts = [p.strip() for p in language_code.split(",") if p.strip()]
+    if len(parts) >= 2 and all(p in REST_SINGLE_LANGUAGES for p in parts):
+        return
+    raise ValueError(
+        f"Unsupported language_code '{language_code}'. "
+        f"Choose from: {', '.join(sorted(REST_SINGLE_LANGUAGES))} "
+        f"or a comma-separated combination of these for auto-detection."
+    )
 
 
 @dataclass
@@ -104,6 +138,7 @@ class GnaniSTTOptions:
     preferred_language: str | None = None
     format: str = "verbatim"
     itn_native_numerals: bool = False
+    recognize_method: str = "websocket"
 
 
 _DEPRECATED_STT_KWARGS = frozenset(("organization_id", "user_id", "http_session"))
@@ -131,11 +166,14 @@ class STT(stt.STT):
     Args:
         language: BCP-47 language code (e.g. "hi-IN", "en-IN").
         api_key: Gnani API key (falls back to GNANI_API_KEY env var).
-        sample_rate: Audio sample rate for streaming (8000 or 16000).
+        sample_rate: Audio sample rate for streaming (8000, 16000, 44100, or 48000).
         base_url: Vachana API base URL.
         preferred_language: Force single-language model for this code.
         format: "verbatim" (default) or "transcribe" (enables ITN).
         itn_native_numerals: Render digits in native script when format="transcribe".
+        recognize_method: Recognition transport — "rest" (POST /stt/v3) or
+            "websocket" (wss://.../stt/v3/stream). REST mode requires a local VAD
+            (LiveKit wraps with ``stt.StreamAdapter`` automatically).
     """
 
     def __init__(
@@ -148,11 +186,12 @@ class STT(stt.STT):
         preferred_language: str | None = None,
         format: GnaniSTTFormat = "verbatim",
         itn_native_numerals: bool = False,
+        recognize_method: GnaniSTTRecognizeMethod = "websocket",
         **kwargs: Any,
     ) -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=True,
+                streaming=recognize_method == "websocket",
                 interim_results=False,
                 aligned_transcript=False,
             )
@@ -167,8 +206,11 @@ class STT(stt.STT):
                 "Provide it directly or set GNANI_API_KEY environment variable."
             )
 
-        if sample_rate not in (SAMPLE_RATE_8K, SAMPLE_RATE_16K):
-            raise ValueError("sample_rate must be 8000 or 16000")
+        if sample_rate not in STREAM_SUPPORTED_SAMPLE_RATES:
+            allowed = ", ".join(str(r) for r in STREAM_SUPPORTED_SAMPLE_RATES)
+            raise ValueError(f"sample_rate must be one of {allowed}, got {sample_rate}")
+
+        _validate_rest_language_code(language)
 
         self._opts = GnaniSTTOptions(
             api_key=self._api_key,
@@ -178,6 +220,7 @@ class STT(stt.STT):
             preferred_language=preferred_language,
             format=format,
             itn_native_numerals=itn_native_numerals,
+            recognize_method=recognize_method,
         )
         self._session: aiohttp.ClientSession | None = None
 
@@ -288,6 +331,12 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
+        if self._opts.recognize_method != "websocket":
+            return cast(
+                "SpeechStream",
+                super().stream(language=language, conn_options=conn_options),
+            )
+
         opts = replace(self._opts)
         if is_given(language):
             opts.language = language
@@ -351,7 +400,7 @@ class SpeechStream(stt.RecognizeStream):
         try:
             async with websockets.connect(
                 ws_url,
-                additional_headers=headers,
+                **_ws_header_kwargs(headers),
                 ping_interval=20,
                 ping_timeout=20,
                 close_timeout=10,
@@ -374,13 +423,8 @@ class SpeechStream(stt.RecognizeStream):
                         task.result()
 
                     if send_task.done() and not recv_task.done():
-                        # All audio sent. The Gnani API has no application-level
-                        # end-of-stream message, so give the server a short
-                        # window to flush final transcripts before closing.
-                        try:
+                        with contextlib.suppress(asyncio.TimeoutError):
                             await asyncio.wait_for(asyncio.shield(recv_task), timeout=1.0)
-                        except asyncio.TimeoutError:
-                            pass
                 finally:
                     await utils.aio.gracefully_cancel(send_task, recv_task)
 
