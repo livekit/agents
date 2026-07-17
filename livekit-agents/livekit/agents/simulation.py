@@ -68,6 +68,11 @@ class SimulationContext:
         return self._scenario
 
     @property
+    def job_id(self) -> str:
+        """The simulation job id (``SRJ_...``) this run executes under."""
+        return self._dispatch.job_id
+
+    @property
     def simulation_mode(self) -> int:
         """How the simulated user interacts with the agent (text chat or audio).
         Unspecified is treated as text, since simulations predating the field

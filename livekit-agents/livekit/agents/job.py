@@ -40,7 +40,12 @@ from .log import logger
 from .observability import Tagger
 from .telemetry import _upload_session_report, otel_metrics
 from .telemetry.traces import _BufferingHandler, _setup_cloud_tracer, _shutdown_telemetry
-from .types import ATTRIBUTE_SIMULATOR, ATTRIBUTE_SIMULATOR_DISPATCH, NotGivenOr
+from .types import (
+    ATTRIBUTE_SIMULATOR,
+    ATTRIBUTE_SIMULATOR_ACK,
+    ATTRIBUTE_SIMULATOR_DISPATCH,
+    NotGivenOr,
+)
 from .utils import http_context, is_given, wait_for_participant
 from .utils.deprecation import deprecate_params
 from .utils.misc import is_cloud
@@ -595,6 +600,17 @@ class JobContext:
 
             _apply_auto_subscribe_opts(self._room, auto_subscribe)
             self._connected = True
+
+            if (sim_ctx := self.simulation_context()) is not None:
+                # Acknowledge scenario delivery on our own participant: the
+                # simulation harness preflights on this attribute to tell a
+                # dropped dispatch apart from a healthy run before driving turns.
+                try:
+                    await self._room.local_participant.set_attributes(
+                        {ATTRIBUTE_SIMULATOR_ACK: sim_ctx.job_id}
+                    )
+                except Exception:
+                    logger.warning("failed to publish the simulation ack attribute", exc_info=True)
 
     def _track_pending_task(self, task: asyncio.Task[Any], *, name: str) -> None:
         """Track a fire-and-forget task so its exceptions are surfaced instead of swallowed.
