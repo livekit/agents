@@ -477,9 +477,12 @@ class SpeechStream(stt.SpeechStream):
                 ready = False
                 deadline = time.monotonic() + timeout
                 while time.monotonic() < deadline and not ready:
-                    raw = await asyncio.wait_for(
-                        ws.recv(), timeout=max(0.1, deadline - time.monotonic())
-                    )
+                    try:
+                        raw = await asyncio.wait_for(
+                            ws.recv(), timeout=max(0.1, deadline - time.monotonic())
+                        )
+                    except asyncio.TimeoutError as e:
+                        raise APITimeoutError("STT realtime: timed out waiting for ready") from e
                     if isinstance(raw, bytes):
                         continue
                     try:
@@ -568,9 +571,7 @@ class SpeechStream(stt.SpeechStream):
                     except asyncio.CancelledError:
                         pass
 
-        except APIConnectionError:
-            raise
-        except APITimeoutError:
+        except (APIStatusError, APITimeoutError, APIConnectionError):
             raise
         except websockets.exceptions.ConnectionClosed as e:
             raise APIConnectionError(f"STT WebSocket closed: {e}") from e
