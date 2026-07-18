@@ -36,7 +36,6 @@ import json
 import re
 import time
 
-import httpx
 import websockets
 
 from livekit.agents import (
@@ -390,10 +389,10 @@ class TTS(tts.TTS):
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> ChunkedStream:
-        """Non-streaming synthesis via HTTP POST.
+        """One-shot synthesis over the realtime WebSocket.
 
-        Uses a direct HTTP request instead of WebSocket, suitable for
-        short texts or environments where WebSocket is not available.
+        The Blaze gateway only exposes TTS realtime on WebSocket
+        (``WS /v1/tts/realtime``); there is no HTTP POST equivalent.
         """
         return ChunkedStream(
             tts_instance=self,
@@ -411,17 +410,21 @@ class TTS(tts.TTS):
 
 
 # ---------------------------------------------------------------------------
-# ChunkedStream — one-shot HTTP POST synthesis
+# ChunkedStream — one-shot WebSocket synthesis (WS /v1/tts/realtime)
 # ---------------------------------------------------------------------------
 
 
 class ChunkedStream(tts.ChunkedStream):
-    """Non-streaming TTS via HTTP POST.
+    """One-shot TTS over Blaze realtime WebSocket.
 
-    Sends the full text in a single request and streams back audio chunks.
-    Useful as a fallback when WebSocket is unavailable or for short texts.
+    Protocol (same as streaming TTS, single query):
+      1. Connect → ``successful-connection``
+      2. Auth with ``{token, strategy}`` → ``successful-authentication``
+      3. ``speech-start`` → send ``{query}`` → ``speech-end``
+      4. Receive binary PCM (or other format) until ``speech-end``
 
-    API Endpoint: POST /v1/tts/realtime (multipart form)
+    There is no HTTP POST for ``/v1/tts/realtime`` on the public gateway
+    (POST returns 404); this path is WebSocket-only.
     """
 
     def __init__(
@@ -434,12 +437,31 @@ class ChunkedStream(tts.ChunkedStream):
         super().__init__(tts=tts_instance, input_text=input_text, conn_options=conn_options)
         self._blaze_tts = tts_instance
 
+    def _speech_start_params(self) -> dict:
+        tts_cfg = self._blaze_tts
+        params: dict = {
+            "event": "speech-start",
+            "language": tts_cfg._language,
+            "audio_format": tts_cfg._audio_format,
+            "speaker_id": tts_cfg._speaker_id,
+            "normalization": "no",
+            "model": tts_cfg._model,
+        }
+        if tts_cfg._audio_speed and tts_cfg._audio_speed != "1":
+            params["audio_speed"] = tts_cfg._audio_speed
+        if tts_cfg._audio_quality is not None:
+            params["audio_quality"] = tts_cfg._audio_quality
+        return params
+
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = shortuuid()
         tts_cfg = self._blaze_tts
+        turn_start = time.monotonic()
+        idle_timeout = effective_connect_timeout(self._conn_options, tts_cfg._timeout)
+        session_deadline = turn_start + tts_cfg._stream_timeout
 
-        synthesize_url = f"{tts_cfg._api_url}/v1/tts/realtime"
         text = apply_normalization_rules(self._input_text, tts_cfg._normalization_rules)
+        text = _normalize_batch_text(text)
 
         mime_type = {
             "pcm": "audio/pcm",
@@ -461,66 +483,97 @@ class ChunkedStream(tts.ChunkedStream):
             output_emitter.flush()
             return
 
-        headers: dict[str, str] = {}
-        if tts_cfg._auth_token:
-            headers["Authorization"] = f"Bearer {tts_cfg._auth_token}"
-
-        form_data = {
-            "query": text,
-            "language": tts_cfg._language,
-            "audio_format": tts_cfg._audio_format,
-            "speaker_id": tts_cfg._speaker_id,
-            "model": tts_cfg._model,
-        }
-        if tts_cfg._audio_speed and tts_cfg._audio_speed != "1":
-            form_data["audio_speed"] = tts_cfg._audio_speed
-        if tts_cfg._audio_quality is not None:
-            form_data["audio_quality"] = str(tts_cfg._audio_quality)
+        if not tts_cfg._auth_token:
+            raise APIConnectionError("Blaze TTS requires an auth token (BLAZE_API_TOKEN)")
 
         logger.info(
-            "[%s] TTS chunked request: %d chars, speaker=%s",
+            "[%s] TTS one-shot WS: %d chars, speaker=%s, model=%s",
             request_id,
             len(text),
             tts_cfg._speaker_id,
+            tts_cfg._model,
         )
 
+        ws_guard = _WSStreamGuard(
+            idle_timeout=idle_timeout,
+            session_deadline=session_deadline,
+            request_id=request_id,
+        )
+        total_bytes = 0
+
         try:
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(
-                    effective_connect_timeout(self._conn_options, tts_cfg._timeout),
-                    connect=5.0,
+            async with websockets.connect(
+                tts_cfg._ws_url,
+                ping_interval=_WS_PING_INTERVAL,
+                ping_timeout=_WS_PING_TIMEOUT,
+                close_timeout=5,
+            ) as ws:
+                # Handshake
+                msg = json.loads(await ws_guard.recv(ws))
+                if msg.get("type") != "successful-connection":
+                    raise APIConnectionError(f"Unexpected WS message on connect: {msg}")
+
+                await ws.send(
+                    json.dumps(
+                        {
+                            "token": tts_cfg._auth_token,
+                            "strategy": "livekit",
+                        }
+                    )
                 )
-            ) as client:
-                async with client.stream(
-                    "POST",
-                    synthesize_url,
-                    data=form_data,
-                    headers=headers,
-                ) as response:
-                    if response.status_code != 200:
-                        error_text = (await response.aread()).decode(errors="replace")
+                msg = json.loads(await ws_guard.recv(ws))
+                if msg.get("type") != "successful-authentication":
+                    raise APIStatusError(
+                        f"WS authentication failed: {msg}",
+                        status_code=403,
+                        request_id=request_id,
+                        body=json.dumps(msg),
+                    )
+
+                # Single speech session
+                await ws.send(json.dumps(self._speech_start_params()))
+                await ws_guard.recv(ws)  # speech-start ack
+                await ws.send(json.dumps({"query": text}))
+                await ws.send(json.dumps({"event": "speech-end"}))
+
+                while True:
+                    frame = await ws_guard.recv(ws)
+                    if isinstance(frame, bytes):
+                        if frame:
+                            total_bytes += len(frame)
+                            output_emitter.push(frame)
+                        continue
+
+                    status_msg = json.loads(frame)
+                    st = status_msg.get("status") or status_msg.get("type", "")
+                    if st == "speech-end":
+                        break
+                    if st in ("failed-request", "error"):
                         raise APIStatusError(
-                            f"TTS service error {response.status_code}: {error_text}",
-                            status_code=response.status_code,
+                            f"TTS failed: {status_msg.get('message', '')} "
+                            f"{status_msg.get('details', '')}",
+                            status_code=500,
                             request_id=request_id,
-                            body=error_text,
+                            body=json.dumps(status_msg),
                         )
+                    # started-byte-stream / finished-byte-stream / processing → ignore
 
-                    async for chunk in response.aiter_bytes(4096):
-                        if chunk:
-                            output_emitter.push(chunk)
-
-        except httpx.TimeoutException as e:
-            raise APITimeoutError(f"TTS request timed out: {e}") from e
-        except httpx.NetworkError as e:
-            raise APIConnectionError(f"TTS network error: {e}") from e
         except (APIStatusError, APITimeoutError, APIConnectionError):
             raise
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError(f"TTS WebSocket timed out: {e}") from e
+        except websockets.exceptions.WebSocketException as e:
+            raise APIConnectionError(f"TTS WebSocket error: {e}") from e
         except Exception as e:
             raise APIConnectionError(f"TTS connection error: {e}") from e
 
         output_emitter.flush()
-        logger.info("[%s] TTS chunked synthesis complete", request_id)
+        logger.info(
+            "[%s] TTS one-shot complete: %d audio bytes in %.3fs",
+            request_id,
+            total_bytes,
+            time.monotonic() - turn_start,
+        )
 
 
 # ---------------------------------------------------------------------------
