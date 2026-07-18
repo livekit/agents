@@ -1820,9 +1820,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # a transcript means stt recovered; reset its error tolerance
             self._stt_error_counts = 0
 
-        if self.user_state == "away" and ev.is_final:
-            # reset user state from away to listening in case VAD has a miss detection
-            self._update_user_state("listening")
+        if ev.is_final and self.user_state != "speaking":
+            if self.user_state == "away":
+                # reset user state from away to listening in case VAD has a miss detection
+                self._update_user_state("listening")
+            elif self.user_state == "listening" and self._agent_state == "listening":
+                # VAD may have missed speech; STT still saw activity, so refresh away timeout
+                self._set_user_away_timer()
 
         self.emit("user_input_transcribed", ev)
 
