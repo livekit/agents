@@ -17,7 +17,7 @@ Blaze STT Plugin for LiveKit Voice Agent
 
 Speech-to-Text plugin that interfaces with Blaze's transcription service.
 
-Batch API: POST /v1/stt/transcribe (model default: stt-async-1.5)
+Batch API: POST /v1/stt/transcribe (model default: v2.0)
 Realtime API: WS /v1/stt/realtime (model default: stt-stream-1.5)
 """
 
@@ -51,7 +51,7 @@ from ._utils import apply_normalization_rules, convert_pcm_to_wav, effective_con
 from .log import logger
 
 # Latest public Blaze STT model identifiers.
-DEFAULT_BATCH_MODEL = "stt-async-1.5"
+DEFAULT_BATCH_MODEL = "v2.0"
 DEFAULT_STREAM_MODEL = "stt-stream-1.5"
 
 
@@ -62,7 +62,7 @@ class STT(stt.STT):
     Converts speech to text using Blaze's transcription service.
 
     * Batch recognition via ``recognize()`` / ``_recognize_impl`` uses
-      ``POST /v1/stt/transcribe`` with model ``stt-async-1.5`` by default.
+      ``POST /v1/stt/transcribe`` with model ``v2.0`` by default.
     * Native streaming via ``stream()`` uses WebSocket ``/v1/stt/realtime``
       with model ``stt-stream-1.5`` by default (partial + final transcripts).
     * ``with_streaming(vad)`` remains available for VAD-segmented batch STT.
@@ -72,7 +72,7 @@ class STT(stt.STT):
         language: Language code for transcription (default: "vi").
         auth_token: Bearer token for authentication.
         sample_rate: Audio sample rate in Hz (default: 16000).
-        model: Batch STT model id (default: stt-async-1.5).
+        model: Batch STT model id (default: v2.0).
         stream_model: Realtime STT model id (default: stt-stream-1.5).
         normalization_rules: Dict mapping input strings to replacements.
         timeout: Request timeout in seconds (default: 30.0).
@@ -185,7 +185,7 @@ class STT(stt.STT):
 
         Prefer native ``stream()`` (``stt-stream-1.5``) for low-latency realtime
         STT. This adapter is useful when you want VAD-driven utterance cuts with
-        the batch model (``stt-async-1.5``).
+        the batch model (``v2.0``).
 
         Args:
             vad: A VAD instance (e.g. ``silero.VAD.load()``).
