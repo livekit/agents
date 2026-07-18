@@ -474,7 +474,9 @@ class SpeechStream(stt.SpeechStream):
                 ready = False
                 deadline = time.monotonic() + timeout
                 while time.monotonic() < deadline and not ready:
-                    raw = await asyncio.wait_for(ws.recv(), timeout=max(0.1, deadline - time.monotonic()))
+                    raw = await asyncio.wait_for(
+                        ws.recv(), timeout=max(0.1, deadline - time.monotonic())
+                    )
                     if isinstance(raw, bytes):
                         continue
                     try:
