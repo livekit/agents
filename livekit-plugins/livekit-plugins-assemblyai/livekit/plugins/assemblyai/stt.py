@@ -29,6 +29,7 @@ import aiohttp
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectionError,
     APIConnectOptions,
     APIStatusError,
     LanguageCode,
@@ -160,7 +161,6 @@ class STT(stt.STT):
         prompt: NotGivenOr[str] = NOT_GIVEN,
         agent_context: NotGivenOr[str] = NOT_GIVEN,
         previous_context_n_turns: NotGivenOr[int] = NOT_GIVEN,
-        agent_context_carryover: NotGivenOr[bool] = NOT_GIVEN,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         speaker_labels: NotGivenOr[bool] = NOT_GIVEN,
         max_speakers: NotGivenOr[int] = NOT_GIVEN,
@@ -173,6 +173,7 @@ class STT(stt.STT):
         base_url: str = "wss://streaming.assemblyai.com",
         # Deprecated — use min_turn_silence instead
         min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
+        agent_context_carryover: NotGivenOr[bool] = NOT_GIVEN,
     ):
         """
         Args:
@@ -218,25 +219,21 @@ class STT(stt.STT):
                 transcription of the user's reply. Set at construction or updated per-turn
                 via `update_options(agent_context=...)`. Only supported with the
                 Universal-3 Pro family models (max 1750 characters; longer values raise
-                ValueError). With ``agent_context_carryover`` enabled — the default on
-                Universal-3 Pro family models — each assistant reply replaces this value
-                automatically; pass ``agent_context_carryover=False`` to manage it
-                manually.
+                ValueError). When chat-context carryover is on (the default on the Universal-3
+                Pro family) each assistant reply replaces this value automatically; disable it
+                to manage this manually.
             previous_context_n_turns: Maximum number of prior conversation entries (user
                 transcripts and any `agent_context` values) carried forward as context for
                 each transcription. Set to 0 to disable automatic context carryover
                 entirely; leave unset to use the server default (recommended). Range 0–100.
                 Only supported with the Universal-3 Pro family models. Set at construction
                 (connect) time only; it cannot be changed via `update_options`.
-            agent_context_carryover: When the model supports it, let an ``AgentSession`` push each
-                assistant reply into ``agent_context`` so it is carried into the model's
-                conversation context. Enabled by default on models that support it (the
-                Universal-3 Pro family); pass False to opt out. On other models it is off;
-                explicitly passing True logs a warning and is ignored. Also disabled by
-                default when ``previous_context_n_turns=0`` (context carryover explicitly
-                turned off). Prior user turns are carried automatically by the model
-                regardless of this flag. Replies longer than the 1750-character server cap
-                are truncated (keeping the tail) before being sent.
+            agent_context_carryover: Deprecated, use
+                ``AgentSession(stt_context_options={"forward_chat_context": ...})`` instead.
+                On the Universal-3 Pro family, assistant replies are carried into ``agent_context``
+                by default; pass ``False`` to opt out. On other models it is off. Replies longer
+                than the 1750-character server cap are truncated (keeping the tail) before
+                being sent.
             voice_focus: Voice Focus isolates the primary voice and suppresses background
                 noise (chatter, keyboard clicks, fan hum, room echo) before the audio reaches
                 the model. Use 'near-field' for headsets, handsets, and close-talking
@@ -272,21 +269,24 @@ class STT(stt.STT):
             language_codes = NOT_GIVEN
         if is_given(agent_context):
             _validate_agent_context(agent_context)
-        # agent_context carryover is only available on the u3-rt-pro family
-        # ("u3-pro" is normalized to "u3-rt-pro" below). Unset means "on where
-        # supported"; only an explicit True on an unsupported model warns.
+
+        # agent_context carryover is only available on the u3-rt-pro family ("u3-pro" is
+        # normalized to "u3-rt-pro" below), where it is on by default; the session's
+        # stt_context_options.forward_chat_context toggle is the supported way to control it.
         supports_carryover = model in _U3_PRO_MODELS or model == "u3-pro"
-        if is_given(agent_context_carryover) and agent_context_carryover and not supports_carryover:
+        if is_given(agent_context_carryover):
             logger.warning(
-                "agent_context_carryover is enabled but model %r does not support it; ignoring",
-                model,
+                "'agent_context_carryover' is deprecated, use "
+                "AgentSession(stt_context_options={'forward_chat_context': ...}) instead."
             )
-        # previous_context_n_turns=0 is documented as "disable automatic context
-        # carryover" — honor it in the default resolution (an explicit
-        # agent_context_carryover=True still wins).
-        _context_disabled = is_given(previous_context_n_turns) and previous_context_n_turns == 0
+            if agent_context_carryover and not supports_carryover:
+                logger.warning(
+                    "agent_context_carryover is enabled but model %r does not support it; ignoring",
+                    model,
+                )
+        # on by default for supported models; an explicit agent_context_carryover=False opts out
         carryover_enabled = supports_carryover and (
-            agent_context_carryover if is_given(agent_context_carryover) else not _context_disabled
+            agent_context_carryover if is_given(agent_context_carryover) else True
         )
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -685,27 +685,32 @@ class SpeechStream(stt.SpeechStream):
             # forward inputs to AssemblyAI
             # if we receive a close message, signal it to AssemblyAI and break.
             # the recv task will then make sure to process the remaining audio and stop
-            async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
-                    frames = audio_bstream.flush()
-                else:
-                    frames = audio_bstream.write(data.data.tobytes())
+            try:
+                async for data in self._input_ch:
+                    if isinstance(data, self._FlushSentinel):
+                        frames = audio_bstream.flush()
+                    else:
+                        frames = audio_bstream.write(data.data.tobytes())
 
-                for frame in frames:
-                    if not anchored:
-                        # Anchor the stream's wall-clock to the moment just
-                        # before the first frame is sent — aligned with the
-                        # server's stream-relative zero used by
-                        # SpeechStarted.timestamp.
-                        self.start_time = time.time()
-                        anchored = True
-                    self._speech_duration += frame.duration
-                    await ws.send_bytes(frame.data.tobytes())
-                    self._last_frame_sent_at = time.time()
+                    for frame in frames:
+                        if not anchored:
+                            # Anchor the stream's wall-clock to the moment just
+                            # before the first frame is sent — aligned with the
+                            # server's stream-relative zero used by
+                            # SpeechStarted.timestamp.
+                            self.start_time = time.time()
+                            anchored = True
+                        self._speech_duration += frame.duration
+                        await ws.send_bytes(frame.data.tobytes())
+                        self._last_frame_sent_at = time.time()
 
-            closing_ws = True
-            logger.debug("AssemblyAI sending close message session=%s", self._session_id)
-            await ws.send_str(SpeechStream._CLOSE_MSG)
+                closing_ws = True
+                logger.debug("AssemblyAI sending close message session=%s", self._session_id)
+                await ws.send_str(SpeechStream._CLOSE_MSG)
+            except (aiohttp.ClientError, ConnectionError) as e:
+                if closing_ws or self._session.closed:
+                    return
+                raise APIConnectionError("AssemblyAI connection closed unexpectedly") from e
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws

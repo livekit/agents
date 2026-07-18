@@ -615,26 +615,35 @@ class SpeechStream(stt.SpeechStream):
             )
 
             has_ended = False
-            async for data in self._input_ch:
-                frames: list[rtc.AudioFrame] = []
-                if isinstance(data, rtc.AudioFrame):
-                    frames.extend(audio_bstream.write(data.data.tobytes()))
-                elif isinstance(data, self._FlushSentinel):
-                    frames.extend(audio_bstream.flush())
-                    has_ended = True
+            try:
+                async for data in self._input_ch:
+                    frames: list[rtc.AudioFrame] = []
+                    if isinstance(data, rtc.AudioFrame):
+                        frames.extend(audio_bstream.write(data.data.tobytes()))
+                    elif isinstance(data, self._FlushSentinel):
+                        frames.extend(audio_bstream.flush())
+                        has_ended = True
 
-                for frame in frames:
-                    self._audio_duration_collector.push(frame.duration)
-                    await ws.send_bytes(frame.data.tobytes())
+                    for frame in frames:
+                        self._audio_duration_collector.push(frame.duration)
+                        await ws.send_bytes(frame.data.tobytes())
 
-                    if has_ended:
-                        self._audio_duration_collector.flush()
-                        await ws.send_str(SpeechStream._FINALIZE_MSG)
-                        has_ended = False
+                        if has_ended:
+                            self._audio_duration_collector.flush()
+                            await ws.send_str(SpeechStream._FINALIZE_MSG)
+                            has_ended = False
 
-            # tell deepgram we are done sending audio/inputs
-            closing_ws = True
-            await ws.send_str(SpeechStream._CLOSE_MSG)
+                # tell deepgram we are done sending audio/inputs
+                closing_ws = True
+                await ws.send_str(SpeechStream._CLOSE_MSG)
+            except (aiohttp.ClientError, ConnectionError) as e:
+                # a mid-write socket drop surfaces here as a raw connection error.
+                # if the close is expected (aclose or the http session closing) just
+                # return; otherwise re-raise as a retryable APIError so _main_task
+                # reconnects, symmetric with recv_task.
+                if closing_ws or self._session.closed:
+                    return
+                raise APIConnectionError("deepgram connection closed unexpectedly") from e
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
