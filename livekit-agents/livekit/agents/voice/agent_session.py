@@ -474,6 +474,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._async_tool_options = _resolve_async_tool_options(
             tool_handling.get("async_options") if is_given(tool_handling) else None
         )
+        self._tool_reply_after_audio: Literal["always", "skip"] = (
+            tool_handling.get("tool_reply_after_audio", "always")
+            if is_given(tool_handling)
+            else "always"
+        )
 
         # unrecoverable error counts, reset after agent speaking
         self._llm_error_counts = 0

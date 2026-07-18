@@ -120,6 +120,7 @@ class ToolHandlingOptions(TypedDict, total=False):
         AgentSession(
             tool_handling={
                 "async_options": {"update_template": "..."},
+                "tool_reply_after_audio": "skip",
             },
         )
 
@@ -129,6 +130,16 @@ class ToolHandlingOptions(TypedDict, total=False):
     async_options: AsyncToolOptions
     """Templates injected around async tool dispatch (``ctx.update()``, duplicate
     handling, coalesced replies). Unmentioned keys keep their defaults."""
+
+    tool_reply_after_audio: Literal["always", "skip"]
+    """Controls post-tool reply generation when the realtime response that
+    triggered the function call also produced audible audio output.
+
+    - ``"always"`` (default): always generate a reply after tool execution,
+      even if the response already produced audio.
+    - ``"skip"``: skip the post-tool reply when the triggering response
+      already delivered audio to the user, preventing duplicate speech.
+    """
 
 
 def _render(template: str | Callable[[Any], str], args: dict[str, Any]) -> str:

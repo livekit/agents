@@ -430,6 +430,7 @@ class FunctionToolsExecutedEvent(BaseModel):
     created_at: float = Field(default_factory=time.time)
     _reply_required: bool = PrivateAttr(default=False)
     _handoff_required: bool = PrivateAttr(default=False)
+    _response_had_audio: bool = PrivateAttr(default=False)
 
     def zipped(self) -> list[tuple[FunctionCall, FunctionCallOutput | None]]:
         """Return calls paired with outputs by list position."""
@@ -448,6 +449,13 @@ class FunctionToolsExecutedEvent(BaseModel):
     @property
     def has_agent_handoff(self) -> bool:
         return self._handoff_required
+
+    @property
+    def response_had_audio(self) -> bool:
+        """Whether the response that triggered these function calls also produced
+        audible audio output. Useful for deciding whether a post-tool reply would
+        duplicate speech that was already delivered to the user."""
+        return self._response_had_audio
 
     @model_validator(mode="after")
     def verify_lists_length(self) -> Self:
