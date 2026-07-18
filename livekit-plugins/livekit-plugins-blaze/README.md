@@ -3,7 +3,7 @@
 Agent Framework plugin for [Blaze AI](https://blaze.ai) services:
 
 - **STT** (Speech-to-Text) via `POST /v1/stt/transcribe` (batch, default model `v2.0`) and WS `/v1/stt/realtime` (streaming, default model `stt-stream-1.5`)
-- **TTS** (Text-to-Speech) via `POST|WS /v1/tts/realtime` (default model `2.0-realtime`)
+- **TTS** (Text-to-Speech) via `WS /v1/tts/realtime` (default model `2.0-realtime`; one-shot `synthesize()` and streaming `stream()` both use WebSocket — there is no HTTP POST for realtime TTS)
 - **LLM** (Conversational AI) via `POST /voicebot/{bot_id}/chat-conversion?stream=true` (SSE)
 
 ## Installation
