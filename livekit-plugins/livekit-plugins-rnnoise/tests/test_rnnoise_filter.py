@@ -23,6 +23,8 @@ import livekit.plugins.rnnoise as rn
 from livekit import rtc
 from livekit.plugins.rnnoise import RNNoise
 
+pytestmark = pytest.mark.unit
+
 
 def _make_frame(samples: np.ndarray, sample_rate: int) -> rtc.AudioFrame:
     samples = samples.astype(np.int16)
