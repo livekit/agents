@@ -21,10 +21,11 @@ supporting both REST recognition and real-time streaming (WebSocket).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 from dataclasses import dataclass, replace
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import aiohttp
 
@@ -40,58 +41,28 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
-from livekit.agents.utils import AudioBuffer
 from livekit.agents.utils.misc import is_given
 
+if TYPE_CHECKING:
+    from livekit.agents.utils import AudioBuffer
+
 from .log import logger
+from .models import GnaniSTTLanguages
 
 GnaniSTTFormat = Literal["verbatim", "transcribe"]
 
 GNANI_STT_BASE_URL = "https://api.vachana.ai"
 
-GnaniSTTLanguages = Literal[
-    "bn-IN",
-    "en-IN",
-    "gu-IN",
-    "hi-IN",
-    "kn-IN",
-    "ml-IN",
-    "mr-IN",
-    "pa-IN",
-    "ta-IN",
-    "te-IN",
-    "en-IN,hi-IN",
-]
-
-SUPPORTED_LANGUAGES: set[str] = {
-    "bn-IN",
-    "en-IN",
-    "gu-IN",
-    "hi-IN",
-    "kn-IN",
-    "ml-IN",
-    "mr-IN",
-    "pa-IN",
-    "ta-IN",
-    "te-IN",
-    "en-IN,hi-IN",
-}
-
-STREAM_SUPPORTED_LANGUAGES: set[str] = {
-    "bn-IN",
-    "en-IN",
-    "gu-IN",
-    "hi-IN",
-    "kn-IN",
-    "ml-IN",
-    "mr-IN",
-    "pa-IN",
-    "ta-IN",
-    "te-IN",
-}
-
 SAMPLE_RATE_16K = 16000
 SAMPLE_RATE_8K = 8000
+SAMPLE_RATE_44K = 44100
+SAMPLE_RATE_48K = 48000
+STREAM_SUPPORTED_SAMPLE_RATES = (
+    SAMPLE_RATE_8K,
+    SAMPLE_RATE_16K,
+    SAMPLE_RATE_44K,
+    SAMPLE_RATE_48K,
+)
 STREAM_CHUNK_BYTES = 1024
 
 
@@ -104,6 +75,7 @@ class GnaniSTTOptions:
     preferred_language: str | None = None
     format: str = "verbatim"
     itn_native_numerals: bool = False
+    use_streaming: bool = True
 
 
 _DEPRECATED_STT_KWARGS = frozenset(("organization_id", "user_id", "http_session"))
@@ -131,28 +103,33 @@ class STT(stt.STT):
     Args:
         language: BCP-47 language code (e.g. "hi-IN", "en-IN").
         api_key: Gnani API key (falls back to GNANI_API_KEY env var).
-        sample_rate: Audio sample rate for streaming (8000 or 16000).
+        sample_rate: Audio sample rate for streaming (8000, 16000, 44100, or 48000).
         base_url: Vachana API base URL.
         preferred_language: Force single-language model for this code.
         format: "verbatim" (default) or "transcribe" (enables ITN).
         itn_native_numerals: Render digits in native script when format="transcribe".
+        use_streaming: When True (default), transcribe over the WebSocket stream
+            (wss://.../stt/v3/stream). When False, use REST recognition
+            (POST /stt/v3), which requires a local VAD — LiveKit wraps the STT
+            with ``stt.StreamAdapter`` automatically.
     """
 
     def __init__(
         self,
         *,
-        language: str = "en-IN",
+        language: GnaniSTTLanguages | str = "en-IN",
         api_key: str | None = None,
         sample_rate: int = SAMPLE_RATE_16K,
         base_url: str = GNANI_STT_BASE_URL,
         preferred_language: str | None = None,
         format: GnaniSTTFormat = "verbatim",
         itn_native_numerals: bool = False,
+        use_streaming: bool = True,
         **kwargs: Any,
     ) -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=True,
+                streaming=use_streaming,
                 interim_results=False,
                 aligned_transcript=False,
             )
@@ -167,8 +144,9 @@ class STT(stt.STT):
                 "Provide it directly or set GNANI_API_KEY environment variable."
             )
 
-        if sample_rate not in (SAMPLE_RATE_8K, SAMPLE_RATE_16K):
-            raise ValueError("sample_rate must be 8000 or 16000")
+        if sample_rate not in STREAM_SUPPORTED_SAMPLE_RATES:
+            allowed = ", ".join(str(r) for r in STREAM_SUPPORTED_SAMPLE_RATES)
+            raise ValueError(f"sample_rate must be one of {allowed}, got {sample_rate}")
 
         self._opts = GnaniSTTOptions(
             api_key=self._api_key,
@@ -178,6 +156,7 @@ class STT(stt.STT):
             preferred_language=preferred_language,
             format=format,
             itn_native_numerals=itn_native_numerals,
+            use_streaming=use_streaming,
         )
         self._session: aiohttp.ClientSession | None = None
 
@@ -288,6 +267,12 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
+        if not self._opts.use_streaming:
+            return cast(
+                "SpeechStream",
+                super().stream(language=language, conn_options=conn_options),
+            )
+
         opts = replace(self._opts)
         if is_given(language):
             opts.language = language
@@ -374,13 +359,8 @@ class SpeechStream(stt.RecognizeStream):
                         task.result()
 
                     if send_task.done() and not recv_task.done():
-                        # All audio sent. The Gnani API has no application-level
-                        # end-of-stream message, so give the server a short
-                        # window to flush final transcripts before closing.
-                        try:
+                        with contextlib.suppress(asyncio.TimeoutError):
                             await asyncio.wait_for(asyncio.shield(recv_task), timeout=1.0)
-                        except asyncio.TimeoutError:
-                            pass
                 finally:
                     await utils.aio.gracefully_cancel(send_task, recv_task)
 

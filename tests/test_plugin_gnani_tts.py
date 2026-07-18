@@ -36,11 +36,11 @@ def test_tts_accepts_api_key_from_env():
 
 
 def test_tts_default_voice():
-    """TTS defaults to 'Karan' voice."""
+    """TTS defaults to 'Pranav' voice."""
     from livekit.plugins.gnani import TTS
 
     tts = TTS(api_key="test-key")
-    assert tts._opts.voice == "Karan"
+    assert tts._opts.voice == "Pranav"
 
 
 def test_tts_custom_voice():
@@ -61,29 +61,29 @@ def test_tts_all_voices_accepted():
         assert tts._opts.voice == voice
 
 
-def test_tts_rejects_invalid_voice():
-    """TTS rejects unsupported voices."""
+def test_tts_accepts_arbitrary_voice():
+    """TTS accepts arbitrary voice strings (validated server-side)."""
     from livekit.plugins.gnani import TTS
 
-    with pytest.raises(ValueError, match="not supported"):
-        TTS(api_key="test-key", voice="nonexistent")
+    tts = TTS(api_key="test-key", voice="some-new-voice")
+    assert tts._opts.voice == "some-new-voice"
 
 
 def test_tts_default_model():
-    """TTS defaults to vachana-voice-v3 for the default v3 voice."""
+    """TTS defaults to timbre-v2.0 (DEFAULT_MODEL)."""
     from livekit.plugins.gnani import TTS
 
     tts = TTS(api_key="test-key")
-    assert tts._opts.model == "vachana-voice-v3"
+    assert tts._opts.model == "timbre-v2.0"
 
 
-def test_tts_model_v3():
-    """TTS uses vachana-voice-v3 model."""
+def test_tts_model_independent_of_voice():
+    """The default model is used regardless of the selected voice."""
     from livekit.plugins.gnani import TTS
 
     tts = TTS(api_key="test-key", voice="Simran")
-    assert tts._opts.model == "vachana-voice-v3"
-    assert tts.model == "vachana-voice-v3"
+    assert tts._opts.model == "timbre-v2.0"
+    assert tts.model == "timbre-v2.0"
 
 
 def test_tts_model_explicit_override():
@@ -99,7 +99,7 @@ def test_tts_model_property():
     from livekit.plugins.gnani import TTS
 
     tts = TTS(api_key="test-key")
-    assert tts.model == "vachana-voice-v3"
+    assert tts.model == "timbre-v2.0"
 
 
 def test_tts_provider_property():
@@ -178,13 +178,13 @@ def test_tts_update_options_voice_and_model():
     assert tts._opts.model == "custom-model"
 
 
-def test_tts_update_options_rejects_invalid_voice():
-    """update_options rejects unsupported voices."""
+def test_tts_update_options_accepts_arbitrary_voice():
+    """update_options accepts arbitrary voice strings (validated server-side)."""
     from livekit.plugins.gnani import TTS
 
     tts = TTS(api_key="test-key")
-    with pytest.raises(ValueError, match="not supported"):
-        tts.update_options(voice="nonexistent")
+    tts.update_options(voice="some-new-voice")
+    assert tts._opts.voice == "some-new-voice"
 
 
 def test_tts_update_options_model():
@@ -400,7 +400,7 @@ def test_tts_update_options_preserves_other_fields():
     tts = TTS(api_key="test-key", voice="Karan")
     tts.update_options(voice="Raju")
     assert tts._opts.voice == "Raju"
-    assert tts._opts.model == "vachana-voice-v3"
+    assert tts._opts.model == "timbre-v2.0"
     assert tts._opts.encoding == "linear_pcm"
 
 
