@@ -219,10 +219,9 @@ class STT(stt.STT):
                 transcription of the user's reply. Set at construction or updated per-turn
                 via `update_options(agent_context=...)`. Only supported with the
                 Universal-3 Pro family models (max 1750 characters; longer values raise
-                ValueError). With ``agent_context_carryover`` enabled — the default on
-                Universal-3 Pro family models — each assistant reply replaces this value
-                automatically; pass ``agent_context_carryover=False`` to manage it
-                manually.
+                ValueError). With ``agent_context_carryover=True`` each assistant reply
+                replaces this value automatically; leave it disabled (the default) to
+                manage it manually.
             previous_context_n_turns: Maximum number of prior conversation entries (user
                 transcripts and any `agent_context` values) carried forward as context for
                 each transcription. Set to 0 to disable automatic context carryover
@@ -231,13 +230,12 @@ class STT(stt.STT):
                 (connect) time only; it cannot be changed via `update_options`.
             agent_context_carryover: When the model supports it, let an ``AgentSession`` push each
                 assistant reply into ``agent_context`` so it is carried into the model's
-                conversation context. Enabled by default on models that support it (the
-                Universal-3 Pro family); pass False to opt out. On other models it is off;
-                explicitly passing True logs a warning and is ignored. Also disabled by
-                default when ``previous_context_n_turns=0`` (context carryover explicitly
-                turned off). Prior user turns are carried automatically by the model
-                regardless of this flag. Replies longer than the 1750-character server cap
-                are truncated (keeping the tail) before being sent.
+                conversation context. Disabled by default; pass True to opt in on a model
+                that supports it (the Universal-3 Pro family). On other models it is off;
+                explicitly passing True logs a warning and is ignored. Prior user turns are
+                carried automatically by the model regardless of this flag. Replies longer
+                than the 1750-character server cap are truncated (keeping the tail) before
+                being sent.
             voice_focus: Voice Focus isolates the primary voice and suppresses background
                 noise (chatter, keyboard clicks, fan hum, room echo) before the audio reaches
                 the model. Use 'near-field' for headsets, handsets, and close-talking
@@ -274,20 +272,16 @@ class STT(stt.STT):
         if is_given(agent_context):
             _validate_agent_context(agent_context)
         # agent_context carryover is only available on the u3-rt-pro family
-        # ("u3-pro" is normalized to "u3-rt-pro" below). Unset means "on where
-        # supported"; only an explicit True on an unsupported model warns.
+        # ("u3-pro" is normalized to "u3-rt-pro" below). It is opt-in: off unless
+        # explicitly enabled, and an explicit True on an unsupported model warns.
         supports_carryover = model in _U3_PRO_MODELS or model == "u3-pro"
         if is_given(agent_context_carryover) and agent_context_carryover and not supports_carryover:
             logger.warning(
                 "agent_context_carryover is enabled but model %r does not support it; ignoring",
                 model,
             )
-        # previous_context_n_turns=0 is documented as "disable automatic context
-        # carryover" — honor it in the default resolution (an explicit
-        # agent_context_carryover=True still wins).
-        _context_disabled = is_given(previous_context_n_turns) and previous_context_n_turns == 0
-        carryover_enabled = supports_carryover and (
-            agent_context_carryover if is_given(agent_context_carryover) else not _context_disabled
+        carryover_enabled = (
+            supports_carryover and is_given(agent_context_carryover) and agent_context_carryover
         )
         super().__init__(
             capabilities=stt.STTCapabilities(

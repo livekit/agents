@@ -547,7 +547,8 @@ class STT(stt.STT):
             http_session (aiohttp.ClientSession, optional): HTTP session to use.
             extra_kwargs (dict, optional): Extra kwargs to pass to the STT model.
             agent_context_carryover (bool, optional): Let an ``AgentSession`` push each assistant
-                reply into AssemblyAI's ``agent_context``. Only the U3 Pro family supports it (on by default there).
+                reply into AssemblyAI's ``agent_context``. Disabled by default; pass True to opt in
+                on the U3 Pro family (the only models that support it).
             fallback (FallbackModelType, optional): Fallback models - either a list of model names,
                 a list of FallbackModel instances.
             conn_options (APIConnectOptions, optional): Connection options for request attempts.
@@ -571,18 +572,15 @@ class STT(stt.STT):
 
         vad = _resolve_vad_for_model(model, vad if is_given(vad) else None)
 
-        extra_dict = dict(extra_kwargs) if is_given(extra_kwargs) else None
         supports_carryover = _supports_agent_context_carryover(model)
         if is_given(agent_context_carryover) and agent_context_carryover and not supports_carryover:
             logger.warning(
                 "agent_context_carryover is enabled but model %r does not support it; ignoring",
                 model,
             )
-        context_disabled = (
-            extra_dict is not None and extra_dict.get("previous_context_n_turns") == 0
-        )
-        carryover_enabled = supports_carryover and (
-            agent_context_carryover if is_given(agent_context_carryover) else not context_disabled
+        # Opt-in: off unless explicitly enabled on a model that supports it.
+        carryover_enabled = (
+            supports_carryover and is_given(agent_context_carryover) and agent_context_carryover
         )
 
         super().__init__(

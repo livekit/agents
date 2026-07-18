@@ -1319,7 +1319,7 @@ async def test_language_code_singular_not_in_update_options():
 
 
 # ---------------------------------------------------------------------------
-# agent_context server cap (1750 chars) + agent_context_carryover default
+# agent_context server cap (1750 chars) + agent_context_carryover opt-in
 #
 # The server rejects `agent_context` longer than 1750 chars, and an invalid
 # UpdateConfiguration cancels the whole streaming session — so the plugin
@@ -1404,7 +1404,7 @@ async def test_carryover_truncates_oversize_reply_keeping_tail():
 
 async def test_carryover_ignores_non_assistant_items():
     """_push_conversation_item ignores user messages and textless assistant items
-    — the shapes it receives now that carryover is on by default."""
+    — the shapes it receives when carryover is enabled."""
     from livekit.agents.llm import ChatMessage
     from livekit.agents.voice.events import ConversationItemAddedEvent
     from livekit.plugins.assemblyai import STT
@@ -1437,12 +1437,21 @@ async def test_carryover_ignores_agent_handoff_items():
     assert stt._opts.agent_context is NOT_GIVEN
 
 
-async def test_carryover_defaults_on_for_u3_pro_family():
-    """agent_context_carryover defaults to enabled on models that support it."""
+async def test_carryover_defaults_off_for_u3_pro_family():
+    """agent_context_carryover is opt-in: off by default even on models that support it."""
     from livekit.plugins.assemblyai import STT
 
     for model in ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro", "u3-pro"):
         stt = STT(api_key="test-key", model=model)
+        assert stt.capabilities.chat_context is False
+
+
+async def test_carryover_explicit_true_enables_on_u3_pro_family():
+    """agent_context_carryover=True opts in on models that support it."""
+    from livekit.plugins.assemblyai import STT
+
+    for model in ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro", "u3-pro"):
+        stt = STT(api_key="test-key", model=model, agent_context_carryover=True)
         assert stt.capabilities.chat_context is True
 
 
@@ -1484,16 +1493,8 @@ async def test_carryover_explicit_false_disables():
     assert stt.capabilities.chat_context is False
 
 
-async def test_carryover_disabled_by_previous_context_n_turns_zero():
-    """previous_context_n_turns=0 (documented 'disable carryover') suppresses the default."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(api_key="test-key", previous_context_n_turns=0)
-    assert stt.capabilities.chat_context is False
-
-
 async def test_carryover_explicit_true_wins_over_n_turns_zero():
-    """An explicit agent_context_carryover=True overrides the n_turns=0 suppression."""
+    """agent_context_carryover=True enables carryover regardless of previous_context_n_turns."""
     from livekit.plugins.assemblyai import STT
 
     stt = STT(api_key="test-key", previous_context_n_turns=0, agent_context_carryover=True)
