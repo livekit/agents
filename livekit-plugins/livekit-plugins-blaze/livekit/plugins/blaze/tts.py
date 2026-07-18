@@ -432,7 +432,25 @@ class ChunkedStream(tts.ChunkedStream):
 
         synthesize_url = f"{tts_cfg._api_url}/v1/tts/realtime"
         text = apply_normalization_rules(self._input_text, tts_cfg._normalization_rules)
+
+        mime_type = {
+            "pcm": "audio/pcm",
+            "mp3": "audio/mpeg",
+            "wav": "audio/wav",
+        }.get(tts_cfg._audio_format, "audio/pcm")
+
+        # Always initialize so base ChunkedStream._main_task can end_input()/join()
+        # even when the text is empty/whitespace-only after normalization.
+        output_emitter.initialize(
+            request_id=request_id,
+            sample_rate=tts_cfg._sample_rate,
+            num_channels=1,
+            mime_type=mime_type,
+            stream=False,
+        )
+
         if not text.strip():
+            output_emitter.flush()
             return
 
         headers: dict[str, str] = {}
@@ -450,20 +468,6 @@ class ChunkedStream(tts.ChunkedStream):
             form_data["audio_speed"] = tts_cfg._audio_speed
         if tts_cfg._audio_quality is not None:
             form_data["audio_quality"] = str(tts_cfg._audio_quality)
-
-        mime_type = {
-            "pcm": "audio/pcm",
-            "mp3": "audio/mpeg",
-            "wav": "audio/wav",
-        }.get(tts_cfg._audio_format, "audio/pcm")
-
-        output_emitter.initialize(
-            request_id=request_id,
-            sample_rate=tts_cfg._sample_rate,
-            num_channels=1,
-            mime_type=mime_type,
-            stream=False,
-        )
 
         logger.info(
             "[%s] TTS chunked request: %d chars, speaker=%s",
