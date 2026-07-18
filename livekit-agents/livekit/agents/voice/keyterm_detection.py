@@ -59,17 +59,6 @@ class KeytermDetectionOptions(TypedDict, total=False):
     Defaults to ``10.0``. Raise it if a slow detection ``llm`` needs longer."""
 
 
-class ChatContextOptions(TypedDict, total=False):
-    """Native conversation-context carryover, for STTs that consume context directly.
-
-    Only STTs that advertise the ``chat_context`` capability act on it (e.g. AssemblyAI
-    u3-pro via inference); others ignore it.
-    """
-
-    enabled: bool
-    """Whether to forward conversation turns to the STT. Defaults to ``True``."""
-
-
 class STTContextOptions(TypedDict, total=False):
     """Conversation-aware context for the STT.
 
@@ -79,7 +68,7 @@ class STTContextOptions(TypedDict, total=False):
             stt_context_options={
                 "keyterms": ["LiveKit", "Acme Corp"],
                 "keyterm_detection": {"enabled": True, "turn_interval": 1},
-                "chat_context": {"enabled": True},
+                "forward_chat_context": True,
             },
         )
     """
@@ -88,8 +77,9 @@ class STTContextOptions(TypedDict, total=False):
     """Static keyterms applied wherever the STT accepts a term list; never touched by detection."""
     keyterm_detection: KeytermDetectionOptions
     """LLM-based keyterm extraction, for STTs that accept a term list."""
-    chat_context: ChatContextOptions
-    """Native conversation-context carryover, for STTs that consume context directly."""
+    forward_chat_context: bool
+    """Forward conversation turns to STTs that consume context directly (e.g. AssemblyAI u3-pro).
+    Defaults to ``True``; only STTs that advertise the ``chat_context`` capability act on it."""
 
 
 # bound a single pass so a stuck LLM call can't hold the single-flight guard forever and
@@ -120,21 +110,13 @@ def _resolve_detection(config: KeytermDetectionOptions | None) -> KeytermDetecti
     return KeytermDetectionOptions(**{**_KEYTERM_DETECTION_DEFAULTS, **(config or {})})
 
 
-_CHAT_CONTEXT_DEFAULTS: ChatContextOptions = {"enabled": True}
-
-
-def _resolve_chat_context(config: ChatContextOptions | None) -> ChatContextOptions:
-    """Return a fully-defaulted chat-context config (``enabled`` defaults to True)."""
-    return ChatContextOptions(**{**_CHAT_CONTEXT_DEFAULTS, **(config or {})})
-
-
 def _resolve_stt_context_options(config: STTContextOptions | None) -> STTContextOptions:
     """Return a fully-defaulted STT-context config."""
     config = config or {}
     return STTContextOptions(
         keyterms=list(config.get("keyterms", [])),
         keyterm_detection=_resolve_detection(config.get("keyterm_detection")),
-        chat_context=_resolve_chat_context(config.get("chat_context")),
+        forward_chat_context=config.get("forward_chat_context", True),
     )
 
 

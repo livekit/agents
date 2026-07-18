@@ -335,8 +335,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             turn_handling (TurnHandlingOptions, optional): Configuration for turn handling.
             stt_context_options (STTContextOptions, optional): Conversation-aware context for the
                 STT: static ``keyterms`` plus ``keyterm_detection`` for STTs that accept a term
-                list, and ``chat_context`` carryover (on by default) for STTs that consume context
-                directly. Applied where the STT supports it, ignored otherwise.
+                list, and ``forward_chat_context`` (on by default) that forwards conversation turns
+                to STTs that consume context directly. Applied where the STT supports it, ignored
+                otherwise.
             keyterms_options (KeytermsOptions, optional): Deprecated, use ``stt_context_options``
                 instead. Its ``keyterms``/``keyterm_detection`` keys map onto the new option.
             max_endpointing_delay (float): Maximum time-in-seconds the agent

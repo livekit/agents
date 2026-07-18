@@ -117,7 +117,6 @@ from .voice.amd import (
 )
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
 from .voice.keyterm_detection import (
-    ChatContextOptions,
     KeytermDetectionOptions,
     KeytermsOptions,
     STTContextOptions,
@@ -281,7 +280,6 @@ __all__ = [
     "KeytermsOptions",
     "KeytermDetectionOptions",
     "STTContextOptions",
-    "ChatContextOptions",
     "UserTurnExceededEvent",
 ]
 

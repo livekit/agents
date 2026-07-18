@@ -19,7 +19,6 @@ from livekit.agents.voice.keyterm_detection import (
     _detect_keyterms,
     _format_input,
     _parse_tool_call,
-    _resolve_chat_context,
     _resolve_detection,
     _resolve_stt_context_options,
     _stt_context_from_keyterms_options,
@@ -564,17 +563,11 @@ def test_resolve_detection() -> None:
     assert resolved["max_keyterms"] is None
 
 
-def test_resolve_chat_context_defaults_enabled() -> None:
-    assert _resolve_chat_context(None)["enabled"] is True
-    assert _resolve_chat_context({})["enabled"] is True
-    assert _resolve_chat_context({"enabled": False})["enabled"] is False
-
-
 def test_resolve_stt_context_options_defaults() -> None:
     resolved = _resolve_stt_context_options(None)
     assert resolved["keyterms"] == []
     assert resolved["keyterm_detection"]["enabled"] is False
-    assert resolved["chat_context"]["enabled"] is True
+    assert resolved["forward_chat_context"] is True
 
 
 def test_resolve_stt_context_options_passthrough() -> None:
@@ -582,17 +575,17 @@ def test_resolve_stt_context_options_passthrough() -> None:
         {
             "keyterms": ["LiveKit"],
             "keyterm_detection": {"enabled": True, "turn_interval": 2},
-            "chat_context": {"enabled": False},
+            "forward_chat_context": False,
         }
     )
     assert resolved["keyterms"] == ["LiveKit"]
     assert resolved["keyterm_detection"]["enabled"] is True
     assert resolved["keyterm_detection"]["turn_interval"] == 2
-    assert resolved["chat_context"]["enabled"] is False
+    assert resolved["forward_chat_context"] is False
 
 
 def test_stt_context_from_keyterms_options_maps_keys() -> None:
-    """The deprecated keyterms_options maps onto keyterms/keyterm_detection; chat_context defaults."""
+    """The deprecated keyterms_options maps onto keyterms/keyterm_detection; the rest defaults."""
     mapped = _stt_context_from_keyterms_options(
         {"keyterms": ["Acme"], "keyterm_detection": {"enabled": True}}
     )
@@ -601,6 +594,6 @@ def test_stt_context_from_keyterms_options_maps_keys() -> None:
     resolved = _resolve_stt_context_options(mapped)
     assert resolved["keyterms"] == ["Acme"]
     assert resolved["keyterm_detection"]["enabled"] is True
-    assert resolved["chat_context"]["enabled"] is True
+    assert resolved["forward_chat_context"] is True
 
     assert _stt_context_from_keyterms_options(None) == {}

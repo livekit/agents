@@ -608,10 +608,8 @@ class AgentActivity(RecognitionHooks):
                 resolved_stt.prewarm()
                 resolved_stt.on("metrics_collected", self._on_metrics_collected)
                 resolved_stt.on("error", self._on_error)
-                chat_ctx_enabled = self._session._opts.stt_context_options["chat_context"][
-                    "enabled"
-                ]
-                if resolved_stt.capabilities.chat_context and chat_ctx_enabled:
+                forward_chat_ctx = self._session._opts.stt_context_options["forward_chat_context"]
+                if resolved_stt.capabilities.chat_context and forward_chat_ctx:
                     self._session.on(
                         "conversation_item_added", resolved_stt._push_conversation_item
                     )
@@ -1029,9 +1027,9 @@ class AgentActivity(RecognitionHooks):
             self._session._keyterm_detector.start(self._session, stt=self.stt)
 
             # forward conversation turns to STTs that consume context natively; gated by the STT's
-            # capability and the session's chat_context toggle. stateless and activity-scoped.
-            chat_ctx_enabled = self._session._opts.stt_context_options["chat_context"]["enabled"]
-            if self.stt.capabilities.chat_context and chat_ctx_enabled:
+            # capability and the session's forward_chat_context toggle. stateless, activity-scoped.
+            forward_chat_ctx = self._session._opts.stt_context_options["forward_chat_context"]
+            if self.stt.capabilities.chat_context and forward_chat_ctx:
                 self._session.on("conversation_item_added", self.stt._push_conversation_item)
 
     @tracer.start_as_current_span("drain_agent_activity")

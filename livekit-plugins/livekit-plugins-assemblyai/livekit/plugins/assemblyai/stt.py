@@ -229,7 +229,7 @@ class STT(stt.STT):
                 Only supported with the Universal-3 Pro family models. Set at construction
                 (connect) time only; it cannot be changed via `update_options`.
             agent_context_carryover: Deprecated, use
-                ``AgentSession(stt_context_options={"chat_context": {"enabled": ...}})`` instead.
+                ``AgentSession(stt_context_options={"forward_chat_context": ...})`` instead.
                 On the Universal-3 Pro family, assistant replies are carried into ``agent_context``
                 by default; pass ``False`` to opt out. On other models it is off. Replies longer
                 than the 1750-character server cap are truncated (keeping the tail) before
@@ -272,12 +272,12 @@ class STT(stt.STT):
 
         # agent_context carryover is only available on the u3-rt-pro family ("u3-pro" is
         # normalized to "u3-rt-pro" below), where it is on by default; the session's
-        # stt_context_options.chat_context toggle is the supported way to control it.
+        # stt_context_options.forward_chat_context toggle is the supported way to control it.
         supports_carryover = model in _U3_PRO_MODELS or model == "u3-pro"
         if is_given(agent_context_carryover):
             logger.warning(
                 "'agent_context_carryover' is deprecated, use "
-                "AgentSession(stt_context_options={'chat_context': {'enabled': ...}}) instead."
+                "AgentSession(stt_context_options={'forward_chat_context': ...}) instead."
             )
             if agent_context_carryover and not supports_carryover:
                 logger.warning(

@@ -1977,13 +1977,13 @@ async def test_user_supplied_turn_detector_passes_through() -> None:
         await session.aclose()
 
 
-async def test_stt_context_options_defaults_chat_context_on() -> None:
-    """chat_context carryover is on by default in the resolved stt_context_options."""
+async def test_stt_context_options_defaults_forward_chat_context_on() -> None:
+    """forward_chat_context is on by default in the resolved stt_context_options."""
     from livekit.agents.voice.agent_session import AgentSession
 
     session = AgentSession(vad=None)
     try:
-        assert session._opts.stt_context_options["chat_context"]["enabled"] is True
+        assert session._opts.stt_context_options["forward_chat_context"] is True
     finally:
         await session.aclose()
 
@@ -1993,12 +1993,12 @@ async def test_stt_context_options_passthrough() -> None:
 
     session = AgentSession(
         vad=None,
-        stt_context_options={"keyterms": ["LiveKit"], "chat_context": {"enabled": False}},
+        stt_context_options={"keyterms": ["LiveKit"], "forward_chat_context": False},
     )
     try:
         opts = session._opts.stt_context_options
         assert opts["keyterms"] == ["LiveKit"]
-        assert opts["chat_context"]["enabled"] is False
+        assert opts["forward_chat_context"] is False
     finally:
         await session.aclose()
 
@@ -2012,7 +2012,7 @@ async def test_deprecated_keyterms_options_maps_to_stt_context(caplog) -> None:
     try:
         opts = session._opts.stt_context_options
         assert opts["keyterms"] == ["Acme"]
-        assert opts["chat_context"]["enabled"] is True  # default still applies
+        assert opts["forward_chat_context"] is True  # default still applies
         assert "keyterms_options is deprecated" in caplog.text
     finally:
         await session.aclose()

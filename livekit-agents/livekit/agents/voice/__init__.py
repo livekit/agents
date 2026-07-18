@@ -29,7 +29,6 @@ from .events import (
     UserTurnExceededEvent,
 )
 from .keyterm_detection import (
-    ChatContextOptions,
     KeytermDetectionOptions,
     KeytermsOptions,
     STTContextOptions,
@@ -77,7 +76,6 @@ __all__ = [
     "KeytermsOptions",
     "KeytermDetectionOptions",
     "STTContextOptions",
-    "ChatContextOptions",
     "TranscriptSynchronizer",
     "io",
     "room_io",
