@@ -500,6 +500,15 @@ class RealtimeSession(llm.RealtimeSession):
         self._active_session: AsyncSession | None = None
         # indicates if the underlying session should end
         self._session_should_close = asyncio.Event()
+        # a tool result produced while the socket is restarting (e.g. update_tools mid-turn)
+        # is stashed here and replayed once the new session is established, otherwise it would
+        # be sent on the dying session and never reach the model (the turn would hang).
+        self._pending_tool_result: types.LiveClientToolResponse | None = None
+        # tracks whether the current generation has reached its completion signal. it lets us
+        # drop trailing `model_turn` frames that some Live preview models emit after a
+        # generation completed, instead of attaching them to the wrong (finished) generation.
+        # True means "idle / completed"; set False when a new generation starts.
+        self._generation_completed = True
         self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
         self._pending_generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
         # number of tool calls rejected in the current tool_choice="none" turn; non-zero also
@@ -672,7 +681,17 @@ class RealtimeSession(llm.RealtimeSession):
                         types.LiveClientContent(turns=turns, turn_complete=False)
                     )
             if tool_results:
-                self._send_client_event(tool_results)
+                if self._session_should_close.is_set():
+                    # The socket is tearing down (e.g. update_tools() mid-turn). Sending the
+                    # tool result now would deliver it to the dying session and it would never
+                    # reach the model, hanging the turn. Stash it so _main_task can replay it
+                    # once the new session is established.
+                    logger.debug(
+                        "session restarting; buffering tool result to replay after reconnect"
+                    )
+                    self._pending_tool_result = tool_results
+                else:
+                    self._send_client_event(tool_results)
 
         # since we don't have a view of the history on the server side, we'll assume
         # the current state is accurate. this isn't perfect because removals aren't done.
@@ -741,15 +760,6 @@ class RealtimeSession(llm.RealtimeSession):
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         if is_given(tools):
             logger.warning("per-response tools is not supported by Google Realtime API, ignoring")
-        if not self._realtime_model.capabilities.mutable_chat_context:
-            logger.warning(
-                f"generate_reply is not compatible with '{self._opts.model}' and will be ignored."
-            )
-            fut = asyncio.Future[llm.GenerationCreatedEvent]()
-            fut.set_exception(
-                llm.RealtimeError(f"generate_reply is not compatible with '{self._opts.model}'")
-            )
-            return fut
         if self._pending_generation_fut and not self._pending_generation_fut.done():
             logger.warning(
                 "generate_reply called while another generation is pending, cancelling previous."
@@ -771,13 +781,21 @@ class RealtimeSession(llm.RealtimeSession):
             )
             self._in_user_activity = False
 
-        # Gemini requires the last message to end with user's turn
-        # so we need to add a placeholder user turn in order to trigger a new generation
-        turns = []
-        if is_given(instructions):
-            turns.append(types.Content(parts=[types.Part(text=instructions)], role="model"))
-        turns.append(types.Content(parts=[types.Part(text=".")], role="user"))
-        self._send_client_event(types.LiveClientContent(turns=turns, turn_complete=True))
+        # Gemini requires the last message to end with user's turn so we add a placeholder user
+        # turn to trigger a new generation. Mutable-context models accept an appended
+        # client-content turn; the live-preview family ignores appended turns until the next
+        # session, so nudge those with a realtime text input instead.
+        if self._realtime_model.capabilities.mutable_chat_context:
+            turns = []
+            if is_given(instructions):
+                turns.append(types.Content(parts=[types.Part(text=instructions)], role="model"))
+            turns.append(types.Content(parts=[types.Part(text=".")], role="user"))
+            self._send_client_event(types.LiveClientContent(turns=turns, turn_complete=True))
+        else:
+            if is_given(instructions):
+                self._send_client_event(types.LiveClientRealtimeInput(text=instructions))
+            else:
+                self._send_client_event(types.LiveClientRealtimeInput(text="."))
 
         def _on_timeout() -> None:
             if not fut.done():
@@ -867,6 +885,8 @@ class RealtimeSession(llm.RealtimeSession):
             await self._close_active_session()
 
             self._session_should_close.clear()
+            # a fresh session starts idle, with no generation in flight
+            self._generation_completed = True
             config = self._build_connect_config()
             session = None
             try:
@@ -907,6 +927,30 @@ class RealtimeSession(llm.RealtimeSession):
                                 turns=turns,  # type: ignore
                                 turn_complete=False,
                             )
+
+                    # A tool result produced while the previous session was tearing down was
+                    # buffered instead of being sent on the dying socket. Replay it now so the
+                    # model receives it and can continue the turn.
+                    if self._pending_tool_result is not None and (
+                        function_responses := self._pending_tool_result.function_responses
+                    ):
+                        logger.debug("replaying buffered tool result to the new session")
+                        await session.send_tool_response(function_responses=function_responses)
+                        # Clear only after the send succeeds. If send_tool_response raises (e.g.
+                        # the fresh socket drops during reconnect churn), the buffer survives so
+                        # the next reconnect can replay it instead of leaving the model hanging.
+                        self._pending_tool_result = None
+                        # Gemini only generates after a user turn. Mutable-context models accept
+                        # an appended client-content turn; the live-preview family ignores
+                        # appended turns until the next session, so nudge those with a realtime
+                        # text input instead (mirrors how generate_reply() nudges generation).
+                        if self._realtime_model.capabilities.mutable_chat_context:
+                            await session.send_client_content(
+                                turns=[types.Content(parts=[types.Part(text=".")], role="user")],
+                                turn_complete=True,
+                            )
+                        else:
+                            await session.send_realtime_input(text=".")
 
                     # queue up existing chat context
                     send_task = asyncio.create_task(
@@ -1082,6 +1126,24 @@ class RealtimeSession(llm.RealtimeSession):
                         self._reject_tool_calls(response.tool_call.function_calls or [])
                         continue
 
+                    if (
+                        (not self._current_generation or self._current_generation._done)
+                        and not self._generation_completed
+                        and response.server_content
+                        and response.server_content.model_turn
+                    ):
+                        # A `model_turn` arrived for a generation that was already torn down but
+                        # never saw a completion signal (`_generation_completed` is still False).
+                        # There is no active, incomplete generation to attach it to, so
+                        # processing it would double-process the content or spin up a spurious
+                        # generation. Drop this frame; a genuine next turn will start its own
+                        # generation once a completion signal has been recorded.
+                        if lk_google_debug:
+                            logger.debug(
+                                "dropping trailing model_turn without an active generation"
+                            )
+                        continue
+
                     if not self._current_generation or self._current_generation._done:
                         if (sc := response.server_content) and sc.interrupted:
                             # two cases an interrupted event is sent without an active generation
@@ -1201,6 +1263,8 @@ class RealtimeSession(llm.RealtimeSession):
 
     def _start_new_generation(self) -> None:
         self._rejected_tool_calls = 0
+        # a generation is now in flight; its completion signal will flip this back to True
+        self._generation_completed = False
         if self._current_generation and not self._current_generation._done:
             logger.warning("starting new generation while another is active. Finalizing previous.")
             self._mark_current_generation_done()
@@ -1317,6 +1381,7 @@ class RealtimeSession(llm.RealtimeSession):
                 current_gen.push_text(text)
 
         if server_content.generation_complete or server_content.turn_complete:
+            self._generation_completed = True
             current_gen._completed_timestamp = time.time()
 
         # gemini delays turn_complete until it thinks client-side playback finished, so end
@@ -1443,6 +1508,11 @@ class RealtimeSession(llm.RealtimeSession):
                     arguments=arguments,
                 )
             )
+        # A tool call completes the current generation regardless of model family (some Live
+        # preview models don't emit a separate generation_complete afterwards). Recording the
+        # completion here keeps the model's post-tool reply flowing as a fresh generation and
+        # keeps the trailing-model_turn guard in _recv_task from misfiring on it.
+        self._generation_completed = True
         self._mark_current_generation_done()
 
     def _handle_tool_call_cancellation(
