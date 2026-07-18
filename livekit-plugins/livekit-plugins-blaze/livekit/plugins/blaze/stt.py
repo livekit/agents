@@ -500,6 +500,7 @@ class SpeechStream(stt.SpeechStream):
                     raise APITimeoutError("STT realtime: timed out waiting for ready")
 
                 send_task = asyncio.create_task(self._send_audio(ws))
+                speaking = False
                 try:
                     async for raw in ws:
                         if isinstance(raw, (bytes, bytearray)):
@@ -521,6 +522,15 @@ class SpeechStream(stt.SpeechStream):
                         if not text.strip() and mtype != "final":
                             continue
 
+                        # AgentSession stt turn-detection requires START_OF_SPEECH to open
+                        # the user turn (see audio_recognition.py). Emit on first non-empty
+                        # transcript; re-arm after END_OF_SPEECH for multi-utterance streams.
+                        if text.strip() and not speaking:
+                            speaking = True
+                            self._event_ch.send_nowait(
+                                stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
+                            )
+
                         event_type = (
                             stt.SpeechEventType.FINAL_TRANSCRIPT
                             if mtype == "final"
@@ -540,9 +550,11 @@ class SpeechStream(stt.SpeechStream):
                             )
                         )
                         if mtype == "final":
-                            self._event_ch.send_nowait(
-                                stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-                            )
+                            if speaking:
+                                speaking = False
+                                self._event_ch.send_nowait(
+                                    stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                                )
                 finally:
                     send_task.cancel()
                     try:
