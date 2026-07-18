@@ -6,7 +6,7 @@ import struct
 
 import pytest
 
-from livekit.agents import APIConnectOptions, DEFAULT_API_CONNECT_OPTIONS
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from livekit.plugins.blaze._utils import (
     apply_normalization_rules,
     convert_pcm_to_wav,

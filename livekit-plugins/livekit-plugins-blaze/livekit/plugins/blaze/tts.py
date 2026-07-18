@@ -962,7 +962,9 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
         except Exception as e:
             raise APIConnectionError(f"TTS stream error: {e}") from e
 
-        output_emitter.flush()
+        # Let base SynthesizeStream._main_task call output_emitter.end_input() so
+        # the final segment ends cleanly with is_final on the last audio frame
+        # (explicit flush() here would emit an extra synthetic marker frame).
 
         logger.info(
             "[%s] TTS turn complete: %d batches, %d TTS segments, %.3fs total",
