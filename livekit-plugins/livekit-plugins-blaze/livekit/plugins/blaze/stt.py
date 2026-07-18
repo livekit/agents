@@ -332,7 +332,8 @@ class STT(stt.STT):
         result = response.json()
         raw_text = result.get("transcription", "")
         text = apply_normalization_rules(raw_text, self._normalization_rules)
-        confidence = result.get("confidence", 1.0)
+        # Explicit null confidence must not become None (breaks %.3f logging).
+        confidence = float(result.get("confidence") or 1.0)
         latency = time.monotonic() - start_time
 
         # --- Frame accumulation logic ---
