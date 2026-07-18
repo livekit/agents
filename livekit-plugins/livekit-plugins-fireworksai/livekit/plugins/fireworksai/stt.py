@@ -27,6 +27,7 @@ import aiohttp
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectionError,
     APIConnectOptions,
     APIStatusError,
     LanguageCode,
@@ -335,18 +336,23 @@ class SpeechStream(stt.SpeechStream):
                 samples_per_channel=samples_per_buffer,
             )
 
-            async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
-                    frames = audio_bstream.flush()
-                else:
-                    frames = audio_bstream.write(data.data.tobytes())
+            try:
+                async for data in self._input_ch:
+                    if isinstance(data, self._FlushSentinel):
+                        frames = audio_bstream.flush()
+                    else:
+                        frames = audio_bstream.write(data.data.tobytes())
 
-                for frame in frames:
-                    await self._audio_duration_collector.push(frame.duration)
-                    await ws.send_bytes(frame.data.tobytes())
+                    for frame in frames:
+                        await self._audio_duration_collector.push(frame.duration)
+                        await ws.send_bytes(frame.data.tobytes())
 
-            closing_ws = True
-            await ws.send_str(self._CLOSE_MSG)
+                closing_ws = True
+                await ws.send_str(self._CLOSE_MSG)
+            except (aiohttp.ClientError, ConnectionError) as e:
+                if closing_ws:
+                    return
+                raise APIConnectionError("Fireworks AI connection closed unexpectedly") from e
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws

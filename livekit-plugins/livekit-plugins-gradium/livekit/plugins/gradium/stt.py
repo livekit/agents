@@ -28,6 +28,7 @@ import aiohttp
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectionError,
     APIConnectOptions,
     APIStatusError,
     LanguageCode,
@@ -256,22 +257,27 @@ class SpeechStream(stt.SpeechStream):
                 samples_per_channel=samples_per_buffer,
             )
 
-            async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
-                    frames = audio_bstream.flush()
-                else:
-                    frames = audio_bstream.write(data.data.tobytes())
+            try:
+                async for data in self._input_ch:
+                    if isinstance(data, self._FlushSentinel):
+                        frames = audio_bstream.flush()
+                    else:
+                        frames = audio_bstream.write(data.data.tobytes())
 
-                for frame in frames:
-                    if len(frame.data) % 2 != 0:
-                        logger.warning("Frame data size not aligned to int16 (multiple of 2)")
+                    for frame in frames:
+                        if len(frame.data) % 2 != 0:
+                            logger.warning("Frame data size not aligned to int16 (multiple of 2)")
 
-                    audio_data = base64.b64encode(frame.data.tobytes()).decode("utf-8")
-                    audio_msg = {
-                        "type": "audio",
-                        "audio": audio_data,
-                    }
-                    await ws.send_str(json.dumps(audio_msg))
+                        audio_data = base64.b64encode(frame.data.tobytes()).decode("utf-8")
+                        audio_msg = {
+                            "type": "audio",
+                            "audio": audio_data,
+                        }
+                        await ws.send_str(json.dumps(audio_msg))
+            except (aiohttp.ClientError, ConnectionError) as e:
+                if self._session.closed:
+                    return
+                raise APIConnectionError("Gradium connection closed unexpectedly") from e
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws

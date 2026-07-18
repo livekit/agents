@@ -184,7 +184,6 @@ class SpeechStream(stt.RecognizeStream):
             nonlocal closing_ws
 
             wav_header = _create_streaming_wav_header(self._stt._opts.sample_rate, NUM_CHANNELS)
-            await ws.send_bytes(wav_header)
 
             samples_per_chunk = self._stt._opts.sample_rate // 20
             audio_bstream = utils.audio.AudioByteStream(
@@ -193,20 +192,27 @@ class SpeechStream(stt.RecognizeStream):
                 samples_per_channel=samples_per_chunk,
             )
 
-            async for data in self._input_ch:
-                if isinstance(data, rtc.AudioFrame):
-                    for frame in audio_bstream.write(data.data.tobytes()):
-                        await ws.send_bytes(frame.data.tobytes())
-                elif isinstance(data, self._FlushSentinel):
-                    for frame in audio_bstream.flush():
-                        await ws.send_bytes(frame.data.tobytes())
+            try:
+                await ws.send_bytes(wav_header)
 
-            for frame in audio_bstream.flush():
-                await ws.send_bytes(frame.data.tobytes())
+                async for data in self._input_ch:
+                    if isinstance(data, rtc.AudioFrame):
+                        for frame in audio_bstream.write(data.data.tobytes()):
+                            await ws.send_bytes(frame.data.tobytes())
+                    elif isinstance(data, self._FlushSentinel):
+                        for frame in audio_bstream.flush():
+                            await ws.send_bytes(frame.data.tobytes())
 
-            # Don't close the WS here — let recv_task read the final
-            # transcript before the server closes the connection.
-            closing_ws = True
+                for frame in audio_bstream.flush():
+                    await ws.send_bytes(frame.data.tobytes())
+
+                # Don't close the WS here — let recv_task read the final
+                # transcript before the server closes the connection.
+                closing_ws = True
+            except (aiohttp.ClientError, ConnectionError) as e:
+                if closing_ws:
+                    return
+                raise APIConnectionError("Telnyx STT connection closed unexpectedly") from e
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:

@@ -339,15 +339,23 @@ class SpeechStream(stt.SpeechStream):
                 samples_per_channel=samples_50ms,
             )
 
-            async for data in self._input_ch:
-                frames: list[rtc.AudioFrame] = []
-                if isinstance(data, rtc.AudioFrame):
-                    frames.extend(audio_bstream.write(data.data.tobytes()))
-                elif isinstance(data, self._FlushSentinel):
-                    frames.extend(audio_bstream.flush())
+            try:
+                async for data in self._input_ch:
+                    frames: list[rtc.AudioFrame] = []
+                    if isinstance(data, rtc.AudioFrame):
+                        frames.extend(audio_bstream.write(data.data.tobytes()))
+                    elif isinstance(data, self._FlushSentinel):
+                        frames.extend(audio_bstream.flush())
 
-                for frame in frames:
-                    await ws.send_bytes(frame.data.tobytes())
+                    for frame in frames:
+                        await ws.send_bytes(frame.data.tobytes())
+            except (aiohttp.ClientError, ConnectionError):
+                # mirror recv_task: a mid-send socket drop should trigger an internal
+                # reconnect (see the _run loop), not crash the session.
+                if self._session.closed:
+                    return
+                self._reconnect_event.set()
+                return
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:

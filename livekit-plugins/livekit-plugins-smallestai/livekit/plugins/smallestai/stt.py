@@ -360,24 +360,29 @@ class SpeechStream(stt.SpeechStream):
                 samples_per_channel=samples_per_chunk,
             )
 
-            async for data in self._input_ch:
-                if isinstance(data, rtc.AudioFrame):
-                    for frame in audio_bstream.write(data.data.tobytes()):
-                        self._audio_duration_collector.push(frame.duration)
-                        await ws.send_bytes(frame.data.tobytes())
-                elif isinstance(data, self._FlushSentinel):
-                    # User paused: drain the accumulator so the server gets all buffered
-                    # audio. The server's eou_timeout_ms will then detect the silence and
-                    # emit a final transcript — no explicit flush message is needed.
-                    for frame in audio_bstream.flush():
-                        self._audio_duration_collector.push(frame.duration)
-                        await ws.send_bytes(frame.data.tobytes())
-                    self._audio_duration_collector.flush()
+            try:
+                async for data in self._input_ch:
+                    if isinstance(data, rtc.AudioFrame):
+                        for frame in audio_bstream.write(data.data.tobytes()):
+                            self._audio_duration_collector.push(frame.duration)
+                            await ws.send_bytes(frame.data.tobytes())
+                    elif isinstance(data, self._FlushSentinel):
+                        # User paused: drain the accumulator so the server gets all buffered
+                        # audio. The server's eou_timeout_ms will then detect the silence and
+                        # emit a final transcript — no explicit flush message is needed.
+                        for frame in audio_bstream.flush():
+                            self._audio_duration_collector.push(frame.duration)
+                            await ws.send_bytes(frame.data.tobytes())
+                        self._audio_duration_collector.flush()
 
-            # Input channel closed: close the stream so the server flushes remaining
-            # audio, emits final transcripts, and sends is_last=True.
-            closing_ws = True
-            await ws.send_str(SpeechStream._CLOSE_STREAM_MSG)
+                # Input channel closed: close the stream so the server flushes remaining
+                # audio, emits final transcripts, and sends is_last=True.
+                closing_ws = True
+                await ws.send_str(SpeechStream._CLOSE_STREAM_MSG)
+            except (aiohttp.ClientError, ConnectionError) as e:
+                if closing_ws or self._session.closed:
+                    return
+                raise APIConnectionError("Smallest AI connection closed unexpectedly") from e
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
