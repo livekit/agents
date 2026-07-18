@@ -333,7 +333,9 @@ class STT(stt.STT):
         raw_text = result.get("transcription", "")
         text = apply_normalization_rules(raw_text, self._normalization_rules)
         # Explicit null confidence must not become None (breaks %.3f logging).
-        confidence = float(result.get("confidence") or 1.0)
+        # Do not treat 0.0 as missing — only None/null defaults to 1.0.
+        _raw_confidence = result.get("confidence")
+        confidence = float(_raw_confidence) if _raw_confidence is not None else 1.0
         latency = time.monotonic() - start_time
 
         # --- Frame accumulation logic ---
@@ -537,6 +539,9 @@ class SpeechStream(stt.SpeechStream):
                             if mtype == "final"
                             else stt.SpeechEventType.INTERIM_TRANSCRIPT
                         )
+                        # Preserve 0.0 confidence; only missing/null defaults to 1.0.
+                        _raw_confidence = msg.get("confidence")
+                        confidence = float(_raw_confidence) if _raw_confidence is not None else 1.0
                         self._event_ch.send_nowait(
                             stt.SpeechEvent(
                                 type=event_type,
@@ -545,7 +550,7 @@ class SpeechStream(stt.SpeechStream):
                                     stt.SpeechData(
                                         text=text,
                                         language=LanguageCode(self._language),
-                                        confidence=float(msg.get("confidence") or 1.0),
+                                        confidence=confidence,
                                     )
                                 ],
                             )
