@@ -19,7 +19,7 @@ def effective_connect_timeout(
     """Return the plugin timeout when default connect options are used."""
     if not conn_options.timeout:
         return plugin_timeout
-    if conn_options.timeout == DEFAULT_API_CONNECT_OPTIONS.timeout:
+    if conn_options is DEFAULT_API_CONNECT_OPTIONS:
         return plugin_timeout
     return conn_options.timeout
 
