@@ -114,10 +114,18 @@ def _apply_pcm16_fade(
     fade_in: bool = False,
     fade_out: bool = False,
 ) -> bytes:
-    """Apply a short linear fade to 16-bit mono PCM to reduce edge pops."""
+    """Apply a short linear fade to 16-bit mono PCM to reduce edge pops.
+
+    Requires an even-length buffer (complete 16-bit samples). Callers should
+    only pass even-length PCM; a trailing odd byte is dropped if present so
+    ``memoryview.cast("h")`` never raises.
+    """
     if not pcm_data or (not fade_in and not fade_out):
         return pcm_data
 
+    # Align to 16-bit sample boundary (WS frames can land on odd byte offsets).
+    if len(pcm_data) % 2 == 1:
+        pcm_data = pcm_data[:-1]
     sample_count = len(pcm_data) // 2
     if sample_count <= 0:
         return pcm_data
@@ -758,7 +766,13 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
                                         continue
 
                                     pcm = pending_tail + frame
-                                    if first_audio:
+                                    # Carry a trailing odd byte so only complete
+                                    # 16-bit samples are faded / pushed.
+                                    odd_carry = b""
+                                    if len(pcm) % 2 == 1:
+                                        odd_carry = pcm[-1:]
+                                        pcm = pcm[:-1]
+                                    if first_audio and pcm:
                                         pcm = _apply_pcm16_fade(
                                             pcm,
                                             fade_samples=fade_samples,
@@ -767,10 +781,10 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
                                     first_audio = False
 
                                     if len(pcm) <= tail_bytes:
-                                        pending_tail = pcm
+                                        pending_tail = pcm + odd_carry
                                         continue
                                     output_emitter.push(pcm[:-tail_bytes])
-                                    pending_tail = pcm[-tail_bytes:]
+                                    pending_tail = pcm[-tail_bytes:] + odd_carry
                                 else:
                                     msg = json.loads(frame)
                                     st = msg.get("status") or msg.get("type", "")
