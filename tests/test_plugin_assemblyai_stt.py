@@ -1319,7 +1319,7 @@ async def test_language_code_singular_not_in_update_options():
 
 
 # ---------------------------------------------------------------------------
-# agent_context server cap (1750 chars) + agent_context_carryover opt-in
+# agent_context server cap (1750 chars) + agent_context_carryover deprecation
 #
 # The server rejects `agent_context` longer than 1750 chars, and an invalid
 # UpdateConfiguration cancels the whole streaming session — so the plugin
@@ -1437,22 +1437,39 @@ async def test_carryover_ignores_agent_handoff_items():
     assert stt._opts.agent_context is NOT_GIVEN
 
 
-async def test_carryover_defaults_off_for_u3_pro_family():
-    """agent_context_carryover is opt-in: off by default even on models that support it."""
+async def test_carryover_on_by_default_for_u3_pro_family():
+    """chat_context carryover is on by default on models that support it."""
     from livekit.plugins.assemblyai import STT
 
     for model in ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro", "u3-pro"):
         stt = STT(api_key="test-key", model=model)
-        assert stt.capabilities.chat_context is False
+        assert stt.capabilities.chat_context is True
 
 
-async def test_carryover_explicit_true_enables_on_u3_pro_family():
-    """agent_context_carryover=True opts in on models that support it."""
+async def test_carryover_default_does_not_warn(caplog):
+    """Not passing the deprecated flag produces no deprecation warning."""
+    import logging
+
     from livekit.plugins.assemblyai import STT
 
-    for model in ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro", "u3-pro"):
-        stt = STT(api_key="test-key", model=model, agent_context_carryover=True)
-        assert stt.capabilities.chat_context is True
+    with caplog.at_level(logging.WARNING):
+        stt = STT(api_key="test-key", model="universal-3-5-pro")
+
+    assert stt.capabilities.chat_context is True
+    assert "deprecated" not in caplog.text
+
+
+async def test_carryover_explicit_true_still_enables_and_warns(caplog):
+    """The deprecated agent_context_carryover=True still enables, and warns to migrate."""
+    import logging
+
+    from livekit.plugins.assemblyai import STT
+
+    with caplog.at_level(logging.WARNING):
+        stt = STT(api_key="test-key", model="universal-3-5-pro", agent_context_carryover=True)
+
+    assert stt.capabilities.chat_context is True
+    assert "deprecated" in caplog.text
 
 
 async def test_carryover_defaults_off_for_unsupported_models_without_warning(caplog):
@@ -1485,12 +1502,17 @@ async def test_carryover_explicit_true_on_unsupported_model_warns(caplog):
     assert "agent_context_carryover" in caplog.text
 
 
-async def test_carryover_explicit_false_disables():
-    """agent_context_carryover=False opts out on a supported model."""
+async def test_carryover_explicit_false_disables(caplog):
+    """The deprecated agent_context_carryover=False opts out on a supported model, and warns."""
+    import logging
+
     from livekit.plugins.assemblyai import STT
 
-    stt = STT(api_key="test-key", agent_context_carryover=False)
+    with caplog.at_level(logging.WARNING):
+        stt = STT(api_key="test-key", agent_context_carryover=False)
+
     assert stt.capabilities.chat_context is False
+    assert "deprecated" in caplog.text
 
 
 async def test_carryover_explicit_true_wins_over_n_turns_zero():

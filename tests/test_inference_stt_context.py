@@ -1,8 +1,10 @@
-"""agent_context carryover for LiveKit Inference STT.
+"""chat_context carryover for LiveKit Inference STT.
 
-Mirrors the AssemblyAI plugin's carryover behavior (see
-tests/test_plugin_assemblyai_stt.py), gated to the AssemblyAI Universal-3 Pro
-family models that support it, and applied through the inference ``extra`` path.
+The chat_context capability follows the model's native support (the AssemblyAI Universal-3
+Pro family); whether turns are actually forwarded is decided by
+``AgentSession(stt_context_options=...)``, not a per-STT flag. The sink
+(``_push_conversation_item``) mirrors the AssemblyAI plugin's carryover behavior (see
+tests/test_plugin_assemblyai_stt.py), applied through the inference ``extra`` path.
 """
 
 from __future__ import annotations
@@ -36,53 +38,39 @@ def _assistant_item_event(text: str) -> ConversationItemAddedEvent:
 # -- capability gating --
 
 
-def test_carryover_defaults_off_for_u3_pro_family():
-    """agent_context_carryover is opt-in: off by default even on models that support it."""
+def test_chat_context_capability_on_for_u3_pro_family():
+    """The chat_context capability follows the model's native support (U3 Pro family)."""
     for model in ("assemblyai/u3-rt-pro", "assemblyai/universal-3-5-pro"):
         stt = _make_stt(model=model)
-        assert stt.capabilities.chat_context is False
-
-
-def test_carryover_explicit_true_enables_on_u3_pro_family():
-    """agent_context_carryover=True opts in on models that support it."""
-    for model in ("assemblyai/u3-rt-pro", "assemblyai/universal-3-5-pro"):
-        stt = _make_stt(model=model, agent_context_carryover=True)
         assert stt.capabilities.chat_context is True
 
 
-def test_carryover_defaults_off_for_unsupported_models_without_warning(caplog):
-    """On non-U3-Pro models the default is silently off — no 'ignoring' warning."""
+def test_chat_context_capability_off_for_unsupported_models(caplog):
+    """On non-U3-Pro AssemblyAI models the capability is off, silently (no warning)."""
     with caplog.at_level(logging.WARNING):
         stt = _make_stt(model="assemblyai/universal-streaming")
 
     assert stt.capabilities.chat_context is False
-    assert "agent_context_carryover" not in caplog.text
+    assert "agent_context" not in caplog.text
 
 
-def test_carryover_off_for_non_assemblyai_models():
+def test_chat_context_capability_off_for_non_assemblyai_models():
     """Providers other than AssemblyAI don't carry agent_context."""
     stt = _make_stt(model="deepgram/nova-3")
     assert stt.capabilities.chat_context is False
 
 
-def test_carryover_explicit_true_on_unsupported_model_warns(caplog):
-    """Explicitly enabling carryover on an unsupported model warns and is ignored."""
-    with caplog.at_level(logging.WARNING):
-        stt = _make_stt(model="assemblyai/universal-streaming", agent_context_carryover=True)
+def test_chat_context_capability_independent_of_previous_context_n_turns():
+    """The capability depends only on the model, not on the previous_context_n_turns extra."""
+    stt = _make_stt(extra_kwargs={"previous_context_n_turns": 0})
+    assert stt.capabilities.chat_context is True
 
+
+def test_chat_context_capability_reevaluated_on_model_update():
+    """update_options(model=...) re-derives the chat_context capability from the new model."""
+    stt = _make_stt(model="assemblyai/universal-streaming")
     assert stt.capabilities.chat_context is False
-    assert "agent_context_carryover" in caplog.text
-
-
-def test_carryover_explicit_false_disables():
-    """agent_context_carryover=False opts out on a supported model."""
-    stt = _make_stt(agent_context_carryover=False)
-    assert stt.capabilities.chat_context is False
-
-
-def test_carryover_explicit_true_wins_over_n_turns_zero():
-    """agent_context_carryover=True enables carryover regardless of previous_context_n_turns."""
-    stt = _make_stt(extra_kwargs={"previous_context_n_turns": 0}, agent_context_carryover=True)
+    stt.update_options(model="assemblyai/universal-3-5-pro")
     assert stt.capabilities.chat_context is True
 
 

@@ -415,7 +415,6 @@ class STT(stt.STT):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[AssemblyaiOptions] = NOT_GIVEN,
-        agent_context_carryover: NotGivenOr[bool] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None: ...
@@ -502,7 +501,6 @@ class STT(stt.STT):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
-        agent_context_carryover: NotGivenOr[bool] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None: ...
@@ -529,7 +527,6 @@ class STT(stt.STT):
             | SpeechmaticsOptions
             | InworldOptions
         ] = NOT_GIVEN,
-        agent_context_carryover: NotGivenOr[bool] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
@@ -546,9 +543,6 @@ class STT(stt.STT):
             api_secret (str, optional): LIVEKIT_API_SECRET, if not provided, read from environment variable.
             http_session (aiohttp.ClientSession, optional): HTTP session to use.
             extra_kwargs (dict, optional): Extra kwargs to pass to the STT model.
-            agent_context_carryover (bool, optional): Let an ``AgentSession`` push each assistant
-                reply into AssemblyAI's ``agent_context``. Disabled by default; pass True to opt in
-                on the U3 Pro family (the only models that support it).
             fallback (FallbackModelType, optional): Fallback models - either a list of model names,
                 a list of FallbackModel instances.
             conn_options (APIConnectOptions, optional): Connection options for request attempts.
@@ -572,17 +566,7 @@ class STT(stt.STT):
 
         vad = _resolve_vad_for_model(model, vad if is_given(vad) else None)
 
-        supports_carryover = _supports_agent_context_carryover(model)
-        if is_given(agent_context_carryover) and agent_context_carryover and not supports_carryover:
-            logger.warning(
-                "agent_context_carryover is enabled but model %r does not support it; ignoring",
-                model,
-            )
-        # Opt-in: off unless explicitly enabled on a model that supports it.
-        carryover_enabled = (
-            supports_carryover and is_given(agent_context_carryover) and agent_context_carryover
-        )
-
+        # chat_context follows the model's native support; the session decides whether to forward
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
@@ -591,7 +575,7 @@ class STT(stt.STT):
                 aligned_transcript="word",
                 offline_recognize=False,
                 keyterms=_keyterms_extra_for_model(model) is not None,
-                chat_context=carryover_enabled,
+                chat_context=_supports_agent_context_carryover(model),
             ),
         )
 
@@ -713,6 +697,7 @@ class STT(stt.STT):
             self._capabilities = replace(
                 self._capabilities,
                 keyterms=_keyterms_extra_for_model(self._opts.model) is not None,
+                chat_context=_supports_agent_context_carryover(self._opts.model),
             )
         if is_given(language):
             self._opts.language = LanguageCode(language)

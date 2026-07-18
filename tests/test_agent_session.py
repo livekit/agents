@@ -1977,6 +1977,62 @@ async def test_user_supplied_turn_detector_passes_through() -> None:
         await session.aclose()
 
 
+async def test_stt_context_options_defaults_forward_chat_context_on() -> None:
+    """forward_chat_context is on by default in the resolved stt_context_options."""
+    from livekit.agents.voice.agent_session import AgentSession
+
+    session = AgentSession(vad=None)
+    try:
+        assert session._opts.stt_context_options["forward_chat_context"] is True
+    finally:
+        await session.aclose()
+
+
+async def test_stt_context_options_passthrough() -> None:
+    from livekit.agents.voice.agent_session import AgentSession
+
+    session = AgentSession(
+        vad=None,
+        stt_context_options={"keyterms": ["LiveKit"], "forward_chat_context": False},
+    )
+    try:
+        opts = session._opts.stt_context_options
+        assert opts["keyterms"] == ["LiveKit"]
+        assert opts["forward_chat_context"] is False
+    finally:
+        await session.aclose()
+
+
+async def test_deprecated_keyterms_options_maps_to_stt_context(caplog) -> None:
+    """keyterms_options still works, maps onto stt_context_options, and warns."""
+    from livekit.agents.voice.agent_session import AgentSession
+
+    with caplog.at_level(logging.WARNING):
+        session = AgentSession(vad=None, keyterms_options={"keyterms": ["Acme"]})
+    try:
+        opts = session._opts.stt_context_options
+        assert opts["keyterms"] == ["Acme"]
+        assert opts["forward_chat_context"] is True  # default still applies
+        assert "keyterms_options is deprecated" in caplog.text
+    finally:
+        await session.aclose()
+
+
+async def test_stt_context_options_wins_over_keyterms_options() -> None:
+    """When both are passed, stt_context_options takes precedence over the deprecated option."""
+    from livekit.agents.voice.agent_session import AgentSession
+
+    session = AgentSession(
+        vad=None,
+        stt_context_options={"keyterms": ["new"]},
+        keyterms_options={"keyterms": ["old"]},
+    )
+    try:
+        assert session._opts.stt_context_options["keyterms"] == ["new"]
+    finally:
+        await session.aclose()
+
+
 async def test_streaming_detector_uses_streaming_endpointing_defaults() -> None:
     """Default session → streaming detector → tighter 0.3/2.5 endpointing defaults."""
     from livekit.agents.voice.agent_session import AgentSession
