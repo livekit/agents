@@ -1158,6 +1158,35 @@ async def test_stt_errors_use_unrecoverable_error_tolerance() -> None:
         await _close_test_session(session)
 
 
+async def test_final_transcript_resets_away_timer_when_not_speaking() -> None:
+    session = create_session(FakeActions(), extra_kwargs={"user_away_timeout": 15.0})
+    try:
+        session._agent_state = "listening"
+        session._user_state = "listening"
+
+        with patch.object(session, "_set_user_away_timer") as set_timer:
+            session._user_input_transcribed(
+                UserInputTranscribedEvent(transcript="hello", is_final=True)
+            )
+            set_timer.assert_called_once()
+            assert session.user_state == "listening"
+
+        with patch.object(session, "_set_user_away_timer") as set_timer:
+            session._user_input_transcribed(
+                UserInputTranscribedEvent(transcript="hello", is_final=False)
+            )
+            set_timer.assert_not_called()
+
+        session._user_state = "speaking"
+        with patch.object(session, "_set_user_away_timer") as set_timer:
+            session._user_input_transcribed(
+                UserInputTranscribedEvent(transcript="hello", is_final=True)
+            )
+            set_timer.assert_not_called()
+    finally:
+        await _close_test_session(session)
+
+
 async def test_stt_error_count_resets_on_user_transcript() -> None:
     from livekit.agents.voice.agent_session import SessionConnectOptions
 
