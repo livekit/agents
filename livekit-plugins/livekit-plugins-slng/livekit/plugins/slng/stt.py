@@ -546,7 +546,10 @@ class SpeechStream(stt.SpeechStream):
             except (aiohttp.ClientError, ConnectionError) as e:
                 if self._session.closed:
                     return
-                raise APIConnectionError("SLNG connection closed unexpectedly") from e
+                # match recv_task: raise APIStatusError (not APIConnectionError) so a
+                # transient send-side drop gets slng's same-endpoint immediate retry
+                # rather than a permanent failover to a lower-priority endpoint.
+                raise APIStatusError("SLNG connection closed unexpectedly") from e
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             speech_started = False
