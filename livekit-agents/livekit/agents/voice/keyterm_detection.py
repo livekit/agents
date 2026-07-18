@@ -24,14 +24,9 @@ if TYPE_CHECKING:
 class KeytermsOptions(TypedDict, total=False):
     """Keyterm biasing for STTs that accept a term list.
 
-    Can be passed as a plain dict::
-
-        AgentSession(
-            keyterms_options={
-                "keyterms": ["LiveKit", "Acme Corp"],
-                "keyterm_detection": {"enabled": True, "turn_interval": 1},
-            },
-        )
+    .. deprecated:: v2.0
+        Use :class:`STTContextOptions` (``AgentSession(stt_context_options=...)``) instead;
+        its ``keyterms`` and ``keyterm_detection`` keys are identical.
     """
 
     keyterms: list[str]
@@ -64,6 +59,39 @@ class KeytermDetectionOptions(TypedDict, total=False):
     Defaults to ``10.0``. Raise it if a slow detection ``llm`` needs longer."""
 
 
+class ChatContextOptions(TypedDict, total=False):
+    """Native conversation-context carryover, for STTs that consume context directly.
+
+    Only STTs that advertise the ``chat_context`` capability act on it (e.g. AssemblyAI
+    u3-pro via inference); others ignore it.
+    """
+
+    enabled: bool
+    """Whether to forward conversation turns to the STT. Defaults to ``True``."""
+
+
+class STTContextOptions(TypedDict, total=False):
+    """Conversation-aware context for the STT.
+
+    Can be passed as a plain dict::
+
+        AgentSession(
+            stt_context_options={
+                "keyterms": ["LiveKit", "Acme Corp"],
+                "keyterm_detection": {"enabled": True, "turn_interval": 1},
+                "chat_context": {"enabled": True},
+            },
+        )
+    """
+
+    keyterms: list[str]
+    """Static keyterms applied wherever the STT accepts a term list; never touched by detection."""
+    keyterm_detection: KeytermDetectionOptions
+    """LLM-based keyterm extraction, for STTs that accept a term list."""
+    chat_context: ChatContextOptions
+    """Native conversation-context carryover, for STTs that consume context directly."""
+
+
 # bound a single pass so a stuck LLM call can't hold the single-flight guard forever and
 # stall detection for the rest of the call; a timed-out pass simply makes no change
 _DETECTION_TIMEOUT = 10.0
@@ -92,13 +120,33 @@ def _resolve_detection(config: KeytermDetectionOptions | None) -> KeytermDetecti
     return KeytermDetectionOptions(**{**_KEYTERM_DETECTION_DEFAULTS, **(config or {})})
 
 
-def _resolve_keyterms_options(config: KeytermsOptions | None) -> KeytermsOptions:
-    """Return a fully-defaulted keyterms config."""
+_CHAT_CONTEXT_DEFAULTS: ChatContextOptions = {"enabled": True}
+
+
+def _resolve_chat_context(config: ChatContextOptions | None) -> ChatContextOptions:
+    """Return a fully-defaulted chat-context config (``enabled`` defaults to True)."""
+    return ChatContextOptions(**{**_CHAT_CONTEXT_DEFAULTS, **(config or {})})
+
+
+def _resolve_stt_context_options(config: STTContextOptions | None) -> STTContextOptions:
+    """Return a fully-defaulted STT-context config."""
     config = config or {}
-    return KeytermsOptions(
+    return STTContextOptions(
         keyterms=list(config.get("keyterms", [])),
         keyterm_detection=_resolve_detection(config.get("keyterm_detection")),
+        chat_context=_resolve_chat_context(config.get("chat_context")),
     )
+
+
+def _stt_context_from_keyterms_options(config: KeytermsOptions | None) -> STTContextOptions:
+    """Map the deprecated ``keyterms_options`` onto the new :class:`STTContextOptions` shape."""
+    config = config or {}
+    out: STTContextOptions = {}
+    if "keyterms" in config:
+        out["keyterms"] = config["keyterms"]
+    if "keyterm_detection" in config:
+        out["keyterm_detection"] = config["keyterm_detection"]
+    return out
 
 
 def _resolve_detection_llm(configured: LLM | str | None) -> LLM | None:

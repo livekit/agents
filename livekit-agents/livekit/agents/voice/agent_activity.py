@@ -608,7 +608,10 @@ class AgentActivity(RecognitionHooks):
                 resolved_stt.prewarm()
                 resolved_stt.on("metrics_collected", self._on_metrics_collected)
                 resolved_stt.on("error", self._on_error)
-                if resolved_stt.capabilities.chat_context:
+                chat_ctx_enabled = self._session._opts.stt_context_options["chat_context"][
+                    "enabled"
+                ]
+                if resolved_stt.capabilities.chat_context and chat_ctx_enabled:
                     self._session.on(
                         "conversation_item_added", resolved_stt._push_conversation_item
                     )
@@ -1022,13 +1025,13 @@ class AgentActivity(RecognitionHooks):
 
         if isinstance(self.stt, stt.STT):
             # bind the session's keyterm detector to this activity's STT (detection uses its
-            # own LLM, configured via keyterms_options, not the agent's)
+            # own LLM, configured via stt_context_options, not the agent's)
             self._session._keyterm_detector.start(self._session, stt=self.stt)
 
-            # forward conversation turns to STTs that consume context natively; gated by the
-            # STT's own capability (toggled via the STT's args). stateless and activity-scoped,
-            # so it lives here rather than in the detector.
-            if self.stt.capabilities.chat_context:
+            # forward conversation turns to STTs that consume context natively; gated by the STT's
+            # capability and the session's chat_context toggle. stateless and activity-scoped.
+            chat_ctx_enabled = self._session._opts.stt_context_options["chat_context"]["enabled"]
+            if self.stt.capabilities.chat_context and chat_ctx_enabled:
                 self._session.on("conversation_item_added", self.stt._push_conversation_item)
 
     @tracer.start_as_current_span("drain_agent_activity")
