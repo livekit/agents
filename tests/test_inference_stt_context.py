@@ -36,10 +36,17 @@ def _assistant_item_event(text: str) -> ConversationItemAddedEvent:
 # -- capability gating --
 
 
-def test_carryover_defaults_on_for_u3_pro_family():
-    """agent_context_carryover defaults to enabled on models that support it."""
+def test_carryover_defaults_off_for_u3_pro_family():
+    """agent_context_carryover is opt-in: off by default even on models that support it."""
     for model in ("assemblyai/u3-rt-pro", "assemblyai/universal-3-5-pro"):
         stt = _make_stt(model=model)
+        assert stt.capabilities.chat_context is False
+
+
+def test_carryover_explicit_true_enables_on_u3_pro_family():
+    """agent_context_carryover=True opts in on models that support it."""
+    for model in ("assemblyai/u3-rt-pro", "assemblyai/universal-3-5-pro"):
+        stt = _make_stt(model=model, agent_context_carryover=True)
         assert stt.capabilities.chat_context is True
 
 
@@ -73,14 +80,8 @@ def test_carryover_explicit_false_disables():
     assert stt.capabilities.chat_context is False
 
 
-def test_carryover_disabled_by_previous_context_n_turns_zero():
-    """previous_context_n_turns=0 (documented 'disable carryover') suppresses the default."""
-    stt = _make_stt(extra_kwargs={"previous_context_n_turns": 0})
-    assert stt.capabilities.chat_context is False
-
-
 def test_carryover_explicit_true_wins_over_n_turns_zero():
-    """An explicit agent_context_carryover=True overrides the n_turns=0 suppression."""
+    """agent_context_carryover=True enables carryover regardless of previous_context_n_turns."""
     stt = _make_stt(extra_kwargs={"previous_context_n_turns": 0}, agent_context_carryover=True)
     assert stt.capabilities.chat_context is True
 
