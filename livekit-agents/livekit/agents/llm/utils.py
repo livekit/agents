@@ -606,7 +606,16 @@ def _shallow_model_dump(model: BaseModel, *, by_alias: bool = False) -> dict[str
     return result
 
 
-def strip_thinking_tokens(content: str | None, thinking: asyncio.Event) -> str | None:
+def strip_thinking_tokens(
+    content: str | list | None, thinking: asyncio.Event
+) -> str | None:
+    if isinstance(content, list):
+        # OpenAI-compatible providers (e.g. Mistral) may stream delta.content as a
+        # list of typed content parts instead of a plain string.
+        content = (
+            "".join(part.get("text", "") for part in content if isinstance(part, dict))
+            or None
+        )
     if content is None:
         return None
 
