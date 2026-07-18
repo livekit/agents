@@ -267,7 +267,7 @@ class TTS(tts.TTS):
         language: str = "vi",
         speaker_id: str = "default",
         auth_token: str | None = None,
-        model: str = "v1_5_pro",
+        model: str = "2.0-realtime",
         audio_format: str = "pcm",
         audio_speed: str = "1",
         audio_quality: int = 32,

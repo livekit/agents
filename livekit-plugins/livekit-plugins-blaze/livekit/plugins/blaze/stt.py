@@ -17,20 +17,20 @@ Blaze STT Plugin for LiveKit Voice Agent
 
 Speech-to-Text plugin that interfaces with Blaze's transcription service.
 
-API Endpoint: POST /v1/stt/transcribe
-Input: WAV audio file, language code
-Output: { "transcription": str, "confidence": float, "is_final": bool, "language": str }
-
-Supports both batch recognition and streaming (via StreamAdapter with VAD).
+Batch API: POST /v1/stt/transcribe (model default: stt-async-1.5)
+Realtime API: WS /v1/stt/realtime (model default: stt-stream-1.5)
 """
 
 from __future__ import annotations
 
+import asyncio
 import io
+import json
 import time
 import uuid
 
 import httpx
+import websockets
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -44,11 +44,15 @@ from livekit.agents import (
     stt,
 )
 from livekit.agents.stt import StreamAdapter
-from livekit.agents.utils import AudioBuffer
+from livekit.agents.utils import AudioBuffer, shortuuid
 
 from ._config import BlazeConfig
 from ._utils import apply_normalization_rules, convert_pcm_to_wav, effective_connect_timeout
 from .log import logger
+
+# Latest public Blaze STT model identifiers.
+DEFAULT_BATCH_MODEL = "stt-async-1.5"
+DEFAULT_STREAM_MODEL = "stt-stream-1.5"
 
 
 class STT(stt.STT):
@@ -56,27 +60,27 @@ class STT(stt.STT):
     Blaze Speech-to-Text Plugin.
 
     Converts speech to text using Blaze's transcription service.
-    Supports batch recognition natively. Streaming is available via
-    ``with_streaming()`` which wraps this STT with a VAD-based stream adapter.
+
+    * Batch recognition via ``recognize()`` / ``_recognize_impl`` uses
+      ``POST /v1/stt/transcribe`` with model ``stt-async-1.5`` by default.
+    * Native streaming via ``stream()`` uses WebSocket ``/v1/stt/realtime``
+      with model ``stt-stream-1.5`` by default (partial + final transcripts).
+    * ``with_streaming(vad)`` remains available for VAD-segmented batch STT.
 
     Args:
         api_url: Base URL for the STT service.
         language: Language code for transcription (default: "vi").
         auth_token: Bearer token for authentication.
         sample_rate: Audio sample rate in Hz (default: 16000).
+        model: Batch STT model id (default: stt-async-1.5).
+        stream_model: Realtime STT model id (default: stt-stream-1.5).
         normalization_rules: Dict mapping input strings to replacements.
         timeout: Request timeout in seconds (default: 30.0).
         config: Optional BlazeConfig for centralized configuration.
 
     Example:
         >>> from livekit.plugins import blaze
-        >>>
-        >>> # Batch-only (default)
-        >>> stt = blaze.STT(language="vi")
-        >>>
-        >>> # With streaming via VAD adapter
-        >>> from livekit.plugins import silero
-        >>> streaming_stt = blaze.STT(language="vi").with_streaming(silero.VAD.load())
+        >>> stt = blaze.STT(language="vi")  # streaming-capable, latest models
     """
 
     def __init__(
@@ -86,14 +90,16 @@ class STT(stt.STT):
         language: str = "vi",
         auth_token: str | None = None,
         sample_rate: int = 16000,
+        model: str = DEFAULT_BATCH_MODEL,
+        stream_model: str = DEFAULT_STREAM_MODEL,
         normalization_rules: dict[str, str] | None = None,
         timeout: float | None = None,
         config: BlazeConfig | None = None,
     ) -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=False,
-                interim_results=False,
+                streaming=True,
+                interim_results=True,
             )
         )
 
@@ -102,9 +108,13 @@ class STT(stt.STT):
         self._language = language
         self._auth_token = auth_token or self._config.api_token
         self._sample_rate = sample_rate
+        self._model = model
+        self._stream_model = stream_model
         self._timeout = timeout if timeout is not None else self._config.stt_timeout
         self._normalization_rules = normalization_rules
         self._transcribe_url = f"{self._api_url}/v1/stt/transcribe"
+        ws_base = self._api_url.replace("https://", "wss://").replace("http://", "ws://")
+        self._ws_url = f"{ws_base}/v1/stt/realtime"
         self._client = httpx.AsyncClient(timeout=httpx.Timeout(self._timeout, connect=5.0))
 
         # Frame accumulation: buffer PCM from empty STT segments so short
@@ -120,11 +130,26 @@ class STT(stt.STT):
         self._max_pending_segments: int = 3  # consecutive empty segments
         self._pending_idle_timeout: float = 10.0  # auto-clear after idle gap
 
-        logger.info("BlazeSTT initialized: url=%s, language=%s", self._api_url, self._language)
+        logger.info(
+            "BlazeSTT initialized: url=%s, language=%s, batch_model=%s, stream_model=%s",
+            self._api_url,
+            self._language,
+            self._model,
+            self._stream_model,
+        )
 
     @property
     def provider(self) -> str:
         return "Blaze"
+
+    @property
+    def model(self) -> str:
+        """Primary model id (batch). Streaming uses ``stream_model``."""
+        return self._model
+
+    @property
+    def stream_model(self) -> str:
+        return self._stream_model
 
     @property
     def sample_rate(self) -> int:
@@ -139,6 +164,8 @@ class STT(stt.STT):
         *,
         language: str | None = None,
         auth_token: str | None = None,
+        model: str | None = None,
+        stream_model: str | None = None,
         normalization_rules: dict[str, str] | None = None,
     ) -> None:
         """Update STT options at runtime."""
@@ -146,31 +173,44 @@ class STT(stt.STT):
             self._language = language
         if auth_token is not None:
             self._auth_token = auth_token
+        if model is not None:
+            self._model = model
+        if stream_model is not None:
+            self._stream_model = stream_model
         if normalization_rules is not None:
             self._normalization_rules = normalization_rules
 
     def with_streaming(self, vad: object) -> StreamAdapter:
-        """Create a streaming STT by wrapping this batch STT with a VAD.
+        """Create a VAD-segmented streaming STT over the batch API.
 
-        The returned ``StreamAdapter`` pushes continuous audio frames through
-        the VAD, and on each end-of-speech event calls ``recognize()``
-        on the accumulated utterance.
+        Prefer native ``stream()`` (``stt-stream-1.5``) for low-latency realtime
+        STT. This adapter is useful when you want VAD-driven utterance cuts with
+        the batch model (``stt-async-1.5``).
 
         Args:
             vad: A VAD instance (e.g. ``silero.VAD.load()``).
 
         Returns:
             A ``StreamAdapter`` with ``streaming=True`` capability.
-
-        Example:
-            >>> from livekit.plugins import blaze, silero
-            >>> stt = blaze.STT().with_streaming(silero.VAD.load())
         """
         from livekit.agents.vad import VAD
 
         if not isinstance(vad, VAD):
             raise TypeError(f"Expected a VAD instance, got {type(vad).__name__}")
         return StreamAdapter(stt=self, vad=vad)
+
+    def stream(
+        self,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> SpeechStream:
+        """Open a realtime STT WebSocket stream (model: stt-stream-1.5 by default)."""
+        return SpeechStream(
+            stt=self,
+            conn_options=conn_options,
+            language=language if isinstance(language, str) else self._language,
+        )
 
     async def _recognize_impl(
         self,
@@ -255,6 +295,7 @@ class STT(stt.STT):
             "language": lang,
             "enable_segments": "false",
             "enable_refinement": "false",
+            "model": self._model,
         }
         headers: dict[str, str] = {}
         if self._auth_token:
@@ -377,3 +418,158 @@ class STT(stt.STT):
                 )
             ],
         )
+
+
+class SpeechStream(stt.SpeechStream):
+    """Realtime STT over Blaze WebSocket ``/v1/stt/realtime`` (stt-stream-1.5).
+
+    Protocol:
+      1. Connect WS, send ``{token, language, model}``
+      2. Wait for ``{type: "ready"}`` (or connection-ready messages)
+      3. Stream binary PCM (s16le mono, typically 16 kHz)
+      4. Receive ``{type: "partial"|"final"|"error", text: "..."}``
+    """
+
+    def __init__(
+        self,
+        *,
+        stt: STT,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        language: str = "vi",
+    ) -> None:
+        super().__init__(stt=stt, conn_options=conn_options, sample_rate=stt._sample_rate)
+        self._blaze_stt = stt
+        self._language = language
+        self._request_id = shortuuid()
+
+    async def _run(self) -> None:
+        stt_cfg = self._blaze_stt
+        if not stt_cfg._auth_token:
+            raise APIConnectionError("Blaze STT streaming requires an auth token (BLAZE_API_TOKEN)")
+
+        timeout = effective_connect_timeout(self._conn_options, stt_cfg._timeout)
+        logger.info(
+            "[%s] STT WS connecting: url=%s model=%s language=%s",
+            self._request_id,
+            stt_cfg._ws_url,
+            stt_cfg._stream_model,
+            self._language,
+        )
+
+        try:
+            async with websockets.connect(
+                stt_cfg._ws_url,
+                open_timeout=timeout,
+                close_timeout=5,
+                max_size=8 * 1024 * 1024,
+            ) as ws:
+                init_msg = {
+                    "token": stt_cfg._auth_token,
+                    "language": self._language,
+                    "model": stt_cfg._stream_model,
+                }
+                await ws.send(json.dumps(init_msg))
+
+                # Wait for ready / auth ack before streaming audio.
+                ready = False
+                deadline = time.monotonic() + timeout
+                while time.monotonic() < deadline and not ready:
+                    raw = await asyncio.wait_for(ws.recv(), timeout=max(0.1, deadline - time.monotonic()))
+                    if isinstance(raw, bytes):
+                        continue
+                    try:
+                        msg = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    mtype = msg.get("type")
+                    if mtype in (
+                        "ready",
+                        "successful-connection",
+                        "successful-authentication",
+                    ):
+                        ready = True
+                        break
+                    if mtype == "error":
+                        raise APIConnectionError(
+                            f"STT realtime auth error: {msg.get('text') or msg}"
+                        )
+
+                if not ready:
+                    raise APITimeoutError("STT realtime: timed out waiting for ready")
+
+                send_task = asyncio.create_task(self._send_audio(ws))
+                try:
+                    async for raw in ws:
+                        if isinstance(raw, (bytes, bytearray)):
+                            continue
+                        try:
+                            msg = json.loads(raw)
+                        except json.JSONDecodeError:
+                            continue
+
+                        mtype = msg.get("type")
+                        text = msg.get("text") or ""
+                        if mtype == "error":
+                            raise APIConnectionError(f"STT realtime error: {text or msg}")
+
+                        if mtype not in ("partial", "final", "interim"):
+                            continue
+
+                        text = apply_normalization_rules(text, stt_cfg._normalization_rules)
+                        if not text.strip() and mtype != "final":
+                            continue
+
+                        event_type = (
+                            stt.SpeechEventType.FINAL_TRANSCRIPT
+                            if mtype == "final"
+                            else stt.SpeechEventType.INTERIM_TRANSCRIPT
+                        )
+                        self._event_ch.send_nowait(
+                            stt.SpeechEvent(
+                                type=event_type,
+                                request_id=self._request_id,
+                                alternatives=[
+                                    stt.SpeechData(
+                                        text=text,
+                                        language=LanguageCode(self._language),
+                                        confidence=float(msg.get("confidence") or 1.0),
+                                    )
+                                ],
+                            )
+                        )
+                        if mtype == "final":
+                            self._event_ch.send_nowait(
+                                stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                            )
+                finally:
+                    send_task.cancel()
+                    try:
+                        await send_task
+                    except asyncio.CancelledError:
+                        pass
+
+        except APIConnectionError:
+            raise
+        except APITimeoutError:
+            raise
+        except websockets.exceptions.ConnectionClosed as e:
+            raise APIConnectionError(f"STT WebSocket closed: {e}") from e
+        except Exception as e:
+            raise APIConnectionError(f"STT stream error: {e}") from e
+
+    async def _send_audio(self, ws: websockets.ClientConnection) -> None:
+        """Forward audio frames from the LiveKit input channel to the WS."""
+        try:
+            async for item in self._input_ch:
+                if isinstance(item, self._FlushSentinel):
+                    # Blaze/Soniox finalize on silence; no explicit flush frame.
+                    continue
+                # AudioFrame → raw PCM bytes
+                pcm = bytes(item.data)
+                if pcm:
+                    await ws.send(pcm)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("[%s] STT send_audio stopped: %s", self._request_id, e)
+            raise

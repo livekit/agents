@@ -124,6 +124,11 @@ async def test_ws_stream_guard_session_deadline() -> None:
         await guard.recv(ws)
 
 
+def test_tts_default_model_is_2_0_realtime() -> None:
+    tts = TTS(config=BlazeConfig(api_url="http://localhost"))
+    assert tts.model == "2.0-realtime"
+
+
 def test_tts_provider_model_and_ws_url() -> None:
     config = BlazeConfig(api_url="https://api.example.com", api_token="tok")
     tts = TTS(config=config, speaker_id="voice-1", model="v2_pro")
