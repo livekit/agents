@@ -185,3 +185,19 @@ def test_stt_with_streaming_requires_vad_instance() -> None:
 
     with pytest.raises(TypeError, match="Expected a VAD instance"):
         stt.with_streaming(object())  # type: ignore[arg-type]
+
+
+def test_stt_default_models() -> None:
+    stt = STT(config=BlazeConfig(api_url="http://localhost", api_token="tok"))
+    assert stt.model == "stt-async-1.5"
+    assert stt.stream_model == "stt-stream-1.5"
+    assert stt.capabilities.streaming is True
+    assert stt.capabilities.interim_results is True
+    assert stt._ws_url == "ws://localhost/v1/stt/realtime"
+
+
+def test_stt_update_models() -> None:
+    stt = STT(config=BlazeConfig(api_url="http://localhost", api_token="tok"))
+    stt.update_options(model="stt-async-1.0", stream_model="stt-stream-1.5")
+    assert stt.model == "stt-async-1.0"
+    assert stt.stream_model == "stt-stream-1.5"
