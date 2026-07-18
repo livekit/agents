@@ -30,7 +30,7 @@ from livekit.protocol.agent_pb import agent_session as agent_pb
 from .. import cli, inference, llm, stt, tts, utils, vad
 from .._exceptions import APIError
 from ..job import get_job_context
-from ..llm import AgentHandoff, ChatContext, MetricsReport
+from ..llm import LLM, AgentHandoff, ChatContext, MetricsReport
 from ..llm.chat_context import Instructions
 from ..log import logger
 from ..metrics import AgentSessionUsage, ModelUsageCollector
@@ -476,6 +476,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._vad = vad or None
         self._llm = llm or None
         self._tts = tts or None
+
+        # eagerly establish DNS/TLS to the LLM provider so the first inference
+        # request doesn't pay connection setup costs
+        if isinstance(self._llm, LLM):
+            try:
+                asyncio.get_running_loop()
+                self._llm.prewarm()
+            except RuntimeError:
+                pass  # no running event loop, prewarm runs at agent activity start instead
 
         self._keyterm_detector = KeytermDetector(
             static_keyterms=self._opts.stt_context_options["keyterms"],

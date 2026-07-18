@@ -135,6 +135,9 @@ class LLM(llm.LLM):
             ),
         )
 
+    async def _prewarm_impl(self) -> None:
+        await self._client.models.list(limit=1)
+
     @property
     def model(self) -> str:
         return self._opts.model
