@@ -48,7 +48,6 @@ if TYPE_CHECKING:
 
 from .log import logger
 from .models import GnaniSTTLanguages
-from .utils import ws_header_kwargs as _ws_header_kwargs
 
 GnaniSTTFormat = Literal["verbatim", "transcribe"]
 
@@ -337,7 +336,7 @@ class SpeechStream(stt.RecognizeStream):
         try:
             async with websockets.connect(
                 ws_url,
-                **_ws_header_kwargs(headers),
+                additional_headers=headers,
                 ping_interval=20,
                 ping_timeout=20,
                 close_timeout=10,

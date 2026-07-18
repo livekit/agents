@@ -55,7 +55,6 @@ from .models import (
     GnaniTTSModels,
     GnaniTTSVoices,
 )
-from .utils import ws_header_kwargs as _ws_header_kwargs
 
 GNANI_TTS_BASE_URL = "https://api.vachana.ai"
 
@@ -109,7 +108,7 @@ class TTS(tts.TTS):
         language: BCP-47 language code for timbre-v2.5 only (e.g. "hi-IN").
         sample_rate: Audio output sample rate (8000-44100).
         encoding: Audio encoding (linear_pcm or oggopus).
-        container: Audio container format (raw, mp3, wav, mulaw, ogg).
+        container: Audio container format (raw, mp3, wav, ogg).
         api_key: Gnani API key (falls back to GNANI_API_KEY env var).
         base_url: Vachana API base URL.
         synthesize_method: Synthesis mode — "rest", "sse", or "websocket".
@@ -441,7 +440,7 @@ class WebSocketChunkedStream(tts.ChunkedStream):
             ws_url = self._build_ws_url()
             async with websockets.connect(
                 ws_url,
-                **_ws_header_kwargs(_build_headers(self._opts)),
+                additional_headers=_build_headers(self._opts),
                 ping_interval=20,
                 ping_timeout=20,
                 close_timeout=10,
@@ -552,7 +551,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             ws_url = self._build_ws_url()
             async with websockets.connect(
                 ws_url,
-                **_ws_header_kwargs(_build_headers(self._opts)),
+                additional_headers=_build_headers(self._opts),
                 ping_interval=20,
                 ping_timeout=20,
                 close_timeout=10,
