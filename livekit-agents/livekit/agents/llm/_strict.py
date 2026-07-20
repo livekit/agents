@@ -7,13 +7,29 @@ from pydantic import BaseModel, TypeAdapter
 _T = TypeVar("_T")
 
 
-def to_strict_json_schema(model: type[BaseModel] | TypeAdapter[Any]) -> dict[str, Any]:
+def to_strict_json_schema(
+    model: type[BaseModel] | TypeAdapter[Any],
+    *,
+    null_sentinel_for_defaults: bool = False,
+) -> dict[str, Any]:
+    """Convert a model's JSON schema to the strict dialect the OpenAI API expects.
+
+    Strict mode doesn't support the ``default`` keyword, so defaults are always
+    removed. With ``null_sentinel_for_defaults``, a defaulted field additionally
+    accepts ``null`` as a sentinel meaning "use the Python default" — only enable
+    this when the decode side resolves the sentinel before validation, as the tool
+    pipeline does in ``_prepare_function_arguments``. Without it, the schema stays
+    faithful: defaulted fields remain required and non-nullable, and the raw
+    payload validates directly with pydantic.
+    """
     if isinstance(model, TypeAdapter):
         schema = model.json_schema()
     else:
         schema = model.model_json_schema()
 
-    return _ensure_strict_json_schema(schema, path=(), root=schema)
+    return _ensure_strict_json_schema(
+        schema, path=(), root=schema, null_sentinel_for_defaults=null_sentinel_for_defaults
+    )
 
 
 # from https://platform.openai.com/docs/guides/function-calling?api-mode=responses&strict-mode=disabled#strict-mode
@@ -34,6 +50,7 @@ def _ensure_strict_json_schema(
     *,
     path: tuple[str, ...],
     root: dict[str, object],
+    null_sentinel_for_defaults: bool,
 ) -> dict[str, Any]:
     """Mutates the given JSON schema to ensure it conforms to the `strict` standard
     that the API expects.
@@ -44,7 +61,12 @@ def _ensure_strict_json_schema(
     defs = json_schema.get("$defs")
     if is_dict(defs):
         for def_name, def_schema in defs.items():
-            _ensure_strict_json_schema(def_schema, path=(*path, "$defs", def_name), root=root)
+            _ensure_strict_json_schema(
+                def_schema,
+                path=(*path, "$defs", def_name),
+                root=root,
+                null_sentinel_for_defaults=null_sentinel_for_defaults,
+            )
 
     definitions = json_schema.get("definitions")
     if is_dict(definitions):
@@ -53,6 +75,7 @@ def _ensure_strict_json_schema(
                 definition_schema,
                 path=(*path, "definitions", definition_name),
                 root=root,
+                null_sentinel_for_defaults=null_sentinel_for_defaults,
             )
 
     typ = json_schema.get("type")
@@ -65,7 +88,12 @@ def _ensure_strict_json_schema(
     if is_dict(properties) and properties:
         json_schema["required"] = list(properties.keys())
         json_schema["properties"] = {
-            key: _ensure_strict_json_schema(prop_schema, path=(*path, "properties", key), root=root)
+            key: _ensure_strict_json_schema(
+                prop_schema,
+                path=(*path, "properties", key),
+                root=root,
+                null_sentinel_for_defaults=null_sentinel_for_defaults,
+            )
             for key, prop_schema in properties.items()
         }
 
@@ -73,7 +101,12 @@ def _ensure_strict_json_schema(
     # { 'type': 'array', 'items': {...} }
     items = json_schema.get("items")
     if is_dict(items):
-        json_schema["items"] = _ensure_strict_json_schema(items, path=(*path, "items"), root=root)
+        json_schema["items"] = _ensure_strict_json_schema(
+            items,
+            path=(*path, "items"),
+            root=root,
+            null_sentinel_for_defaults=null_sentinel_for_defaults,
+        )
 
     # unions (anyOf / oneOf)
     # Strip empty schema objects ({}) — they are JSON Schema's identity element
@@ -88,13 +121,23 @@ def _ensure_strict_json_schema(
             variants = [v for v in variants if v != {}]
             if len(variants) == 1:
                 json_schema.update(
-                    _ensure_strict_json_schema(variants[0], path=(*path, union_key, "0"), root=root)
+                    _ensure_strict_json_schema(
+                        variants[0],
+                        path=(*path, union_key, "0"),
+                        root=root,
+                        null_sentinel_for_defaults=null_sentinel_for_defaults,
+                    )
                 )
                 json_schema.pop(union_key, None)
             elif len(variants) >= 2:
                 json_schema.pop(union_key, None)
                 json_schema["anyOf"] = [
-                    _ensure_strict_json_schema(variant, path=(*path, "anyOf", str(i)), root=root)
+                    _ensure_strict_json_schema(
+                        variant,
+                        path=(*path, "anyOf", str(i)),
+                        root=root,
+                        null_sentinel_for_defaults=null_sentinel_for_defaults,
+                    )
                     for i, variant in enumerate(variants)
                 ]
             else:
@@ -105,12 +148,22 @@ def _ensure_strict_json_schema(
     if is_list(all_of):
         if len(all_of) == 1:
             json_schema.update(
-                _ensure_strict_json_schema(all_of[0], path=(*path, "allOf", "0"), root=root)
+                _ensure_strict_json_schema(
+                    all_of[0],
+                    path=(*path, "allOf", "0"),
+                    root=root,
+                    null_sentinel_for_defaults=null_sentinel_for_defaults,
+                )
             )
             json_schema.pop("allOf")
         else:
             json_schema["allOf"] = [
-                _ensure_strict_json_schema(entry, path=(*path, "allOf", str(i)), root=root)
+                _ensure_strict_json_schema(
+                    entry,
+                    path=(*path, "allOf", str(i)),
+                    root=root,
+                    null_sentinel_for_defaults=null_sentinel_for_defaults,
+                )
                 for i, entry in enumerate(all_of)
             ]
 
@@ -123,9 +176,11 @@ def _ensure_strict_json_schema(
         json_schema.pop("default", None)
 
         # Strict schemas require all fields, but LLMs cannot see or apply Python defaults.
-        # Let the field additionally accept null as a sentinel; validate_response_format and
-        # tool preparation swap a returned null back for the field's default.
-        _add_null_sentinel(json_schema)
+        # For tool schemas, let the field additionally accept null as a sentinel; tool
+        # preparation (_prepare_function_arguments) swaps a returned null back for the
+        # field's default. Response formats stay faithful: the model must produce a value.
+        if null_sentinel_for_defaults:
+            _add_null_sentinel(json_schema)
 
     # we can't use `$ref`s if there are also other properties defined, e.g.
     # `{"$ref": "...", "description": "my description"}`
@@ -147,7 +202,9 @@ def _ensure_strict_json_schema(
         json_schema.pop("$ref")
         # Since the schema expanded from `$ref` might not have `additionalProperties: false` applied,  # noqa: E501
         # we call `_ensure_strict_json_schema` again to fix the inlined schema and ensure it's valid.  # noqa: E501
-        return _ensure_strict_json_schema(json_schema, path=path, root=root)
+        return _ensure_strict_json_schema(
+            json_schema, path=path, root=root, null_sentinel_for_defaults=null_sentinel_for_defaults
+        )
 
     # simplify nullable unions (“anyOf” or “oneOf”)
     for union_key in ("anyOf", "oneOf"):

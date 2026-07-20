@@ -17,6 +17,7 @@ from livekit.agents.llm import (
 )
 from livekit.agents.llm._strict import to_strict_json_schema
 from livekit.agents.llm.utils import (
+    _json_schema_allows_null,
     build_legacy_openai_schema,
     build_strict_openai_schema,
     function_arguments_to_pydantic_model,
@@ -725,6 +726,38 @@ class TestStrictJsonSchema:
         status = schema["properties"]["status"]
         assert None not in status["enum"], f"enum should not contain None: {status}"
         assert "null" not in status.get("type", []), f"type should not contain 'null': {status}"
+
+
+class _SentinelChildModel(BaseModel):
+    x: int = 1
+
+
+class _DefaultedFieldsModel(BaseModel):
+    count: int = 5
+    label: Literal["a", "b"] = "a"
+    value: int | str = 5
+    child: _SentinelChildModel = _SentinelChildModel()
+
+
+class TestNullSentinelForDefaults:
+    """Tool schemas advertise null for defaulted fields — the tool-args pipeline
+    resolves the sentinel in _prepare_function_arguments. Without the flag,
+    defaults are dropped and fields stay required and non-nullable."""
+
+    def test_sentinel_flag_advertises_null_for_all_defaulted_shapes(self):
+        schema = to_strict_json_schema(_DefaultedFieldsModel, null_sentinel_for_defaults=True)
+        for field in ("count", "label", "value", "child"):
+            prop = schema["properties"][field]
+            assert _json_schema_allows_null(prop, root=schema), f"{field}: {prop}"
+            assert "default" not in prop
+
+    def test_no_flag_keeps_defaulted_fields_required_and_non_nullable(self):
+        schema = to_strict_json_schema(_DefaultedFieldsModel)
+        assert schema["required"] == ["count", "label", "value", "child"]
+        for field in ("count", "label", "value", "child"):
+            prop = schema["properties"][field]
+            assert not _json_schema_allows_null(prop, root=schema), f"{field}: {prop}"
+            assert "default" not in prop
 
 
 class _CarModel(BaseModel):

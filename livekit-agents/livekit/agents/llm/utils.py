@@ -238,7 +238,7 @@ def build_strict_openai_schema(
     """strict mode tool description"""
     model = function_arguments_to_pydantic_model(function_tool)
     info = function_tool.info
-    schema = _strict.to_strict_json_schema(model)
+    schema = _strict.to_strict_json_schema(model, null_sentinel_for_defaults=True)
 
     return {
         "type": "function",
@@ -298,6 +298,9 @@ def to_response_format_param(
 def to_openai_response_format(response_format: type | dict[str, Any]) -> dict[str, Any]:
     name, json_schema_type = to_response_format_param(response_format)
 
+    # No null sentinel here: nothing resolves it on the decode side (users validate
+    # the raw payload themselves), so the schema must be exactly what validation
+    # accepts. Defaulted fields stay required; the model produces their values.
     schema = _strict.to_strict_json_schema(json_schema_type)
     return {
         "type": "json_schema",
@@ -307,26 +310,6 @@ def to_openai_response_format(response_format: type | dict[str, Any]) -> dict[st
             "strict": True,
         },
     }
-
-
-def validate_response_format(response_format: type[ResponseFormatT], value: Any) -> ResponseFormatT:
-    """Validate a structured response, applying defaults represented by ``null``.
-
-    Strict JSON schemas require every field and cannot communicate Python defaults to the LLM.
-    ``to_openai_response_format`` therefore makes a defaulted field nullable. When the field's
-    declared type is not nullable, a returned ``null`` means "use the default" and must be
-    replaced before Pydantic validation.
-    """
-    _, json_schema_type = to_response_format_param(response_format)
-    if isinstance(json_schema_type, TypeAdapter):
-        schema = json_schema_type.json_schema()
-    else:
-        schema = json_schema_type.model_json_schema()
-
-    value = _inject_schema_defaults(value, schema=schema, root=schema)
-    if isinstance(json_schema_type, TypeAdapter):
-        return cast(ResponseFormatT, json_schema_type.validate_python(value))
-    return cast(ResponseFormatT, json_schema_type.model_validate(value))
 
 
 def _inject_schema_defaults(value: Any, *, schema: dict[str, Any], root: dict[str, Any]) -> Any:
