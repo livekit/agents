@@ -725,7 +725,8 @@ class SpeechStream(stt.SpeechStream):
                 if not awaiting_final:
                     try:
                         self._input_ch.send_nowait(self._FlushSentinel())
-                    except RuntimeError:
+                    except utils.aio.ChanClosed:
+                        # Input stream already closing; nothing to finalize.
                         pending_user_state_finalize = False
                     else:
                         pending_user_state_finalize = True
