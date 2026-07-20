@@ -200,7 +200,12 @@ class SynthesizeStream(tts.SynthesizeStream):
             mime_type="audio/pcm",
             stream=True,
         )
-        url = f"{self._opts.ws_url}?key={self._opts.api_key}"
+        # Send the API key in the Authorization header (not the URL query string) so it
+        # isn't captured in proxy/access logs. The Quickdial WS endpoint accepts a Bearer
+        # header; the ?key= query param is only needed for browser clients that can't set
+        # WS handshake headers.
+        url = self._opts.ws_url
+        ws_headers = {"Authorization": f"Bearer {self._opts.api_key}"}
 
         async def _send(ws: aiohttp.ClientWebSocketResponse) -> None:
             # Aggregate text tokens between flush markers and synthesize ONCE per
@@ -253,10 +258,14 @@ class SynthesizeStream(tts.SynthesizeStream):
                         raise APIStatusError(message=evt.get("message", "tts error"))
 
         try:
-            async with self._tts._ensure_session().ws_connect(url) as ws:
+            async with self._tts._ensure_session().ws_connect(url, headers=ws_headers) as ws:
                 await asyncio.gather(_send(ws), _recv(ws))
                 if segment_open:
                     output_emitter.end_segment()
+        except (APITimeoutError, APIStatusError, APIConnectionError):
+            # already-typed API errors (e.g. a server "error" event) must propagate as-is
+            # so non-retryable failures aren't relabeled as retryable connection errors.
+            raise
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
         except aiohttp.ClientResponseError as e:
