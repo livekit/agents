@@ -111,3 +111,35 @@ async def test_get_dtmf_sip_event_with_confirmation() -> None:
             )
 
             assert result.final_output.user_input == "1 2 3 4 5 6 7 8 9 0"
+
+
+@pytest.mark.asyncio
+async def test_collect_card_number_incrementally_with_correction() -> None:
+    from livekit.agents.beta.workflows.credit_card import (
+        GetCardNumberResult,
+        GetCardNumberTask,
+    )
+
+    async with _llm_model() as llm, AgentSession(llm=llm) as sess:
+        await sess.start(GetCardNumberTask(require_confirmation=True))
+
+        for user_input in (
+            "The first group is 4 2 4 2, and I have more digits.",
+            "The next group is 4 2 4 3, and I have more digits.",
+            "Correction: replace the last digit with 2. I still have more digits.",
+            "The next group is 4 2 4 2, and I have one group left.",
+            "The final group is 4 2 4 2. That's the whole number.",
+        ):
+            result = await sess.run(user_input=user_input, input_modality="audio")
+            result.expect.contains_function_call(name="append_card_number")
+
+        result = await sess.run(
+            user_input="Repeating it for confirmation: 4 2 4 2 4 2 4 2 4 2 4 2 4 2 4 2.",
+            output_type=GetCardNumberResult,
+            input_modality="audio",
+        )
+
+        result.expect.contains_function_call(name="append_card_number")
+        assert result.final_output == GetCardNumberResult(
+            issuer="Visa", card_number="4242424242424242"
+        )
