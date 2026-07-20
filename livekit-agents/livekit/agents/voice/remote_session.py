@@ -273,6 +273,10 @@ _TOOL_REPLY_STATUS_MAP: dict[str, agent_pb.ToolReplyStatus] = {
 _AMD_CATEGORY_MAP: dict[AMDCategory, agent_pb.AmdCategory] = {
     AMDCategory.HUMAN: agent_pb.AmdCategory.AMD_HUMAN,
     AMDCategory.MACHINE_IVR: agent_pb.AmdCategory.AMD_MACHINE_IVR,
+    # TODO: proto enum member not shipped yet; falls back to uncertain until it lands.
+    AMDCategory.MACHINE_SCREENING: getattr(
+        agent_pb.AmdCategory, "AMD_MACHINE_SCREENING", agent_pb.AmdCategory.AMD_UNCERTAIN
+    ),
     AMDCategory.MACHINE_VM: agent_pb.AmdCategory.AMD_MACHINE_VM,
     AMDCategory.MACHINE_UNAVAILABLE: agent_pb.AmdCategory.AMD_MACHINE_UNAVAILABLE,
     AMDCategory.UNCERTAIN: agent_pb.AmdCategory.AMD_UNCERTAIN,
@@ -610,15 +614,23 @@ class SessionHost:
         delay = Duration()
         delay.FromNanoseconds(int(event.delay * 1e9))
 
+        kwargs: dict[str, Any] = {
+            "speech_duration": speech_duration,
+            "delay": delay,
+            "category": _AMD_CATEGORY_MAP.get(event.category, agent_pb.AmdCategory.AMD_UNCERTAIN),
+            "reason": event.reason,
+            "transcript": event.transcript,
+        }
+        # TODO: forward once the proto ships these fields; guarded so it's harmless until then
+        _amd_fields = agent_pb.AgentSessionEvent.AmdPrediction.DESCRIPTOR.fields_by_name
+        if "screening_detected" in _amd_fields:
+            kwargs["screening_detected"] = event.screening_detected
+        if "message_playback" in _amd_fields:
+            kwargs["message_playback"] = event.message_playback
+
         self._send_event(
             agent_pb.AgentSessionEvent(
-                amd_prediction=agent_pb.AgentSessionEvent.AmdPrediction(
-                    speech_duration=speech_duration,
-                    delay=delay,
-                    category=_AMD_CATEGORY_MAP[event.category],
-                    reason=event.reason,
-                    transcript=event.transcript,
-                )
+                amd_prediction=agent_pb.AgentSessionEvent.AmdPrediction(**kwargs)
             )
         )
 
