@@ -245,6 +245,9 @@ class AgentActivity(RecognitionHooks):
         )
         self._interruption_detection_enabled: bool = self._interruption_detector is not None
         self._interruption_detected: bool = False
+        # backchannel verdict for the turn's overlap; unlike _interruption_detected it
+        # survives the agent stopping, so a late-ending backchannel is still dropped
+        self._backchannel_detected: bool = False
 
         # this allows taking over audio interruption temporarily until interruption is detected
         # by default it is true unless turn_detection is manual or realtime_llm
@@ -1798,10 +1801,18 @@ class AgentActivity(RecognitionHooks):
         self._session._on_error(error)
 
     def _on_overlap_speech_ended(self, ev: inference.OverlappingSpeechEvent) -> None:
-        if ev.is_interruption:
-            self._interruption_detected = True
-        else:
-            self._interruption_detected = False
+        self._interruption_detected = ev.is_interruption
+        self._backchannel_detected = not ev.is_interruption
+
+        # clear rt_session's audio buffer when backchannel if the server-side turn detection is disabled
+        if (
+            not ev.is_interruption
+            and isinstance(self.llm, llm.RealtimeModel)
+            and not self.llm.capabilities.turn_detection
+            and self._rt_session
+        ):
+            self._rt_session.clear_audio()
+
         self._session.emit("overlapping_speech", ev)
 
     def _on_input_speech_started(self, _: llm.InputSpeechStartedEvent) -> None:
@@ -1985,6 +1996,7 @@ class AgentActivity(RecognitionHooks):
         self._user_silence_event.clear()
         self._stt_eos_received = False
         self._interruption_detected = False
+        self._backchannel_detected = False
 
         if self._false_interruption_timer:
             # cancel the timer when user starts speaking but leave the paused state unchanged
@@ -2224,6 +2236,7 @@ class AgentActivity(RecognitionHooks):
             # TODO(theomonnom): should we "forward" this new turn to the next agent/activity?
             return True
 
+        # avoid interruption if the new_transcript is too short
         if (
             self.stt is not None
             and self._turn_detection != "manual"
@@ -2235,7 +2248,28 @@ class AgentActivity(RecognitionHooks):
             < self._session.options.interruption["min_words"]
         ):
             self._cancel_preemptive_generation()
-            # avoid interruption if the new_transcript is too short
+            return False
+
+        # avoid interruption if backchannel is detected with realtime model
+        if (
+            self.stt is None
+            and self._turn_detection != "manual"
+            and isinstance(self.llm, llm.RealtimeModel)
+            and not self.llm.capabilities.turn_detection
+            and self._interruption_detection_enabled
+            and (
+                # confirmed backchannel (survives the agent stopping)
+                self._backchannel_detected
+                # or agent still speaking with nothing flagged yet
+                or (
+                    not self._interruption_detected
+                    and self._current_speech is not None
+                    and not self._current_speech.interrupted
+                )
+            )
+        ):
+            self._cancel_preemptive_generation()
+            # no transcript to gatekeep for realtime barge-in — drop the backchannel turn
             return False
 
         old_task = self._user_turn_completed_atask
