@@ -4303,13 +4303,22 @@ class AgentActivity(RecognitionHooks):
         return self._session._using_default_vad
 
     def _resolve_interruption_detection(self) -> inference.AdaptiveInterruptionDetector | None:
-        if not (
-            self.stt is not None
-            and self.stt.capabilities.aligned_transcript
-            and self.stt.capabilities.streaming
-            and self.vad is not None
-            and self._turn_detection not in ("manual", "realtime_llm")
-            and not isinstance(self.llm, llm.RealtimeModel)
+        realtime_llm = self.llm if isinstance(self.llm, llm.RealtimeModel) else None
+        if realtime_llm is not None:
+            # realtime commits turns manually; barge-in withholds the commit, so no STT is needed
+            can_gatekeep = not realtime_llm.capabilities.turn_detection
+        else:
+            # the STT pipeline gatekeeps by holding and flushing transcripts
+            can_gatekeep = (
+                self.stt is not None
+                and self.stt.capabilities.aligned_transcript
+                and self.stt.capabilities.streaming
+            )
+
+        if (
+            not can_gatekeep
+            or self.vad is None
+            or self._turn_detection in ("manual", "realtime_llm")
         ):
             if (
                 is_given(self._agent.interruption_detection)
