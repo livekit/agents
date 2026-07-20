@@ -263,7 +263,7 @@ class MetricsReport(TypedDict, total=False):
     """
 
     llm_node_ttfs: float
-    """Time from LLM generation start to the first complete sentence
+    """Time from LLM generation start to the first sentence chunk, segmented with the same tokenizer the TTS path uses
 
     Assistant `ChatMessage` only
     """
