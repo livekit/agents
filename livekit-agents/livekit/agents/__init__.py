@@ -114,6 +114,7 @@ from .voice.amd import (
     AMD,
     AMDCategory,
     AMDPredictionEvent,
+    DetectionOptions,
 )
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
 from .voice.keyterm_detection import (
@@ -272,6 +273,7 @@ __all__ = [
     "AMD",
     "AMDCategory",
     "AMDPredictionEvent",
+    "DetectionOptions",
     "TurnHandlingOptions",
     "EndpointingOptions",
     "InterruptionOptions",

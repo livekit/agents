@@ -64,6 +64,7 @@ EVALUATED_STT_MODELS: set[str] = {
 
 _SIP_CALL_STATUS_ATTR = "sip.callStatus"
 _SIP_CALL_STATUS_ACTIVE = "active"
+_DEFAULT_SIP_ANSWER_TIMEOUT = 60.0
 
 
 class DetectionOptions(TypedDict, total=False):
@@ -72,6 +73,7 @@ class DetectionOptions(TypedDict, total=False):
     machine_silence_threshold: float
     no_speech_threshold: float
     timeout: float
+    sip_answer_timeout: float
     prompt: str
 
 
@@ -81,6 +83,7 @@ _DEFAULT_DETECTION_OPTIONS: DetectionOptions = {
     "machine_silence_threshold": MACHINE_SILENCE_THRESHOLD,
     "no_speech_threshold": NO_SPEECH_THRESHOLD,
     "timeout": TIMEOUT,
+    "sip_answer_timeout": _DEFAULT_SIP_ANSWER_TIMEOUT,
     "prompt": AMD_PROMPT,
 }
 
@@ -100,9 +103,9 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
     - ``uncertain``: the transcript is ambiguous and could not be classified.
 
     AMD should be started before the SIP participant is created so no audio
-    is missed. The overall detection-timeout budget starts when the
-    participant's audio track is subscribed (so AMD cannot hang if the call
-    never connects).
+    is missed. For SIP participants, the detection-timeout budget starts when
+    ``sip.callStatus == "active"``. A separate ``sip_answer_timeout`` bounds
+    calls that never become active.
 
     For SIP participants, the no-speech timer and
     audio/transcript processing are deferred until ``sip.callStatus ==
@@ -142,8 +145,10 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             the resolved STT or LLM is not among the bundled AMD-tested model
             strings. Has no effect on classification behavior.
         detection_options: Optional overrides for timing thresholds and the AMD
-            classification prompt (see :class:`DetectionOptions`). When
-            omitted, library defaults apply.
+            classification prompt (see :class:`DetectionOptions`). The
+            `sip_answer_timeout` option bounds how long SIP AMD waits for an
+            active call (60 seconds by default). When omitted, library defaults
+            apply.
         wait_until_finished: If ``True``, once any speech has been heard the
             ``detection_timeout`` no longer forces emission — AMD will keep
             waiting for the post-speech silence and a positive end-of-turn
@@ -391,9 +396,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             logger.warning(
                 "session room_io unavailable, starting amd timers immediately as fallback"
             )
-            if self._classifier:
-                self._classifier.start_detection_timer()
-                self._classifier.start_listening()
+            self._start_listening()
         else:
             room = session._room_io.room
             publication = await wait_for_track_publication(
@@ -404,10 +407,6 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             )
             if self._closed or not self._classifier:
                 return
-            # outer budget runs from track-up so AMD bails out even if the
-            # call never reaches the active state
-            self._classifier.start_detection_timer()
-
             if self._participant_identity:
                 publisher = room.remote_participants.get(self._participant_identity)
             else:
@@ -437,19 +436,30 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             await self._run_stt()
 
     def _start_listening(self) -> None:
-        if self._closed or not self._classifier:
+        if self._closed or not self._classifier or self._classifier.listening:
             return
+        self._classifier.start_detection_timer()
         self._classifier.start_listening()
         logger.debug("call has been answered, AMD starts listening")
 
     async def _wait_for_sip_answer(self, room: rtc.Room, identity: str) -> None:
         try:
-            await wait_for_participant_attribute(
-                room,
-                identity=identity,
-                attribute=_SIP_CALL_STATUS_ATTR,
-                value=_SIP_CALL_STATUS_ACTIVE,
+            await asyncio.wait_for(
+                wait_for_participant_attribute(
+                    room,
+                    identity=identity,
+                    attribute=_SIP_CALL_STATUS_ATTR,
+                    value=_SIP_CALL_STATUS_ACTIVE,
+                ),
+                timeout=self._opts["sip_answer_timeout"],
             )
+        except asyncio.TimeoutError:
+            if not self._closed and self._classifier:
+                self._classifier._on_timeout(
+                    category=AMDCategory.UNCERTAIN,
+                    reason="sip_answer_timeout",
+                )
+            return
         except RuntimeError as e:
             # SIP participant disconnected before going active, default to detection timeout
             logger.debug(

@@ -350,8 +350,8 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
         (the real signal or the backstop timer), so we don't cut the greeting
         short with an ``uncertain`` result.
 
-        Not gated by ``_listening_guard``: detection_timeout must still fire
-        when the call never reaches listening (e.g. sip never answered).
+        Not gated by ``_listening_guard``: this handler is also used by
+        pre-listening guards such as ``sip_answer_timeout``.
         """
         if self._closed:
             return
