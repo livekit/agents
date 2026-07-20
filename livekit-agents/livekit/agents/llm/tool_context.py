@@ -617,6 +617,13 @@ class ToolContext:
         structured = [t for t in self._tools if not any(t is r for r in removed)]
         self._update_tools([*structured, *added], exclude=removed)
 
+    def _exclude(self, tools: Sequence[Tool]) -> None:
+        """Hide ``tools`` from the callable set while keeping their toolsets intact."""
+        if not tools:
+            return
+        kept = [t for t in self.flatten() if not any(t is e for e in tools)]
+        self._sync_flattened(kept)
+
     def copy(self) -> ToolContext:
         return ToolContext(self._tools.copy())
 

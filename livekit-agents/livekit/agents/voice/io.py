@@ -400,7 +400,7 @@ class TextOutput(ABC):
 
     @abstractmethod
     def flush(self) -> None:
-        """Mark the current text segment as complete (e.g LLM generation is complete)"""
+        """Mark the current text segment as complete (e.g LLM generation is complete)."""
 
     def on_attached(self) -> None:
         if self.next_in_chain:

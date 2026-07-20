@@ -30,6 +30,7 @@ import numpy as np
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectionError,
     APIConnectOptions,
     APIStatusError,
     LanguageCode,
@@ -341,18 +342,23 @@ class SpeechStream(stt.SpeechStream):
                 samples_per_channel=samples_per_buffer,
             )
 
-            async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
-                    frames = audio_bstream.flush()
-                else:
-                    frames = audio_bstream.write(data.data.tobytes())
+            try:
+                async for data in self._input_ch:
+                    if isinstance(data, self._FlushSentinel):
+                        frames = audio_bstream.flush()
+                    else:
+                        frames = audio_bstream.write(data.data.tobytes())
 
-                for frame in frames:
-                    if len(frame.data) % 2 != 0:
-                        logger.warning("Frame data size not aligned to float32 (multiple of 4)")
+                    for frame in frames:
+                        if len(frame.data) % 2 != 0:
+                            logger.warning("Frame data size not aligned to float32 (multiple of 4)")
 
-                    int16_array = np.frombuffer(frame.data, dtype=np.int16)
-                    await ws.send_bytes(int16_array.tobytes())
+                        int16_array = np.frombuffer(frame.data, dtype=np.int16)
+                        await ws.send_bytes(int16_array.tobytes())
+            except (aiohttp.ClientError, ConnectionError) as e:
+                if closing_ws or self._session.closed:
+                    return
+                raise APIConnectionError("Baseten connection closed unexpectedly") from e
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws

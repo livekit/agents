@@ -24,6 +24,7 @@ from ..llm import (
     RawFunctionTool,
     Toolset,
 )
+from ..llm.chat_context import Instructions
 from ..log import logger
 from ..metrics import (
     AgentSessionUsage,
@@ -43,6 +44,11 @@ from .events import (
     ErrorEvent,
     FunctionToolsExecutedEvent,
     SessionUsageUpdatedEvent,
+    ToolCallEnded,
+    ToolCallStarted,
+    ToolCallUpdated,
+    ToolExecutionUpdatedEvent,
+    ToolReplyUpdated,
     UserInputTranscribedEvent,
     UserState,
     UserStateChangedEvent,
@@ -251,6 +257,19 @@ _METRICS_FIELDS = (
     "e2e_latency",
 )
 
+_TOOL_CALL_STATUS_MAP: dict[str, agent_pb.ToolCallStatus] = {
+    "done": agent_pb.TC_DONE,
+    "error": agent_pb.TC_ERROR,
+    "cancelled": agent_pb.TC_CANCELLED,
+}
+
+_TOOL_REPLY_STATUS_MAP: dict[str, agent_pb.ToolReplyStatus] = {
+    "scheduled": agent_pb.TR_SCHEDULED,
+    "completed": agent_pb.TR_COMPLETED,
+    "interrupted": agent_pb.TR_INTERRUPTED,
+    "skipped": agent_pb.TR_SKIPPED,
+}
+
 _AMD_CATEGORY_MAP: dict[AMDCategory, agent_pb.AmdCategory] = {
     AMDCategory.HUMAN: agent_pb.AmdCategory.AMD_HUMAN,
     AMDCategory.MACHINE_IVR: agent_pb.AmdCategory.AMD_MACHINE_IVR,
@@ -287,8 +306,8 @@ def _chat_item_to_proto(item: llm.ChatItem) -> agent_pb.ChatContext.ChatItem:
         }
         pb_role = role_map.get(item.role, agent_pb.ASSISTANT)
         content = []
-        if item.text_content:
-            content.append(agent_pb.ChatMessage.ChatContent(text=item.text_content))
+        if item.raw_text_content:
+            content.append(agent_pb.ChatMessage.ChatContent(text=item.raw_text_content))
         pb_msg = agent_pb.ChatMessage(
             id=item.id,
             role=pb_role,
@@ -326,7 +345,7 @@ def _chat_item_to_proto(item: llm.ChatItem) -> agent_pb.ChatContext.ChatItem:
         return agent_pb.ChatContext.ChatItem(
             agent_config_update=agent_pb.AgentConfigUpdate(
                 id=item.id,
-                instructions=item.instructions,
+                instructions=str(item.instructions) if item.instructions is not None else None,
                 tools_added=item.tools_added or [],
                 tools_removed=item.tools_removed or [],
             )
@@ -372,6 +391,7 @@ class SessionHost:
             session.on("conversation_item_added", self._on_conversation_item_added)
             session.on("user_input_transcribed", self._on_user_input_transcribed)
             session.on("function_tools_executed", self._on_function_tools_executed)
+            session.on("tool_execution_updated", self._on_tool_execution_updated)
             session.on("session_usage_updated", self._on_session_usage_updated)
             session.on("overlapping_speech", self._on_overlapping_speech)
             session.on("error", self._on_error)
@@ -396,6 +416,7 @@ class SessionHost:
             self._session.off("conversation_item_added", self._on_conversation_item_added)
             self._session.off("user_input_transcribed", self._on_user_input_transcribed)
             self._session.off("function_tools_executed", self._on_function_tools_executed)
+            self._session.off("tool_execution_updated", self._on_tool_execution_updated)
             self._session.off("session_usage_updated", self._on_session_usage_updated)
             self._session.off("overlapping_speech", self._on_overlapping_speech)
             self._session.off("error", self._on_error)
@@ -513,6 +534,54 @@ class SessionHost:
                     function_call_outputs=pb_outputs,
                 )
             )
+        )
+
+    def _on_tool_execution_updated(self, event: ToolExecutionUpdatedEvent) -> None:
+        pb = agent_pb.AgentSessionEvent.ToolExecutionUpdated
+        updated: agent_pb.AgentSessionEvent.ToolExecutionUpdated
+        if isinstance(event.update, ToolCallStarted):
+            fc = event.update.function_call
+            updated = pb(
+                started=pb.Started(
+                    function_call=agent_pb.FunctionCall(
+                        id=fc.id,
+                        call_id=fc.call_id,
+                        name=fc.name,
+                        arguments=fc.arguments,
+                    )
+                )
+            )
+        elif isinstance(event.update, ToolCallUpdated):
+            updated = pb(
+                call_updated=pb.CallUpdated(
+                    id=event.update.id,
+                    call_id=event.update.call_id,
+                    message=event.update.message,
+                )
+            )
+        elif isinstance(event.update, ToolCallEnded):
+            ended = pb.Ended(
+                id=event.update.id,
+                call_id=event.update.call_id,
+                status=_TOOL_CALL_STATUS_MAP[event.update.status],
+            )
+            if event.update.message is not None:
+                ended.message = event.update.message
+            updated = pb(ended=ended)
+        elif isinstance(event.update, ToolReplyUpdated):
+            updated = pb(
+                reply_updated=pb.ReplyUpdated(
+                    update_ids=event.update.update_ids,
+                    status=_TOOL_REPLY_STATUS_MAP[event.update.status],
+                    speech_id=event.update.speech_id,
+                )
+            )
+        else:
+            return
+
+        self._send_event(
+            agent_pb.AgentSessionEvent(tool_execution_updated=updated),
+            created_at=event.created_at,
         )
 
     def _on_overlapping_speech(self, event: OverlappingSpeechEvent) -> None:
@@ -639,12 +708,19 @@ class SessionHost:
         elif req.HasField("get_agent_info"):
             agent = self._session.current_agent
             items = [_chat_item_to_proto(item) for item in agent.chat_ctx.items]
+            # collapse modality variants for the report; audio-first matches the
+            # update_instructions default for voice sessions
+            agent_instructions = (
+                agent.instructions.render(modality="audio")
+                if isinstance(agent.instructions, Instructions)
+                else agent.instructions
+            )
             resp = agent_pb.AgentSessionMessage(
                 response=agent_pb.SessionResponse(
                     request_id=req.request_id,
                     get_agent_info=agent_pb.SessionResponse.GetAgentInfoResponse(
                         id=agent.id,
-                        instructions=agent.instructions,
+                        instructions=agent_instructions,
                         tools=_tool_names(agent.tools),
                         chat_ctx=items,
                     ),
@@ -931,6 +1007,7 @@ RemoteSessionEventTypes = Literal[
     "conversation_item_added",
     "user_input_transcribed",
     "function_tools_executed",
+    "tool_execution_updated",
     "session_usage_updated",
     "error",
 ]
@@ -1050,6 +1127,14 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
         )
         resp = await self._send_request(req)
         return resp.get_agent_info
+
+    async def get_framework_info(self) -> agent_pb.SessionResponse.GetFrameworkInfoResponse:
+        req = agent_pb.SessionRequest(
+            request_id=utils.shortuuid("req_"),
+            get_framework_info=agent_pb.SessionRequest.GetFrameworkInfo(),
+        )
+        resp = await self._send_request(req)
+        return resp.get_framework_info
 
     async def get_session_state(self) -> agent_pb.SessionResponse.GetSessionStateResponse:
         req = agent_pb.SessionRequest(

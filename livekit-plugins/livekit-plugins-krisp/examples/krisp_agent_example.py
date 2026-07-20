@@ -8,8 +8,15 @@ into a LiveKit voice agent for human-to-bot conversations.
 The audio pipeline:
     Room → RoomIO (with KrispVivaFilterFrameProcessor) → VAD → STT → LLM → TTS → Room
 
+Authentication:
+    By default the plugin uses ``krisp.auth.livekit_cloud()`` — auth + metering
+    happen via the room's existing JWT, which the agent framework hands to the
+    FrameProcessor automatically. No Krisp env vars are required when running
+    against LiveKit Cloud. To use your own Krisp license + ``.kef`` model file
+    instead, see the commented ``auth_provider=`` block below.
+
 Prerequisites:
-    1. Set KRISP_VIVA_FILTER_MODEL_PATH environment variable to your .kef model file
+    1. Standard agent env: LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET
     2. Install required packages:
        - livekit-agents (with PR #4145 support for FrameProcessor)
        - livekit-plugins-krisp
@@ -77,12 +84,30 @@ async def entrypoint(ctx: JobContext):
 
     logger.info("Starting agent session with RoomIO and Krisp noise cancellation")
 
-    # Create Krisp FrameProcessor for noise cancellation
+    # Create Krisp FrameProcessor for noise cancellation.
+    # Defaults to krisp.auth.livekit_cloud() — the framework pushes the room's
+    # JWT to the FrameProcessor via _on_credentials_updated and auto-refreshes
+    # it on token rotation. No manual credential plumbing required.
     processor = krisp.KrispVivaFilterFrameProcessor(
         noise_suppression_level=100,  # 0-100, where 100 is maximum suppression
         frame_duration_ms=10,
         sample_rate=16000,  # Pre-load model at this sample rate
     )
+
+    # To use a Krisp license key + .kef model file instead, supply an explicit
+    # auth provider:
+    #
+    #     processor = krisp.KrispVivaFilterFrameProcessor(
+    #         auth_provider=krisp.auth.krisp_license(
+    #             # Both default to env vars KRISP_VIVA_SDK_LICENSE_KEY and
+    #             # KRISP_VIVA_FILTER_MODEL_PATH if omitted.
+    #             license_key="...",
+    #             model_path="/path/to/model.kef",
+    #         ),
+    #         noise_suppression_level=100,
+    #         frame_duration_ms=10,
+    #         sample_rate=16000,
+    #     )
 
     # Start the session with RoomIO configuration
     # IMPORTANT: frame_size_ms must match Krisp's frame_duration_ms

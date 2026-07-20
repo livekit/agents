@@ -172,7 +172,7 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
 
         super().__init__(
             instructions=Instructions(
-                _CARD_NUMBER_BASE_INSTRUCTIONS.format(
+                audio=_CARD_NUMBER_BASE_INSTRUCTIONS.format(
                     modality_specific=_CARD_NUMBER_AUDIO_SPECIFIC,
                     confirmation_instructions=(
                         confirmation_instructions if require_confirmation is not False else ""
@@ -326,7 +326,7 @@ class GetSecurityCodeTask(AgentTask[GetSecurityCodeResult]):
 
         super().__init__(
             instructions=Instructions(
-                _SECURITY_CODE_BASE_INSTRUCTIONS.format(
+                audio=_SECURITY_CODE_BASE_INSTRUCTIONS.format(
                     modality_specific=_SECURITY_CODE_AUDIO_SPECIFIC,
                     confirmation_instructions=(
                         confirmation_instructions if require_confirmation is not False else ""
@@ -447,7 +447,7 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
 
         super().__init__(
             instructions=Instructions(
-                _EXPIRATION_DATE_BASE_INSTRUCTIONS.format(
+                audio=_EXPIRATION_DATE_BASE_INSTRUCTIONS.format(
                     modality_specific=_EXPIRATION_DATE_AUDIO_SPECIFIC,
                     confirmation_instructions=(
                         confirmation_instructions if require_confirmation is not False else ""

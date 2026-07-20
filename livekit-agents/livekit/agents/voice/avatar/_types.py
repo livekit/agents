@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator, Coroutine
 from typing import TYPE_CHECKING, Generic, Literal, TypeVar
 
 from livekit import rtc
+from livekit.api import TwirpError
 
 from ... import utils
 from ...job import get_job_context
@@ -130,12 +131,18 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
                             identity=self.avatar_identity,
                         )
                     )
-                except Exception:
-                    logger.warning(
-                        "failed to remove avatar participant",
-                        extra={"identity": self.avatar_identity},
-                        exc_info=True,
-                    )
+                except Exception as e:
+                    if isinstance(e, TwirpError) and e.code == "not_found":
+                        logger.debug(
+                            "avatar participant not in room, skipping removal",
+                            extra={"identity": self.avatar_identity},
+                        )
+                    else:
+                        logger.warning(
+                            "failed to remove avatar participant",
+                            extra={"identity": self.avatar_identity},
+                            exc_info=True,
+                        )
 
         if self._agent_session:
             self._agent_session.off("conversation_item_added", self._on_conversation_item_added)

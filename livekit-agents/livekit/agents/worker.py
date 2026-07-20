@@ -52,7 +52,7 @@ from .log import DEV_LEVEL, logger
 from .plugin import Plugin
 from .simulation import SimulationContext
 from .types import ATTRIBUTE_AGENT_NAME, NOT_GIVEN, NotGivenOr
-from .utils import http_server, is_given
+from .utils import http_context, http_server, is_given
 from .utils.hw import get_cpu_monitor
 from .version import __version__
 
@@ -61,6 +61,7 @@ UPDATE_STATUS_INTERVAL = 2.5
 UPDATE_LOAD_INTERVAL = 0.5
 HEARTBEAT_INTERVAL = 30
 WORKER_PROTOCOL_VERSION = 1
+DRAIN_TIMEOUT = 3600  # 1hr
 
 
 def _default_setup_fnc(proc: JobProcess) -> Any:
@@ -201,7 +202,7 @@ class ServerOptions:
     Defaults to 0 (disabled).
     """  # noqa: E501
 
-    drain_timeout: int = 1800
+    drain_timeout: int = DRAIN_TIMEOUT
     """Number of seconds to wait for current jobs to finish upon receiving TERM or INT signal."""
     num_idle_processes: int | ServerEnvOption[int] = ServerEnvOption(
         dev_default=0, prod_default=min(math.ceil(get_cpu_monitor().cpu_count()), 4)
@@ -306,7 +307,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         load_threshold: float | ServerEnvOption[float] = _default_load_threshold,
         job_memory_warn_mb: float = 1000,
         job_memory_limit_mb: float = 0,
-        drain_timeout: int = 1800,
+        drain_timeout: int = DRAIN_TIMEOUT,
         num_idle_processes: int | ServerEnvOption[int] = _default_num_idle_processes,
         shutdown_process_timeout: float = 10.0,
         session_end_timeout: float = 300.0,
@@ -726,6 +727,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             if self._deployment:
                 os.environ["LIVEKIT_AGENT_DEPLOYMENT"] = self._deployment
 
+            # must run before job processes spawn so they inherit the SSL_CERT_FILE fallback
+            http_context._set_default_cert_env()
+
             logger.info(
                 "starting worker",
                 extra={"version": __version__, "rtc-version": rtc.__version__},
@@ -783,7 +787,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._proc_pool.on("process_job_launched", _update_job_status)
             await self._proc_pool.start()
 
-            self._http_session = aiohttp.ClientSession(proxy=self._http_proxy or None)
+            self._http_session = aiohttp.ClientSession(
+                proxy=self._http_proxy or None,
+                connector=aiohttp.TCPConnector(ssl=http_context._create_ssl_context()),
+            )
             if self._ws_url:
                 self._api = api.LiveKitAPI(
                     self._ws_url, self._api_key, self._api_secret, session=self._http_session
