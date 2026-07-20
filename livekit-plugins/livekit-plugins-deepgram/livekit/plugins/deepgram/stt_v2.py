@@ -659,7 +659,7 @@ class SpeechStreamv2(stt.SpeechStream):
             logger.warning("deepgram rejected Configure update", extra={"lk.pii.data": data})
 
         elif data["type"] == "Error":
-            logger.warning("deepgram sent an error", extra={"data": data})
+            logger.warning("deepgram sent an error", extra={"lk.pii.data": data})
             desc = data.get("description") or "unknown error from deepgram"
             code = -1
             raise APIStatusError(message=desc, status_code=code)

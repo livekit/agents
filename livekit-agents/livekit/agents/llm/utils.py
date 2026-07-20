@@ -751,7 +751,7 @@ def make_function_call_output(
     if not _is_valid_function_output(output):
         logger.error(
             f"AI function `{fnc_call.name}` returned an invalid output",
-            extra={"call_id": fnc_call.call_id, "output": output},
+            extra={"call_id": fnc_call.call_id, "lk.pii.output": output},
         )
         return FunctionCallResult(
             fnc_call=fnc_call,
