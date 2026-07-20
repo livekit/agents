@@ -22,8 +22,7 @@ def _job_redaction_enabled() -> bool:
     job_ctx = get_job_context(required=False)
     if job_ctx is None:
         return False
-    # TODO: @chenghao-mou use direct attribute once the bump is added
-    return bool(getattr(job_ctx.job, "enable_redaction", False))
+    return job_ctx.job.enable_redaction
 
 
 def record_exception(
