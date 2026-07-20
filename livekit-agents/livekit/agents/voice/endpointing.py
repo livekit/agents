@@ -85,16 +85,12 @@ class DynamicEndpointing(BaseEndpointing):
 
     @property
     def min_delay(self) -> float:
-        return (
+        return min(
             self._utterance_pause.value
             if self._utterance_pause.value is not None
-            else self._min_delay
+            else self._min_delay,
+            self.max_delay,
         )
-
-    @property
-    def max_delay(self) -> float:
-        # fixed ceiling, clamped so a learned min_delay can never exceed it
-        return max(self._max_delay, self.min_delay)
 
     @property
     def between_utterance_delay(self) -> float:
@@ -137,8 +133,8 @@ class DynamicEndpointing(BaseEndpointing):
         self._overlapping = False
 
     def on_end_of_agent_speech(self, ended_at: float) -> None:
-        # NOTE: intentionally keep _agent_speech_started_at so that
-        # between_turn_delay can be computed in the normal end-of-speech path
+        # Keep the agent speech timestamps until the next user utterance ends so
+        # the pause across an agent turn is not learned as an intra-user pause.
         # NOTE: we also guard against duplicate calls from pipeline reply and pipeline reply done
         if self._agent_speech_started_at is not None and (
             self._agent_speech_ended_at is None
@@ -223,7 +219,8 @@ class DynamicEndpointing(BaseEndpointing):
                     },
                 )
 
-        else:  # this is a normal end of speech
+        else:
+            # Only learn an intra-user pause when no agent turn occurred between utterances.
             if (
                 (pause := self.between_utterance_delay) > 0
                 and self._agent_speech_ended_at is None

@@ -199,15 +199,28 @@ class TestDynamicEndpointing:
 
         assert ep.max_delay == 1.0
 
-    def test_max_delay_clamped_to_min_delay(self) -> None:
-        """max_delay never drops below min_delay, even if min exceeds the ceiling."""
+    def test_min_delay_clamped_to_max_delay(self) -> None:
+        """The fixed max_delay ceiling clamps min_delay from above."""
         ep = DynamicEndpointing(min_delay=0.3, max_delay=1.0)
 
         ep.update_options(min_delay=1.5)  # floor pushed above the configured ceiling
 
-        assert ep.min_delay == pytest.approx(1.5, rel=1e-5)
-        assert ep.max_delay == pytest.approx(1.5, rel=1e-5)
-        assert ep.max_delay >= ep.min_delay
+        assert ep.min_delay == pytest.approx(1.0, rel=1e-5)
+        assert ep.max_delay == pytest.approx(1.0, rel=1e-5)
+
+    def test_lowering_max_delay_clamps_learned_min_delay(self) -> None:
+        """Updating max_delay immediately clamps an already-learned min_delay."""
+        ep = DynamicEndpointing(min_delay=0.3, max_delay=1.0, alpha=0.5)
+
+        ep.on_end_of_speech(ended_at=100.0)
+        ep.on_start_of_speech(started_at=101.0)
+        ep.on_end_of_speech(ended_at=101.5)
+        assert ep.min_delay == pytest.approx(0.65, rel=1e-5)
+
+        ep.update_options(max_delay=0.5)
+
+        assert ep.min_delay == pytest.approx(0.5, rel=1e-5)
+        assert ep.max_delay == pytest.approx(0.5, rel=1e-5)
 
     def test_non_interruption_clears_agent_speech(self) -> None:
         """Test that non-interruption utterance start clears agent speech timestamp."""
@@ -273,7 +286,7 @@ class TestDynamicEndpointing:
         assert ep._utterance_pause._alpha == pytest.approx(0.5, rel=1e-5)
 
     def test_update_options_updates_alpha_in_place(self) -> None:
-        """update_options(alpha=...) should update both EMA filters without resetting learned state."""
+        """Updating alpha should update the EMA filter without resetting learned state."""
         ep = DynamicEndpointing(min_delay=0.3, max_delay=1.0, alpha=0.5)
 
         # Record some history so the filter has a non-initial value.
@@ -494,7 +507,7 @@ class TestDynamicEndpointing:
                 user_start = 100.4
             else:
                 # Delayed: agent spoke but user starts much later (inferred interruption)
-                # between_turn_delay=0.9 → case 3 updates max_delay
+                # Delayed interruptions do not update either delay.
                 ep.on_start_of_agent_speech(started_at=100.9)
                 user_start = 101.8
         else:
@@ -563,7 +576,7 @@ class TestDynamicEndpointing:
 
 class TestCreateEndpointing:
     def test_dynamic_mode_wires_alpha(self) -> None:
-        """create_endpointing should pass alpha through to both EMA filters."""
+        """create_endpointing should pass alpha through to the EMA filter."""
         ep = create_endpointing(
             {"mode": "dynamic", "min_delay": 0.3, "max_delay": 1.0, "alpha": 0.7}
         )
