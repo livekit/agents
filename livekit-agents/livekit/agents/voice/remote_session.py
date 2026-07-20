@@ -329,6 +329,7 @@ def _chat_item_to_proto(item: llm.ChatItem) -> agent_pb.ChatContext.ChatItem:
         return agent_pb.ChatContext.ChatItem(
             function_call_output=agent_pb.FunctionCallOutput(
                 call_id=item.call_id,
+                name=item.name,
                 output=item.output,
                 is_error=item.is_error,
             )
@@ -521,6 +522,7 @@ class SessionHost:
         pb_outputs = [
             agent_pb.FunctionCallOutput(
                 call_id=fco.call_id,
+                name=fco.name,
                 output=fco.output,
                 is_error=fco.is_error,
             )
