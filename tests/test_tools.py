@@ -759,6 +759,43 @@ class TestNullSentinelForDefaults:
             assert not _json_schema_allows_null(prop, root=schema), f"{field}: {prop}"
             assert "default" not in prop
 
+    def test_described_ref_default_keeps_ref_free_of_siblings(self):
+        # a documented tool param whose type is a nested model and that has a
+        # default arrives as {"$ref", "default", "description"}; strict mode
+        # forbids siblings on $ref, so the description must stay on the wrapper
+        @function_tool
+        async def tool_with_documented_model_arg(
+            query: str,
+            config: _SentinelChildModel = _SentinelChildModel(),  # noqa: B008
+        ) -> str:
+            """Does a thing.
+
+            Args:
+                query: What to search for.
+                config: Optional configuration for the search.
+            """
+            return "ok"
+
+        schema = build_strict_openai_schema(tool_with_documented_model_arg)["function"][
+            "parameters"
+        ]
+
+        def assert_no_ref_siblings(node, path="$"):
+            if isinstance(node, dict):
+                if "$ref" in node:
+                    assert len(node) == 1, f"$ref with siblings at {path}: {sorted(node)}"
+                for key, value in node.items():
+                    assert_no_ref_siblings(value, f"{path}.{key}")
+            elif isinstance(node, list):
+                for i, value in enumerate(node):
+                    assert_no_ref_siblings(value, f"{path}[{i}]")
+
+        assert_no_ref_siblings(schema)
+
+        config = schema["properties"]["config"]
+        assert config["description"] == "Optional configuration for the search."
+        assert _json_schema_allows_null(config, root=schema)
+
 
 class _CarModel(BaseModel):
     vehicle: Literal["Car"]

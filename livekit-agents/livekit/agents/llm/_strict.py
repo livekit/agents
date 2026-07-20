@@ -268,7 +268,13 @@ def _add_null_sentinel(json_schema: dict[str, Any]) -> None:
     if not inner:
         return
     json_schema.clear()
-    json_schema["anyOf"] = [inner, {"type": "null"}]
+    if "$ref" in inner and len(inner) > 1:
+        # strict mode forbids siblings on $ref (but allows them on anyOf), so keep
+        # the siblings (e.g. description) on the wrapper and the ref alone inside
+        json_schema.update(inner)
+        json_schema["anyOf"] = [{"$ref": json_schema.pop("$ref")}, {"type": "null"}]
+    else:
+        json_schema["anyOf"] = [inner, {"type": "null"}]
 
 
 def resolve_ref(*, root: dict[str, object], ref: str) -> object:
