@@ -967,7 +967,7 @@ class RealtimeSession(  # noqa: F811
                     restart_ctx.items.pop()
                     logger.debug(
                         "[SESSION] Popped last user message for interactive send",
-                        extra={"lk.pii.user_text": interactive_user_text[:60]},
+                        extra={"lk.pii.user_text": f"{interactive_user_text[:60]}..."},
                     )
 
             init_events, history_events = self._event_builder.create_prompt_start_block(
@@ -1017,7 +1017,7 @@ class RealtimeSession(  # noqa: F811
                 await self._stream_ready.wait()
                 logger.debug(
                     "[SESSION] Sending interactive user text",
-                    extra={"lk.pii.user_text": interactive_user_text[:60]},
+                    extra={"lk.pii.user_text": f"{interactive_user_text[:60]}..."},
                 )
                 await self._send_text_message(interactive_user_text, interactive=True)
 
@@ -1523,7 +1523,7 @@ class RealtimeSession(  # noqa: F811
                         except json.JSONDecodeError:
                             logger.warning(
                                 "JSON decode error",
-                                extra={"lk.pii.response_data": response_data},
+                                extra={"lk.pii.response_data": f"{response_data}"},
                             )
                     else:
                         logger.warning("No response received")

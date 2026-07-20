@@ -806,11 +806,17 @@ class SpeechStream(stt.RecognizeStream):
             AgentServerMessageType.RECOGNITION_STARTED,
             AgentServerMessageType.INFO,
         ]:
-            logger.info(f"{event} -> {message}")
+            logger.info(
+                "speechmatics sent info message", extra={"event": event, "lk.pii.message": message}
+            )
         elif event == AgentServerMessageType.WARNING:
-            logger.warning(f"{event} -> {message}")
+            logger.warning(
+                "speechmatics sent warning", extra={"event": event, "lk.pii.message": message}
+            )
         elif event == AgentServerMessageType.ERROR:
-            logger.error(f"{event} -> {message}")
+            logger.error(
+                "speechmatics sent error", extra={"event": event, "lk.pii.message": message}
+            )
 
         # Handle the messages
         elif event == AgentServerMessageType.ADD_PARTIAL_SEGMENT:

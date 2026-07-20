@@ -424,7 +424,7 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
         elif data["type"] == "error":
             message = data.get("message") or "unknown error from cartesia"
             status_code = data.get("code") or 500
-            logger.warning("cartesia sent an error", extra={"data": data})
+            logger.warning("cartesia sent an error", extra={"lk.pii.data": data})
             if status_code >= 500:
                 raise APIConnectionError(message=message, retryable=True)
         else:
