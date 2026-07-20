@@ -415,6 +415,12 @@ class TTS(tts.TTS):
         self._active_candidate_index = 0
         self._candidate_tts: list[TTS] = [self]
         self._is_candidate = _candidate
+        # Set by the parent chain on candidates it constructs itself: such
+        # candidates safely receive runtime option updates, and their voice is
+        # only updated when it was inherited from the chain-level default
+        # rather than set explicitly per candidate.
+        self._managed_candidate = False
+        self._inherits_voice = False
         self._streams = weakref.WeakSet[SynthesizeStream]()
         self._ws_connection_timings: dict[int, _WsConnectionTiming] = {}
         self._standby_lock = asyncio.Lock()
@@ -468,6 +474,8 @@ class TTS(tts.TTS):
                         _candidate=True,
                         **model_options,
                     )
+                    candidate._managed_candidate = True
+                    candidate._inherits_voice = config.voice is None
                 if (
                     candidate.sample_rate != self.sample_rate
                     or candidate.num_channels != self.num_channels
@@ -678,6 +686,19 @@ class TTS(tts.TTS):
             with contextlib.suppress(RuntimeError):
                 asyncio.get_running_loop().create_task(self._close_standby())
 
+        # Keep chain-built fallback candidates consistent with the primary so a
+        # later failover does not synthesize with construction-time settings.
+        # A candidate with an explicit per-candidate voice keeps it; prebuilt
+        # TTS candidates are user-owned and are not mutated.
+        if not self._is_candidate:
+            for candidate in self._candidate_tts[1:]:
+                if not candidate._managed_candidate:
+                    continue
+                candidate.update_options(
+                    voice=voice if is_given(voice) and candidate._inherits_voice else NOT_GIVEN,
+                    language=language,
+                )
+
     def synthesize(
         self,
         text: str,
@@ -723,8 +744,10 @@ class TTS(tts.TTS):
 
     def prewarm(self) -> None:
         if len(self._candidate_tts) > 1 and not self._is_candidate:
-            self._candidate_tts[self._candidate_state.start()].prewarm()
-            return
+            active = self._candidate_tts[self._candidate_state.start()]
+            if active is not self:
+                active.prewarm()
+                return
         if self.warm_standby_enabled:
             self._start_standby_replenish(timeout=10.0)
         # Without warm standby there is nothing to prewarm: every segment uses
