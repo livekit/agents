@@ -22,7 +22,7 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGive
 from livekit.agents.utils import is_given
 
 from .log import logger
-from .models import LatencyMode, OutputFormat, TTSModels
+from .models import LatencyMode, MP3Bitrate, OpusBitrate, OutputFormat, TTSModels
 from .version import __version__
 
 DEFAULT_MODEL: TTSModels = "s2.1-pro"
@@ -53,6 +53,11 @@ class _TTSOptions:
     chunk_length: int
     speed: NotGivenOr[float]
     volume: NotGivenOr[float]
+    temperature: float
+    top_p: float
+    mp3_bitrate: MP3Bitrate
+    opus_bitrate: OpusBitrate
+    normalize: bool
 
     def get_http_url(self, path: str) -> str:
         return f"{self.base_url}{path}"
@@ -75,6 +80,11 @@ class TTS(tts.TTS):
         chunk_length: int = 100,
         speed: NotGivenOr[float] = NOT_GIVEN,
         volume: NotGivenOr[float] = NOT_GIVEN,
+        temperature: float = 0.7,
+        top_p: float = 0.7,
+        mp3_bitrate: MP3Bitrate = 64,
+        opus_bitrate: OpusBitrate = 64000,
+        normalize: bool = True,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
@@ -104,6 +114,16 @@ class TTS(tts.TTS):
             volume (NotGivenOr[float]): Loudness adjustment in decibels (Fish
                 ``prosody.volume``). ``0`` is the voice's natural level. Unset leaves it
                 unchanged.
+            temperature (float): Sampling temperature (0–1). Higher values produce more
+                varied, expressive speech; lower values are more stable. Defaults to 0.7.
+            top_p (float): Nucleus sampling probability mass (0–1). Defaults to 0.7.
+            mp3_bitrate (MP3Bitrate): MP3 bitrate in kbps: 64, 128, or 192. Only used
+                when ``output_format`` is ``"mp3"``. Defaults to 64.
+            opus_bitrate (OpusBitrate): Opus bitrate in bps: -1000 (auto), 24000, 32000,
+                48000, or 64000. Only used when ``output_format`` is ``"opus"``.
+                Defaults to 64000.
+            normalize (bool): Whether Fish normalizes the input text (numbers, dates,
+                abbreviations) before synthesis. Defaults to True.
             tokenizer (tokenize.SentenceTokenizer): Sentence tokenizer used to detect
                 sentence boundaries. Defaults to ``tokenize.blingfire.SentenceTokenizer()``.
             http_session (aiohttp.ClientSession | None): Optional aiohttp session.
@@ -133,6 +153,10 @@ class TTS(tts.TTS):
 
         if not 100 <= chunk_length <= 300:
             raise ValueError("chunk_length must be between 100 and 300")
+        if not 0 <= temperature <= 1:
+            raise ValueError("temperature must be between 0 and 1")
+        if not 0 <= top_p <= 1:
+            raise ValueError("top_p must be between 0 and 1")
 
         self._opts = _TTSOptions(
             model=model,
@@ -145,6 +169,11 @@ class TTS(tts.TTS):
             chunk_length=chunk_length,
             speed=speed,
             volume=volume,
+            temperature=temperature,
+            top_p=top_p,
+            mp3_bitrate=mp3_bitrate,
+            opus_bitrate=opus_bitrate,
+            normalize=normalize,
         )
 
         self._session = http_session
@@ -219,6 +248,11 @@ class TTS(tts.TTS):
         chunk_length: NotGivenOr[int] = NOT_GIVEN,
         speed: NotGivenOr[float] = NOT_GIVEN,
         volume: NotGivenOr[float] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+        mp3_bitrate: NotGivenOr[MP3Bitrate] = NOT_GIVEN,
+        opus_bitrate: NotGivenOr[OpusBitrate] = NOT_GIVEN,
+        normalize: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         if is_given(model) and model != self._opts.model:
             self._opts.model = model
@@ -239,6 +273,20 @@ class TTS(tts.TTS):
             self._opts.speed = speed
         if is_given(volume):
             self._opts.volume = volume
+        if is_given(temperature):
+            if not 0 <= temperature <= 1:
+                raise ValueError("temperature must be between 0 and 1")
+            self._opts.temperature = temperature
+        if is_given(top_p):
+            if not 0 <= top_p <= 1:
+                raise ValueError("top_p must be between 0 and 1")
+            self._opts.top_p = top_p
+        if is_given(mp3_bitrate):
+            self._opts.mp3_bitrate = mp3_bitrate
+        if is_given(opus_bitrate):
+            self._opts.opus_bitrate = opus_bitrate
+        if is_given(normalize):
+            self._opts.normalize = normalize
 
     def synthesize(
         self,
@@ -283,17 +331,17 @@ def _build_tts_request(opts: _TTSOptions, *, text: str = "") -> dict[str, Any]:
         "chunk_length": opts.chunk_length,
         "format": opts.output_format,
         "sample_rate": opts.sample_rate,
-        "mp3_bitrate": 64,
-        "opus_bitrate": 64000,
+        "mp3_bitrate": opts.mp3_bitrate,
+        "opus_bitrate": opts.opus_bitrate,
         "references": [],
         # Fish Audio's wire field is `reference_id`; we expose it as `voice_id` on
         # the plugin for consistency with other TTS plugins.
         "reference_id": opts.voice_id if is_given(opts.voice_id) else None,
-        "normalize": True,
+        "normalize": opts.normalize,
         "latency": opts.latency_mode,
         "prosody": prosody,
-        "top_p": 0.7,
-        "temperature": 0.7,
+        "top_p": opts.top_p,
+        "temperature": opts.temperature,
     }
 
 

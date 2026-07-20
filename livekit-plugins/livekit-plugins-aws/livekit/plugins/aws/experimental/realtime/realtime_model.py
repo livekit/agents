@@ -1822,13 +1822,8 @@ class RealtimeSession(  # noqa: F811
                     self._chat_ctx.items.append(item)
                 else:
                     logger.debug(
-<<<<<<< HEAD
                         "Skipping user message (already in context from audio)",
-                        extra={"lk.pii.text_content": item.text_content},
-=======
-                        "Skipping user message (already in context from audio): "
-                        f"{item.raw_text_content}"
->>>>>>> main
+                        extra={"lk.pii.text_content": item.raw_text_content},
                     )
                     self._sent_message_ids.add(item.id)
 

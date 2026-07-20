@@ -949,46 +949,53 @@ class SpeechStream(stt.SpeechStream):
 
         has_ended = False
         last_frame: rtc.AudioFrame | None = None
+        closing_ws = False
 
-        async for data in self._input_ch:
-            if not self._ws:
-                break
+        try:
+            async for data in self._input_ch:
+                if not self._ws:
+                    break
 
-            frames: list[rtc.AudioFrame] = []
-            if isinstance(data, rtc.AudioFrame):
-                state = self._check_energy_state(data)
-                if state in (
-                    AudioEnergyFilter.State.START,
-                    AudioEnergyFilter.State.SPEAKING,
-                ):
-                    if last_frame:
-                        frames.extend(audio_bstream.write(last_frame.data.tobytes()))
-                        last_frame = None
-                    frames.extend(audio_bstream.write(data.data.tobytes()))
-                elif state == AudioEnergyFilter.State.END:
+                frames: list[rtc.AudioFrame] = []
+                if isinstance(data, rtc.AudioFrame):
+                    state = self._check_energy_state(data)
+                    if state in (
+                        AudioEnergyFilter.State.START,
+                        AudioEnergyFilter.State.SPEAKING,
+                    ):
+                        if last_frame:
+                            frames.extend(audio_bstream.write(last_frame.data.tobytes()))
+                            last_frame = None
+                        frames.extend(audio_bstream.write(data.data.tobytes()))
+                    elif state == AudioEnergyFilter.State.END:
+                        frames = audio_bstream.flush()
+                        has_ended = True
+                    elif state == AudioEnergyFilter.State.SILENCE:
+                        last_frame = data
+                elif isinstance(data, self._FlushSentinel):
                     frames = audio_bstream.flush()
                     has_ended = True
-                elif state == AudioEnergyFilter.State.SILENCE:
-                    last_frame = data
-            elif isinstance(data, self._FlushSentinel):
-                frames = audio_bstream.flush()
-                has_ended = True
 
-            for frame in frames:
-                self._audio_duration_collector.push(frame.duration)
-                # Encode the audio data as base64
-                chunk_b64 = base64.b64encode(frame.data.tobytes()).decode("utf-8")
-                message = json.dumps({"type": "audio_chunk", "data": {"chunk": chunk_b64}})
-                await self._ws.send_str(message)
+                for frame in frames:
+                    self._audio_duration_collector.push(frame.duration)
+                    # Encode the audio data as base64
+                    chunk_b64 = base64.b64encode(frame.data.tobytes()).decode("utf-8")
+                    message = json.dumps({"type": "audio_chunk", "data": {"chunk": chunk_b64}})
+                    await self._ws.send_str(message)
 
-                if has_ended:
-                    self._audio_duration_collector.flush()
-                    await self._ws.send_str(json.dumps({"type": "stop_recording"}))
-                    has_ended = False
+                    if has_ended:
+                        self._audio_duration_collector.flush()
+                        await self._ws.send_str(json.dumps({"type": "stop_recording"}))
+                        has_ended = False
 
-        # Tell Gladia we're done sending audio when the stream ends
-        if self._ws:
-            await self._ws.send_str(json.dumps({"type": "stop_recording"}))
+            # Tell Gladia we're done sending audio when the stream ends
+            closing_ws = True
+            if self._ws:
+                await self._ws.send_str(json.dumps({"type": "stop_recording"}))
+        except (aiohttp.ClientError, ConnectionError) as e:
+            if closing_ws or self._session.closed:
+                return
+            raise APIConnectionError("Gladia connection closed unexpectedly") from e
 
     async def _recv_messages_task(self) -> None:
         """Receive and process messages from Gladia WebSocket."""

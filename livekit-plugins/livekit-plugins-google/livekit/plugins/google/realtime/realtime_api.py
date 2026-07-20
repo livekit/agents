@@ -178,8 +178,18 @@ class _ResponseGeneration:
     """The timestamp when the generation is completed"""
     _done: bool = False
     """Whether the generation is done (set when the turn is complete)"""
+    _extra_content_warned: bool = False
+    """Whether we've warned about audio/text arriving after generation completed"""
 
     def push_text(self, text: str) -> None:
+        if self.text_ch.closed:
+            # generation_complete already finalized the output; a turn should not emit
+            # more text, so drop it (see _handle_server_content)
+            if not self._extra_content_warned:
+                self._extra_content_warned = True
+                logger.warning("Gemini sent text after generation completed; dropping it")
+            return
+
         if self.output_text:
             self.output_text += text
         else:
@@ -1261,6 +1271,15 @@ class RealtimeSession(llm.RealtimeSession):
                 if part.text:
                     current_gen.push_text(part.text)
                 if part.inline_data:
+                    if current_gen.audio_ch.closed:
+                        # generation_complete already closed the audio stream; a turn
+                        # should not emit more audio, so drop any late frame
+                        if not current_gen._extra_content_warned:
+                            current_gen._extra_content_warned = True
+                            logger.warning(
+                                "Gemini sent audio after generation completed; dropping it"
+                            )
+                        continue
                     if not current_gen._first_token_timestamp:
                         current_gen._first_token_timestamp = time.time()
                     frame_data = part.inline_data.data
@@ -1301,6 +1320,11 @@ class RealtimeSession(llm.RealtimeSession):
 
         if server_content.generation_complete or server_content.turn_complete:
             current_gen._completed_timestamp = time.time()
+
+        # gemini delays turn_complete until it thinks client-side playback finished, so end
+        # the output streams on generation_complete instead
+        if server_content.generation_complete:
+            self._close_output_streams(current_gen)
 
         if server_content.interrupted and not self._pending_generation_fut:
             # interrupt agent if there is no pending user initiated generation
@@ -1345,6 +1369,17 @@ class RealtimeSession(llm.RealtimeSession):
                 id=gen.response_id,
             )
 
+        self._close_output_streams(gen)
+
+        gen.function_ch.close()
+        gen.message_ch.close()
+        gen._done = True
+        if lk_google_debug:
+            logger.debug("generation done", extra={"lk.pii.generation": str(gen)})
+
+    def _close_output_streams(self, gen: _ResponseGeneration) -> None:
+        # ends the audio segment and finalizes the output transcript. called on
+        # generation_complete (audio/text are done by then) and again at final teardown.
         if not gen.text_ch.closed:
             if self._opts.output_audio_transcription is None:
                 # close the text data of transcription synchronizer
@@ -1352,12 +1387,6 @@ class RealtimeSession(llm.RealtimeSession):
             gen.text_ch.close()
         if not gen.audio_ch.closed:
             gen.audio_ch.close()
-
-        gen.function_ch.close()
-        gen.message_ch.close()
-        gen._done = True
-        if lk_google_debug:
-            logger.debug("generation done", extra={"lk.pii.generation": str(gen)})
 
     def _handle_input_speech_started(self) -> None:
         self.emit("input_speech_started", llm.InputSpeechStartedEvent())
