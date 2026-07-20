@@ -9,6 +9,7 @@ Two paths, both emitting 16-bit PCM mono @ 24 kHz:
 
 Auth is a Bearer API key (``qdl_live_…``). Get one at https://web.quickdial.ai.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -30,7 +31,6 @@ from livekit.agents import (
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
-from .log import logger
 from .models import TTSVoices
 
 DEFAULT_BASE_URL = "https://api.quickdial.ai"
@@ -62,7 +62,7 @@ class TTS(tts.TTS):
         base_url: str = DEFAULT_BASE_URL,
         sample_rate: int = SAMPLE_RATE,
         params: NotGivenOr[dict] = NOT_GIVEN,
-        word_tokenizer: NotGivenOr["tokenize.WordTokenizer"] = NOT_GIVEN,  # type: ignore  # noqa: F821
+        word_tokenizer: NotGivenOr[tokenize.WordTokenizer] = NOT_GIVEN,  # type: ignore  # noqa: F821
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         """Create a Quickdial TTS.
@@ -86,9 +86,7 @@ class TTS(tts.TTS):
         )
         key = api_key if is_given(api_key) else os.environ.get("QUICKDIAL_API_KEY", "")
         if not key:
-            raise ValueError(
-                "Quickdial API key required — pass api_key= or set QUICKDIAL_API_KEY"
-            )
+            raise ValueError("Quickdial API key required — pass api_key= or set QUICKDIAL_API_KEY")
         from livekit.agents import tokenize  # local import to avoid hard dep at top
 
         self._opts = _TTSOptions(

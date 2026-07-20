@@ -2,15 +2,16 @@
 # Licensed under the Apache License, Version 2.0
 """Quickdial plugin for LiveKit Agents — cheap, fast, real-time TTS & STT.
 
-    from livekit.plugins import quickdial
+from livekit.plugins import quickdial
 
-    session = AgentSession(
-        tts=quickdial.TTS(voice="alba"),
-        stt=quickdial.STT(language="en"),
-        vad=silero.VAD.load(),
-        llm=...,
-    )
+session = AgentSession(
+    tts=quickdial.TTS(voice="alba"),
+    stt=quickdial.STT(language="en"),
+    vad=silero.VAD.load(),
+    llm=...,
+)
 """
+
 from livekit.agents import Plugin
 
 from .log import logger

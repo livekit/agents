@@ -9,6 +9,7 @@
 Pair with a VAD (e.g. ``silero.VAD``) so end-of-utterance is detected; the plugin
 emits a FINAL_TRANSCRIPT per utterance (no interim results yet).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -30,7 +31,6 @@ from livekit.agents import (
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
 
-from .log import logger
 from .models import STTLanguages
 
 DEFAULT_BASE_URL = "https://api.quickdial.ai"
@@ -66,14 +66,10 @@ class STT(stt.STT):
         # run as a NON-streaming STT: the AgentSession's VAD segments speech and
         # calls _recognize_impl (POST /v1/stt) per utterance. This is the reliable
         # path; the WS SpeechStream remains available for advanced use.
-        super().__init__(
-            capabilities=stt.STTCapabilities(streaming=False, interim_results=False)
-        )
+        super().__init__(capabilities=stt.STTCapabilities(streaming=False, interim_results=False))
         key = api_key if is_given(api_key) else os.environ.get("QUICKDIAL_API_KEY", "")
         if not key:
-            raise ValueError(
-                "Quickdial API key required — pass api_key= or set QUICKDIAL_API_KEY"
-            )
+            raise ValueError("Quickdial API key required — pass api_key= or set QUICKDIAL_API_KEY")
         self._opts = _STTOptions(
             language=language,
             sample_rate=sample_rate,
@@ -147,9 +143,7 @@ def _to_speech_event(data: dict, language: str) -> stt.SpeechEvent:
 
 
 class SpeechStream(stt.SpeechStream):
-    def __init__(
-        self, *, stt: STT, opts: _STTOptions, conn_options: APIConnectOptions
-    ) -> None:
+    def __init__(self, *, stt: STT, opts: _STTOptions, conn_options: APIConnectOptions) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._stt: STT = stt
         self._opts = opts
