@@ -24,7 +24,7 @@ from ..llm import (
 from ..llm.chat_context import Instructions
 from ..log import logger
 from ..telemetry import trace_types, tracer
-from ..tokenize import blingfire
+from ..tokenize import SentenceTokenizer, blingfire
 from ..types import (
     USERDATA_TIMED_TRANSCRIPT,
     USERDATA_TTS_STARTED_TIME,
@@ -66,13 +66,6 @@ class _LLMGenerationData:
 # output for an injected in-progress tool call, phrased so the model waits instead of
 # re-issuing the call.
 _RUNNING_TOOL_PLACEHOLDER = "The tool call is still in progress."
-
-
-# Stateless and cheap to construct, min_sentence_len=1
-# keeps short first sentences (e.g. "Hi there.") counted when timing ttfs.
-_SENTENCE_TOKENIZER = blingfire.SentenceTokenizer(min_sentence_len=1)
-
-
 # extra flag marking an injected pair so it can be stripped before the ctx is forwarded.
 _RUNNING_PLACEHOLDER_KEY = "__lk_running_placeholder__"
 
@@ -160,12 +153,22 @@ def perform_llm_inference(
     model_settings: ModelSettings,
     model: str | None = None,
     provider: str | None = None,
+    sentence_tokenizer: SentenceTokenizer | None = None,
 ) -> tuple[asyncio.Task[bool], _LLMGenerationData]:
     text_ch = aio.Chan[str | FlushSentinel]()
     function_ch = aio.Chan[llm.FunctionCall]()
     data = _LLMGenerationData(text_ch=text_ch, function_ch=function_ch)
     llm_task = asyncio.create_task(
-        _llm_inference_task(node, chat_ctx, tool_ctx, model_settings, data, model, provider)
+        _llm_inference_task(
+            node,
+            chat_ctx,
+            tool_ctx,
+            model_settings,
+            data,
+            model,
+            provider,
+            sentence_tokenizer=sentence_tokenizer,
+        )
     )
     llm_task.add_done_callback(lambda _: text_ch.close())
     llm_task.add_done_callback(lambda _: function_ch.close())
@@ -189,6 +192,8 @@ async def _llm_inference_task(
     data: _LLMGenerationData,
     model: str | None = None,
     provider: str | None = None,
+    *,
+    sentence_tokenizer: SentenceTokenizer | None = None,
 ) -> bool:
     start_time = time.perf_counter()
     current_span = trace.get_current_span()
@@ -239,9 +244,9 @@ async def _llm_inference_task(
 
     # forward llm stream to output channels
     usage: Any = None
-    # Time the first complete sentence (ttfs) with a streaming tokenizer that consumes
-    # text incrementally without re-tokenizing the whole generation each chunk.
-    sentence_stream = _SENTENCE_TOKENIZER.stream()
+    if sentence_tokenizer is None:
+        sentence_tokenizer = blingfire.SentenceTokenizer(retain_format=True)
+    sentence_stream = sentence_tokenizer.stream()
 
     async def _set_time_first_sentence() -> None:
         try:

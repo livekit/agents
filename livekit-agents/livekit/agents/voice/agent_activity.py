@@ -15,7 +15,7 @@ from livekit import rtc
 from livekit.agents.llm.realtime import MessageGeneration
 from livekit.agents.metrics.base import Metadata
 
-from .. import inference, llm, stt, tts, utils, vad
+from .. import inference, llm, stt, tokenize, tts, utils, vad
 from ..llm.chat_context import Instructions
 from ..llm.realtime_fallback_adapter import _FallbackRealtimeSession
 from ..llm.tool_context import (
@@ -2544,6 +2544,20 @@ class AgentActivity(RecognitionHooks):
             return DEFAULT_EXPRESSIVE_OPTIONS
         return None
 
+    def _tts_sentence_tokenizer(self) -> tokenize.SentenceTokenizer:
+        """Sentence tokenizer matching what the TTS path applies to this generation,
+        mirroring `Agent.default.tts_node` and the inference TTS provider defaults.
+        Custom `tts_node` overrides and provider-side segmentation aren't visible here,
+        so those fall back to the `StreamAdapter` default."""
+        expressive_active = self._resolve_expressive_options() is not None
+        if isinstance(self.tts, tts.StreamAdapter):
+            return self.tts._sentence_tokenizer
+        if isinstance(self.tts, inference.TTS):
+            from ..tts._provider_format import sentence_tokenizer
+
+            return sentence_tokenizer(self.tts.model.split("/")[0], expressive=expressive_active)
+        return tokenize.blingfire.SentenceTokenizer(retain_format=True, xml_aware=expressive_active)
+
     def _inject_expressive_instructions(
         self,
         chat_ctx: llm.ChatContext,
@@ -2963,6 +2977,7 @@ class AgentActivity(RecognitionHooks):
             model_settings=model_settings,
             model=self.llm.model if self.llm else None,
             provider=self.llm.provider if self.llm else None,
+            sentence_tokenizer=self._tts_sentence_tokenizer(),
         )
         tasks.append(llm_task)
 

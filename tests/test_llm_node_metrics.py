@@ -10,7 +10,6 @@ from livekit.agents.tokenize import blingfire
 from livekit.agents.utils import aio
 from livekit.agents.voice.agent import ModelSettings
 from livekit.agents.voice.generation import (
-    _SENTENCE_TOKENIZER,
     _llm_inference_task,
     _LLMGenerationData,
 )
@@ -28,7 +27,10 @@ def _fake_node(chunks: list[ChatChunk]):
     return node
 
 
-async def _run_inference(chunks: list[ChatChunk]) -> _LLMGenerationData:
+async def _run_inference(
+    chunks: list[ChatChunk],
+    sentence_tokenizer: blingfire.SentenceTokenizer | None = None,
+) -> _LLMGenerationData:
     data = _LLMGenerationData(text_ch=aio.Chan(), function_ch=aio.Chan())
     await _llm_inference_task(
         _fake_node(chunks),
@@ -36,6 +38,7 @@ async def _run_inference(chunks: list[ChatChunk]) -> _LLMGenerationData:
         ToolContext.empty(),
         ModelSettings(),
         data,
+        sentence_tokenizer=sentence_tokenizer,
     )
     return data
 
@@ -70,6 +73,18 @@ class TestLLMNodeTps:
         assert data.tps is None
 
 
+class _RecordingTokenizer(blingfire.SentenceTokenizer):
+    """Counts stream() calls so tests can assert the caller-provided tokenizer is used."""
+
+    def __init__(self) -> None:
+        super().__init__(min_sentence_len=1)
+        self.stream_calls = 0
+
+    def stream(self, *, language: str | None = None):  # type: ignore[no-untyped-def]
+        self.stream_calls += 1
+        return super().stream(language=language)
+
+
 class TestLLMNodeTtfs:
     async def test_ttfs_set_for_nonempty_generation(self) -> None:
         data = await _run_inference([_content("First sentence. "), _content("Second one.")])
@@ -80,10 +95,12 @@ class TestLLMNodeTtfs:
         data = await _run_inference([_content("   ")])
         assert data.ttfs is None
 
-
-class TestSentenceTokenizerConfig:
-    def test_short_first_sentence_is_counted(self) -> None:
-        # regression: ttfs must see short openers. blingfire's TTS-oriented default
-        # (min_sentence_len=20) drops them, which silently inflated ttfs to the whole turn.
-        text = "Hi there. How can I help?"
-        assert len(_SENTENCE_TOKENIZER.tokenize(text)) == 2
+    async def test_ttfs_uses_provided_tokenizer(self) -> None:
+        # the tokenizer must be resolved from the actual TTS path
+        tokenizer = _RecordingTokenizer()
+        data = await _run_inference(
+            [_content("First sentence here, quite long. "), _content("Second one.")],
+            sentence_tokenizer=tokenizer,
+        )
+        assert tokenizer.stream_calls == 1
+        assert data.ttfs is not None
