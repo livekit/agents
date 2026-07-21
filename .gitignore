@@ -179,9 +179,3 @@ docs/
 # Examples for development
 examples/dev/*
 
-# Local Gnani dev harness — not for upstream LiveKit PR
-scripts/smoke-gnani/
-examples/voice_agents/voice_gnani.py
-livekit-plugins/livekit-plugins-gnani/Makefile
-livekit-plugins/livekit-plugins-gnani/scripts/
-livekit-plugins/livekit-plugins-gnani/.gitignore

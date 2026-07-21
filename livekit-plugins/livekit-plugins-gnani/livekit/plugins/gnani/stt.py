@@ -50,7 +50,6 @@ from ._compat import ws_header_kwargs as _ws_header_kwargs
 from .log import logger
 
 GnaniSTTFormat = Literal["verbatim", "transcribe"]
-GnaniSTTRecognizeMethod = Literal["rest", "websocket"]
 
 GNANI_STT_BASE_URL = "https://api.vachana.ai"
 
@@ -138,7 +137,7 @@ class GnaniSTTOptions:
     preferred_language: str | None = None
     format: str = "verbatim"
     itn_native_numerals: bool = False
-    recognize_method: str = "websocket"
+    streaming: bool = True
 
 
 _DEPRECATED_STT_KWARGS = frozenset(("organization_id", "user_id", "http_session"))
@@ -171,8 +170,8 @@ class STT(stt.STT):
         preferred_language: Force single-language model for this code.
         format: "verbatim" (default) or "transcribe" (enables ITN).
         itn_native_numerals: Render digits in native script when format="transcribe".
-        recognize_method: Recognition transport — "rest" (POST /stt/v3) or
-            "websocket" (wss://.../stt/v3/stream). REST mode requires a local VAD
+        streaming: If True (default), use WebSocket streaming (wss://.../stt/v3/stream).
+            If False, use REST recognition (POST /stt/v3); REST mode requires a local VAD
             (LiveKit wraps with ``stt.StreamAdapter`` automatically).
     """
 
@@ -186,12 +185,12 @@ class STT(stt.STT):
         preferred_language: str | None = None,
         format: GnaniSTTFormat = "verbatim",
         itn_native_numerals: bool = False,
-        recognize_method: GnaniSTTRecognizeMethod = "websocket",
+        streaming: bool = True,
         **kwargs: Any,
     ) -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=recognize_method == "websocket",
+                streaming=streaming,
                 interim_results=False,
                 aligned_transcript=False,
             )
@@ -220,7 +219,7 @@ class STT(stt.STT):
             preferred_language=preferred_language,
             format=format,
             itn_native_numerals=itn_native_numerals,
-            recognize_method=recognize_method,
+            streaming=streaming,
         )
         self._session: aiohttp.ClientSession | None = None
 
@@ -331,7 +330,7 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
-        if self._opts.recognize_method != "websocket":
+        if not self._opts.streaming:
             return cast(
                 "SpeechStream",
                 super().stream(language=language, conn_options=conn_options),
@@ -519,3 +518,13 @@ class SpeechStream(stt.RecognizeStream):
             raise
         except Exception as e:
             raise APIConnectionError(f"Error receiving Gnani STT messages: {e}") from e
+
+
+__all__ = [
+    "GnaniSTTFormat",
+    "GnaniSTTLanguages",
+    "STT",
+    "STREAM_SUPPORTED_LANGUAGES",
+    "SUPPORTED_LANGUAGES",
+    "SpeechStream",
+]

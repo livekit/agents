@@ -532,10 +532,9 @@ class SSEChunkedStream(tts.ChunkedStream):
                     raw_line = raw_bytes.decode("utf-8").strip()
                     if not raw_line:
                         continue
-                    if raw_line.startswith("event:"):
+                    if not raw_line.startswith("data:"):
                         continue
-                    if raw_line.startswith("data:"):
-                        raw_line = raw_line[5:].strip()
+                    raw_line = raw_line[5:].strip()
 
                     buf += raw_line
                     try:
@@ -812,6 +811,11 @@ class SynthesizeStream(tts.SynthesizeStream):
 
 __all__ = [
     "DEFAULT_MODEL",
+    "GnaniTTSBitrates",
+    "GnaniTTSContainers",
+    "GnaniTTSEncodings",
+    "GnaniTTSSynthesizeMethod",
+    "GnaniTTSVoices",
     "SUPPORTED_TTS_LANGUAGES",
     "TIMBRE_V20_VOICES",
     "TIMBRE_V25_VOICES",

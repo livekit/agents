@@ -22,20 +22,41 @@ including multilingual and code-switching scenarios.
 See https://docs.livekit.io/agents/integrations/stt/gnani/ for more information.
 """
 
-from .stt import STT, SpeechStream
+from .stt import (
+    STREAM_SUPPORTED_LANGUAGES,
+    STT,
+    SUPPORTED_LANGUAGES,
+    GnaniSTTFormat,
+    GnaniSTTLanguages,
+    SpeechStream,
+)
 from .tts import (
     DEFAULT_MODEL,
     SUPPORTED_TTS_LANGUAGES,
     TIMBRE_V20_VOICES,
     TIMBRE_V25_VOICES,
     TTS,
+    GnaniTTSBitrates,
+    GnaniTTSContainers,
+    GnaniTTSEncodings,
+    GnaniTTSSynthesizeMethod,
+    GnaniTTSVoices,
     SynthesizeStream,
 )
 from .version import __version__
 
 __all__ = [
     "DEFAULT_MODEL",
+    "GnaniSTTFormat",
+    "GnaniSTTLanguages",
+    "GnaniTTSBitrates",
+    "GnaniTTSContainers",
+    "GnaniTTSEncodings",
+    "GnaniTTSSynthesizeMethod",
+    "GnaniTTSVoices",
     "STT",
+    "STREAM_SUPPORTED_LANGUAGES",
+    "SUPPORTED_LANGUAGES",
     "SUPPORTED_TTS_LANGUAGES",
     "TIMBRE_V20_VOICES",
     "TIMBRE_V25_VOICES",
