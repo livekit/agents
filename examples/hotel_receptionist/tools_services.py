@@ -41,6 +41,27 @@ _pending_shutdowns: set[asyncio.Task[None]] = set()
 _CALLER_HANGUP_GRACE = 10.0
 
 
+def _farewell_instruction(userdata: Userdata) -> str:
+    """The close path's reply instruction: one farewell per call, ever.
+
+    Callers routinely answer a goodbye ("you too!"), and the model then calls the
+    close tool again - without this guard that produced a "Goodbye!" / "Take care!" /
+    "Goodbye!" loop. The first close delivers the farewell; every later one answers
+    real questions only and otherwise stays quiet while the line closes on its own.
+    """
+    if not userdata.goodbye_said:
+        userdata.goodbye_said = True
+        return (
+            "The line closes right after your next utterance. Give ONE short, warm "
+            "goodbye now - no questions, no new information."
+        )
+    return (
+        "You've already said goodbye - do NOT give another farewell, sign-off, or "
+        "filler. If the caller just asked a real question, answer it in one short "
+        "sentence; otherwise say nothing. The line closes on its own once they stop."
+    )
+
+
 def _resolve_flower_destination(location: str | None, recipient: str | None) -> str:
     """One stored destination from the two collected ideas: the location wins.
 
@@ -623,16 +644,18 @@ class ServicesToolsMixin:
         # Pre-hangup policy audit: re-read the standing policy against the transcript
         # and, at most once per call, hand the agent back the one thing it still owes
         # the caller instead of closing - the "offer before wind-down" policy grounded
-        # in a guaranteed action.
-        agent_instructions = self.instructions if isinstance(self, Agent) else ""
-        nudge = await run_goodbye_gate(
-            ctx.userdata,
-            ctx.session.llm,
-            instructions=agent_instructions if isinstance(agent_instructions, str) else "",
-            chat_ctx=ctx.session.history,
-        )
-        if nudge is not None:
-            return nudge
+        # in a guaranteed action. Skipped on repeat closes (the farewell already
+        # happened; the call is winding down, not re-opening).
+        if not ctx.userdata.goodbye_said:
+            agent_instructions = self.instructions if isinstance(self, Agent) else ""
+            nudge = await run_goodbye_gate(
+                ctx.userdata,
+                ctx.session.llm,
+                instructions=agent_instructions if isinstance(agent_instructions, str) else "",
+                chat_ctx=ctx.session.history,
+            )
+            if nudge is not None:
+                return nudge
 
         # Close path: the goodbye is this tool's reply, reusing the current speech
         # handle. Don't hang up right after it - callers routinely answer a farewell
@@ -679,7 +702,4 @@ class ServicesToolsMixin:
             job_ctx.add_shutdown_callback(_delete_room)
             job_ctx.shutdown(reason=ev.reason.value)
 
-        return (
-            "The line closes right after your next utterance. Give ONE short, warm "
-            "goodbye now - no questions, no new information."
-        )
+        return _farewell_instruction(ctx.userdata)
