@@ -23,6 +23,11 @@ Once called, no further interaction is possible with the user.
 Don't generate any other text or response when the tool is called.
 """
 
+# grace before shutdown when there's no audio playout to absorb the gap between the
+# final message being committed and the session tearing down (e.g. text-only sessions);
+# shutting down immediately races the delivery of that message to the remote participant
+_FINAL_MESSAGE_FLUSH_GRACE = 2.0
+
 
 class EndCallTool(Toolset):
     def __init__(
@@ -77,8 +82,10 @@ class EndCallTool(Toolset):
             )
             if not isinstance(llm_v, RealtimeModel) or not auto_tool_reply:
                 # tool reply will reuse the same speech handle, so we can shutdown the session
-                # directly after this speech handle is done
-                ctx.session.shutdown()
+                # once this speech handle is done and the final message has flushed
+                self._shutdown_session_task = asyncio.create_task(
+                    self._graceful_session_shutdown(ctx)
+                )
             else:
                 self._shutdown_session_task = asyncio.create_task(
                     self._delayed_session_shutdown(ctx)
@@ -112,7 +119,13 @@ class EndCallTool(Toolset):
             logger.warning("tool reply timed out, shutting down session")
         finally:
             ctx.session.off("speech_created", _on_speech_created)
-            ctx.session.shutdown()
+            await self._graceful_session_shutdown(ctx)
+
+    async def _graceful_session_shutdown(self, ctx: RunContext) -> None:
+        """Shutdown the session, letting the final message flush first when it has no playout"""
+        if ctx.session.output.audio is None:
+            await asyncio.sleep(_FINAL_MESSAGE_FLUSH_GRACE)
+        ctx.session.shutdown()
 
     def _on_session_close(self, ev: CloseEvent) -> None:
         """Close the job process when AgentSession is closed"""
