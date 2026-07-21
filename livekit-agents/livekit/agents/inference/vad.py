@@ -54,7 +54,8 @@ class VAD(vad.VAD):
 
     The native model singleton is loaded once at module import (via the
     pybind11 ``.so`` constructor); each stream allocates its own per-instance
-    LSTM/context state.
+    LSTM/context state. Pass ``executor`` to isolate inference from the event
+    loop's default executor; the caller remains responsible for shutting it down.
     """
 
     def __init__(
