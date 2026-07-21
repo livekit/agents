@@ -361,7 +361,7 @@ class ServicesToolsMixin:
             card_message: The gift-card message exactly as the caller dictates it.
             guest_name: The caller's full name.
             guest_phone: The caller's phone number, in case the florist needs to reach them.
-            deliver_to_location: The room number or suite name it goes to, and NOTHING else (e.g. "412", "Penthouse Suite" - never a person's name). Omit if the caller only named a person.
+            deliver_to_location: The room or suite it goes to, exactly as the caller names it and NOTHING else - never a person's name. Omit if the caller only named a person.
             recipient_name: The name of the person it's for, if the caller gave one. Omit if the flowers just go to a room.
         """
         deliver_to = _resolve_flower_destination(deliver_to_location, recipient_name)
