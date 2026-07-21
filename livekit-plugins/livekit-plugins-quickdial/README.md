@@ -1,8 +1,8 @@
 # LiveKit Plugins Quickdial
 
 [Quickdial](https://quickdial.ai/) plugin for LiveKit Agents. Quickdial is a
-CPU-optimized, real-time voice API — lifelike text-to-speech and accurate
-speech-to-text over REST + WebSocket, no GPU, priced per character.
+Real-time voice API — lifelike text-to-speech and accurate
+speech-to-text over REST + WebSocket, priced per character.
 
 See [https://docs.livekit.io/agents/integrations/](https://docs.livekit.io/agents/integrations/) for more information.
 

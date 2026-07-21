@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "livekit-plugins-quickdial"
 dynamic = ["version"]
-description = "LiveKit Agents plugin for Quickdial — cheap, fast, real-time CPU TTS & STT"
+description = "LiveKit Agents plugin for Quickdial — cheap, fast, real-time TTS & STT"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
@@ -13,7 +13,7 @@ authors = [{ name = "Quickdial AI", email = "hello@quickdial.ai" }]
 keywords = [
     "webrtc", "realtime", "audio", "livekit", "livekit-agents",
     "quickdial", "stt", "tts", "speech-to-text", "text-to-speech",
-    "voice", "streaming", "websocket", "cpu",
+    "voice", "streaming", "websocket",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
