@@ -104,7 +104,9 @@ class STT(stt.STT):
             ) as resp:
                 resp.raise_for_status()
                 data = await resp.json()
-                return _to_speech_event(data, self._opts.language)
+                # tag the transcript with the *effective* language (per-request override,
+                # falling back to the configured default) when the server omits it
+                return _to_speech_event(data, cfg["language"])
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
         except aiohttp.ClientResponseError as e:
