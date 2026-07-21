@@ -119,7 +119,7 @@ class RecordingOptions(TypedDict, total=False):
     transcript: bool
     """Upload the conversation transcript (chat history). Defaults to ``True``."""
     redaction: bool
-    """Request collector-side redaction preview. ``False`` does not disable project redaction."""
+    """Enable redaction. ``False`` does not disable project redaction."""
 
 
 _RECORDING_ALL_ON: RecordingOptions = {
