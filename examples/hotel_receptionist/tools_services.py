@@ -35,6 +35,11 @@ logger = logging.getLogger("hotel-receptionist")
 # Strong refs to in-flight post-goodbye shutdown tasks (see say_goodbye_and_close_call).
 _pending_shutdowns: set[asyncio.Task[None]] = set()
 
+# How long the line stays quiet after the goodbye before the agent hangs up itself.
+# Callers usually hang up within a couple of seconds of the farewell; this is only
+# the fallback for the ones who don't.
+_CALLER_HANGUP_GRACE = 10.0
+
 
 class ServicesToolsMixin:
     @function_tool
@@ -607,26 +612,37 @@ class ServicesToolsMixin:
         if nudge is not None:
             return nudge
 
-        # Close path, mirroring the framework's beta EndCallTool for non-realtime LLMs:
-        # the goodbye is this tool's reply, reusing the current speech handle. Don't
-        # shut down the moment the speech handle completes, though - in text
-        # simulations there's no audio playout between committing the goodbye and
-        # tearing the session down, so an immediate shutdown races the delivery of
-        # that final message to the caller (observed as 60s turn timeouts). A short
-        # grace period lets it flush; shutdown() is idempotent, so a caller hanging
-        # up during the grace is fine.
+        # Close path: the goodbye is this tool's reply, reusing the current speech
+        # handle. Don't hang up right after it - callers routinely answer a farewell
+        # ("okay, bye!"), and a session torn down under that reply leaves their turn
+        # hanging (observed in simulations as 60s turn timeouts). Do what a real
+        # receptionist does: say goodbye, give the caller the chance to hang up
+        # first, and only close the line after it stays quiet. Anything the caller
+        # says re-opens the conversation and cancels the pending close; shutdown()
+        # is idempotent, so a caller who hangs up during the wait is a no-op.
         session = ctx.session
 
-        def _shutdown_after_grace(_: object) -> None:
-            async def _task() -> None:
-                await asyncio.sleep(2.0)
-                session.shutdown()
+        def _arm_close_watchdog(_: object) -> None:
+            def _on_item_added(ev: object) -> None:
+                item = getattr(ev, "item", None)
+                if item is not None and getattr(item, "role", None) == "user":
+                    task.cancel()
 
-            task = asyncio.create_task(_task())
+            async def _close_after_silence() -> None:
+                try:
+                    await asyncio.sleep(_CALLER_HANGUP_GRACE)
+                    session.shutdown()
+                except asyncio.CancelledError:
+                    pass  # caller spoke again - the conversation is back on
+                finally:
+                    session.off("conversation_item_added", _on_item_added)
+
+            session.on("conversation_item_added", _on_item_added)
+            task = asyncio.create_task(_close_after_silence())
             _pending_shutdowns.add(task)
             task.add_done_callback(_pending_shutdowns.discard)
 
-        ctx.speech_handle.add_done_callback(_shutdown_after_grace)
+        ctx.speech_handle.add_done_callback(_arm_close_watchdog)
 
         @ctx.session.once("close")
         def _on_close(ev: CloseEvent) -> None:
