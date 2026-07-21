@@ -429,7 +429,11 @@ class RoomToolsMixin:
         items = ", ".join(f"{li.label} {speak_usd(li.amount_cents)}" for li in invoice.line_items)
         return (
             f"That booking's total is {speak_usd(invoice.total)}, with line items: "
-            f"{items}. I can email an itemized copy to the address on file, {booking.email}, if you'd like - just say the word."
+            f"{items}. I can email an itemized copy to the address on file, {booking.email}, "
+            "if you'd like - just say the word. | If the caller disputes any of these "
+            "charges, do NOT offer a refund, waiver, or credit yourself - call "
+            "dispute_charge with accepts_offered_resolution=false first; it returns the "
+            "policy position and exactly what to offer."
         )
 
     @function_tool
