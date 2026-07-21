@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import sys
@@ -30,6 +31,9 @@ from livekit.agents import (
 )
 
 logger = logging.getLogger("hotel-receptionist")
+
+# Strong refs to in-flight post-goodbye shutdown tasks (see say_goodbye_and_close_call).
+_pending_shutdowns: set[asyncio.Task[None]] = set()
 
 
 class ServicesToolsMixin:
@@ -604,9 +608,25 @@ class ServicesToolsMixin:
             return nudge
 
         # Close path, mirroring the framework's beta EndCallTool for non-realtime LLMs:
-        # the goodbye is this tool's reply, reusing the current speech handle, so the
-        # session shuts down exactly when the farewell finishes playing out.
-        ctx.speech_handle.add_done_callback(lambda _: ctx.session.shutdown())
+        # the goodbye is this tool's reply, reusing the current speech handle. Don't
+        # shut down the moment the speech handle completes, though - in text
+        # simulations there's no audio playout between committing the goodbye and
+        # tearing the session down, so an immediate shutdown races the delivery of
+        # that final message to the caller (observed as 60s turn timeouts). A short
+        # grace period lets it flush; shutdown() is idempotent, so a caller hanging
+        # up during the grace is fine.
+        session = ctx.session
+
+        def _shutdown_after_grace(_: object) -> None:
+            async def _task() -> None:
+                await asyncio.sleep(2.0)
+                session.shutdown()
+
+            task = asyncio.create_task(_task())
+            _pending_shutdowns.add(task)
+            task.add_done_callback(_pending_shutdowns.discard)
+
+        ctx.speech_handle.add_done_callback(_shutdown_after_grace)
 
         @ctx.session.once("close")
         def _on_close(ev: CloseEvent) -> None:
