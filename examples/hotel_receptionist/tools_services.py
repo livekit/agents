@@ -41,6 +41,25 @@ _pending_shutdowns: set[asyncio.Task[None]] = set()
 _CALLER_HANGUP_GRACE = 10.0
 
 
+def _resolve_flower_destination(location: str | None, recipient: str | None) -> str:
+    """One stored destination from the two collected ideas: the location wins.
+
+    florist_orders.deliver_to holds a single value; splitting the tool parameters
+    keeps a caller's "to the Penthouse Suite, for Diane Okafor" from being jammed
+    into it as a concatenation. The recipient's name stands in only when no room
+    or suite was given (an external delivery addressed to a person).
+    """
+    location = (location or "").strip()
+    if location:
+        return location
+    recipient = (recipient or "").strip()
+    if recipient:
+        return recipient
+    raise ToolError(
+        "no destination: ask the caller which room or suite the flowers go to, or who they're for."
+    )
+
+
 class ServicesToolsMixin:
     @function_tool
     async def flag_late_arrival(self, ctx: RunContext[Userdata], note: str) -> str:
@@ -328,21 +347,24 @@ class ServicesToolsMixin:
         ctx: RunContext[Userdata],
         arrangement: Literal["bouquet", "roses", "centerpiece"],
         on_date: date,
-        deliver_to: str,
         card_message: str,
         guest_name: str,
         guest_phone: str,
+        deliver_to_location: str | None = None,
+        recipient_name: str | None = None,
     ) -> str:
-        """Order a flower arrangement from the hotel florist for delivery to a room or recipient. The catalog (arrangements, prices, delivery cutoff) is in lookup_policy topic "florist" - look it up first and let the caller pick the arrangement, never pick for them. Collect the delivery date, where it goes (room number or recipient name), and the gift-card message, and read the card message back so it's right. Once they pick and agree, THIS CALL places the order - saying "I'll get that arranged" orders nothing; nothing exists until this returns a reference.
+        """Order a flower arrangement from the hotel florist for delivery to a room or recipient. The catalog (arrangements, prices, delivery cutoff) is in lookup_policy topic "florist" - look it up first and let the caller pick the arrangement, never pick for them. Collect the delivery date, where it goes, and the gift-card message, and read the card message back so it's right. Once they pick and agree, THIS CALL places the order - saying "I'll get that arranged" orders nothing; nothing exists until this returns a reference.
 
         Args:
             arrangement: The arrangement the caller picked.
             on_date: Delivery date in ISO YYYY-MM-DD format.
-            deliver_to: Where it goes - the number of the room or the recipient's name. Prefer room number when available.
             card_message: The gift-card message exactly as the caller dictates it.
             guest_name: The caller's full name.
             guest_phone: The caller's phone number, in case the florist needs to reach them.
+            deliver_to_location: The room number or suite name it goes to, and NOTHING else (e.g. "412", "Penthouse Suite" - never a person's name). Omit if the caller only named a person.
+            recipient_name: The name of the person it's for, if the caller gave one. Omit if the flowers just go to a room.
         """
+        deliver_to = _resolve_flower_destination(deliver_to_location, recipient_name)
         try:
             code, a, total = await ctx.userdata.db.order_flowers(
                 arrangement_id=arrangement,
