@@ -72,6 +72,8 @@ class _EndOfTurnInfo:
     new_transcript: str
     transcript_confidence: float
     metrics: _EndOfTurnMetrics
+    backchannel_over_agent: bool = False
+    """The turn's speech overlapped agent speech and was classified a backchannel by adaptive interruption."""
 
 
 def _compute_end_of_turn_metrics(
@@ -293,6 +295,9 @@ class AudioRecognition:
         self._interruption_enabled: bool = interruption_detection is not None and vad is not None
         self._agent_speaking: bool = False
         self._agent_speech_started_at: float | None = None
+        # turn-scoped backchannel-over-agent verdict from adaptive interruption, consumed and reset at end of turn
+        self._overlap_in_current_turn: bool = False
+        self._turn_backchannel_over_agent: bool = False
 
         _backchannel_boundary: float | tuple[float, float] | None = (
             session.options.interruption.get("backchannel_boundary")
@@ -511,6 +516,8 @@ class AudioRecognition:
         )
         if not self._adaptive_interruption_active or not self._agent_speaking:
             return
+        # overlap over agent speech started this turn; gates verdict acceptance below
+        self._overlap_in_current_turn = True
         self._interruption_ch.send_nowait(  # type: ignore[union-attr]
             _OverlapSpeechStartedSentinel(
                 speech_duration=speech_duration,
@@ -1381,6 +1388,11 @@ class AudioRecognition:
             )
             return
 
+        # only honor the verdict while this turn's overlap is unresolved so a late verdict
+        # can't leak into the next turn; an interruption supersedes a prior backchannel
+        if self._overlap_in_current_turn:
+            self._turn_backchannel_over_agent = not ev.is_interruption
+
         if ev.is_interruption:
             self._hooks.on_interruption(ev)
 
@@ -1629,6 +1641,7 @@ class AudioRecognition:
                     new_transcript=self._audio_transcript,
                     transcript_confidence=confidence_avg,
                     metrics=metrics,
+                    backchannel_over_agent=self._turn_backchannel_over_agent,
                 )
             )
             if committed:
@@ -1677,6 +1690,9 @@ class AudioRecognition:
                     self._turn_detector_prediction_fut = None
                     self._turn_detector_flushed = True
 
+            # reset turn-scoped barge-in state once per logical turn (commit or drop)
+            self._turn_backchannel_over_agent = False
+            self._overlap_in_current_turn = False
             self._user_turn_committed = False
 
         if self._end_of_turn_task is not None:

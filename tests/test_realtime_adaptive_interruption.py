@@ -19,7 +19,9 @@ def _make_activity(session: AgentSession) -> AgentActivity:
     return AgentActivity(Agent(instructions="test"), session)
 
 
-def _end_of_turn_info(transcript: str = "") -> _EndOfTurnInfo:
+def _end_of_turn_info(
+    transcript: str = "", *, backchannel_over_agent: bool = False
+) -> _EndOfTurnInfo:
     return _EndOfTurnInfo(
         skip_reply=False,
         new_transcript=transcript,
@@ -30,6 +32,7 @@ def _end_of_turn_info(transcript: str = "") -> _EndOfTurnInfo:
             transcription_delay=None,
             end_of_turn_delay=None,
         ),
+        backchannel_over_agent=backchannel_over_agent,
     )
 
 
@@ -119,9 +122,9 @@ async def test_backchannel_does_not_commit_while_agent_speaking(
     current_speech.interrupted = False
     activity._current_speech = current_speech
     activity._interruption_detected = False
-    activity._backchannel_detected = False  # verdict pending, agent still speaking
 
-    assert activity.on_end_of_turn(_end_of_turn_info()) is False
+    # verdict pending, agent still speaking — dropped via the live-speech branch
+    assert activity.on_end_of_turn(_end_of_turn_info(backchannel_over_agent=False)) is False
 
 
 async def test_backchannel_dropped_after_agent_finishes_speaking(
@@ -137,6 +140,6 @@ async def test_backchannel_dropped_after_agent_finishes_speaking(
 
     activity._current_speech = None  # agent has finished speaking
     activity._interruption_detected = False
-    activity._backchannel_detected = True
 
-    assert activity.on_end_of_turn(_end_of_turn_info()) is False
+    # backchannel verdict for this turn survives the agent stopping
+    assert activity.on_end_of_turn(_end_of_turn_info(backchannel_over_agent=True)) is False
