@@ -490,6 +490,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
 
         self._turn_detection = raw_turn_detection
+        # whether the user passed turn_detection, vs the eager TurnDetector() default
+        self._turn_detection_explicit = "turn_detection" in turn_handling
         self._interruption_detection = interruption.get("mode", NOT_GIVEN)
         self._mcp_servers = mcp_servers or None
         if self._mcp_servers:

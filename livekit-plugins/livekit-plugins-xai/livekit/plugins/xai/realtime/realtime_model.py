@@ -86,9 +86,12 @@ class RealtimeModel(openai.realtime.RealtimeModel):
             conn_options=conn_options,
         )
         self._capabilities.per_response_tool_choice = False
+        # client turn-taking is not stable during testing, mark it as unsupported for now
+        self._capabilities.can_disable_turn_detection = False
         self._provider_label = "xAI Realtime API"
 
-    def session(self) -> "RealtimeSession":
+    def session(self, *, turn_detection_disabled: bool = False) -> "RealtimeSession":
+        # manual turn-taking is unsupported (can_disable_turn_detection=False)
         sess = RealtimeSession(self)
         self._sessions.add(sess)
         return sess
