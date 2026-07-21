@@ -193,7 +193,7 @@ class AvatarSession(BaseAvatarSession):
         """The provider's own session id (available after start())."""
         return self._provider_session_id
 
-    async def start(  # type: ignore[override]
+    async def start(
         self,
         agent_session: AgentSession,
         room: rtc.Room,
