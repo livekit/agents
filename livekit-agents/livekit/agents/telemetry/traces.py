@@ -49,7 +49,11 @@ from livekit import api
 from livekit.protocol import agent_pb, metrics as proto_metrics
 
 from ..log import TRACE_LEVEL, logger
-from ..types import recording_enabled
+from ..types import (
+    ATTRIBUTE_REDACTION_ENABLED,
+    ATTRIBUTE_SIMULATION_ENABLED,
+    recording_enabled,
+)
 from . import trace_types
 
 if TYPE_CHECKING:
@@ -452,9 +456,6 @@ async def _upload_session_report(
     metadata: dict[str, AttributeValue] | None = None,
 ) -> None:
     metadata = metadata or {}
-    metadata_headers = {
-        k: str(v).lower() if isinstance(v, bool) else str(v) for k, v in metadata.items()
-    }
 
     def _get_logger(name: str) -> Any:
         return get_logger_provider().get_logger(
@@ -587,6 +588,8 @@ async def _upload_session_report(
     header_msg = proto_metrics.MetricsRecordingHeader(
         room_id=report.room_id,
         job_id=report.job_id,
+        simulated=bool(metadata.get(ATTRIBUTE_SIMULATION_ENABLED, False)),
+        redaction_enabled=bool(metadata.get(ATTRIBUTE_REDACTION_ENABLED, False)),
     )
     header_msg.start_time.FromMilliseconds(int((report.audio_recording_started_at or 0) * 1000))
     header_bytes = header_msg.SerializeToString()
@@ -610,7 +613,6 @@ async def _upload_session_report(
 
         part = mp.append(header_bytes)
         part.set_content_disposition("form-data", name="header", filename="header.binpb")
-        part.headers.update(metadata_headers)
         part.headers["Content-Type"] = "application/protobuf"
         part.headers["Content-Length"] = str(len(header_bytes))
 
@@ -619,14 +621,12 @@ async def _upload_session_report(
             part.set_content_disposition(
                 "form-data", name="chat_history", filename="chat_history.json"
             )
-            part.headers.update(metadata_headers)
             part.headers["Content-Type"] = "application/json"
             part.headers["Content-Length"] = str(len(chat_history_json))
 
         if audio_bytes:
             part = mp.append(audio_bytes)
             part.set_content_disposition("form-data", name="audio", filename="recording.ogg")
-            part.headers.update(metadata_headers)
             part.headers["Content-Type"] = "audio/ogg"
             part.headers["Content-Length"] = str(len(audio_bytes))
 

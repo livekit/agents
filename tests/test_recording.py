@@ -20,6 +20,7 @@ from livekit.agents.voice.agent_session import (
     RecordingOptions,
 )
 from livekit.agents.voice.recorder_io.recorder_io import _split_frame
+from livekit.protocol import metrics as proto_metrics
 
 from .fake_io import FakeAudioInput, FakeAudioOutput, FakeTextOutput
 from .fake_llm import FakeLLM
@@ -430,7 +431,7 @@ async def test_upload_session_report_includes_redaction_metadata() -> None:
     assert attrs["lk.redaction.enabled"] is True
 
 
-async def test_upload_multipart_includes_metadata_headers() -> None:
+async def test_upload_multipart_header_carries_simulation_redaction() -> None:
     report = _make_mock_report({"audio": False, "traces": False, "logs": False, "transcript": True})
     metadata = {
         "lk.simulation.enabled": True,
@@ -444,10 +445,9 @@ async def test_upload_multipart_includes_metadata_headers() -> None:
 
     mp_writer = mock_http.post.call_args.kwargs.get("data") or mock_http.post.call_args[1]["data"]
     parts = _get_multipart_parts(mp_writer)
-    assert parts["header"].headers["lk.simulation.enabled"] == "true"
-    assert parts["header"].headers["lk.simulation.run_id"] == "run-1"
-    assert parts["header"].headers["lk.redaction.enabled"] == "true"
-    assert parts["chat_history"].headers["lk.simulation.run_id"] == "run-1"
+    header = proto_metrics.MetricsRecordingHeader.FromString(parts["header"]._value)
+    assert header.simulated is True
+    assert header.redaction_enabled is True
 
 
 def test_job_context_otel_metadata_includes_redaction_option() -> None:
