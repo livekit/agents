@@ -5,7 +5,7 @@ import json
 import logging
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
@@ -80,6 +80,79 @@ class _DynamicTracer(Tracer):
 
 
 tracer: _DynamicTracer = _DynamicTracer("livekit-agents")
+
+
+class _UploadGate:
+    """Process-wide gate that stops observability uploads once LiveKit Cloud reports data
+    recording is disabled for the project. Reset per session from JobContext.init_recording().
+    """
+
+    # substrings identifying the 401 "data recording is disabled by owner" rejection. Other
+    # 401s ("missing project id", "operation requires observability write grant") share the
+    # same status/grpc code, so we match the message text rather than the code.
+    _DISABLED_MARKERS = ("data recording is disabled", "disabled by owner")
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._disabled = False
+
+    def reset(self) -> None:
+        with self._lock:
+            self._disabled = False
+
+    @property
+    def disabled(self) -> bool:
+        return self._disabled
+
+    def disable(self) -> None:
+        with self._lock:
+            if self._disabled:
+                return
+            self._disabled = True
+        logger.warning(
+            "LiveKit Cloud data recording is disabled for this project; "
+            "skipping telemetry and recording uploads for this session"
+        )
+
+    @staticmethod
+    def is_disabled_response(status_code: int, body: bytes) -> bool:
+        """Return True if an upload response means recording is disabled by the project owner."""
+        if status_code != 401:
+            return False
+        text = body.decode("utf-8", "ignore").lower()
+        return any(marker in text for marker in _UploadGate._DISABLED_MARKERS)
+
+
+_upload_gate = _UploadGate()
+
+
+class _AuthRefreshingSession(requests.Session):
+    """requests.Session shared by the OTLP exporters. Injects a fresh auth header on every
+    request and, once the project reports recording is disabled, stops uploading and reports
+    success so the exporters don't keep logging errors."""
+
+    def __init__(self, header_provider: Callable[[], dict[str, str]]) -> None:
+        super().__init__()
+        self._header_provider = header_provider
+
+    @staticmethod
+    def _make_ok_response() -> requests.Response:
+        """A synthetic 200 response so OTLP exporters treat the export as successful."""
+        resp = requests.Response()
+        resp.status_code = 200
+        resp._content = b""
+        return resp
+
+    def request(self, *args: Any, **kwargs: Any) -> requests.Response:
+        if _upload_gate.disabled:
+            return self._make_ok_response()
+
+        self.headers.update(self._header_provider())
+        resp = super().request(*args, **kwargs)
+        if _upload_gate.is_disabled_response(resp.status_code, resp.content):
+            _upload_gate.disable()
+            return self._make_ok_response()
+        return resp
 
 
 class _MetadataSpanProcessor(SpanProcessor):
@@ -162,17 +235,10 @@ def _setup_cloud_tracer(
     enable_traces: bool = True,
     enable_logs: bool = True,
 ) -> None:
+    _upload_gate.reset()
+
     token_ttl = timedelta(hours=6)
     refresh_margin = timedelta(minutes=5)
-
-    class _AuthRefreshingSession(requests.Session):
-        def __init__(self, header_provider: _AuthHeaderProvider) -> None:
-            super().__init__()
-            self._header_provider = header_provider
-
-        def request(self, *args: Any, **kwargs: Any) -> requests.Response:
-            self.headers.update(self._header_provider())
-            return super().request(*args, **kwargs)
 
     class _AuthHeaderProvider:
         def __init__(self) -> None:
@@ -451,6 +517,9 @@ async def _upload_session_report(
     tagger: Tagger,
     http_session: aiohttp.ClientSession,
 ) -> None:
+    if _upload_gate.disabled:
+        return
+
     def _get_logger(name: str) -> Any:
         return get_logger_provider().get_logger(
             name=name,
@@ -635,6 +704,11 @@ async def _upload_session_report(
         async with http_session.post(url, data=mp, headers=headers) as resp:
             if resp.status < 400:
                 break
+
+            body = await resp.read()
+            if _upload_gate.is_disabled_response(resp.status, body):
+                _upload_gate.disable()
+                return
 
             retry_delay = await _parse_retry_delay(resp)
             if retry_delay is None or attempt == max_retries:
