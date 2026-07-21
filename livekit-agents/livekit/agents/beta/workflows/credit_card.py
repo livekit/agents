@@ -701,7 +701,7 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
         if 0 <= year <= 99:
             return year
         if 2000 <= year <= 2099:
-            return year - 2000
+            return year % 100
         raise ToolError(
             "The expiration year must use its last two digits or the full four-digit year. "
             "Ask the user to repeat the expiration year without providing an example."
