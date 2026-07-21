@@ -40,6 +40,7 @@ from ..types import (
     NOT_GIVEN,
     APIConnectOptions,
     NotGivenOr,
+    recording_enabled,
 )
 from ..utils.deprecation import deprecate_params
 from ..utils.misc import is_given
@@ -97,14 +98,16 @@ if TYPE_CHECKING:
 class RecordingOptions(TypedDict, total=False):
     """Granular control over which recording features are active.
 
-    All keys default to ``True`` when not specified, so ``{"logs": False}``
-    means "record everything except logs."
+    Recording keys default to ``True`` when not specified, so ``{"logs": False}``
+    means "record everything except logs." Redaction defaults to the project setting;
+    ``False`` is ignored when redaction is enabled globally for the project.
 
     Can be passed directly to :pymethod:`AgentSession.start(record=...)`:
 
     * ``record=True``  → all on (backward compatible)
     * ``record=False`` → all off (backward compatible)
     * ``record={"audio": True, "traces": False}`` → granular
+    * ``record={"redaction": True}`` → enable redaction for the session
     """
 
     audio: bool
@@ -115,6 +118,8 @@ class RecordingOptions(TypedDict, total=False):
     """Export OpenTelemetry logs. Defaults to ``True``."""
     transcript: bool
     """Upload the conversation transcript (chat history). Defaults to ``True``."""
+    redaction: bool
+    """Enable redaction. ``False`` does not disable project redaction."""
 
 
 _RECORDING_ALL_ON: RecordingOptions = {
@@ -122,12 +127,14 @@ _RECORDING_ALL_ON: RecordingOptions = {
     "traces": True,
     "logs": True,
     "transcript": True,
+    "redaction": False,
 }
 _RECORDING_ALL_OFF: RecordingOptions = {
     "audio": False,
     "traces": False,
     "logs": False,
     "transcript": False,
+    "redaction": False,
 }
 
 
@@ -761,7 +768,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     job_ctx._primary_agent_session = self
                 else:
                     is_primary = False
-                    if any(self._recording_options.values()):
+                    if recording_enabled(self._recording_options):
                         if record_is_given:
                             raise RuntimeError(
                                 "Only one `AgentSession` can be the primary at a time. "
