@@ -80,7 +80,6 @@ exclude = [
     "livekit-plugins/community",
     "livekit-plugins/livekit-blockguard",
     "livekit-plugins/livekit-durable",
-    "livekit-plugins/livekit-blingfire",
 ]
 
 [dependency-groups]
