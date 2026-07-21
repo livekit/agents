@@ -259,7 +259,9 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
         return append_card_number
 
     def _build_submit_card_number_tool(self) -> llm.FunctionTool:
-        @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
+        flags = ToolFlag.IGNORE_ON_ENTER if self._require_explicit_ask else ToolFlag.NONE
+
+        @function_tool(flags=flags)
         async def submit_card_number(context: RunContext) -> str | None:
             """Submit the active card-number reading after the user finishes it.
 

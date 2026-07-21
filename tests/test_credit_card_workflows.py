@@ -13,7 +13,7 @@ from livekit.agents.beta.workflows.credit_card import (
     GetSecurityCodeTask,
 )
 from livekit.agents.llm.chat_context import Instructions
-from livekit.agents.llm.tool_context import ToolError
+from livekit.agents.llm.tool_context import ToolError, ToolFlag
 
 pytestmark = pytest.mark.unit
 
@@ -206,9 +206,18 @@ async def test_expiration_year_uses_the_current_century() -> None:
 
 def test_credit_card_instructions_prohibit_concrete_format_examples() -> None:
     card_number_task = GetCardNumberTask()
-    tool_ids = {tool.id for tool in card_number_task.tools}
+    tools_by_id = {tool.id: tool for tool in card_number_task.tools}
+    tool_ids = set(tools_by_id)
     assert {"append_card_number", "submit_card_number"} <= tool_ids
     assert {"update_card_number", "confirm_card_number"}.isdisjoint(tool_ids)
+    assert not (tools_by_id["append_card_number"].info.flags & ToolFlag.IGNORE_ON_ENTER)
+    assert not (tools_by_id["submit_card_number"].info.flags & ToolFlag.IGNORE_ON_ENTER)
+
+    explicit_ask_tools = {
+        tool.id: tool for tool in GetCardNumberTask(require_explicit_ask=True).tools
+    }
+    assert explicit_ask_tools["append_card_number"].info.flags & ToolFlag.IGNORE_ON_ENTER
+    assert explicit_ask_tools["submit_card_number"].info.flags & ToolFlag.IGNORE_ON_ENTER
 
     for task in (
         card_number_task,
