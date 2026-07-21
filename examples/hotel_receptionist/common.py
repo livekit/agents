@@ -35,6 +35,10 @@ class Userdata:
     # Line items ("<booking code>:<label>") whose dispute offer was already handed to
     # the agent - gates waivers/credits so money never moves before the offer was made.
     dispute_offers_made: set[str] = field(default_factory=set)
+    # Whether the farewell was already delivered on this call - repeat close attempts
+    # (the caller answered the goodbye, the model called the tool again) must not
+    # produce a "Goodbye!" / "Take care!" / "Goodbye!" loop.
+    goodbye_said: bool = False
 
 
 def _speak_code(code: str) -> str:
