@@ -40,7 +40,12 @@ from .log import logger
 from .observability import Tagger
 from .telemetry import _upload_session_report, otel_metrics
 from .telemetry.traces import _BufferingHandler, _setup_cloud_tracer, _shutdown_telemetry
-from .types import ATTRIBUTE_SIMULATOR, ATTRIBUTE_SIMULATOR_DISPATCH, NotGivenOr
+from .types import (
+    ATTRIBUTE_SIMULATOR,
+    ATTRIBUTE_SIMULATOR_DISPATCH,
+    NotGivenOr,
+    recording_enabled,
+)
 from .utils import http_context, is_given, wait_for_participant
 from .utils.deprecation import deprecate_params
 from .utils.misc import is_cloud
@@ -296,7 +301,7 @@ class JobContext:
 
         has_evals = bool(self._tagger.evaluations or self._tagger.outcome)
         obs_url = _observability_url(self._info.url)
-        if (any(report.recording_options.values()) or has_evals) and obs_url:
+        if (recording_enabled(report.recording_options) or has_evals) and obs_url:
             try:
                 await _upload_session_report(
                     agent_name=self._info.job.agent_name,
@@ -304,6 +309,7 @@ class JobContext:
                     report=report,
                     tagger=self._tagger,
                     http_session=http_context.http_session(),
+                    metadata=self._otel_metadata(report.recording_options),
                 )
             except Exception:
                 logger.exception("failed to upload the session report to LiveKit Cloud")
@@ -775,6 +781,7 @@ class JobContext:
             observability_url=obs_url,
             enable_traces=options["traces"],
             enable_logs=options["logs"],
+            metadata=self._otel_metadata(options),
         )
         # init_recording is typically called during session.start(), at which point a bunch of
         # the logs would have already been emitted. we want to capture all of the logs as it
@@ -820,6 +827,15 @@ class JobContext:
 
     def token_claims(self) -> Claims:
         return api.TokenVerifier().verify(self._info.token, verify_signature=False)
+
+    def _otel_metadata(self, options: RecordingOptions | None = None) -> dict[str, Any] | None:
+        metadata: dict[str, Any] = {}
+        if sim_ctx := self.simulation_context():
+            metadata["lk.simulation.enabled"] = True
+            metadata["lk.simulation.run_id"] = sim_ctx._dispatch.simulation_run_id
+        if options and options.get("redaction", False):
+            metadata["lk.redaction.enabled"] = True
+        return metadata or None
 
 
 def _apply_auto_subscribe_opts(room: rtc.Room, auto_subscribe: AutoSubscribe) -> None:

@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, TypeAlias, TypeVar
 
@@ -50,6 +51,13 @@ The job attribute carrying the run's protojson ``SimulationDispatch``,
 delivered with the agent dispatch and read by
 ``JobContext.simulation_context()``.
 """
+
+_RECORDING_OPTION_KEYS = ("audio", "traces", "logs", "transcript")
+
+
+def recording_enabled(options: Mapping[str, object]) -> bool:
+    return any(options.get(key, False) for key in _RECORDING_OPTION_KEYS)
+
 
 TOPIC_CHAT = "lk.chat"
 TOPIC_TRANSCRIPTION = "lk.transcription"
