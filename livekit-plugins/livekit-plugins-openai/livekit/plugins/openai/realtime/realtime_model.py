@@ -747,7 +747,9 @@ class RealtimeModel(llm.RealtimeModel):
         for sess in self._sessions:
             sess.update_options(
                 voice=voice,
-                turn_detection=self._opts.turn_detection,
+                # only propagate when the caller set it, so a session that opted out of
+                # server-side turn detection isn't force-synced back on by an unrelated update
+                turn_detection=self._opts.turn_detection if is_given(turn_detection) else NOT_GIVEN,
                 tool_choice=tool_choice,
                 input_audio_transcription=self._opts.input_audio_transcription,
                 input_audio_noise_reduction=self._opts.input_audio_noise_reduction,
