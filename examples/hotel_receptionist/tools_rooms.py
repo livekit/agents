@@ -91,9 +91,13 @@ def _say_dispute_outcome(
     if outcome == "explained_no_action":
         return f"{policy_explanation}"
     if outcome == "escalated_to_manager":
+        # The position from the record comes FIRST - "I've escalated it" with no
+        # explanation reads as a brush-off and skips the policy stance the caller
+        # is owed (e.g. a card-guaranteed no-show charge that stands).
         return (
-            f"I've escalated this to the manager - they'll review and follow up by email. "
-            f"Your case number is {_speak_code(case_number)}."
+            f"{policy_explanation} | Explain that position to the caller calmly first, "
+            f"then let them know it's been escalated to the manager, who will review and "
+            f"follow up by email - case number {_speak_code(case_number)}."
         )
     if outcome == "accounting_ticket_opened":
         return (
