@@ -1,5 +1,7 @@
 # Assumptions:
-#   - Seed date is pinned: HOTEL_TODAY=2026-06-08 (Mon). All dates are literals.
+#   - Seed date is pinned to 2026-06-08 (Mon); all dates are literals. hotel_db
+#     pins this automatically under `lk agent simulate` (SIM_TODAY); set
+#     HOTEL_TODAY=YYYY-MM-DD to override in any mode.
 #   - expected_state is included ONLY where the end state is deterministic at the
 #     granularity the diff compares (room *type*, followup *kind*, booking *status*).
 #     Pinned guest facts (email/phone/card) in `instructions` are repeated verbatim
