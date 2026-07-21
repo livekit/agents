@@ -33,14 +33,11 @@ from livekit.agents.utils import AudioBuffer, is_given
 from .models import STTLanguages
 
 DEFAULT_BASE_URL = "https://api.quickdial.ai"
-SAMPLE_RATE = 16000
-NUM_CHANNELS = 1
 
 
 @dataclass
 class _STTOptions:
     language: str
-    sample_rate: int
     base_url: str
     api_key: str
     params: dict | None
@@ -53,7 +50,6 @@ class STT(stt.STT):
         language: STTLanguages | str = "en",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: str = DEFAULT_BASE_URL,
-        sample_rate: int = SAMPLE_RATE,
         params: NotGivenOr[dict] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
@@ -66,7 +62,6 @@ class STT(stt.STT):
             raise ValueError("Quickdial API key required — pass api_key= or set QUICKDIAL_API_KEY")
         self._opts = _STTOptions(
             language=language,
-            sample_rate=sample_rate,
             base_url=base_url.rstrip("/"),
             api_key=key,
             params=params if is_given(params) else None,
