@@ -904,31 +904,42 @@ async def test_mode_connect_time_only():
 
 
 # ---------------------------------------------------------------------------
-# language_code (language steering)
+# language_code / language_codes (language steering)
 #
-# `language_code` biases transcription toward a single language (e.g. "en",
-# "es") instead of automatic detection/code-switching. Steering is only applied
-# by the u3-pro ASR, so — like `mode` and the context/voice-focus params — it is
-# u3-rt-pro-family-only and connect-time only (not exposed via update_options,
-# matching the AssemblyAI streaming API, where `language_code` is a connect-time
-# parameter and not part of UpdateConfiguration).
+# `language_codes` biases transcription toward one or more expected languages
+# (e.g. ["en", "es"]) instead of automatic detection/code-switching across all
+# supported languages. `language_code` is shorthand for a one-element list;
+# both normalize into `_opts.language_codes`. Steering is only applied by the
+# u3-pro ASR, so — like `mode` and the context/voice-focus params — both are
+# u3-rt-pro-family-only at construction. `language_codes` (unlike the
+# singular) can also be re-steered mid-session via update_options, matching
+# the AssemblyAI streaming API's UpdateConfiguration; an empty list clears
+# steering back to the model default.
 # ---------------------------------------------------------------------------
 
 
-async def test_language_code_default():
-    """language_code is unset by default (automatic detection applies)."""
+async def test_language_codes_default():
+    """language_codes is unset by default (automatic detection applies)."""
     from livekit.plugins.assemblyai import STT
 
     stt = STT(api_key="test-key")
-    assert stt._opts.language_code is NOT_GIVEN
+    assert stt._opts.language_codes is NOT_GIVEN
 
 
 async def test_language_code_set():
-    """language_code can be set in the constructor."""
+    """The singular language_code is stored as a one-element language_codes list."""
     from livekit.plugins.assemblyai import STT
 
     stt = STT(api_key="test-key", model="u3-rt-pro", language_code="es")
-    assert stt._opts.language_code == "es"
+    assert stt._opts.language_codes == ["es"]
+
+
+async def test_language_codes_set():
+    """language_codes can be set in the constructor."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model="u3-rt-pro", language_codes=["en", "es"])
+    assert stt._opts.language_codes == ["en", "es"]
 
 
 async def test_language_code_normalized_to_iso_639_1():
@@ -944,7 +955,74 @@ async def test_language_code_normalized_to_iso_639_1():
         ("pt-BR", "pt"),
     ):
         stt = STT(api_key="test-key", model="u3-rt-pro", language_code=raw)
-        assert stt._opts.language_code == expected
+        assert stt._opts.language_codes == [expected]
+
+
+async def test_language_codes_normalized_and_deduped():
+    """Each entry is normalized; duplicates after normalization are dropped,
+    preserving first-seen order."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(
+        api_key="test-key",
+        model="u3-rt-pro",
+        language_codes=["en-US", "en-GB", "Spanish", "es"],
+    )
+    assert stt._opts.language_codes == ["en", "es"]
+
+
+async def test_language_code_and_language_codes_mutually_exclusive():
+    """Passing both spellings raises — they fill the same server field."""
+    from livekit.plugins.assemblyai import STT
+
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        STT(api_key="test-key", model="u3-rt-pro", language_code="en", language_codes=["es"])
+
+
+async def test_language_codes_max_10():
+    """More than 10 codes after normalization/dedup raises (server limit)."""
+    from livekit.plugins.assemblyai import STT
+
+    codes = ["en", "es", "fr", "de", "it", "pt", "nl", "pl", "ru", "ja", "ko"]
+    with pytest.raises(ValueError, match="at most 10"):
+        STT(api_key="test-key", model="u3-rt-pro", language_codes=codes)
+
+
+async def test_language_codes_max_10_applies_after_dedup():
+    """11 raw entries that dedup to 10 codes are accepted — the client is never
+    stricter than what it actually sends to the server."""
+    from livekit.plugins.assemblyai import STT
+
+    codes = ["en-US", "en-GB", "es", "fr", "de", "it", "pt", "nl", "pl", "ru", "ja"]
+    stt = STT(api_key="test-key", model="u3-rt-pro", language_codes=codes)
+    assert stt._opts.language_codes == [
+        "en",
+        "es",
+        "fr",
+        "de",
+        "it",
+        "pt",
+        "nl",
+        "pl",
+        "ru",
+        "ja",
+    ]
+
+
+async def test_language_codes_multi_cannot_be_combined():
+    """'multi' routes to the unsteered multilingual model and must be sent alone."""
+    from livekit.plugins.assemblyai import STT
+
+    with pytest.raises(ValueError, match="multi"):
+        STT(api_key="test-key", model="u3-rt-pro", language_codes=["multi", "en"])
+
+
+async def test_language_codes_multi_alone_is_allowed():
+    """'multi' by itself is valid and passes through un-mangled."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model="u3-rt-pro", language_codes=["multi"])
+    assert stt._opts.language_codes == ["multi"]
 
 
 async def test_language_code_requires_u3_pro_family():
@@ -955,17 +1033,53 @@ async def test_language_code_requires_u3_pro_family():
         STT(api_key="test-key", model="universal-streaming-multilingual", language_code="es")
 
 
-async def test_language_code_allowed_for_all_u3_pro_family_models():
-    """language_code is accepted for every u3-rt-pro-family model, not just the default."""
+async def test_language_codes_requires_u3_pro_family():
+    """language_codes raises ValueError when used with a non-u3-rt-pro-family model."""
+    from livekit.plugins.assemblyai import STT
+
+    with pytest.raises(ValueError, match="language_codes"):
+        STT(
+            api_key="test-key",
+            model="universal-streaming-multilingual",
+            language_codes=["es"],
+        )
+
+
+async def test_language_codes_allowed_for_all_u3_pro_family_models():
+    """language_codes is accepted for every u3-rt-pro-family model, not just the default."""
     from livekit.plugins.assemblyai import STT
 
     for model in ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro"):
-        stt = STT(api_key="test-key", model=model, language_code="en")
-        assert stt._opts.language_code == "en"
+        stt = STT(api_key="test-key", model=model, language_codes=["en", "es"])
+        assert stt._opts.language_codes == ["en", "es"]
 
 
-async def test_language_code_in_connect_config():
-    """language_code is sent in the connect config query."""
+async def test_language_codes_in_connect_config():
+    """language_codes is sent as a JSON array in the connect config query."""
+    import json
+    from urllib.parse import parse_qs, urlparse
+
+    from livekit.plugins.assemblyai import STT
+
+    captured: dict = {}
+
+    async def _fake_ws_connect(url, **kwargs):
+        captured["url"] = url
+        return MagicMock()
+
+    stt = STT(api_key="test-key", model="universal-3-5-pro", language_codes=["en", "es"])
+    stream = _make_stream_for_unit_test(stt)
+    stream._session.ws_connect = _fake_ws_connect
+    await stream._connect_ws()
+
+    query = parse_qs(urlparse(captured["url"]).query)
+    assert json.loads(query["language_codes"][0]) == ["en", "es"]
+
+
+async def test_language_code_singular_in_connect_config():
+    """A singular language_code is sent as a one-element language_codes JSON
+    array — the server aliases both names to the same field."""
+    import json
     from urllib.parse import parse_qs, urlparse
 
     from livekit.plugins.assemblyai import STT
@@ -982,11 +1096,12 @@ async def test_language_code_in_connect_config():
     await stream._connect_ws()
 
     query = parse_qs(urlparse(captured["url"]).query)
-    assert query["language_code"] == ["es"]
+    assert json.loads(query["language_codes"][0]) == ["es"]
+    assert "language_code" not in query
 
 
-async def test_language_code_absent_from_connect_config_when_unset():
-    """language_code key is omitted from the connect config when not set."""
+async def test_language_codes_absent_from_connect_config_when_unset():
+    """language_codes key is omitted from the connect config when not set."""
     from urllib.parse import parse_qs, urlparse
 
     from livekit.plugins.assemblyai import STT
@@ -1003,11 +1118,195 @@ async def test_language_code_absent_from_connect_config_when_unset():
     await stream._connect_ws()
 
     query = parse_qs(urlparse(captured["url"]).query)
+    assert "language_codes" not in query
     assert "language_code" not in query
 
 
-async def test_language_code_connect_time_only():
-    """language_code is connect-time only — not exposed via update_options."""
+async def test_language_codes_stream_sends_update_configuration():
+    """SpeechStream.update_options enqueues an UpdateConfiguration message
+    containing language_codes."""
+    stream = _make_stream_for_unit_test()
+
+    stream.update_options(language_codes=["en", "es"])
+
+    assert stream._opts.language_codes == ["en", "es"]
+    msg = stream._config_update_queue.get_nowait()
+    assert msg["type"] == "UpdateConfiguration"
+    assert msg["language_codes"] == ["en", "es"]
+
+
+async def test_language_codes_update_normalizes_input():
+    """Mid-session updates get the same normalization/dedup as the constructor."""
+    stream = _make_stream_for_unit_test()
+
+    stream.update_options(language_codes=["en-US", "Spanish"])
+
+    msg = stream._config_update_queue.get_nowait()
+    assert msg["language_codes"] == ["en", "es"]
+
+
+async def test_language_codes_update_validates_input():
+    """Mid-session updates get the same fail-fast validation as the constructor."""
+    stream = _make_stream_for_unit_test()
+
+    with pytest.raises(ValueError, match="multi"):
+        stream.update_options(language_codes=["multi", "en"])
+
+
+async def test_language_codes_empty_list_clears_steering():
+    """An explicit empty list is forwarded (the server's documented 'clear
+    steering back to model default' form), not dropped by a truthiness check."""
+    stream = _make_stream_for_unit_test()
+
+    stream.update_options(language_codes=[])
+
+    assert stream._opts.language_codes == []
+    msg = stream._config_update_queue.get_nowait()
+    assert msg["type"] == "UpdateConfiguration"
+    assert msg["language_codes"] == []
+
+
+async def test_language_codes_propagates_from_stt_to_active_stream():
+    """STT.update_options(language_codes=...) propagates to an already-active
+    stream and sends it over that stream's websocket queue."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", http_session=MagicMock())
+
+    def _fake_create_task(coro, *args, **kwargs):
+        coro.close()
+        return MagicMock()
+
+    with patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=_fake_create_task):
+        stream = stt.stream()
+
+    stt.update_options(language_codes=["en", "es"])
+
+    assert stt._opts.language_codes == ["en", "es"]
+    assert stream._opts.language_codes == ["en", "es"]
+    msg = stream._config_update_queue.get_nowait()
+    assert msg["type"] == "UpdateConfiguration"
+    assert msg["language_codes"] == ["en", "es"]
+
+
+async def test_cleared_language_codes_omitted_on_reconnect():
+    """After clearing ([]), a (re)connect omits the language_codes param —
+    consistent with the cleared state."""
+    from urllib.parse import parse_qs, urlparse
+
+    from livekit.plugins.assemblyai import STT
+
+    captured: dict = {}
+
+    async def _fake_ws_connect(url, **kwargs):
+        captured["url"] = url
+        return MagicMock()
+
+    stt = STT(api_key="test-key", model="universal-3-5-pro", language_codes=["en", "es"])
+    stream = _make_stream_for_unit_test(stt)
+    stream.update_options(language_codes=[])
+    stream._session.ws_connect = _fake_ws_connect
+    await stream._connect_ws()
+
+    query = parse_qs(urlparse(captured["url"]).query)
+    assert "language_codes" not in query
+
+
+async def test_language_codes_update_requires_u3_pro_family():
+    """update_options mirrors the constructor's family gate for language_codes."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model="universal-streaming-english")
+    with pytest.raises(ValueError, match="language_codes"):
+        stt.update_options(language_codes=["es"])
+
+    stream = _make_stream_for_unit_test(stt)
+    with pytest.raises(ValueError, match="language_codes"):
+        stream.update_options(language_codes=["es"])
+    assert stream._config_update_queue.empty()
+
+
+async def test_language_codes_empty_list_at_construction_is_unset():
+    """An explicit [] at construction equals unset — even on non-U3-Pro models."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model="universal-streaming-english", language_codes=[])
+    assert stt._opts.language_codes is NOT_GIVEN
+
+    stt_pro = STT(api_key="test-key", model="u3-rt-pro", language_codes=[])
+    assert stt_pro._opts.language_codes is NOT_GIVEN
+
+
+async def test_language_codes_accepts_bare_string():
+    """language_codes accepts a single code directly, normalized like a list entry."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model="u3-rt-pro", language_codes="es")
+    assert stt._opts.language_codes == ["es"]
+
+    stt_norm = STT(api_key="test-key", model="u3-rt-pro", language_codes="Spanish")
+    assert stt_norm._opts.language_codes == ["es"]
+
+
+async def test_language_codes_empty_string_at_construction_is_unset():
+    """An explicit "" at construction equals unset, like []."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model="universal-streaming-english", language_codes="")
+    assert stt._opts.language_codes is NOT_GIVEN
+
+
+async def test_language_code_singular_logs_deprecation_warning(caplog):
+    """The singular language_code still works but logs a deprecation warning."""
+    import logging
+
+    from livekit.plugins.assemblyai import STT
+
+    with caplog.at_level(logging.WARNING):
+        stt = STT(api_key="test-key", model="u3-rt-pro", language_code="es")
+
+    assert stt._opts.language_codes == ["es"]
+    assert "'language_code' is deprecated" in caplog.text
+
+
+async def test_language_codes_no_deprecation_warning(caplog):
+    """The plural spelling does not trigger the deprecation warning."""
+    import logging
+
+    from livekit.plugins.assemblyai import STT
+
+    with caplog.at_level(logging.WARNING):
+        STT(api_key="test-key", model="u3-rt-pro", language_codes=["es"])
+
+    assert "deprecated" not in caplog.text
+
+
+async def test_language_codes_update_accepts_bare_string():
+    """update_options accepts a single code directly and sends it as a list."""
+    stream = _make_stream_for_unit_test()
+
+    stream.update_options(language_codes="en-US")
+
+    assert stream._opts.language_codes == ["en"]
+    msg = stream._config_update_queue.get_nowait()
+    assert msg["type"] == "UpdateConfiguration"
+    assert msg["language_codes"] == ["en"]
+
+
+async def test_language_codes_update_empty_string_clears_steering():
+    """An explicit "" mid-session clears steering, same as []."""
+    stream = _make_stream_for_unit_test()
+
+    stream.update_options(language_codes="")
+
+    assert stream._opts.language_codes == []
+    msg = stream._config_update_queue.get_nowait()
+    assert msg["language_codes"] == []
+
+
+async def test_language_code_singular_not_in_update_options():
+    """The singular language_code is constructor-only; mid-session re-steering
+    goes through language_codes."""
     import inspect
 
     from livekit.plugins.assemblyai import STT
@@ -1015,3 +1314,210 @@ async def test_language_code_connect_time_only():
 
     assert "language_code" not in inspect.signature(STT.update_options).parameters
     assert "language_code" not in inspect.signature(SpeechStream.update_options).parameters
+    assert "language_codes" in inspect.signature(STT.update_options).parameters
+    assert "language_codes" in inspect.signature(SpeechStream.update_options).parameters
+
+
+# ---------------------------------------------------------------------------
+# agent_context server cap (1750 chars) + agent_context_carryover deprecation
+#
+# The server rejects `agent_context` longer than 1750 chars, and an invalid
+# UpdateConfiguration cancels the whole streaming session — so the plugin
+# enforces the cap client-side. The auto-carryover path truncates (keeping the
+# tail: the end of the agent's reply is what the user responds to); explicit
+# developer input fails fast with ValueError instead of being silently
+# mangled.
+# ---------------------------------------------------------------------------
+
+
+def _assistant_item_event(text: str):
+    from livekit.agents.llm import ChatMessage
+    from livekit.agents.voice.events import ConversationItemAddedEvent
+
+    return ConversationItemAddedEvent(item=ChatMessage(role="assistant", content=[text]))
+
+
+async def test_agent_context_at_cap_accepted():
+    """agent_context of exactly 1750 chars is accepted everywhere."""
+    from livekit.plugins.assemblyai import STT
+
+    text = "x" * 1750
+    stt = STT(api_key="test-key", agent_context=text)
+    assert stt._opts.agent_context == text
+
+    stt.update_options(agent_context=text)
+    assert stt._opts.agent_context == text
+
+
+async def test_agent_context_over_cap_raises_in_constructor():
+    """Explicit oversize agent_context fails fast instead of killing the session later."""
+    from livekit.plugins.assemblyai import STT
+
+    with pytest.raises(ValueError, match="agent_context"):
+        STT(api_key="test-key", agent_context="x" * 1751)
+
+
+async def test_agent_context_over_cap_raises_in_stt_update_options():
+    """STT.update_options rejects oversize agent_context without mutating any option."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", vad_threshold=0.5)
+    with pytest.raises(ValueError, match="agent_context"):
+        stt.update_options(vad_threshold=0.9, agent_context="x" * 1751)
+
+    # the same call must not have applied its other updates (no partial update)
+    assert stt._opts.vad_threshold == 0.5
+    assert stt._opts.agent_context is NOT_GIVEN
+
+
+async def test_agent_context_over_cap_raises_in_stream_update_options():
+    """SpeechStream.update_options rejects oversize agent_context without
+    mutating options or enqueuing an UpdateConfiguration."""
+    stream = _make_stream_for_unit_test()
+
+    with pytest.raises(ValueError, match="agent_context"):
+        stream.update_options(vad_threshold=0.9, agent_context="x" * 1751)
+
+    assert stream._opts.agent_context is NOT_GIVEN
+    assert stream._opts.vad_threshold is NOT_GIVEN
+    assert stream._config_update_queue.empty()
+
+
+async def test_carryover_forwards_short_reply_verbatim():
+    """_push_conversation_item forwards assistant text within the cap unchanged."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key")
+    stt._push_conversation_item(_assistant_item_event("Your room is booked for Tuesday."))
+    assert stt._opts.agent_context == "Your room is booked for Tuesday."
+
+
+async def test_carryover_truncates_oversize_reply_keeping_tail():
+    """_push_conversation_item truncates oversize replies to the last 1750 chars."""
+    from livekit.plugins.assemblyai import STT
+
+    text = "a" * 2000 + "b" * 1750
+    stt = STT(api_key="test-key")
+    stt._push_conversation_item(_assistant_item_event(text))
+    assert stt._opts.agent_context == "b" * 1750
+
+
+async def test_carryover_ignores_non_assistant_items():
+    """_push_conversation_item ignores user messages and textless assistant items
+    — the shapes it receives when carryover is enabled."""
+    from livekit.agents.llm import ChatMessage
+    from livekit.agents.voice.events import ConversationItemAddedEvent
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key")
+
+    stt._push_conversation_item(
+        ConversationItemAddedEvent(item=ChatMessage(role="user", content=["hi there"]))
+    )
+    assert stt._opts.agent_context is NOT_GIVEN
+
+    stt._push_conversation_item(
+        ConversationItemAddedEvent(item=ChatMessage(role="assistant", content=[]))
+    )
+    assert stt._opts.agent_context is NOT_GIVEN
+
+
+async def test_carryover_ignores_agent_handoff_items():
+    """_push_conversation_item ignores non-message items (e.g. AgentHandoff),
+    which have `.type != "message"` and no `text_content`."""
+    from livekit.agents.llm import AgentHandoff
+    from livekit.agents.voice.events import ConversationItemAddedEvent
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key")
+
+    stt._push_conversation_item(
+        ConversationItemAddedEvent(item=AgentHandoff(new_agent_id="agent-2"))
+    )
+    assert stt._opts.agent_context is NOT_GIVEN
+
+
+async def test_carryover_on_by_default_for_u3_pro_family():
+    """chat_context carryover is on by default on models that support it."""
+    from livekit.plugins.assemblyai import STT
+
+    for model in ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro", "u3-pro"):
+        stt = STT(api_key="test-key", model=model)
+        assert stt.capabilities.chat_context is True
+
+
+async def test_carryover_default_does_not_warn(caplog):
+    """Not passing the deprecated flag produces no deprecation warning."""
+    import logging
+
+    from livekit.plugins.assemblyai import STT
+
+    with caplog.at_level(logging.WARNING):
+        stt = STT(api_key="test-key", model="universal-3-5-pro")
+
+    assert stt.capabilities.chat_context is True
+    assert "deprecated" not in caplog.text
+
+
+async def test_carryover_explicit_true_still_enables_and_warns(caplog):
+    """The deprecated agent_context_carryover=True still enables, and warns to migrate."""
+    import logging
+
+    from livekit.plugins.assemblyai import STT
+
+    with caplog.at_level(logging.WARNING):
+        stt = STT(api_key="test-key", model="universal-3-5-pro", agent_context_carryover=True)
+
+    assert stt.capabilities.chat_context is True
+    assert "deprecated" in caplog.text
+
+
+async def test_carryover_defaults_off_for_unsupported_models_without_warning(caplog):
+    """On non-U3-Pro models the default is silently off — no 'ignoring' warning."""
+    import logging
+
+    from livekit.plugins.assemblyai import STT
+
+    with caplog.at_level(logging.WARNING):
+        stt = STT(api_key="test-key", model="universal-streaming-english")
+
+    assert stt.capabilities.chat_context is False
+    assert "agent_context_carryover" not in caplog.text
+
+
+async def test_carryover_explicit_true_on_unsupported_model_warns(caplog):
+    """Explicitly enabling carryover on an unsupported model keeps today's warning."""
+    import logging
+
+    from livekit.plugins.assemblyai import STT
+
+    with caplog.at_level(logging.WARNING):
+        stt = STT(
+            api_key="test-key",
+            model="universal-streaming-english",
+            agent_context_carryover=True,
+        )
+
+    assert stt.capabilities.chat_context is False
+    assert "agent_context_carryover" in caplog.text
+
+
+async def test_carryover_explicit_false_disables(caplog):
+    """The deprecated agent_context_carryover=False opts out on a supported model, and warns."""
+    import logging
+
+    from livekit.plugins.assemblyai import STT
+
+    with caplog.at_level(logging.WARNING):
+        stt = STT(api_key="test-key", agent_context_carryover=False)
+
+    assert stt.capabilities.chat_context is False
+    assert "deprecated" in caplog.text
+
+
+async def test_carryover_explicit_true_wins_over_n_turns_zero():
+    """agent_context_carryover=True enables carryover regardless of previous_context_n_turns."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", previous_context_n_turns=0, agent_context_carryover=True)
+    assert stt.capabilities.chat_context is True

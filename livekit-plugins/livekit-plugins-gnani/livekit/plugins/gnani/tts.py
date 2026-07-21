@@ -57,6 +57,15 @@ from livekit.agents import (
 
 from ._compat import ws_header_kwargs as _ws_header_kwargs
 from .log import logger
+from .models import (
+    DEFAULT_MODEL,
+    GnaniTTSBitrates,
+    GnaniTTSContainers,
+    GnaniTTSEncodings,
+    GnaniTTSLanguages,
+    GnaniTTSModels,
+    GnaniTTSVoices,
+)
 
 GNANI_TTS_BASE_URL = "https://api.vachana.ai"
 
@@ -258,7 +267,7 @@ class TTS(tts.TTS):
         language: BCP-47 language code for timbre-v2.5 only (e.g. "hi-IN").
         sample_rate: Audio output sample rate (8000-44100).
         encoding: Audio encoding (linear_pcm or oggopus).
-        container: Audio container format (raw, mp3, wav, mulaw, ogg).
+        container: Audio container format (raw, mp3, wav, ogg).
         api_key: Gnani API key (falls back to GNANI_API_KEY env var).
         base_url: Vachana API base URL.
         synthesize_method: Synthesis mode — "rest", "sse", or "websocket".
@@ -483,9 +492,10 @@ class RESTChunkedStream(tts.ChunkedStream):
 class SSEChunkedStream(tts.ChunkedStream):
     """SSE-based chunked TTS — POST /api/v1/tts/sse.
 
-    Each SSE chunk decodes to a complete WAV file. This class strips per-chunk
-    WAV headers and emits only raw PCM so the LiveKit pipeline receives a
-    single contiguous audio stream.
+    Each SSE ``audio`` payload carries container-encoded audio (WAV by
+    default). Bytes are pushed straight to the ``AudioEmitter``, whose built-in
+    ``AudioStreamDecoder`` decodes and re-frames them into a single contiguous
+    PCM stream.
     """
 
     def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
@@ -524,7 +534,7 @@ class SSEChunkedStream(tts.ChunkedStream):
                     request_id=request_id,
                     sample_rate=self._tts.sample_rate,
                     num_channels=self._tts.num_channels,
-                    mime_type="audio/pcm",
+                    mime_type=_mime_type(self._opts),
                 )
 
                 buf = ""
@@ -633,7 +643,7 @@ class WebSocketChunkedStream(tts.ChunkedStream):
                     request_id=request_id,
                     sample_rate=self._tts.sample_rate,
                     num_channels=self._tts.num_channels,
-                    mime_type="audio/pcm",
+                    mime_type=_mime_type(self._opts),
                 )
 
                 async for msg in ws:
@@ -719,7 +729,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             request_id=request_id,
             sample_rate=self._tts.sample_rate,
             num_channels=self._tts.num_channels,
-            mime_type="audio/pcm",
+            mime_type=_mime_type(self._opts),
             stream=True,
         )
 

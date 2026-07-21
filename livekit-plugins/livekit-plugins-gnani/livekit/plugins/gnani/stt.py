@@ -48,6 +48,7 @@ if TYPE_CHECKING:
 
 from ._compat import ws_header_kwargs as _ws_header_kwargs
 from .log import logger
+from .models import GnaniSTTLanguages
 
 GnaniSTTFormat = Literal["verbatim", "transcribe"]
 
@@ -178,7 +179,7 @@ class STT(stt.STT):
     def __init__(
         self,
         *,
-        language: str = "en-IN",
+        language: GnaniSTTLanguages | str = "en-IN",
         api_key: str | None = None,
         sample_rate: int = SAMPLE_RATE_16K,
         base_url: str = GNANI_STT_BASE_URL,

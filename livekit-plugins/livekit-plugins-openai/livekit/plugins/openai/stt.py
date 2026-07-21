@@ -554,34 +554,49 @@ class SpeechStream(stt.SpeechStream):
                 samples_per_channel=SAMPLE_RATE // 20,
             )
 
-            async for data in self._input_ch:
-                frames: list[rtc.AudioFrame] = []
-                if isinstance(data, rtc.AudioFrame):
-                    if vad_stream is not None:
-                        vad_stream.push_frame(data)
-                    frames.extend(audio_bstream.write(data.data.tobytes()))
-                elif isinstance(data, self._FlushSentinel):
-                    frames.extend(audio_bstream.flush())
+            try:
+                async for data in self._input_ch:
+                    frames: list[rtc.AudioFrame] = []
+                    if isinstance(data, rtc.AudioFrame):
+                        if vad_stream is not None:
+                            vad_stream.push_frame(data)
+                        frames.extend(audio_bstream.write(data.data.tobytes()))
+                    elif isinstance(data, self._FlushSentinel):
+                        frames.extend(audio_bstream.flush())
 
-                for frame in frames:
-                    encoded_frame = {
-                        "type": "input_audio_buffer.append",
-                        "audio": base64.b64encode(frame.data.tobytes()).decode("utf-8"),
-                    }
-                    await ws.send_json(encoded_frame)
+                    for frame in frames:
+                        encoded_frame = {
+                            "type": "input_audio_buffer.append",
+                            "audio": base64.b64encode(frame.data.tobytes()).decode("utf-8"),
+                        }
+                        await ws.send_json(encoded_frame)
+            except (aiohttp.ClientError, ConnectionError) as e:
+                if closing_ws:
+                    return
+                raise APIConnectionError(
+                    "OpenAI Realtime STT connection closed unexpectedly"
+                ) from e
+            finally:
+                if vad_stream is not None:
+                    vad_stream.end_input()
 
-            if vad_stream is not None:
-                vad_stream.end_input()
             closing_ws = True
 
         @utils.log_exceptions(logger=logger)
         async def vad_task(ws: aiohttp.ClientWebSocketResponse, vad_stream: vad.VADStream) -> None:
-            async for ev in vad_stream:
-                if ev.type == vad.VADEventType.START_OF_SPEECH:
-                    self._start_speaking()
-                elif ev.type == vad.VADEventType.END_OF_SPEECH:
-                    self._stop_speaking()
-                    await ws.send_json({"type": "input_audio_buffer.commit"})
+            try:
+                async for ev in vad_stream:
+                    if ev.type == vad.VADEventType.START_OF_SPEECH:
+                        self._start_speaking()
+                    elif ev.type == vad.VADEventType.END_OF_SPEECH:
+                        self._stop_speaking()
+                        await ws.send_json({"type": "input_audio_buffer.commit"})
+            except (aiohttp.ClientError, ConnectionError) as e:
+                if closing_ws:
+                    return
+                raise APIConnectionError(
+                    "OpenAI Realtime STT connection closed unexpectedly"
+                ) from e
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:

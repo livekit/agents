@@ -66,8 +66,8 @@ def test_tts_all_voices_accepted():
         assert tts._opts.voice == voice
 
 
-def test_tts_rejects_invalid_voice():
-    """TTS rejects unsupported voices."""
+def test_tts_accepts_arbitrary_voice():
+    """TTS accepts arbitrary voice strings (validated server-side)."""
     from livekit.plugins.gnani import TTS
 
     with pytest.raises(ValueError, match="Unsupported voice"):
@@ -183,8 +183,8 @@ def test_tts_update_options_voice_and_model():
     assert tts._opts.model == "timbre-v2.5"
 
 
-def test_tts_update_options_rejects_invalid_voice():
-    """update_options rejects unsupported voices."""
+def test_tts_update_options_accepts_arbitrary_voice():
+    """update_options accepts arbitrary voice strings (validated server-side)."""
     from livekit.plugins.gnani import TTS
 
     tts = TTS(api_key="test-key")

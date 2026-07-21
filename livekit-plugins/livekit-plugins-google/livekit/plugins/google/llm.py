@@ -545,8 +545,12 @@ class LLMStream(llm.LLMStream):
 
                 for part in candidate.content.parts:
                     chat_chunk = self._parse_part(request_id, part)
-                    response_generated = True
                     if chat_chunk is not None:
+                        # Only count parts that actually produce output. Thought
+                        # summaries (dropped in _parse_part) must not mark the
+                        # response as generated, otherwise a thought-only turn would
+                        # be treated as successful and skip the retry below.
+                        response_generated = True
                         retryable = False
                         self._event_ch.send_nowait(chat_chunk)
 
@@ -617,6 +621,12 @@ class LLMStream(llm.LLMStream):
             return chat_chunk
 
         if not part.text:
+            return None
+
+        # Drop thought summaries: when include_thoughts is enabled Gemini streams its
+        # reasoning back as parts flagged part.thought=True. These must not reach
+        # ChoiceDelta.content, otherwise TTS would speak the model's internal reasoning.
+        if part.thought:
             return None
 
         return llm.ChatChunk(
