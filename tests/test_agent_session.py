@@ -1187,6 +1187,60 @@ async def test_final_transcript_resets_away_timer_when_not_speaking() -> None:
         await _close_test_session(session)
 
 
+async def test_noise_user_state_flips_do_not_defer_away_deadline() -> None:
+    """Transcript-less speaking↔listening must not push the away deadline (#6030)."""
+    session = create_session(FakeActions(), extra_kwargs={"user_away_timeout": 0.5})
+    try:
+        session._agent_state = "listening"
+        session._user_state = "listening"
+        session._set_user_away_timer(reset=True)
+        deadline = session._user_away_deadline
+        assert deadline is not None
+
+        await asyncio.sleep(0.15)
+        # noise segment: VAD/STT SpeechStarted with no transcript
+        session._update_user_state("speaking")
+        assert session._user_away_timer is None
+        session._update_user_state("listening")
+
+        assert session._user_away_deadline == deadline
+        assert session._user_away_timer is not None
+        assert session.user_state == "listening"
+
+        # original deadline still wins — not deferred by a full timeout after the noise
+        await asyncio.sleep(0.4)
+        assert session.user_state == "away"
+    finally:
+        await _close_test_session(session)
+
+
+async def test_final_transcript_and_agent_activity_refresh_away_deadline() -> None:
+    session = create_session(FakeActions(), extra_kwargs={"user_away_timeout": 1.0})
+    try:
+        session._agent_state = "listening"
+        session._user_state = "listening"
+        session._set_user_away_timer(reset=True)
+        deadline0 = session._user_away_deadline
+        assert deadline0 is not None
+
+        await asyncio.sleep(0.2)
+        session._user_input_transcribed(
+            UserInputTranscribedEvent(transcript="still here", is_final=True)
+        )
+        deadline1 = session._user_away_deadline
+        assert deadline1 is not None
+        assert deadline1 > deadline0
+
+        await asyncio.sleep(0.2)
+        session._update_agent_state("speaking")
+        session._update_agent_state("listening")
+        deadline2 = session._user_away_deadline
+        assert deadline2 is not None
+        assert deadline2 > deadline1
+    finally:
+        await _close_test_session(session)
+
+
 async def test_stt_error_count_resets_on_user_transcript() -> None:
     from livekit.agents.voice.agent_session import SessionConnectOptions
 

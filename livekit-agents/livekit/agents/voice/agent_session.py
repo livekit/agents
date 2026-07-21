@@ -364,8 +364,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             loop (asyncio.AbstractEventLoop, optional): Event loop to bind the
                 session to. Falls back to :pyfunc:`asyncio.get_event_loop()`.
             user_away_timeout (float, optional): If set, set the user state as
-                "away" after this amount of time after user and agent are silent.
-                Defaults to ``15.0`` s, set to ``None`` to disable.
+                "away" after this amount of mutual silence. The deadline is
+                refreshed by meaningful activity (agent leaving idle, or a final
+                user transcript) — raw VAD/STT speech flips without a transcript
+                do not defer it. Defaults to ``15.0`` s, set to ``None`` to disable.
             aec_warmup_duration (float, optional): The duration in seconds that the agent
                 will ignore user's audio interruptions after the agent starts speaking.
                 This is useful to prevent the agent from being interrupted by echo before AEC is ready.
@@ -536,6 +538,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._user_state: UserState = "listening"
         self._agent_state: AgentState = "initializing"
         self._user_away_timer: asyncio.TimerHandle | None = None
+        # absolute deadline for "away"; preserved across transcript-less user
+        # speaking↔listening flips so telephony noise cannot defer the timeout
+        self._user_away_deadline: float | None = None
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
         self._closing_task: asyncio.Task[None] | None = None
@@ -1669,7 +1674,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 self._activity.push_video(frame)
 
-    def _set_user_away_timer(self) -> None:
+    def _set_user_away_timer(self, *, reset: bool = True) -> None:
+        """Arm the away timer.
+
+        Args:
+            reset: When True, push the away deadline to ``now + user_away_timeout``
+                (meaningful activity). When False, re-arm with whatever time
+                remains on the existing deadline — used for transcript-less user
+                state flips so background noise cannot defer "away".
+        """
         self._cancel_user_away_timer()
         if self._opts.user_away_timeout is None:
             return
@@ -1682,9 +1695,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # skip the timer before user join the room
             return
 
-        self._user_away_timer = self._loop.call_later(
-            self._opts.user_away_timeout, self._update_user_state, "away"
-        )
+        now = time.time()
+        if reset or self._user_away_deadline is None:
+            self._user_away_deadline = now + self._opts.user_away_timeout
+
+        remaining = max(0.0, self._user_away_deadline - now)
+        self._user_away_timer = self._loop.call_later(remaining, self._update_user_state, "away")
 
     def _cancel_user_away_timer(self) -> None:
         if self._user_away_timer is not None:
@@ -1792,9 +1808,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._user_speaking_span = None
 
         if state == "listening" and self._agent_state == "listening":
-            self._set_user_away_timer()
+            # preserve the existing deadline — transcript-less speaking↔listening
+            # flips (telephony noise) must not defer "away" (#6030)
+            self._set_user_away_timer(reset=False)
         else:
             self._cancel_user_away_timer()
+            if state == "away":
+                self._user_away_deadline = None
 
         old_state = self._user_state
         self._user_state = state
@@ -1824,9 +1844,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self.user_state == "away":
                 # reset user state from away to listening in case VAD has a miss detection
                 self._update_user_state("listening")
+                # full silence window after returning from away
+                self._set_user_away_timer(reset=True)
             elif self.user_state == "listening" and self._agent_state == "listening":
                 # VAD may have missed speech; STT still saw activity, so refresh away timeout
-                self._set_user_away_timer()
+                self._set_user_away_timer(reset=True)
 
         self.emit("user_input_transcribed", ev)
 
