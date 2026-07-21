@@ -13,7 +13,7 @@ from livekit.agents import inference
 
 session = AgentSession(
     stt=inference.STT("deepgram/nova-3"),
-    llm=inference.LLM("openai/gpt-4.1-mini"),
+    llm=inference.LLM("google/gemma-4-31b-it"),  # LiveKit-hosted latency optimized gemma
     tts=inference.TTS("cartesia/sonic-3"),
 )
 ```
