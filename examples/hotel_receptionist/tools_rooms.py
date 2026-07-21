@@ -107,6 +107,43 @@ def _say_dispute_outcome(
     return f"Logged. Case number {_speak_code(case_number)}."
 
 
+def _needs_offer_first(outcome: str, key: str, offers_made: set[str]) -> bool:
+    """Gate money-moving dispute outcomes on an offer actually having been made.
+
+    The docstring tells the model to set accepts_offered_resolution=true only after
+    the caller accepted an offered outcome, but a docstring alone doesn't stop it
+    from waiving on the first call. Record the offer here; the first waiver/credit
+    attempt for a line item is blocked and turned into the offer itself.
+    """
+    if outcome not in ("goodwill_waived", "credit_offered"):
+        return False
+    if key in offers_made:
+        return False
+    offers_made.add(key)
+    return True
+
+
+def _say_dispute_offer(
+    *,
+    outcome: str,
+    refund: int,
+    line_item: str,
+    policy_explanation: str,
+) -> str:
+    """The blocked first attempt: hand the agent the explanation and the offer to make."""
+    resolution = (
+        f"waive the {line_item} charge as a one-time courtesy ({speak_usd(refund)} back)"
+        if outcome == "goodwill_waived"
+        else f"apply a {speak_usd(refund)} credit toward the {line_item}"
+    )
+    return (
+        f"NOT resolved yet - nothing was offered to the caller. {policy_explanation} | "
+        f"Explain that to the caller first, then offer to {resolution}. If they accept, "
+        f"call dispute_charge again with accepts_offered_resolution=true; if they push "
+        f"back, call it again with accepts_offered_resolution=false."
+    )
+
+
 class RoomToolsMixin:
     @function_tool
     async def resolve_room_conflict(self, ctx: RunContext[Userdata]) -> str:
@@ -440,6 +477,17 @@ class RoomToolsMixin:
             invoice_line_items=[(li.label, li.amount_cents) for li in invoice.line_items],
             accepts=accepts_offered_resolution,
         )
+
+        offer_key = f"{booking.code}:{item.label.casefold()}"
+        if _needs_offer_first(outcome, offer_key, ctx.userdata.dispute_offers_made):
+            # Nothing is filed on the blocked attempt - the dispute row is written
+            # only once the caller has actually responded to the offer.
+            return _say_dispute_offer(
+                outcome=outcome,
+                refund=refund,
+                line_item=item.label,
+                policy_explanation=policy.explanation,
+            )
 
         case_number = await ctx.userdata.db.file_dispute(
             booking_code=booking.code,
