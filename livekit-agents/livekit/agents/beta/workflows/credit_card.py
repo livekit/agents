@@ -700,7 +700,8 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
     def _normalize_expiration_year(self, year: int) -> int:
         if 0 <= year <= 99:
             return year
-        if 2000 <= year <= 2099:
+        current_century = self._current_date().year // 100 * 100
+        if current_century <= year <= current_century + 99:
             return year % 100
         raise ToolError(
             "The expiration year must use its last two digits or the full four-digit year. "
@@ -708,9 +709,13 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
         )
 
     def _is_expired(self, month: int, year: int) -> bool:
-        today = date.today()
-        full_year = 2000 + year
+        today = self._current_date()
+        current_century = today.year // 100 * 100
+        full_year = current_century + year
         return (full_year, month) < (today.year, today.month)
+
+    def _current_date(self) -> date:
+        return date.today()
 
     def _confirmation_required(self, ctx: RunContext) -> bool:
         if is_given(self._require_confirmation):

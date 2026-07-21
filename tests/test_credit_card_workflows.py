@@ -1,4 +1,5 @@
 import asyncio
+from datetime import date
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
@@ -175,15 +176,32 @@ async def test_sensitive_field_duplicate_updates_redirect_to_confirmation() -> N
     assert await security_code_task._update_security_code_impl(ctx, "456")
 
     expiration_task = GetExpirationDateTask(require_confirmation=True)
-    assert await expiration_task._update_expiration_date_impl(ctx, 4, 2099)
-    assert expiration_task._expiration_date == "04/99"
-    with pytest.raises(ToolError, match="confirm_expiration_date"):
-        await expiration_task._update_expiration_date_impl(ctx, 4, 99)
-    assert await expiration_task._update_expiration_date_impl(ctx, 5, 2099)
+    with patch.object(expiration_task, "_current_date", return_value=date(2026, 7, 21)):
+        assert await expiration_task._update_expiration_date_impl(ctx, 4, 2099)
+        assert expiration_task._expiration_date == "04/99"
+        with pytest.raises(ToolError, match="confirm_expiration_date"):
+            await expiration_task._update_expiration_date_impl(ctx, 4, 99)
+        assert await expiration_task._update_expiration_date_impl(ctx, 5, 2099)
 
-    for invalid_year in (1999, 2100):
-        with pytest.raises(ToolError, match="last two digits or the full four-digit year"):
-            await expiration_task._update_expiration_date_impl(ctx, 5, invalid_year)
+        for invalid_year in (1999, 2100):
+            with pytest.raises(ToolError, match="last two digits or the full four-digit year"):
+                await expiration_task._update_expiration_date_impl(ctx, 5, invalid_year)
+
+
+@pytest.mark.asyncio
+async def test_expiration_year_uses_the_current_century() -> None:
+    task = GetExpirationDateTask(require_confirmation=True)
+
+    with patch.object(task, "_current_date", return_value=date(3000, 1, 1)):
+        assert await task._update_expiration_date_impl(_run_context(), 4, 3000)
+        assert task._expiration_date == "04/00"
+
+        with pytest.raises(ToolError, match="confirm_expiration_date"):
+            await task._update_expiration_date_impl(_run_context(), 4, 0)
+
+        for invalid_year in (2999, 3100):
+            with pytest.raises(ToolError, match="last two digits or the full four-digit year"):
+                await task._update_expiration_date_impl(_run_context(), 4, invalid_year)
 
 
 def test_credit_card_instructions_prohibit_concrete_format_examples() -> None:
