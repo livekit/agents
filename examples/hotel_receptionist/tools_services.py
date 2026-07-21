@@ -62,6 +62,40 @@ def _farewell_instruction(userdata: Userdata) -> str:
     )
 
 
+def _departure_margin_note(*, pickup: time, departure: time) -> str:
+    """The pickup-vs-departure sanity check, computed instead of remembered.
+
+    The prose instruction to "sanity-check the pickup time against the flight"
+    was routinely skipped; with the departure time on file the tool hands the
+    agent the actual margin to say back.
+    """
+    minutes = (departure.hour * 60 + departure.minute) - (pickup.hour * 60 + pickup.minute)
+    spoken_dep = speak_time(departure)
+    if minutes <= 0:
+        return (
+            f"the pickup is not before the {spoken_dep} departure - re-check the "
+            "times with the guest before confirming anything."
+        )
+    halves = round(minutes / 30)
+    whole, half = divmod(halves, 2)
+    if whole == 0:
+        margin = "about half an hour"
+    elif half:
+        margin = f"about {whole} and a half hours"
+    else:
+        margin = f"about {whole} hour{'s' if whole != 1 else ''}"
+    if minutes < 120:
+        return (
+            f"that's only {margin} before the {spoken_dep} departure - TIGHT for an "
+            "airport run; flag it to the guest (about 3 hours ahead is right for "
+            "international)."
+        )
+    return (
+        f"that's {margin} before the {spoken_dep} departure - say this margin back "
+        "to the guest (about 3 hours ahead is right for international)."
+    )
+
+
 def _resolve_flower_destination(location: str | None, recipient: str | None) -> str:
     """One stored destination from the two collected ideas: the location wins.
 
@@ -467,6 +501,7 @@ class ServicesToolsMixin:
         flight_date: date,
         booking_reference: str,
         seat_check: bool,
+        departure_time: time | None = None,
     ) -> str:
         """Log a flight-reconfirmation request for an in-house guest: the concierge calls the carrier and rings the guest's room with the result. Collect ALL the flight details first and read the booking reference back before calling - a wrong reference makes the whole request useless.
 
@@ -477,6 +512,7 @@ class ServicesToolsMixin:
             flight_date: Flight date in ISO YYYY-MM-DD format. When the caller says a weekday ("Thursday"), resolve it against today and say the concrete date back ("Thursday - that's June eleventh?") BEFORE calling; a one-day slip sends the whole request to the wrong flight.
             booking_reference: The airline booking reference, letters and digits only.
             seat_check: True if the guest also wants their seat assignment checked - it's handled in the same carrier call.
+            departure_time: Scheduled departure in 24-hour HH:MM format if the caller mentions or knows it - it's what any airport-car pickup gets sanity-checked against. Omit if they don't know it.
         """
         try:
             code = await ctx.userdata.db.request_flight_reconfirmation(
@@ -486,6 +522,7 @@ class ServicesToolsMixin:
                 flight_date=flight_date,
                 booking_reference=booking_reference,
                 seat_check=seat_check,
+                departure_time=departure_time,
             )
         except NotFound:
             raise ToolError(f"no room {room} exists - re-confirm the room number") from None
@@ -524,11 +561,22 @@ class ServicesToolsMixin:
             raise ToolError(f"no room {room} exists - re-confirm the room number") from None
         except Unavailable as e:
             raise ToolError(f"can't book that: {e} - re-confirm the date") from None
+        # With a flight on file for this room and day, the pickup margin is computed
+        # here rather than left to the prose instruction the model routinely skips.
+        departure = await ctx.userdata.db.latest_flight_departure(
+            room=room, flight_date=pickup_date
+        )
+        margin_note = (
+            " " + _departure_margin_note(pickup=pickup_time, departure=departure)
+            if departure
+            else ""
+        )
         return (
             f"hotel car booked; reference {_speak_code(code)}. Pickup "
             f"{pickup_date.strftime('%A, %B %-d')} at {speak_time(pickup_time)}, front entrance, "
             f"{passengers} passenger{'s' if passengers != 1 else ''}, flat eighty-five dollars "
-            "charged to the room | confirm the time, the front-entrance pickup, the cost, and "
+            f"charged to the room -{margin_note or ' no flight on file to check the margin'}"
+            " | confirm the time, the front-entrance pickup, the cost, and "
             "the reference to the caller; no further tool call is needed for the car."
         )
 
