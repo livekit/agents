@@ -5,7 +5,12 @@ from typing import Any
 from ...job import get_job_context
 from ...llm import RealtimeModel, ToolFlag, Toolset, function_tool
 from ...log import logger
-from ...voice.events import CloseEvent, RunContext, SpeechCreatedEvent
+from ...voice.events import (
+    CloseEvent,
+    ConversationItemAddedEvent,
+    RunContext,
+    SpeechCreatedEvent,
+)
 from ...voice.speech_handle import SpeechHandle
 
 END_CALL_DESCRIPTION = """
@@ -23,10 +28,11 @@ Once called, no further interaction is possible with the user.
 Don't generate any other text or response when the tool is called.
 """
 
-# grace before shutdown when there's no audio playout to absorb the gap between the
-# final message being committed and the session tearing down (e.g. text-only sessions);
-# shutting down immediately races the delivery of that message to the remote participant
-_FINAL_MESSAGE_FLUSH_GRACE = 2.0
+# how long a text-only session stays open after the farewell so the remote side can
+# answer it ("okay, bye!") or hang up first; users routinely reply to a goodbye, and a
+# session shut down under that reply leaves their turn hanging against a dead session.
+# anything the user says cancels the pending close and the conversation continues.
+_CALLER_HANGUP_GRACE = 10.0
 
 
 class EndCallTool(Toolset):
@@ -122,10 +128,26 @@ class EndCallTool(Toolset):
             await self._graceful_session_shutdown(ctx)
 
     async def _graceful_session_shutdown(self, ctx: RunContext) -> None:
-        """Shutdown the session, letting the final message flush first when it has no playout"""
-        if ctx.session.output.audio is None:
-            await asyncio.sleep(_FINAL_MESSAGE_FLUSH_GRACE)
-        ctx.session.shutdown()
+        """Shutdown the session; without audio playout, let the user hang up first"""
+        session = ctx.session
+        if session.output.audio is not None:
+            session.shutdown()
+            return
+
+        task = asyncio.current_task()
+
+        def _on_item_added(ev: ConversationItemAddedEvent) -> None:
+            if getattr(ev.item, "role", None) == "user" and task is not None:
+                task.cancel()
+
+        session.on("conversation_item_added", _on_item_added)
+        try:
+            await asyncio.sleep(_CALLER_HANGUP_GRACE)
+            session.shutdown()
+        except asyncio.CancelledError:
+            pass  # the user spoke again - the conversation is back on
+        finally:
+            session.off("conversation_item_added", _on_item_added)
 
     def _on_session_close(self, ev: CloseEvent) -> None:
         """Close the job process when AgentSession is closed"""
