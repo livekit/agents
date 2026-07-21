@@ -57,15 +57,6 @@ from livekit.agents import (
 
 from ._compat import ws_header_kwargs as _ws_header_kwargs
 from .log import logger
-from .models import (
-    DEFAULT_MODEL,
-    GnaniTTSBitrates,
-    GnaniTTSContainers,
-    GnaniTTSEncodings,
-    GnaniTTSLanguages,
-    GnaniTTSModels,
-    GnaniTTSVoices,
-)
 
 GNANI_TTS_BASE_URL = "https://api.vachana.ai"
 
@@ -132,7 +123,7 @@ def _strip_wav_header(data: bytes) -> bytes:
 
     if len(data) <= _WAV_HEADER_SIZE:
         return b""
-    return b""
+    return data[_WAV_HEADER_SIZE:]
 
 
 class _Pcm16Aligner:
@@ -534,7 +525,7 @@ class SSEChunkedStream(tts.ChunkedStream):
                     request_id=request_id,
                     sample_rate=self._tts.sample_rate,
                     num_channels=self._tts.num_channels,
-                    mime_type=_mime_type(self._opts),
+                    mime_type=_mime_type(stream_opts),
                 )
 
                 buf = ""
@@ -643,7 +634,7 @@ class WebSocketChunkedStream(tts.ChunkedStream):
                     request_id=request_id,
                     sample_rate=self._tts.sample_rate,
                     num_channels=self._tts.num_channels,
-                    mime_type=_mime_type(self._opts),
+                    mime_type=_mime_type(stream_opts),
                 )
 
                 async for msg in ws:
@@ -725,11 +716,12 @@ class SynthesizeStream(tts.SynthesizeStream):
         import websockets
 
         request_id = utils.shortuuid()
+        stream_opts = _streaming_payload_opts(self._opts)
         output_emitter.initialize(
             request_id=request_id,
             sample_rate=self._tts.sample_rate,
             num_channels=self._tts.num_channels,
-            mime_type=_mime_type(self._opts),
+            mime_type=_mime_type(stream_opts),
             stream=True,
         )
 
@@ -751,7 +743,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             sample_rate=self._tts.sample_rate,
             num_channels=self._tts.num_channels,
         )
-        stream_opts = _streaming_payload_opts(self._opts)
         try:
             ws_url = self._build_ws_url()
             async with websockets.connect(

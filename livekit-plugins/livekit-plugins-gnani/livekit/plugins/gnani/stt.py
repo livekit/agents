@@ -48,7 +48,6 @@ if TYPE_CHECKING:
 
 from ._compat import ws_header_kwargs as _ws_header_kwargs
 from .log import logger
-from .models import GnaniSTTLanguages
 
 GnaniSTTFormat = Literal["verbatim", "transcribe"]
 
