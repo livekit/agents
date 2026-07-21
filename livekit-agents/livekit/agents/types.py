@@ -55,9 +55,6 @@ delivered with the agent dispatch and read by
 ATTRIBUTE_SIMULATION_ENABLED = "lk.simulation.enabled"
 """Telemetry metadata key marking the session as a simulation."""
 
-ATTRIBUTE_SIMULATION_RUN_ID = "lk.simulation.run_id"
-"""Telemetry metadata key carrying the simulation run id."""
-
 ATTRIBUTE_REDACTION_ENABLED = "lk.redaction.enabled"
 """Telemetry metadata key requesting collector-side PII redaction for the session."""
 

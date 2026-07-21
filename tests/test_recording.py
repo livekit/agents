@@ -406,7 +406,6 @@ async def test_upload_session_report_includes_simulation_metadata() -> None:
     report = _make_mock_report({"audio": False, "traces": True, "logs": False, "transcript": False})
     metadata = {
         "lk.simulation.enabled": True,
-        "lk.simulation.run_id": "run-1",
     }
 
     with _patch_upload_deps() as mock_logger:
@@ -414,7 +413,6 @@ async def test_upload_session_report_includes_simulation_metadata() -> None:
 
     attrs = mock_logger.provider.get_logger.call_args_list[0].kwargs["attributes"]
     assert attrs["lk.simulation.enabled"] is True
-    assert attrs["lk.simulation.run_id"] == "run-1"
     session_report_call = next(
         c for c in mock_logger.emit.call_args_list if c.kwargs.get("body") == "session report"
     )
@@ -435,7 +433,6 @@ async def test_upload_multipart_header_carries_simulation_redaction() -> None:
     report = _make_mock_report({"audio": False, "traces": False, "logs": False, "transcript": True})
     metadata = {
         "lk.simulation.enabled": True,
-        "lk.simulation.run_id": "run-1",
         "lk.redaction.enabled": True,
     }
     mock_http = _make_mock_http()
@@ -500,7 +497,7 @@ def test_setup_cloud_tracer_logger_provider_always_created() -> None:
             **_observability_endpoint_arg(_setup_cloud_tracer),
             enable_traces=False,
             enable_logs=False,
-            metadata={"lk.simulation.enabled": True, "lk.simulation.run_id": "run-1"},
+            metadata={"lk.simulation.enabled": True},
         )
 
     mock_slp.assert_called_once()

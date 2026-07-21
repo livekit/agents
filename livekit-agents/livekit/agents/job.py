@@ -43,7 +43,6 @@ from .telemetry.traces import _BufferingHandler, _setup_cloud_tracer, _shutdown_
 from .types import (
     ATTRIBUTE_REDACTION_ENABLED,
     ATTRIBUTE_SIMULATION_ENABLED,
-    ATTRIBUTE_SIMULATION_RUN_ID,
     ATTRIBUTE_SIMULATOR,
     ATTRIBUTE_SIMULATOR_DISPATCH,
     NotGivenOr,
@@ -833,9 +832,8 @@ class JobContext:
 
     def _otel_metadata(self, options: RecordingOptions | None = None) -> dict[str, Any] | None:
         metadata: dict[str, Any] = {}
-        if sim_ctx := self.simulation_context():
+        if self.simulation_context() is not None:
             metadata[ATTRIBUTE_SIMULATION_ENABLED] = True
-            metadata[ATTRIBUTE_SIMULATION_RUN_ID] = sim_ctx._dispatch.simulation_run_id
         if options and options.get("redaction", False):
             metadata[ATTRIBUTE_REDACTION_ENABLED] = True
         return metadata or None
