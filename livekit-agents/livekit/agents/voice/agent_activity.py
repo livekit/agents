@@ -855,6 +855,10 @@ class AgentActivity(RecognitionHooks):
                     self.llm.capabilities.mutable_tools
                     or llm.ToolContext(self.tools) == llm.ToolContext(new_activity.tools)
                 )
+                # only reuse if the new activity resolves server-side turn detection the same way
+                reusable = reusable and (
+                    self._rt_turn_detection_enabled == new_activity._rt_turn_detection_enabled
+                )
 
                 if reusable:
                     # detach: remove event listeners but don't close the session

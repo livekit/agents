@@ -197,3 +197,34 @@ def test_fallback_adapter_support_is_conservative_and() -> None:
     adapter = RealtimeModelFallbackAdapter([m1, m2])
 
     assert adapter.capabilities.can_disable_turn_detection is False
+
+
+# --------------------------------------------------------------------------- #
+# handoff: reuse a realtime session only when the new agent resolves server TD the same
+# --------------------------------------------------------------------------- #
+
+
+async def test_rt_session_reuse_respects_turn_detection_resolution() -> None:
+    model = FakeRealtimeModel(capabilities=fake_capabilities(can_disable_turn_detection=True))
+
+    def _act(**handling: object) -> AgentActivity:
+        session = AgentSession(
+            llm=model,
+            vad=FakeVAD(fake_user_speeches=[]),
+            turn_handling=TurnHandlingOptions(**handling),  # type: ignore[typeddict-item]
+        )
+        return _activity(session)
+
+    server_on = _act()  # no client trigger -> server-side TD on
+    client_a = _act(turn_detection="vad")  # client vad -> server-side TD off
+    client_b = _act(turn_detection="vad")
+    assert server_on._rt_turn_detection_enabled is True
+    assert client_a._rt_turn_detection_enabled is False
+
+    # differing resolution -> refuse reuse, fall back to a fresh session
+    server_on._rt_session = model.session()
+    assert (await server_on._detach_reusable_resources(client_a)).rt_session is None
+
+    # same resolution -> reuse
+    client_a._rt_session = model.session()
+    assert (await client_a._detach_reusable_resources(client_b)).rt_session is not None
