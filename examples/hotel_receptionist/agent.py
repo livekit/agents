@@ -31,17 +31,6 @@ from livekit.agents import (
     cli,
     inference,
 )
-from livekit.agents.evals import (
-    JudgeGroup,
-    accuracy_judge,
-    coherence_judge,
-    conciseness_judge,
-    handoff_judge,
-    relevancy_judge,
-    safety_judge,
-    task_completion_judge,
-    tool_use_judge,
-)
 
 load_dotenv(".env.local")
 
@@ -102,21 +91,6 @@ async def on_session_end(ctx: JobContext) -> None:
     chat = report.chat_history.copy(exclude_function_call=True, exclude_instructions=True)
     if len(chat.items) < 3:
         return
-
-    judges = JudgeGroup(
-        llm="openai/gpt-4.1-mini",
-        judges=[
-            task_completion_judge(),
-            accuracy_judge(),
-            tool_use_judge(),
-            handoff_judge(),
-            safety_judge(),
-            relevancy_judge(),
-            coherence_judge(),
-            conciseness_judge(),
-        ],
-    )
-    await judges.evaluate(report.chat_history)
 
     userdata = ctx.primary_session.userdata
 
