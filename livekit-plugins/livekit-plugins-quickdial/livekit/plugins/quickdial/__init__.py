@@ -15,16 +15,14 @@ session = AgentSession(
 from livekit.agents import Plugin
 
 from .log import logger
-from .stt import STT, SpeechStream
-from .tts import TTS, ChunkedStream, SynthesizeStream
+from .stt import STT
+from .tts import TTS, ChunkedStream
 from .version import __version__
 
 __all__ = [
     "TTS",
     "STT",
     "ChunkedStream",
-    "SynthesizeStream",
-    "SpeechStream",
     "__version__",
 ]
 
