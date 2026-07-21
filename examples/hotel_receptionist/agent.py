@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import time
+from collections import deque
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -27,6 +29,7 @@ from livekit.agents import (
     AgentServer,
     AgentSession,
     JobContext,
+    MetricsCollectedEvent,
     SimulationContext,
     cli,
     inference,
@@ -197,6 +200,33 @@ async def hotel_receptionist_agent(ctx: JobContext) -> None:
         tts=inference.TTS("inworld/inworld-tts-2"),
         max_tool_steps=5,
     )
+
+    # Token-usage instrumentation: the inference gateway enforces a per-minute LLM
+    # token quota project-wide, so log every LLM request's token counts plus a
+    # rolling 60s total to see exactly what consumes the budget.
+    llm_events: deque[tuple[float, int]] = deque()
+
+    @session.on("metrics_collected")
+    def _on_metrics(ev: MetricsCollectedEvent) -> None:
+        m = ev.metrics
+        if m.type != "llm_metrics":
+            return
+        now = time.monotonic()
+        llm_events.append((now, m.total_tokens))
+        while llm_events and now - llm_events[0][0] > 60:
+            llm_events.popleft()
+        window_tokens = sum(t for _, t in llm_events)
+        logger.info(
+            "LLM usage: prompt=%d (cached=%d) completion=%d total=%d ttft=%.2fs "
+            "| last-60s (this session, agent LLM only): %d tokens across %d requests",
+            m.prompt_tokens,
+            m.prompt_cached_tokens,
+            m.completion_tokens,
+            m.total_tokens,
+            m.ttft,
+            window_tokens,
+            len(llm_events),
+        )
 
     await session.start(agent=HotelReceptionistAgent(), room=ctx.room)
 
