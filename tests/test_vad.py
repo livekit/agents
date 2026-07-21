@@ -1,4 +1,6 @@
 import asyncio
+from concurrent.futures import Future, ThreadPoolExecutor
+from typing import Any
 
 import pytest
 
@@ -18,6 +20,16 @@ VAD = InferenceVAD(
     min_speech_duration=0.5,
     min_silence_duration=0.75,
 )
+
+
+class _RecordingExecutor(ThreadPoolExecutor):
+    def __init__(self) -> None:
+        super().__init__(max_workers=1)
+        self.submissions = 0
+
+    def submit(self, fn: Any, /, *args: Any, **kwargs: Any) -> Future[Any]:
+        self.submissions += 1
+        return super().submit(fn, *args, **kwargs)
 
 
 @pytest.mark.parametrize("sample_rate", SAMPLE_RATES)
@@ -64,6 +76,22 @@ async def test_chunks_vad(sample_rate) -> None:
 
     with open(f"test_vad.{sample_rate}.inference_frames.wav", "wb") as f:
         f.write(utils.make_wav_file(inference_frames))
+
+
+async def test_vad_uses_configured_executor() -> None:
+    frames, *_ = await utils.make_test_speech(chunk_duration_ms=10, sample_rate=16000)
+    executor = _RecordingExecutor()
+    stream = InferenceVAD(model="silero", executor=executor).stream()
+    try:
+        for frame in frames:
+            stream.push_frame(frame)
+        stream.end_input()
+        _ = [event async for event in stream]
+    finally:
+        await stream.aclose()
+        executor.shutdown()
+
+    assert executor.submissions > 0
 
 
 async def _drain_speech_segment(
