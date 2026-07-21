@@ -12,11 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Gnani Vachana plugin for LiveKit Agents
+"""Gnani plugin for LiveKit Agents
 
-Support for speech-to-text and text-to-speech with [Gnani's Vachana platform](https://gnani.ai/).
+Support for speech-to-text and text-to-speech with [Gnani](https://gnani.ai/).
 
-Vachana provides high-accuracy STT and low-latency TTS for Indian languages,
+Gnani provides high-accuracy STT and low-latency TTS for Indian languages,
 including multilingual and code-switching scenarios.
 
 See https://docs.livekit.io/agents/integrations/stt/gnani/ for more information.

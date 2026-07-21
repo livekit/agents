@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Text-to-Speech implementation for Gnani Vachana
+"""Text-to-Speech implementation for Gnani Timbre
 
-This module provides a TTS implementation that uses the Gnani Vachana API,
+This module provides a TTS implementation that uses the Gnani API,
 supporting three synthesis modes via ``synthesize()``:
   - REST  (RESTChunkedStream) — single-request batch synthesis
   - SSE   (SSEChunkedStream)  — streaming via Server-Sent Events
@@ -37,7 +37,6 @@ from typing import Any, Literal
 import aiohttp
 
 from gnani.tts.client import (  # type: ignore[import-untyped]
-    DEFAULT_MODEL,
     SUPPORTED_TTS_LANGUAGES,  # noqa: F401 — re-exported via livekit.plugins.gnani
     TIMBRE_V20_VOICES,
     TIMBRE_V25_VOICES,
@@ -57,6 +56,7 @@ from livekit.agents import (
 
 from ._compat import ws_header_kwargs as _ws_header_kwargs
 from .log import logger
+from .models import DEFAULT_MODEL
 
 GNANI_TTS_BASE_URL = "https://api.vachana.ai"
 
@@ -68,12 +68,12 @@ GnaniTTSVoices = Literal[
 ]
 """See https://docs.gnani.ai/api/TTS/tts-sse#available-voices"""
 
-GnaniTTSEncodings = Literal["linear_pcm", "oggopus"]
-GnaniTTSContainers = Literal["raw", "mp3", "wav", "mulaw", "ogg"]
-GnaniTTSBitrates = Literal["96k", "128k", "192k"]
+GnaniTTSEncodings = Literal["linear_pcm", "oggopus", "pcm_mulaw", "pcm_alaw"]
+GnaniTTSContainers = Literal["raw", "mp3", "wav", "mulaw", "alaw", "ogg"]
+GnaniTTSBitrates = Literal["32k", "64k", "96k", "128k", "192k"]
 GnaniTTSSynthesizeMethod = Literal["rest", "sse", "websocket"]
 
-SUPPORTED_SAMPLE_RATES = (8000, 16000, 22050, 44100)
+SUPPORTED_SAMPLE_RATES = (8000, 16000, 22050, 24000, 44100, 48000)
 
 _WAV_HEADER_SIZE = 44
 # Match RoomIO _ParticipantAudioOutput target frame size (sample_rate // 20).
@@ -233,7 +233,7 @@ def _process_and_push(
 @dataclass
 class GnaniTTSOptions:
     api_key: str
-    voice: str = "Pranav"
+    voice: str = "Nalini"
     model: str = DEFAULT_MODEL
     language: str | None = None
     sample_rate: int = 16000
@@ -247,27 +247,27 @@ class GnaniTTSOptions:
 
 
 class TTS(tts.TTS):
-    """Gnani Vachana Text-to-Speech implementation.
+    """Gnani Timbre Text-to-Speech implementation.
 
-    Provides text-to-speech functionality using Gnani's Vachana platform.
+    Provides text-to-speech functionality using Gnani's Timbre platform.
     Supports REST, SSE, and WebSocket synthesis modes.
 
     Args:
         voice: Voice to use for synthesis (see https://docs.gnani.ai/api/TTS/tts-sse#available-voices).
-        model: TTS model name (default: timbre-v2.0; also: timbre-v2.5).
+        model: TTS model name (default: timbre-v2.5; also: timbre-v2.0).
         language: BCP-47 language code for timbre-v2.5 only (e.g. "hi-IN").
         sample_rate: Audio output sample rate (8000-44100).
         encoding: Audio encoding (linear_pcm or oggopus).
         container: Audio container format (raw, mp3, wav, ogg).
         api_key: Gnani API key (falls back to GNANI_API_KEY env var).
-        base_url: Vachana API base URL.
+        base_url: Gnani API base URL.
         synthesize_method: Synthesis mode — "rest", "sse", or "websocket".
     """
 
     def __init__(
         self,
         *,
-        voice: GnaniTTSVoices | str = "Pranav",
+        voice: GnaniTTSVoices | str = "Nalini",
         model: str = DEFAULT_MODEL,
         language: str | None = None,
         sample_rate: int = 16000,
