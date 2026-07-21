@@ -107,7 +107,7 @@ class RecordingOptions(TypedDict, total=False):
     * ``record=True``  → all on (backward compatible)
     * ``record=False`` → all off (backward compatible)
     * ``record={"audio": True, "traces": False}`` → granular
-    * ``record={"redaction": True}`` → preview collector-side redaction
+    * ``record={"redaction": True}`` → enable redaction for the session
     """
 
     audio: bool
