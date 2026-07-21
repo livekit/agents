@@ -28,6 +28,10 @@ class Userdata:
     # caller input since, which would silently double-book the guest.
     last_room_booking: RoomBooking | None = None
     caller_turns_at_last_booking: int = 0
+    # Whether the pre-hangup policy audit already handed the agent its one nudge -
+    # after that, say_goodbye_and_close_call always closes, so the agent can never
+    # get stuck unable to hang up.
+    end_call_nudged: bool = False
 
 
 def _speak_code(code: str) -> str:
