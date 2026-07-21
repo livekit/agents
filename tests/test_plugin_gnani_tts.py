@@ -1,4 +1,4 @@
-"""Tests for Gnani Vachana TTS plugin configuration and behavior."""
+"""Tests for Gnani TTS plugin configuration and behavior."""
 
 from __future__ import annotations
 
@@ -36,18 +36,18 @@ def test_tts_accepts_api_key_from_env():
 
 
 def test_tts_default_voice():
-    """TTS defaults to 'Pranav' voice."""
+    """TTS defaults to 'Nalini' voice."""
     from livekit.plugins.gnani import TTS
 
     tts = TTS(api_key="test-key")
-    assert tts._opts.voice == "Pranav"
+    assert tts._opts.voice == "Nalini"
 
 
 def test_tts_custom_voice():
     """TTS accepts custom voice."""
     from livekit.plugins.gnani import TTS
 
-    tts = TTS(api_key="test-key", voice="Deepak")
+    tts = TTS(api_key="test-key", voice="Deepak", model="timbre-v2.0")
     assert tts._opts.voice == "Deepak"
 
 
@@ -62,7 +62,7 @@ def test_tts_all_voices_accepted():
         "Deepak",
     ]
     for voice in voices:
-        tts = TTS(api_key="test-key", voice=voice)
+        tts = TTS(api_key="test-key", voice=voice, model="timbre-v2.0")
         assert tts._opts.voice == voice
 
 
@@ -75,18 +75,18 @@ def test_tts_accepts_arbitrary_voice():
 
 
 def test_tts_default_model():
-    """TTS defaults to timbre-v2.0."""
+    """TTS defaults to timbre-v2.5."""
     from livekit.plugins.gnani import TTS
 
     tts = TTS(api_key="test-key")
-    assert tts._opts.model == "timbre-v2.0"
+    assert tts._opts.model == "timbre-v2.5"
 
 
 def test_tts_model_v20():
-    """TTS uses timbre-v2.0 model by default."""
+    """TTS accepts timbre-v2.0 with explicit model."""
     from livekit.plugins.gnani import TTS
 
-    tts = TTS(api_key="test-key", voice="Kaveri")
+    tts = TTS(api_key="test-key", voice="Kaveri", model="timbre-v2.0")
     assert tts._opts.model == "timbre-v2.0"
     assert tts.model == "timbre-v2.0"
 
@@ -104,7 +104,7 @@ def test_tts_model_property():
     from livekit.plugins.gnani import TTS
 
     tts = TTS(api_key="test-key")
-    assert tts.model == "timbre-v2.0"
+    assert tts.model == "timbre-v2.5"
 
 
 def test_tts_provider_property():
@@ -168,7 +168,7 @@ def test_tts_update_options_voice():
     """update_options can change voice."""
     from livekit.plugins.gnani import TTS
 
-    tts = TTS(api_key="test-key", voice="Pranav")
+    tts = TTS(api_key="test-key", voice="Pranav", model="timbre-v2.0")
     tts.update_options(voice="Kaveri")
     assert tts._opts.voice == "Kaveri"
 
@@ -177,7 +177,7 @@ def test_tts_update_options_voice_and_model():
     """update_options with both voice and model uses the explicit model."""
     from livekit.plugins.gnani import TTS
 
-    tts = TTS(api_key="test-key", voice="Pranav")
+    tts = TTS(api_key="test-key", voice="Pranav", model="timbre-v2.0")
     tts.update_options(voice="Nalini", model="timbre-v2.5")
     assert tts._opts.voice == "Nalini"
     assert tts._opts.model == "timbre-v2.5"
@@ -285,7 +285,7 @@ def test_synthesize_routes_websocket():
 
 
 def test_tts_base_url_default():
-    """TTS defaults to Vachana API base URL."""
+    """TTS defaults to Gnani API base URL."""
     from livekit.plugins.gnani import TTS
 
     tts = TTS(api_key="test-key")
@@ -368,14 +368,14 @@ def test_tts_rejects_invalid_sample_rate():
     from livekit.plugins.gnani import TTS
 
     with pytest.raises(ValueError, match="sample_rate"):
-        TTS(api_key="test-key", sample_rate=48000)
+        TTS(api_key="test-key", sample_rate=96000)
 
 
 def test_tts_all_sample_rates_accepted():
     """TTS accepts all documented sample rates."""
     from livekit.plugins.gnani import TTS
 
-    for rate in (8000, 16000, 22050, 44100):
+    for rate in (8000, 16000, 22050, 24000, 44100, 48000):
         tts = TTS(api_key="test-key", sample_rate=rate)
         assert tts.sample_rate == rate
 
@@ -402,7 +402,7 @@ def test_tts_update_options_preserves_other_fields():
     """update_options only changes specified fields."""
     from livekit.plugins.gnani import TTS
 
-    tts = TTS(api_key="test-key", voice="Pranav")
+    tts = TTS(api_key="test-key", voice="Pranav", model="timbre-v2.0")
     tts.update_options(voice="Deepak")
     assert tts._opts.voice == "Deepak"
     assert tts._opts.model == "timbre-v2.0"
@@ -431,7 +431,7 @@ def test_tts_timbre_v20_rejects_language():
     from livekit.plugins.gnani import TTS
 
     with pytest.raises(ValueError, match="language is only supported"):
-        TTS(api_key="test-key", language="hi-IN")
+        TTS(api_key="test-key", model="timbre-v2.0", voice="Pranav", language="hi-IN")
 
 
 def test_tts_timbre_v25_accepts_language():
@@ -456,10 +456,10 @@ def test_tts_invalid_model_raises():
 
 
 def test_tts_update_options_preserves_timbre_v20_default():
-    """update_options preserves timbre-v2.0 default when only voice changes."""
+    """update_options preserves timbre-v2.0 when only voice changes."""
     from livekit.plugins.gnani import TTS
 
-    tts = TTS(api_key="test-key", voice="Pranav")
+    tts = TTS(api_key="test-key", voice="Pranav", model="timbre-v2.0")
     tts.update_options(voice="Kaveri")
     assert tts._opts.voice == "Kaveri"
     assert tts._opts.model == "timbre-v2.0"
