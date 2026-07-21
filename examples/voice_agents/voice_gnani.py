@@ -5,8 +5,8 @@ Pipeline (streaming end-to-end):
   → Groq LLM → Gnani TTS WebSocket (wss://.../api/v1/tts) → room audio
 
 Defaults to timbre-v2.5 (voice: Nalini, language: en-IN, sample_rate: 16000).
-Override via GNANI_STT_SAMPLE_RATE, GNANI_STT_RECOGNIZE_METHOD (rest | websocket),
-GNANI_TTS_MODEL, GNANI_TTS_VOICE, GNANI_TTS_LANGUAGE, GNANI_TTS_SAMPLE_RATE
+Override via GNANI_STT_SAMPLE_RATE, GNANI_STT_STREAMING (true | false; default true for
+WebSocket, false for REST), GNANI_TTS_MODEL, GNANI_TTS_VOICE, GNANI_TTS_LANGUAGE, GNANI_TTS_SAMPLE_RATE
 (8000 | 16000 | 22050 | 44100), and GNANI_TTS_SYNTHESIZE_METHOD (rest | sse | websocket).
 
 Requires GNANI_API_KEY, GROQ_API_KEY, and LIVEKIT_* vars in examples/.env
@@ -54,7 +54,7 @@ load_dotenv(dotenv_path=_env_file)
 GNANI_STT_LANGUAGE = os.environ.get("GNANI_STT_LANGUAGE", "en-IN")
 # Gnani STT WebSocket stream supports 8000, 16000, 44100, 48000.
 GNANI_STT_SAMPLE_RATE = int(os.environ.get("GNANI_STT_SAMPLE_RATE", "16000"))
-GNANI_STT_RECOGNIZE_METHOD = os.environ.get("GNANI_STT_RECOGNIZE_METHOD", "websocket")
+GNANI_STT_STREAMING = os.environ.get("GNANI_STT_STREAMING", "true").lower() in ("true", "1", "yes")
 # timbre-v2.5: 42 voices; timbre-v2.0: Pranav, Kaveri, Shubhra, Deepak
 GNANI_TTS_VOICE = os.environ.get("GNANI_TTS_VOICE", "Nalini")
 GNANI_TTS_MODEL = os.environ.get("GNANI_TTS_MODEL", "timbre-v2.5")
@@ -127,10 +127,10 @@ async def entrypoint(ctx: JobContext) -> None:
         "room": ctx.room.name,
     }
 
-    stt_kwargs: dict[str, str | int] = {
+    stt_kwargs: dict[str, str | int | bool] = {
         "language": GNANI_STT_LANGUAGE,
         "sample_rate": GNANI_STT_SAMPLE_RATE,
-        "recognize_method": GNANI_STT_RECOGNIZE_METHOD,
+        "streaming": GNANI_STT_STREAMING,
     }
 
     tts_kwargs: dict[str, str | int] = {
