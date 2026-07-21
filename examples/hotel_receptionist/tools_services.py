@@ -9,6 +9,7 @@ from typing import Annotated, Literal
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from common import Userdata, _speak_code
+from end_call_check import run_goodbye_gate
 from hotel_db import (
     MAX_PARTY_SIZE,
     FollowupKind,
@@ -19,7 +20,14 @@ from hotel_db import (
 )
 from pydantic import Field
 
-from livekit.agents import RunContext, ToolError, function_tool
+from livekit.agents import (
+    Agent,
+    CloseEvent,
+    RunContext,
+    ToolError,
+    function_tool,
+    get_job_context,
+)
 
 logger = logging.getLogger("hotel-receptionist")
 
@@ -576,4 +584,44 @@ class ServicesToolsMixin:
             f"waitlisted; reference {_speak_code(code)} | tell the caller they're on the list "
             "for those dates and you'll reach out if something opens up - make clear nothing is "
             "held and it's not a guarantee."
+        )
+
+    @function_tool
+    async def say_goodbye_and_close_call(self, ctx: RunContext[Userdata]) -> str:
+        """End the call once the caller indicates they're finished ("that's all", "thanks, bye"). NEVER say goodbye yourself - this tool delivers the farewell and then closes the line. It may instead hand back one last thing your standing policy still requires on this call: handle that with the caller first, then call this tool again. Don't call it when the caller is only pausing, holding, or mid-request."""
+        # Pre-hangup policy audit: re-read the standing policy against the transcript
+        # and, at most once per call, hand the agent back the one thing it still owes
+        # the caller instead of closing - the "offer before wind-down" policy grounded
+        # in a guaranteed action.
+        agent_instructions = self.instructions if isinstance(self, Agent) else ""
+        nudge = await run_goodbye_gate(
+            ctx.userdata,
+            ctx.session.llm,
+            instructions=agent_instructions if isinstance(agent_instructions, str) else "",
+            chat_ctx=ctx.session.history,
+        )
+        if nudge is not None:
+            return nudge
+
+        # Close path, mirroring the framework's beta EndCallTool for non-realtime LLMs:
+        # the goodbye is this tool's reply, reusing the current speech handle, so the
+        # session shuts down exactly when the farewell finishes playing out.
+        ctx.speech_handle.add_done_callback(lambda _: ctx.session.shutdown())
+
+        @ctx.session.once("close")
+        def _on_close(ev: CloseEvent) -> None:
+            try:
+                job_ctx = get_job_context()
+            except RuntimeError:
+                return  # no job to shut down (console / tests)
+
+            async def _delete_room() -> None:
+                await job_ctx.delete_room()
+
+            job_ctx.add_shutdown_callback(_delete_room)
+            job_ctx.shutdown(reason=ev.reason.value)
+
+        return (
+            "The line closes right after your next utterance. Give ONE short, warm "
+            "goodbye now - no questions, no new information."
         )
