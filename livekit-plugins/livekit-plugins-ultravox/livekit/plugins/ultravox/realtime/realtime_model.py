@@ -375,19 +375,19 @@ class RealtimeSession(
                 continue
 
             if item.type == "message" and item.role in ("system", "developer"):
-                if item.text_content:
+                if item.raw_text_content:
                     self._send_client_event(
                         UserTextMessageEvent(
-                            text=f"<instruction>{item.text_content}</instruction>",
+                            text=f"<instruction>{item.raw_text_content}</instruction>",
                             defer_response=True,
                         )
                     )
 
             elif item.type == "message" and item.role == "user":
                 # Inject user message as context; do not trigger an immediate response
-                if item.text_content:
+                if item.raw_text_content:
                     self._send_client_event(
-                        UserTextMessageEvent(text=item.text_content, defer_response=True)
+                        UserTextMessageEvent(text=item.raw_text_content, defer_response=True)
                     )
             elif item.type == "function_call_output":
                 # Bridge tool result back to Ultravox using the original invocationId

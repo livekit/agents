@@ -49,6 +49,11 @@ from livekit import api
 from livekit.protocol import agent_pb, metrics as proto_metrics
 
 from ..log import TRACE_LEVEL, logger
+from ..types import (
+    ATTRIBUTE_REDACTION_ENABLED,
+    ATTRIBUTE_SIMULATION_ENABLED,
+    recording_enabled,
+)
 from . import trace_types
 
 if TYPE_CHECKING:
@@ -98,7 +103,7 @@ class _MetadataLogProcessor(LogRecordProcessor):
         if log_data.log_record.attributes:
             log_data.log_record.attributes.update(self._metadata)  # type: ignore
         else:
-            log_data.log_record.attributes = self._metadata
+            log_data.log_record.attributes = dict(self._metadata)
 
         if log_data.instrumentation_scope:
             log_data.log_record.attributes.update(  # type: ignore
@@ -161,6 +166,7 @@ def _setup_cloud_tracer(
     observability_url: str,
     enable_traces: bool = True,
     enable_logs: bool = True,
+    metadata: dict[str, AttributeValue] | None = None,
 ) -> None:
     token_ttl = timedelta(hours=6)
     refresh_margin = timedelta(minutes=5)
@@ -201,15 +207,12 @@ def _setup_cloud_tracer(
     header_provider = _AuthHeaderProvider()
     session = _AuthRefreshingSession(header_provider)
     otlp_compression = Compression.Gzip
-    metadata: dict[str, AttributeValue] = {"room_id": room_id, "job_id": job_id}
+    base_metadata: dict[str, AttributeValue] = {"room_id": room_id, "job_id": job_id}
+    session_metadata = dict(base_metadata)
+    if metadata:
+        session_metadata.update(metadata)
 
-    resource = Resource.create(
-        {
-            SERVICE_NAME: "livekit-agents",
-            "room_id": room_id,
-            "job_id": job_id,
-        }
-    )
+    resource = Resource.create({SERVICE_NAME: "livekit-agents", **base_metadata})
 
     if enable_traces:
         # Check if a tracer provider is not set and set one up
@@ -235,7 +238,7 @@ def _setup_cloud_tracer(
         )
 
         if isinstance(tracer_provider, trace_sdk.TracerProvider):
-            tracer_provider.add_span_processor(_MetadataSpanProcessor(metadata))
+            tracer_provider.add_span_processor(_MetadataSpanProcessor(session_metadata))
             tracer_provider.add_span_processor(BatchSpanProcessor(span_exporter))
 
     # Always set up the logger provider — it's needed for session reports,
@@ -251,7 +254,7 @@ def _setup_cloud_tracer(
             compression=otlp_compression,
             session=session,
         )
-        logger_provider.add_log_record_processor(_MetadataLogProcessor(metadata))
+        logger_provider.add_log_record_processor(_MetadataLogProcessor(session_metadata))
         logger_provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
 
         handler = _TraceLevelLoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
@@ -296,7 +299,7 @@ def _chat_ctx_to_otel_events(chat_ctx: ChatContext) -> list[tuple[str, Attribute
     for item in chat_ctx.items:
         if item.type == "message" and (event_name := role_to_event.get(item.role)):
             # only support text content for now
-            events.append((event_name, {"content": item.text_content or ""}))
+            events.append((event_name, {"content": item.raw_text_content or ""}))
         elif item.type == "function_call":
             events.append(
                 (
@@ -342,10 +345,12 @@ def _build_proto_chat_item(
         }
         msg.role = role_map[item.role]
 
+        from ..llm.chat_context import Instructions
+
         for content in item.content:
-            if isinstance(content, str):
+            if isinstance(content, (str, Instructions)):
                 content_pb = msg.content.add()
-                content_pb.text = content
+                content_pb.text = str(content)
 
         msg.interrupted = item.interrupted
 
@@ -448,7 +453,10 @@ async def _upload_session_report(
     report: SessionReport,
     tagger: Tagger,
     http_session: aiohttp.ClientSession,
+    metadata: dict[str, AttributeValue] | None = None,
 ) -> None:
+    metadata = metadata or {}
+
     def _get_logger(name: str) -> Any:
         return get_logger_provider().get_logger(
             name=name,
@@ -456,6 +464,7 @@ async def _upload_session_report(
                 "room_id": report.room_id,
                 "job_id": report.job_id,
                 "room": report.room,
+                **metadata,
             },
         )
 
@@ -478,7 +487,7 @@ async def _upload_session_report(
     chat_logger = _get_logger("chat_history")
     recording_options = report.recording_options
 
-    if any(recording_options.values()):
+    if recording_enabled(recording_options):
         _log(
             chat_logger,
             body="session report",
@@ -578,6 +587,9 @@ async def _upload_session_report(
 
     header_msg = proto_metrics.MetricsRecordingHeader(
         room_id=report.room_id,
+        job_id=report.job_id,
+        simulated=bool(metadata.get(ATTRIBUTE_SIMULATION_ENABLED, False)),
+        redaction_enabled=bool(metadata.get(ATTRIBUTE_REDACTION_ENABLED, False)),
     )
     header_msg.start_time.FromMilliseconds(int((report.audio_recording_started_at or 0) * 1000))
     header_bytes = header_msg.SerializeToString()

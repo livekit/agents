@@ -119,7 +119,7 @@ async def entrypoint(ctx: JobContext):
         # llm=openai.LLM(model="gpt-4.1-mini"),
         # tts=cartesia.TTS(model="sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"),
         stt=inference.STT("deepgram/nova-3", language="multi"),
-        llm=inference.LLM("openai/gpt-4.1-mini"),
+        llm=inference.LLM("google/gemma-4-31b-it"),  # low-latency gemma, hosted on LiveKit
         tts=inference.TTS("cartesia/sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"),
     )
 
@@ -201,7 +201,7 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession[StoryData](
         vad=inference.VAD(),
         stt="deepgram/nova-3",
-        llm="openai/gpt-4.1-mini",
+        llm="google/gemma-4-31b-it",  # low-latency gemma, hosted on LiveKit
         tts="cartesia/sonic-3:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
         userdata=userdata,
     )

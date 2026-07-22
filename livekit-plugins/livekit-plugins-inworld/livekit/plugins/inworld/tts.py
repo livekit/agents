@@ -973,6 +973,14 @@ class TTS(tts.TTS):
             )
         )
 
+    class Markup(tts.TTS.Markup):
+        # markup delegation lives in the base class, keyed on _provider_key()
+        def _provider_key(self) -> str:
+            # only inworld-tts-2 understands the markup tags; older models get no
+            # markup so the tags aren't injected, converted, or stripped (matches
+            # the inference gateway's behavior)
+            return "inworld" if "tts-2" in self._tts.model else ""
+
     @property
     def model(self) -> str:
         return self._opts.model

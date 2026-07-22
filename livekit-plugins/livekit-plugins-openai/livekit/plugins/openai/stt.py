@@ -22,7 +22,7 @@ import time
 import weakref
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import aiohttp
 import httpx
@@ -78,6 +78,7 @@ class _STTOptions:
     turn_detection: SessionTurnDetection
     prompt: NotGivenOr[str] = NOT_GIVEN
     noise_reduction_type: NotGivenOr[str] = NOT_GIVEN
+    temperature: NotGivenOr[float] = NOT_GIVEN
 
 
 class STT(stt.STT):
@@ -90,6 +91,7 @@ class STT(stt.STT):
         prompt: NotGivenOr[str] = NOT_GIVEN,
         turn_detection: NotGivenOr[SessionTurnDetection] = NOT_GIVEN,
         noise_reduction_type: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         client: openai.AsyncClient | None = None,
@@ -109,6 +111,8 @@ class STT(stt.STT):
                 Ignored for `gpt-realtime-whisper`, which does not support server-side turn detection.
             noise_reduction_type: Type of noise reduction to apply. "near_field" or "far_field"
                 This isn't needed when using LiveKit's noise cancellation.
+            temperature: Sampling temperature between 0 and 1. Lower values make the
+                transcription more deterministic. Not supported for realtime transcription.
             base_url: Custom base URL for OpenAI API.
             api_key: Your OpenAI API key. If not provided, will use the OPENAI_API_KEY environment variable.
             client: Optional pre-configured OpenAI AsyncClient instance.
@@ -119,6 +123,13 @@ class STT(stt.STT):
                 settings. Pass `vad=None` to opt out of the auto-load and drive
                 `input_audio_buffer.commit` yourself.
         """  # noqa: E501
+
+        if use_realtime and is_given(temperature):
+            logger.warning(
+                "temperature is not supported for realtime transcription; "
+                "ignoring the provided value"
+            )
+            temperature = NOT_GIVEN
 
         whisper_realtime = use_realtime and _is_whisper_realtime(model)
         if whisper_realtime:
@@ -160,6 +171,7 @@ class STT(stt.STT):
             model=model,
             prompt=prompt,
             turn_detection=turn_detection,
+            temperature=temperature,
         )
         if is_given(noise_reduction_type):
             self._opts.noise_reduction_type = noise_reduction_type
@@ -212,6 +224,7 @@ class STT(stt.STT):
         prompt: NotGivenOr[str] = NOT_GIVEN,
         turn_detection: NotGivenOr[SessionTurnDetection] = NOT_GIVEN,
         noise_reduction_type: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
         azure_endpoint: str | None = None,
         azure_deployment: str | None = None,
         api_version: str | None = None,
@@ -260,6 +273,7 @@ class STT(stt.STT):
             prompt=prompt,
             turn_detection=turn_detection,
             noise_reduction_type=noise_reduction_type,
+            temperature=temperature,
             client=azure_client,
             use_realtime=use_realtime,
             vad=vad,
@@ -323,6 +337,7 @@ class STT(stt.STT):
         prompt: NotGivenOr[str] = NOT_GIVEN,
         turn_detection: NotGivenOr[SessionTurnDetection] = NOT_GIVEN,
         noise_reduction_type: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         """
         Update the options for the speech stream. Most options are updated at the
@@ -335,6 +350,7 @@ class STT(stt.STT):
             prompt: Optional text prompt to guide the transcription. Only supported for whisper-1.
             turn_detection: When using realtime, this controls how model detects the user is done speaking.
             noise_reduction_type: Type of noise reduction to apply. "near_field" or "far_field"
+            temperature: Sampling temperature between 0 and 1. Not supported for realtime transcription.
         """  # noqa: E501
         if is_given(model):
             self._opts.model = model
@@ -349,6 +365,14 @@ class STT(stt.STT):
             self._opts.turn_detection = turn_detection
         if is_given(noise_reduction_type):
             self._opts.noise_reduction_type = noise_reduction_type
+        if is_given(temperature):
+            if self.capabilities.streaming:
+                logger.warning(
+                    "temperature is not supported for realtime transcription; "
+                    "ignoring the provided value"
+                )
+            else:
+                self._opts.temperature = temperature
 
         for stream in self._streams:
             if is_given(language):
@@ -392,6 +416,13 @@ class STT(stt.STT):
         query_params: dict[str, str] = {
             "intent": "transcription",
         }
+        # OpenAI's native realtime endpoint treats ?model= as selecting a
+        # conversation session and rejects the transcription-mode
+        # session.update with invalid_model — the model is conveyed via
+        # audio.input.transcription.model instead. Gateways need the model
+        # on the upgrade URL to route the connection before the first frame.
+        if urlparse(str(self._client.base_url)).hostname != "api.openai.com":
+            query_params["model"] = self._opts.model
         headers = {
             "User-Agent": "LiveKit Agents",
             "Authorization": f"Bearer {self._client.api_key}",
@@ -442,6 +473,9 @@ class STT(stt.STT):
                 language=self._opts.language.language if self._opts.language else "",
                 prompt=prompt,
                 response_format=format,
+                temperature=self._opts.temperature
+                if is_given(self._opts.temperature)
+                else openai.omit,
                 timeout=httpx.Timeout(30, connect=conn_options.timeout),
             )
 
@@ -480,6 +514,7 @@ class SpeechStream(stt.SpeechStream):
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
         self._vad = vad_instance
+        self._speaking = False
 
     def update_options(
         self,
@@ -489,6 +524,18 @@ class SpeechStream(stt.SpeechStream):
         self._language = LanguageCode(language)
         self._pool.invalidate()
         self._reconnect_event.set()
+
+    def _start_speaking(self) -> None:
+        if self._speaking:
+            return
+        self._speaking = True
+        self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+
+    def _stop_speaking(self) -> None:
+        if not self._speaking:
+            return
+        self._speaking = False
+        self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
     @utils.log_exceptions(logger=logger)
     async def _run(self) -> None:
@@ -507,31 +554,49 @@ class SpeechStream(stt.SpeechStream):
                 samples_per_channel=SAMPLE_RATE // 20,
             )
 
-            async for data in self._input_ch:
-                frames: list[rtc.AudioFrame] = []
-                if isinstance(data, rtc.AudioFrame):
-                    if vad_stream is not None:
-                        vad_stream.push_frame(data)
-                    frames.extend(audio_bstream.write(data.data.tobytes()))
-                elif isinstance(data, self._FlushSentinel):
-                    frames.extend(audio_bstream.flush())
+            try:
+                async for data in self._input_ch:
+                    frames: list[rtc.AudioFrame] = []
+                    if isinstance(data, rtc.AudioFrame):
+                        if vad_stream is not None:
+                            vad_stream.push_frame(data)
+                        frames.extend(audio_bstream.write(data.data.tobytes()))
+                    elif isinstance(data, self._FlushSentinel):
+                        frames.extend(audio_bstream.flush())
 
-                for frame in frames:
-                    encoded_frame = {
-                        "type": "input_audio_buffer.append",
-                        "audio": base64.b64encode(frame.data.tobytes()).decode("utf-8"),
-                    }
-                    await ws.send_json(encoded_frame)
+                    for frame in frames:
+                        encoded_frame = {
+                            "type": "input_audio_buffer.append",
+                            "audio": base64.b64encode(frame.data.tobytes()).decode("utf-8"),
+                        }
+                        await ws.send_json(encoded_frame)
+            except (aiohttp.ClientError, ConnectionError) as e:
+                if closing_ws:
+                    return
+                raise APIConnectionError(
+                    "OpenAI Realtime STT connection closed unexpectedly"
+                ) from e
+            finally:
+                if vad_stream is not None:
+                    vad_stream.end_input()
 
-            if vad_stream is not None:
-                vad_stream.end_input()
             closing_ws = True
 
         @utils.log_exceptions(logger=logger)
         async def vad_task(ws: aiohttp.ClientWebSocketResponse, vad_stream: vad.VADStream) -> None:
-            async for ev in vad_stream:
-                if ev.type == vad.VADEventType.END_OF_SPEECH:
-                    await ws.send_json({"type": "input_audio_buffer.commit"})
+            try:
+                async for ev in vad_stream:
+                    if ev.type == vad.VADEventType.START_OF_SPEECH:
+                        self._start_speaking()
+                    elif ev.type == vad.VADEventType.END_OF_SPEECH:
+                        self._stop_speaking()
+                        await ws.send_json({"type": "input_audio_buffer.commit"})
+            except (aiohttp.ClientError, ConnectionError) as e:
+                if closing_ws:
+                    return
+                raise APIConnectionError(
+                    "OpenAI Realtime STT connection closed unexpectedly"
+                ) from e
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -570,12 +635,16 @@ class SpeechStream(stt.SpeechStream):
                         current_item_id = item_id
                         audio_start_ms = data.get("audio_start_ms", 0)
                         item_audio_timing[item_id] = {"start_ms": audio_start_ms}
+                        if self._vad is None:
+                            self._start_speaking()
 
                     elif msg_type == "input_audio_buffer.speech_stopped":
                         item_id = data.get("item_id", "")
                         audio_end_ms = data.get("audio_end_ms", 0)
                         if item_id in item_audio_timing:
                             item_audio_timing[item_id]["end_ms"] = audio_end_ms
+                        if self._vad is None:
+                            self._stop_speaking()
 
                     elif msg_type == "conversation.item.input_audio_transcription.delta":
                         delta = data.get("delta", "")
@@ -665,6 +734,8 @@ class SpeechStream(stt.SpeechStream):
 
         while True:
             closing_ws = False  # reset the flag
+            # a segment left open across the reconnect gap would fuse into the next utterance
+            self._stop_speaking()
             async with self._pool.connection(timeout=self._conn_options.timeout) as ws:
                 self._report_connection_acquired(
                     self._pool.last_acquire_time, self._pool.last_connection_reused

@@ -9,6 +9,7 @@ from typing import Any, Literal, cast
 
 import aiohttp
 import httpx
+from yarl import URL
 
 import openai
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm, utils
@@ -53,11 +54,19 @@ OPENAI_RESPONSES_WS_URL = "wss://api.openai.com/v1/responses"
 
 class _ResponsesWebsocket:
     def __init__(
-        self, api_key: str | None, timeout: float | None, base_url: str | None = None
+        self, api_key: str | None, timeout: float | None, model: str, base_url: str | None = None
     ) -> None:
         self._api_key = api_key
         self._timeout = timeout or DEFAULT_API_CONNECT_OPTIONS.timeout
-        self._base_url = base_url if base_url else OPENAI_RESPONSES_WS_URL
+        url = URL(base_url if base_url else OPENAI_RESPONSES_WS_URL)
+        if url.scheme in ("http", "https"):
+            url = url.with_scheme("ws" if url.scheme == "http" else "wss")
+        if url.host != "api.openai.com":
+            # OpenAI's native endpoint takes the model in the response.create
+            # payload; gateways need it on the upgrade URL to route the
+            # connection before the first frame.
+            url = url.update_query(model=model)
+        self._base_url = str(url)
 
         self._session: aiohttp.ClientSession | None = None
 
@@ -95,7 +104,19 @@ class _ResponsesWebsocket:
     async def generate_response(self, msg: dict) -> AsyncGenerator[dict, None]:
         def _default(o: object) -> object:
             if isinstance(o, openai.BaseModel):
-                return o.model_dump(mode="json")
+                # exclude_none is load-bearing, not cosmetic. This hand-rolled WS
+                # transport serializes request models itself instead of going
+                # through the openai SDK (which omits unset fields). Without
+                # exclude_none, every Optional field the model defaults to None
+                # is emitted as an explicit `null` on the wire. The Responses API
+                # rejects explicit nulls on fields that expect an enum: e.g. after
+                # openai-python added `Reasoning.mode` (default None), a plain
+                # `Reasoning(effort=...)` began serializing `"mode": null`, which
+                # the API 400s with "Invalid type for 'reasoning.mode': expected
+                # one of 'standard' or 'pro', but got null instead." Omitting None
+                # mirrors the SDK's on-the-wire shape and is forward-compatible
+                # with future Optional additions to these models.
+                return o.model_dump(mode="json", exclude_none=True)
             raise TypeError(f"unexpected type {type(o)}")
 
         try:
@@ -229,6 +250,7 @@ class LLM(llm.LLM):
             self._ws = _ResponsesWebsocket(
                 api_key=resolved_api_key,
                 timeout=timeout.connect if timeout is not None else None,
+                model=str(model),
                 base_url=base_url if is_given(base_url) else None,
             )
 
@@ -496,7 +518,14 @@ class LLMStream(llm.LLMStream):
 
         event_type = event.get("type", "")
         if event_type == "error":
-            return ResponseErrorEvent.model_validate({**event.get("error", {}), **event})
+            # Top-level protocol error frames (e.g. a request-validation 400) do
+            # NOT carry `sequence_number`, which ResponseErrorEvent marks required.
+            # Validating them as-is raises a pydantic ValidationError that masks
+            # the real API message ("... 1 validation error ... sequence_number
+            # Field required ..."). Default the field so the genuine error
+            # surfaces as a clean APIStatusError via _handle_error instead.
+            merged = {"sequence_number": -1, **event.get("error", {}), **event}
+            return ResponseErrorEvent.model_validate(merged)
         elif event_type == "response.created":
             return ResponseCreatedEvent.model_validate(event)
         elif event_type == "response.output_item.done":

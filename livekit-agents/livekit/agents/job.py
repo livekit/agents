@@ -40,7 +40,14 @@ from .log import logger
 from .observability import Tagger
 from .telemetry import _upload_session_report, otel_metrics
 from .telemetry.traces import _BufferingHandler, _setup_cloud_tracer, _shutdown_telemetry
-from .types import ATTRIBUTE_SIMULATOR, ATTRIBUTE_SIMULATOR_DISPATCH, NotGivenOr
+from .types import (
+    ATTRIBUTE_REDACTION_ENABLED,
+    ATTRIBUTE_SIMULATION_ENABLED,
+    ATTRIBUTE_SIMULATOR,
+    ATTRIBUTE_SIMULATOR_DISPATCH,
+    NotGivenOr,
+    recording_enabled,
+)
 from .utils import http_context, is_given, wait_for_participant
 from .utils.deprecation import deprecate_params
 from .utils.misc import is_cloud
@@ -192,7 +199,7 @@ class JobContext:
 
         self._primary_agent_session: AgentSession | None = None
 
-        # Lazily built from the simulation room's metadata; None when not under a
+        # Lazily built from the job's simulation attributes; None when not under a
         # simulation. _simulation_resolved guards the one-time parse.
         self._simulation_ctx: SimulationContext | None = None
         self._simulation_resolved = False
@@ -296,7 +303,7 @@ class JobContext:
 
         has_evals = bool(self._tagger.evaluations or self._tagger.outcome)
         obs_url = _observability_url(self._info.url)
-        if (any(report.recording_options.values()) or has_evals) and obs_url:
+        if (recording_enabled(report.recording_options) or has_evals) and obs_url:
             try:
                 await _upload_session_report(
                     agent_name=self._info.job.agent_name,
@@ -304,6 +311,7 @@ class JobContext:
                     report=report,
                     tagger=self._tagger,
                     http_session=http_context.http_session(),
+                    metadata=self._otel_metadata(report.recording_options),
                 )
             except Exception:
                 logger.exception("failed to upload the session report to LiveKit Cloud")
@@ -446,29 +454,20 @@ class JobContext:
         Resolved once and cached. The framework hands it to ``on_simulation_end``
         automatically, so you never need to call this to "prime" anything. Call it only
         when you want the scenario in your entrypoint (e.g. to seed scenario-specific
-        mocks). Resolves synchronously from the simulator participant's
-        ``lk.simulator.dispatch`` attribute (a protojson ``SimulationDispatch``); a
-        production room has none and returns ``None``.
+        mocks). Resolves synchronously from the job's ``lk.simulator.dispatch``
+        attribute (a protojson ``SimulationDispatch``), available as soon as the
+        entrypoint runs; a production job has none and returns ``None``.
         """
         if self._simulation_resolved:
             return self._simulation_ctx
 
-        metadata = ""
-        for participant in self._room.remote_participants.values():
-            if ATTRIBUTE_SIMULATOR not in participant.attributes:
-                continue
-            if dispatch_json := participant.attributes.get(ATTRIBUTE_SIMULATOR_DISPATCH):
-                metadata = dispatch_json
-                break
-        if not metadata:
-            # The simulator joins before the agent, so a miss is only final
-            # once the room is connected and a remote participant is visible.
-            self._simulation_resolved = (
-                self._room.isconnected() and len(self._room.remote_participants) > 0
-            )
-            return None
-
+        # The simulation attributes ride the agent dispatch and land on the job
+        # itself, so this is final before the room even connects.
         self._simulation_resolved = True
+
+        metadata = self._info.job.attributes.get(ATTRIBUTE_SIMULATOR_DISPATCH, "")
+        if not metadata:
+            return None
 
         from google.protobuf import json_format
 
@@ -739,7 +738,7 @@ class JobContext:
         self._track_pending_task(task, name="transfer_sip_participant")
         return task
 
-    def shutdown(self, reason: str = "") -> None:
+    def shutdown(self, reason: str = "user requested") -> None:
         self._on_shutdown(reason)
 
     def add_participant_entrypoint(
@@ -784,6 +783,7 @@ class JobContext:
             observability_url=obs_url,
             enable_traces=options["traces"],
             enable_logs=options["logs"],
+            metadata=self._otel_metadata(options),
         )
         # init_recording is typically called during session.start(), at which point a bunch of
         # the logs would have already been emitted. we want to capture all of the logs as it
@@ -829,6 +829,14 @@ class JobContext:
 
     def token_claims(self) -> Claims:
         return api.TokenVerifier().verify(self._info.token, verify_signature=False)
+
+    def _otel_metadata(self, options: RecordingOptions | None = None) -> dict[str, Any] | None:
+        metadata: dict[str, Any] = {}
+        if self.simulation_context() is not None:
+            metadata[ATTRIBUTE_SIMULATION_ENABLED] = True
+        if options and options.get("redaction", False):
+            metadata[ATTRIBUTE_REDACTION_ENABLED] = True
+        return metadata or None
 
 
 def _apply_auto_subscribe_opts(room: rtc.Room, auto_subscribe: AutoSubscribe) -> None:

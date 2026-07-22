@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, TypeAlias, TypeVar
 
@@ -7,6 +8,15 @@ from pydantic_core import CoreSchema, core_schema
 ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID = "lk.segment_id"
 ATTRIBUTE_TRANSCRIPTION_TRACK_ID = "lk.transcribed_track_id"
 ATTRIBUTE_TRANSCRIPTION_FINAL = "lk.transcription_final"
+ATTRIBUTE_TRANSCRIPTION_EXPRESSION = "lk.expression"
+"""
+The expression (delivery/emotion) the agent used for a transcription segment, surfaced so
+the frontend can react to it, when expressive markup is stripped from the transcript. The
+value is a JSON object ``{"value": ...}`` carrying the segment's leading expression — the
+``<expression>`` tag for Inworld/ElevenLabs v3 or the ``<emotion>`` tag for Cartesia, e.g.
+``{"value": "speak happy"}``. A JSON object (rather than a bare string) so the shape can
+gain fields later without breaking parsers.
+"""
 ATTRIBUTE_PUBLISH_ON_BEHALF = "lk.publish_on_behalf"
 """
 The identity of the agent participant that an avatar worker is publishing on behalf of.
@@ -37,9 +47,23 @@ When set to "true", the agent will skip audio input/output processing.
 
 ATTRIBUTE_SIMULATOR_DISPATCH = "lk.simulator.dispatch"
 """
-The simulator participant's attribute carrying the run's protojson
-``SimulationDispatch``, read by ``JobContext.simulation_context()``.
+The job attribute carrying the run's protojson ``SimulationDispatch``,
+delivered with the agent dispatch and read by
+``JobContext.simulation_context()``.
 """
+
+ATTRIBUTE_SIMULATION_ENABLED = "lk.simulation.enabled"
+"""Telemetry metadata key marking the session as a simulation."""
+
+ATTRIBUTE_REDACTION_ENABLED = "lk.redaction.enabled"
+"""Telemetry metadata key requesting PII redaction for the session."""
+
+_RECORDING_OPTION_KEYS = ("audio", "traces", "logs", "transcript")
+
+
+def recording_enabled(options: Mapping[str, object]) -> bool:
+    return any(options.get(key, False) for key in _RECORDING_OPTION_KEYS)
+
 
 TOPIC_CHAT = "lk.chat"
 TOPIC_TRANSCRIPTION = "lk.transcription"
@@ -47,6 +71,13 @@ TOPIC_TRANSCRIPTION = "lk.transcription"
 USERDATA_TIMED_TRANSCRIPT = "lk.timed_transcripts"
 """
 The key for the timed transcripts in the audio frame userdata.
+"""
+
+USERDATA_TTS_STARTED_TIME = "lk.tts_started_time"
+"""
+The key for the time (``time.perf_counter()``) at which the synthesized text was first
+sent to the TTS provider, attached to the audio frame userdata. Used to compute TTFB
+without attributing upstream (e.g. LLM streaming) latency to the TTS.
 """
 
 

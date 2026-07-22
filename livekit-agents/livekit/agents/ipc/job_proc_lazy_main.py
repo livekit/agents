@@ -247,7 +247,10 @@ class _JobProc:
 
                     with contextlib.suppress(asyncio.InvalidStateError):
                         self._shutdown_fut.set_result(
-                            _ShutdownInfo(reason=msg.reason, user_initiated=False)
+                            _ShutdownInfo(
+                                reason=msg.reason or "parent process shutdown",
+                                user_initiated=False,
+                            )
                         )
 
                 if isinstance(msg, InferenceResponse):
@@ -290,7 +293,9 @@ class _JobProc:
             self._ctx_shutdown_called = True
 
             with contextlib.suppress(asyncio.InvalidStateError):
-                self._shutdown_fut.set_result(_ShutdownInfo(user_initiated=True, reason=reason))
+                self._shutdown_fut.set_result(
+                    _ShutdownInfo(user_initiated=True, reason=reason or "user requested")
+                )
 
         self._room._info.name = msg.running_job.job.room.name
 
