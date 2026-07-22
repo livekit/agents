@@ -26,7 +26,7 @@ This restricts the LLM to known IDs at the schema layer before any runtime logic
 
 ### Order Types
 
-`order.py` defines three Pydantic models: `OrderedCombo`, `OrderedHappy`, and `OrderedRegular` . A discriminated union `OrderedItem` is also defined. Each ordered item receives a random short `order_id` on creation via `order_uid()`. 
+`order.py` defines three Pydantic models: `OrderedCombo`, `OrderedHappy`, and `OrderedRegular`. A plain union `OrderedItem` groups the three concrete item classes. Each ordered item receives a random short `order_id` on creation via `order_uid()`.
 
 `OrderState` stores the current cart as a `dict[str, OrderedItem]` keyed by `order_id`, which the `remove_order_item` and `list_order_items` tools use to look up or modify existing items.
 https://github.com/livekit/agents/blob/8283a5a5c9863a07bcf030ee90e8ab780e1e569b/examples/drive-thru/order.py#L45-L56
