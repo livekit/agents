@@ -34,6 +34,7 @@ import warnings
 from typing import Any, Literal, Protocol
 
 from livekit import rtc
+from livekit.plugins.krisp_internal import VivaMode
 
 from .auth import KrispLicenseAuthProvider, LiveKitCloudAuthProvider
 
@@ -120,6 +121,7 @@ def _resolve_auth_provider(
 
 
 def _build_inner(
+    mode: VivaMode,
     provider: LiveKitCloudAuthProvider | KrispLicenseAuthProvider,
     *,
     noise_suppression_level: int,
@@ -146,6 +148,7 @@ def _build_inner(
             noise_suppression_level=noise_suppression_level,
             frame_duration_ms=frame_duration_ms,
             sample_rate=sample_rate,
+            mode=mode,
         )
         return cloud_processor
 
@@ -200,6 +203,7 @@ class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
     def __init__(
         self,
         *,
+        mode: VivaMode = VivaMode.VOICE_ISOLATION,
         auth_provider: LiveKitCloudAuthProvider | KrispLicenseAuthProvider | None = None,
         model_path: str | None = None,
         noise_suppression_level: int = 100,
@@ -246,6 +250,7 @@ class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
 
         provider = _resolve_auth_provider(auth_provider, model_path)
         self._inner = _build_inner(
+            mode,
             provider,
             noise_suppression_level=noise_suppression_level,
             frame_duration_ms=frame_duration_ms if frame_duration_ms is not None else 10,
