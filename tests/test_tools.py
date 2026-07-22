@@ -1,12 +1,17 @@
+import asyncio
 import enum
 import json
 from typing import Annotated, Any, Literal
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pydantic import BaseModel, Field, ValidationError
 
 from livekit.agents import Agent
 from livekit.agents.llm import (
+    ChatContext,
+    FunctionCall,
+    FunctionCallOutput,
     ProviderTool,
     Tool,
     ToolContext,
@@ -22,6 +27,8 @@ from livekit.agents.llm.utils import (
     function_arguments_to_pydantic_model,
     prepare_function_arguments,
 )
+from livekit.agents.voice.events import RunContext
+from livekit.agents.voice.reply_scheduler import _ReplyScheduler
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
@@ -1596,16 +1603,13 @@ def _make_fake_speech():
 
 def _make_reply_session(speech: Any) -> Any:
     """A session mock with just enough surface for _enqueue_reply/_deliver_reply."""
-    from unittest.mock import AsyncMock, MagicMock
-
-    from livekit.agents.llm import ChatContext
-
     session = MagicMock()
     agent = MagicMock()
     agent.chat_ctx = ChatContext.empty()
     agent.update_chat_ctx = AsyncMock()
     session.current_agent = agent
     session._global_run_state = None
+    session.history = MagicMock()
     activity = MagicMock()
     activity.agent = agent
     session.wait_for_idle = AsyncMock(return_value=activity)
@@ -1614,11 +1618,6 @@ def _make_reply_session(speech: Any) -> Any:
 
 
 def _make_run_context_with_session(session: Any, call_id: str, name: str):
-    from unittest.mock import MagicMock
-
-    from livekit.agents.llm import FunctionCall
-    from livekit.agents.voice.events import RunContext
-
     speech_handle = MagicMock()
     speech_handle.num_steps = 1
     speech_handle.allow_interruptions = True
@@ -1627,6 +1626,203 @@ def _make_run_context_with_session(session: Any, call_id: str, name: str):
         speech_handle=speech_handle,
         function_call=FunctionCall(call_id=call_id, name=name, arguments="{}"),
     )
+
+
+class TestReplyScheduler:
+    @pytest.mark.asyncio
+    async def test_accepts_chat_items_and_generic_source_metadata(self):
+        speech = _make_fake_speech()
+        session = _make_reply_session(speech)
+        scheduler = _ReplyScheduler()
+        items = [
+            FunctionCall(call_id="background_1", name="search", arguments="{}"),
+            FunctionCallOutput(
+                call_id="background_1",
+                name="search",
+                output="found it",
+                is_error=False,
+            ),
+        ]
+
+        await scheduler.enqueue(
+            session=session,
+            items=items,
+            source={"kind": "test", "name": "search"},
+        )
+        assert scheduler.reply_task is not None
+        await scheduler.reply_task
+
+        assert session.current_agent.update_chat_ctx.await_count == 1
+        assert session.history.insert.call_args.args == (items,)
+        assert session.generate_reply.call_args.kwargs["tool_choice"] == "none"
+        assert "background_1" in session.generate_reply.call_args.kwargs["instructions"]
+
+    @pytest.mark.asyncio
+    async def test_close_waits_for_inflight_enqueue_and_prevents_reply(self):
+        update_started = asyncio.Event()
+        release_update = asyncio.Event()
+        speech = _make_fake_speech()
+        session = _make_reply_session(speech)
+
+        async def blocked_update(chat_ctx: ChatContext) -> None:
+            update_started.set()
+            await release_update.wait()
+            session.current_agent.chat_ctx = chat_ctx
+
+        session.current_agent.update_chat_ctx = AsyncMock(side_effect=blocked_update)
+        scheduler = _ReplyScheduler()
+        items = [
+            FunctionCallOutput(
+                call_id="background_1",
+                name="search",
+                output="found it",
+                is_error=False,
+            )
+        ]
+
+        enqueue_task = asyncio.create_task(
+            scheduler.enqueue(
+                session=session,
+                items=items,
+                source={"kind": "test", "name": "search"},
+            )
+        )
+        await update_started.wait()
+        close_task = asyncio.create_task(scheduler.aclose())
+        await asyncio.sleep(0)
+
+        release_update.set()
+        await asyncio.gather(enqueue_task, close_task)
+
+        assert scheduler._pending == []
+        assert scheduler.reply_task is None
+        assert session.history.insert.call_count == 0
+        assert session.generate_reply.call_count == 0
+
+        await scheduler.enqueue(
+            session=session,
+            items=items,
+            source={"kind": "test", "name": "search"},
+        )
+        assert session.current_agent.update_chat_ctx.await_count == 1
+        assert scheduler.reply_task is None
+
+    @pytest.mark.asyncio
+    async def test_close_cancels_delivery_blocked_updating_handoff_target(self):
+        update_started = asyncio.Event()
+        release_update = asyncio.Event()
+        speech = _make_fake_speech()
+        session = _make_reply_session(speech)
+        original_agent = session.current_agent
+        target_agent = MagicMock()
+        target_agent.chat_ctx = ChatContext.empty()
+
+        async def blocked_update(chat_ctx: ChatContext) -> None:
+            update_started.set()
+            await release_update.wait()
+            target_agent.chat_ctx = chat_ctx
+
+        target_agent.update_chat_ctx = AsyncMock(side_effect=blocked_update)
+        target_activity = MagicMock()
+        target_activity.agent = target_agent
+        session.wait_for_idle = AsyncMock(return_value=target_activity)
+        scheduler = _ReplyScheduler()
+        item = FunctionCallOutput(
+            call_id="background_1",
+            name="search",
+            output="found it",
+            is_error=False,
+        )
+
+        await scheduler.enqueue(
+            session=session,
+            items=[item],
+            source={"kind": "test"},
+        )
+        assert original_agent is not target_agent
+        await update_started.wait()
+
+        try:
+            await asyncio.wait_for(scheduler.aclose(), timeout=1)
+        finally:
+            release_update.set()
+
+        assert scheduler.reply_task is None
+        assert scheduler._pending == []
+        session.generate_reply.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_delivery_retargets_after_each_awaited_context_update(self):
+        target_update_started = asyncio.Event()
+        release_target_update = asyncio.Event()
+        speech = _make_fake_speech()
+        session = _make_reply_session(speech)
+        generated_on: list[object] = []
+
+        def make_agent() -> MagicMock:
+            agent = MagicMock()
+            agent.chat_ctx = ChatContext.empty()
+            return agent
+
+        agent_b = make_agent()
+        agent_c = make_agent()
+        agent_d = make_agent()
+
+        async def update_b(chat_ctx: ChatContext) -> None:
+            target_update_started.set()
+            await release_target_update.wait()
+            agent_b.chat_ctx = chat_ctx
+            session.current_agent = agent_c
+
+        async def update_c(chat_ctx: ChatContext) -> None:
+            agent_c.chat_ctx = chat_ctx
+            session.current_agent = agent_d
+
+        async def update_d(chat_ctx: ChatContext) -> None:
+            agent_d.chat_ctx = chat_ctx
+
+        agent_b.update_chat_ctx = AsyncMock(side_effect=update_b)
+        agent_c.update_chat_ctx = AsyncMock(side_effect=update_c)
+        agent_d.update_chat_ctx = AsyncMock(side_effect=update_d)
+        target_activity = MagicMock()
+        target_activity.agent = agent_b
+
+        async def wait_for_idle() -> object:
+            session.current_agent = agent_b
+            return target_activity
+
+        session.wait_for_idle = AsyncMock(side_effect=wait_for_idle)
+
+        def generate_reply(**kwargs: object) -> object:
+            del kwargs
+            generated_on.append(session.current_agent)
+            return speech
+
+        session.generate_reply = MagicMock(side_effect=generate_reply)
+        scheduler = _ReplyScheduler()
+        item = FunctionCallOutput(
+            call_id="background_1",
+            name="search",
+            output="found it",
+            is_error=False,
+        )
+
+        await scheduler.enqueue(
+            session=session,
+            items=[item],
+            source={"kind": "test"},
+        )
+        await target_update_started.wait()
+        release_target_update.set()
+        assert scheduler.reply_task is not None
+        await scheduler.reply_task
+
+        assert generated_on == [agent_d]
+        assert agent_b.chat_ctx.items == [item]
+        assert agent_c.chat_ctx.items == [item]
+        assert agent_d.chat_ctx.items == [item]
+        session.history.insert.assert_called_once_with([item])
+        await scheduler.aclose()
 
 
 class TestToolCallEvents:
@@ -1753,7 +1949,7 @@ class TestToolCallEvents:
         assert items[1] == ToolCallEnded(id="c4", call_id="c4", message="ok", status="done")
 
     @pytest.mark.asyncio
-    async def test_updates_and_deferred_result_with_reply_lifecycle(self):
+    async def test_updates_and_buffered_result_with_reply_lifecycle(self):
         from livekit.agents.voice.events import (
             RunContext,
             ToolCallEnded,
@@ -1775,7 +1971,7 @@ class TestToolCallEvents:
         speech = _make_fake_speech()
         session = _make_reply_session(speech)
         # hold the session busy until the tool has buffered everything, so the
-        # deferred reply coalesces the second update and the final result
+        # scheduled reply coalesces the second update and the final result
         idle_event = _asyncio.Event()
         activity = session.wait_for_idle.return_value
 
@@ -1801,11 +1997,11 @@ class TestToolCallEvents:
         # first update is inline (plain call_id), the second is buffered
         assert items[1] == ToolCallUpdated(id="c5", call_id="c5", message="step one")
         assert items[2] == ToolCallUpdated(id="c5_update_1", call_id="c5", message="step two")
-        # the final return is deferred through the coalescer
+        # the final return is buffered through the coalescer
         assert items[3] == ToolCallEnded(
             id="c5_final", call_id="c5", message="all done", status="done"
         )
-        # the deferred reply covering the buffered ids was scheduled
+        # the reply covering the buffered ids was scheduled
         reply = items[4]
         assert isinstance(reply, ToolReplyUpdated)
         assert reply.status == "scheduled"
@@ -1816,6 +2012,9 @@ class TestToolCallEvents:
         assert isinstance(completed, ToolReplyUpdated)
         assert completed.status == "completed"
         assert completed.update_ids == ["c5_update_1", "c5_final"]
+        assert not any(
+            call.args[0] == "background_message_updated" for call in session.emit.call_args_list
+        )
 
     @pytest.mark.asyncio
     async def test_interrupted_and_skipped_reply_outcomes(self):
@@ -1852,7 +2051,7 @@ class TestToolCallEvents:
             assert last.status == expected
 
     @pytest.mark.asyncio
-    async def test_error_after_update_is_deferred_with_final_id(self):
+    async def test_error_after_update_is_buffered_with_final_id(self):
         from livekit.agents.voice.events import RunContext, ToolCallEnded
         from livekit.agents.voice.tool_executor import _ToolExecutor
 

@@ -6,10 +6,21 @@ from .agent_session import (
     VoiceActivityVideoSampler,
 )
 from .audio_recognition import AudioRecognition
+from .background_session import (
+    BackgroundContext,
+    BackgroundDefinition,
+    BackgroundHandlingOptions,
+    BackgroundReplyPromptArgs,
+    BackgroundUpdatePromptArgs,
+    background,
+)
 from .events import (
     AgentEvent,
     AgentFalseInterruptionEvent,
     AgentStateChangedEvent,
+    BackgroundMessageReceived,
+    BackgroundMessageUpdatedEvent,
+    BackgroundReplyUpdated,
     CloseEvent,
     CloseReason,
     ConversationItemAddedEvent,
@@ -45,6 +56,12 @@ from .transcription import TranscriptSynchronizer, text_transforms
 
 __all__ = [
     "AgentSession",
+    "background",
+    "BackgroundDefinition",
+    "BackgroundContext",
+    "BackgroundUpdatePromptArgs",
+    "BackgroundReplyPromptArgs",
+    "BackgroundHandlingOptions",
     "RecordingOptions",
     "RunOutputOptions",
     "VoiceActivityVideoSampler",
@@ -72,6 +89,9 @@ __all__ = [
     "ToolCallUpdated",
     "ToolCallEnded",
     "ToolReplyUpdated",
+    "BackgroundMessageReceived",
+    "BackgroundReplyUpdated",
+    "BackgroundMessageUpdatedEvent",
     "UserTurnExceededEvent",
     "KeytermsOptions",
     "KeytermDetectionOptions",
