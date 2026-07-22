@@ -1,7 +1,7 @@
 """The deep-research background session.
 
 A Python port of the Claude Code ``deep-research`` dynamic workflow
-(see ``deep-research-workflow.js in this folder``), packaged as a reusable
+packaged as a reusable
 ``@background`` definition:
 
     Clarify -> Scope -> Search -> Fetch+Extract -> 3-vote adversarial Verify -> Synthesize
