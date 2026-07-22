@@ -21,7 +21,7 @@ from hotel_db import (
     speak_time,
     speak_usd,
 )
-from pydantic import BaseModel, Field, RootModel
+from pydantic import Field, RootModel
 
 from livekit.agents import (
     Agent,
