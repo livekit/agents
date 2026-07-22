@@ -7,7 +7,6 @@ import json
 import time
 from collections.abc import AsyncIterable, Coroutine
 from dataclasses import dataclass
-from functools import cache
 from typing import TYPE_CHECKING, Any, Literal
 
 from opentelemetry import context as otel_context, trace
