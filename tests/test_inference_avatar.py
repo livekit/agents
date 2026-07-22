@@ -1,8 +1,9 @@
 """Unit tests for livekit.agents.inference.AvatarSession.
 
 Covers model-string parsing, credential resolution, the gateway create call
-(payload/headers/idempotency), error mapping, and that the response sample rate
-drives the DataStream audio sink.
+(payload/headers/idempotency), error mapping, that the response sample rate
+drives the DataStream audio sink, the terminate_token contract, double-start
+guarding, and the standalone (no job context) room paths.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ import contextlib
 from typing import Any
 
 import aiohttp
+import jwt
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
@@ -86,10 +88,10 @@ class TestCredentials:
 
 
 @contextlib.asynccontextmanager
-async def _gateway(handler):  # type: ignore[no-untyped-def]
-    """Start an aiohttp test server exposing POST /v1/avatar/sessions."""
+async def _gateway(handler, path: str = "/v1/avatar/sessions"):  # type: ignore[no-untyped-def]
+    """Start an aiohttp test server exposing POST `path`."""
     app = web.Application()
-    app.router.add_post("/v1/avatar/sessions", handler)
+    app.router.add_post(path, handler)
     server = TestServer(app)
     await server.start_server()
     session = aiohttp.ClientSession()
@@ -285,11 +287,17 @@ class _FakeJobCtx:
 
 async def test_start_uses_response_sample_rate(monkeypatch: pytest.MonkeyPatch) -> None:
     """The DataStream sink is created with the gateway-reported sample rate,
-    not a hardcoded per-provider constant."""
+    not a hardcoded per-provider constant, and terminate_token is captured
+    from the create response for later use by aclose()."""
 
     async def handler(request: web.Request) -> web.Response:
         return web.json_response(
-            {"session_id": "AVS_1", "provider_session_id": "ls_1", "sample_rate": 24000}
+            {
+                "session_id": "AVS_1",
+                "provider_session_id": "ls_1",
+                "terminate_token": "tt_1",
+                "sample_rate": 24000,
+            }
         )
 
     monkeypatch.setattr(avatar_mod, "get_job_context", lambda *a, **k: _FakeJobCtx())
@@ -312,37 +320,283 @@ async def test_start_uses_response_sample_rate(monkeypatch: pytest.MonkeyPatch) 
 
     assert av.session_id == "AVS_1"
     assert av.provider_session_id == "ls_1"
+    assert av._terminate_token == "tt_1"
     assert isinstance(agent_session.output.sink, _FakeSink)
     assert agent_session.output.sink.sample_rate == 24000
 
 
-async def test_aclose_terminates_session(monkeypatch: pytest.MonkeyPatch) -> None:
-    """aclose() calls the gateway terminate endpoint so the provider session
-    stops billing instead of lingering until idle timeout."""
+async def test_start_mints_worker_token_with_expected_grants(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The minted avatar worker token must carry the room-join grant and the
+    lk.publish_on_behalf / lk.avatar_provider attributes the gateway and
+    server-side metering depend on."""
+    captured: dict[str, Any] = {}
+
+    async def handler(request: web.Request) -> web.Response:
+        captured["body"] = await request.json()
+        return web.json_response({"session_id": "AVS_1", "provider_session_id": "ls_1"})
+
+    monkeypatch.setattr(avatar_mod, "get_job_context", lambda *a, **k: _FakeJobCtx())
+    monkeypatch.setattr(avatar_mod, "DataStreamAudioOutput", _FakeSink)
+
+    async with _gateway(handler) as (base_url, session):
+        av = _make_avatar(base_url=base_url, http_session=session)
+        agent_session = _FakeAgentSession()
+        await av.start(
+            agent_session,  # type: ignore[arg-type]
+            _FakeRoom(),  # type: ignore[arg-type]
+            livekit_url="wss://example.livekit.cloud",
+            livekit_api_key="devkey",
+            livekit_api_secret="devsecret",
+        )
+
+    assert captured["body"]["room_sid"] == "RM_123"
+    assert captured["body"]["agent_identity"] == "agent-worker-1"
+
+    claims = jwt.decode(captured["body"]["livekit_token"], options={"verify_signature": False})
+    assert claims["kind"] == "agent"
+    assert claims["sub"] == "lemonslice-avatar-agent"
+    assert claims["video"]["roomJoin"] is True
+    assert claims["video"]["room"] == "my-room"
+    assert claims["attributes"] == {
+        "lk.publish_on_behalf": "agent-worker-1",
+        "lk.avatar_provider": "lemonslice",
+    }
+
+
+async def test_start_twice_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A second start() must not create a second paid provider session or lose
+    the first session's terminate handle."""
+    calls = {"n": 0}
+
+    async def handler(request: web.Request) -> web.Response:
+        calls["n"] += 1
+        return web.json_response({"session_id": "AVS_1", "provider_session_id": "ls_1"})
+
+    monkeypatch.setattr(avatar_mod, "get_job_context", lambda *a, **k: _FakeJobCtx())
+    monkeypatch.setattr(avatar_mod, "DataStreamAudioOutput", _FakeSink)
+
+    async with _gateway(handler) as (base_url, session):
+        av = _make_avatar(base_url=base_url, http_session=session)
+        agent_session = _FakeAgentSession()
+        await av.start(
+            agent_session,  # type: ignore[arg-type]
+            _FakeRoom(),  # type: ignore[arg-type]
+            livekit_url="wss://example.livekit.cloud",
+            livekit_api_key="devkey",
+            livekit_api_secret="devsecret",
+        )
+
+        with pytest.raises(RuntimeError, match="only be called once"):
+            await av.start(
+                agent_session,  # type: ignore[arg-type]
+                _FakeRoom(),  # type: ignore[arg-type]
+                livekit_url="wss://example.livekit.cloud",
+                livekit_api_key="devkey",
+                livekit_api_secret="devsecret",
+            )
+
+    assert calls["n"] == 1, "second start() must not call the gateway again"
+    assert av.provider_session_id == "ls_1", "the first session's terminate handle must survive"
+
+
+class _FakeBrokenOutput:
+    def replace_audio_tail(self, sink: Any) -> None:
+        raise RuntimeError("boom")
+
+
+class _FakeBrokenAgentSession(_FakeAgentSession):
+    def __init__(self) -> None:
+        super().__init__()
+        self.output = _FakeBrokenOutput()  # type: ignore[assignment]
+
+
+async def test_start_ids_set_before_audio_rebind(monkeypatch: pytest.MonkeyPatch) -> None:
+    """session_id/provider_session_id/terminate_token must be recorded before
+    the audio-output rebind, so a failure in the rebind still leaves a
+    terminable (billable) session rather than an orphaned one."""
+
+    async def handler(request: web.Request) -> web.Response:
+        return web.json_response(
+            {"session_id": "AVS_1", "provider_session_id": "ls_1", "terminate_token": "tt_1"}
+        )
+
+    monkeypatch.setattr(avatar_mod, "get_job_context", lambda *a, **k: _FakeJobCtx())
+
+    async with _gateway(handler) as (base_url, session):
+        av = _make_avatar(base_url=base_url, http_session=session)
+        with pytest.raises(RuntimeError, match="boom"):
+            await av.start(
+                _FakeBrokenAgentSession(),  # type: ignore[arg-type]
+                _FakeRoom(),  # type: ignore[arg-type]
+                livekit_url="wss://example.livekit.cloud",
+                livekit_api_key="devkey",
+                livekit_api_secret="devsecret",
+            )
+
+    assert av.provider_session_id == "ls_1"
+    assert av._terminate_token == "tt_1"
+
+
+class _FakeLocalParticipant:
+    identity = "standalone-agent"
+
+
+class _FakeConnectedRoom:
+    name = "my-room"
+
+    def isconnected(self) -> bool:
+        return True
+
+    @property
+    def local_participant(self) -> Any:
+        return _FakeLocalParticipant()
+
+    @property
+    def sid(self) -> Any:
+        async def _get() -> str:
+            return "RM_789"
+
+        return _get()
+
+    def on(self, *_a: Any, **_k: Any) -> None:
+        pass
+
+    def off(self, *_a: Any, **_k: Any) -> None:
+        pass
+
+
+async def test_start_standalone_connected_room(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without a job context, a connected room's local_participant/sid drive
+    start() (guarded by isconnected(), not a bare local_participant access,
+    which raises on a real rtc.Room instead of returning None)."""
+    captured: dict[str, Any] = {}
+
+    async def handler(request: web.Request) -> web.Response:
+        captured["body"] = await request.json()
+        return web.json_response({"session_id": "AVS_1", "provider_session_id": "ls_1"})
+
+    monkeypatch.setattr(avatar_mod, "get_job_context", lambda *a, **k: None)
+    monkeypatch.setattr(avatar_mod, "DataStreamAudioOutput", _FakeSink)
+
+    async with _gateway(handler) as (base_url, session):
+        av = _make_avatar(base_url=base_url, http_session=session)
+        await av.start(
+            _FakeAgentSession(),  # type: ignore[arg-type]
+            _FakeConnectedRoom(),  # type: ignore[arg-type]
+            livekit_url="wss://example.livekit.cloud",
+            livekit_api_key="devkey",
+            livekit_api_secret="devsecret",
+        )
+
+        # isconnected() == True also makes the base class eagerly spawn a
+        # join-wait task; this fake doesn't implement remote_participants
+        # (out of scope for this test), so retrieve/discard its exception
+        # rather than leaving it unretrieved at garbage-collection time.
+        join_task = av._wait_avatar_join_task
+        if join_task is not None:
+            join_task.cancel()
+            with contextlib.suppress(BaseException):
+                await join_task
+
+    assert captured["body"]["agent_identity"] == "standalone-agent"
+    assert captured["body"]["room_sid"] == "RM_789"
+
+
+async def test_start_standalone_disconnected_room_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without a job context and a disconnected room, start() must raise the
+    documented, actionable RuntimeError rather than an opaque error from the
+    rtc layer (Room.local_participant raises rather than returning None)."""
+    monkeypatch.setattr(avatar_mod, "get_job_context", lambda *a, **k: None)
+
+    av = _make_avatar()
+    with pytest.raises(RuntimeError, match="needs a connected room"):
+        await av.start(
+            _FakeAgentSession(),  # type: ignore[arg-type]
+            _FakeRoom(),  # type: ignore[arg-type]
+            livekit_url="wss://example.livekit.cloud",
+            livekit_api_key="devkey",
+            livekit_api_secret="devsecret",
+        )
+
+
+async def test_aclose_terminates_session() -> None:
+    """aclose() calls the gateway terminate endpoint (with the terminate_token
+    the gateway requires) so the provider session stops billing instead of
+    lingering until idle timeout."""
     terminate_bodies: list[dict[str, Any]] = []
 
     async def handler(request: web.Request) -> web.Response:
         terminate_bodies.append(await request.json())
         return web.json_response({"terminated": True})
 
-    app = web.Application()
-    app.router.add_post("/v1/avatar/sessions/terminate", handler)
-    server = TestServer(app)
-    await server.start_server()
-    session = aiohttp.ClientSession()
-    try:
-        av = _make_avatar(base_url=str(server.make_url("/v1")), http_session=session)
+    async with _gateway(handler, path="/v1/avatar/sessions/terminate") as (base_url, session):
+        av = _make_avatar(base_url=base_url, http_session=session)
         av._provider_session_id = "ls_abc"
+        av._terminate_token = "tt_abc"
         # No room/agent were started; base aclose() no-ops on cleanup.
         await av.aclose()
-    finally:
-        await session.close()
-        await server.close()
 
     assert len(terminate_bodies) == 1
-    assert terminate_bodies[0] == {"provider": "lemonslice", "provider_session_id": "ls_abc"}
-    # provider session id cleared so a second aclose() does not re-terminate.
+    assert terminate_bodies[0] == {
+        "provider": "lemonslice",
+        "provider_session_id": "ls_abc",
+        "terminate_token": "tt_abc",
+    }
+    # cleared on a confirmed terminate, so a second aclose() does not re-terminate.
     assert av.provider_session_id is None
+    assert av._terminate_token is None
+
+
+async def test_aclose_skips_terminate_without_token() -> None:
+    """If the create response never returned a terminate_token, aclose() must
+    not call the gateway at all (it would just 400) — it logs and moves on."""
+    calls = {"n": 0}
+
+    async def handler(request: web.Request) -> web.Response:
+        calls["n"] += 1
+        return web.json_response({"terminated": True})
+
+    async with _gateway(handler, path="/v1/avatar/sessions/terminate") as (base_url, session):
+        av = _make_avatar(base_url=base_url, http_session=session)
+        av._provider_session_id = "ls_abc"
+        # av._terminate_token left None, as if the gateway never returned one.
+        await av.aclose()  # must not raise
+
+    assert calls["n"] == 0, "terminate must not be attempted without a terminate_token"
+
+
+async def test_aclose_terminate_failure_keeps_ids_and_runs_base_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed terminate must not raise, must leave the ids in place so a
+    subsequent aclose() call can retry, and must not block the base class's
+    own cleanup."""
+    from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession
+
+    base_aclose_calls = {"n": 0}
+    orig_base_aclose = BaseAvatarSession.aclose
+
+    async def spy_base_aclose(self: Any) -> None:
+        base_aclose_calls["n"] += 1
+        await orig_base_aclose(self)
+
+    monkeypatch.setattr(BaseAvatarSession, "aclose", spy_base_aclose)
+
+    async def handler(request: web.Request) -> web.Response:
+        return web.json_response({"error": "boom"}, status=500)
+
+    async with _gateway(handler, path="/v1/avatar/sessions/terminate") as (base_url, session):
+        av = _make_avatar(base_url=base_url, http_session=session)
+        av._provider_session_id = "ls_abc"
+        av._terminate_token = "tt_abc"
+
+        await av.aclose()  # must not raise
+
+    assert base_aclose_calls["n"] == 1
+    assert av.provider_session_id == "ls_abc", "must survive a failed terminate for a retry"
+    assert av._terminate_token == "tt_abc"
 
 
 async def test_aclose_without_session_is_noop() -> None:

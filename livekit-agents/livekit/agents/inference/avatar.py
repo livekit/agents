@@ -37,9 +37,14 @@ if TYPE_CHECKING:
     from ..voice import AgentSession
 
 # Fallback audio sample rate when the gateway response omits one. The gateway
-# is authoritative (it returns the per-provider rate) so this is only a floor
-# for older gateways.
+# is authoritative (it returns the per-provider rate) so this is only a
+# fallback for older gateways.
 _DEFAULT_SAMPLE_RATE = 16000
+# Total request timeout for gateway calls. sock_connect (conn_options.timeout)
+# bounds the TCP connect; this bounds the whole request so a gateway that
+# accepts the connection but never responds can't hang start()/aclose()
+# indefinitely. Matches the BYOK lemonslice plugin's request timeout.
+_REQUEST_TIMEOUT = 60.0
 # lk.avatar_provider tags the avatar worker participant with its provider so
 # server-side (participant-lifetime) avatar-minutes metering can attribute the
 # worker's room time to the right SKU. See the inference-avatar plan.
@@ -174,6 +179,9 @@ class AvatarSession(BaseAvatarSession):
 
         self._session_id: str | None = None
         self._provider_session_id: str | None = None
+        # HMAC issued by the gateway alongside provider_session_id; required by
+        # /avatar/sessions/terminate to prove this project owns the session.
+        self._terminate_token: str | None = None
 
     @property
     def avatar_identity(self) -> str:
@@ -202,6 +210,12 @@ class AvatarSession(BaseAvatarSession):
         livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
         livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
+        if self._session_id is not None or self._provider_session_id is not None:
+            raise RuntimeError(
+                "AvatarSession.start() may only be called once per instance; "
+                "create a new AvatarSession to start another avatar"
+            )
+
         await super().start(agent_session, room)
 
         lk_url = livekit_url or (os.getenv("LIVEKIT_URL") or NOT_GIVEN)
@@ -221,7 +235,7 @@ class AvatarSession(BaseAvatarSession):
         if job_ctx is not None:
             local_participant_identity = job_ctx.local_participant_identity
             room_sid = job_ctx.job.room.sid or await room.sid
-        elif room.local_participant is not None:
+        elif room.isconnected():
             local_participant_identity = room.local_participant.identity
             room_sid = await room.sid
         else:
@@ -257,7 +271,22 @@ class AvatarSession(BaseAvatarSession):
 
         self._session_id = create_resp.get("session_id")
         self._provider_session_id = create_resp.get("provider_session_id")
+        self._terminate_token = create_resp.get("terminate_token")
         sample_rate = create_resp.get("sample_rate") or _DEFAULT_SAMPLE_RATE
+
+        if self._provider_session_id and not self._terminate_token:
+            # aclose() cannot terminate without this; the provider session will
+            # run to its own idle timeout instead of being stopped explicitly.
+            logger.warning(
+                "avatar gateway create response had no terminate_token; this "
+                "session cannot be explicitly terminated and will bill until "
+                "its provider idle timeout",
+                extra={
+                    "provider": self._provider,
+                    "session_id": self._session_id,
+                    "provider_session_id": self._provider_session_id,
+                },
+            )
 
         # Rebind the audio tail to the avatar worker using the gateway-reported
         # sample rate. Done after the create response (unlike BYOK, which
@@ -289,22 +318,40 @@ class AvatarSession(BaseAvatarSession):
     async def aclose(self) -> None:
         # Terminate the provider session through the gateway so it stops billing
         # immediately instead of lingering until its idle timeout. Best-effort:
-        # a failure must not block participant cleanup in the base class.
+        # a failure must not block participant cleanup in the base class, so
+        # base cleanup runs in `finally` even if terminate raises or is
+        # cancelled (e.g. job-shutdown deadline). The ids are cleared only on
+        # a confirmed terminate so a second aclose() call can still retry.
         provider_session_id = self._provider_session_id
-        self._provider_session_id = None
-        if provider_session_id:
-            try:
-                await self._terminate_session(provider_session_id)
-            except Exception:
-                logger.warning(
-                    "failed to terminate inference avatar session",
+        terminate_token = self._terminate_token
+        try:
+            if provider_session_id and terminate_token:
+                try:
+                    await self._terminate_session(provider_session_id, terminate_token)
+                except Exception:
+                    logger.warning(
+                        "failed to terminate inference avatar session; it will "
+                        "keep billing until its provider idle timeout unless "
+                        "aclose() is called again",
+                        extra={
+                            "provider": self._provider,
+                            "provider_session_id": provider_session_id,
+                        },
+                        exc_info=True,
+                    )
+                else:
+                    self._provider_session_id = None
+                    self._terminate_token = None
+            elif provider_session_id:
+                logger.debug(
+                    "no terminate_token for this avatar session; skipping explicit terminate",
                     extra={
                         "provider": self._provider,
                         "provider_session_id": provider_session_id,
                     },
-                    exc_info=True,
                 )
-        await super().aclose()
+        finally:
+            await super().aclose()
 
     async def _create_session(
         self,
@@ -360,7 +407,7 @@ class AvatarSession(BaseAvatarSession):
                         headers=headers,
                         json=payload,
                         timeout=aiohttp.ClientTimeout(
-                            total=None,
+                            total=_REQUEST_TIMEOUT,
                             sock_connect=self._conn_options.timeout,
                         ),
                     ) as response:
@@ -372,13 +419,20 @@ class AvatarSession(BaseAvatarSession):
                                 body=text,
                             )
                         return await response.json()  # type: ignore[no-any-return]
-                except asyncio.TimeoutError as e:
-                    last_exc = APITimeoutError()
-                    logger.warning("avatar gateway request timed out", extra={"attempt": i})
-                    _ = e
+                except asyncio.TimeoutError:
+                    last_exc = APITimeoutError(
+                        f"avatar gateway create timed out after attempt {i + 1}"
+                    )
+                    logger.warning(
+                        "avatar gateway request timed out",
+                        extra={"provider": self._provider, "attempt": i},
+                    )
                 except aiohttp.ClientError as e:
                     last_exc = APIConnectionError(str(e))
-                    logger.warning("failed to call avatar gateway", extra={"error": str(e)})
+                    logger.warning(
+                        "failed to call avatar gateway",
+                        extra={"provider": self._provider, "error": str(e)},
+                    )
                 except APIError as e:
                     last_exc = e
                     if not e.retryable:
@@ -398,7 +452,7 @@ class AvatarSession(BaseAvatarSession):
             if self._http_session is None:
                 await session.close()
 
-    async def _terminate_session(self, provider_session_id: str) -> None:
+    async def _terminate_session(self, provider_session_id: str, terminate_token: str) -> None:
         url = f"{self._base_url.rstrip('/')}/avatar/sessions/terminate"
         headers = {
             **get_inference_headers(),
@@ -406,7 +460,11 @@ class AvatarSession(BaseAvatarSession):
             HEADER_INFERENCE_PROVIDER: self._provider,
             "Content-Type": "application/json",
         }
-        payload = {"provider": self._provider, "provider_session_id": provider_session_id}
+        payload = {
+            "provider": self._provider,
+            "provider_session_id": provider_session_id,
+            "terminate_token": terminate_token,
+        }
 
         session = self._http_session or aiohttp.ClientSession()
         try:
@@ -414,7 +472,9 @@ class AvatarSession(BaseAvatarSession):
                 url,
                 headers=headers,
                 json=payload,
-                timeout=aiohttp.ClientTimeout(total=None, sock_connect=self._conn_options.timeout),
+                timeout=aiohttp.ClientTimeout(
+                    total=_REQUEST_TIMEOUT, sock_connect=self._conn_options.timeout
+                ),
             ) as response:
                 if not response.ok:
                     text = await response.text()
