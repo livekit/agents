@@ -8,23 +8,13 @@ from openai.types.chat.chat_completion_chunk import (
     ChoiceDeltaToolCallFunction,
 )
 
-from livekit.agents.inference.llm import LLMStream, _use_strict_tool_schema
+from livekit.agents.inference.llm import LLMStream
 from livekit.agents.llm.utils import ThinkingTokenFilter, strip_thinking_tokens
 
 pytestmark = pytest.mark.unit
 
 
 GEMMA_THINK_TAGS = ("<|channel>thought", "<channel|>")
-
-
-def test_gemma_preserves_discriminated_tool_schemas() -> None:
-    assert not _use_strict_tool_schema("google/gemma-4-31b-it")
-    assert not _use_strict_tool_schema("gemma-4-31b-it")
-
-
-def test_other_models_keep_strict_tool_schemas() -> None:
-    assert _use_strict_tool_schema("openai/gpt-5.4")
-    assert _use_strict_tool_schema("google/gemini-3-flash")
 
 
 def _collect_visible_text(

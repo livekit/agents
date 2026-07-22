@@ -9,6 +9,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 import pytest
 from fake_data.seed import build_seed_bytes
 from hotel_db import TODAY, HotelDB, speak_room
+from pydantic import TypeAdapter, ValidationError
 
 
 @pytest.fixture
@@ -105,9 +106,26 @@ def test_amend_unknown_code_is_not_found(db: HotelDB) -> None:
 
 # --- tool layer: destination validation ---
 
-from tools_services import _florist_destination  # noqa: E402
+from tools_services import (  # noqa: E402
+    NumberedRoom,
+    PenthouseSuite,
+    Room,
+    _florist_destination,
+    room_to_id,
+)
 
-from livekit.agents import ToolError  # noqa: E402
+from livekit.agents import ToolError, function_tool  # noqa: E402
+from livekit.agents.llm.utils import prepare_function_arguments  # noqa: E402
+
+
+@function_tool
+async def _echo_room(room: Room) -> str:
+    """Return a room.
+
+    Args:
+        room: A numbered room, or the penthouse.
+    """
+    return room_to_id(room)
 
 
 def test_destination_neither_raises(db: HotelDB) -> None:
@@ -115,6 +133,42 @@ def test_destination_neither_raises(db: HotelDB) -> None:
         _florist_destination(None, None)
     with pytest.raises(ToolError):
         _florist_destination(None, "  ")
+
+
+def test_room_models_keep_distinct_types_with_scalar_json() -> None:
+    adapter = TypeAdapter(Room)
+
+    numbered = adapter.validate_python(206)
+    assert isinstance(numbered, NumberedRoom)
+    assert adapter.dump_python(numbered) == 206
+    assert room_to_id(numbered) == "RM_206"
+
+    penthouse = adapter.validate_python("penthouse")
+    assert isinstance(penthouse, PenthouseSuite)
+    assert adapter.dump_python(penthouse) == "penthouse"
+    assert room_to_id(penthouse) == "RM_PH"
+
+
+def test_room_models_reject_arbitrary_room_phrases() -> None:
+    with pytest.raises(ValidationError):
+        TypeAdapter(Room).validate_python("suite 206")
+
+
+@pytest.mark.parametrize(
+    ("arguments", "expected_type", "expected_id"),
+    [
+        ('{"room": 206}', NumberedRoom, "RM_206"),
+        ('{"room": "penthouse"}', PenthouseSuite, "RM_PH"),
+    ],
+)
+def test_tool_arguments_preserve_room_model_type(
+    arguments: str,
+    expected_type: type[NumberedRoom] | type[PenthouseSuite],
+    expected_id: str,
+) -> None:
+    args, _ = prepare_function_arguments(fnc=_echo_room, json_arguments=arguments)
+    assert isinstance(args[0], expected_type)
+    assert room_to_id(args[0]) == expected_id
 
 
 from benchmark import diff_databases  # noqa: E402
