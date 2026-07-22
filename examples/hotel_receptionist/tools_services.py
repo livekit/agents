@@ -14,8 +14,10 @@ from end_call_check import run_goodbye_gate
 from hotel_db import (
     MAX_PARTY_SIZE,
     FollowupKind,
+    HotelDB,
     NotFound,
     Unavailable,
+    speak_room,
     speak_time,
     speak_usd,
 )
@@ -96,22 +98,29 @@ def _departure_margin_note(*, pickup: time, departure: time) -> str:
     )
 
 
-def _resolve_flower_destination(location: str | None, recipient: str | None) -> str:
-    """One stored destination from the two collected ideas: the location wins.
-
-    florist_orders.deliver_to holds a single value; splitting the tool parameters
-    keeps a caller's "to the Penthouse Suite, for Diane Okafor" from being jammed
-    into it as a concatenation. The recipient's name stands in only when no room
-    or suite was given (an external delivery addressed to a person).
-    """
-    location = (location or "").strip()
-    if location:
-        return location
-    recipient = (recipient or "").strip()
+def _florist_destination(
+    db: HotelDB, room_or_suite: str | None, recipient_name: str | None
+) -> tuple[str | None, str | None]:
+    """Validate the delivery destination: (room_id, None) for a real room or
+    suite here, (None, recipient) when no room is assigned yet. A phrase that
+    names no actual room - including stand-in words like "room" - is refused so
+    the agent asks the caller instead of a placeholder reaching the order."""
+    phrase = (room_or_suite or "").strip()
+    recipient = (recipient_name or "").strip() or None
+    if phrase:
+        room_id = db.resolve_room_phrase(phrase)
+        if room_id is None:
+            raise ToolError(
+                f'"{phrase}" doesn\'t match a room or suite at this hotel '
+                f"({db.room_options_spoken()}) - ask the caller which room or "
+                "suite it goes to, or who it's for if their room isn't assigned yet."
+            )
+        return room_id, None
     if recipient:
-        return recipient
+        return None, recipient
     raise ToolError(
-        "no destination: ask the caller which room or suite the flowers go to, or who they're for."
+        "no destination: ask the caller which room or suite the flowers go to, "
+        "or who they're for if their room isn't assigned yet."
     )
 
 
@@ -136,7 +145,7 @@ class ServicesToolsMixin:
         caller_phone: str,
         summary: str,
     ) -> str:
-        """Capture something for a human to follow up on - sales/group leads, identity-field change requests (email/phone/name), callback requests, verification-failed callers, in-house early-checkout requests, and any other request you can't handle on this line. ALWAYS use this instead of saying "someone will follow up" with no record; otherwise the request vanishes.
+        """Capture something for a human to follow up on - sales/group leads, identity-field change requests (email/phone/name), callback requests, verification-failed callers, in-house early-checkout requests, and any other request you can't handle on this line. ALWAYS use this instead of saying "someone will follow up" with no record; otherwise the request vanishes. Florist delivery notes are the one exception - they belong on the order itself via amend_florist_order, never here.
 
         Args:
             kind: One of housekeeping, sales_lead, identity_change, callback, verification_help, early_checkout, abandoned_booking, lost_and_found, other.
@@ -405,10 +414,11 @@ class ServicesToolsMixin:
         card_message: str,
         guest_name: str,
         guest_phone: str,
-        deliver_to_location: str | None = None,
+        room_or_suite: str | None = None,
         recipient_name: str | None = None,
+        delivery_instructions: str | None = None,
     ) -> str:
-        """Order a flower arrangement from the hotel florist for delivery to a room or recipient. The catalog (arrangements, prices, delivery cutoff) is in lookup_policy topic "florist" - look it up first and let the caller pick the arrangement, never pick for them. Collect the delivery date, where it goes, and the gift-card message, and read the card message back so it's right. Once they pick and agree, THIS CALL places the order - saying "I'll get that arranged" orders nothing; nothing exists until this returns a reference.
+        """Order a flower arrangement from the hotel florist, delivered to a room or suite here, or to an arriving guest by name if their room isn't assigned yet. The catalog (arrangements, prices, delivery cutoff) is in lookup_policy topic "florist" - look it up first and let the caller pick the arrangement, never pick for them. Collect the delivery date, where it goes, and the gift-card message, and read the card message back so it's right. Once they pick and agree, THIS CALL places the order - saying "I'll get that arranged" orders nothing; nothing exists until this returns a reference. Delivery handling requests ("as early as possible") go in delivery_instructions here, or via amend_florist_order after placing - never in a followup.
 
         Args:
             arrangement: The arrangement the caller picked.
@@ -416,26 +426,57 @@ class ServicesToolsMixin:
             card_message: The gift-card message exactly as the caller dictates it.
             guest_name: The caller's full name.
             guest_phone: The caller's phone number, in case the florist needs to reach them.
-            deliver_to_location: The room or suite it goes to, exactly as the caller names it and NOTHING else - never a person's name. Omit if the caller only named a person.
-            recipient_name: The name of the person it's for, if the caller gave one. Omit if the flowers just go to a room.
+            room_or_suite: The room or suite, exactly as the caller names it. Omit unless the caller actually named one - never guess and never pass a stand-in word; if you don't know where it goes, ask.
+            recipient_name: Who it's for, when no room or suite is known (e.g. they haven't checked in yet). Omit if a room or suite was given.
+            delivery_instructions: Any delivery handling request, in the caller's words. Omit if none.
         """
-        deliver_to = _resolve_flower_destination(deliver_to_location, recipient_name)
+        room_id, recipient = _florist_destination(
+            ctx.userdata.db, room_or_suite, recipient_name
+        )
         try:
             code, a, total = await ctx.userdata.db.order_flowers(
                 arrangement_id=arrangement,
                 guest_name=guest_name,
                 guest_phone=guest_phone,
-                deliver_to=deliver_to,
                 on_date=on_date,
                 card_message=card_message,
+                room_id=room_id,
+                recipient_name=recipient,
+                delivery_instructions=(delivery_instructions or "").strip(),
             )
         except (NotFound, Unavailable) as e:
             raise ToolError(str(e)) from None
+        destination = speak_room(room_id) if room_id else recipient
         return (
-            f"{a.name} ordered for delivery to {deliver_to} on "
+            f"{a.name} ordered for delivery to {destination} on "
             f"{on_date.strftime('%A, %B %-d')}; reference {_speak_code(code)}; total "
             f"{speak_usd(total)} | confirm the arrangement, where it's going, the date, and the "
             "total to the caller - no further tool call is needed for this order."
+        )
+
+    @function_tool
+    async def amend_florist_order(
+        self,
+        ctx: RunContext[Userdata],
+        order_code: str,
+        delivery_instructions: str,
+    ) -> str:
+        """Add or update the delivery instructions on an existing florist order - THIS is how a note gets to the florist ("deliver as early as possible", "leave with the front desk"). Use it when a delivery request comes up after the order was placed. Never record a followup for florist delivery notes; this call is the record.
+
+        Args:
+            order_code: The order's reference code (FLR-...).
+            delivery_instructions: The full delivery note for the florist, in the caller's words.
+        """
+        try:
+            await ctx.userdata.db.amend_florist_order(
+                code=order_code, delivery_instructions=delivery_instructions
+            )
+        except NotFound as e:
+            raise ToolError(str(e)) from None
+        return (
+            f'noted on order {_speak_code(order_code)}: "{delivery_instructions}" | read the '
+            "note back to the caller - it goes to the florist with the order; no further tool "
+            "call is needed."
         )
 
     @function_tool
