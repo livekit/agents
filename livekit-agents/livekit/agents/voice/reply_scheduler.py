@@ -108,9 +108,19 @@ class _ReplyScheduler:
 
     async def insert_only(self, *, session: AgentSession, items: list[ChatItem]) -> bool:
         """Insert items into the target Agent context and session history without
-        buffering them for a scheduled reply — silent, context-only insertion."""
+        buffering them for a scheduled reply — silent, context-only insertion.
+
+        A handoff can occur while ``update_chat_ctx()`` is awaited; since silent
+        items are never buffered, no later delivery pass would copy them over, so
+        retarget here until the current Agent is stable."""
         async with self._lock:
-            return await self._insert_items_locked(session, items) is not None
+            target = await self._insert_items_locked(session, items)
+            if target is None:
+                return False
+            entry = _PendingReply(
+                items=list(items), item_ids=[], source="silent_insert", target=target
+            )
+            return await self._retarget_until_stable(session, [entry], target) is not None
 
     async def _insert_items_locked(
         self, session: AgentSession, items: list[ChatItem]

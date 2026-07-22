@@ -1417,3 +1417,41 @@ def test_session_background_state_conflict_fails_during_construction() -> None:
 
     with pytest.raises(ValueError, match=rf"{_BACKGROUND_STATE_TOOL_NAME} is reserved"):
         AgentSession(vad=None, tools=[conflicting_state], background=[worker])
+
+
+@pytest.mark.asyncio
+async def test_silent_send_retargets_when_handoff_races_insert() -> None:
+    @background(name="worker", description="Handles work.")
+    async def worker(ctx: BackgroundContext) -> None:
+        del ctx
+
+    session = _make_session()
+    agent_a = session.current_agent
+    agent_b = MagicMock()
+    agent_b.chat_ctx = ChatContext.empty()
+
+    async def update_b(chat_ctx: ChatContext) -> None:
+        agent_b.chat_ctx = chat_ctx
+
+    agent_b.update_chat_ctx = AsyncMock(side_effect=update_b)
+
+    async def update_a(chat_ctx: ChatContext) -> None:
+        agent_a.chat_ctx = chat_ctx
+        session.current_agent = agent_b  # handoff during the awaited insert
+
+    agent_a.update_chat_ctx = AsyncMock(side_effect=update_a)
+
+    manager = _BackgroundRuntimeManager([worker], session=session)
+    runtime = manager._runtimes["worker"]
+
+    await runtime.context.send("edited src/app.py", silent=True)
+
+    # the silent note followed the handoff onto the now-current agent
+    [item_b] = agent_b.chat_ctx.items
+    assert "edited src/app.py" in item_b.text_content
+    [item_a] = agent_a.chat_ctx.items
+    assert item_a.id == item_b.id
+    session.history.insert.assert_called_once()
+    assert runtime._reply_scheduler.reply_task is None
+    session.generate_reply.assert_not_called()
+    await manager.aclose()
