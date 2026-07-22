@@ -18,6 +18,7 @@ import asyncio
 import base64
 import os
 from dataclasses import dataclass, replace
+from typing import Any, cast
 
 from livekit.agents import (
     APIConnectionError,
@@ -40,7 +41,8 @@ from speechify.client import AsyncSpeechify
 from speechify.core.api_error import ApiError
 from speechify.types.get_voice import GetVoice
 
-from .models import TTSModels
+from .log import logger
+from .models import Gender, TTSModels, VoiceType
 
 DEFAULT_VOICE_ID = "dominic_32"
 DEFAULT_MODEL: TTSModels = "simba-3.2"
@@ -59,6 +61,31 @@ class _TTSOptions:
     text_normalization: NotGivenOr[bool]
 
 
+@dataclass
+class Voice:
+    id: str
+    type: VoiceType
+    display_name: str
+    gender: Gender
+    avatar_image: str | None
+    models: list[TTSModels]
+    locale: str
+
+
+def _voice_from_sdk(v: GetVoice) -> Voice:
+    # The SDK exposes "notSpecified"; the plugin's Gender literal is "neutral".
+    gender = "neutral" if v.gender == "notSpecified" else v.gender
+    return Voice(
+        id=v.id,
+        type=cast(VoiceType, v.type),
+        display_name=v.display_name,
+        gender=cast(Gender, gender),
+        avatar_image=v.avatar_image,
+        models=[cast(TTSModels, m.name) for m in v.models],
+        locale=v.locale,
+    )
+
+
 class TTS(tts.TTS):
     def __init__(
         self,
@@ -68,10 +95,11 @@ class TTS(tts.TTS):
         language: NotGivenOr[str] = NOT_GIVEN,
         loudness_normalization: NotGivenOr[bool] = NOT_GIVEN,
         text_normalization: NotGivenOr[bool] = NOT_GIVEN,
-        token: NotGivenOr[str] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         client: AsyncSpeechify | None = None,
+        **kwargs: Any,
     ) -> None:
         """Create a new instance of Speechify TTS.
 
@@ -93,12 +121,14 @@ class TTS(tts.TTS):
                 level. Increases latency slightly when enabled.
             text_normalization: Expand numbers, dates, etc. into words before
                 synthesis. Increases latency slightly when enabled.
-            token: Speechify API key. Falls back to the ``SPEECHIFY_API_KEY``
+            api_key: Speechify API key. Falls back to the ``SPEECHIFY_API_KEY``
                 environment variable.
             base_url: Override the Speechify API base URL.
             tokenizer: Sentence tokenizer used to chunk input in ``stream()``.
             client: A preconfigured ``AsyncSpeechify`` client. When provided,
-                ``token`` and ``base_url`` are ignored.
+                ``api_key`` and ``base_url`` are ignored.
+            **kwargs: Catches deprecated parameters. A warning is logged for
+                any recognised deprecated name.
         """
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True, aligned_transcript=True),
@@ -109,14 +139,14 @@ class TTS(tts.TTS):
         if client is not None:
             self._client = client
         else:
-            resolved_token = token if is_given(token) else os.environ.get("SPEECHIFY_API_KEY")
-            if not resolved_token:
+            resolved_key = api_key if is_given(api_key) else os.environ.get("SPEECHIFY_API_KEY")
+            if not resolved_key:
                 raise ValueError(
-                    "Speechify API key is required, either as the token argument "
+                    "Speechify API key is required, either as the api_key argument "
                     "or via the SPEECHIFY_API_KEY environment variable"
                 )
             self._client = AsyncSpeechify(
-                token=resolved_token,
+                token=resolved_key,
                 base_url=base_url if is_given(base_url) else None,
             )
 
@@ -129,6 +159,8 @@ class TTS(tts.TTS):
             text_normalization=text_normalization,
         )
 
+        _check_deprecated_args(kwargs)
+
     @property
     def model(self) -> str:
         return self._opts.model if is_given(self._opts.model) else "unknown"
@@ -137,10 +169,10 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Speechify"
 
-    async def list_voices(self) -> list[GetVoice]:
+    async def list_voices(self) -> list[Voice]:
         """List the voices available for the configured Speechify account."""
-        voices: list[GetVoice] = await self._client.voices.list()
-        return voices
+        sdk_voices: list[GetVoice] = await self._client.voices.list()
+        return [_voice_from_sdk(v) for v in sdk_voices]
 
     def update_options(
         self,
@@ -235,6 +267,18 @@ def _raise_from(e: Exception) -> None:
     if isinstance(e, ConnectionError):
         raise APIConnectionError() from e
     raise e
+
+
+def _check_deprecated_args(kwargs: dict[str, Any]) -> None:
+    """Warn about kwargs from earlier plugin versions that no longer apply."""
+    removed = {
+        "encoding": "output is fixed to 24 kHz PCM",
+        "http_session": "the official Speechify SDK owns the HTTP client",
+        "follow_redirects": "the official Speechify SDK handles redirects",
+    }
+    for name, reason in removed.items():
+        if name in kwargs:
+            logger.warning(f"`{name}` is deprecated and no longer used ({reason})")
 
 
 class ChunkedStream(tts.ChunkedStream):

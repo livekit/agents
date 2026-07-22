@@ -21,5 +21,13 @@ TTSModels = Literal[
     "simba-3.2",
 ]
 
+# Deprecated: output is fixed to 24 kHz PCM; kept for import compatibility.
+TTSEncoding = Literal[
+    "mp3_24000",
+    "wav_48000",
+    "ogg_24000",
+    "aac_24000",
+]
+
 VoiceType = Literal["shared", "personal"]
 Gender = Literal["male", "female", "neutral"]

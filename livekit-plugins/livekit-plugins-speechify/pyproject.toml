@@ -9,7 +9,7 @@ description = "Agent Framework plugin for voice synthesis with Speechify's API."
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10.0"
-authors = [{ name = "Speechify", email = "hello@speechify.ai" }]
+authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
 keywords = ["webrtc", "realtime", "audio", "video", "livekit", "speechify", "tts"]
 classifiers = [
     "Intended Audience :: Developers",
@@ -24,10 +24,9 @@ classifiers = [
 dependencies = ["livekit-agents[codecs]>=1.6.6", "speechify-api>=3.0.1"]
 
 [project.urls]
-Documentation = "https://docs.speechify.ai"
-Website = "https://speechify.ai"
-Repository = "https://github.com/Speechify-AI/livekit-plugin-python"
-Issues = "https://github.com/Speechify-AI/livekit-plugin-python/issues"
+Documentation = "https://docs.livekit.io"
+Website = "https://livekit.io/"
+Source = "https://github.com/livekit/agents"
 
 [tool.hatch.version]
 path = "livekit/plugins/speechify/version.py"
