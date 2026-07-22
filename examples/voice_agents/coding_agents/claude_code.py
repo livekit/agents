@@ -5,8 +5,9 @@ The harness separates what each side sees into explicit channels, so the
 voice LLM always has the right context at the right cost:
 
 1. SPEAK — Claude Code calls its ``send_to_user`` tool (an in-process MCP
-   tool). The message goes through ``ctx.send()`` and is voiced verbatim:
-   questions, decisions to confirm, and completion summaries.
+   tool). The message goes straight to ``session.say()`` and is voiced
+   verbatim — no LLM rephrasing in between: questions, decisions to
+   confirm, and completion summaries.
 2. CONTEXT-ONLY — Claude Code's plain narration text is inserted silently
    (``ctx.send(..., silent=True)``): the voice LLM can see the full working
    narrative without the user having to listen to it.
@@ -26,6 +27,7 @@ Run with: uv run examples/voice_agents/coding_agents/claude_code.py dev
 
 import asyncio
 import logging
+import time
 from collections import deque
 from pathlib import Path
 from typing import Any
@@ -57,7 +59,13 @@ logger = logging.getLogger("claude-code-agent")
 
 load_dotenv()
 
-REPO_ROOT = Path(__file__).parent
+# Claude Code drives the repository this example lives in
+REPO_ROOT = Path(__file__).parents[3]
+
+# messages arriving this soon after a turn starts are treated as part of the same
+# user utterance (voice LLMs often split one correction into several sends) and are
+# queued instead of interrupting the turn they just dispatched
+INTERRUPT_GRACE = 2.0
 
 CLAUDE_CODE_PROMPT = """You are pair-programming with a user who is on a live voice call.
 
@@ -87,10 +95,19 @@ async def claude_code(ctx: BackgroundContext) -> None:
 
     def report(**changes: Any) -> None:
         status.update(changes)
-        ctx.set_state({**status, "recent_activity": list(activity), "files_changed": files_changed})
+        ctx.set_state(
+            {
+                **status,
+                "recent_activity": list(activity),
+                # drop files that have since been deleted so state never reports
+                # a change that no longer exists on disk
+                "files_changed": [p for p in files_changed if Path(p).exists()],
+            }
+        )
 
-    # SPEAK channel: Claude Code pushes voice updates itself. Tool inputs are
-    # delivered verbatim — never summarized — so what it writes is what is said.
+    # SPEAK channel: Claude Code pushes voice updates itself. session.say() speaks
+    # the tool input verbatim over TTS — no LLM in between to paraphrase it —
+    # unlike ctx.send(), which schedules a generated (rephrased) reply.
     @tool(
         "send_to_user",
         "Speak a message aloud to the user on the voice call. Use this for questions "
@@ -99,8 +116,8 @@ async def claude_code(ctx: BackgroundContext) -> None:
         {"message": str},
     )
     async def send_to_user(args: dict[str, Any]) -> dict[str, Any]:
-        await ctx.send(str(args["message"]))
-        return {"content": [{"type": "text", "text": "Delivered to the user."}]}
+        ctx.session.say(str(args["message"]))
+        return {"content": [{"type": "text", "text": "Spoken to the user."}]}
 
     voice_server = create_sdk_mcp_server(name="voice", version="1.0.0", tools=[send_to_user])
 
@@ -114,14 +131,17 @@ async def claude_code(ctx: BackgroundContext) -> None:
 
     inbox: asyncio.Queue[str] = asyncio.Queue()
     working = False
+    turn_started = 0.0
 
     async with ClaudeSDKClient(options=options) as client:
 
         async def _read_inbox() -> None:
             async for message in ctx.message_stream():
-                if working:
-                    # INTERRUPT channel: the user spoke while Claude Code is
-                    # mid-turn — stop it; the message becomes the next turn.
+                # INTERRUPT channel: the user spoke while Claude Code is mid-turn —
+                # stop it; the message becomes the next turn. Guarded so a burst of
+                # split messages interrupts once: later pieces just queue behind the
+                # first instead of killing the correction turn they belong to.
+                if working and inbox.empty() and time.monotonic() - turn_started > INTERRUPT_GRACE:
                     try:
                         await client.interrupt()
                         report(status="interrupted, switching to the user's new instruction")
@@ -135,6 +155,7 @@ async def claude_code(ctx: BackgroundContext) -> None:
             while True:
                 message = await inbox.get()
                 working = True
+                turn_started = time.monotonic()
                 report(status="working", task=message[:150])
                 await client.query(message)
 
@@ -174,6 +195,9 @@ class CodingAssistant(Agent):
                 "You are a voice coding assistant fronting a Claude Code session running "
                 "in the background.\n"
                 "- Send the user's coding tasks to the claude_code background session.\n"
+                "- Sending a task only delivers it — it does NOT mean the work is done. After "
+                "dispatching, say you've passed it along and nothing more. Never claim a file "
+                "was created, changed, or deleted until Claude Code itself announces it.\n"
                 "- Claude Code speaks its own questions and completion summaries; relay its "
                 "updates naturally and forward the user's answers back to it immediately.\n"
                 "- Forward corrections or new directions right away — if Claude Code is "
