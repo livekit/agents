@@ -59,6 +59,7 @@ class STTOptions:
     mip_opt_out: bool = False
     tags: NotGivenOr[list[str]] = NOT_GIVEN
     language_hint: NotGivenOr[list[str]] = NOT_GIVEN
+    numerals: bool = False
 
 
 class STTv2(stt.STT):
@@ -77,6 +78,7 @@ class STTv2(stt.STT):
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = "wss://api.deepgram.com/v2/listen",
         mip_opt_out: bool = False,
+        numerals: bool = False,
         # deprecated
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
@@ -95,6 +97,8 @@ class STTv2(stt.STT):
             http_session: Optional aiohttp ClientSession to use for requests.
             base_url: The base URL for Deepgram API. Defaults to "https://api.deepgram.com/v1/listen".
             mip_opt_out: Whether to take part in the model improvement program
+            numerals: Whether to convert numbers from written format to numerical format. Supported by
+                both `flux-general-en` and `flux-general-multi`. Defaults to False.
 
         Raises:
             ValueError: If no API key is provided or found in environment variables.
@@ -147,6 +151,7 @@ class STTv2(stt.STT):
             mip_opt_out=mip_opt_out,
             tags=_validate_tags(tags) if is_given(tags) else [],
             language_hint=language_hint if is_given(language_hint) else [],
+            numerals=numerals,
             eager_eot_threshold=eager_eot_threshold,
             eot_threshold=eot_threshold,
             eot_timeout_ms=eot_timeout_ms,
@@ -212,6 +217,7 @@ class STTv2(stt.STT):
         mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
         language_hint: NotGivenOr[list[str]] = NOT_GIVEN,
+        numerals: NotGivenOr[bool] = NOT_GIVEN,
         endpoint_url: NotGivenOr[str] = NOT_GIVEN,
         # deprecated
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
@@ -256,6 +262,8 @@ class STTv2(stt.STT):
                     "`language_hint` is only supported by `flux-general-multi` and will be ignored for model '%s'",
                     self._opts.model,
                 )
+        if is_given(numerals):
+            self._opts.numerals = numerals
         if is_given(endpoint_url):
             self._opts.endpoint_url = endpoint_url
         if is_given(eager_eot_threshold):
@@ -272,6 +280,7 @@ class STTv2(stt.STT):
                 endpoint_url=endpoint_url,
                 tags=tags,
                 language_hint=language_hint,
+                numerals=numerals,
                 eager_eot_threshold=eager_eot_threshold,
             )
 
@@ -329,6 +338,7 @@ class SpeechStreamv2(stt.SpeechStream):
         mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
         language_hint: NotGivenOr[list[str]] = NOT_GIVEN,
+        numerals: NotGivenOr[bool] = NOT_GIVEN,
         endpoint_url: NotGivenOr[str] = NOT_GIVEN,
         eager_eot_threshold: NotGivenOr[float] = NOT_GIVEN,
         # deprecated
@@ -355,6 +365,8 @@ class SpeechStreamv2(stt.SpeechStream):
             self._opts.tags = _validate_tags(tags)
         if is_given(language_hint):
             self._opts.language_hint = language_hint
+        if is_given(numerals):
+            self._opts.numerals = numerals
         if is_given(endpoint_url):
             self._opts.endpoint_url = endpoint_url
         if is_given(eager_eot_threshold):
@@ -563,6 +575,9 @@ class SpeechStreamv2(stt.SpeechStream):
 
         if self._opts.language_hint:
             live_config["language_hint"] = self._opts.language_hint
+
+        if self._opts.numerals:
+            live_config["numerals"] = self._opts.numerals
 
         try:
             ws = await asyncio.wait_for(
