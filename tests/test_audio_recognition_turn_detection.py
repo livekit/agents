@@ -540,10 +540,14 @@ class TestPredictionFutureLifecycle:
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         """A late stt final after the turn was flushed must not start an
-        inference request; it warns once, then logs at debug level."""
+        inference request and must not commit a second turn (issue #6504):
+        committing here would ship a turn with a null ``end_of_turn_probability``
+        and split one utterance into two. It warns once, then logs at debug level,
+        and leaves the transcript untouched so it folds into the next turn."""
         caplog.set_level(logging.WARNING, logger="livekit.agents")
         ar = _make_full_recognition_for_eou()
         ar._turn_detector_flushed = True
+        ar._audio_transcript = "date needed now"
         chat_ctx = _make_chat_ctx_stub()
 
         for _ in range(2):
@@ -553,7 +557,13 @@ class TestPredictionFutureLifecycle:
 
         assert ar._turn_detector_stream.predict.call_count == 0
         ar._hooks.on_eot_prediction.assert_not_called()
-        flush_warnings = [r for r in caplog.records if "already flushed" in r.getMessage()]
+        # the late transcript is genuinely skipped, never committed with a null prediction
+        ar._hooks.on_end_of_turn.assert_not_called()
+        # transcript is preserved so it merges into the next turn instead of being lost
+        assert ar._audio_transcript == "date needed now"
+        flush_warnings = [
+            r for r in caplog.records if "after turn has been committed" in r.getMessage()
+        ]
         assert len(flush_warnings) == 1
 
     async def test_predict_timeout_signals_fallback_and_drops_future(self) -> None:
