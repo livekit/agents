@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+from typing import Any
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -87,14 +88,14 @@ def test_no_destination_is_unavailable(db: HotelDB) -> None:
 
 
 def test_instructions_stored_with_order(db: HotelDB) -> None:
-    code, _, _ = _order(db, room_id="RM_304", delivery_instructions="as early as possible")
-    assert _row(db, code) == ("RM_304", None, "as early as possible")
+    code, _, _ = _order(db, room_id="RM_304", delivery_instructions="as_early_as_possible")
+    assert _row(db, code) == ("RM_304", None, "as_early_as_possible")
 
 
 def test_amend_sets_instructions(db: HotelDB) -> None:
     code, _, _ = _order(db, room_id="RM_304")
-    asyncio.run(db.amend_florist_order(code=code, delivery_instructions="before noon"))
-    assert _row(db, code) == ("RM_304", None, "before noon")
+    asyncio.run(db.amend_florist_order(code=code, delivery_instructions="before_noon_if_possible"))
+    assert _row(db, code) == ("RM_304", None, "before_noon_if_possible")
 
 
 def test_amend_unknown_code_is_not_found(db: HotelDB) -> None:
@@ -114,3 +115,26 @@ def test_destination_neither_raises(db: HotelDB) -> None:
         _florist_destination(None, None)
     with pytest.raises(ToolError):
         _florist_destination(None, "  ")
+
+
+from benchmark import diff_databases  # noqa: E402
+
+
+def _db_with_order(**overrides: Any) -> HotelDB:
+    fresh = HotelDB.from_bytes(build_seed_bytes(TODAY))
+    _order(fresh, **overrides)
+    return fresh
+
+
+def test_diff_catches_delivery_instruction_divergence() -> None:
+    a = _db_with_order(room_id="RM_304", delivery_instructions="as_early_as_possible")
+    b = _db_with_order(room_id="RM_304", delivery_instructions="")
+    diffs = diff_databases(a.connection, b.connection)
+    assert any("delivery_instructions" in d for d in diffs)
+
+
+def test_diff_catches_destination_divergence() -> None:
+    a = _db_with_order(room_id="RM_PH")
+    b = _db_with_order(recipient_name="Diane Okafor")
+    diffs = diff_databases(a.connection, b.connection)
+    assert any("florist_orders" in d for d in diffs)

@@ -1229,8 +1229,7 @@ scenarios:
     - the gift-card message: "Happy ten years, my love. Yours always, Marcus."
     DO, IN ORDER:
     1. Ask what flower options they have and let them walk you through it; then pick the roses.
-    2. Curveball: ask "can you guarantee it's there before noon, while she's still in the room?"
-       - you want a real answer about the delivery window, not a vague "sure".
+    2. Ask for delivery before noon while she's still in the room.
     3. Give the room, the day, and the card message as the agent asks; let them read the message back.
     4. Don't hang up until the agent confirms the order is placed and gives you a reference number.
     GROUND TRUTH (never spoken): this Friday is 2026-06-12.
@@ -1240,7 +1239,8 @@ scenarios:
     it's exactly right, and confirms the caller's name and the destination. Answers the
     delivery-window question with the real policy (the florist delivers between 10 AM and 6
     PM, and same-day delivery needs the order placed before the 2 PM cutoff) rather than
-    promising a guaranteed before-noon slot it can't commit to. Actually places the order
+    promising a guaranteed before-noon slot it can't commit to. Records the non-guaranteed
+    before-noon preference on the florist order. Actually places the order
     (not a vague "I'll get that arranged") and confirms it with a reference number, reading
     back the arrangement, where it's going, the date, and the total.
   tags:
@@ -1251,9 +1251,10 @@ scenarios:
     expected_state:
     - |
       INSERT INTO florist_orders
-        (code, arrangement_id, guest_name, guest_phone, room_id, date, message, total, status)
+        (code, arrangement_id, guest_name, guest_phone, room_id, date, message,
+         delivery_instructions, total, status)
       VALUES ('IGNORED', 'roses', 'Marcus Webb', '4155550182', 'RM_304', '2026-06-12',
-              'IGNORED', 'IGNORED', 'confirmed')
+              'IGNORED', 'before_noon_if_possible', 'IGNORED', 'confirmed')
 
   # --- 35: Re-send an itemized folio to the address on file (deterministic: emails_sent row)
 - label: Email me an itemized folio (departed guest)
@@ -1412,8 +1413,9 @@ scenarios:
     DO, IN ORDER:
     1. Ask what arrangements are available and their prices; let the agent walk you
        through them, then choose the centerpiece.
-    2. Curveball: "She arrives around noon - can you guarantee it's in the suite before
-       she gets there?" You want a real answer about the delivery window, not a vague yes.
+    2. Ask: "She arrives around noon - please have it in the suite before she gets there."
+       You want the preference recorded, along with an honest answer about the delivery
+       window rather than a guaranteed time the florist cannot promise.
     3. Give the suite, the day, and the card message as the agent asks; let them read
        the card message back to you.
     4. Don't hang up until the agent confirms the order is actually placed and gives you
@@ -1426,7 +1428,8 @@ scenarios:
     caller's name and the destination suite. Answers the timing question with the real
     policy (the florist delivers between 10 AM and 6 PM, same-day delivery needs the order
     placed before the 2 PM cutoff) rather than promising a guaranteed before-noon slot it
-    cannot commit to. Actually places the order with the florist tool (not a vague "I'll get
+    cannot commit to. Records the non-guaranteed before-noon preference on the florist
+    order. Actually places the order with the florist tool (not a vague "I'll get
     that arranged") and confirms it back with a reference number, the arrangement, where it
     is going, and the date.
   tags:
@@ -1437,9 +1440,10 @@ scenarios:
     expected_state:
     - |
       INSERT INTO florist_orders
-        (code, arrangement_id, guest_name, guest_phone, room_id, date, message, total, status)
+        (code, arrangement_id, guest_name, guest_phone, room_id, date, message,
+         delivery_instructions, total, status)
       VALUES ('IGNORED', 'centerpiece', 'Renata Cole', '4155550193', 'RM_PH',
-              '2026-06-10', 'IGNORED', 'IGNORED', 'confirmed')
+              '2026-06-10', 'IGNORED', 'before_noon_if_possible', 'IGNORED', 'confirmed')
 
   # --- 40: VIP pre-arrival -> noted preference via record_followup (NL-only; kind non-deterministic)
 - label: VIP arrival with a noted champagne-on-ice preference
