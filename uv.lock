@@ -117,6 +117,7 @@ typing = [
     { name = "types-grpcio", specifier = ">=1.0.0.20260607" },
     { name = "types-grpcio-status", specifier = ">=1.0.0.20260408" },
     { name = "types-gunicorn", specifier = ">=26.0.0.20260518" },
+    { name = "types-nanoid", specifier = ">=2.0.0.20260508" },
     { name = "types-openpyxl", specifier = ">=3.1.5.20260518" },
     { name = "types-pexpect", specifier = ">=4.9.0.20260518" },
     { name = "types-psutil", specifier = ">=7.2.2.20260518" },
@@ -2428,7 +2429,7 @@ requires-dist = [
     { name = "livekit-plugins-ultravox", marker = "extra == 'ultravox'", editable = "livekit-plugins/livekit-plugins-ultravox" },
     { name = "livekit-plugins-upliftai", marker = "extra == 'upliftai'", editable = "livekit-plugins/livekit-plugins-upliftai" },
     { name = "livekit-plugins-xai", marker = "extra == 'xai'", editable = "livekit-plugins/livekit-plugins-xai" },
-    { name = "livekit-protocol", specifier = ">=1.1.19,<2" },
+    { name = "livekit-protocol", specifier = ">=1.1.21,<2" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.24.0,<2" },
     { name = "nest-asyncio", specifier = ">=1.6.0" },
     { name = "numpy", specifier = ">=1.26.0" },
@@ -3522,15 +3523,15 @@ requires-dist = [{ name = "livekit-agents", extras = ["openai"], editable = "liv
 
 [[package]]
 name = "livekit-protocol"
-version = "1.1.19"
+version = "1.1.21"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "protobuf" },
     { name = "types-protobuf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/84/85/10aee7d87cf716ab06075836590616cb91d453251dac683cae73fe4b7122/livekit_protocol-1.1.19.tar.gz", hash = "sha256:81709e8bc47cdaf0cc5ba937bd9ec24a095e4978c58fb3d5e69b9888b9930be4", size = 118325, upload-time = "2026-07-08T17:21:10.707Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7f/ae/9d60fe37d85623e68a2e36ae31d18c671949db67d2a13a6438410d930466/livekit_protocol-1.1.21.tar.gz", hash = "sha256:8bb1ac1aba5d37d0af43e9d56d129a5d16295cbd91518b00fd157e258f20a6ef", size = 122363, upload-time = "2026-07-21T18:28:26.372Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/44/20/98150dc45b9e92ab81a8eba74cdf544015b9291c4281252e2e76a7338462/livekit_protocol-1.1.19-py3-none-any.whl", hash = "sha256:fe5a8411c6cb886e55b2564d729f275af5d77ec191dd2ca95ffac3db16979a8a", size = 145513, upload-time = "2026-07-08T17:21:09.303Z" },
+    { url = "https://files.pythonhosted.org/packages/2e/d2/ec10b1cdf912235c2b07898be6ba2535e50f23e8980bb719f29decbd8034/livekit_protocol-1.1.21-py3-none-any.whl", hash = "sha256:ce0bb763327c91349ee8831843c4f8bd72132c4d06ac572171f2ae5c0217211d", size = 149245, upload-time = "2026-07-21T18:28:24.985Z" },
 ]
 
 [[package]]
@@ -6486,6 +6487,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/74/1c/a01ec531454c9b1904ac5164bc6fd1c5dfebe97b7976c8cb2135b90625ec/types_gunicorn-26.0.0.20260518.tar.gz", hash = "sha256:40d40019cd1798924f19c62b5fe96bc5a63a2051278706d788c39805fabdb306", size = 34157, upload-time = "2026-05-18T06:07:57.858Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8b/1a/07fa198168b4023286692d3df4db3232eb94c6815b516e5c5488abd15f71/types_gunicorn-26.0.0.20260518-py3-none-any.whl", hash = "sha256:5b5e1d9d43a1c56e90a380694106a9eba295d4d99e64abbdcbedee44c2c6dc50", size = 52182, upload-time = "2026-05-18T06:07:57.022Z" },
+]
+
+[[package]]
+name = "types-nanoid"
+version = "2.0.0.20260508"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/6b/9a/a9719ba0866c76c378d9ced7c59f76d98da987e8c971f2102aefbefd694b/types_nanoid-2.0.0.20260508.tar.gz", hash = "sha256:4ab493a2bc6dea7aa3c9671e2cb32ed0ed8f6419250a98ec533d49bc619302d7", size = 7351, upload-time = "2026-05-08T04:48:54.25Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9d/18/5a305d16ca4d43ce04c63a2c89b2da14de3b555f546d7f31b167a7f2ed55/types_nanoid-2.0.0.20260508-py3-none-any.whl", hash = "sha256:d6d3098c075ac1ba8e9e010e20605ffadf7a3870022eb19517868dc7566579c9", size = 8604, upload-time = "2026-05-08T04:48:53.257Z" },
 ]
 
 [[package]]

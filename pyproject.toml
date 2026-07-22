@@ -110,6 +110,7 @@ typing = [
     "types-grpcio>=1.0.0.20260607",
     "types-grpcio-status>=1.0.0.20260408",
     "types-gunicorn>=26.0.0.20260518",
+    "types-nanoid>=2.0.0.20260508",
     "types-openpyxl>=3.1.5.20260518",
     "types-pexpect>=4.9.0.20260518",
     "types-psutil>=7.2.2.20260518",
