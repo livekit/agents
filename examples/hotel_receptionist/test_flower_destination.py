@@ -3,15 +3,11 @@ from __future__ import annotations
 import os
 import sys
 
-import pytest
-
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+import pytest
 from fake_data.seed import build_seed_bytes
-from hotel_db import TODAY, HotelDB
-from tools_services import _resolve_flower_destination
-
-from livekit.agents import ToolError
+from hotel_db import TODAY, HotelDB, speak_room
 
 
 @pytest.fixture
@@ -19,33 +15,16 @@ def db() -> HotelDB:
     return HotelDB.from_bytes(build_seed_bytes(TODAY))
 
 
-def test_location_only() -> None:
-    assert _resolve_flower_destination("Penthouse Suite", None) == "Penthouse Suite"
+def test_speak_room() -> None:
+    assert speak_room("RM_304") == "room 304"
+    assert speak_room("RM_PH") == "the penthouse suite"
 
 
-def test_recipient_only() -> None:
-    assert _resolve_flower_destination(None, "Diane Okafor") == "Diane Okafor"
-
-
-def test_location_wins_when_both_are_given() -> None:
-    # the observed failure: "Penthouse Suite, Diane Okafor" jammed into one field.
-    # with both known, the stored destination is the location alone.
-    assert _resolve_flower_destination("Penthouse Suite", "Diane Okafor") == "Penthouse Suite"
-
-
-def test_values_are_trimmed() -> None:
-    assert _resolve_flower_destination("  412 ", None) == "412"
-
-
-def test_blank_location_falls_back_to_recipient() -> None:
-    assert _resolve_flower_destination("   ", "Diane Okafor") == "Diane Okafor"
-
-
-def test_neither_raises_tool_error() -> None:
-    with pytest.raises(ToolError):
-        _resolve_flower_destination(None, None)
-    with pytest.raises(ToolError):
-        _resolve_flower_destination("  ", "")
+def test_seed_has_exactly_one_penthouse(db: HotelDB) -> None:
+    # PenthouseSuite carries no id because RM_PH is the only penthouse; this
+    # guards the assumption against future seed edits.
+    rows = list(db.connection.execute("SELECT id FROM hotel_rooms WHERE type = 'penthouse'"))
+    assert rows == [("RM_PH",)]
 
 
 # --- DB layer: order_flowers destination rules + amend_florist_order ---
@@ -130,30 +109,8 @@ from tools_services import _florist_destination  # noqa: E402
 from livekit.agents import ToolError  # noqa: E402
 
 
-def test_destination_room_phrase_resolves(db: HotelDB) -> None:
-    assert _florist_destination(db, "room 304", None) == ("RM_304", None)
-    assert _florist_destination(db, "the penthouse suite", "Diane Okafor") == ("RM_PH", None)
-
-
-def test_destination_recipient_only(db: HotelDB) -> None:
-    assert _florist_destination(db, None, "Theodore Lansing") == (None, "Theodore Lansing")
-    assert _florist_destination(db, "  ", " Theodore Lansing ") == (None, "Theodore Lansing")
-
-
-def test_destination_placeholder_raises(db: HotelDB) -> None:
-    # a bare stand-in word must bounce even when a recipient is also present -
-    # the agent said "room" without the caller naming one.
-    with pytest.raises(ToolError):
-        _florist_destination(db, "room", "Diane Okafor")
-
-
-def test_destination_unknown_room_raises(db: HotelDB) -> None:
-    with pytest.raises(ToolError, match="doesn't match"):
-        _florist_destination(db, "412", None)
-
-
 def test_destination_neither_raises(db: HotelDB) -> None:
     with pytest.raises(ToolError, match="ask the caller"):
-        _florist_destination(db, None, None)
+        _florist_destination(None, None)
     with pytest.raises(ToolError):
-        _florist_destination(db, "", "  ")
+        _florist_destination(None, "  ")
