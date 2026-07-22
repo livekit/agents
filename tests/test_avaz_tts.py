@@ -331,6 +331,64 @@ async def test_stream_run_turn_avoids_fixed_pre_flush_sleeps(
 
 
 @pytest.mark.asyncio
+async def test_stream_clean_ws_close_after_audio_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Normal end-of-turn ConnectionClosedOK must not fail a turn that already got audio."""
+    import websockets.exceptions
+
+    from livekit.plugins.avaz import TTS
+
+    engine = TTS(
+        ws_url=_TEST_WS,
+        api_key="test-api-key",
+        post_text_drain_s=0.01,
+        recv_idle_timeout_s=0.05,
+        flush_recv_timeout_s=0.05,
+        turn_timeout_s=5.0,
+    )
+    stream = engine.stream()
+    stream.push_text("Merhaba.")
+    stream.end_input()
+
+    audio_b64 = _minimal_wav_b64()
+    recv_queue: list[object] = [
+        '{"status":"initialized"}',
+        json.dumps({"audio": audio_b64}),
+        '{"status":"closed","chunks_generated":1}',
+        websockets.exceptions.ConnectionClosedOK(None, None),
+    ]
+
+    mock_ws = AsyncMock()
+    mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
+    mock_ws.__aexit__ = AsyncMock(return_value=None)
+
+    async def recv_side_effect() -> str:
+        if not recv_queue:
+            raise asyncio.TimeoutError
+        item = recv_queue.pop(0)
+        if isinstance(item, BaseException):
+            raise item
+        return item  # type: ignore[return-value]
+
+    mock_ws.recv = AsyncMock(side_effect=recv_side_effect)
+    mock_ws.send = AsyncMock()
+
+    async def fake_warmup(timeout_s: float = 10.0) -> bool:
+        engine._warmed = True
+        return True
+
+    monkeypatch.setattr(engine, "warmup", fake_warmup)
+
+    with patch("livekit.plugins.avaz.tts.websockets.connect", return_value=mock_ws):
+        frames = 0
+        async for _ev in stream:
+            frames += 1
+
+    assert frames >= 1
+
+
+@pytest.mark.asyncio
 async def test_stream_connect_errors_raise_api_connection_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

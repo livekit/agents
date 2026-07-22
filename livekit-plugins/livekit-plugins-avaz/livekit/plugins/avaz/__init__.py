@@ -14,7 +14,7 @@
 
 """Avaz TTS plugin for LiveKit Agents."""
 
-from .tts import SynthesizeStream, TTS, build_auth_headers
+from .tts import TTS, SynthesizeStream, build_auth_headers
 from .version import __version__
 
 __all__ = ["TTS", "SynthesizeStream", "build_auth_headers", "__version__"]

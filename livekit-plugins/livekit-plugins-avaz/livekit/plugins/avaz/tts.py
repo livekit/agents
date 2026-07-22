@@ -65,6 +65,7 @@ def build_auth_headers(api_key: str) -> dict[str, str]:
         "X-API-Key": api_key,
     }
 
+
 # websockets default max_size is 1 MiB; long utterances return base64 WAV frames above that.
 _WS_MAX_SIZE = 16 * 1024 * 1024
 _UUID_RE = re.compile(
@@ -113,8 +114,7 @@ def _resolve_ws_url(
     if env:
         return env.rstrip("/")
     raise ValueError(
-        "Avaz TTS WebSocket URL is required. Pass ws_url=..., base_url=..., "
-        "or set AVAZ_BASE_URL."
+        "Avaz TTS WebSocket URL is required. Pass ws_url=..., base_url=..., or set AVAZ_BASE_URL."
     )
 
 
@@ -297,7 +297,9 @@ async def _warmup_turn(opts: _TTSOptions, *, timeout_s: float = 15.0) -> bool:
                     break
                 continue
             except websockets.exceptions.ConnectionClosed as exc:
-                raise APIConnectionError(f"Avaz TTS WebSocket closed during warm-up: {exc}") from exc
+                raise APIConnectionError(
+                    f"Avaz TTS WebSocket closed during warm-up: {exc}"
+                ) from exc
             try:
                 payload = json.loads(raw)
             except (TypeError, json.JSONDecodeError):
@@ -413,7 +415,6 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "avaz"
-
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -667,6 +668,15 @@ class SynthesizeStream(tts.SynthesizeStream):
                 except asyncio.TimeoutError:
                     break
                 except websockets.exceptions.ConnectionClosed as exc:
+                    # Server often closes cleanly after flush/status=closed; treat that as
+                    # end-of-stream (matches warm-up). Only fail if we never got audio.
+                    if (
+                        isinstance(exc, websockets.exceptions.ConnectionClosedOK)
+                        or got_audio
+                        or emitter_ready
+                    ):
+                        logger.debug("[Avaz TTS] WebSocket closed during drain: %s", exc)
+                        break
                     raise APIConnectionError(f"Avaz TTS WebSocket closed: {exc}") from exc
                 try:
                     payload = json.loads(raw)
@@ -686,9 +696,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def _run_turn(ws: Any) -> None:
             await ws.send(json.dumps(init_msg))
-            init_resp = await asyncio.wait_for(
-                ws.recv(), timeout=self._opts.connect_timeout_s
-            )
+            init_resp = await asyncio.wait_for(ws.recv(), timeout=self._opts.connect_timeout_s)
             _parse_init_response(init_resp)
 
             # Send full utterance in one frame (integration tests / greeting path).
@@ -703,9 +711,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             await ws.send(json.dumps({"flush": True}))
             flush_status: dict[str, Any] | None = None
             try:
-                raw = await asyncio.wait_for(
-                    ws.recv(), timeout=self._opts.flush_recv_timeout_s
-                )
+                raw = await asyncio.wait_for(ws.recv(), timeout=self._opts.flush_recv_timeout_s)
                 flush_text = raw.decode() if isinstance(raw, bytes) else raw
                 payload = json.loads(flush_text)
                 if isinstance(payload, dict):
@@ -720,6 +726,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                     logger.debug("[Avaz TTS] non-dict flush response ignored: %r", payload)
             except asyncio.TimeoutError:
                 pass
+            except websockets.exceptions.ConnectionClosed as exc:
+                if isinstance(exc, websockets.exceptions.ConnectionClosedOK) or emitter_ready:
+                    logger.debug("[Avaz TTS] WebSocket closed during flush recv: %s", exc)
+                else:
+                    raise APIConnectionError(f"Avaz TTS WebSocket closed: {exc}") from exc
             except json.JSONDecodeError as exc:
                 raise APIConnectionError(
                     f"Avaz TTS invalid flush response: {flush_text[:500]!r}"
@@ -739,9 +750,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         len(sent_text),
                         sent_text[:200],
                     )
-                    raise APIConnectionError(
-                        f"Avaz TTS produced no audio: {flush_status}"
-                    )
+                    raise APIConnectionError(f"Avaz TTS produced no audio: {flush_status}")
 
         async def _connect_and_run_turn() -> None:
             async with websockets.connect(
