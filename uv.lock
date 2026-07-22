@@ -2291,7 +2291,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "livekit-agents", editable = "livekit-agents" },
-    { name = "websockets", specifier = ">=13.0" },
+    { name = "websockets", specifier = ">=14.0,<16.0" },
 ]
 
 [[package]]
