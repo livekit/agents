@@ -83,6 +83,7 @@ def _make_mock_session() -> MagicMock:
     options.interruption = MagicMock(__iter__=lambda s: iter([]))
     options.max_tool_steps = 5
     options.user_away_timeout = 30
+    options.user_away_on = "presence"
     options.preemptive_generation = MagicMock(__iter__=lambda s: iter([]))
     options.min_consecutive_speech_delay = 0.5
     options.use_tts_aligned_transcript = True

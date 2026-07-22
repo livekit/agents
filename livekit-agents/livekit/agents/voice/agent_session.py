@@ -183,6 +183,13 @@ DEFAULT_EXPRESSIVE_OPTIONS: ExpressiveOptions = ExpressiveOptions(
     ),
 )
 
+# Activity signal for pausing/refreshing ``user_away_timeout``:
+# - presence: cancel while user or agent is speaking (VAD/STT speech-started);
+#   transcript-less flips keep the existing deadline (#6030).
+# - conversation: cancel only while the agent is active; ignore user VAD speaking
+#   (preferred for noisy telephony / turn_detection="stt").
+UserAwayOn = Literal["presence", "conversation"]
+
 
 @dataclass
 class AgentSessionOptions:
@@ -192,6 +199,8 @@ class AgentSessionOptions:
     """sparse endpointing keys the user provided explicitly"""
     max_tool_steps: int
     user_away_timeout: float | None
+    user_away_on: UserAwayOn
+    """See ``UserAwayOn`` — ``"presence"`` (default) or ``"conversation"``."""
     min_consecutive_speech_delay: float
     use_tts_aligned_transcript: bool | None
     tts_text_transforms: Sequence[TextTransforms] | None
@@ -293,6 +302,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         aec_warmup_duration: float | None = 3.0,
         ivr_detection: bool = False,
         user_away_timeout: float | None = 15.0,
+        user_away_on: UserAwayOn = "presence",
         session_close_transcript_timeout: float = 2.0,
         # Runtime settings
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
@@ -373,8 +383,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             user_away_timeout (float, optional): If set, set the user state as
                 "away" after this amount of mutual silence. The deadline is
                 refreshed by meaningful activity (agent leaving idle, or a final
-                user transcript) — raw VAD/STT speech flips without a transcript
-                do not defer it. Defaults to ``15.0`` s, set to ``None`` to disable.
+                user transcript). Defaults to ``15.0`` s, set to ``None`` to disable.
+            user_away_on (Literal["presence", "conversation"], optional): Which
+                activity cancels/refreshes the away countdown. ``"presence"``
+                (default) pauses while the user or agent is speaking; transcript-less
+                user speaking↔listening flips keep the existing deadline so noise
+                cannot defer "away". ``"conversation"`` ignores user VAD speaking and
+                only pauses while the agent is active — preferred for noisy telephony
+                / ``turn_detection="stt"`` (#6030).
             aec_warmup_duration (float, optional): The duration in seconds that the agent
                 will ignore user's audio interruptions after the agent starts speaking.
                 This is useful to prevent the agent from being interrupted by echo before AEC is ready.
@@ -451,6 +467,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             endpointing_overrides=endpointing_overrides,
             max_tool_steps=max_tool_steps,
             user_away_timeout=user_away_timeout,
+            user_away_on=user_away_on,
             min_consecutive_speech_delay=min_consecutive_speech_delay,
             tts_text_transforms=(
                 tts_text_transforms
@@ -1818,6 +1835,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # preserve the existing deadline — transcript-less speaking↔listening
             # flips (telephony noise) must not defer "away" (#6030)
             self._set_user_away_timer(reset=False)
+        elif state == "speaking" and self._opts.user_away_on == "conversation":
+            # conversation mode: raw VAD/STT speaking must not pause the countdown
+            pass
         else:
             self._cancel_user_away_timer()
             if state == "away":
@@ -1849,10 +1869,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         if ev.is_final and self.user_state != "speaking":
             if self.user_state == "away":
-                # reset user state from away to listening in case VAD has a miss detection
+                # reset user state from away to listening in case VAD has a miss detection.
+                # ``_update_user_state`` re-arms a full window when the agent is listening
+                # (deadline was cleared on away); must not arm while the agent is speaking.
                 self._update_user_state("listening")
-                # full silence window after returning from away
-                self._set_user_away_timer(reset=True)
             elif self.user_state == "listening" and self._agent_state == "listening":
                 # VAD may have missed speech; STT still saw activity, so refresh away timeout
                 self._set_user_away_timer(reset=True)

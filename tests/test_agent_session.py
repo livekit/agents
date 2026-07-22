@@ -1241,6 +1241,68 @@ async def test_final_transcript_and_agent_activity_refresh_away_deadline() -> No
         await _close_test_session(session)
 
 
+async def test_away_recovery_transcript_does_not_arm_during_agent_speech() -> None:
+    """Final transcript recovering from away must not arm the timer mid-agent-speech."""
+    session = create_session(FakeActions(), extra_kwargs={"user_away_timeout": 15.0})
+    try:
+        session._agent_state = "speaking"
+        session._user_state = "away"
+        session._user_away_deadline = None
+
+        session._user_input_transcribed(
+            UserInputTranscribedEvent(transcript="i'm back", is_final=True)
+        )
+
+        assert session.user_state == "listening"
+        assert session._user_away_timer is None
+        assert session._user_away_deadline is None
+    finally:
+        await _close_test_session(session)
+
+
+async def test_conversation_user_away_ignores_user_speaking() -> None:
+    """``user_away_on='conversation'`` keeps the countdown during VAD noise speaking."""
+    session = create_session(
+        FakeActions(),
+        extra_kwargs={"user_away_timeout": 0.4, "user_away_on": "conversation"},
+    )
+    try:
+        session._agent_state = "listening"
+        session._user_state = "listening"
+        session._set_user_away_timer(reset=True)
+        deadline = session._user_away_deadline
+        assert deadline is not None
+        assert session._user_away_timer is not None
+
+        # continuous noise: stay in speaking — countdown must keep running
+        session._update_user_state("speaking")
+        assert session.user_state == "speaking"
+        assert session._user_away_timer is not None
+        assert session._user_away_deadline == deadline
+
+        await asyncio.sleep(0.5)
+        assert session.user_state == "away"
+    finally:
+        await _close_test_session(session)
+
+
+async def test_conversation_user_away_still_cancels_on_agent_speaking() -> None:
+    session = create_session(
+        FakeActions(),
+        extra_kwargs={"user_away_timeout": 15.0, "user_away_on": "conversation"},
+    )
+    try:
+        session._agent_state = "listening"
+        session._user_state = "listening"
+        session._set_user_away_timer(reset=True)
+        assert session._user_away_timer is not None
+
+        session._update_agent_state("speaking")
+        assert session._user_away_timer is None
+    finally:
+        await _close_test_session(session)
+
+
 async def test_stt_error_count_resets_on_user_transcript() -> None:
     from livekit.agents.voice.agent_session import SessionConnectOptions
 
