@@ -143,3 +143,26 @@ async def test_collect_card_number_incrementally_with_correction() -> None:
         assert result.final_output == GetCardNumberResult(
             issuer="Visa", card_number="4242424242424242"
         )
+
+
+@pytest.mark.asyncio
+async def test_collect_expiration_month_name_and_two_digit_year() -> None:
+    from livekit.agents.beta.workflows.credit_card import (
+        GetExpirationDateResult,
+        GetExpirationDateTask,
+    )
+
+    async with _llm_model() as llm, AgentSession(llm=llm) as sess:
+        await sess.start(GetExpirationDateTask(require_confirmation=False))
+
+        result = await sess.run(
+            user_input="July 32nd",
+            output_type=GetExpirationDateResult,
+            input_modality="audio",
+        )
+
+        result.expect.contains_function_call(
+            name="update_expiration_date",
+            arguments={"expiration_month": 7, "expiration_year": 32},
+        )
+        assert result.final_output == GetExpirationDateResult(date="07/32")

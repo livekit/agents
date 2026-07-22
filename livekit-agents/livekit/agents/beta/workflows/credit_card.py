@@ -75,6 +75,7 @@ Handle input as typed text. Users will type the security code directly.
 _EXPIRATION_DATE_BASE_INSTRUCTIONS = """
 You are a single step in a broader process of collecting credit card information.
 You are solely responsible for collecting the user's card's expiration date.
+An expiration date contains only a month and a year. Never interpret any part as a day of the month.
 {modality_specific}
 If the user refuses to provide a date, call decline_card_capture().
 If the user wishes to start over the card collection process, call restart_card_collection().
@@ -88,6 +89,7 @@ If the user asks how to say the expiration year, say it can be provided using th
 
 _EXPIRATION_DATE_AUDIO_SPECIFIC = """
 Handle input as noisy voice transcription. Expect users to say the expiration date in formats like 'April twenty five', 'oh four twenty five', 'four slash twenty five', or 'April 2025'.
+When a month name is followed by a two-digit number, interpret that number as the last two digits of the year, even if the transcription gives it an ordinal suffix.
 Normalize spoken months and digits silently.
 Filter out filler words or hesitations.
 """

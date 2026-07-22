@@ -232,3 +232,5 @@ def test_credit_card_instructions_prohibit_concrete_format_examples() -> None:
     assert isinstance(expiration, Instructions)
     rendered_expiration = expiration.render(modality="audio")
     assert "last two digits or in full four digits" in rendered_expiration
+    assert "never interpret any part as a day of the month" in rendered_expiration.lower()
+    assert "even if the transcription gives it an ordinal suffix" in rendered_expiration.lower()
