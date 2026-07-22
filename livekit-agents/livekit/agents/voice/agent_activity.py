@@ -3859,6 +3859,9 @@ class AgentActivity(RecognitionHooks):
         ) -> llm.ChatMessage:
             assistant_metrics: llm.MetricsReport = {}
 
+            if generation_ev.response_id:
+                assistant_metrics["provider_request_ids"] = [generation_ev.response_id]
+
             if stopped_speaking_at and started_speaking_at:
                 assistant_metrics["started_speaking_at"] = started_speaking_at
                 assistant_metrics["stopped_speaking_at"] = stopped_speaking_at
