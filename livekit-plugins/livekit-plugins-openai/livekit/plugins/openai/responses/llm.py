@@ -363,7 +363,16 @@ class LLM(llm.LLM):
                 self._prev_chat_ctx
             ) and self._pending_tool_calls_completed(chat_ctx.items[n:]):
                 # send only the new items appended since the last response
-                input_chat_ctx = ChatContext(items=chat_ctx.items[n:])
+                input_chat_ctx = ChatContext(
+                    items=[
+                        item
+                        for item in chat_ctx.items[n:]
+                        if not (
+                            item.type == "function_call"
+                            and item.call_id in self._pending_tool_calls
+                        )
+                    ]
+                )
                 extra["previous_response_id"] = self._prev_resp_id
             # if the context was modified otherwise, resend the whole context and omit previous response id
         return LLMStream(
