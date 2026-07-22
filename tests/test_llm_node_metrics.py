@@ -104,3 +104,24 @@ class TestLLMNodeTtfs:
         )
         assert tokenizer.stream_calls == 1
         assert data.ttfs is not None
+
+
+class TestTtsSentenceTokenizerResolution:
+    """`AgentActivity._tts_sentence_tokenizer` is the single source of truth the default
+    `tts_node` and the ttfs metric both read, so the segmentation ttfs times matches what
+    TTS actually applies."""
+
+    async def test_reuses_live_stream_adapter_instance(self) -> None:
+        # a StreamAdapter already owns the tokenizer TTS will run; reuse that exact
+        # instance rather than building a parallel one that could drift from it.
+        from types import SimpleNamespace
+
+        from livekit.agents import tts
+        from livekit.agents.voice.agent_activity import AgentActivity
+
+        from .fake_tts import FakeTTS
+
+        adapter = tts.StreamAdapter(tts=FakeTTS())
+        activity = SimpleNamespace(tts=adapter, _resolve_expressive_options=lambda: None)
+        resolved = AgentActivity._tts_sentence_tokenizer(activity)  # type: ignore[arg-type]
+        assert resolved is adapter._sentence_tokenizer

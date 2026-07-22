@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 
 from livekit import rtc
 
-from .. import inference, llm, stt, tokenize, tts, utils, vad
+from .. import inference, llm, stt, tts, utils, vad
 from ..llm import ChatContext, RealtimeModel, ToolError, find_function_tools
 from ..llm.chat_context import Instructions, _ReadOnlyChatContext
 from ..log import logger
@@ -564,11 +564,7 @@ class Agent:
             if not activity.tts.capabilities.streaming:
                 wrapped_tts = tts.StreamAdapter(
                     tts=wrapped_tts,
-                    sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(
-                        retain_format=True,
-                        # markup only exists in the stream when expressive is active
-                        xml_aware=expressive_active,
-                    ),
+                    sentence_tokenizer=activity._tts_sentence_tokenizer(),
                 )
 
             # Mark whether expressive is active for this synthesis, synchronously
