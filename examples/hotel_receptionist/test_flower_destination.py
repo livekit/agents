@@ -55,12 +55,12 @@ from datetime import timedelta  # noqa: E402
 
 from hotel_db import NotFound, Unavailable  # noqa: E402
 
-_ORDER_KWARGS = dict(
-    arrangement_id="roses",
-    guest_name="Marcus Webb",
-    guest_phone="415-555-0182",
-    card_message="Happy ten years.",
-)
+_ORDER_KWARGS = {
+    "arrangement_id": "roses",
+    "guest_name": "Marcus Webb",
+    "guest_phone": "415-555-0182",
+    "card_message": "Happy ten years.",
+}
 
 
 def _order(db: HotelDB, **overrides):
@@ -125,9 +125,9 @@ def test_amend_unknown_code_is_not_found(db: HotelDB) -> None:
 
 # --- tool layer: destination validation ---
 
-from livekit.agents import ToolError  # noqa: E402
-
 from tools_services import _florist_destination  # noqa: E402
+
+from livekit.agents import ToolError  # noqa: E402
 
 
 def test_destination_room_phrase_resolves(db: HotelDB) -> None:

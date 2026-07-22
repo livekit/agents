@@ -430,9 +430,7 @@ class ServicesToolsMixin:
             recipient_name: Who it's for, when no room or suite is known (e.g. they haven't checked in yet). Omit if a room or suite was given.
             delivery_instructions: Any delivery handling request, in the caller's words. Omit if none.
         """
-        room_id, recipient = _florist_destination(
-            ctx.userdata.db, room_or_suite, recipient_name
-        )
+        room_id, recipient = _florist_destination(ctx.userdata.db, room_or_suite, recipient_name)
         try:
             code, a, total = await ctx.userdata.db.order_flowers(
                 arrangement_id=arrangement,
