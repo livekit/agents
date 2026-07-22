@@ -77,6 +77,16 @@ _MODEL_THINK_TAGS = {
 }
 
 
+def _use_strict_tool_schema(model: str) -> bool:
+    # OpenAI strict schemas do not support oneOf/discriminator, so our strict
+    # conversion rewrites discriminated Pydantic unions to plain anyOf. Gemma's
+    # tool decoder relies on that discriminator to select the matching branch;
+    # without it, it can consistently choose a shorter but incorrect variant.
+    # The legacy schema preserves the discriminator and is still validated by
+    # the SDK before tool execution.
+    return not model.split("/")[-1].startswith("gemma-")
+
+
 def drop_unsupported_params(
     model: str, params: dict[str, Any], tools: list[Any] | None = None
 ) -> dict[str, Any]:
@@ -371,7 +381,7 @@ class LLM(llm.LLM):
             model=self._opts.model,
             provider=self._opts.provider,
             inference_class=effective_inference_class,
-            strict_tool_schema=True,
+            strict_tool_schema=_use_strict_tool_schema(self._opts.model),
             client=self._client,
             chat_ctx=chat_ctx,
             tools=tools or [],
