@@ -452,6 +452,12 @@ FLORIST_ARRANGEMENTS: dict[str, FloralArrangement] = {
     "centerpiece": FloralArrangement(name="Table centerpiece arrangement", price=14000),
 }
 
+
+def speak_room(room_id: str) -> str:
+    suffix = room_id.removeprefix("RM_")
+    return "the penthouse suite" if suffix == "PH" else f"room {suffix}"
+
+
 # The partner property used when a confirmed guest has to be walked.
 WALK_PARTNER_HOTEL = "the Harbor House"
 
