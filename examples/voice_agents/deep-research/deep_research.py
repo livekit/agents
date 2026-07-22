@@ -484,7 +484,9 @@ async def deep_research(ctx: BackgroundContext) -> None:
     prior_context: str | None = None
     try:
         while True:
+            ctx.set_state({"phase": "waiting for a research question"})
             state = ResearchState(question=await inbox.get())
+            ctx.set_state({"phase": "clarifying scope", "topic": state.question})
             if prior_context:
                 # follow-up round: give the clarify/plan LLM the previous result so
                 # "narrow it to X" style requests need no re-clarification
@@ -518,6 +520,13 @@ async def deep_research(ctx: BackgroundContext) -> None:
             try:
                 # ── Scope ──
                 angles = await _plan_angles(llm_client, state)
+                ctx.set_state(
+                    {
+                        "phase": "searching the web",
+                        "topic": state.question,
+                        "angles": [a.label for a in angles],
+                    }
+                )
                 await ctx.send(
                     f"Starting deep research on: {state.question}\n"
                     f"Covering {len(angles)} angles: {', '.join(a.label for a in angles)}."
@@ -575,6 +584,14 @@ async def deep_research(ctx: BackgroundContext) -> None:
                         qual_rank[sc.quality],
                     ),
                 )[:MAX_VERIFY_CLAIMS]
+                ctx.set_state(
+                    {
+                        "phase": "adversarially verifying claims",
+                        "topic": state.question,
+                        "sources_read": len(sources),
+                        "claims_under_review": len(all_claims),
+                    }
+                )
                 await ctx.send(
                     f"Read {len(sources)} sources and extracted "
                     f"{sum(len(g) for g in extracted)} claims. "
@@ -613,6 +630,7 @@ async def deep_research(ctx: BackgroundContext) -> None:
                     continue  # keep listening for a refined question
 
                 # ── Synthesize + write the report to disk ──
+                ctx.set_state({"phase": "writing the report", "topic": state.question})
                 report = await _synthesize(llm_client, state, confirmed)
                 report_path = await asyncio.to_thread(
                     _write_report_file, state, report, confirmed, refuted
@@ -634,6 +652,13 @@ async def deep_research(ctx: BackgroundContext) -> None:
                 ]
                 await ctx.send("\n".join(lines))
                 prior_context = report.summary
+                ctx.set_state(
+                    {
+                        "phase": "done, listening for follow-ups",
+                        "last_topic": state.question,
+                        "last_report": str(report_path),
+                    }
+                )
             finally:
                 steering_task.cancel()
     finally:

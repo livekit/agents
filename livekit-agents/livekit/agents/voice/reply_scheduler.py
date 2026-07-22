@@ -106,6 +106,36 @@ class _ReplyScheduler:
     def _mark_closed(self) -> None:
         self._closed = True
 
+    async def insert_only(self, *, session: AgentSession, items: list[ChatItem]) -> bool:
+        """Insert items into the target Agent context and session history without
+        buffering them for a scheduled reply — silent, context-only insertion."""
+        async with self._lock:
+            return await self._insert_items_locked(session, items) is not None
+
+    async def _insert_items_locked(
+        self, session: AgentSession, items: list[ChatItem]
+    ) -> Agent | None:
+        """Eagerly insert items into the target Agent context and session history.
+
+        Must be called while holding ``self._lock``. Returns the Agent the items
+        were inserted into, or ``None`` if the scheduler closed.
+        """
+        if self._closed:
+            return None
+
+        target = (
+            self._owning_activity.agent
+            if self._owning_activity is not None
+            else session.current_agent
+        )
+        chat_ctx = target.chat_ctx.copy()
+        chat_ctx.insert(items)
+        await target.update_chat_ctx(chat_ctx)
+        if self._closed:
+            return None
+        session.history.insert(items)
+        return target
+
     async def enqueue(
         self,
         *,
@@ -115,20 +145,9 @@ class _ReplyScheduler:
         item_ids: list[str] | None = None,
     ) -> bool:
         async with self._lock:
-            if self._closed:
+            target = await self._insert_items_locked(session, items)
+            if target is None:
                 return False
-
-            target = (
-                self._owning_activity.agent
-                if self._owning_activity is not None
-                else session.current_agent
-            )
-            chat_ctx = target.chat_ctx.copy()
-            chat_ctx.insert(items)
-            await target.update_chat_ctx(chat_ctx)
-            if self._closed:
-                return False
-            session.history.insert(items)
 
             if item_ids is None:
                 item_ids = [item.call_id for item in items if item.type == "function_call_output"]

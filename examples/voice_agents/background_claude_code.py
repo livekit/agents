@@ -25,6 +25,7 @@ from claude_agent_sdk import (
     ClaudeSDKClient,
     ResultMessage,
     TextBlock,
+    ToolUseBlock,
 )
 from dotenv import load_dotenv
 
@@ -61,15 +62,29 @@ async def claude_code(ctx: BackgroundContext) -> None:
         cwd=str(Path(__file__).parent),
     )
     async with ClaudeSDKClient(options=options) as client:
+        files_changed: list[str] = []
+        ctx.set_state({"status": "idle", "files_changed": files_changed})
         async for message in ctx.message_stream():  # voice -> claude code (FIFO)
+            ctx.set_state(
+                {"status": "working", "task": message[:150], "files_changed": files_changed}
+            )
             await client.query(message)
             async for msg in client.receive_response():
                 if isinstance(msg, AssistantMessage):
                     for block in msg.content:
                         if isinstance(block, TextBlock) and block.text.strip():
                             await ctx.send(block.text)  # claude code -> voice
+                        elif isinstance(block, ToolUseBlock) and block.name in ("Write", "Edit"):
+                            path = str(block.input.get("file_path", ""))
+                            if path and path not in files_changed:
+                                files_changed.append(path)
+                                # context-only: the voice agent knows without speaking it
+                                await ctx.send(f"Claude Code modified {path}", silent=True)
                 elif isinstance(msg, ResultMessage):
                     logger.info("claude code turn done", extra={"subtype": msg.subtype})
+            ctx.set_state(
+                {"status": "idle", "last_task": message[:150], "files_changed": files_changed}
+            )
 
 
 class CodingAssistant(Agent):
@@ -81,6 +96,8 @@ class CodingAssistant(Agent):
                 "- Send the user's coding tasks to the claude_code background session.\n"
                 "- Relay its progress updates and questions conversationally; forward the "
                 "user's answers and follow-ups back to it immediately.\n"
+                "- If the user asks what is happening right now, call the lk_background_state "
+                "tool for the real-time status and answer from it.\n"
                 "- Keep responses concise; no markdown or special characters."
             ),
         )

@@ -45,6 +45,8 @@ class ResearchAssistant(Agent):
                 "Relay them naturally, one at a time if there are several, collect the "
                 "user's answers, and send them back to the deep_research session.\n"
                 "- Relay progress updates conversationally and briefly.\n"
+                "- If the user asks what is happening right now, call the lk_background_state "
+                "tool for the real-time status and answer from it.\n"
                 "- If the user adds context, narrows scope, or changes direction while the "
                 "research is running, forward it to the deep_research session immediately.\n"
                 "- Keep responses concise; no markdown or special characters."

@@ -51,11 +51,12 @@ from .agent import Agent, AgentTask
 from .agent_activity import AgentActivity, _ReusableResources
 from .amd import AMD
 from .background_session import (
-    _BACKGROUND_SEND_TOOL_NAME,
+    _RESERVED_BACKGROUND_TOOL_NAMES,
     BackgroundDefinition,
     BackgroundHandlingOptions,
     _BackgroundRuntimeManager,
     _create_background_send_tool,
+    _create_background_state_tool,
 )
 from .events import (
     AgentEvent,
@@ -510,11 +511,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._tools = tools if is_given(tools) else []
         self._background_manager: _BackgroundRuntimeManager | None = None
         if background:
-            if _BACKGROUND_SEND_TOOL_NAME in get_fnc_tool_names(self._tools):
-                raise ValueError(
-                    f"duplicate function name: {_BACKGROUND_SEND_TOOL_NAME} is reserved for "
-                    "background sessions"
-                )
+            session_tool_names = get_fnc_tool_names(self._tools)
+            for reserved_name in _RESERVED_BACKGROUND_TOOL_NAMES:
+                if reserved_name in session_tool_names:
+                    raise ValueError(
+                        f"duplicate function name: {reserved_name} is reserved for "
+                        "background sessions"
+                    )
             self._tools = list(self._tools)
             self._background_manager = _BackgroundRuntimeManager(
                 background,
@@ -522,6 +525,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 background_handling=background_handling,
             )
             self._tools.append(_create_background_send_tool(self._background_manager, background))
+            self._tools.append(_create_background_state_tool(self._background_manager, background))
         self._async_tool_options = _resolve_async_tool_options(
             tool_handling.get("async_options") if is_given(tool_handling) else None
         )

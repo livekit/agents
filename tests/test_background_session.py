@@ -12,6 +12,7 @@ from livekit.agents.llm import ChatContext
 from livekit.agents.voice import Agent, AgentSession
 from livekit.agents.voice.background_session import (
     _BACKGROUND_SEND_TOOL_NAME,
+    _BACKGROUND_STATE_TOOL_NAME,
     BackgroundContext,
     BackgroundDefinition,
     BackgroundHandlingOptions,
@@ -196,7 +197,7 @@ def test_agent_session_generates_stable_routing_tool() -> None:
     tools: list[llm.Tool | llm.Toolset] = []
     session = AgentSession(vad=None, tools=tools, background=[codex, claude])
 
-    assert len(session.tools) == 1
+    assert len(session.tools) == 2
     assert session.tools is not tools
     assert tools == []
     schema = llm.ToolContext(session.tools).parse_function_tools("openai")
@@ -223,7 +224,28 @@ def test_agent_session_generates_stable_routing_tool() -> None:
                 },
                 "strict": True,
             },
-        }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": _BACKGROUND_STATE_TOOL_NAME,
+                "description": (
+                    "Get the real-time state reported by a background session — what it is "
+                    "working on right now. Use this when the user asks about the progress or "
+                    "status of background work.\n\n"
+                    "Available background sessions:\n"
+                    "- claude: Handles repository tasks.\n"
+                    "- codex: Reviews code."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {"background_session_id": {"type": "string"}},
+                    "required": ["background_session_id"],
+                    "additionalProperties": False,
+                },
+                "strict": True,
+            },
+        },
     ]
 
 
@@ -1250,3 +1272,148 @@ async def test_entrypoint_failure_is_logged_and_not_restarted(
         for record in caplog.records
     )
     await manager.aclose()
+
+
+# ---------------------------------------------------------------------------
+# Real-time state (lk_background_state) and silent context-only insertion
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_state_tool_returns_reported_state_or_default_message() -> None:
+    @background(name="research", description="Investigates requests.")
+    async def research(ctx: BackgroundContext) -> None:
+        del ctx
+
+    session = AgentSession(vad=None, background=[research])
+    tool = llm.ToolContext(session.tools).get_function_tool(_BACKGROUND_STATE_TOOL_NAME)
+    assert tool is not None
+
+    result = await tool(background_session_id="research")
+    assert result == "The background session has not reported any state yet."
+
+    assert session._background_manager is not None
+    context = session._background_manager._runtimes["research"].context
+    state = {"phase": "searching", "topic": "EV chargers", "sources_read": 4}
+    context.set_state(state)
+
+    assert await tool(background_session_id="research") == state
+
+    context.set_state("verifying claim 3 of 10")
+    assert await tool(background_session_id="research") == "verifying claim 3 of 10"
+
+
+@pytest.mark.asyncio
+async def test_state_tool_rejects_unknown_id_with_valid_ids() -> None:
+    @background(name="alpha", description="First worker.")
+    async def alpha(ctx: BackgroundContext) -> None:
+        del ctx
+
+    session = AgentSession(vad=None, background=[alpha])
+    tool = llm.ToolContext(session.tools).get_function_tool(_BACKGROUND_STATE_TOOL_NAME)
+    assert tool is not None
+
+    with pytest.raises(llm.ToolError, match=r"Valid IDs: alpha"):
+        await tool(background_session_id="missing")
+
+
+@pytest.mark.asyncio
+async def test_set_state_never_inserts_context_or_schedules_reply() -> None:
+    @background(name="worker", description="Handles work.")
+    async def worker(ctx: BackgroundContext) -> None:
+        del ctx
+
+    session = _make_session()
+    manager = _BackgroundRuntimeManager([worker], session=session)
+    runtime = manager._runtimes["worker"]
+
+    runtime.context.set_state({"status": "busy"})
+
+    assert runtime.state == {"status": "busy"}
+    assert list(session.current_agent.chat_ctx.items) == []
+    session.history.insert.assert_not_called()
+    session.generate_reply.assert_not_called()
+    session.emit.assert_not_called()
+    assert runtime._reply_scheduler.reply_task is None
+    await manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_set_state_validates_tool_return_shape_and_close() -> None:
+    @background(name="worker", description="Handles work.")
+    async def worker(ctx: BackgroundContext) -> None:
+        del ctx
+
+    session = _make_session()
+    manager = _BackgroundRuntimeManager([worker], session=session)
+    context = manager._runtimes["worker"].context
+
+    with pytest.raises(ValueError, match="background state must be a valid function-tool"):
+        context.set_state(object())
+
+    context.set_state(["ok", 1, {"nested": True}])
+
+    await manager.aclose()
+    with pytest.raises(RuntimeError, match="background session 'worker' is closed"):
+        context.set_state("late")
+
+
+@pytest.mark.asyncio
+async def test_silent_send_inserts_context_only_without_reply() -> None:
+    @background(name="worker", description="Handles work.")
+    async def worker(ctx: BackgroundContext) -> None:
+        del ctx
+
+    session = _make_session()
+    manager = _BackgroundRuntimeManager([worker], session=session)
+    runtime = manager._runtimes["worker"]
+
+    await runtime.context.send("edited src/app.py", silent=True)
+
+    items = list(session.current_agent.chat_ctx.items)
+    assert len(items) == 1
+    assert items[0].role == "user"
+    assert "edited src/app.py" in items[0].text_content
+    assert items[0].extra["background_session_id"] == "worker"
+    session.history.insert.assert_called_once()
+
+    assert runtime._reply_scheduler.reply_task is None
+    session.generate_reply.assert_not_called()
+
+    background_calls = [
+        call for call in session.emit.call_args_list if call.args[0] == "background_message_updated"
+    ]
+    assert len(background_calls) == 1
+    event = background_calls[0].args[1]
+    assert event.update.type == "background_message_received"
+    assert event.update.silent is True
+    assert event.update.content == "edited src/app.py"
+    await manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_silent_send_rejected_after_close() -> None:
+    @background(name="worker", description="Handles work.")
+    async def worker(ctx: BackgroundContext) -> None:
+        del ctx
+
+    session = _make_session()
+    manager = _BackgroundRuntimeManager([worker], session=session)
+    context = manager._runtimes["worker"].context
+    await manager.aclose()
+
+    with pytest.raises(RuntimeError, match="background session 'worker' is closed"):
+        await context.send("late note", silent=True)
+
+
+def test_session_background_state_conflict_fails_during_construction() -> None:
+    @background(name="worker", description="Handles work.")
+    async def worker(ctx: BackgroundContext) -> None:
+        del ctx
+
+    @llm.function_tool(name=_BACKGROUND_STATE_TOOL_NAME)
+    async def conflicting_state(background_session_id: str) -> str:
+        return background_session_id
+
+    with pytest.raises(ValueError, match=rf"{_BACKGROUND_STATE_TOOL_NAME} is reserved"):
+        AgentSession(vad=None, tools=[conflicting_state], background=[worker])
