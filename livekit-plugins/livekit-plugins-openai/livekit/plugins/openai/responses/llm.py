@@ -73,6 +73,11 @@ class _ResponsesWebsocket:
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
             connect_cb=self._create_ws,
             close_cb=self._close_ws,
+            # A Responses socket that was closed while idle (by OpenAI, a NAT
+            # gateway, VPN, or proxy) must be discarded before it is handed
+            # back, otherwise generate_response() burns an outer LLM retry per
+            # stale connection on send_str().
+            validate_cb=lambda ws: not ws.closed,
             max_session_duration=3600,
         )
 

@@ -83,3 +83,73 @@ async def test_get_expired():
 
     conn2 = await pool.get(timeout=10.0)
     assert conn2 is not conn, "Expected a new connection to be returned."
+
+
+@pytest.mark.asyncio
+async def test_get_discards_invalid_connection():
+    # Regression for livekit/agents#6513: a pooled websocket that was closed
+    # while idle must be discarded by get() instead of being handed back to the
+    # caller (which would burn an outer LLM retry on send).
+    dummy_connect = dummy_connect_factory()
+    pool = ConnectionPool(
+        max_session_duration=60,
+        connect_cb=dummy_connect,
+        validate_cb=lambda c: not c.closed,
+    )
+
+    stale1 = DummyConnection("stale-1")
+    stale1.closed = True
+    stale2 = DummyConnection("stale-2")
+    stale2.closed = True
+    healthy = DummyConnection("healthy")
+    healthy.closed = False
+
+    for conn in (stale1, stale2, healthy):
+        pool._connections[conn] = time.time()
+        pool._available.add(conn)
+
+    acquired = await pool.get(timeout=10.0)
+    assert acquired is healthy, (
+        "Expected get() to skip stale connections and return the healthy one."
+    )
+    assert acquired.closed is False
+    assert pool.last_connection_reused is True
+
+
+@pytest.mark.asyncio
+async def test_get_creates_new_when_all_invalid():
+    # When every pooled connection fails validation, get() must fall back to
+    # creating a fresh connection rather than returning a stale one.
+    dummy_connect = dummy_connect_factory()
+    pool = ConnectionPool(
+        max_session_duration=60,
+        connect_cb=dummy_connect,
+        validate_cb=lambda c: not c.closed,
+    )
+
+    stale = DummyConnection("stale")
+    stale.closed = True
+    pool._connections[stale] = time.time()
+    pool._available.add(stale)
+
+    acquired = await pool.get(timeout=10.0)
+    assert acquired is not stale, (
+        "Expected a fresh connection when all pooled connections are invalid."
+    )
+    assert pool.last_connection_reused is False
+    assert stale not in pool._connections
+
+
+@pytest.mark.asyncio
+async def test_get_reuses_when_no_validate_cb():
+    # Without a validate_cb the pool must keep its previous behavior and reuse
+    # available connections regardless of any connection-local state.
+    dummy_connect = dummy_connect_factory()
+    pool = ConnectionPool(max_session_duration=60, connect_cb=dummy_connect)
+
+    conn = await pool.get(timeout=10.0)
+    conn.closed = True  # attribute the pool must ignore when no validate_cb is set
+    pool.put(conn)
+
+    conn2 = await pool.get(timeout=10.0)
+    assert conn2 is conn, "Expected reuse to be unaffected when no validate_cb is provided."

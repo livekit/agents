@@ -25,6 +25,7 @@ class ConnectionPool(Generic[T]):
         mark_refreshed_on_get: bool = False,
         connect_cb: Callable[[float], Awaitable[T]] | None = None,
         close_cb: Callable[[T], Awaitable[None]] | None = None,
+        validate_cb: Callable[[T], bool] | None = None,
         connect_timeout: float = 10.0,
     ) -> None:
         """Initialize the connection wrapper.
@@ -34,11 +35,16 @@ class ConnectionPool(Generic[T]):
             mark_refreshed_on_get: If True, the session will be marked as fresh when get() is called. only used when max_session_duration is set.
             connect_cb: Optional async callback to create new connections
             close_cb: Optional async callback to close connections
+            validate_cb: Optional callback to check whether an available pooled connection is
+                still usable before it is returned by get(). Return False to discard a
+                connection (e.g. a websocket that was closed remotely while idle) so it does
+                not surface as a caller-visible send failure.
         """  # noqa: E501
         self._max_session_duration = max_session_duration
         self._mark_refreshed_on_get = mark_refreshed_on_get
         self._connect_cb = connect_cb
         self._close_cb = close_cb
+        self._validate_cb = validate_cb
         self._connections: dict[T, float] = {}  # conn -> connected_at timestamp
         self._available: set[T] = set()
         self._connect_timeout = connect_timeout
@@ -103,20 +109,26 @@ class ConnectionPool(Generic[T]):
             await self._drain_to_close()
             now = time.time()
 
-            # try to reuse an available connection that hasn't expired
+            # try to reuse an available connection that hasn't expired and is still usable
             while self._available:
                 conn = self._available.pop()
                 if (
-                    self._max_session_duration is None
-                    or now - self._connections[conn] <= self._max_session_duration
+                    self._max_session_duration is not None
+                    and now - self._connections[conn] > self._max_session_duration
                 ):
-                    if self._mark_refreshed_on_get:
-                        self._connections[conn] = now
-                    self.last_acquire_time = 0.0
-                    self.last_connection_reused = True
-                    return conn
-                # connection expired; mark it for resetting.
-                self.remove(conn)
+                    # connection expired; mark it for resetting.
+                    self.remove(conn)
+                    continue
+                if self._validate_cb is not None and not self._validate_cb(conn):
+                    # connection is no longer usable (e.g. remotely closed while idle);
+                    # discard it instead of handing a stale connection to the caller.
+                    self.remove(conn)
+                    continue
+                if self._mark_refreshed_on_get:
+                    self._connections[conn] = now
+                self.last_acquire_time = 0.0
+                self.last_connection_reused = True
+                return conn
 
             t0 = time.perf_counter()
             conn = await self._connect(timeout)
