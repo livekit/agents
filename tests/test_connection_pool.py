@@ -10,6 +10,7 @@ pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurr
 class DummyConnection:
     def __init__(self, id):
         self.id = id
+        self.is_usable = True
 
     def __repr__(self):
         return f"DummyConnection({self.id})"
@@ -83,3 +84,21 @@ async def test_get_expired():
 
     conn2 = await pool.get(timeout=10.0)
     assert conn2 is not conn, "Expected a new connection to be returned."
+
+
+@pytest.mark.asyncio
+async def test_get_skips_connection_that_fails_validation():
+    dummy_connect = dummy_connect_factory()
+    pool = ConnectionPool(
+        max_session_duration=60,
+        connect_cb=dummy_connect,
+        validate_cb=lambda conn: conn.is_usable,
+    )
+
+    conn1 = await pool.get(timeout=10.0)
+    pool.put(conn1)
+    conn1.is_usable = False
+
+    conn2 = await pool.get(timeout=10.0)
+
+    assert conn2 is not conn1, "Expected an unusable connection not to be reused."

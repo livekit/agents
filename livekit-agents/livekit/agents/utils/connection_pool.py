@@ -25,6 +25,7 @@ class ConnectionPool(Generic[T]):
         mark_refreshed_on_get: bool = False,
         connect_cb: Callable[[float], Awaitable[T]] | None = None,
         close_cb: Callable[[T], Awaitable[None]] | None = None,
+        validate_cb: Callable[[T], bool] | None = None,
         connect_timeout: float = 10.0,
     ) -> None:
         """Initialize the connection wrapper.
@@ -34,11 +35,13 @@ class ConnectionPool(Generic[T]):
             mark_refreshed_on_get: If True, the session will be marked as fresh when get() is called. only used when max_session_duration is set.
             connect_cb: Optional async callback to create new connections
             close_cb: Optional async callback to close connections
+            validate_cb: Optional callback to check whether a connection can be reused
         """  # noqa: E501
         self._max_session_duration = max_session_duration
         self._mark_refreshed_on_get = mark_refreshed_on_get
         self._connect_cb = connect_cb
         self._close_cb = close_cb
+        self._validate_cb = validate_cb
         self._connections: dict[T, float] = {}  # conn -> connected_at timestamp
         self._available: set[T] = set()
         self._connect_timeout = connect_timeout
@@ -106,10 +109,12 @@ class ConnectionPool(Generic[T]):
             # try to reuse an available connection that hasn't expired
             while self._available:
                 conn = self._available.pop()
-                if (
+                is_valid = self._validate_cb is None or self._validate_cb(conn)
+                has_expired = not (
                     self._max_session_duration is None
                     or now - self._connections[conn] <= self._max_session_duration
-                ):
+                )
+                if is_valid and not has_expired:
                     if self._mark_refreshed_on_get:
                         self._connections[conn] = now
                     self.last_acquire_time = 0.0

@@ -22,15 +22,21 @@ class _RecordingWS:
     """Minimal aiohttp-websocket stand-in: records what was sent, then replays
     a single terminal frame so `generate_response` returns."""
 
-    def __init__(self, reply: dict) -> None:
+    def __init__(self, reply: dict, *, closed: bool = False) -> None:
         self.sent: str | None = None
         self._reply = reply
+        self.closed = closed
 
     async def send_str(self, data: str) -> None:
+        if self.closed:
+            raise ConnectionResetError("cannot write to closing transport")
         self.sent = data
 
     async def receive(self) -> _FakeWSMsg:
         return _FakeWSMsg(json.dumps(self._reply))
+
+    async def close(self) -> None:
+        self.closed = True
 
 
 class _FakePool:
@@ -56,7 +62,7 @@ class _FakePool:
 async def _capture_sent_payload(msg: dict) -> dict:
     """Run the real `_ResponsesWebsocket.generate_response` against a fake pool
     and return the JSON that was actually put on the wire."""
-    ws = _ResponsesWebsocket(api_key="test-key", timeout=1.0)
+    ws = _ResponsesWebsocket(api_key="test-key", timeout=1.0, model="gpt-4.1")
     rec = _RecordingWS({"type": "response.completed", "response": {"output": []}})
     ws._pool = _FakePool(rec)  # type: ignore[assignment]
     async for _ in ws.generate_response(msg):
@@ -84,6 +90,31 @@ async def test_reasoning_object_serialized_without_null_fields() -> None:
     assert sent["reasoning"] == {"effort": "none"}
     # No serialized request model may carry an explicit null-valued key.
     assert None not in sent["reasoning"].values()
+
+
+async def test_websocket_pool_replaces_closed_connection() -> None:
+    transport = _ResponsesWebsocket(api_key="test-key", timeout=1.0, model="gpt-4.1")
+    reply = {"type": "response.completed", "response": {"output": []}}
+    stale = _RecordingWS(reply)
+    healthy = _RecordingWS(reply)
+    connections = iter([stale, healthy])
+
+    async def connect(_timeout: float) -> _RecordingWS:
+        return next(connections)
+
+    transport._pool._connect_cb = connect  # type: ignore[assignment]
+    first = await transport._pool.get(timeout=1.0)
+    transport._pool.put(first)
+    stale.closed = True
+
+    try:
+        async for _ in transport.generate_response({"type": "response.create"}):
+            pass
+    finally:
+        await transport.aclose()
+
+    assert stale.sent is None
+    assert healthy.sent is not None
 
 
 def test_error_event_missing_sequence_number_parses_cleanly() -> None:
