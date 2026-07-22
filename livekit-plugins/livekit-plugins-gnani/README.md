@@ -21,7 +21,7 @@ Or with [uv](https://docs.astral.sh/uv/):
 uv add livekit-plugins-gnani
 ```
 
-This will also install the [`gnani`](https://pypi.org/project/gnani/) (>= 0.7.7) core SDK as a dependency.
+This will also install the [`gnani-vachana`](https://pypi.org/project/gnani-vachana/) (>= 0.7.7) core SDK as a dependency.
 
 Install with the LiveKit Agents Gnani extra:
 
@@ -265,7 +265,7 @@ tts = TTS(model="timbre-v2.5", voice="Nalini", language="hi-IN")
 ## Architecture
 
 ```
-gnani (>=0.7.7)          ← Core SDK on PyPI
+gnani-vachana (>=0.7.7)  ← Core SDK on PyPI (imports as `gnani`)
         ↑
 livekit-plugins-gnani    ← This package (LiveKit Agents adapter)
   ├── STT: REST + WebSocket
@@ -278,7 +278,7 @@ This plugin wraps the Gnani SDK into LiveKit's `stt.STT` and `tts.TTS` base clas
 
 - [Gnani API Docs](https://docs.gnani.ai/)
 - [LiveKit Agents Docs](https://docs.livekit.io/agents/)
-- [Gnani SDK on PyPI](https://pypi.org/project/gnani/)
+- [Gnani SDK on PyPI](https://pypi.org/project/gnani-vachana/)
 - [Gnani STT Plugin Guide](https://docs.livekit.io/agents/integrations/stt/gnani/)
 - [Gnani TTS Plugin Guide](https://docs.livekit.io/agents/integrations/tts/gnani/)
 - [STT REST API](https://docs.gnani.ai/api/STT/speech-to-text)
@@ -289,7 +289,7 @@ This plugin wraps the Gnani SDK into LiveKit's `stt.STT` and `tts.TTS` base clas
 
 ## LiveKit Compatibility
 
-Tested with **LiveKit Agents v1.6.x** and **gnani v0.7.7**.
+Tested with **LiveKit Agents v1.6.x** and **gnani-vachana v0.7.7+**.
 
 ## License
 
