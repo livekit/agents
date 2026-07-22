@@ -57,6 +57,7 @@ class ProcStartArgs:
     initialize_process_fnc: Callable[[JobProcess], Any]
     job_entrypoint_fnc: Callable[[JobContext], Any]
     session_end_fnc: Callable[[JobContext], Awaitable[None]] | None
+    entrypoint_shutdown_timeout: float
     session_end_timeout: float
     user_arguments: Any | None
     mp_cch: socket.socket
@@ -83,6 +84,7 @@ def proc_main(args: ProcStartArgs) -> None:
         args.initialize_process_fnc,
         args.job_entrypoint_fnc,
         args.session_end_fnc,
+        entrypoint_shutdown_timeout=args.entrypoint_shutdown_timeout,
         session_end_timeout=args.session_end_timeout,
         executor_type=JobExecutorType.PROCESS,
         user_arguments=args.user_arguments,
@@ -191,6 +193,7 @@ class _JobProc:
         job_entrypoint_fnc: Callable[[JobContext], Any],
         session_end_fnc: Callable[[JobContext], Awaitable[None]] | None,
         *,
+        entrypoint_shutdown_timeout: float,
         session_end_timeout: float,
         executor_type: JobExecutorType,
         user_arguments: Any | None = None,
@@ -202,6 +205,7 @@ class _JobProc:
         self._job_entrypoint_fnc = job_entrypoint_fnc
         self._session_end_fnc = session_end_fnc
         self._simulation_end_fnc = simulation_end_fnc
+        self._entrypoint_shutdown_timeout = entrypoint_shutdown_timeout
         self._session_end_timeout = session_end_timeout
         self._job_task: asyncio.Task[None] | None = None
 
@@ -379,7 +383,10 @@ class _JobProc:
         # wait for the entrypoint to finish, cancel if it takes too long
         if not job_entry_task.done():
             try:
-                await asyncio.wait_for(asyncio.shield(job_entry_task), timeout=15)
+                await asyncio.wait_for(
+                    asyncio.shield(job_entry_task),
+                    timeout=self._entrypoint_shutdown_timeout,
+                )
             except asyncio.TimeoutError:
                 logger.warning("entrypoint did not exit in time, cancelling")
                 await aio.cancel_and_wait(job_entry_task)
@@ -449,6 +456,7 @@ class ThreadStartArgs:
     initialize_process_fnc: Callable[[JobProcess], Any]
     job_entrypoint_fnc: Callable[[JobContext], Any]
     session_end_fnc: Callable[[JobContext], Awaitable[None]] | None
+    entrypoint_shutdown_timeout: float
     session_end_timeout: float
     join_fnc: Callable[[], None]
     mp_cch: socket.socket
@@ -467,6 +475,7 @@ def thread_main(
             args.initialize_process_fnc,
             args.job_entrypoint_fnc,
             args.session_end_fnc,
+            entrypoint_shutdown_timeout=args.entrypoint_shutdown_timeout,
             session_end_timeout=args.session_end_timeout,
             executor_type=JobExecutorType.THREAD,
             user_arguments=args.user_arguments,

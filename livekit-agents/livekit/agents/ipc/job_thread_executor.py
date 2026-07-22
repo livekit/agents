@@ -26,6 +26,7 @@ class _ProcOpts:
     simulation_end_fnc: Callable[[Any], Any] | None
     initialize_timeout: float
     close_timeout: float
+    entrypoint_shutdown_timeout: float
     session_end_timeout: float
     ping_interval: float
     high_ping_threshold: float
@@ -43,6 +44,7 @@ class ThreadJobExecutor:
         inference_executor: InferenceExecutor | None,
         initialize_timeout: float,
         close_timeout: float,
+        entrypoint_shutdown_timeout: float,
         session_end_timeout: float,
         ping_interval: float,
         high_ping_threshold: float,
@@ -57,6 +59,7 @@ class ThreadJobExecutor:
             simulation_end_fnc=simulation_end_fnc,
             initialize_timeout=initialize_timeout,
             close_timeout=close_timeout,
+            entrypoint_shutdown_timeout=entrypoint_shutdown_timeout,
             session_end_timeout=session_end_timeout,
             ping_interval=ping_interval,
             high_ping_threshold=high_ping_threshold,
@@ -137,6 +140,7 @@ class ThreadJobExecutor:
                     job_entrypoint_fnc=self._opts.job_entrypoint_fnc,
                     session_end_fnc=self._opts.session_end_fnc,
                     simulation_end_fnc=self._opts.simulation_end_fnc,
+                    entrypoint_shutdown_timeout=self._opts.entrypoint_shutdown_timeout,
                     session_end_timeout=self._opts.session_end_timeout,
                     user_arguments=self._user_args,
                     join_fnc=_on_join,
