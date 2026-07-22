@@ -14,6 +14,7 @@ from livekit.agents import (
     Agent,
     AgentFalseInterruptionEvent,
     AgentStateChangedEvent,
+    APIConnectionError,
     ConversationItemAddedEvent,
     FlushSentinel,
     LanguageCode,
@@ -37,7 +38,7 @@ from livekit.agents.llm import (
     Toolset,
 )
 from livekit.agents.llm.chat_context import ChatContext, ChatMessage
-from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
+from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType, STTError
 from livekit.agents.utils import aio
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.audio_recognition import AudioRecognition, _EndOfTurnInfo
@@ -1127,6 +1128,250 @@ async def test_interruption_detection_error_is_not_session_error() -> None:
         await _close_test_session(session)
 
 
+async def test_stt_errors_use_unrecoverable_error_tolerance() -> None:
+    from livekit.agents.voice.agent_session import SessionConnectOptions
+
+    session = create_session(
+        FakeActions(),
+        extra_kwargs={"conn_options": SessionConnectOptions(max_unrecoverable_errors=1)},
+    )
+
+    def _stt_error() -> STTError:
+        return STTError(
+            timestamp=time.time(),
+            label="test",
+            error=RuntimeError("stt unavailable"),
+            recoverable=False,
+        )
+
+    try:
+        # first unrecoverable error is tolerated, like llm/tts
+        session._on_error(_stt_error())
+        assert session._closing_task is None
+        assert session._stt_error_counts == 1
+
+        # exceeding the tolerance closes the session
+        session._on_error(_stt_error())
+        assert session._closing_task is not None
+        await session._closing_task
+    finally:
+        await _close_test_session(session)
+
+
+async def test_final_transcript_resets_away_timer_when_not_speaking() -> None:
+    session = create_session(FakeActions(), extra_kwargs={"user_away_timeout": 15.0})
+    try:
+        session._agent_state = "listening"
+        session._user_state = "listening"
+
+        with patch.object(session, "_set_user_away_timer") as set_timer:
+            session._user_input_transcribed(
+                UserInputTranscribedEvent(transcript="hello", is_final=True)
+            )
+            set_timer.assert_called_once()
+            assert session.user_state == "listening"
+
+        with patch.object(session, "_set_user_away_timer") as set_timer:
+            session._user_input_transcribed(
+                UserInputTranscribedEvent(transcript="hello", is_final=False)
+            )
+            set_timer.assert_not_called()
+
+        session._user_state = "speaking"
+        with patch.object(session, "_set_user_away_timer") as set_timer:
+            session._user_input_transcribed(
+                UserInputTranscribedEvent(transcript="hello", is_final=True)
+            )
+            set_timer.assert_not_called()
+    finally:
+        await _close_test_session(session)
+
+
+async def test_stt_error_count_resets_on_user_transcript() -> None:
+    from livekit.agents.voice.agent_session import SessionConnectOptions
+
+    session = create_session(
+        FakeActions(),
+        extra_kwargs={"conn_options": SessionConnectOptions(max_unrecoverable_errors=1)},
+    )
+
+    def _stt_error() -> STTError:
+        return STTError(
+            timestamp=time.time(),
+            label="test",
+            error=RuntimeError("stt unavailable"),
+            recoverable=False,
+        )
+
+    try:
+        session._on_error(_stt_error())
+        assert session._stt_error_counts == 1
+
+        # a real transcript means the stt recovered -> tolerance resets
+        session._user_input_transcribed(
+            UserInputTranscribedEvent(transcript="hello", is_final=True)
+        )
+        assert session._stt_error_counts == 0
+
+        # an empty placeholder transcript is not a recovery -> no reset
+        session._on_error(_stt_error())
+        session._user_input_transcribed(UserInputTranscribedEvent(transcript="", is_final=False))
+        assert session._stt_error_counts == 1
+
+        # tolerance still trips once the (reset) budget is exhausted again
+        session._on_error(_stt_error())
+        assert session._closing_task is not None
+        await session._closing_task
+    finally:
+        await _close_test_session(session)
+
+
+async def test_stt_pipeline_recreates_stream_after_unrecoverable_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.agents.voice import audio_recognition
+    from livekit.agents.voice.audio_recognition import _STTPipeline
+
+    monkeypatch.setattr(audio_recognition, "_STT_RECONNECT_INTERVAL", 0.0)
+
+    attempts = 0
+
+    async def stt_node(audio, model_settings):  # type: ignore[no-untyped-def]
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise APIConnectionError("stt unavailable")
+
+        yield SpeechEvent(
+            type=SpeechEventType.FINAL_TRANSCRIPT,
+            alternatives=[SpeechData(text="recovered", language="en")],
+        )
+        # stay open like a live stream until the pipeline is closed
+        async for _ in audio:
+            pass
+
+    pipeline = _STTPipeline(stt_node)
+    try:
+        # the first stream dies on a connection error; the pump must recreate it
+        # and forward the transcript produced by the second stream
+        ev = await asyncio.wait_for(pipeline.event_ch.recv(), timeout=5)
+        assert ev.type == SpeechEventType.FINAL_TRANSCRIPT
+        assert ev.alternatives[0].text == "recovered"
+        assert attempts == 2
+    finally:
+        await pipeline.aclose()
+
+
+async def test_stt_pipeline_does_not_recreate_on_non_connection_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.agents.voice import audio_recognition
+    from livekit.agents.voice.audio_recognition import _STTPipeline
+
+    monkeypatch.setattr(audio_recognition, "_STT_RECONNECT_INTERVAL", 0.0)
+
+    attempts = 0
+
+    async def stt_node(audio, model_settings):  # type: ignore[no-untyped-def]
+        nonlocal attempts
+        attempts += 1
+        raise ValueError("bug in stt_node")
+        yield  # pragma: no cover - makes this an async generator
+
+    # a non-connection error is not retried: the pump stops instead of looping
+    pipeline = _STTPipeline(stt_node)
+    try:
+        events: list[SpeechEvent] = []
+
+        async def _collect() -> None:
+            async for ev in pipeline.event_ch:
+                events.append(ev)
+
+        await asyncio.wait_for(_collect(), timeout=5)
+        assert events == []
+        assert attempts == 1
+    finally:
+        await pipeline.aclose()
+
+
+async def test_stt_pipeline_does_not_recreate_stream_while_closing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.agents.voice import audio_recognition
+    from livekit.agents.voice.audio_recognition import _STTPipeline
+
+    monkeypatch.setattr(audio_recognition, "_STT_RECONNECT_INTERVAL", 0.0)
+
+    attempts = 0
+
+    async def stt_node(audio, model_settings):  # type: ignore[no-untyped-def]
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise APIConnectionError("stt unavailable")
+
+        yield SpeechEvent(
+            type=SpeechEventType.FINAL_TRANSCRIPT,
+            alternatives=[SpeechData(text="recovered", language="en")],
+        )
+
+    # session already closing: the pump must not spawn a replacement stream
+    pipeline = _STTPipeline(stt_node, is_closing=lambda: True)
+    try:
+        events: list[SpeechEvent] = []
+
+        async def _collect() -> None:
+            async for ev in pipeline.event_ch:
+                events.append(ev)
+
+        await asyncio.wait_for(_collect(), timeout=5)
+        assert events == []
+        assert attempts == 1
+    finally:
+        await pipeline.aclose()
+
+
+async def test_stt_pipeline_recreation_uses_rebound_node(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.agents.voice import audio_recognition
+    from livekit.agents.voice.audio_recognition import _STTPipeline
+
+    monkeypatch.setattr(audio_recognition, "_STT_RECONNECT_INTERVAL", 0.0)
+
+    started_old = asyncio.Event()
+    fail_old = asyncio.Event()
+
+    async def old_node(audio, model_settings):  # type: ignore[no-untyped-def]
+        # the stream captured from the previous agent, still running at handoff
+        started_old.set()
+        await fail_old.wait()
+        raise APIConnectionError("stt unavailable")
+        yield  # pragma: no cover - makes this an async generator
+
+    async def new_node(audio, model_settings):  # type: ignore[no-untyped-def]
+        yield SpeechEvent(
+            type=SpeechEventType.FINAL_TRANSCRIPT,
+            alternatives=[SpeechData(text="recovered", language="en")],
+        )
+        async for _ in audio:
+            pass
+
+    # a handoff reuses the pipeline but rebinds it to the new agent's node; the
+    # recreation after the old stream fails must use that rebound node, not the
+    # previous agent's (whose activity would be torn down)
+    pipeline = _STTPipeline(old_node)
+    try:
+        await asyncio.wait_for(started_old.wait(), timeout=5)
+        pipeline._rebind_node(new_node)
+        fail_old.set()
+        ev = await asyncio.wait_for(pipeline.event_ch.recv(), timeout=5)
+        assert ev.type == SpeechEventType.FINAL_TRANSCRIPT
+        assert ev.alternatives[0].text == "recovered"
+    finally:
+        await pipeline.aclose()
+
+
 async def test_vad_fallback_uses_next_vad_inference_event(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -1757,6 +2002,62 @@ async def test_user_supplied_turn_detector_passes_through() -> None:
     session = AgentSession(turn_handling={"turn_detection": user_detector})
     try:
         assert session.turn_detection is user_detector
+    finally:
+        await session.aclose()
+
+
+async def test_stt_context_options_defaults_forward_chat_context_on() -> None:
+    """forward_chat_context is on by default in the resolved stt_context_options."""
+    from livekit.agents.voice.agent_session import AgentSession
+
+    session = AgentSession(vad=None)
+    try:
+        assert session._opts.stt_context_options["forward_chat_context"] is True
+    finally:
+        await session.aclose()
+
+
+async def test_stt_context_options_passthrough() -> None:
+    from livekit.agents.voice.agent_session import AgentSession
+
+    session = AgentSession(
+        vad=None,
+        stt_context_options={"keyterms": ["LiveKit"], "forward_chat_context": False},
+    )
+    try:
+        opts = session._opts.stt_context_options
+        assert opts["keyterms"] == ["LiveKit"]
+        assert opts["forward_chat_context"] is False
+    finally:
+        await session.aclose()
+
+
+async def test_deprecated_keyterms_options_maps_to_stt_context(caplog) -> None:
+    """keyterms_options still works, maps onto stt_context_options, and warns."""
+    from livekit.agents.voice.agent_session import AgentSession
+
+    with caplog.at_level(logging.WARNING):
+        session = AgentSession(vad=None, keyterms_options={"keyterms": ["Acme"]})
+    try:
+        opts = session._opts.stt_context_options
+        assert opts["keyterms"] == ["Acme"]
+        assert opts["forward_chat_context"] is True  # default still applies
+        assert "keyterms_options is deprecated" in caplog.text
+    finally:
+        await session.aclose()
+
+
+async def test_stt_context_options_wins_over_keyterms_options() -> None:
+    """When both are passed, stt_context_options takes precedence over the deprecated option."""
+    from livekit.agents.voice.agent_session import AgentSession
+
+    session = AgentSession(
+        vad=None,
+        stt_context_options={"keyterms": ["new"]},
+        keyterms_options={"keyterms": ["old"]},
+    )
+    try:
+        assert session._opts.stt_context_options["keyterms"] == ["new"]
     finally:
         await session.aclose()
 

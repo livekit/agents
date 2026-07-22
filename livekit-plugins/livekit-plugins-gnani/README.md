@@ -5,7 +5,9 @@
 
 [LiveKit Agents](https://github.com/livekit/agents) plugin for **[Gnani](https://gnani.ai/)** — high-accuracy Speech-to-Text (Prisma) and low-latency Text-to-Speech (Timbre) for Indian languages.
 
->[Gnani.ai](https://gnani.ai) featuring **Prisma** (STT) and **Timbre** (TTS) models, supporting 10+ Indian languages with real-time streaming, multilingual transcription, and code-switching capabilities.
+> **Gnani** is a production-ready speech AI platform supporting 10+ Indian languages, real-time streaming, and multilingual transcription.
+
+> This integration is maintained by [Gnani.ai](https://gnani.ai/).
 
 ## Installation
 
@@ -13,114 +15,151 @@
 pip install livekit-plugins-gnani
 ```
 
+Or with [uv](https://docs.astral.sh/uv/):
+
+```bash
+uv add livekit-plugins-gnani
+```
+
 This will also install the [`websockets`](https://pypi.org/project/websockets/) and [`livekit-agents`](https://pypi.org/project/livekit-agents/) packages as dependencies.
+
+Install with the LiveKit Agents Gnani extra:
+
+```bash
+uv add "livekit-agents[gnani]"
+```
 
 ## Prerequisites
 
-You need a Gnani API key. Email **[speechstack@gnani.ai](mailto:speechstack@gnani.ai)** to get started — all new accounts receive free credits, no credit card required.
+You need a Gnani API key. [Gnani APIs](https://app.gnani.ai/voice) have this.
 
-### Authentication
-
-All APIs require a single API key — no `organization_id` or `user_id` needed.
-
-**Option 1 — Environment variable (recommended):**
+Set your credentials as environment variables:
 
 ```bash
 export GNANI_API_KEY="your-api-key"
 ```
 
-**Option 2 — Constructor argument:**
+**Or pass the key in the constructor:**
 
 ```python
 stt = STT(api_key="your-api-key", language="hi-IN")
 tts = TTS(api_key="your-api-key")
 ```
 
-> **Migration note:** If upgrading from an earlier version, remove any `organization_id` and `user_id` parameters — they are no longer accepted.
+## Environment variables
 
-## Quick Start
+| Variable | Purpose |
+|----------|---------|
+| `GNANI_API_KEY` | API key for Gnani Vachana STT and TTS |
 
-### Speech-to-Text (REST + Streaming)
+## Quick Start — AgentSession snippet
 
-```python
-from livekit.plugins.gnani import STT
-
-stt = STT(language="hi-IN")
-
-# REST STT (file-based transcription)
-speech_event = await stt.recognize(audio_buffer)
-
-# Streaming STT (real-time WebSocket)
-speech_stream = stt.stream()
-```
-
-### Text-to-Speech
+The snippet below shows core `AgentSession` wiring with Gnani WebSocket STT/TTS.
 
 ```python
-from livekit.plugins.gnani import TTS
+from livekit.agents import AgentSession, room_io
+from livekit.plugins import gnani, groq, silero
 
-# REST (default) - single-request batch synthesis
-tts_rest = TTS(voice="Karan")
+session = AgentSession(
+    stt=gnani.STT(
+        language="en-IN",
+        use_streaming=True,
+    ),
+    llm=groq.LLM(model="llama-3.1-8b-instant"),
+    tts=gnani.TTS(
+        voice="Nalini",
+        model="timbre-v2.5",
+        language="en-IN",
+        synthesize_method="websocket",
+    ),
+    vad=silero.VAD.load(),
+)
 
-# SSE - chunked synthesis via Server-Sent Events (lower latency)
-tts_sse = TTS(voice="Karan", synthesize_method="sse")
-
-# WebSocket - chunked synthesis over WS (lowest latency)
-tts_ws = TTS(voice="Karan", synthesize_method="websocket")
+await session.start(
+    agent=MyAgent(),
+    room=ctx.room,
+    room_options=room_io.RoomOptions(
+        audio_input=room_io.AudioInputOptions(sample_rate=16000),
+        audio_output=room_io.AudioOutputOptions(sample_rate=16000),
+    ),
+)
 ```
 
-All three modes work with the standard LiveKit voice agent pipeline.
-The `synthesize_method` controls which transport `synthesize()` uses
-(REST, SSE, or WebSocket). The `stream()` method always uses WebSocket
-regardless of this setting.
+Set `use_streaming=False` (STT) or swap `synthesize_method` (TTS) for REST variants — see below. WebSocket STT + TTS is the default for lowest latency.
 
-## Full Constructor Reference
+## Service Construction
 
-### STT — All parameters
+### Speech-to-Text (REST)
 
 ```python
 from livekit.plugins.gnani import STT
 
 stt = STT(
-    language="en-IN",           # Default: "en-IN"
-    sample_rate=16000,          # Default: 16000 (also: 8000)
-    format="verbatim",          # Default: "verbatim" (also: "transcribe")
-    preferred_language=None,    # Default: None
-    itn_native_numerals=False,  # Default: False
-    api_key=None,               # Default: None (reads GNANI_API_KEY env var)
-    base_url="https://api.vachana.ai",  # Default
+    language="hi-IN",
+    use_streaming=False,
 )
 ```
 
-### TTS — All parameters
+REST mode requires a VAD in the pipeline. LiveKit wraps the STT with `stt.StreamAdapter` automatically when `use_streaming=False`.
+
+### Speech-to-Text (Streaming WebSocket)
+
+```python
+from livekit.plugins.gnani import STT
+
+stt = STT(
+    language="hi-IN",
+    use_streaming=True,
+    sample_rate=16000,
+)
+```
+
+### Text-to-Speech (REST)
 
 ```python
 from livekit.plugins.gnani import TTS
 
 tts = TTS(
-    voice="Karan",                    # Default: "Karan" (also: Simran, Nara, Riya, Viraj, Raju)
-    model="vachana-voice-v3",         # Default: "vachana-voice-v3"
-    sample_rate=16000,                # Default: 16000 (also: 8000, 22050, 44100)
-    encoding="linear_pcm",           # Default: "linear_pcm" (also: "oggopus")
-    container="wav",                  # Default: "wav" (also: "raw", "mp3", "mulaw", "ogg")
-    num_channels=1,                   # Default: 1
-    bitrate=None,                     # Default: None (also: "96k", "128k", "192k")
-    synthesize_method="rest",         # Default: "rest" (also: "sse", "websocket")
-    api_key=None,                     # Default: None (reads GNANI_API_KEY env var)
-    base_url="https://api.vachana.ai",  # Default
+    voice="Pranav",
+    model="timbre-v2.0",
+    synthesize_method="rest",
 )
 ```
 
-## Features
+### Text-to-Speech (SSE Streaming)
 
-### STT (Prisma)
+```python
+from livekit.plugins.gnani import TTS
 
-- **REST recognition** — REST API (`POST /stt/v3`) for file-based transcription
-- **Real-time streaming** — WebSocket API (`wss://api.vachana.ai/stt/v3/stream`) for live audio transcription with VAD
-- **10+ Indian languages** — see [supported language codes](https://docs.gnani.ai/api/STT/stt-websocket#supported-languages)
-- **Code-switching** — supports multilingual and code-mixed audio
-- **Sample rates** — 8 kHz and 16 kHz
-- **ITN support** — Inverse Text Normalization via `format="transcribe"`
+tts = TTS(
+    voice="Pranav",
+    synthesize_method="sse",
+)
+```
+
+### Text-to-Speech (WebSocket Streaming)
+
+```python
+from livekit.plugins.gnani import TTS
+
+tts = TTS(
+    voice="Nalini",
+    model="timbre-v2.5",
+    language="hi-IN",
+    synthesize_method="websocket",
+)
+```
+
+The `stream()` method always uses WebSocket regardless of `synthesize_method`.
+
+## Services
+
+### STT
+
+| Mode | Parameter | Transport | Description |
+|------|-----------|-----------|-------------|
+| REST | `use_streaming=False` | POST `/stt/v3` | File/buffer transcription. Requires VAD. |
+| WebSocket | `use_streaming=True` | `wss://api.vachana.ai/stt/v3/stream` | Real-time streaming with VAD. Default. |
 
 #### Streaming PCM Specification
 
@@ -137,42 +176,99 @@ All streaming audio must be sent as **raw PCM binary frames** — no container f
 
 Frames must be sent at **real-time cadence**. See **[STT Realtime — PCM Specification](https://docs.gnani.ai/api/STT/stt-websocket#pcm-specification)** for full details.
 
-### TTS (Timbre)
+### TTS
 
-- **REST synthesis** — single-request batch audio generation (`synthesize_method="rest"`)
-- **SSE streaming** — lower-latency chunked synthesis via Server-Sent Events (`synthesize_method="sse"`)
-- **WebSocket synthesis** — lowest-latency synthesis via `synthesize_method="websocket"` or the `stream()` method
-- **6 voices** — Karan, Simran, Nara, Riya, Viraj, Raju
-- **Configurable output** — sample rate (8000–44100), encoding (linear_pcm, oggopus), container (raw, mp3, wav, mulaw, ogg)
-- **Runtime updates** — change voice or model via `update_options()`
+| Mode | Parameter | Transport | Description |
+|------|-----------|-----------|-------------|
+| REST | `synthesize_method="rest"` | POST `/api/v1/tts/inference` | Single-request batch synthesis. Default for `synthesize()`. |
+| SSE | `synthesize_method="sse"` | POST `/api/v1/tts/sse` | Chunked synthesis via Server-Sent Events. |
+| WebSocket | `synthesize_method="websocket"` or `stream()` | `wss://api.vachana.ai/api/v1/tts` | Lowest latency; `stream()` always uses WebSocket. |
+
+## Full Constructor Reference
+
+### STT — All parameters
+
+```python
+from livekit.plugins.gnani import STT
+
+stt = STT(
+    language="en-IN",              # Default: "en-IN"
+    sample_rate=16000,             # Default: 16000 (also: 8000, 44100, 48000)
+    format="verbatim",             # Default: "verbatim" (also: "transcribe" for ITN)
+    itn_native_numerals=False,     # Default: False
+    use_streaming=True,            # Default: True (WebSocket); False = REST + VAD
+    api_key=None,                  # Default: None (reads GNANI_API_KEY env var)
+    base_url="https://api.vachana.ai",
+)
+```
+
+### TTS — All parameters
+
+```python
+from livekit.plugins.gnani import TTS
+
+tts = TTS(
+    voice="Pranav",                # Default: "Pranav" (timbre-v2.0: Kaveri, Shubhra, Deepak)
+    model="timbre-v2.0",           # Default: "timbre-v2.0" (also: "timbre-v2.5" with 42 voices)
+    language=None,                 # timbre-v2.5 only — e.g. "hi-IN", "en-IN"
+    sample_rate=16000,             # Default: 16000 (also: 8000, 22050, 44100)
+    encoding="linear_pcm",         # Default: "linear_pcm" (also: "oggopus")
+    container="wav",               # Default: "wav" (also: "raw", "mp3", "ogg")
+    num_channels=1,                # Default: 1
+    bitrate=None,                  # Default: None (also: "96k", "128k", "192k")
+    synthesize_method="rest",      # Default: "rest" (also: "sse", "websocket")
+    api_key=None,                  # Default: None (reads GNANI_API_KEY env var)
+    base_url="https://api.vachana.ai",
+)
+```
 
 ## Supported Languages
 
 ### STT Languages (Prisma)
 
-Prisma uses BCP-47 locale codes (e.g. `hi-IN`). Supported:
+STT uses BCP-47 locale codes (e.g. `hi-IN`, `bn-IN`).
+
+For the full list of supported languages, see:
 
 - **[STT REST — Supported Languages](https://docs.gnani.ai/api/STT/speech-to-text#supported-languages)**
 - **[STT Realtime — Supported Languages](https://docs.gnani.ai/api/STT/stt-websocket#supported-languages)**
 
----
-
 ### TTS Languages (Timbre)
 
-For the full list of supported languages, see **[TTS — Supported Languages](https://docs.gnani.ai/api/TTS/tts-inference#supported-languages)**.
+The optional `language` parameter is supported for **`timbre-v2.5` only**. For the full list, see **[TTS — Supported Languages](https://docs.gnani.ai/api/TTS/tts-inference#supported-languages)**.
+
+> **Migration:** The former model name `vachana-voice-v3` has been renamed to **`timbre-v2.0`**. Update any `model="vachana-voice-v3"` calls to `model="timbre-v2.0"` (or omit `model` to use the default).
 
 ## Available Voices
 
+See the [official voice list](https://docs.gnani.ai/api/TTS/tts-sse#available-voices) for the latest supported voices.
+
+### timbre-v2.0 (4 voices)
+
 | Voice   | ID        | Gender | Description              |
 |---------|-----------|--------|--------------------------|
-| Karan   | `Karan`   | Male   | Bold, Trustworthy        |
-| Simran  | `Simran`  | Female | Confident, Bright        |
-| Nara    | `Nara`    | Female | Gentle, Expressive       |
-| Riya    | `Riya`    | Female | Cheerful, Energetic      |
-| Viraj   | `Viraj`   | Male   | Commanding, Dynamic      |
-| Raju    | `Raju`    | Male   | Grounded, Conversational |
+| Pranav  | `Pranav`  | Male   | Bold, Trustworthy        |
+| Kaveri  | `Kaveri`  | Female | Confident, Bright        |
+| Shubhra | `Shubhra` | Female | Gentle, Expressive       |
+| Deepak  | `Deepak`  | Male   | Grounded, Conversational |
+
+### timbre-v2.5 (42 voices)
+
+The expanded catalog includes voices across Hindi, English, Tamil, Telugu, Kannada, Malayalam, Marathi, Bengali, Gujarati, Punjabi, and Hinglish. Use `model="timbre-v2.5"` with an optional `language` parameter (e.g. `language="hi-IN"`).
+
+```python
+from livekit.plugins.gnani import TTS
+
+tts = TTS(model="timbre-v2.5", voice="Nalini", language="hi-IN")
+```
 
 ## Architecture
+
+```
+livekit-plugins-gnani    ← This package (LiveKit Agents adapter)
+  ├── STT: REST + WebSocket
+  └── TTS: REST + SSE + WebSocket
+```
 
 This plugin directly implements the Gnani REST and WebSocket APIs using `aiohttp` (for REST STT/TTS) and `websockets` (for streaming STT/TTS), adapting them into LiveKit's `stt.STT` and `tts.TTS` base classes. It uses the **Prisma** model for speech-to-text and the **Timbre** model for text-to-speech. No external SDK is required — all connection logic, authentication, and audio format handling is self-contained. Authentication uses a single `api_key` passed via the `X-API-Key-ID` header.
 
@@ -182,6 +278,15 @@ This plugin directly implements the Gnani REST and WebSocket APIs using `aiohttp
 - [LiveKit Agents Docs](https://docs.livekit.io/agents/)
 - [Gnani STT Plugin Guide](https://docs.livekit.io/agents/integrations/stt/gnani/)
 - [Gnani TTS Plugin Guide](https://docs.livekit.io/agents/integrations/tts/gnani/)
+- [STT REST API](https://docs.gnani.ai/api/STT/speech-to-text)
+- [STT Realtime WebSocket](https://docs.gnani.ai/api/STT/stt-websocket)
+- [TTS REST API](https://docs.gnani.ai/api/TTS/tts-inference)
+- [TTS Streaming (SSE)](https://docs.gnani.ai/api/TTS/tts-sse)
+- [TTS Realtime WebSocket](https://docs.gnani.ai/api/TTS/tts-websocket)
+
+## LiveKit Compatibility
+
+Tested with **LiveKit Agents v1.6.x**.
 
 ## License
 
