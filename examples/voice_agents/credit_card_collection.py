@@ -39,7 +39,7 @@ server = AgentServer()
 async def entrypoint(ctx: JobContext) -> None:
     session: AgentSession = AgentSession(
         stt=inference.STT("deepgram/nova-3", language="multi"),
-        llm=inference.LLM("openai/gpt-4.1"),
+        llm=inference.LLM("openai/gpt-5.4"),
         tts=inference.TTS("cartesia/sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"),
     )
 
