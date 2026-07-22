@@ -45,6 +45,7 @@ DeepgramLanguages = Literal[
     "zh",
     "zh-CN",
     "zh-TW",
+    "zh-HK",
     "da",
     "nl",
     "en",
