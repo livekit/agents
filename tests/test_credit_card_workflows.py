@@ -212,6 +212,14 @@ def test_credit_card_instructions_prohibit_concrete_format_examples() -> None:
     assert {"update_card_number", "confirm_card_number"}.isdisjoint(tool_ids)
     assert not (tools_by_id["append_card_number"].info.flags & ToolFlag.IGNORE_ON_ENTER)
     assert not (tools_by_id["submit_card_number"].info.flags & ToolFlag.IGNORE_ON_ENTER)
+    for tool_id in ("append_card_number", "submit_card_number"):
+        description = tools_by_id[tool_id].info.description or ""
+        assert "confirmation" not in description.lower()
+
+    assert isinstance(card_number_task.instructions, Instructions)
+    rendered_card_number = card_number_task.instructions.render(modality="audio")
+    assert "during confirmation" not in rendered_card_number.lower()
+    assert "second complete reading" not in rendered_card_number.lower()
 
     explicit_ask_tools = {
         tool.id: tool for tool in GetCardNumberTask(require_explicit_ask=True).tools

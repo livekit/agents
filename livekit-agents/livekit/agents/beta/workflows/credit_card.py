@@ -30,13 +30,11 @@ If the user wishes to start over the credit card collection process, call restar
 Call `append_card_number` as soon as the user provides a new group of digits. Pass only the newly provided digits; the task stores earlier groups.
 For a correction, use `replace_last` to replace only the incorrect trailing digits.
 Call `submit_card_number` when the user indicates they have finished, or set `finish=True` when appending the final group.
-During confirmation, collect the repeated number with the same append and submit tools.
 Always explicitly invoke a tool when applicable. Do not simulate tool usage, and never state that a value was recorded, submitted, or confirmed unless the corresponding tool call succeeded.
 Avoid listing out questions with bullet points or numbers, use a natural conversational tone.
 Never repeat any sensitive information, such as the user's credit card number, back to the user.
 Never state or infer how many digits have been collected.
 When explaining an input format, never provide invented or example card numbers, security codes, expiration months, or expiration years. Describe only the format's structure.
-{confirmation_instructions}
 """
 
 _CARD_NUMBER_AUDIO_SPECIFIC = """
@@ -182,9 +180,6 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
         require_explicit_ask: bool = False,
         extra_instructions: str = "",
     ) -> None:
-        confirmation_instructions = (
-            "The task will ask for a second complete reading before it finishes."
-        )
         extra_suffix = f"\n{extra_instructions}" if extra_instructions else ""
 
         self._card_number = ""
@@ -198,16 +193,10 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
             instructions=Instructions(
                 audio=_CARD_NUMBER_BASE_INSTRUCTIONS.format(
                     modality_specific=_CARD_NUMBER_AUDIO_SPECIFIC,
-                    confirmation_instructions=(
-                        confirmation_instructions if require_confirmation is not False else ""
-                    ),
                 )
                 + extra_suffix,
                 text=_CARD_NUMBER_BASE_INSTRUCTIONS.format(
                     modality_specific=_CARD_NUMBER_TEXT_SPECIFIC,
-                    confirmation_instructions=(
-                        confirmation_instructions if require_confirmation is True else ""
-                    ),
                 )
                 + extra_suffix,
             ),
@@ -245,9 +234,9 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
         ) -> str | None:
             """Append newly provided digits to the active card-number reading.
 
-            Use this while collecting both the original number and its confirmation. Pass
-            only new digits. To correct a suffix, remove it with replace_last while
-            appending the replacement. Set finish when these are the final digits.
+            Pass only new digits. To correct a suffix, remove it with replace_last while
+            appending the replacement. Set finish when these are the final digits. The task
+            decides whether another reading is required.
 
             Args:
                 digits: Newly provided card-number digits, with no spaces or dashes.
@@ -267,8 +256,8 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
         async def submit_card_number(context: RunContext) -> str | None:
             """Submit the active card-number reading after the user finishes it.
 
-            Call once after the original number and again after the repeated number when
-            confirmation is required. Do not call before the user finishes a reading.
+            Do not call before the user finishes a reading. The task decides whether another
+            reading is required.
             """
             return await self._submit_card_number_impl(context)
 
