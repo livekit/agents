@@ -60,7 +60,7 @@ class TestCredentials:
     def test_defaults_and_identity(self) -> None:
         av = _make_avatar()
         assert av.provider == "lemonslice"
-        assert av.avatar_identity == "lemonslice-avatar-agent"
+        assert av.avatar_identity == "lemonslice-inference-avatar"
 
     def test_env_fallback(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("LIVEKIT_INFERENCE_API_KEY", raising=False)
@@ -85,6 +85,21 @@ class TestCredentials:
     def test_custom_identity(self) -> None:
         av = _make_avatar(avatar_participant_identity="custom-id")
         assert av.avatar_identity == "custom-id"
+
+
+class TestConstructorValidation:
+    def test_image_url_and_model_id_conflict_raises(self) -> None:
+        # A catalog id in the model string and an image_url are mutually
+        # exclusive (the gateway rejects both); the constructor fails fast.
+        with pytest.raises(ValueError, match="not both"):
+            _make_avatar(model="lemonslice/agent_abc", image_url="https://x/y.png")
+
+    def test_extra_kwargs_is_copied(self) -> None:
+        # A later mutation of the caller's dict must not change what we send.
+        extra: dict[str, Any] = {"foo": 1}
+        av = _make_avatar(extra_kwargs=extra)
+        extra["foo"] = 999
+        assert av._extra_kwargs == {"foo": 1}
 
 
 @contextlib.asynccontextmanager
@@ -140,7 +155,7 @@ async def test_create_session_success() -> None:
     body = captured["body"]
     assert body["provider"] == "lemonslice"
     assert body["livekit_token"] == "worker-token"
-    assert body["avatar_identity"] == "lemonslice-avatar-agent"
+    assert body["avatar_identity"] == "lemonslice-inference-avatar"
     assert body["agent_identity"] == "agent-worker-1"
     assert body["room_sid"] == "RM_123"
     assert body["image_url"] == "https://example.com/face.png"
@@ -356,7 +371,7 @@ async def test_start_mints_worker_token_with_expected_grants(
 
     claims = jwt.decode(captured["body"]["livekit_token"], options={"verify_signature": False})
     assert claims["kind"] == "agent"
-    assert claims["sub"] == "lemonslice-avatar-agent"
+    assert claims["sub"] == "lemonslice-inference-avatar"
     assert claims["video"]["roomJoin"] is True
     assert claims["video"]["room"] == "my-room"
     assert claims["attributes"] == {

@@ -47,7 +47,7 @@ _DEFAULT_SAMPLE_RATE = 16000
 _REQUEST_TIMEOUT = 60.0
 # lk.avatar_provider tags the avatar worker participant with its provider so
 # server-side (participant-lifetime) avatar-minutes metering can attribute the
-# worker's room time to the right SKU. See the inference-avatar plan.
+# worker's room time to the right SKU.
 _ATTRIBUTE_AVATAR_PROVIDER = "lk.avatar_provider"
 
 
@@ -56,7 +56,9 @@ def _parse_avatar_model(model: str) -> tuple[str, str | None]:
 
     ``"lemonslice"`` -> ``("lemonslice", None)``; ``"lemonslice/agent_abc"`` ->
     ``("lemonslice", "agent_abc")``. The id (when present) is a provider catalog
-    id forwarded to the gateway as ``avatar_id``.
+    id forwarded to the gateway as ``avatar_id``. For LemonSlice this is the
+    agent id: the gateway maps ``avatar_id`` onto LemonSlice's ``agent_id``, so
+    ``"lemonslice/<agent_id>"`` selects a pre-built LemonSlice agent.
     """
     provider, _, avatar_id = model.partition("/")
     provider = provider.strip()
@@ -115,15 +117,20 @@ class AvatarSession(BaseAvatarSession):
         """
         Args:
             model: ``"<provider>"`` or ``"<provider>/<avatar_id>"``
-                (e.g. ``"lemonslice"`` or ``"lemonslice/agent_abc"``).
+                (e.g. ``"lemonslice"`` or ``"lemonslice/agent_abc"``). For
+                LemonSlice the ``<avatar_id>`` is the agent id (the gateway maps
+                it onto LemonSlice's ``agent_id``); pass a pre-built agent as
+                ``"lemonslice/<agent_id>"``.
             image_url: Appearance source for image-sourced avatars (LemonSlice).
-                Mutually exclusive with a catalog id in the model string.
+                Mutually exclusive with a catalog id in the model string; passing
+                both raises here (and the gateway rejects the combination too).
             prompt: Speaking prompt (mapped to the provider's agent_prompt).
             idle_prompt: Idle prompt (mapped to the provider's agent_idle_prompt).
             idle_timeout: Provider idle timeout in seconds; the gateway clamps it
                 to the provider's configured bounds.
             avatar_participant_identity: Room identity for the avatar worker.
-                Defaults to ``"<provider>-avatar-agent"``.
+                Defaults to ``"<provider>-inference-avatar"`` (the ``inference``
+                marker distinguishes it from the BYOK plugins' worker identity).
             avatar_participant_name: Display name for the avatar worker.
             extra_kwargs: Provider-specific extras forwarded verbatim (subject to
                 the gateway's per-provider allowlist).
@@ -138,11 +145,19 @@ class AvatarSession(BaseAvatarSession):
         super().__init__()
 
         self._provider, self._avatar_id = _parse_avatar_model(model)
+        if self._avatar_id and is_given(image_url):
+            # The gateway (e.g. the LemonSlice adapter) rejects both; fail fast
+            # here so the caller doesn't spend a round trip to learn that.
+            raise ValueError(
+                "pass either a catalog id in the model string "
+                f"('{self._provider}/<avatar_id>') or image_url, not both"
+            )
         self._image_url = image_url
         self._prompt = prompt
         self._idle_prompt = idle_prompt
         self._idle_timeout = idle_timeout
-        self._extra_kwargs = extra_kwargs
+        # Copy so a later mutation of the caller's dict can't change what we send.
+        self._extra_kwargs = dict(extra_kwargs) if is_given(extra_kwargs) else extra_kwargs
         self._conn_options = conn_options
         self._http_session = http_session
 
@@ -169,7 +184,7 @@ class AvatarSession(BaseAvatarSession):
         self._avatar_participant_identity = (
             avatar_participant_identity
             if is_given(avatar_participant_identity)
-            else f"{self._provider}-avatar-agent"
+            else f"{self._provider}-inference-avatar"
         )
         self._avatar_participant_name = (
             avatar_participant_name
@@ -274,7 +289,16 @@ class AvatarSession(BaseAvatarSession):
         self._terminate_token = create_resp.get("terminate_token")
         sample_rate = create_resp.get("sample_rate") or _DEFAULT_SAMPLE_RATE
 
-        if self._provider_session_id and not self._terminate_token:
+        if not self._provider_session_id:
+            # Without it aclose() has nothing to terminate; the provider session
+            # runs to its own idle timeout instead of being stopped explicitly.
+            logger.warning(
+                "avatar gateway create response had no provider_session_id; this "
+                "session cannot be explicitly terminated and will bill until its "
+                "provider idle timeout",
+                extra={"provider": self._provider, "session_id": self._session_id},
+            )
+        elif not self._terminate_token:
             # aclose() cannot terminate without this; the provider session will
             # run to its own idle timeout instead of being stopped explicitly.
             logger.warning(
@@ -289,8 +313,8 @@ class AvatarSession(BaseAvatarSession):
             )
 
         # Rebind the audio tail to the avatar worker using the gateway-reported
-        # sample rate. Done after the create response (unlike BYOK, which
-        # hardcodes the rate and rebinds first): in the canonical flow
+        # sample rate. Done after the create response (the lemonslice BYOK plugin
+        # instead hardcodes the rate and rebinds first): in the canonical flow
         # avatar.start() runs before session.start(), so no audio has flowed yet
         # and nothing is lost. wait_remote_track buffers until the video track
         # appears; replace_audio_tail keeps the TranscriptSynchronizer /
@@ -353,6 +377,16 @@ class AvatarSession(BaseAvatarSession):
         finally:
             await super().aclose()
 
+    def _auth_headers(self) -> dict[str, str]:
+        # Minted fresh on each call: callers inside the create retry loop re-mint
+        # per attempt rather than reusing a token that may expire between tries.
+        return {
+            **get_inference_headers(),
+            "Authorization": f"Bearer {create_access_token(self._api_key, self._api_secret)}",
+            HEADER_INFERENCE_PROVIDER: self._provider,
+            "Content-Type": "application/json",
+        }
+
     async def _create_session(
         self,
         *,
@@ -394,13 +428,7 @@ class AvatarSession(BaseAvatarSession):
         try:
             last_exc: Exception | None = None
             for i in range(self._conn_options.max_retry + 1):
-                headers = {
-                    **get_inference_headers(),
-                    "Authorization": f"Bearer {create_access_token(self._api_key, self._api_secret)}",
-                    HEADER_INFERENCE_PROVIDER: self._provider,
-                    "Idempotency-Key": idempotency_key,
-                    "Content-Type": "application/json",
-                }
+                headers = {**self._auth_headers(), "Idempotency-Key": idempotency_key}
                 try:
                     async with session.post(
                         url,
@@ -439,7 +467,7 @@ class AvatarSession(BaseAvatarSession):
                         raise
                     logger.warning(
                         "avatar gateway returned a retryable error",
-                        extra={"error": str(e)},
+                        extra={"provider": self._provider, "error": str(e)},
                     )
 
                 if i < self._conn_options.max_retry:
@@ -454,12 +482,7 @@ class AvatarSession(BaseAvatarSession):
 
     async def _terminate_session(self, provider_session_id: str, terminate_token: str) -> None:
         url = f"{self._base_url.rstrip('/')}/avatar/sessions/terminate"
-        headers = {
-            **get_inference_headers(),
-            "Authorization": f"Bearer {create_access_token(self._api_key, self._api_secret)}",
-            HEADER_INFERENCE_PROVIDER: self._provider,
-            "Content-Type": "application/json",
-        }
+        headers = self._auth_headers()
         payload = {
             "provider": self._provider,
             "provider_session_id": provider_session_id,
