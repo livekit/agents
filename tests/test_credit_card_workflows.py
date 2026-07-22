@@ -7,12 +7,14 @@ from unittest.mock import patch
 import pytest
 
 from livekit.agents.beta.workflows.credit_card import (
+    CardCollectionRestartError,
     GetCardNumberResult,
     GetCardNumberTask,
+    GetCreditCardTask,
     GetExpirationDateTask,
     GetSecurityCodeTask,
 )
-from livekit.agents.llm.chat_context import Instructions
+from livekit.agents.llm.chat_context import ChatContext, Instructions
 from livekit.agents.llm.tool_context import ToolError, ToolFlag
 
 pytestmark = pytest.mark.unit
@@ -21,6 +23,57 @@ pytestmark = pytest.mark.unit
 def _run_context(modality: str = "audio") -> Any:
     return SimpleNamespace(
         speech_handle=SimpleNamespace(input_details=SimpleNamespace(modality=modality))
+    )
+
+
+@pytest.mark.asyncio
+async def test_credit_card_restart_uses_latest_chat_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    initial_ctx = ChatContext.empty()
+    initial_ctx.add_message(role="user", content="The previous card number was invalid.")
+    task = GetCreditCardTask(chat_ctx=initial_ctx)
+    group_contexts: list[ChatContext] = []
+
+    class FakeTaskGroup:
+        def __init__(self, *, chat_ctx: ChatContext, **_: Any) -> None:
+            group_contexts.append(chat_ctx.copy())
+
+        def add(self, *_: Any, **__: Any) -> "FakeTaskGroup":
+            return self
+
+        def __await__(self):
+            async def run() -> Any:
+                if len(group_contexts) == 1:
+                    task._chat_ctx.add_message(
+                        role="user", content="The first four digits are four two four two."
+                    )
+                    raise CardCollectionRestartError("start the card number again")
+
+                return SimpleNamespace(
+                    task_results={
+                        "cardholder_name_task": SimpleNamespace(
+                            first_name="Ada", last_name="Lovelace"
+                        ),
+                        "card_number_task": SimpleNamespace(
+                            issuer="Visa", card_number="4242424242424242"
+                        ),
+                        "security_code_task": SimpleNamespace(security_code="123"),
+                        "expiration_date_task": SimpleNamespace(date="07/32"),
+                    }
+                )
+
+            return run().__await__()
+
+    monkeypatch.setattr("livekit.agents.beta.workflows.credit_card.TaskGroup", FakeTaskGroup)
+
+    await task.on_enter()
+
+    assert len(group_contexts) == 2
+    assert group_contexts[0].messages()[-1].text_content == "The previous card number was invalid."
+    assert (
+        group_contexts[1].messages()[-1].text_content
+        == "The first four digits are four two four two."
     )
 
 

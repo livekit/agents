@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import date
 from enum import Enum, auto
+from functools import partial
 from typing import TYPE_CHECKING
 
 from ... import llm, stt, tts, vad
@@ -760,7 +761,6 @@ class GetCreditCardTask(AgentTask[GetCreditCardResult]):
         # TaskGroup overwrites each sub-task's chat_ctx with its own (see
         # TaskGroup.on_enter) - without seeding the TaskGroup, sub-tasks
         # would run with empty context.
-        ctx = self.chat_ctx
         # Role hint for the cardholder sub-task. With IGNORE_ON_ENTER on
         # update_name (via require_explicit_ask=True), the model is
         # structurally forced to ask before recording. The extra text
@@ -776,6 +776,9 @@ class GetCreditCardTask(AgentTask[GetCreditCardResult]):
             cardholder_extra = f"{self._extra_instructions}\n\n{cardholder_extra}"
 
         while not self.done():
+            # A restarted TaskGroup merges its final turn back into this task before
+            # raising, so take a fresh snapshot instead of dropping that turn.
+            ctx = self.chat_ctx
             # Order: number first (most natural for the caller to give
             # when asked for "card details"), then expiry and security
             # code, then the cardholder name LAST. The name most often
@@ -785,7 +788,8 @@ class GetCreditCardTask(AgentTask[GetCreditCardResult]):
             # into update_name.
             task_group = TaskGroup(chat_ctx=ctx)
             task_group.add(
-                lambda: GetCardNumberTask(
+                partial(
+                    GetCardNumberTask,
                     chat_ctx=ctx,
                     require_confirmation=self._require_confirmation,
                     extra_instructions=self._extra_instructions,
@@ -794,7 +798,8 @@ class GetCreditCardTask(AgentTask[GetCreditCardResult]):
                 description="Collects the user's card number",
             )
             task_group.add(
-                lambda: GetExpirationDateTask(
+                partial(
+                    GetExpirationDateTask,
                     chat_ctx=ctx,
                     require_confirmation=self._require_confirmation,
                     extra_instructions=self._extra_instructions,
@@ -803,7 +808,8 @@ class GetCreditCardTask(AgentTask[GetCreditCardResult]):
                 description="Collects the card's expiration date",
             )
             task_group.add(
-                lambda: GetSecurityCodeTask(
+                partial(
+                    GetSecurityCodeTask,
                     chat_ctx=ctx,
                     require_confirmation=self._require_confirmation,
                     extra_instructions=self._extra_instructions,
@@ -812,7 +818,8 @@ class GetCreditCardTask(AgentTask[GetCreditCardResult]):
                 description="Collects the card's security code",
             )
             task_group.add(
-                lambda: GetNameTask(
+                partial(
+                    GetNameTask,
                     last_name=True,
                     chat_ctx=ctx,
                     extra_instructions=cardholder_extra,
