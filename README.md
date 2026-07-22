@@ -397,6 +397,8 @@ This project uses [uv](https://docs.astral.sh/uv/) for package management. To in
 uv sync --all-extras --dev
 ```
 
+This repo stores some large file assets with [Git LFS](https://git-lfs.com). Make sure `git-lfs` is installed *before* cloning, otherwise those files are left as small pointer placeholders which fail to load at runtime. If you already cloned without it, install `git-lfs` then run `git lfs install && git lfs pull` (or clone again) to fetch the actual files.
+
 ### Examples
 
 This project includes many examples in the [`examples`](examples/) directory. To run them, create the file `examples/.env` with credentials for LiveKit Server and any necessary model providers (see `examples/.env.example`), then run:

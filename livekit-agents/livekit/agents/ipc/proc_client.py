@@ -47,7 +47,12 @@ class _ProcClient:
                 send_message(cch, InitializeResponse())
             except Exception as e:
                 send_message(cch, InitializeResponse(error=str(e)))
-                raise
+                raise RuntimeError(
+                    "failed to initialize proc_client. Hint: If resource file "
+                    "failed to load (e.g. INVALID_PROTOBUF), your dev repo may have "
+                    "been cloned without Git LFS. Install git-lfs then run "
+                    "`git lfs install && git lfs pull`, or clone again."
+                ) from e
 
             self._initialized = True
             cch.detach()
