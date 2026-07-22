@@ -7,6 +7,7 @@ import json
 import time
 from collections.abc import AsyncIterable, Coroutine
 from dataclasses import dataclass
+from functools import cache
 from typing import TYPE_CHECKING, Any, Literal
 
 from opentelemetry import context as otel_context, trace
@@ -2545,10 +2546,16 @@ class AgentActivity(RecognitionHooks):
         return None
 
     def _tts_sentence_tokenizer(self) -> tokenize.SentenceTokenizer:
-        """Sentence tokenizer matching what the TTS path applies to this generation,
-        mirroring `Agent.default.tts_node` and the inference TTS provider defaults.
-        Custom `tts_node` overrides and provider-side segmentation aren't visible here,
-        so those fall back to the `StreamAdapter` default."""
+        """Sentence tokenizer the TTS path applies to this generation.
+
+        Single source of truth for that segmentation: the default `tts_node` wraps a
+        non-streaming TTS with the tokenizer returned here, and the inference gateway
+        shares the same per-provider defaults, so the ttfs metric can't drift from what
+        TTS actually does. A live `StreamAdapter` instance is reused rather than rebuilt.
+        Custom `tts_node` overrides and native provider-side segmentation aren't visible
+        here, so those fall back to the `StreamAdapter` default.
+        """
+        # markup only exists in the stream when expressive is active
         expressive_active = self._resolve_expressive_options() is not None
         if isinstance(self.tts, tts.StreamAdapter):
             return self.tts._sentence_tokenizer
