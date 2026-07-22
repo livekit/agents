@@ -1158,6 +1158,35 @@ async def test_stt_errors_use_unrecoverable_error_tolerance() -> None:
         await _close_test_session(session)
 
 
+async def test_final_transcript_resets_away_timer_when_not_speaking() -> None:
+    session = create_session(FakeActions(), extra_kwargs={"user_away_timeout": 15.0})
+    try:
+        session._agent_state = "listening"
+        session._user_state = "listening"
+
+        with patch.object(session, "_set_user_away_timer") as set_timer:
+            session._user_input_transcribed(
+                UserInputTranscribedEvent(transcript="hello", is_final=True)
+            )
+            set_timer.assert_called_once()
+            assert session.user_state == "listening"
+
+        with patch.object(session, "_set_user_away_timer") as set_timer:
+            session._user_input_transcribed(
+                UserInputTranscribedEvent(transcript="hello", is_final=False)
+            )
+            set_timer.assert_not_called()
+
+        session._user_state = "speaking"
+        with patch.object(session, "_set_user_away_timer") as set_timer:
+            session._user_input_transcribed(
+                UserInputTranscribedEvent(transcript="hello", is_final=True)
+            )
+            set_timer.assert_not_called()
+    finally:
+        await _close_test_session(session)
+
+
 async def test_stt_error_count_resets_on_user_transcript() -> None:
     from livekit.agents.voice.agent_session import SessionConnectOptions
 
@@ -1973,6 +2002,62 @@ async def test_user_supplied_turn_detector_passes_through() -> None:
     session = AgentSession(turn_handling={"turn_detection": user_detector})
     try:
         assert session.turn_detection is user_detector
+    finally:
+        await session.aclose()
+
+
+async def test_stt_context_options_defaults_forward_chat_context_on() -> None:
+    """forward_chat_context is on by default in the resolved stt_context_options."""
+    from livekit.agents.voice.agent_session import AgentSession
+
+    session = AgentSession(vad=None)
+    try:
+        assert session._opts.stt_context_options["forward_chat_context"] is True
+    finally:
+        await session.aclose()
+
+
+async def test_stt_context_options_passthrough() -> None:
+    from livekit.agents.voice.agent_session import AgentSession
+
+    session = AgentSession(
+        vad=None,
+        stt_context_options={"keyterms": ["LiveKit"], "forward_chat_context": False},
+    )
+    try:
+        opts = session._opts.stt_context_options
+        assert opts["keyterms"] == ["LiveKit"]
+        assert opts["forward_chat_context"] is False
+    finally:
+        await session.aclose()
+
+
+async def test_deprecated_keyterms_options_maps_to_stt_context(caplog) -> None:
+    """keyterms_options still works, maps onto stt_context_options, and warns."""
+    from livekit.agents.voice.agent_session import AgentSession
+
+    with caplog.at_level(logging.WARNING):
+        session = AgentSession(vad=None, keyterms_options={"keyterms": ["Acme"]})
+    try:
+        opts = session._opts.stt_context_options
+        assert opts["keyterms"] == ["Acme"]
+        assert opts["forward_chat_context"] is True  # default still applies
+        assert "keyterms_options is deprecated" in caplog.text
+    finally:
+        await session.aclose()
+
+
+async def test_stt_context_options_wins_over_keyterms_options() -> None:
+    """When both are passed, stt_context_options takes precedence over the deprecated option."""
+    from livekit.agents.voice.agent_session import AgentSession
+
+    session = AgentSession(
+        vad=None,
+        stt_context_options={"keyterms": ["new"]},
+        keyterms_options={"keyterms": ["old"]},
+    )
+    try:
+        assert session._opts.stt_context_options["keyterms"] == ["new"]
     finally:
         await session.aclose()
 

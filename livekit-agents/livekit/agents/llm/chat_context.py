@@ -278,6 +278,13 @@ class MetricsReport(TypedDict, total=False):
     Assistant `ChatMessage` only
     """
 
+    provider_request_ids: list[str]
+    """Provider-known request or response IDs associated with this turn.
+
+    Assistant `ChatMessage` only. These IDs can be used to correlate a turn with
+    provider-side logs.
+    """
+
     llm_metadata: MetricsMetadata
     tts_metadata: MetricsMetadata
     stt_metadata: MetricsMetadata

@@ -68,11 +68,20 @@ def test_stt_accepts_8k_sample_rate():
 
 
 def test_stt_rejects_invalid_sample_rate():
-    """STT rejects sample rates other than 8000 or 16000."""
+    """STT rejects sample rates outside STREAM_SUPPORTED_SAMPLE_RATES."""
     from livekit.plugins.gnani import STT
 
     with pytest.raises(ValueError, match="sample_rate"):
-        STT(api_key="test-key", sample_rate=44100)
+        STT(api_key="test-key", sample_rate=12345)
+
+
+def test_stt_accepts_44k_and_48k_sample_rates():
+    """STT accepts 44100 and 48000 Hz sample rates."""
+    from livekit.plugins.gnani import STT
+
+    for rate in (44100, 48000):
+        stt = STT(api_key="test-key", sample_rate=rate)
+        assert stt._opts.sample_rate == rate
 
 
 def test_stt_capabilities():
