@@ -465,6 +465,38 @@ def test_tts_update_options_preserves_timbre_v20_default():
     assert tts._opts.model == "timbre-v2.0"
 
 
+def test_tts_update_options_switch_v25_to_v20_clears_language():
+    """Switching model from timbre-v2.5 to timbre-v2.0 auto-clears stale language."""
+    from livekit.plugins.gnani import TTS
+
+    tts = TTS(api_key="test-key", model="timbre-v2.5", voice="Nalini", language="hi-IN")
+    assert tts._opts.language == "hi-IN"
+
+    tts.update_options(model="timbre-v2.0", voice="Pranav")
+    assert tts._opts.model == "timbre-v2.0"
+    assert tts._opts.voice == "Pranav"
+    assert tts._opts.language is None
+
+
+def test_tts_update_options_explicit_language_none():
+    """Passing language=None explicitly clears the language."""
+    from livekit.plugins.gnani import TTS
+
+    tts = TTS(api_key="test-key", model="timbre-v2.5", voice="Nalini", language="hi-IN")
+    tts.update_options(language=None)
+    assert tts._opts.language is None
+
+
+def test_tts_update_options_v25_preserves_language():
+    """Switching voice within timbre-v2.5 preserves language."""
+    from livekit.plugins.gnani import TTS
+
+    tts = TTS(api_key="test-key", model="timbre-v2.5", voice="Nalini", language="hi-IN")
+    tts.update_options(voice="Bhavna")
+    assert tts._opts.voice == "Bhavna"
+    assert tts._opts.language == "hi-IN"
+
+
 def test_tts_websocket_chunked_stream_ws_url():
     """WebSocketChunkedStream builds correct WS URL."""
     from unittest.mock import MagicMock, patch

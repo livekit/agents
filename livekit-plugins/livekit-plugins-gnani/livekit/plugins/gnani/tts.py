@@ -53,6 +53,8 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.utils.misc import is_given
 
 from ._compat import ws_header_kwargs as _ws_header_kwargs
 from .log import logger
@@ -347,29 +349,37 @@ class TTS(tts.TTS):
     def update_options(
         self,
         *,
-        voice: str | None = None,
-        model: str | None = None,
-        language: str | None = None,
+        voice: NotGivenOr[str] = NOT_GIVEN,
+        model: NotGivenOr[str] = NOT_GIVEN,
+        language: NotGivenOr[str | None] = NOT_GIVEN,
         **kwargs: Any,
     ) -> None:
         _check_deprecated_tts_args(kwargs, caller="TTS.update_options")
 
-        next_voice = voice if voice is not None else self._opts.voice
-        next_model = model if model is not None else self._opts.model
-        next_language = language if language is not None else self._opts.language
+        next_voice = voice if is_given(voice) else self._opts.voice
+        next_model = model if is_given(model) else self._opts.model
 
-        if voice is not None or model is not None or language is not None:
+        if is_given(language):
+            next_language = language
+        elif next_model != "timbre-v2.5" and self._opts.language is not None:
+            next_language = None
+        else:
+            next_language = self._opts.language
+
+        if is_given(voice) or is_given(model) or is_given(language):
             _validate_tts_config(
                 voice=next_voice,
                 model=next_model,
                 language=next_language,
             )
 
-        if voice is not None:
+        if is_given(voice):
             self._opts.voice = voice
-        if model is not None:
+        if is_given(model):
             self._opts.model = model
-        if language is not None:
+            if next_model != "timbre-v2.5":
+                self._opts.language = None
+        if is_given(language):
             self._opts.language = language
 
     async def aclose(self) -> None:
