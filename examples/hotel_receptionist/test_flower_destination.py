@@ -121,3 +121,39 @@ def test_amend_sets_instructions(db: HotelDB) -> None:
 def test_amend_unknown_code_is_not_found(db: HotelDB) -> None:
     with pytest.raises(NotFound):
         asyncio.run(db.amend_florist_order(code="FLR-NOPE", delivery_instructions="x"))
+
+
+# --- tool layer: destination validation ---
+
+from livekit.agents import ToolError  # noqa: E402
+
+from tools_services import _florist_destination  # noqa: E402
+
+
+def test_destination_room_phrase_resolves(db: HotelDB) -> None:
+    assert _florist_destination(db, "room 304", None) == ("RM_304", None)
+    assert _florist_destination(db, "the penthouse suite", "Diane Okafor") == ("RM_PH", None)
+
+
+def test_destination_recipient_only(db: HotelDB) -> None:
+    assert _florist_destination(db, None, "Theodore Lansing") == (None, "Theodore Lansing")
+    assert _florist_destination(db, "  ", " Theodore Lansing ") == (None, "Theodore Lansing")
+
+
+def test_destination_placeholder_raises(db: HotelDB) -> None:
+    # a bare stand-in word must bounce even when a recipient is also present -
+    # the agent said "room" without the caller naming one.
+    with pytest.raises(ToolError):
+        _florist_destination(db, "room", "Diane Okafor")
+
+
+def test_destination_unknown_room_raises(db: HotelDB) -> None:
+    with pytest.raises(ToolError, match="doesn't match"):
+        _florist_destination(db, "412", None)
+
+
+def test_destination_neither_raises(db: HotelDB) -> None:
+    with pytest.raises(ToolError, match="ask the caller"):
+        _florist_destination(db, None, None)
+    with pytest.raises(ToolError):
+        _florist_destination(db, "", "  ")
