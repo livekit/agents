@@ -2657,25 +2657,25 @@ dependencies = [
 requires-dist = [
     { name = "livekit", specifier = ">=1.0.23,<2" },
     { name = "livekit-agents", editable = "livekit-agents" },
-    { name = "livekit-plugins-krisp-internal", specifier = ">=0.1.0" },
+    { name = "livekit-plugins-krisp-internal", specifier = "==0.2.0" },
     { name = "numpy", specifier = ">=1.20.0" },
 ]
 
 [[package]]
 name = "livekit-plugins-krisp-internal"
-version = "0.1.1"
+version = "0.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "livekit" },
     { name = "numpy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/84/37/cbb0654c9e475ece760a28ffcbf86ef63bae438bd49c62ac3ce2fb66a583/livekit_plugins_krisp_internal-0.1.1.tar.gz", hash = "sha256:d6af9a2204d2f797ad91d59a20c7c6a70acd223997530995b7d7d84305d9b733", size = 66233284, upload-time = "2026-07-06T08:39:32.119Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/68/06/00f16159f24c7c87a17b2a295a4b5e460d82ead087eb838fc5bce11c0e1e/livekit_plugins_krisp_internal-0.2.0.tar.gz", hash = "sha256:3cbc22b55c74bb1f04518c066c559749fe4940eedbc6927fee7c16992414c96e", size = 70996779, upload-time = "2026-07-22T15:19:42.166Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3d/1e/cbbeaf7dc9847ab6fc14225da0320b9eb300a048295fe959669496d31a6e/livekit_plugins_krisp_internal-0.1.1-cp310-abi3-macosx_10_9_x86_64.whl", hash = "sha256:42e8f298707c4bec169a60457ff474d2a4f8a3e7061553a712896edb1eae85e6", size = 54093413, upload-time = "2026-07-06T08:39:16.201Z" },
-    { url = "https://files.pythonhosted.org/packages/28/f8/81cfd4c0e3b48ab0d9785b291397e3f482c7e286ddfaac9606597724c711/livekit_plugins_krisp_internal-0.1.1-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:cc481f1020aa3ec16ae3e7f5739d15b33a3bdebcefb7d04870f75c089a696f90", size = 53154360, upload-time = "2026-07-06T08:39:19.312Z" },
-    { url = "https://files.pythonhosted.org/packages/73/46/a32ee41869f4ab10853f4fa3570adc0781060e910ea57ab874c077bfb5bd/livekit_plugins_krisp_internal-0.1.1-cp310-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:cfa3b7e1724049cc22a963c5cc5df5f4053096580aec1ba57d7cbe250030e929", size = 60010593, upload-time = "2026-07-06T08:39:22.544Z" },
-    { url = "https://files.pythonhosted.org/packages/9f/a4/5eaf5b7003778153af42a7bd6641d8d6d5d892490e2d76cb59a3b0ba904d/livekit_plugins_krisp_internal-0.1.1-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:1a1edda1a70d8fec09e7a84b9e0c9fad37262960631e7d79cf4fe2e816d26666", size = 66365065, upload-time = "2026-07-06T08:39:25.662Z" },
-    { url = "https://files.pythonhosted.org/packages/38/cf/2869fb6537e241d204d9ba7faccbb6c92a1b854854e0fe354c0b580de897/livekit_plugins_krisp_internal-0.1.1-cp310-abi3-win_amd64.whl", hash = "sha256:f255ff75d6b5da3163cd443146831186a6c6b8b3fcb55c2f9af7412cd0142761", size = 53743971, upload-time = "2026-07-06T08:39:28.86Z" },
+    { url = "https://files.pythonhosted.org/packages/6a/0d/202d3521abf4efbf09a5aec05803027f651bb65481b3c2c5ace5c531428d/livekit_plugins_krisp_internal-0.2.0-cp310-abi3-macosx_10_9_x86_64.whl", hash = "sha256:99692e2a65f870cdb0d4d0762056fbbb8d4f4be13646e97d3e74a0788b6b8a66", size = 58858515, upload-time = "2026-07-22T15:19:23.741Z" },
+    { url = "https://files.pythonhosted.org/packages/5d/5d/bfa911c125903bd4d16612b17359e6c64c7afe670e7098022f9526f85435/livekit_plugins_krisp_internal-0.2.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:d79d24269fcbd06ecdff0b69a2bb041db1d931057079f1588a99aeec23838cfb", size = 57970069, upload-time = "2026-07-22T15:19:27.188Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/98/63269a0a65788e49f81b7dd742f39b8aaf3990e51f9d59f2e2c199e8321b/livekit_plugins_krisp_internal-0.2.0-cp310-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:ea29e6a3901af3c62e09e90d116d660c8b1bacff895001fc8fa7bef47ad152d6", size = 64775270, upload-time = "2026-07-22T15:19:30.884Z" },
+    { url = "https://files.pythonhosted.org/packages/bd/49/f97ce56bd234338511956f3b5f0e19accad7db3b3db7e059619eb5b5c9f8/livekit_plugins_krisp_internal-0.2.0-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:baa80ed742c370b24e2c4fd55018adb1cc09c7e0d37455a801c685b090d35729", size = 71128415, upload-time = "2026-07-22T15:19:34.417Z" },
+    { url = "https://files.pythonhosted.org/packages/7b/15/04db5d46103e372ab72a23caae1236faee46d7a72cd68d37668459758707/livekit_plugins_krisp_internal-0.2.0-cp310-abi3-win_amd64.whl", hash = "sha256:7c75b439a86c78711d0147fd4c47814c876f0b02358f42f17c045a048154427d", size = 58508658, upload-time = "2026-07-22T15:19:38.303Z" },
 ]
 
 [[package]]
