@@ -5,6 +5,7 @@ import logging
 import os
 import sys
 from datetime import date, time
+from enum import StrEnum
 from typing import Annotated, Literal
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -114,8 +115,27 @@ class PenthouseSuite(BaseModel):
 Room = Annotated[NumberedRoom | PenthouseSuite, Field(discriminator="type")]
 
 
+class DeliveryPreference(StrEnum):
+    AS_EARLY_AS_POSSIBLE = "as_early_as_possible"
+    BEFORE_NOON_IF_POSSIBLE = "before_noon_if_possible"
+    LEAVE_WITH_FRONT_DESK = "leave_with_front_desk"
+
+
 def room_to_id(room: NumberedRoom | PenthouseSuite) -> str:
     return "RM_PH" if room.type == "penthouse" else f"RM_{room.number}"
+
+
+def _delivery_instruction_value(instruction: DeliveryPreference) -> str:
+    """Return the stable value stored in florist_orders."""
+    return instruction.value
+
+
+def _speak_delivery_instruction(instruction: DeliveryPreference) -> str:
+    return {
+        DeliveryPreference.AS_EARLY_AS_POSSIBLE: "as early as possible",
+        DeliveryPreference.BEFORE_NOON_IF_POSSIBLE: "before noon if possible",
+        DeliveryPreference.LEAVE_WITH_FRONT_DESK: "leave with the front desk",
+    }[instruction]
 
 
 def _florist_destination(
@@ -432,9 +452,9 @@ class ServicesToolsMixin:
         guest_phone: str,
         room: Room | None = None,
         recipient_name: str | None = None,
-        delivery_instructions: str | None = None,
+        delivery_instruction: DeliveryPreference | None = None,
     ) -> str:
-        """Order a flower arrangement from the hotel florist, delivered to a room or suite here, or to an arriving guest by name if their room isn't assigned yet. The catalog (arrangements, prices, delivery cutoff) is in lookup_policy topic "florist" - look it up first and let the caller pick the arrangement, never pick for them. Collect the delivery date, where it goes, and the gift-card message, and read the card message back so it's right. Once they pick and agree, THIS CALL places the order - saying "I'll get that arranged" orders nothing; nothing exists until this returns a reference. Delivery handling requests ("as early as possible") go in delivery_instructions here, or via amend_florist_order after placing - never in a followup.
+        """Order a flower arrangement from the hotel florist, delivered to a room or suite here, or to an arriving guest by name if their room isn't assigned yet. The catalog (arrangements, prices, delivery cutoff) is in lookup_policy topic "florist" - look it up first and let the caller pick the arrangement, never pick for them. Collect the delivery date, where it goes, and the gift-card message, and read the card message back so it's right. Once they pick and agree, THIS CALL places the order - saying "I'll get that arranged" orders nothing; nothing exists until this returns a reference. Delivery handling requests ("as early as possible") go in delivery_instruction here, or via amend_florist_order after placing - never in a followup.
 
         Args:
             arrangement: The arrangement the caller picked.
@@ -444,7 +464,7 @@ class ServicesToolsMixin:
             guest_phone: The caller's phone number, in case the florist needs to reach them.
             room: The destination room, ONLY if the caller named one. A numbered room or suite is {"type": "room", "number": <number>}; the penthouse suite is {"type": "penthouse"}. Omit when no room was named - never guess; if you don't know where it goes, ask.
             recipient_name: Who it's for, when no room or suite is known (e.g. they haven't checked in yet). Omit if a room or suite was given.
-            delivery_instructions: Any delivery handling request, in the caller's words. Omit if none.
+            delivery_instruction: A delivery preference. Pass "as_early_as_possible", "before_noon_if_possible", or "leave_with_front_desk" when the caller requests that handling. These are requests for the florist, not guaranteed delivery times. Omit if none.
         """
         room_id, recipient = _florist_destination(room, recipient_name)
         try:
@@ -456,7 +476,11 @@ class ServicesToolsMixin:
                 card_message=card_message,
                 room_id=room_id,
                 recipient_name=recipient,
-                delivery_instructions=(delivery_instructions or "").strip(),
+                delivery_instructions=(
+                    _delivery_instruction_value(delivery_instruction)
+                    if delivery_instruction is not None
+                    else ""
+                ),
             )
         except (NotFound, Unavailable) as e:
             raise ToolError(str(e)) from None
@@ -473,22 +497,22 @@ class ServicesToolsMixin:
         self,
         ctx: RunContext[Userdata],
         order_code: str,
-        delivery_instructions: str,
+        delivery_instruction: DeliveryPreference,
     ) -> str:
         """Add or update the delivery instructions on an existing florist order - THIS is how a note gets to the florist ("deliver as early as possible", "leave with the front desk"). Use it when a delivery request comes up after the order was placed. Never record a followup for florist delivery notes; this call is the record.
 
         Args:
             order_code: The order's reference code (FLR-...).
-            delivery_instructions: The full delivery note for the florist, in the caller's words.
+            delivery_instruction: The delivery preference to add: "as_early_as_possible", "before_noon_if_possible", or "leave_with_front_desk". These are requests for the florist, not guaranteed delivery times.
         """
+        value = _delivery_instruction_value(delivery_instruction)
         try:
-            await ctx.userdata.db.amend_florist_order(
-                code=order_code, delivery_instructions=delivery_instructions
-            )
+            await ctx.userdata.db.amend_florist_order(code=order_code, delivery_instructions=value)
         except NotFound as e:
             raise ToolError(str(e)) from None
         return (
-            f'noted on order {_speak_code(order_code)}: "{delivery_instructions}" | read the '
+            f"noted on order {_speak_code(order_code)}: "
+            f'"{_speak_delivery_instruction(delivery_instruction)}" | read the '
             "note back to the caller - it goes to the florist with the order; no further tool "
             "call is needed."
         )
