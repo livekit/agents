@@ -236,9 +236,17 @@ def test_credit_card_instructions_prohibit_concrete_format_examples() -> None:
         rendered = task.instructions.render(modality="audio")
         assert "never provide invented or example" in rendered.lower()
 
-    expiration = GetExpirationDateTask().instructions
+    expiration_task = GetExpirationDateTask()
+    expiration = expiration_task.instructions
     assert isinstance(expiration, Instructions)
     rendered_expiration = expiration.render(modality="audio")
     assert "last two digits or in full four digits" in rendered_expiration
     assert "never interpret any part as a day of the month" in rendered_expiration.lower()
-    assert "even if the transcription gives it an ordinal suffix" in rendered_expiration.lower()
+    assert "strip any ordinal suffix" in rendered_expiration.lower()
+    assert "never call `decline_card_capture` for it" in rendered_expiration.lower()
+
+    update_expiration_tool = next(
+        tool for tool in expiration_task.tools if tool.id == "update_expiration_date"
+    )
+    description = update_expiration_tool.info.description or ""
+    assert "always interpreted as a year and never as a day" in description.lower()

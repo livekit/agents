@@ -87,7 +87,7 @@ If the user asks how to say the expiration year, say it can be provided using th
 
 _EXPIRATION_DATE_AUDIO_SPECIFIC = """
 Handle input as noisy voice transcription. Expect users to say the expiration date in formats like 'April twenty five', 'oh four twenty five', 'four slash twenty five', or 'April 2025'.
-When a month name is followed by a two-digit number, interpret that number as the last two digits of the year, even if the transcription gives it an ordinal suffix.
+When a month name is followed by a two-digit number, it is complete month-and-year input. Strip any ordinal suffix from the number, use its numeric part as the last two digits of the year, and call `update_expiration_date` immediately. Never interpret or reject this pattern as a day of the month, and never call `decline_card_capture` for it.
 Normalize spoken months and digits silently.
 Filter out filler words or hesitations.
 """
@@ -602,9 +602,14 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
         ) -> str | None:
             """Call to update the card's expiration date. Collect both the numerical month and year.
 
+            The component after the month is always interpreted as a year and never as a day.
+            Strip any ordinal suffix introduced by transcription before calling this tool.
+
             Args:
-                expiration_month (int): The numerical expiration month of the card, example: '04' for April
-                expiration_year (int): The numerical expiration year as its last two digits or the full four-digit year
+                expiration_month (int): The numerical month from the first component.
+                expiration_year (int): The second component after the month, always interpreted
+                    as a year and never as a day. Strip any transcribed ordinal suffix and use
+                    either the last two digits or the full four-digit year.
             """
             return await self._update_expiration_date_impl(
                 context, expiration_month, expiration_year
