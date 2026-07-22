@@ -2294,7 +2294,7 @@ class AgentActivity(RecognitionHooks):
             self.stt is None
             and self._turn_detection != "manual"
             and isinstance(self.llm, llm.RealtimeModel)
-            and not self.llm.capabilities.turn_detection
+            and not self._rt_turn_detection_enabled
             and self._interruption_detection_enabled
             and (
                 # confirmed backchannel for this turn (survives the agent stopping)
@@ -4382,7 +4382,7 @@ class AgentActivity(RecognitionHooks):
         realtime_llm = self.llm if isinstance(self.llm, llm.RealtimeModel) else None
         if realtime_llm is not None:
             # realtime commits turns manually; barge-in withholds the commit, so no STT is needed
-            can_gatekeep = not realtime_llm.capabilities.turn_detection
+            can_gatekeep = not self._rt_turn_detection_enabled
         else:
             # the STT pipeline gatekeeps by holding and flushing transcripts
             can_gatekeep = (
