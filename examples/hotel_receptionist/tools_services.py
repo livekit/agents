@@ -21,7 +21,7 @@ from hotel_db import (
     speak_time,
     speak_usd,
 )
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, RootModel
 
 from livekit.agents import (
     Agent,
@@ -98,21 +98,15 @@ def _departure_margin_note(*, pickup: time, departure: time) -> str:
     )
 
 
-class NumberedRoom(BaseModel):
-    """A numbered room or suite, as the caller says it: "room 304" / "suite 401" -> 304 / 401."""
-
-    type: Literal["room"] = "room"
-    number: int
+class NumberedRoom(RootModel[int]):
+    """A numbered room or suite, serialized as its integer room number."""
 
 
-class PenthouseSuite(BaseModel):
-    """The hotel's penthouse suite. It is the one room with no number
-    (test_flower_destination guards that the seed keeps it unique)."""
-
-    type: Literal["penthouse"] = "penthouse"
+class PenthouseSuite(RootModel[Literal["penthouse"]]):
+    """The hotel's sole named room, serialized as the string ``"penthouse"``."""
 
 
-Room = Annotated[NumberedRoom | PenthouseSuite, Field(discriminator="type")]
+Room = NumberedRoom | PenthouseSuite
 
 
 class DeliveryPreference(StrEnum):
@@ -122,7 +116,7 @@ class DeliveryPreference(StrEnum):
 
 
 def room_to_id(room: NumberedRoom | PenthouseSuite) -> str:
-    return "RM_PH" if room.type == "penthouse" else f"RM_{room.number}"
+    return "RM_PH" if isinstance(room, PenthouseSuite) else f"RM_{room.root}"
 
 
 def _delivery_instruction_value(instruction: DeliveryPreference) -> str:
@@ -462,7 +456,7 @@ class ServicesToolsMixin:
             card_message: The gift-card message exactly as the caller dictates it.
             guest_name: The caller's full name.
             guest_phone: The caller's phone number, in case the florist needs to reach them.
-            room: The destination room, ONLY if the caller named one. A numbered room or suite is {"type": "room", "number": <number>}; the penthouse suite is {"type": "penthouse"}. Omit when no room was named - never guess; if you don't know where it goes, ask.
+            room: The destination room, ONLY if the caller named one. Pass a numbered room or suite as its integer room number; pass the penthouse suite as "penthouse". Omit when no room was named - never guess; if you don't know where it goes, ask.
             recipient_name: Who it's for, when no room or suite is known (e.g. they haven't checked in yet). Omit if a room or suite was given.
             delivery_instruction: A delivery preference. Pass "as_early_as_possible", "before_noon_if_possible", or "leave_with_front_desk" when the caller requests that handling. These are requests for the florist, not guaranteed delivery times. Omit if none.
         """
