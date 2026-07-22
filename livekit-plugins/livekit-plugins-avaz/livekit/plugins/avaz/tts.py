@@ -656,9 +656,15 @@ class SynthesizeStream(tts.SynthesizeStream):
             await _push_pcm(pcm, sr)
 
         async def _drain_audio(ws: Any, *, timeout: float) -> bool:
-            """Return True if at least one audio message was received."""
+            """Drain until ``timeout`` seconds of recv idle elapse.
+
+            Returns True if at least one audio message was received. The idle
+            deadline resets on every received frame so long utterances are not
+            truncated by a fixed wall-clock window.
+            """
             got_audio = False
-            deadline = time.monotonic() + max(0.0, timeout)
+            idle = max(0.0, timeout)
+            deadline = time.monotonic() + idle
             while True:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -678,6 +684,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                         logger.debug("[Avaz TTS] WebSocket closed during drain: %s", exc)
                         break
                     raise APIConnectionError(f"Avaz TTS WebSocket closed: {exc}") from exc
+                # Extend idle window on any frame activity (true idle timeout).
+                deadline = time.monotonic() + idle
                 try:
                     payload = json.loads(raw)
                 except (TypeError, json.JSONDecodeError):
