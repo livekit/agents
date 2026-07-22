@@ -5,9 +5,10 @@ The harness separates what each side sees into explicit channels, so the
 voice LLM always has the right context at the right cost:
 
 1. SPEAK — Claude Code calls its ``send_to_user`` tool (an in-process MCP
-   tool). The message goes straight to ``session.say()`` and is voiced
-   verbatim — no LLM rephrasing in between: questions, decisions to
-   confirm, and completion summaries.
+   tool). The message goes through ``ctx.send()``, which schedules a spoken
+   reply: the voice agent relays it to the user (possibly rephrased —
+   background sessions never talk to the user directly): questions,
+   decisions to confirm, and completion summaries.
 2. CONTEXT-ONLY — Claude Code's plain narration text is inserted silently
    (``ctx.send(..., silent=True)``): the voice LLM can see the full working
    narrative without the user having to listen to it.
@@ -73,8 +74,8 @@ Communication channels — follow them strictly:
 - Your plain text output is NOT spoken. It is recorded as background context the voice
   assistant can read, so narrate your work there freely.
 - To say something the user must hear — a question you need answered, a decision you want
-  confirmed, or a short summary when you finish a task — call the send_to_user tool. Its
-  message is spoken aloud verbatim: keep it to one or two conversational sentences, no
+  confirmed, or a short summary when you finish a task — call the send_to_user tool. The
+  voice assistant relays it aloud: keep it to one or two conversational sentences, no
   markdown, no code, no file paths unless essential. Ask one question at a time, then end
   your turn and wait for the answer.
 - You may be interrupted mid-task. When that happens, the next user message is a
@@ -105,19 +106,19 @@ async def claude_code(ctx: BackgroundContext) -> None:
             }
         )
 
-    # SPEAK channel: Claude Code pushes voice updates itself. session.say() speaks
-    # the tool input verbatim over TTS — no LLM in between to paraphrase it —
-    # unlike ctx.send(), which schedules a generated (rephrased) reply.
+    # SPEAK channel: Claude Code pushes voice updates itself. By design a
+    # background session never talks to the user directly — ctx.send() schedules
+    # a spoken reply that the voice agent delivers (and may lightly rephrase).
     @tool(
         "send_to_user",
-        "Speak a message aloud to the user on the voice call. Use this for questions "
-        "you need answered, decisions you want confirmed, and short completion "
-        "summaries. One or two plain conversational sentences; no markdown.",
+        "Send a message for the voice assistant to relay to the user. Use this for "
+        "questions you need answered, decisions you want confirmed, and short "
+        "completion summaries. One or two plain conversational sentences; no markdown.",
         {"message": str},
     )
     async def send_to_user(args: dict[str, Any]) -> dict[str, Any]:
-        ctx.session.say(str(args["message"]))
-        return {"content": [{"type": "text", "text": "Spoken to the user."}]}
+        await ctx.send(str(args["message"]))
+        return {"content": [{"type": "text", "text": "Delivered to the user."}]}
 
     voice_server = create_sdk_mcp_server(name="voice", version="1.0.0", tools=[send_to_user])
 
