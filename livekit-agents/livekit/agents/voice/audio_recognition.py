@@ -478,7 +478,7 @@ class AudioRecognition:
         if self._agent_speaking:
             # no interruption is detected, end the inference (idempotent)
             if not is_given(self._ignore_user_transcript_until):
-                self._on_end_of_overlap_speech(ended_at=time.time())
+                self._on_end_of_overlap_speech(ended_at=time.time(), agent_ended=True)
 
             end_cooldown: float = (
                 self._backchannel_boundary[1] if self._backchannel_boundary else 0.0
@@ -550,8 +550,14 @@ class AudioRecognition:
         self,
         ended_at: float,
         user_speaking_span: trace.Span | None = None,
+        agent_ended: bool = False,
     ) -> None:
-        """End interruption inference when agent is speaking and overlap speech ends."""
+        """End interruption inference when agent is speaking and overlap speech ends.
+
+        agent_ended is True when the overlap is force-ended because the agent finished
+        speaking (the user may still be talking), in which case the synthesized verdict
+        is inconclusive and must not be treated as a confirmed backchannel.
+        """
         if not self._adaptive_interruption_active or not self._agent_speaking:
             return
 
@@ -567,7 +573,7 @@ class AudioRecognition:
                 user_speaking_span.set_attribute(trace_types.ATTR_IS_INTERRUPTION, "false")
 
         self._interruption_ch.send_nowait(  # type: ignore[union-attr]
-            _OverlapSpeechEndedSentinel(ended_at=ended_at or time.time())
+            _OverlapSpeechEndedSentinel(ended_at=ended_at or time.time(), agent_ended=agent_ended)
         )
 
     @property
@@ -1395,7 +1401,7 @@ class AudioRecognition:
 
         # only honor the verdict while this turn's overlap is unresolved so a late verdict
         # can't leak into the next turn; an interruption supersedes a prior backchannel
-        if self._overlap_in_current_turn:
+        if self._overlap_in_current_turn and not ev.agent_ended:
             self._turn_backchannel_over_agent = not ev.is_interruption
 
         if ev.is_interruption:

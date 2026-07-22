@@ -5,8 +5,13 @@ from unittest.mock import MagicMock
 import pytest
 
 from livekit.agents import Agent, AgentSession, TurnHandlingOptions
+from livekit.agents.inference import OverlappingSpeechEvent
 from livekit.agents.voice.agent_activity import AgentActivity
-from livekit.agents.voice.audio_recognition import _EndOfTurnInfo, _EndOfTurnMetrics
+from livekit.agents.voice.audio_recognition import (
+    AudioRecognition,
+    _EndOfTurnInfo,
+    _EndOfTurnMetrics,
+)
 
 from .fake_llm import FakeLLM
 from .fake_realtime import FakeRealtimeModel, fake_capabilities
@@ -130,8 +135,9 @@ async def test_backchannel_does_not_commit_while_agent_speaking(
 async def test_backchannel_dropped_after_agent_finishes_speaking(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # same backchannel, but the agent finished before the user stopped — the backchannel
-    # verdict survives, so the turn is still dropped with no live speech to key off
+    # the user finished the backchannel first (verdict latched), then the agent finished —
+    # the backchannel verdict survives to end of turn, so the turn is still dropped with no
+    # live speech to key off
     monkeypatch.setenv("LIVEKIT_API_KEY", "k")
     monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
 
@@ -143,3 +149,49 @@ async def test_backchannel_dropped_after_agent_finishes_speaking(
 
     # backchannel verdict for this turn survives the agent stopping
     assert activity.on_end_of_turn(_end_of_turn_info(backchannel_over_agent=True)) is False
+
+
+def _recognition_for_overlap() -> AudioRecognition:
+    ar = AudioRecognition.__new__(AudioRecognition)
+    ar._backchannel_boundary_timer = None
+    ar._overlap_in_current_turn = True
+    ar._turn_backchannel_over_agent = False
+    ar._hooks = MagicMock()
+    return ar
+
+
+def _overlap_event(*, is_interruption: bool, agent_ended: bool) -> OverlappingSpeechEvent:
+    return OverlappingSpeechEvent(is_interruption=is_interruption, agent_ended=agent_ended)
+
+
+async def test_user_ended_overlap_latches_backchannel() -> None:
+    # the user's overlap ended on its own with no interruption flagged — a real backchannel
+    ar = _recognition_for_overlap()
+    await ar._on_overlap_speech_event(_overlap_event(is_interruption=False, agent_ended=False))
+    assert ar._turn_backchannel_over_agent is True
+
+
+async def test_agent_ended_overlap_is_not_a_backchannel() -> None:
+    # the overlap ended because the agent finished, not the user — the user may still be
+    # mid-turn, so this inconclusive verdict must not mark the turn a backchannel
+    ar = _recognition_for_overlap()
+    await ar._on_overlap_speech_event(_overlap_event(is_interruption=False, agent_ended=True))
+    assert ar._turn_backchannel_over_agent is False
+
+
+async def test_agent_ended_overlap_preserves_prior_backchannel() -> None:
+    # a real backchannel was already latched this turn; the later agent-ended overlap is a
+    # no-op and must not clear it
+    ar = _recognition_for_overlap()
+    ar._turn_backchannel_over_agent = True
+    await ar._on_overlap_speech_event(_overlap_event(is_interruption=False, agent_ended=True))
+    assert ar._turn_backchannel_over_agent is True
+
+
+async def test_interruption_clears_backchannel() -> None:
+    # a confirmed interruption supersedes any prior backchannel verdict for the turn
+    ar = _recognition_for_overlap()
+    ar._turn_backchannel_over_agent = True
+    await ar._on_overlap_speech_event(_overlap_event(is_interruption=True, agent_ended=False))
+    assert ar._turn_backchannel_over_agent is False
+    ar._hooks.on_interruption.assert_called_once()
