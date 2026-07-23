@@ -4,7 +4,8 @@ Real-time noise reduction for LiveKit voice agents using [Krisp's VIVA SDK](http
 
 ## Features
 
-- **`KrispVivaFilterFrameProcessor`**: Real-time noise reduction FrameProcessor for audio processing
+- **`voice_isolation()`**: Real-time voice isolation and noise reduction `FrameProcessor`
+- **`voice_isolation_telephony()`**: Voice isolation tuned for telephony audio (for example, SIP participants)
 
 ## Installation
 
@@ -21,9 +22,9 @@ or model file is required.
 
 ## Quick Start
 
-By default, `KrispVivaFilterFrameProcessor` uses **LiveKit Cloud** authentication: the
-bundled backend ships the noise-reduction model and authenticates against LiveKit Cloud
-using the room JWT the agent framework hands to the FrameProcessor automatically.
+By default, `krisp.voice_isolation()` uses **LiveKit Cloud** authentication: the
+bundled backend ships the voice isolation model and authenticates against LiveKit Cloud
+using the room JWT the agent framework hands to the `FrameProcessor` automatically.
 
 ```python
 from livekit.agents import AgentSession, Agent, JobContext, inference, room_io
@@ -32,7 +33,7 @@ from livekit.plugins import krisp, openai
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     # Default: LiveKit Cloud auth + bundled model. No keys or model files.
-    processor = krisp.KrispVivaFilterFrameProcessor(
+    noise_cancellation = krisp.voice_isolation(
         noise_suppression_level=100,  # 0-100
     )
 
@@ -49,25 +50,39 @@ async def entrypoint(ctx: JobContext):
         room=ctx.room,
         room_options=room_io.RoomOptions(
             audio_input=room_io.AudioInputOptions(
-                noise_cancellation=processor,  # Pass FrameProcessor directly
+                noise_cancellation=noise_cancellation,  # Pass the FrameProcessor directly
             ),
         ),
     )
 ```
 
-**Audio Pipeline:** `Room → RoomIO (with KrispVivaFilterFrameProcessor) → VAD → STT → LLM`
+For telephony audio, use `krisp.voice_isolation_telephony()` instead — it takes the
+same options and behaves identically, but selects a voice isolation model tuned for
+telephony.
+
+**Audio Pipeline:** `Room → RoomIO (with voice_isolation) → VAD → STT → LLM`
 
 ## Configuration
 
-### KrispVivaFilterFrameProcessor Parameters
+### `voice_isolation()` / `voice_isolation_telephony()` options
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `auth_provider` | `LiveKitCloudAuthProvider \| KrispLicenseAuthProvider` | `LiveKitCloudAuthProvider` | Authentication backend. Defaults to LiveKit Cloud. See [the alternative](#alternative-krisp-license-auth). |
 | `noise_suppression_level` | int | 100 | Noise reduction intensity (0-100) |
-| `frame_duration_ms` | int | None | **Deprecated.** Input frames of any size are now buffered automatically. |
-| `sample_rate` | int | None | **Deprecated.** The processor now adapts to the input sample rate automatically. |
-| `model_path` | str | None | **Deprecated.** Use `auth_provider=krisp.auth.krisp_license(model_path=...)`. License-mode only. |
+
+Input frames of any size and sample rate are buffered and adapted automatically.
+
+### Runtime control
+
+Both factory functions return a `KrispVivaFilterFrameProcessor`. Adjust it while the
+session is running:
+
+```python
+noise_cancellation.enabled = False              # pass audio through unmodified
+noise_cancellation.noise_suppression_level = 50  # adjust 0-100 on the fly
+noise_cancellation.close()                       # free resources when done
+```
 
 
 ## Alternative: Krisp License Auth
@@ -102,7 +117,7 @@ Select the license backend by passing `auth_provider`:
 ```python
 from livekit.plugins import krisp
 
-processor = krisp.KrispVivaFilterFrameProcessor(
+noise_cancellation = krisp.voice_isolation(
     auth_provider=krisp.auth.krisp_license(
         license_key="...",                    # or KRISP_VIVA_SDK_LICENSE_KEY
         model_path="/path/to/noise_model.kef",  # or KRISP_VIVA_FILTER_MODEL_PATH

@@ -34,6 +34,7 @@ import warnings
 from typing import Any, Literal, Protocol
 
 from livekit import rtc
+from livekit.plugins.krisp_internal import VivaMode
 
 from .auth import KrispLicenseAuthProvider, LiveKitCloudAuthProvider
 
@@ -120,6 +121,7 @@ def _resolve_auth_provider(
 
 
 def _build_inner(
+    mode: VivaMode,
     provider: LiveKitCloudAuthProvider | KrispLicenseAuthProvider,
     *,
     noise_suppression_level: int,
@@ -146,6 +148,7 @@ def _build_inner(
             noise_suppression_level=noise_suppression_level,
             frame_duration_ms=frame_duration_ms,
             sample_rate=sample_rate,
+            mode=mode,
         )
         return cloud_processor
 
@@ -200,6 +203,7 @@ class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
     def __init__(
         self,
         *,
+        mode: VivaMode = VivaMode.VOICE_ISOLATION,
         auth_provider: LiveKitCloudAuthProvider | KrispLicenseAuthProvider | None = None,
         model_path: str | None = None,
         noise_suppression_level: int = 100,
@@ -246,6 +250,7 @@ class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
 
         provider = _resolve_auth_provider(auth_provider, model_path)
         self._inner = _build_inner(
+            mode,
             provider,
             noise_suppression_level=noise_suppression_level,
             frame_duration_ms=frame_duration_ms if frame_duration_ms is not None else 10,
@@ -327,3 +332,49 @@ class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         """Context manager exit - clean up session."""
         self.close()
         return False
+
+
+def voice_isolation(
+    *,
+    auth_provider: LiveKitCloudAuthProvider | KrispLicenseAuthProvider | None = None,
+    noise_suppression_level: int = 100,
+) -> KrispVivaFilterFrameProcessor:
+    """Create a Krisp VIVA voice isolation ``FrameProcessor``.
+
+    Pass the result as the ``noise_cancellation`` argument in
+    :class:`~livekit.agents.room_io.AudioInputOptions`. Uses LiveKit Cloud auth
+    by default; pass ``auth_provider=krisp.auth.krisp_license(...)`` to run the
+    proprietary Krisp SDK with your own license key + ``.kef`` model.
+
+    Args:
+        auth_provider: Authentication provider. Defaults to
+            :class:`LiveKitCloudAuthProvider` (LiveKit Cloud auth + bundled model).
+        noise_suppression_level: Noise suppression level (0-100, default: 100).
+    """
+    return KrispVivaFilterFrameProcessor(
+        mode=VivaMode.VOICE_ISOLATION,
+        auth_provider=auth_provider,
+        noise_suppression_level=noise_suppression_level,
+    )
+
+
+def voice_isolation_telephony(
+    *,
+    auth_provider: LiveKitCloudAuthProvider | KrispLicenseAuthProvider | None = None,
+    noise_suppression_level: int = 100,
+) -> KrispVivaFilterFrameProcessor:
+    """Create a Krisp VIVA voice isolation ``FrameProcessor`` tuned for telephony.
+
+    Same as :func:`voice_isolation`, but optimized for telephony audio such as
+    SIP participants.
+
+    Args:
+        auth_provider: Authentication provider. Defaults to
+            :class:`LiveKitCloudAuthProvider` (LiveKit Cloud auth + bundled model).
+        noise_suppression_level: Noise suppression level (0-100, default: 100).
+    """
+    return KrispVivaFilterFrameProcessor(
+        mode=VivaMode.VOICE_ISOLATION_TELEPHONY,
+        auth_provider=auth_provider,
+        noise_suppression_level=noise_suppression_level,
+    )

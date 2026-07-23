@@ -35,11 +35,11 @@ classifiers = [
 ]
 dependencies = [
     "livekit-agents>=1.6.6",
-    "livekit>=1.0.23,<2",  # FrameProcessor support requires livekit>=1.0.23 (PR #4145)
+    "livekit>=1.0.23,<2",    # FrameProcessor support requires livekit>=1.0.23 (PR #4145)
     "numpy>=1.20.0",
     # Closed-source default backend (bundles the Krisp VIVA SDK); distributed
     # under the LiveKit Terms of Service: https://livekit.io/legal/terms-of-service
-    "livekit-plugins-krisp-internal>=0.1.0",
+    "livekit-plugins-krisp-internal==0.2.0",
 ]
 
 [project.urls]
