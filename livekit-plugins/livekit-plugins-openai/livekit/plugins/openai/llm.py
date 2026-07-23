@@ -61,6 +61,7 @@ lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
 Verbosity = Literal["low", "medium", "high"]
 PromptCacheRetention = Literal["in_memory", "24h"]
+ReasoningFormat = Literal["parsed", "raw", "hidden"]
 
 
 @dataclass
@@ -78,6 +79,7 @@ class _LLMOptions:
     max_completion_tokens: NotGivenOr[int]
     service_tier: NotGivenOr[str]
     reasoning_effort: NotGivenOr[ReasoningEffort]
+    reasoning_format: NotGivenOr[ReasoningFormat]
     verbosity: NotGivenOr[Verbosity]
     prompt_cache_retention: NotGivenOr[PromptCacheRetention]
     extra_body: NotGivenOr[dict[str, Any]]
@@ -107,6 +109,7 @@ class LLM(llm.LLM):
         max_retries: NotGivenOr[int] = NOT_GIVEN,
         service_tier: NotGivenOr[str] = NOT_GIVEN,
         reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        reasoning_format: NotGivenOr[ReasoningFormat] = NOT_GIVEN,
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
         prompt_cache_retention: NotGivenOr[PromptCacheRetention] = NOT_GIVEN,
         extra_body: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
@@ -120,6 +123,12 @@ class LLM(llm.LLM):
 
         ``api_key`` must be set to your OpenAI API key, either using the argument or by setting the
         ``OPENAI_API_KEY`` environmental variable.
+
+        ``reasoning_format`` controls how reasoning models (e.g. ``gpt-oss-120b`` on Cerebras,
+        or Grok on xAI) return their thinking tokens. Set it to ``"hidden"`` or ``"parsed"`` to
+        keep the model's internal monologue out of the message content so it isn't spoken by the
+        TTS pipeline. This is forwarded as a request body field and is only honored by providers
+        that support it.
         """
         super().__init__()
 
@@ -140,6 +149,7 @@ class LLM(llm.LLM):
             max_completion_tokens=max_completion_tokens,
             service_tier=service_tier,
             reasoning_effort=reasoning_effort,
+            reasoning_format=reasoning_format,
             safety_identifier=safety_identifier,
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
@@ -267,6 +277,7 @@ class LLM(llm.LLM):
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        reasoning_format: NotGivenOr[ReasoningFormat] = NOT_GIVEN,
         safety_identifier: NotGivenOr[str] = NOT_GIVEN,
         prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
@@ -276,6 +287,10 @@ class LLM(llm.LLM):
 
         ``api_key`` must be set to your Cerebras API key, either using the argument or by setting
         the ``CEREBRAS_API_KEY`` environment variable.
+
+        ``reasoning_format`` controls how Cerebras reasoning models (e.g. ``gpt-oss-120b``) return
+        their thinking tokens; set it to ``"hidden"`` or ``"parsed"`` to keep reasoning out of the
+        spoken message content.
         """
 
         api_key = api_key or os.environ.get("CEREBRAS_API_KEY")
@@ -294,6 +309,7 @@ class LLM(llm.LLM):
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
             reasoning_effort=reasoning_effort,
+            reasoning_format=reasoning_format,
             safety_identifier=safety_identifier,
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
@@ -401,6 +417,7 @@ class LLM(llm.LLM):
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: ToolChoice = "auto",
         reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        reasoning_format: NotGivenOr[ReasoningFormat] = NOT_GIVEN,
         safety_identifier: NotGivenOr[str] = NOT_GIVEN,
         prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
@@ -410,6 +427,9 @@ class LLM(llm.LLM):
 
         ``api_key`` must be set to your XAI API key, either using the argument or by setting
         the ``XAI_API_KEY`` environmental variable.
+
+        ``reasoning_format`` controls how Grok reasoning models return their thinking tokens; set
+        it to ``"hidden"`` or ``"parsed"`` to keep reasoning out of the spoken message content.
         """
         api_key = api_key or os.environ.get("XAI_API_KEY")
         if api_key is None:
@@ -428,6 +448,7 @@ class LLM(llm.LLM):
             tool_choice=tool_choice,
             # TODO(long): add provider fmt for grok
             reasoning_effort=reasoning_effort,
+            reasoning_format=reasoning_format,
             safety_identifier=safety_identifier,
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
@@ -981,6 +1002,13 @@ class LLM(llm.LLM):
 
         if is_given(self._opts.reasoning_effort):
             extra["reasoning_effort"] = self._opts.reasoning_effort
+
+        if is_given(self._opts.reasoning_format):
+            # reasoning_format is a provider-specific body field (Cerebras/xAI), so it has to be
+            # forwarded via extra_body rather than as a top-level OpenAI SDK argument.
+            extra_body = dict(extra.get("extra_body") or {})
+            extra_body["reasoning_format"] = self._opts.reasoning_format
+            extra["extra_body"] = extra_body
 
         if is_given(self._opts.safety_identifier):
             extra["safety_identifier"] = self._opts.safety_identifier
