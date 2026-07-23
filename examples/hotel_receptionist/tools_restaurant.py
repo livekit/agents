@@ -8,7 +8,7 @@ from typing import Annotated
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from book_restaurant import BookRestaurantTask
+from book_restaurant import BookRestaurantTask, RestaurantReservationNotCreatedError
 from common import Userdata, _speak_code
 from context import speech_only
 from hotel_db import (
@@ -49,9 +49,15 @@ class RestaurantToolsMixin:
     @function_tool
     async def start_restaurant_booking(self, ctx: RunContext[Userdata]) -> str | None:
         """Start the restaurant-reservation flow. Call it the moment the caller wants a table - the flow collects date, party size, time, name, and phone itself. Its return is the FINAL result of the reservation: relay it and move on - nothing further to confirm or call afterwards."""
-        reservation = await BookRestaurantTask(
-            db=ctx.userdata.db, chat_ctx=speech_only(self.chat_ctx)
-        )
+        try:
+            reservation = await BookRestaurantTask(
+                db=ctx.userdata.db, chat_ctx=speech_only(self.chat_ctx)
+            )
+        except RestaurantReservationNotCreatedError:
+            return (
+                "No reservation was created because a phone number is required. "
+                "| tell the caller the table is not reserved; do not use success wording"
+            )
         return (
             f"You're set for {speak_time(reservation.time)} on "
             f"{reservation.date.strftime('%A, %B %-d')} for "

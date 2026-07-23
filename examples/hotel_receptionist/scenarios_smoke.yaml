@@ -176,6 +176,8 @@ scenarios:
     - you mention, in passing, that you and your husband are here celebrating your
       wedding anniversary this trip (bring this up naturally, once)
     - you have no dinner plans for tonight yet (only if asked)
+    - if offered dinner, ask for tomorrow at 5:30 p.m. for two
+    - when asked for a phone number, say you don't have it handy and decline to provide one
     DO, IN ORDER:
     1. Ask your breakfast-hours question and let the agent answer it.
     2. Mention the anniversary naturally in passing while chatting.
@@ -183,7 +185,8 @@ scenarios:
     REACTIONS:
     - If the agent, at the close, warmly offers something that genuinely fits the
       anniversary (a dinner reservation at the restaurant, a special touch) without being
-      pushy, you're pleasantly surprised and may take it up ("oh, that's a lovely idea").
+      pushy, you're pleasantly surprised and take up the dinner offer ("oh, that's a lovely
+      idea"), then provide the reservation details above only as the agent asks for them.
     - If the agent ignores the anniversary entirely and just ends the call flatly, that's
       a missed opportunity.
     - If the agent hard-sells or pitches something irrelevant, you're put off - decline.
@@ -195,7 +198,11 @@ scenarios:
     guest declines. A pass is a relevant, non-pushy, well-timed offer tied to what the
     caller said (not a generic or irrelevant pitch, and not ignoring an obvious opening);
     a hard sell, an irrelevant pitch, or flatly ending without noticing the opening is a
-    fail. (Graded softly - this is judgment, not a script.)
+    fail. If the guest takes up the dinner offer but cannot provide the required phone
+    number, clearly says no reservation was created and never claims the table is reserved.
+    (Graded softly - this is judgment, not a script.)
+  userdata:
+    expected_state: []
   tags:
     feature: sell_the_return
     channel: phone
