@@ -588,13 +588,14 @@ class ServicesToolsMixin:
             departure_time: Scheduled departure in 24-hour HH:MM format if the caller mentions or knows it - it's what any airport-car pickup gets sanity-checked against. Omit if they don't know it.
         """
         room_id = room_to_id(room)
+        normalized_booking_reference = "".join(c for c in booking_reference if c.isalnum()).upper()
         try:
             code = await ctx.userdata.db.request_flight_reconfirmation(
                 room=room_id,
                 airline=airline,
                 flight_number=flight_number,
                 flight_date=flight_date,
-                booking_reference=booking_reference,
+                booking_reference=normalized_booking_reference,
                 seat_check=seat_check,
                 departure_time=departure_time,
             )
@@ -603,8 +604,12 @@ class ServicesToolsMixin:
                 f"{speak_room(room_id)} doesn't exist here - re-confirm the room"
             ) from None
         return (
-            f"reconfirmation request logged; reference {_speak_code(code)} | tell the caller the "
-            "concierge will call the carrier and ring their room with the result within the hour"
+            f"reconfirmation request logged; request reference {_speak_code(code)}. "
+            "The airline booking reference captured is "
+            f"{_speak_code(normalized_booking_reference)}; explicitly read that airline booking "
+            "reference back to the caller, labeling it as the airline booking reference so it is "
+            "not confused with the car or request reference. The concierge will call the carrier "
+            "and ring their room with the result within the hour"
             + (", including the seat check" if seat_check else "")
             + ". The flight is NOT confirmed yet - never say it is; promise the callback instead."
         )
@@ -628,6 +633,16 @@ class ServicesToolsMixin:
         """
         room_id = room_to_id(room)
         try:
+            departure = await ctx.userdata.db.latest_flight_departure(
+                room=room_id, flight_date=pickup_date
+            )
+            if departure is None:
+                raise ToolError(
+                    "Airport car NOT booked: the flight reconfirmation request must be logged with "
+                    "its departure time first. After request_flight_reconfirmation succeeds "
+                    "(including if it succeeded in this tool batch), retry book_airport_car now; "
+                    "do not tell the caller the car is booked until that retry succeeds."
+                )
             code = await ctx.userdata.db.book_airport_car(
                 room=room_id,
                 pickup_date=pickup_date,
@@ -640,21 +655,12 @@ class ServicesToolsMixin:
             ) from None
         except Unavailable as e:
             raise ToolError(f"can't book that: {e} - re-confirm the date") from None
-        # With a flight on file for this room and day, the pickup margin is computed
-        # here rather than left to the prose instruction the model routinely skips.
-        departure = await ctx.userdata.db.latest_flight_departure(
-            room=room_id, flight_date=pickup_date
-        )
-        margin_note = (
-            " " + _departure_margin_note(pickup=pickup_time, departure=departure)
-            if departure
-            else ""
-        )
+        margin_note = " " + _departure_margin_note(pickup=pickup_time, departure=departure)
         return (
             f"hotel car booked; reference {_speak_code(code)}. Pickup "
             f"{pickup_date.strftime('%A, %B %-d')} at {speak_time(pickup_time)}, front entrance, "
             f"{passengers} passenger{'s' if passengers != 1 else ''}, flat eighty-five dollars "
-            f"charged to the room -{margin_note or ' no flight on file to check the margin'}"
+            f"charged to the room -{margin_note}"
             " | confirm the time, the front-entrance pickup, the cost, and "
             "the reference to the caller; no further tool call is needed for the car."
         )
