@@ -180,6 +180,9 @@ class _ResponsesWebsocket:
                 last_exc = e
                 if not reused:
                     break  # a fresh connection failing to send is a real error, not staleness
+            except BaseException:
+                self._pool.remove(ws)  # cancellation: discard the socket, don't leak it
+                raise
         raise APIConnectionError("failed to send request over WebSocket") from last_exc
 
 

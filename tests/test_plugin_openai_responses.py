@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from unittest.mock import AsyncMock, MagicMock
@@ -160,6 +161,27 @@ async def test_fresh_ws_send_failure_is_raised() -> None:
     with pytest.raises(APIConnectionError):
         async for _ in transport.generate_response({"type": "response.create"}):
             pass
+    await transport.aclose()
+
+
+async def test_send_cancellation_discards_socket() -> None:
+    """A cancellation during send must discard the acquired socket, not leave it
+    orphaned in the pool (never reused, never closed until aclose)."""
+    ws = _RecordingWS({"type": "response.completed", "response": {"output": []}})
+
+    async def _cancel(_data: str) -> None:
+        raise asyncio.CancelledError
+
+    ws.send_str = _cancel  # type: ignore[method-assign]
+
+    transport = _make_transport()
+    _use_connections(transport, ws)
+
+    with pytest.raises(asyncio.CancelledError):
+        await transport._acquire_and_send("{}")
+
+    assert ws not in transport._pool._connections
+    assert ws not in transport._pool._available
     await transport.aclose()
 
 
