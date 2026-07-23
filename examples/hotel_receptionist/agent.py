@@ -57,6 +57,14 @@ def _expected_state_statements(userdata: dict[str, object]) -> list[str] | None:
     return statements
 
 
+def _tag_work_activity(ctx: JobContext, *, state_changes: list[str], served_reads: bool) -> None:
+    """Record whether deterministic app activity was observed, without judging outcome."""
+    if state_changes or served_reads:
+        ctx.tagger.add("work:observed")
+    else:
+        ctx.tagger.add("work:none")
+
+
 class HotelReceptionistAgent(RoomToolsMixin, RestaurantToolsMixin, ServicesToolsMixin, Agent):
     def __init__(self) -> None:
         super().__init__(instructions=build_instructions(), tools=[build_lookup_policy_tool()])
@@ -79,27 +87,32 @@ _SEED_DB_BYTES = build_seed_bytes(TODAY)
 
 
 async def on_simulation_end(ctx: SimulationContext) -> None:
-    # Grade the run on final DB state: build the scenario's `expected_state` on a
-    # fresh seed, then diff it against the agent's DB. The diff compares
-    # agent-decided facts only (room type, dates, extras, status), so minted
-    # codes / order / which-king don't matter and the agent need not reproduce the
-    # statements — while collateral damage still surfaces.
+    db_diffs: list[str] = []
     expected_state = _expected_state_statements(ctx.userdata())
-    if expected_state is None:
-        return
+    if expected_state is not None:
+        # Grade the run on final DB state: build the scenario's `expected_state` on a
+        # fresh seed, then diff it against the agent's DB. The diff compares
+        # agent-decided facts only (room type, dates, extras, status), so minted
+        # codes / order / which-king don't matter and the agent need not reproduce the
+        # statements — while collateral damage still surfaces.
+        session = ctx.job_context.primary_session
+        expected = await build_expected(_SEED_DB_BYTES, expected_state)
+        try:
+            db_diffs = diff_databases(expected.connection, session.userdata.db.connection)
+        finally:
+            await expected.aclose()
 
-    session = ctx.job_context.primary_session
-    expected = await build_expected(_SEED_DB_BYTES, expected_state)
-    try:
-        diffs = diff_databases(expected.connection, session.userdata.db.connection)
-    finally:
-        await expected.aclose()
-
-    # Veto the run if the final DB state diverged. The effective result is the AND of
-    # this check and the simulator's conversation judgment, so a mismatch fails a run
-    # the simulator passed; a match simply leaves the simulator's verdict to stand.
-    if diffs:
-        ctx.fail(reason="final DB diverges from expected: " + " | ".join(diffs[:8]))
+    # The session outcome is the simulator's conversation judgment AND the optional
+    # DB-state check. In particular, conversation-only scenarios must not be failed
+    # merely because they correctly completed without a tool call or state change.
+    if db_diffs:
+        reason = "final DB diverges from expected: " + " | ".join(db_diffs[:8])
+        ctx.fail(reason=reason)
+        ctx.job_context.tagger.fail(reason=reason)
+    elif ctx.simulator_verdict.success:
+        ctx.job_context.tagger.success(reason=ctx.simulator_verdict.reason)
+    else:
+        ctx.job_context.tagger.fail(reason=ctx.simulator_verdict.reason)
 
 
 async def on_session_end(ctx: JobContext) -> None:
@@ -113,29 +126,6 @@ async def on_session_end(ctx: JobContext) -> None:
         return
 
     userdata = ctx.primary_session.userdata
-
-    db_diffs: list[str] = []
-    expected_state_configured = False
-    try:
-        sim_ctx = ctx.simulation_context()
-        if sim_ctx is None:
-            logger.info(
-                "local expected-state diff skipped: no simulation context "
-                "(job/room metadata carried no SimulationDispatch)"
-            )
-        expected_state = _expected_state_statements(sim_ctx.userdata()) if sim_ctx else None
-        expected_state_configured = expected_state is not None
-        if sim_ctx is not None and expected_state is None:
-            logger.info("local expected-state diff skipped: scenario has no expected_state")
-        if expected_state is not None:
-            logger.info("running local expected-state diff (%d statement(s))", len(expected_state))
-            expected = await build_expected(_SEED_DB_BYTES, expected_state)
-            try:
-                db_diffs = diff_databases(expected.connection, userdata.db.connection)
-            finally:
-                await expected.aclose()
-    except Exception:
-        logger.exception("error running local expected-state diff")
 
     # "Did the call do real work?" is a DB question, not per-tool bookkeeping:
     # compare the final DB against the untouched seed. Any change in the
@@ -175,18 +165,10 @@ async def on_session_end(ctx: JobContext) -> None:
         for item in report.chat_history.items
     )
 
-    if db_diffs:
-        ctx.tagger.fail(reason="final DB diverges from expected: " + " | ".join(db_diffs[:8]))
-    elif expected_state_configured:
-        ctx.tagger.success()
-    elif state_changes or served_reads:
-        ctx.tagger.success()
-    else:
-        ctx.tagger.fail(
-            reason="The call accomplished nothing: no state was changed (booking, "
-            "cancellation, modification, dispute, followup, message, wake-up call...) "
-            "and no information was looked up for the caller."
-        )
+    # This is useful activity metadata, not an outcome judgment. Simulations set
+    # lk.success/lk.fail from their actual verdict in on_simulation_end; production
+    # sessions may set an outcome through app-specific instrumentation.
+    _tag_work_activity(ctx, state_changes=state_changes, served_reads=served_reads)
 
     logger.info("session tags: %s", ctx.tagger.tags)
 
