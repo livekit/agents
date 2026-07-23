@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from typing_extensions import TypedDict
 
 from .. import utils
-from ..llm.chat_context import ChatContext, ChatItem
+from ..llm.chat_context import ChatItem
 from ..llm.tool_context import (
     CONFIRM_DUPLICATE_PARAM,
     DuplicateMode,
@@ -24,7 +24,6 @@ from ..llm.tool_context import (
 )
 from ..llm.utils import prepare_function_arguments
 from ..log import logger
-from ..types import NOT_GIVEN, NotGivenOr
 from .events import (
     RunContext,
     ToolCallEnded,
@@ -32,12 +31,19 @@ from .events import (
     ToolExecutionUpdatedEvent,
     ToolReplyUpdated,
 )
+from .reply_scheduler import (
+    REPLY_INSTRUCTIONS_AT_TAIL,
+    REPLY_INSTRUCTIONS_MAYBE_COVERED,
+    ReplyOptions,
+    ReplyPromptArgs as ReplyPromptArgs,
+    ReplyStatus,
+    ReplyTemplate,
+    _ReplyScheduler,
+)
 
 if TYPE_CHECKING:
-    from .agent import Agent
     from .agent_activity import AgentActivity
     from .agent_session import AgentSession
-    from .speech_handle import SpeechHandle
 
 
 UPDATE_TEMPLATE = """The tool `{function_name}` has updated, message: {message}
@@ -53,19 +59,6 @@ DUPLICATE_CONFIRM = """Same tool `{function_name}` is already running:
 Re-call with confirm duplicate True to run a duplicate if needed,
 or if you want to cancel the existing one, call `lk_agents_cancel_task` with call_id.
 Only run duplicate or cancel the existing one when user explicitly requests it."""
-
-# used when the pending update is the most recent item in chat_ctx — the agent
-# can't have already talked about it.
-REPLY_INSTRUCTIONS_AT_TAIL = """New results arrived from background tool calls (call_ids: {call_ids}).
-Summarize the results naturally. Do NOT repeat information you have already told the user."""
-
-# used when newer items have been appended after the pending update — the agent
-# may have already verbalized the result in its most recent turn.
-REPLY_INSTRUCTIONS_MAYBE_COVERED = """New results arrived from background tool calls (call_ids: {call_ids}).
-You may have already mentioned them in your most recent replies.
-If you already told the user everything in these results, reply with an empty response (no text at all).
-Otherwise, summarize only what you have not said yet, with a natural transition.
-Never repeat information you have already told the user."""
 
 
 class UpdatePromptArgs(TypedDict):
@@ -86,12 +79,6 @@ class DuplicatePromptArgs(TypedDict):
     """``fnc_calls_json`` joined by newlines — what the default string templates use."""
 
 
-class ReplyPromptArgs(TypedDict):
-    """Args for the ``reply_at_tail`` / ``reply_maybe_covered`` templates."""
-
-    call_ids: list[str]
-
-
 class AsyncToolOptions(TypedDict, total=False):
     """System-message templates injected around async tool dispatch.
 
@@ -106,9 +93,9 @@ class AsyncToolOptions(TypedDict, total=False):
     """Sent to the LLM when ``on_duplicate='reject'`` blocks a duplicate call."""
     duplicate_confirm_template: str | Callable[[DuplicatePromptArgs], str]
     """Sent to the LLM when ``on_duplicate='confirm'`` requires re-call with confirmation."""
-    reply_at_tail_template: str | Callable[[ReplyPromptArgs], str]
+    reply_at_tail_template: ReplyTemplate
     """Instruction for the deferred reply when the pending update is still the tail of chat_ctx."""
-    reply_maybe_covered_template: str | Callable[[ReplyPromptArgs], str]
+    reply_maybe_covered_template: ReplyTemplate
     """Instruction for the deferred reply when newer items came after the pending update."""
 
 
@@ -154,6 +141,14 @@ def _resolve_async_tool_options(
     if config is None:
         return AsyncToolOptions(**_ASYNC_TOOL_OPTIONS_DEFAULTS)
     return AsyncToolOptions(**{**_ASYNC_TOOL_OPTIONS_DEFAULTS, **config})
+
+
+def _reply_options(options: AsyncToolOptions) -> ReplyOptions:
+    """Select the fully resolved reply templates owned by the scheduler."""
+    return {
+        "reply_at_tail_template": options["reply_at_tail_template"],
+        "reply_maybe_covered_template": options["reply_maybe_covered_template"],
+    }
 
 
 # session-scoped view shared across executors, so cancel_task / get_running_tasks
@@ -206,13 +201,6 @@ class _RunningTask:
     allow_cancellation: bool
 
 
-@dataclass
-class _PendingUpdate:
-    ctx: RunContext
-    items: list[ChatItem]
-    target: Agent  # agent that received the eager chat_ctx insert
-
-
 class _ToolExecutor:
     """Lifecycle manager for in-flight tool calls.
 
@@ -232,18 +220,27 @@ class _ToolExecutor:
         self._running_tasks: dict[str, _RunningTask] = {}
         self._duplicate_check_lock = asyncio.Lock()
 
-        self._pending_updates: list[_PendingUpdate] = []
-        self._reply_task: asyncio.Task[None] | None = None
-
         self._owning_activity: AgentActivity | None = owning_activity
         self._tool_options: AsyncToolOptions = _resolve_async_tool_options(async_tool_options)
+        self._reply_scheduler = _ReplyScheduler(
+            owning_activity=owning_activity,
+            reply_options=_reply_options(self._tool_options),
+            on_reply_scheduled=self._on_reply_scheduled,
+            on_reply_done=self._on_reply_done,
+        )
 
     def set_owning_activity(self, activity: AgentActivity | None) -> None:
         self._owning_activity = activity
+        self._reply_scheduler.set_owning_activity(activity)
 
     def set_tool_options(self, options: AsyncToolOptions) -> None:
         """Replace the async tool templates. Caller must pre-resolve defaults."""
         self._tool_options = options
+        self._reply_scheduler.set_reply_options(_reply_options(options))
+
+    @property
+    def _reply_task(self) -> asyncio.Task[None] | None:
+        return self._reply_scheduler.reply_task
 
     @property
     def has_running_tasks(self) -> bool:
@@ -450,150 +447,52 @@ class _ToolExecutor:
 
     async def aclose(self) -> None:
         """Cancel everything and drop any buffered replies."""
-        self._pending_updates.clear()
         tasks = [task.exe_task for task in self._running_tasks.values()]
-        if self._reply_task is not None:
-            tasks.append(self._reply_task)
         if tasks:
             await utils.aio.cancel_and_wait(*tasks)
+        await self._reply_scheduler.aclose()
         self._running_tasks.clear()
 
     async def drain(self) -> None:
         """Cancel cancellable tools, await the rest. Reply delivery is left running;
-        ``_deliver_reply`` drops itself when its target activity closes."""
+        the scheduler drops it when its target activity closes."""
         await self.cancel_all(cancellable_only=True)
 
     async def _enqueue_reply(self, ctx: RunContext, items: list[ChatItem]) -> None:
-        # eager insert so a reply firing before delivery sees the items
-        target = (
-            self._owning_activity.agent
-            if self._owning_activity is not None
-            else ctx.session.current_agent
-        )
-        chat_ctx = target.chat_ctx.copy()
-        chat_ctx.insert(items)
-        await target.update_chat_ctx(chat_ctx)
-        ctx.session.history.insert(items)
-
-        self._pending_updates.append(_PendingUpdate(ctx=ctx, items=items, target=target))
-
-        if self._reply_task is None or self._reply_task.done():
-            self._reply_task = asyncio.create_task(
-                self._deliver_reply(ctx.session), name="tool_executor_deliver_reply"
-            )
-            # let an active RunResult wait for the deferred reply to land
-            run_state = ctx.session._global_run_state
-            if run_state is not None:
-                run_state._watch_handle(self._reply_task)
-
-    async def _deliver_reply(self, session: AgentSession) -> None:
-        from .agent_activity import ActivityClosedError
-
-        target_agent: Agent
-        try:
-            if self._owning_activity is not None:
-                await self._owning_activity.wait_for_idle()
-                target_agent = self._owning_activity.agent
-            else:
-                target_activity = await session.wait_for_idle()
-                target_agent = target_activity.agent
-        except ActivityClosedError:
-            logger.debug("dropping tool reply — owning activity closed")
-            self._pending_updates.clear()
-            return
-
-        # no await after this line
-
-        updates = self._pending_updates[:]
-        self._pending_updates.clear()
-
-        pending_items: list[ChatItem] = []
-        for update in updates:
-            pending_items.extend(update.items)
-
-        if not pending_items:
-            return
-
-        # only insert again if delivery target differs (session-scoped handoff)
-        chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN
-        items_to_insert = [
-            item for u in updates for item in u.items if u.target is not target_agent
-        ]
-        if items_to_insert:
-            logger.warning(
-                "agent handoff happened while tool waiting for reply delivering",
-                extra={
-                    "tools": [
-                        u.ctx.function_call.name for u in updates if u.target is not target_agent
-                    ],
-                },
-            )
-            chat_ctx = target_agent.chat_ctx.copy()
-            chat_ctx.insert(items_to_insert)
-
-        # if the update is still the tail, the agent hasn't spoken since — summarize
-        # directly; otherwise let the LLM decide whether it already covered this
-        at_tail = (items := target_agent.chat_ctx.items) and items[-1].id == pending_items[-1].id
-        template = (
-            self._tool_options["reply_at_tail_template"]
-            if at_tail
-            else self._tool_options["reply_maybe_covered_template"]
+        await self._reply_scheduler.enqueue(
+            session=ctx.session,
+            items=items,
+            source={
+                "function_name": ctx.function_call.name,
+                "call_id": ctx.function_call.call_id,
+            },
         )
 
-        call_ids = [item.call_id for item in pending_items if item.type == "function_call_output"]
-        speech = session.generate_reply(
-            instructions=_render(template, {"call_ids": call_ids}),
-            tool_choice="none",
-            chat_ctx=chat_ctx,
-        )
+    def _on_reply_scheduled(
+        self, session: AgentSession, call_ids: list[str], speech_id: str
+    ) -> None:
         session.emit(
             "tool_execution_updated",
             ToolExecutionUpdatedEvent(
                 update=ToolReplyUpdated(
-                    update_ids=call_ids, status="scheduled", speech_id=speech.id
+                    update_ids=call_ids, status="scheduled", speech_id=speech_id
                 )
             ),
         )
-        logger.debug(
-            "generate async tool reply",
-            extra={
-                "speech_id": speech.id,
-                "items": [
-                    (item.name, item.call_id)
-                    for item in pending_items
-                    if item.type == "function_call_output"
-                ],
-                "updates_at_tail": at_tail,
-            },
+
+    def _on_reply_done(
+        self,
+        session: AgentSession,
+        call_ids: list[str],
+        speech_id: str,
+        status: ReplyStatus,
+    ) -> None:
+        session.emit(
+            "tool_execution_updated",
+            ToolExecutionUpdatedEvent(
+                update=ToolReplyUpdated(update_ids=call_ids, status=status, speech_id=speech_id)
+            ),
         )
-
-        def _on_speech_done(speech: SpeechHandle) -> None:
-            reply_status: Literal["completed", "interrupted", "skipped"]
-            if speech.interrupted:
-                reply_status = "interrupted"
-            elif not speech.chat_items:
-                # the LLM judged the content already covered and produced no output
-                reply_status = "skipped"
-            else:
-                reply_status = "completed"
-
-            if not speech.chat_items:
-                logger.debug(
-                    "async tool reply was done without outputs",
-                    extra={"speech_id": speech.id, "interrupted": speech.interrupted},
-                )
-                # TODO(long): reschedule interrupted replies?
-
-            session.emit(
-                "tool_execution_updated",
-                ToolExecutionUpdatedEvent(
-                    update=ToolReplyUpdated(
-                        update_ids=call_ids, status=reply_status, speech_id=speech.id
-                    )
-                ),
-            )
-
-        speech.add_done_callback(_on_speech_done)
 
     async def _check_duplicate(
         self,

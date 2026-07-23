@@ -32,6 +32,7 @@ from .._exceptions import APIError
 from ..job import get_job_context
 from ..llm import AgentHandoff, ChatContext, MetricsReport
 from ..llm.chat_context import Instructions
+from ..llm.tool_context import get_fnc_tool_names
 from ..log import logger
 from ..metrics import AgentSessionUsage, ModelUsageCollector
 from ..telemetry import trace_types, tracer
@@ -49,6 +50,13 @@ from ._utils import _set_participant_attributes
 from .agent import Agent, AgentTask
 from .agent_activity import AgentActivity, _ReusableResources
 from .amd import AMD
+from .background_session import (
+    _BACKGROUND_SEND_TOOL_NAME,
+    BackgroundDefinition,
+    BackgroundHandlingOptions,
+    _BackgroundRuntimeManager,
+    _create_background_send_tool,
+)
 from .events import (
     AgentEvent,
     AgentState,
@@ -282,6 +290,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # Tool settings
         tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
         tool_handling: NotGivenOr[ToolHandlingOptions] = NOT_GIVEN,
+        background: Sequence[BackgroundDefinition] | None = None,
+        background_handling: BackgroundHandlingOptions | None = None,
         max_tool_steps: int = 3,
         # TTS settings
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
@@ -498,6 +508,20 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 "and will be removed in a future version. Use `MCPToolset` instead."
             )
         self._tools = tools if is_given(tools) else []
+        self._background_manager: _BackgroundRuntimeManager | None = None
+        if background:
+            if _BACKGROUND_SEND_TOOL_NAME in get_fnc_tool_names(self._tools):
+                raise ValueError(
+                    f"duplicate function name: {_BACKGROUND_SEND_TOOL_NAME} is reserved for "
+                    "background sessions"
+                )
+            self._tools = list(self._tools)
+            self._background_manager = _BackgroundRuntimeManager(
+                background,
+                session=self,
+                background_handling=background_handling,
+            )
+            self._tools.append(_create_background_send_tool(self._background_manager, background))
         self._async_tool_options = _resolve_async_tool_options(
             tool_handling.get("async_options") if is_given(tool_handling) else None
         )
@@ -931,6 +955,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._session_host is not None:
                 await self._session_host.start()
 
+            if self._background_manager is not None:
+                self._background_manager.start()
+                try:
+                    await self._background_manager.wait_started()
+                except BaseException:
+                    await self._background_manager.aclose()
+                    raise
+
             # important: no await should be done after this!
 
             if self.input.audio is not None:
@@ -1064,6 +1096,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._closing = True
             self._cancel_user_away_timer()
             self._on_aec_warmup_expired()  # always clear aec warmup when closing the session
+
+            if self._background_manager is not None:
+                await self._background_manager.aclose()
 
             if self._amd is not None:
                 await self._amd.aclose()
