@@ -18,7 +18,7 @@ The trick is that everything speaks the OpenAI API: the openai plugin's `base_ur
 
 ```bash
 curl -fsSL https://ollama.com/install.sh | sh
-ollama pull qwen3:4b
+ollama pull llama3.2:3b
 ```
 
 Any chat model works. Smaller models answer faster; see the latency table below before choosing.
