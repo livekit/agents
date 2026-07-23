@@ -419,6 +419,9 @@ class TTS(tts.TTS):
         self._standby_lock = asyncio.Lock()
         self._standby: _WarmStandbyConnection | None = None
         self._standby_task: asyncio.Task[None] | None = None
+        # Retain fire-and-forget standby-close tasks so the event loop cannot
+        # garbage-collect them mid-run before the socket is actually closed.
+        self._standby_close_tasks: set[asyncio.Task[None]] = set()
 
         if not _candidate:
             for fallback in raw_connections[1:]:
@@ -671,7 +674,9 @@ class TTS(tts.TTS):
         # drop them so the next segment reconnects with the updated init payload.
         if invalidate_pool and (self._standby is not None or self._standby_task is not None):
             with contextlib.suppress(RuntimeError):
-                asyncio.get_running_loop().create_task(self._close_standby())
+                close_task = asyncio.get_running_loop().create_task(self._close_standby())
+                self._standby_close_tasks.add(close_task)
+                close_task.add_done_callback(self._standby_close_tasks.discard)
 
         # Keep fallback candidates consistent with the primary so a later
         # failover does not synthesize with construction-time settings. A
@@ -744,6 +749,16 @@ class TTS(tts.TTS):
             await stream.aclose()
 
         self._streams.clear()
+        # Let any in-flight standby cleanup finish: _close_standby detaches
+        # self._standby before awaiting the socket close, so interrupting it
+        # mid-close would strand that already-detached socket open. shield keeps
+        # the close running even if aclose() itself is cancelled (a bare
+        # `await close_task` would propagate that cancel into the close). The
+        # close is bounded by WS_CLOSE_TIMEOUT_S.
+        for close_task in list(self._standby_close_tasks):
+            with contextlib.suppress(Exception):
+                await asyncio.shield(close_task)
+        self._standby_close_tasks.clear()
         await self._close_standby()
         if not self._is_candidate:
             for candidate in self._candidate_tts[1:]:
