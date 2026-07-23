@@ -247,6 +247,9 @@ class RealtimeModel(llm.RealtimeModel):
 
         Args:
             instructions (str, optional): Initial system instructions for the model. Defaults to "".
+                Gemini 3.1 Live models do not support mid-session instruction updates;
+                start a new session with updated instructions, or pass turn-specific context
+                in user/tool content before the model responds.
             api_key (str, optional): Google Gemini API key. If None, will attempt to read from the environment variable GOOGLE_API_KEY.
             modalities (list[Modality], optional): Modalities to use, such as ["TEXT", "AUDIO"]. Defaults to ["AUDIO"].
             model (str, optional): The name of the model to use. Defaults to "gemini-2.5-flash-native-audio-preview-12-2025" or "gemini-live-2.5-flash-native-audio" (vertexai).
