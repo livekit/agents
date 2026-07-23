@@ -35,6 +35,7 @@ livekit-plugins-krisp = { workspace = true }
 livekit-plugins-keyframe = { workspace = true }
 livekit-plugins-langchain = { workspace = true }
 livekit-plugins-lemonslice = { workspace = true }
+livekit-plugins-litellm = { workspace = true }
 livekit-plugins-liveavatar = { workspace = true }
 livekit-plugins-lmnt = { workspace = true }
 livekit-plugins-minimax-ai = { workspace = true }
