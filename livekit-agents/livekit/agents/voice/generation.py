@@ -24,6 +24,7 @@ from ..llm import (
 from ..llm.chat_context import Instructions
 from ..log import logger
 from ..telemetry import trace_types, tracer
+from ..tokenize import SentenceTokenizer, blingfire
 from ..types import (
     USERDATA_TIMED_TRANSCRIPT,
     USERDATA_TTS_STARTED_TIME,
@@ -58,6 +59,8 @@ class _LLMGenerationData:
     id: str = field(default_factory=lambda: utils.shortuuid("item_"))
     started_fut: asyncio.Future[None] = field(default_factory=asyncio.Future)
     ttft: float | None = None
+    tps: float | None = None
+    ttfs: float | None = None
 
 
 # output for an injected in-progress tool call, phrased so the model waits instead of
@@ -150,12 +153,22 @@ def perform_llm_inference(
     model_settings: ModelSettings,
     model: str | None = None,
     provider: str | None = None,
+    sentence_tokenizer: SentenceTokenizer | None = None,
 ) -> tuple[asyncio.Task[bool], _LLMGenerationData]:
     text_ch = aio.Chan[str | FlushSentinel]()
     function_ch = aio.Chan[llm.FunctionCall]()
     data = _LLMGenerationData(text_ch=text_ch, function_ch=function_ch)
     llm_task = asyncio.create_task(
-        _llm_inference_task(node, chat_ctx, tool_ctx, model_settings, data, model, provider)
+        _llm_inference_task(
+            node,
+            chat_ctx,
+            tool_ctx,
+            model_settings,
+            data,
+            model,
+            provider,
+            sentence_tokenizer=sentence_tokenizer,
+        )
     )
     llm_task.add_done_callback(lambda _: text_ch.close())
     llm_task.add_done_callback(lambda _: function_ch.close())
@@ -179,6 +192,8 @@ async def _llm_inference_task(
     data: _LLMGenerationData,
     model: str | None = None,
     provider: str | None = None,
+    *,
+    sentence_tokenizer: SentenceTokenizer | None = None,
 ) -> bool:
     start_time = time.perf_counter()
     current_span = trace.get_current_span()
@@ -228,6 +243,20 @@ async def _llm_inference_task(
         return False
 
     # forward llm stream to output channels
+    usage: Any = None
+    if sentence_tokenizer is None:
+        sentence_tokenizer = blingfire.SentenceTokenizer(retain_format=True)
+    sentence_stream = sentence_tokenizer.stream()
+
+    async def _set_time_first_sentence() -> None:
+        try:
+            async for _ in sentence_stream:
+                data.ttfs = time.perf_counter() - start_time
+                return
+        except Exception:
+            logger.exception("failed to time first sentence (llm_node_ttfs)")
+
+    ttfs_task = asyncio.create_task(_set_time_first_sentence())
     try:
         async for chunk in llm_node:
             if data.ttft is None:
@@ -240,6 +269,8 @@ async def _llm_inference_task(
                 content = chunk
 
             elif isinstance(chunk, ChatChunk):
+                if chunk.usage is not None:
+                    usage = chunk.usage
                 if not chunk.delta:
                     continue
 
@@ -283,9 +314,22 @@ async def _llm_inference_task(
             if content:
                 data.generated_text += content
                 text_ch.send_nowait(content)
+                if data.ttfs is None:
+                    sentence_stream.push_text(content)
     finally:
         if isinstance(llm_node, _ACloseable):
             await llm_node.aclose()
+        try:
+            sentence_stream.end_input()  # flush any trailing sentence, then close
+        except RuntimeError:
+            pass
+        await utils.aio.cancel_and_wait(ttfs_task)
+
+    duration = time.perf_counter() - start_time
+    if usage is not None and duration > 0:
+        data.tps = usage.completion_tokens / duration
+    if data.ttfs is None and data.generated_text.strip():
+        data.ttfs = duration
 
     current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, data.generated_text)
     current_span.set_attribute(

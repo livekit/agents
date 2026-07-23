@@ -15,7 +15,7 @@ from livekit import rtc
 from livekit.agents.llm.realtime import MessageGeneration
 from livekit.agents.metrics.base import Metadata
 
-from .. import inference, llm, stt, tts, utils, vad
+from .. import inference, llm, stt, tokenize, tts, utils, vad
 from ..llm.chat_context import Instructions
 from ..llm.realtime_fallback_adapter import _FallbackRealtimeSession
 from ..llm.tool_context import (
@@ -2575,6 +2575,26 @@ class AgentActivity(RecognitionHooks):
             return DEFAULT_EXPRESSIVE_OPTIONS
         return None
 
+    def _tts_sentence_tokenizer(self) -> tokenize.SentenceTokenizer:
+        """Sentence tokenizer the TTS path applies to this generation.
+
+        Single source of truth for that segmentation: the default `tts_node` wraps a
+        non-streaming TTS with the tokenizer returned here, and the inference gateway
+        shares the same per-provider defaults, so the ttfs metric can't drift from what
+        TTS actually does. A live `StreamAdapter` instance is reused rather than rebuilt.
+        Custom `tts_node` overrides and native provider-side segmentation aren't visible
+        here, so those fall back to the `StreamAdapter` default.
+        """
+        # markup only exists in the stream when expressive is active
+        expressive_active = self._resolve_expressive_options() is not None
+        if isinstance(self.tts, tts.StreamAdapter):
+            return self.tts._sentence_tokenizer
+        if isinstance(self.tts, inference.TTS):
+            from ..tts._provider_format import sentence_tokenizer
+
+            return sentence_tokenizer(self.tts.model.split("/")[0], expressive=expressive_active)
+        return tokenize.blingfire.SentenceTokenizer(retain_format=True, xml_aware=expressive_active)
+
     def _inject_expressive_instructions(
         self,
         chat_ctx: llm.ChatContext,
@@ -2994,6 +3014,7 @@ class AgentActivity(RecognitionHooks):
             model_settings=model_settings,
             model=self.llm.model if self.llm else None,
             provider=self.llm.provider if self.llm else None,
+            sentence_tokenizer=self._tts_sentence_tokenizer(),
         )
         tasks.append(llm_task)
 
@@ -3279,6 +3300,12 @@ class AgentActivity(RecognitionHooks):
 
         if llm_gen_data.ttft is not None:
             assistant_metrics["llm_node_ttft"] = llm_gen_data.ttft
+
+        if llm_gen_data.tps is not None:
+            assistant_metrics["llm_node_tps"] = llm_gen_data.tps
+
+        if llm_gen_data.ttfs is not None:
+            assistant_metrics["llm_node_ttfs"] = llm_gen_data.ttfs
 
         if first_tts_gen_data and first_tts_gen_data.ttfb is not None:
             assistant_metrics["tts_node_ttfb"] = first_tts_gen_data.ttfb
