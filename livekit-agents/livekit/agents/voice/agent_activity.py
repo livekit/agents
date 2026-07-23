@@ -50,7 +50,7 @@ from .audio_recognition import (
     _PreemptiveGenerationInfo,
     _STTPipeline,
 )
-from .background_session import _BACKGROUND_SEND_TOOL_NAME
+from .background_session import _RESERVED_BACKGROUND_TOOL_NAMES
 from .endpointing import create_endpointing
 from .events import (
     AgentFalseInterruptionEvent,
@@ -207,14 +207,14 @@ class AgentActivity(RecognitionHooks):
         self._mcp_tools: list[mcp.MCPToolset] = []
 
         # Validate the merged session/agent tool namespace before the activity starts.
-        if (
-            self._session._background_manager is not None
-            and _BACKGROUND_SEND_TOOL_NAME in get_fnc_tool_names(self._agent.tools)
-        ):
-            raise ValueError(
-                f"duplicate function name: {_BACKGROUND_SEND_TOOL_NAME} is reserved for "
-                "background sessions"
-            )
+        if self._session._background_manager is not None:
+            agent_tool_names = get_fnc_tool_names(self._agent.tools)
+            for reserved_name in _RESERVED_BACKGROUND_TOOL_NAMES:
+                if reserved_name in agent_tool_names:
+                    raise ValueError(
+                        f"duplicate function name: {reserved_name} is reserved for "
+                        "background sessions"
+                    )
         llm.ToolContext(self._session.tools + self._agent.tools)
 
         # activity-scoped executor: cancels cancellable tools / awaits the rest on drain,
@@ -484,14 +484,14 @@ class AgentActivity(RecognitionHooks):
             )
 
     async def update_tools(self, tools: list[llm.Tool | llm.Toolset]) -> None:
-        if (
-            self._session._background_manager is not None
-            and _BACKGROUND_SEND_TOOL_NAME in get_fnc_tool_names(tools)
-        ):
-            raise ValueError(
-                f"duplicate function name: {_BACKGROUND_SEND_TOOL_NAME} is reserved for "
-                "background sessions"
-            )
+        if self._session._background_manager is not None:
+            updated_tool_names = get_fnc_tool_names(tools)
+            for reserved_name in _RESERVED_BACKGROUND_TOOL_NAMES:
+                if reserved_name in updated_tool_names:
+                    raise ValueError(
+                        f"duplicate function name: {reserved_name} is reserved for "
+                        "background sessions"
+                    )
 
         # Compute tool diff before updating
         old_tool_names = set(get_fnc_tool_names(self._agent._tools))

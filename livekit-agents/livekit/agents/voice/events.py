@@ -530,6 +530,8 @@ class BackgroundMessageReceived(BaseModel):
     background_id: str
     message_id: str
     content: str
+    silent: bool = False
+    """True when the update was inserted into context only, with no reply scheduled."""
 
 
 class BackgroundReplyUpdated(BaseModel):
