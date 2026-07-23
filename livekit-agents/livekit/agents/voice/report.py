@@ -62,6 +62,7 @@ class SessionReport:
                 "max_endpointing_delay": self.options.endpointing["max_delay"],
                 "max_tool_steps": self.options.max_tool_steps,
                 "user_away_timeout": self.options.user_away_timeout,
+                "user_away_on": self.options.user_away_on,
                 "min_consecutive_speech_delay": self.options.min_consecutive_speech_delay,
                 "preemptive_generation": dict(self.options.preemptive_generation),
             },

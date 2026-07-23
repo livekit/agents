@@ -183,6 +183,13 @@ DEFAULT_EXPRESSIVE_OPTIONS: ExpressiveOptions = ExpressiveOptions(
     ),
 )
 
+# Activity signal for pausing/refreshing ``user_away_timeout``:
+# - presence: cancel while user or agent is speaking (VAD/STT speech-started);
+#   transcript-less flips keep the existing deadline (#6030).
+# - conversation: cancel only while the agent is active; ignore user VAD speaking
+#   (preferred for noisy telephony / turn_detection="stt").
+UserAwayOn = Literal["presence", "conversation"]
+
 
 @dataclass
 class AgentSessionOptions:
@@ -192,6 +199,8 @@ class AgentSessionOptions:
     """sparse endpointing keys the user provided explicitly"""
     max_tool_steps: int
     user_away_timeout: float | None
+    user_away_on: UserAwayOn
+    """See ``UserAwayOn`` — ``"presence"`` (default) or ``"conversation"``."""
     min_consecutive_speech_delay: float
     use_tts_aligned_transcript: bool | None
     tts_text_transforms: Sequence[TextTransforms] | None
@@ -293,6 +302,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         aec_warmup_duration: float | None = 3.0,
         ivr_detection: bool = False,
         user_away_timeout: float | None = 15.0,
+        user_away_on: UserAwayOn = "presence",
         session_close_transcript_timeout: float = 2.0,
         # Runtime settings
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
@@ -371,8 +381,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             loop (asyncio.AbstractEventLoop, optional): Event loop to bind the
                 session to. Falls back to :pyfunc:`asyncio.get_event_loop()`.
             user_away_timeout (float, optional): If set, set the user state as
-                "away" after this amount of time after user and agent are silent.
-                Defaults to ``15.0`` s, set to ``None`` to disable.
+                "away" after this amount of mutual silence. The deadline is
+                refreshed by meaningful activity (agent leaving idle, or a final
+                user transcript). Defaults to ``15.0`` s, set to ``None`` to disable.
+            user_away_on (Literal["presence", "conversation"], optional): Which
+                activity cancels/refreshes the away countdown. ``"presence"``
+                (default) pauses while the user or agent is speaking; transcript-less
+                user speaking↔listening flips keep the existing deadline so noise
+                cannot defer "away". ``"conversation"`` ignores user VAD speaking and
+                only pauses while the agent is active — preferred for noisy telephony
+                / ``turn_detection="stt"`` (#6030).
             aec_warmup_duration (float, optional): The duration in seconds that the agent
                 will ignore user's audio interruptions after the agent starts speaking.
                 This is useful to prevent the agent from being interrupted by echo before AEC is ready.
@@ -449,6 +467,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             endpointing_overrides=endpointing_overrides,
             max_tool_steps=max_tool_steps,
             user_away_timeout=user_away_timeout,
+            user_away_on=user_away_on,
             min_consecutive_speech_delay=min_consecutive_speech_delay,
             tts_text_transforms=(
                 tts_text_transforms
@@ -543,6 +562,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._user_state: UserState = "listening"
         self._agent_state: AgentState = "initializing"
         self._user_away_timer: asyncio.TimerHandle | None = None
+        # absolute deadline for "away"; preserved across transcript-less user
+        # speaking↔listening flips so telephony noise cannot defer the timeout
+        self._user_away_deadline: float | None = None
+        # set when a final transcript is seen during the current user speech
+        # segment; speaking→listening then refreshes the deadline (genuine speech)
+        # instead of re-arming a stale remaining=0 window
+        self._user_away_speech_had_transcript: bool = False
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
         self._closing_task: asyncio.Task[None] | None = None
@@ -1681,7 +1707,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 self._activity.push_video(frame)
 
-    def _set_user_away_timer(self) -> None:
+    def _set_user_away_timer(self, *, reset: bool = True) -> None:
+        """Arm the away timer.
+
+        Args:
+            reset: When True, push the away deadline to ``now + user_away_timeout``
+                (meaningful activity). When False, re-arm with whatever time
+                remains on the existing deadline — used for transcript-less user
+                state flips so background noise cannot defer "away".
+        """
         self._cancel_user_away_timer()
         if self._opts.user_away_timeout is None:
             return
@@ -1694,9 +1728,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # skip the timer before user join the room
             return
 
-        self._user_away_timer = self._loop.call_later(
-            self._opts.user_away_timeout, self._update_user_state, "away"
-        )
+        now = time.time()
+        if reset or self._user_away_deadline is None:
+            self._user_away_deadline = now + self._opts.user_away_timeout
+
+        remaining = max(0.0, self._user_away_deadline - now)
+        self._user_away_timer = self._loop.call_later(remaining, self._update_user_state, "away")
 
     def _cancel_user_away_timer(self) -> None:
         if self._user_away_timer is not None:
@@ -1759,7 +1796,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._aec_warmup_remaining,
             )
 
-        if state == "listening" and self._user_state == "listening":
+        # conversation mode treats user VAD "speaking" as idle for away purposes
+        # (noise must not block re-arm after the agent finishes talking)
+        user_idle_for_away = self._user_state == "listening" or (
+            self._opts.user_away_on == "conversation" and self._user_state == "speaking"
+        )
+        if state == "listening" and user_idle_for_away:
             self._set_user_away_timer()
         else:
             self._cancel_user_away_timer()
@@ -1803,10 +1845,27 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._user_speaking_span.end(end_time=last_speaking_time_ns)
             self._user_speaking_span = None
 
+        if state == "speaking":
+            # new speech segment — only a final transcript during this segment
+            # counts as meaningful activity for deadline refresh on EOS
+            self._user_away_speech_had_transcript = False
+
         if state == "listening" and self._agent_state == "listening":
-            self._set_user_away_timer()
+            # genuine speech (saw a final transcript) refreshes the full window;
+            # transcript-less noise flips preserve the existing deadline (#6030)
+            self._set_user_away_timer(reset=self._user_away_speech_had_transcript)
+            self._user_away_speech_had_transcript = False
+        elif state == "speaking" and self._opts.user_away_on == "conversation":
+            # conversation mode: raw VAD/STT speaking must not pause the countdown
+            pass
         else:
             self._cancel_user_away_timer()
+            if state == "away":
+                self._user_away_deadline = None
+            if state == "listening":
+                # agent not idle — discard segment activity; agent return-to-listening
+                # re-arms with a full window via ``_update_agent_state``
+                self._user_away_speech_had_transcript = False
 
         old_state = self._user_state
         self._user_state = state
@@ -1832,13 +1891,20 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # a transcript means stt recovered; reset its error tolerance
             self._stt_error_counts = 0
 
+        if ev.is_final and ev.transcript:
+            # mark activity even while VAD still reports speaking — EOS uses this
+            # to refresh the away deadline instead of a stale remaining=0 window
+            self._user_away_speech_had_transcript = True
+
         if ev.is_final and self.user_state != "speaking":
             if self.user_state == "away":
-                # reset user state from away to listening in case VAD has a miss detection
+                # reset user state from away to listening in case VAD has a miss detection.
+                # ``_update_user_state`` re-arms a full window when the agent is listening
+                # (deadline was cleared on away); must not arm while the agent is speaking.
                 self._update_user_state("listening")
             elif self.user_state == "listening" and self._agent_state == "listening":
                 # VAD may have missed speech; STT still saw activity, so refresh away timeout
-                self._set_user_away_timer()
+                self._set_user_away_timer(reset=True)
 
         self.emit("user_input_transcribed", ev)
 
