@@ -329,7 +329,11 @@ class FallbackRecognizeStream(RecognizeStream):
                     except Exception:
                         pass
 
-                if main_stream is not None:
+                if (
+                    main_stream is not None
+                    and not main_stream._input_ch.closed
+                    and not main_stream._event_ch.closed
+                ):
                     try:
                         if isinstance(data, rtc.AudioFrame):
                             main_stream.push_frame(data)
