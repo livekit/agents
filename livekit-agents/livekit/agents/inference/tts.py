@@ -67,9 +67,21 @@ InworldModels = Literal[
     "inworld/inworld-tts-1",
 ]
 XaiModels = Literal["xai/tts-1",]
+FishAudioModels = Literal[
+    "fishaudio",
+    "fishaudio/s2.1-pro",
+    "fishaudio/s2.1-pro-free",
+    "fishaudio/s2-pro",
+]
 
 TTSModels = (
-    CartesiaModels | DeepgramModels | ElevenlabsModels | RimeModels | InworldModels | XaiModels
+    CartesiaModels
+    | DeepgramModels
+    | ElevenlabsModels
+    | RimeModels
+    | InworldModels
+    | XaiModels
+    | FishAudioModels
 )
 
 
@@ -192,6 +204,23 @@ class XaiOptions(TypedDict, total=False):
     bit_rate: Literal[32000, 64000, 96000, 128000, 192000]
     speed: float  # speaking-rate multiplier, default 1.0
     optimize_streaming_latency: Literal[0, 1, 2]  # latency optimization level, default 0
+
+
+class FishAudioOptions(TypedDict, total=False):
+    """See https://docs.fish.audio/api-reference/endpoint/websocket/tts-live"""
+
+    speed: float  # prosody speaking-rate multiplier, 1.0 is natural
+    volume: float  # prosody loudness adjustment in dB, 0 is natural
+    normalize_loudness: bool  # consistent output loudness; S2-Pro family only
+    temperature: float  # range 0-1, higher is more varied/expressive
+    top_p: float  # nucleus sampling probability mass, range 0-1
+    normalize: bool  # normalize numbers/dates/abbreviations before synthesis
+    latency: Literal["normal", "balanced", "low"]  # streaming latency mode
+    chunk_length: int  # characters buffered before auto-synthesis, range 100-300
+    max_new_tokens: int  # max audio tokens per text chunk, default 1024
+    min_chunk_length: int  # min characters before splitting a new chunk, range 0-100
+    condition_on_previous_chunks: bool  # use prior audio as context for consistency
+    early_stop_threshold: float  # early-stopping threshold for batching, range 0-1
 
 
 TTSEncoding = Literal["pcm_s16le"]
@@ -333,6 +362,25 @@ class TTS(tts.TTS):
     @overload
     def __init__(
         self,
+        model: FishAudioModels,
+        *,
+        voice: NotGivenOr[str] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        encoding: NotGivenOr[TTSEncoding] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        extra_kwargs: NotGivenOr[FishAudioOptions] = NOT_GIVEN,
+        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+    ) -> None:
+        pass
+
+    @overload
+    def __init__(
+        self,
         model: str,
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
@@ -369,6 +417,7 @@ class TTS(tts.TTS):
             | RimeOptions
             | InworldOptions
             | XaiOptions
+            | FishAudioOptions
         ] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
