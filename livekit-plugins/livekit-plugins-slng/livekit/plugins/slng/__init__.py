@@ -19,6 +19,7 @@ STT and TTS adapters for SLNG gateway models.
 See https://docs.slng.ai/ for more information.
 """
 
+from .connection import PluginEvent, STTConnectionConfig, TTSConnectionConfig
 from .log import logger
 from .stt import STT, SpeechStream
 from .tts import TTS
@@ -26,8 +27,11 @@ from .version import __version__
 
 __all__ = [
     "STT",
-    "SpeechStream",
     "TTS",
+    "PluginEvent",
+    "STTConnectionConfig",
+    "SpeechStream",
+    "TTSConnectionConfig",
     "__version__",
 ]
 
