@@ -1303,6 +1303,38 @@ async def test_conversation_user_away_still_cancels_on_agent_speaking() -> None:
         await _close_test_session(session)
 
 
+async def test_presence_long_speech_with_transcript_refreshes_away_deadline() -> None:
+    """Genuine speech must not leave a stale deadline that fires away on EOS."""
+    session = create_session(FakeActions(), extra_kwargs={"user_away_timeout": 0.3})
+    try:
+        session._agent_state = "listening"
+        session._user_state = "listening"
+        session._set_user_away_timer(reset=True)
+        deadline0 = session._user_away_deadline
+        assert deadline0 is not None
+
+        # speak longer than the away timeout; final arrives while still speaking
+        session._update_user_state("speaking")
+        await asyncio.sleep(0.35)
+        session._user_input_transcribed(
+            UserInputTranscribedEvent(transcript="i was talking", is_final=True)
+        )
+        assert session.user_state == "speaking"
+
+        session._update_user_state("listening")
+        deadline1 = session._user_away_deadline
+        assert deadline1 is not None
+        assert deadline1 > deadline0
+        assert session.user_state == "listening"
+        assert session._user_away_timer is not None
+
+        # must not flip to away immediately after a real utterance
+        await asyncio.sleep(0.05)
+        assert session.user_state == "listening"
+    finally:
+        await _close_test_session(session)
+
+
 async def test_stt_error_count_resets_on_user_transcript() -> None:
     from livekit.agents.voice.agent_session import SessionConnectOptions
 

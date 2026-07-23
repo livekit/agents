@@ -565,6 +565,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # absolute deadline for "away"; preserved across transcript-less user
         # speaking↔listening flips so telephony noise cannot defer the timeout
         self._user_away_deadline: float | None = None
+        # set when a final transcript is seen during the current user speech
+        # segment; speaking→listening then refreshes the deadline (genuine speech)
+        # instead of re-arming a stale remaining=0 window
+        self._user_away_speech_had_transcript: bool = False
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
         self._closing_task: asyncio.Task[None] | None = None
@@ -1831,10 +1835,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._user_speaking_span.end(end_time=last_speaking_time_ns)
             self._user_speaking_span = None
 
+        if state == "speaking":
+            # new speech segment — only a final transcript during this segment
+            # counts as meaningful activity for deadline refresh on EOS
+            self._user_away_speech_had_transcript = False
+
         if state == "listening" and self._agent_state == "listening":
-            # preserve the existing deadline — transcript-less speaking↔listening
-            # flips (telephony noise) must not defer "away" (#6030)
-            self._set_user_away_timer(reset=False)
+            # genuine speech (saw a final transcript) refreshes the full window;
+            # transcript-less noise flips preserve the existing deadline (#6030)
+            self._set_user_away_timer(reset=self._user_away_speech_had_transcript)
+            self._user_away_speech_had_transcript = False
         elif state == "speaking" and self._opts.user_away_on == "conversation":
             # conversation mode: raw VAD/STT speaking must not pause the countdown
             pass
@@ -1842,6 +1852,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._cancel_user_away_timer()
             if state == "away":
                 self._user_away_deadline = None
+            if state == "listening":
+                # agent not idle — discard segment activity; agent return-to-listening
+                # re-arms with a full window via ``_update_agent_state``
+                self._user_away_speech_had_transcript = False
 
         old_state = self._user_state
         self._user_state = state
@@ -1866,6 +1880,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if ev.transcript:
             # a transcript means stt recovered; reset its error tolerance
             self._stt_error_counts = 0
+
+        if ev.is_final and ev.transcript:
+            # mark activity even while VAD still reports speaking — EOS uses this
+            # to refresh the away deadline instead of a stale remaining=0 window
+            self._user_away_speech_had_transcript = True
 
         if ev.is_final and self.user_state != "speaking":
             if self.user_state == "away":
