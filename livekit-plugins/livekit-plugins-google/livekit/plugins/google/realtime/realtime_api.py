@@ -1443,6 +1443,12 @@ class RealtimeSession(llm.RealtimeSession):
                     arguments=arguments,
                 )
             )
+
+        # NON_BLOCKING calls may be followed by more output in the same turn.
+        # Keep the generation open until Gemini sends its completion events.
+        if self._opts.tool_behavior == types.Behavior.NON_BLOCKING:
+            return
+
         self._mark_current_generation_done()
 
     def _handle_tool_call_cancellation(
