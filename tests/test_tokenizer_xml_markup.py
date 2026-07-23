@@ -196,6 +196,133 @@ class TestXaiDialect:
         assert pf.normalize_markup("xai", raw) == raw
 
 
+class TestFishAudioDialect:
+    """Fish's native dialect is square brackets: expr markers lower to [very EMOTION] /
+    [SOUND] / [break] / [long-break] / [emphasis] word for the TTS, and the transcript
+    strips both the expr markers and any hallucinated native form (XML or brackets)."""
+
+    def test_llm_instructions_registered(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        instr = pf.llm_instructions("fishaudio")
+        # non-None is what the expressive gate keys on
+        assert instr is not None
+        # discrete emotion vocabulary, Fish's sounds, and the emphasis-only prosody
+        for emotion in pf._FISHAUDIO_EMOTIONS:
+            assert emotion in instr
+        assert '<expr type="sound" label="laughing"/>' in instr
+        assert "clear throat" in instr
+        assert '<expr type="prosody" label="emphasis">' in instr
+
+    def test_convert_expr_to_fish_brackets(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        raw = (
+            '<expr type="expression" label="excited"/> We won! '
+            '<expr type="sound" label="laughing"/> <expr type="break" label="500ms"/> '
+            'That was <expr type="prosody" label="emphasis">really</expr> close. '
+            '<expr type="break" label="2s"/>'
+        )
+        assert pf.convert_markup("fishaudio", raw) == (
+            "[very excited] We won! [laughing] [break] "
+            "That was [emphasis] really close. [long-break]"
+        )
+
+    def test_convert_expression_intensified_once(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        # "very" is prepended so the emotion lands harder, but never doubled
+        assert pf.convert_markup("fishaudio", '<expr type="expression" label="sad"/>') == (
+            "[very sad]"
+        )
+        assert pf.convert_markup("fishaudio", '<expression value="very sad"/>') == "[very sad]"
+
+    def test_convert_sound_alias(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        # other providers advertise "laugh"; a hallucinated one still lowers to a
+        # sound Fish renders
+        assert pf.convert_markup("fishaudio", '<expr type="sound" label="laugh"/>') == "[laughing]"
+
+    def test_split_markup_strips_expr(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        raw = (
+            '<expr type="expression" label="empathetic"/> That sounds '
+            '<expr type="prosody" label="emphasis">really</expr> hard. '
+            '<expr type="sound" label="clear throat"/>'
+        )
+        clean, tags = pf.split_markup("fishaudio", raw)
+        assert clean.strip() == "That sounds really hard."
+        types = [(t["type"], t["value"]) for t in tags]
+        assert ("expression", "empathetic") in types
+        assert ("prosody", "emphasis") in types
+        assert ("sound", "clear throat") in types
+
+    def test_hallucinated_native_markup_never_leaks(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        # native XML and Fish's own bracket form must both vanish from the transcript
+        raw = '<expression value="happy"/> Hey [very sad] there <emphasis>friend</emphasis>'
+        clean, _ = pf.split_markup("fishaudio", raw)
+        assert "<" not in clean and "[" not in clean
+        assert "Hey" in clean and "there" in clean and "friend" in clean
+        # and the same native XML still converts for the TTS
+        assert pf.convert_markup("fishaudio", raw) == (
+            "[very happy] Hey [very sad] there [emphasis] friend"
+        )
+
+    def test_steering_filters_sounds_and_examples(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        # everything off: the Sounds section and any example demonstrating a sound
+        # are omitted entirely, not advertised and then revoked
+        instr = pf.llm_instructions("fishaudio", {"nonverbal_sounds": {}})
+        assert instr is not None
+        assert "laughing" not in instr and "clear throat" not in instr
+        assert "Examples:" in instr  # the sound-free example survives
+
+        # laughing only: clear throat is gone, laughing stays
+        instr = pf.llm_instructions("fishaudio", {"nonverbal_sounds": {"laughing": True}})
+        assert instr is not None
+        assert "laughing" in instr and "clear throat" not in instr
+
+    def test_supported_nonverbals(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        # the queryable capabilities matrix: every Fish sound governed by one field
+        assert pf.supported_nonverbals("fishaudio") == {
+            "laughing": ["laughing", "chuckling"],
+            "reflex_sounds": ["clear throat"],
+        }
+        governed = [
+            label for labels in pf._NONVERBAL_SOUND_LABELS["fishaudio"].values() for label in labels
+        ]
+        assert sorted(governed) == sorted(pf._FISHAUDIO_SOUNDS)
+
+    def test_disfluent_examples_follow_steering(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        # fillers are few-shotted only while disfluencies are enabled, so the
+        # examples never contradict the "no fillers" delivery guideline
+        on = pf.llm_instructions("fishaudio", {"disfluencies": True})
+        off = pf.llm_instructions("fishaudio", {"disfluencies": False})
+        default = pf.llm_instructions("fishaudio")  # disfluencies default on
+        assert on is not None and off is not None and default is not None
+        assert "Um, uh" in on and "Um, uh" in default
+        assert "Um, uh" not in off and ", um," not in off
+
+    def test_normalize_closes_unclosed_tags(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        assert pf.normalize_markup("fishaudio", '<expr type="sound" label="laughing"> hi') == (
+            '<expr type="sound" label="laughing"/> hi'
+        )
+        assert pf.normalize_markup("fishaudio", '<expression value="happy"> hi') == (
+            '<expression value="happy"/> hi'
+        )
+
+
 # ===========================================================================
 # Batch sentence tokenizer
 # ===========================================================================

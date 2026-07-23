@@ -11,6 +11,7 @@ Provider docs:
 - Inworld: https://docs.inworld.ai/tts/best-practices/prompting-for-tts-2
 - xAI: https://docs.x.ai/developers/model-capabilities/audio/text-to-speech
 - xAI: https://docs.x.ai/developers/model-capabilities/audio/voice
+- Fish Audio: https://docs.fish.audio/developer-guide/core-features/emotions
 """
 
 from __future__ import annotations
@@ -116,6 +117,55 @@ def _xai_break_to_bracket(match: re.Match[str]) -> str:
     except ValueError:
         secs = 0.0
     return "[long-pause]" if secs >= 1.0 else "[pause]"
+
+
+# Fish Audio (s2 family) speech markers, from the Fish docs
+# (https://docs.fish.audio/developer-guide/core-features/emotions).
+#
+# The LLM is instructed in the expr dialect (below); expr lowering produces the
+# framework-standard intermediates (<expression value="..."/>, <sound value="..."/>,
+# <break time="..."/>, <emphasis>word</emphasis>) and convert_markup rewrites them to
+# Fish's native square brackets: [very EMOTION], [SOUND], [break]/[long-break], and
+# [emphasis] word (a prefix marker stressing the word that follows). The tag names stay
+# in _FISHAUDIO_TAGS so hallucinated native markup is still stripped from transcripts.
+_FISHAUDIO_EMOTIONS = [
+    "regretful",
+    "hopeful",
+    "happy",
+    "excited",
+    "curious",
+    "surprised",
+    "sad",
+    "empathetic",
+    "sarcastic",
+]
+_FISHAUDIO_SOUNDS = ["laughing", "chuckling", "clear throat"]
+_FISHAUDIO_TAGS = ["expression", "sound", "break", "emphasis"]
+
+_FISHAUDIO_EXPRESSION_RE = re.compile(
+    r'<expression\s+value="([^"]*)"(?:\s*/>|>(?:.*?)</expression>)'
+)
+_FISHAUDIO_BREAK_RE = re.compile(r'<break\s+time="([^"]*)"\s*/?>')
+_FISHAUDIO_EMPHASIS_RE = re.compile(r"<emphasis(?:\s[^>]*)?>([^<]*)</emphasis\s*>", re.IGNORECASE)
+
+
+def _fishaudio_expression_to_bracket(match: re.Match[str]) -> str:
+    # intensify with a leading "very" so the emotion lands harder in Fish's audio
+    # ([very regretful] steers more strongly than [regretful]); never doubled
+    value = match.group(1).strip()
+    if value and not value.lower().startswith("very "):
+        value = f"very {value}"
+    return f"[{value}]"
+
+
+def _fishaudio_break_to_bracket(match: re.Match[str]) -> str:
+    # Fish has two pause levels ([break], [long-break]); use the longer past ~1s
+    raw = match.group(1).strip().lower()
+    try:
+        secs = float(raw[:-2]) / 1000 if raw.endswith("ms") else float(raw.rstrip("s"))
+    except ValueError:
+        secs = 0.0
+    return "[long-break]" if secs >= 1.0 else "[break]"
 
 
 # --- LiveKit expression markers (expr) ---
@@ -344,11 +394,82 @@ the listener to catch what comes next.""",
     return "\n\n".join(parts)
 
 
+# Examples carried over from the original Fish expressive block (PR #6232), rewritten
+# in the expr dialect. Breaks appear only mid-sentence, never beside a period/?/! —
+# an example pairing a break with sentence punctuation few-shots the LLM into
+# double-pausing every boundary.
+_FISHAUDIO_EXAMPLES = [
+    '<expr type="expression" label="excited"/> That\'s hilarious! <expr type="sound" label="laughing"/> <expr type="expression" label="happy"/> You always lighten the mood.',  # noqa: E501
+    '<expr type="expression" label="empathetic"/> <expr type="sound" label="clear throat"/> That sounds like a <expr type="prosody" label="emphasis">really</expr> difficult experience.',  # noqa: E501
+    '<expr type="expression" label="sad"/> Oh, my goodness <expr type="sound" label="clear throat"/> <expr type="break" label="2s"/> that\'s a real shame.',  # noqa: E501
+    # sound-free, so at least one example survives any steering filter
+    '<expr type="expression" label="happy"/> You\'re all set for <expr type="break" label="500ms"/> Thursday the <expr type="prosody" label="emphasis">ninth</expr>. <expr type="expression" label="curious"/> Is there anything else I can help you with?',  # noqa: E501
+]
+
+# The original block baked light disfluencies into the few-shots — that's what made
+# fillers actually show up in generations. Appended only while steering has
+# disfluencies enabled, so the examples never contradict the "no fillers" guideline.
+_FISHAUDIO_DISFLUENT_EXAMPLES = [
+    '<expr type="expression" label="curious"/> Um, uh... really? <expr type="expression" label="sad"/> Well, I\'m really sorry to hear that.',  # noqa: E501
+    '<expr type="expression" label="regretful"/> I really wish I\'d, um, called sooner. <expr type="expression" label="hopeful"/> But I\'m here now if, if you want to talk.',  # noqa: E501
+    '<expr type="expression" label="surprised"/> What?! No way! I, I\'m flabbergasted! <expr type="expression" label="sarcastic"/> Fair play, I guess.',  # noqa: E501
+]
+
+
+def _fishaudio_expr_llm_instructions(sounds: list[str], disfluencies: bool = True) -> str:
+    sections = [
+        f"""Emotion - sets how a sentence sounds. Self-closing; place at the START of a sentence.
+   <expr type="expression" label="EMOTION"/>
+   Labels are a fixed vocabulary, NOT free-form descriptions: {", ".join(_FISHAUDIO_EMOTIONS)}.
+   Give every sentence its own emotion marker — repeat the same label to carry a \
+feeling across sentences, or switch labels when the feeling shifts."""
+    ]
+    if sounds:
+        sections.append(
+            f"""Sounds - a non-verbal sound between sentences. Self-closing.
+   <expr type="sound" label="{sounds[0]}"/>
+   Labels are a fixed vocabulary: {", ".join(sounds)}.
+   Use non-verbal sounds sparingly, and never the same one twice in a row — reach for \
+one only where it genuinely fits. An enabled sound gets over-used otherwise."""
+        )
+    sections.append(
+        """Pauses - insert silence when appropriate. Self-closing.
+   <expr type="break" label="500ms"/> or <expr type="break" label="2s"/>.
+   NEVER place a break next to a period, question mark, exclamation point, or ellipsis \
+— sentence punctuation already pauses, and a break beside it double-pauses. Most \
+replies need no break markers at all; reserve them for a deliberate mid-sentence beat \
+before a key detail (a date, a name, a number)."""
+    )
+    sections.append(
+        """Emphasis - stresses exactly the ONE word it wraps.
+   Are you <expr type="prosody" label="emphasis">sure</expr> you want to do this?
+   Wrap a single word, never a phrase. "emphasis" is the only prosody label for this \
+voice — there are no other wrapping style markers. Never nest it, and always close it \
+with </expr>."""
+    )
+
+    parts = [
+        _EXPR_PREAMBLE,
+        _numbered_sections(sections),
+        """Write for the EAR, not the page: no em or en dashes anywhere in spoken text — \
+use a comma or a period for a short beat, or a break marker for a real pause. Avoid \
+semicolons, mid-sentence colons, and parenthetical asides; rewrite them as separate \
+sentences or commas.""",
+        """When the conversation is in another language, still write every marker label in \
+English — labels are a fixed vocabulary, never translated.""",
+    ]
+    pool = _FISHAUDIO_EXAMPLES + (_FISHAUDIO_DISFLUENT_EXAMPLES if disfluencies else [])
+    if examples := _sound_examples(pool, sounds, _FISHAUDIO_SOUNDS):
+        parts.append("Examples:\n" + "\n".join(f"  {ex}" for ex in examples))
+    return "\n\n".join(parts)
+
+
 # Every provider's full expr sound vocabulary (the advertised labels before any
 # speech_steering filtering). Providers absent here have no non-verbal sounds.
 _PROVIDER_SOUNDS: dict[str, list[str]] = {
     "inworld": _INWORLD_SOUNDS,
     "xai": _XAI_INLINE,
+    "fishaudio": _FISHAUDIO_SOUNDS,
 }
 
 
@@ -412,6 +533,15 @@ _NONVERBAL_SOUND_LABELS: dict[str, dict[str, list[str]]] = {
         "mouth_sounds": ["tsk", "tongue-click", "lip-smack"],
         "reflex_sounds": [],  # xAI has no cough/yawn sounds
     },
+    "fishaudio": {
+        "laughing": ["laughing", "chuckling"],
+        "breathing": [],
+        "sighing": [],
+        "crying": [],
+        "vocalizing": [],
+        "mouth_sounds": [],
+        "reflex_sounds": ["clear throat"],
+    },
 }
 
 # NonverbalOptions field -> the provider's wrapping-prosody labels it governs.
@@ -447,13 +577,16 @@ def supported_nonverbals(provider: str) -> dict[str, list[str]]:
 # sentence. Keyed by label, not NonverbalOptions field, so it's provider-agnostic.
 _SOUND_USAGE_HINTS: dict[str, str] = {
     "laugh": "a laugh at something obviously funny",
+    "laughing": "a laugh at something obviously funny",
     "chuckle": "a chuckle at something subtly humorous",
+    "chuckling": "a chuckle at something subtly humorous",
     "giggle": "a chuckle at something subtly humorous",
     "sigh": "a sigh when commiserating",
     "inhale": "a sharp inhale before a big reveal",
     "lip-smack": "a lip-smack or tongue-click as a tiny beat of thought",
     "tongue-click": "a lip-smack or tongue-click as a tiny beat of thought",
     "tsk": "a tsk for mock-disapproval",
+    "clear throat": "a clear-throat when shifting to a new step or topic",
 }
 
 
@@ -511,6 +644,9 @@ _MAX_INPUT_LEN: dict[str, int] = {
     # well under xAI's 15,000-char request limit; sized as an expressive batch
     # target (https://docs.x.ai/developers/model-capabilities/audio/text-to-speech)
     "xai": 1000,
+    # fishaudio is deliberately absent: its markers are sentence-scoped (every
+    # sentence carries its own [very EMOTION]), so per-sentence emission loses no
+    # steering and keeps time-to-first-audio low
 }
 
 
@@ -557,6 +693,11 @@ _EXPR_UNCLOSED_RE = re.compile(
 
 # expr sound labels that differ from xAI's native cue names
 _XAI_SOUND_ALIASES = {"breathe": "breath"}
+
+# expr sound labels that differ from Fish's native marker names (other providers
+# advertise "laugh"/"chuckle", so a hallucinated one still lowers to a sound Fish
+# renders)
+_FISHAUDIO_SOUND_ALIASES = {"laugh": "laughing", "chuckle": "chuckling"}
 
 # Cartesia prosody labels -> native point controls (coarse steps of the numeric ratios)
 _CARTESIA_PROSODY = {
@@ -626,6 +767,9 @@ def _convert_expr(provider: str, text: str) -> str:
         if provider == "cartesia":
             # wrapping form of the point controls: apply before the span
             return _CARTESIA_PROSODY.get(label, "") + inner
+        if provider == "fishaudio":
+            # emphasis is Fish's only wrapping control; other labels are dropped
+            return f"<emphasis>{inner}</emphasis>" if label == "emphasis" else inner
         return inner
 
     text = _EXPR_WRAP_RE.sub(_wrap, text)
@@ -638,7 +782,7 @@ def _convert_expr(provider: str, text: str) -> str:
             if provider == "cartesia":
                 # Cartesia's discrete emotion vocabulary (instructions list it)
                 return f'<emotion value="{label}"/>'
-            if provider == "inworld":
+            if provider in ("inworld", "fishaudio"):
                 return f'<expression value="{label}"/>'
             return ""  # xAI has no free-form delivery descriptions
         if marker_type == "sound":
@@ -646,6 +790,8 @@ def _convert_expr(provider: str, text: str) -> str:
                 return ""  # no non-verbal sound support
             if provider == "xai":
                 label = _XAI_SOUND_ALIASES.get(label.lower(), label)
+            if provider == "fishaudio":
+                label = _FISHAUDIO_SOUND_ALIASES.get(label.lower(), label)
             return f'<sound value="{label}"/>'
         if marker_type == "break":
             return f'<break time="{label}"/>'
@@ -680,6 +826,11 @@ def llm_instructions(provider: str, steering: SpeechSteeringOptions | None = Non
         return _xai_expr_llm_instructions(
             _allowed_sounds(provider, steering), _allowed_prosody(provider, steering)
         )
+    if provider == "fishaudio":
+        return _fishaudio_expr_llm_instructions(
+            _allowed_sounds(provider, steering),
+            disfluencies=steering.get("disfluencies", True) if steering else True,
+        )
     return None
 
 
@@ -690,6 +841,9 @@ _PROVIDER_MARKUP: dict[str, tuple[list[str], bool]] = {
     # every tag the LLM is taught is XML (expr markers; native sounds/pauses become
     # [..] only for the TTS in convert_markup), so the transcript has no brackets to strip
     "xai": (_XAI_TAGS, False),
+    # brackets are stripped too: Fish's native dialect IS square brackets, so a
+    # hallucinated [very happy] must not leak into the user-visible transcript
+    "fishaudio": (_FISHAUDIO_TAGS, True),
 }
 
 
@@ -829,6 +983,7 @@ class TranscriptMarkupStripper:
 _SELF_CLOSING_TAGS: dict[str, list[str]] = {
     "cartesia": ["emotion", "speed", "volume", "break"],
     "inworld": ["expression", "sound", "break"],
+    "fishaudio": ["expression", "sound", "break"],
 }
 
 
@@ -861,5 +1016,13 @@ def convert_markup(provider: str, text: str) -> str:
     if provider == "xai":
         # xAI has no <break>; map it to its native [pause]/[long-pause]
         text = _XAI_BREAK_RE.sub(_xai_break_to_bracket, text)
+    if provider == "fishaudio":
+        # <expression value="X"/> -> [very X] first (the intensified form steers
+        # harder), then the generic pass lowers the remaining <sound value="X"/> -> [X]
+        text = _FISHAUDIO_EXPRESSION_RE.sub(_fishaudio_expression_to_bracket, text)
+        text = convert_expression_tags(text)
+        text = _FISHAUDIO_BREAK_RE.sub(_fishaudio_break_to_bracket, text)
+        # Fish's per-word stress marker: <emphasis>word</emphasis> -> [emphasis] word
+        text = _FISHAUDIO_EMPHASIS_RE.sub(lambda m: f"[emphasis] {m.group(1).strip()}", text)
     # <break> is otherwise passed through unchanged: Inworld accepts it as native SSML.
     return text
