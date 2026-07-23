@@ -12,7 +12,6 @@ from livekit.agents import (
     APIStatusError,
 )
 
-from .errors import AnamException
 from .log import logger
 from .types import PersonaConfig, SessionOptions
 
@@ -61,15 +60,15 @@ class AnamAPI:
         if self._own_session and self._session:
             await self._session.close()
 
-    async def create_session_token(
+    async def start_session(
         self,
         persona_config: PersonaConfig,
         livekit_url: str,
         livekit_token: str,
         session_options: SessionOptions | None = None,
-    ) -> str:
+    ) -> dict[str, Any]:
         """
-        Creates a session token to authorize starting an engine session.
+        Starts an engine session.
 
         Args:
             session_options: Optional per-session output options (e.g. explicit
@@ -77,7 +76,7 @@ class AnamAPI:
                 ``None``, Anam uses the avatar model's default output.
 
         Returns:
-            The created session token (a JWT string).
+            The session details, including sessionId and engine host info.
         """
         persona_config_payload: dict[str, Any] = {
             "type": "ephemeral",
@@ -126,33 +125,7 @@ class AnamAPI:
             "Authorization": f"Bearer {self._api_key}",  # Use API Key here
             "Content-Type": "application/json",
         }
-        response_data = await self._post("/v1/auth/session-token", payload, headers)
-
-        session_token: str | None = response_data.get("sessionToken")
-        if not session_token:
-            raise AnamException("Failed to retrieve sessionToken from API response.")
-        return session_token
-
-    async def start_engine_session(
-        self,
-        session_token: str,
-    ) -> dict[str, Any]:
-        """
-        Starts the engine session using a previously created session token.
-
-        Args:
-            session_token: The temporary token from create_session_token.
-            livekit_url: The URL of the LiveKit instance.
-            livekit_token: The access token for the LiveKit room.
-
-        Returns:
-            The session details, including sessionId and engine host info.
-        """
-        headers = {
-            "Authorization": f"Bearer {session_token}",  # Use Session Token here
-            "Content-Type": "application/json",
-        }
-        return await self._post("/v1/engine/session", {}, headers)
+        return await self._post("/v1/engine/session", payload, headers)
 
     async def _post(
         self, endpoint: str, payload: dict[str, Any], headers: dict[str, str]
