@@ -455,6 +455,8 @@ with </expr>."""
 use a comma or a period for a short beat, or a break marker for a real pause. Avoid \
 semicolons, mid-sentence colons, and parenthetical asides; rewrite them as separate \
 sentences or commas.""",
+        """When the conversation is in another language, still write every marker label in \
+English — labels are a fixed vocabulary, never translated.""",
     ]
     pool = _FISHAUDIO_EXAMPLES + (_FISHAUDIO_DISFLUENT_EXAMPLES if disfluencies else [])
     if examples := _sound_examples(pool, sounds, _FISHAUDIO_SOUNDS):
