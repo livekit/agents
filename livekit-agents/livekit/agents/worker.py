@@ -1080,6 +1080,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         assert self._http_session is not None
 
         retry_count = 0
+        had_successful_connection = False
         ws: aiohttp.ClientWebSocketResponse | None = None
         while not self._closed:
             try:
@@ -1144,6 +1145,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
                 self._handle_register(msg.register)
                 self._connecting = False
+                had_successful_connection = True
 
                 # report all active jobs to the server after registration
                 await self._report_active_jobs()
@@ -1162,7 +1164,22 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 retry_delay = min(retry_count * 2, 10)
                 retry_count += 1
 
-                logger.warning(
+                # The first reconnect after a successful connection runs at
+                # delay=0 and almost always succeeds — it's expected churn for
+                # control-plane websocket lifecycle and produces a steady
+                # trickle of self-healing WARNINGs that trip warning-level
+                # alerting with nothing actionable behind them. Only the
+                # post-success delay=0 case is downgraded; the *very first*
+                # connection attempt (e.g. wrong URL, auth misconfig) still
+                # logs at WARNING so boot-time failures stay visible to
+                # operators relying on WARNING-level aggregation.
+                is_post_success_first_retry = (
+                    had_successful_connection and retry_delay == 0
+                )
+                log_fn = (
+                    logger.info if is_post_success_first_retry else logger.warning
+                )
+                log_fn(
                     f"failed to connect to livekit, retrying in {retry_delay}s",
                     extra={"retry_count": retry_count, "max_retry": self._max_retry, "error": e},
                 )
