@@ -311,6 +311,8 @@ class STT(stt.STT):
                 self._credentials_file,
                 scopes=["https://www.googleapis.com/auth/cloud-platform"],
             )
+            if project_id is None:
+                project_id = getattr(credentials, "project_number", None)
             self._project_id = project_id
             client = client_cls(credentials=credentials, client_options=client_options)
         else:
