@@ -514,9 +514,9 @@ class AudioRecognition:
         self._endpointing.on_start_of_speech(
             started_at=started_at, overlapping=self._agent_speaking
         )
+        # every speech onset clears the prior backchannel verdict; an overlap re-derives it below
+        self._turn_backchannel_over_agent = False
         if not self._agent_speaking:
-            # non-overlapping speech drops a stale backchannel verdict
-            self._turn_backchannel_over_agent = False
             self._overlap_in_current_turn = False
 
         if not self._adaptive_interruption_active or not self._agent_speaking:
