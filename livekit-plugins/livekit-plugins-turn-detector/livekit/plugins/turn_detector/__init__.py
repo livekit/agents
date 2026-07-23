@@ -27,10 +27,11 @@ from livekit.agents import Plugin
 
 from .base import EOUPlugin
 from .english import _EUORunnerEn
+from .llm_based import LLMTurnDetector
 from .multilingual import _EUORunnerMultilingual
 from .version import __version__
 
-__all__ = ["english", "multilingual", "__version__"]
+__all__ = ["LLMTurnDetector", "english", "multilingual", "__version__"]
 
 warnings.warn(
     "`livekit.plugins.turn_detector` is deprecated and will be removed in a "
