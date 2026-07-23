@@ -270,6 +270,8 @@ class ServerOptions:
     When set, the PROMETHEUS_MULTIPROC_DIR environment variable will be configured automatically.
     When None (default), multiprocess mode is disabled and only main process metrics are collected.
     Users can also set PROMETHEUS_MULTIPROC_DIR environment variable directly before starting the worker."""
+    entrypoint_shutdown_timeout: float = 15.0
+    """Maximum time to wait for a job entrypoint to exit before cancelling it."""
 
     def __post_init__(self) -> None:
         self.log_level = _validate_and_normalize_log_level(self.log_level)
@@ -310,6 +312,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         drain_timeout: int = DRAIN_TIMEOUT,
         num_idle_processes: int | ServerEnvOption[int] = _default_num_idle_processes,
         shutdown_process_timeout: float = 10.0,
+        entrypoint_shutdown_timeout: float = 15.0,
         session_end_timeout: float = 300.0,
         initialize_process_timeout: float = 10.0,
         permissions: WorkerPermissions = _default_permissions,
@@ -346,6 +349,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._drain_timeout = drain_timeout
         self._num_idle_processes = num_idle_processes
         self._shutdown_process_timeout = shutdown_process_timeout
+        self._entrypoint_shutdown_timeout = entrypoint_shutdown_timeout
         self._session_end_timeout = session_end_timeout
         self._initialize_process_timeout = initialize_process_timeout
         self._permissions = permissions
@@ -421,6 +425,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             drain_timeout=options.drain_timeout,
             num_idle_processes=options.num_idle_processes,
             shutdown_process_timeout=options.shutdown_process_timeout,
+            entrypoint_shutdown_timeout=options.entrypoint_shutdown_timeout,
             session_end_timeout=options.session_end_timeout,
             initialize_process_timeout=options.initialize_process_timeout,
             permissions=options.permissions,
@@ -628,6 +633,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 mp_ctx=self._mp_ctx,
                 initialize_timeout=self._initialize_process_timeout,
                 close_timeout=self._shutdown_process_timeout,
+                entrypoint_shutdown_timeout=self._entrypoint_shutdown_timeout,
                 session_end_timeout=self._session_end_timeout,
                 memory_warn_mb=self._job_memory_warn_mb,
                 memory_limit_mb=self._job_memory_limit_mb,
@@ -868,6 +874,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         drain_timeout: NotGivenOr[int] = NOT_GIVEN,
         num_idle_processes: NotGivenOr[int] = NOT_GIVEN,
         shutdown_process_timeout: NotGivenOr[float] = NOT_GIVEN,
+        entrypoint_shutdown_timeout: NotGivenOr[float] = NOT_GIVEN,
         session_end_timeout: NotGivenOr[float] = NOT_GIVEN,
         initialize_process_timeout: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
@@ -906,6 +913,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
         if is_given(shutdown_process_timeout):
             self._shutdown_process_timeout = shutdown_process_timeout
+
+        if is_given(entrypoint_shutdown_timeout):
+            self._entrypoint_shutdown_timeout = entrypoint_shutdown_timeout
 
         if is_given(session_end_timeout):
             self._session_end_timeout = session_end_timeout

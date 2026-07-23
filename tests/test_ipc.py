@@ -287,6 +287,7 @@ async def test_proc_pool():
         job_executor_type=job.JobExecutorType.PROCESS,
         initialize_timeout=20.0,
         close_timeout=20.0,
+        entrypoint_shutdown_timeout=15.0,
         session_end_timeout=300.0,
         inference_executor=None,
         memory_warn_mb=0,
@@ -370,6 +371,7 @@ async def test_slow_initialization():
         num_idle_processes=num_idle_processes,
         initialize_timeout=1.0,
         close_timeout=20.0,
+        entrypoint_shutdown_timeout=15.0,
         session_end_timeout=300.0,
         inference_executor=None,
         memory_warn_mb=0,
@@ -437,6 +439,7 @@ async def test_proc_pool_launch_job_raises_when_all_spawns_fail():
         # generous so initialize() fails via the init fn raising, not a spawn-racing timeout
         initialize_timeout=10.0,
         close_timeout=20.0,
+        entrypoint_shutdown_timeout=15.0,
         session_end_timeout=300.0,
         inference_executor=None,
         memory_warn_mb=0,
@@ -463,6 +466,7 @@ def _create_proc(
     mp_ctx: BaseContext,
     initialize_timeout: float = 20.0,
     job_entrypoint_fnc: Callable[[JobContext], object] = _job_entrypoint,
+    entrypoint_shutdown_timeout: float = 15.0,
 ) -> tuple[ipc.job_proc_executor.ProcJobExecutor, _StartArgs]:
     start_args = _new_start_args(mp_ctx)
     loop = asyncio.get_running_loop()
@@ -474,6 +478,7 @@ def _create_proc(
         initialize_timeout=initialize_timeout,
         close_timeout=close_timeout,
         session_end_timeout=300.0,
+        entrypoint_shutdown_timeout=entrypoint_shutdown_timeout,
         memory_warn_mb=0,
         memory_limit_mb=0,
         ping_interval=2.5,
@@ -519,6 +524,27 @@ async def test_shutdown_no_job():
     assert proc.exitcode == 0
     assert not proc.killed
     assert start_args.shutdown_counter.value == 0, "shutdown_cb isn't called when there is no job"
+
+
+async def test_job_entrypoint_shutdown_timeout():
+    mp_ctx = mp.get_context("spawn")
+    proc, start_args = _create_proc(
+        close_timeout=5.0,
+        mp_ctx=mp_ctx,
+        entrypoint_shutdown_timeout=0.0,
+    )
+    start_args.entrypoint_simulate_work_time = 30.0
+
+    await proc.start()
+    await proc.initialize()
+    await proc.launch_job(_generate_fake_job())
+    await _poll_until(lambda: start_args.entrypoint_counter.value >= 1)
+
+    await proc.aclose()
+
+    assert proc.exitcode == 0, "process should have exited cleanly"
+    assert not proc.killed
+    assert start_args.shutdown_counter.value == 1
 
 
 async def test_job_slow_shutdown():
