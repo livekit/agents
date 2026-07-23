@@ -40,7 +40,6 @@ class _TTSOptions:
     sample_rate: int
     word_tokenizer: tokenize.WordTokenizer
     base_url: str
-    api_key: str
     mip_opt_out: bool = False
     bit_rate: int | None = None
 
@@ -58,6 +57,7 @@ class TTS(tts.TTS):
         word_tokenizer: NotGivenOr[tokenize.WordTokenizer] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         mip_opt_out: bool = False,
+        extra_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of Deepgram TTS.
@@ -73,6 +73,9 @@ class TTS(tts.TTS):
             base_url (str): Base URL for Deepgram TTS API. Defaults to "https://api.deepgram.com/v1/speak"
             word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to basic WordTokenizer.
             http_session (aiohttp.ClientSession): Optional aiohttp session to use for requests.
+            extra_headers: Additional HTTP headers sent on every connection, merged over the
+                default ``Authorization: Token`` header. When no API key is set, these become
+                the sole auth (e.g. the Cloudflare AI Gateway).
 
         """  # noqa: E501
         super().__init__(
@@ -81,9 +84,16 @@ class TTS(tts.TTS):
             num_channels=NUM_CHANNELS,
         )
 
-        api_key = api_key or os.environ.get("DEEPGRAM_API_KEY")
-        if not api_key:
+        # only fall back to the env var when no api_key was passed at all; an explicit "" means
+        # "no Deepgram key" (e.g. with_cloudflare), so it must not pick up DEEPGRAM_API_KEY
+        if api_key is None:
+            api_key = os.environ.get("DEEPGRAM_API_KEY")
+        extra = dict(extra_headers) if is_given(extra_headers) else {}
+        if not api_key and not extra:
             raise ValueError("Deepgram API key required. Set DEEPGRAM_API_KEY or provide api_key.")
+        # default Token auth only when a key is present; extra_headers merge on top (and are
+        # the sole auth when no key is set, e.g. the Cloudflare AI Gateway)
+        self._connect_headers = ({"Authorization": f"Token {api_key}"} if api_key else {}) | extra
 
         if not is_given(word_tokenizer):
             word_tokenizer = tokenize.basic.WordTokenizer(ignore_punctuation=False)
@@ -95,7 +105,6 @@ class TTS(tts.TTS):
             bit_rate=bit_rate,
             word_tokenizer=word_tokenizer,
             base_url=base_url,
-            api_key=api_key,
             mip_opt_out=mip_opt_out,
         )
         self._session = http_session
@@ -116,6 +125,70 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Deepgram"
 
+    @staticmethod
+    def with_cloudflare(
+        *,
+        model: str = "aura-1",
+        account_id: str | None = None,
+        gateway_id: str = "default",
+        cf_aig_token: str | None = None,
+        base_url: str | None = None,
+        encoding: str = "linear16",
+        sample_rate: int = 24000,
+        word_tokenizer: NotGivenOr[tokenize.WordTokenizer] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+    ) -> TTS:
+        """Create a Deepgram TTS routed through the Cloudflare AI Gateway.
+
+        Connects to the gateway's ``workers-ai`` WebSocket, which proxies Deepgram's
+        streaming protocol. Auth uses the ``cf-aig-authorization`` header; no Deepgram
+        API key is required.
+
+        Args:
+            model: Deepgram model name (e.g. ``"aura-1"``); the ``@cf/deepgram/`` prefix is
+                added automatically. A value already prefixed with ``@cf/`` is used as-is.
+            account_id: Cloudflare account ID. Falls back to ``CLOUDFLARE_ACCOUNT_ID``.
+                Required unless ``base_url`` is given.
+            gateway_id: Gateway name. Defaults to ``"default"``.
+            cf_aig_token: Gateway token for ``cf-aig-authorization``. Falls back to
+                ``CLOUDFLARE_AI_GATEWAY_TOKEN``.
+            base_url: Full gateway endpoint; overrides ``account_id`` / ``gateway_id``.
+            encoding: Audio encoding, forwarded to ``TTS``. Defaults to ``"linear16"``.
+            sample_rate: Audio sample rate in Hz, forwarded to ``TTS``.
+            word_tokenizer: Optional tokenizer, forwarded to ``TTS``.
+            http_session: Optional aiohttp session, forwarded to ``TTS``.
+        """
+        cf_aig_token = cf_aig_token or os.environ.get("CLOUDFLARE_AI_GATEWAY_TOKEN")
+        if not cf_aig_token:
+            raise ValueError(
+                "Cloudflare AI Gateway token is required, either as argument or set"
+                " CLOUDFLARE_AI_GATEWAY_TOKEN environment variable"
+            )
+        if base_url is None:
+            account_id = account_id or os.environ.get("CLOUDFLARE_ACCOUNT_ID")
+            if not account_id:
+                raise ValueError(
+                    "Cloudflare account_id is required, either as argument or set"
+                    " CLOUDFLARE_ACCOUNT_ID environment variable (or pass base_url directly)"
+                )
+            base_url = f"https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/workers-ai"
+
+        if not model.startswith("@cf/"):
+            model = f"@cf/deepgram/{model}"
+
+        return TTS(
+            model=model,
+            encoding=encoding,
+            sample_rate=sample_rate,
+            base_url=base_url,
+            word_tokenizer=word_tokenizer,
+            http_session=http_session,
+            # explicit empty key opts out of the DEEPGRAM_API_KEY env fallback, so the gateway
+            # only ever receives cf-aig-authorization (no stray Authorization: Token header)
+            api_key="",
+            extra_headers={"cf-aig-authorization": cf_aig_token},
+        )
+
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
         config: dict = {
@@ -129,7 +202,7 @@ class TTS(tts.TTS):
         ws = await asyncio.wait_for(
             session.ws_connect(
                 _to_deepgram_url(config, self._opts.base_url, websocket=True),
-                headers={"Authorization": f"Token {self._opts.api_key}"},
+                headers=self._connect_headers,
             ),
             timeout,
         )
@@ -247,7 +320,7 @@ class ChunkedStream(tts.ChunkedStream):
             async with self._tts._ensure_session().post(
                 _to_deepgram_url(http_params, self._opts.base_url, websocket=False),
                 headers={
-                    "Authorization": f"Token {self._opts.api_key}",
+                    **self._tts._connect_headers,
                     "Content-Type": "application/json",
                 },
                 json={"text": self._input_text},

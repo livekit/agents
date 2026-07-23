@@ -110,6 +110,7 @@ class STT(stt.STT):
         dictation: bool = False,
         replace: dict[str, str] | None = None,
         search: list[str] | None = None,
+        extra_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         # deprecated
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
@@ -155,9 +156,13 @@ class STT(stt.STT):
             search: List of terms to search for in the transcript. Matched terms are returned with
                    confidence scores in the response.
                    See https://developers.deepgram.com/reference/speech-to-text/listen-streaming#query-search
+            extra_headers: Additional HTTP headers sent on every connection, merged over the
+                default ``Authorization: Token`` header. Useful for self-hosted Deepgram or
+                gateways with custom auth. When no API key is set, these become the sole auth.
 
         Raises:
-            ValueError: If no API key is provided or found in environment variables.
+            ValueError: If no API key is provided or found in environment variables
+                (unless ``extra_headers`` is supplied).
 
         Note:
             The api_key must be set either through the constructor argument or by setting
@@ -175,12 +180,17 @@ class STT(stt.STT):
         )
 
         deepgram_api_key = api_key if is_given(api_key) else os.environ.get("DEEPGRAM_API_KEY")
-        if not deepgram_api_key:
+        extra = dict(extra_headers) if is_given(extra_headers) else {}
+        if not deepgram_api_key and not extra:
             raise ValueError(
                 "Deepgram API key is required, either as argument or set"
                 " DEEPGRAM_API_KEY environment variable"
             )
-        self._api_key = deepgram_api_key
+        # default Token auth only when a key is present; extra_headers merge on top (and are
+        # the sole auth when no key is set, e.g. the Cloudflare AI Gateway)
+        self._connect_headers = (
+            {"Authorization": f"Token {deepgram_api_key}"} if deepgram_api_key else {}
+        ) | extra
 
         model = _validate_model(model, language)
         if is_given(keyterms):
@@ -233,6 +243,70 @@ class STT(stt.STT):
     def provider(self) -> str:
         return "Deepgram"
 
+    @staticmethod
+    def with_cloudflare(
+        *,
+        model: DeepgramModels | str = "nova-3",
+        account_id: str | None = None,
+        gateway_id: str = "default",
+        cf_aig_token: str | None = None,
+        base_url: str | None = None,
+        language: DeepgramLanguages | str = "en-US",
+        interim_results: bool = True,
+        sample_rate: int = 16000,
+        http_session: aiohttp.ClientSession | None = None,
+    ) -> STT:
+        """Create a Deepgram STT routed through the Cloudflare AI Gateway.
+
+        Connects to the gateway's ``workers-ai`` WebSocket, which proxies Deepgram's
+        streaming protocol. Auth uses the ``cf-aig-authorization`` header; no Deepgram
+        API key is required.
+
+        Args:
+            model: Deepgram model name (e.g. ``"nova-3"``); the ``@cf/deepgram/`` prefix is
+                added automatically. A value already prefixed with ``@cf/`` is used as-is.
+            account_id: Cloudflare account ID. Falls back to ``CLOUDFLARE_ACCOUNT_ID``.
+                Required unless ``base_url`` is given.
+            gateway_id: Gateway name. Defaults to ``"default"``.
+            cf_aig_token: Gateway token for ``cf-aig-authorization``. Falls back to
+                ``CLOUDFLARE_AI_GATEWAY_TOKEN``.
+            base_url: Full gateway endpoint; overrides ``account_id`` / ``gateway_id``.
+            language: Recognition language, forwarded to ``STT``. Defaults to ``"en-US"``.
+            interim_results: Whether to emit interim transcripts, forwarded to ``STT``.
+            sample_rate: Audio sample rate in Hz, forwarded to ``STT``.
+            http_session: Optional aiohttp session, forwarded to ``STT``.
+        """
+        cf_aig_token = cf_aig_token or os.environ.get("CLOUDFLARE_AI_GATEWAY_TOKEN")
+        if not cf_aig_token:
+            raise ValueError(
+                "Cloudflare AI Gateway token is required, either as argument or set"
+                " CLOUDFLARE_AI_GATEWAY_TOKEN environment variable"
+            )
+        if base_url is None:
+            account_id = account_id or os.environ.get("CLOUDFLARE_ACCOUNT_ID")
+            if not account_id:
+                raise ValueError(
+                    "Cloudflare account_id is required, either as argument or set"
+                    " CLOUDFLARE_ACCOUNT_ID environment variable (or pass base_url directly)"
+                )
+            base_url = f"https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/workers-ai"
+
+        if not model.startswith("@cf/"):
+            model = f"@cf/deepgram/{model}"
+
+        return STT(
+            model=model,
+            language=language,
+            interim_results=interim_results,
+            sample_rate=sample_rate,
+            base_url=base_url,
+            http_session=http_session,
+            # explicit empty key opts out of the DEEPGRAM_API_KEY env fallback, so the gateway
+            # only ever receives cf-aig-authorization (no stray Authorization: Token header)
+            api_key="",
+            extra_headers={"cf-aig-authorization": cf_aig_token},
+        )
+
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()
@@ -273,7 +347,7 @@ class STT(stt.STT):
                 url=_to_deepgram_url(recognize_config, self._opts.endpoint_url, websocket=False),
                 data=rtc.combine_audio_frames(buffer).to_wav_bytes(),
                 headers={
-                    "Authorization": f"Token {self._api_key}",
+                    **self._connect_headers,
                     "Accept": "application/json",
                     "Content-Type": "audio/wav",
                 },
@@ -310,9 +384,9 @@ class STT(stt.STT):
             stt=self,
             conn_options=conn_options,
             opts=config,
-            api_key=self._api_key,
             http_session=self._ensure_session(),
             base_url=self._opts.endpoint_url,
+            connect_headers=self._connect_headers,
         )
         self._streams.add(stream)
         return stream
@@ -464,9 +538,9 @@ class SpeechStream(stt.SpeechStream):
         stt: STT,
         opts: STTOptions,
         conn_options: APIConnectOptions,
-        api_key: str,
         http_session: aiohttp.ClientSession,
         base_url: str,
+        connect_headers: dict[str, str],
     ) -> None:
         if opts.detect_language or opts.language is None:
             raise ValueError(
@@ -476,7 +550,7 @@ class SpeechStream(stt.SpeechStream):
 
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
-        self._api_key = api_key
+        self._connect_headers = dict(connect_headers)
         self._session = http_session
         self._opts.endpoint_url = base_url
         self._speaking = False
@@ -770,7 +844,7 @@ class SpeechStream(stt.SpeechStream):
             ws = await asyncio.wait_for(
                 self._session.ws_connect(
                     _to_deepgram_url(live_config, base_url=self._opts.endpoint_url, websocket=True),
-                    headers={"Authorization": f"Token {self._api_key}"},
+                    headers=self._connect_headers,
                 ),
                 self._conn_options.timeout,
             )
@@ -948,6 +1022,12 @@ def prerecorded_transcription_to_speech_event(
     )
 
 
+def _bare_model(model: DeepgramModels | str) -> str:
+    # Cloudflare AI Gateway routes Deepgram models as "@cf/deepgram/<model>"; strip the routing
+    # prefix so model-name checks see the underlying Deepgram model (e.g. "nova-3").
+    return model.removeprefix("@cf/deepgram/")
+
+
 def _validate_model(
     model: DeepgramModels | str, language: NotGivenOr[DeepgramLanguages | str]
 ) -> DeepgramModels | str:
@@ -962,11 +1042,14 @@ def _validate_model(
         "nova-2-drivethru",
         "nova-2-automotive",
     }
-    if is_given(language) and language not in ("en-US", "en") and model in en_only_models:
+    bare = _bare_model(model)
+    if is_given(language) and language not in ("en-US", "en") and bare in en_only_models:
         logger.warning(
             f"{model} does not support language {language}, falling back to nova-2-general"
         )
-        return "nova-2-general"
+        # preserve any routing prefix (e.g. "@cf/deepgram/") on the fallback model
+        prefix = model[: len(model) - len(bare)]
+        return f"{prefix}nova-2-general"
     return model
 
 
@@ -987,13 +1070,13 @@ def _validate_keyterm(
     Validating keyterm and keywords for model compatibility.
     See: https://developers.deepgram.com/docs/keyterm and https://developers.deepgram.com/docs/keywords
     """
-    if model.startswith("nova-3") and is_given(keywords):
+    if _bare_model(model).startswith("nova-3") and is_given(keywords):
         raise ValueError(
             "Keywords is only available for use with Nova-2, Nova-1, Enhanced, and "
             "Base speech to text models. For Nova-3, use Keyterm Prompting."
         )
 
-    if is_given(keyterm) and (not model.startswith("nova-3")):
+    if is_given(keyterm) and (not _bare_model(model).startswith("nova-3")):
         raise ValueError(
             "Keyterm Prompting is only available for transcription using the Nova-3 Model. "
             "To boost recognition of keywords using another model, use the Keywords feature."
