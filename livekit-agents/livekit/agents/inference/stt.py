@@ -838,6 +838,9 @@ class SpeechStream(stt.SpeechStream):
 
     async def _run(self) -> None:
         """Main loop for streaming transcription."""
+        # reset per-session state since the gateway starts a fresh session on reconnect
+        self._speech_duration = 0
+        self._speaking = False
         closing_ws = False
         http_session = self._stt._ensure_session()
         vad_stream: vad.VADStream | None = self._vad.stream() if self._vad is not None else None
