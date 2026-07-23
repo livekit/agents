@@ -1601,7 +1601,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if old_task is not None:
             await old_task
 
-        await self._update_activity(agent)
+        await self._update_activity(agent, wait_on_enter=False)
 
     def _emit_debug_message(self, payload: dict[str, Any]) -> None:
         """:meta private: internal — emit a debug/trace payload to the debugger/recorder."""
