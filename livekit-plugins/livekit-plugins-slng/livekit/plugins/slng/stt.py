@@ -523,25 +523,33 @@ class SpeechStream(stt.SpeechStream):
                 samples_per_channel=samples_per_buffer,
             )
 
-            for frame in pending_frames:
-                frames = audio_bstream.write(frame.data.tobytes())
-                for out in frames:
-                    if len(out.data) % bytes_per_sample != 0:
-                        continue
-                    await ws.send_bytes(bytes(out.data))
-                    self._speech_duration += out.duration
+            try:
+                for frame in pending_frames:
+                    frames = audio_bstream.write(frame.data.tobytes())
+                    for out in frames:
+                        if len(out.data) % bytes_per_sample != 0:
+                            continue
+                        await ws.send_bytes(bytes(out.data))
+                        self._speech_duration += out.duration
 
-            async for item in self._input_ch:
-                if isinstance(item, self._FlushSentinel):
-                    frames = audio_bstream.flush()
-                else:
-                    frames = audio_bstream.write(item.data.tobytes())
+                async for item in self._input_ch:
+                    if isinstance(item, self._FlushSentinel):
+                        frames = audio_bstream.flush()
+                    else:
+                        frames = audio_bstream.write(item.data.tobytes())
 
-                for frame in frames:
-                    if len(frame.data) % bytes_per_sample != 0:
-                        continue
-                    await ws.send_bytes(bytes(frame.data))
-                    self._speech_duration += frame.duration
+                    for frame in frames:
+                        if len(frame.data) % bytes_per_sample != 0:
+                            continue
+                        await ws.send_bytes(bytes(frame.data))
+                        self._speech_duration += frame.duration
+            except (aiohttp.ClientError, ConnectionError) as e:
+                if self._session.closed:
+                    return
+                # match recv_task: raise APIStatusError (not APIConnectionError) so a
+                # transient send-side drop gets slng's same-endpoint immediate retry
+                # rather than a permanent failover to a lower-priority endpoint.
+                raise APIStatusError("SLNG connection closed unexpectedly") from e
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             speech_started = False
