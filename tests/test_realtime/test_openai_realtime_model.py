@@ -41,6 +41,26 @@ def test_update_options_only_propagates_given_turn_detection() -> None:
     assert is_given(stub.calls[-1]["turn_detection"])
 
 
+def test_with_azure_preserves_can_disable_turn_detection() -> None:
+    # with_azure fills in a default turn_detection, but the framework must still be allowed to
+    # auto-disable server-side turn detection when the caller didn't configure it. An explicit
+    # value is respected. (PR #6495 review)
+    default_td = RealtimeModel.with_azure(
+        azure_deployment="dep", api_key="fake", base_url="https://example.com/openai"
+    )
+    assert default_td.capabilities.turn_detection is True
+    assert default_td.capabilities.can_disable_turn_detection is True
+
+    explicit_off = RealtimeModel.with_azure(
+        azure_deployment="dep",
+        api_key="fake",
+        base_url="https://example.com/openai",
+        turn_detection=None,
+    )
+    assert explicit_off.capabilities.turn_detection is False
+    assert explicit_off.capabilities.can_disable_turn_detection is False
+
+
 def test_update_chat_ctx_deletes_empty_remote_items() -> None:
     remote_ctx = RemoteChatContext()
     audio_item = llm.ChatMessage(id="audio_item", role="user", content=[])
