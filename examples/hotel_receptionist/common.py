@@ -32,9 +32,6 @@ class Userdata:
     # after that, say_goodbye_and_close_call always closes, so the agent can never
     # get stuck unable to hang up.
     end_call_nudged: bool = False
-    # Line items ("<booking code>:<label>") whose dispute offer was already handed to
-    # the agent - gates waivers/credits so money never moves before the offer was made.
-    dispute_offers_made: set[str] = field(default_factory=set)
     # Whether the farewell was already delivered on this call - repeat close attempts
     # (the caller answered the goodbye, the model called the tool again) must not
     # produce a "Goodbye!" / "Take care!" / "Goodbye!" loop.
