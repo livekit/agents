@@ -590,6 +590,7 @@ class SpeechStream(stt.SpeechStream):
         wait_reconnect: asyncio.Task[bool] | None = None
         candidate_attempts = 0
         silent_reconnects = 0
+        same_endpoint_replays = 0
         connection_had_transcript = False
         recover_primary_after_final = False
 
@@ -749,7 +750,7 @@ class SpeechStream(stt.SpeechStream):
             nonlocal input_finished, closing, protocol_close_sent
             nonlocal pending_non_empty_transcript, pending_replay
             nonlocal pending_switch_succeeded, sent_audio_since_finalize
-            nonlocal candidate_attempts, silent_reconnects
+            nonlocal candidate_attempts, silent_reconnects, same_endpoint_replays
             from_model = current_model()
             exc_info = (
                 (type(exc), exc, exc.__traceback__)
@@ -759,6 +760,34 @@ class SpeechStream(stt.SpeechStream):
             details = error_details(exc)
             next_index = self._candidate_state.advance(self._active_endpoint_index)
             if next_index is None:
+                # No further fallback candidate. If the error is transient and
+                # we still hold buffered audio for the in-flight utterance,
+                # reconnect the SAME endpoint and replay it rather than ending
+                # the stream (the common single-candidate case on a brief blip).
+                # Bounded by _candidate_max_retry so a persistently failing
+                # endpoint still surfaces the error.
+                if (
+                    reason == "hard_fail"
+                    and exc is not None
+                    and not is_non_retryable_client_error(exc)
+                    and buffered_audio
+                    and same_endpoint_replays < self._candidate_max_retry
+                ):
+                    same_endpoint_replays += 1
+                    logger.warning(
+                        "STT reconnecting same endpoint with replay (attempt=%s error=%s): %s",
+                        same_endpoint_replays,
+                        details["error_message"],
+                        from_model,
+                        exc_info=exc_info,
+                    )
+                    input_finished = False
+                    closing = False
+                    protocol_close_sent = False
+                    pending_non_empty_transcript = False
+                    sent_audio_since_finalize = False
+                    pending_replay = bytes(buffered_audio)
+                    return True
                 logger.error(
                     "STT fallback exhausted (reason=%s timeout_s=%s error=%s): from=%s",
                     reason,
@@ -803,6 +832,7 @@ class SpeechStream(stt.SpeechStream):
             self._active_endpoint_index = next_index
             candidate_attempts = 0
             silent_reconnects = 0
+            same_endpoint_replays = 0
             input_finished = False
             closing = False
             protocol_close_sent = False
@@ -929,7 +959,7 @@ class SpeechStream(stt.SpeechStream):
             nonlocal awaiting_final, pending_non_empty_transcript, speech_started
             nonlocal recover_primary_after_final, candidate_attempts
             nonlocal finalize_requested_for_buffer, silent_reconnects
-            nonlocal connection_had_transcript
+            nonlocal connection_had_transcript, same_endpoint_replays
             while True:
                 msg = await ws.receive()
                 if msg.type in (
@@ -1022,6 +1052,7 @@ class SpeechStream(stt.SpeechStream):
                             self._has_spoken_since_last_response = False
                             buffered_audio.clear()
                             finalize_requested_for_buffer = False
+                            same_endpoint_replays = 0
                             if speech_started:
                                 # Close the bracket opened by an earlier interim so
                                 # clients never see a dangling START_OF_SPEECH.
@@ -1048,6 +1079,9 @@ class SpeechStream(stt.SpeechStream):
                         pending_non_empty_transcript = False
                         buffered_audio.clear()
                         finalize_requested_for_buffer = False
+                        # A completed final is real progress on this endpoint;
+                        # only a final (not an interim) clears the reconnect debt.
+                        same_endpoint_replays = 0
 
                         start_time = words[0].get("start", 0.0) if words else 0.0
                         end_time = words[-1].get("end", 0.0) if words else 0.0
@@ -1075,7 +1109,8 @@ class SpeechStream(stt.SpeechStream):
                             )
                         ],
                     )
-                    # Genuine transcript progress clears the silent-close debt.
+                    # A connection producing any output is not "silent".
+                    # (same_endpoint_replays resets only on a final, below.)
                     silent_reconnects = 0
                     connection_had_transcript = True
                     self._event_ch.send_nowait(event)
