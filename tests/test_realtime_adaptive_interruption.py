@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import MagicMock
 
 import pytest
@@ -15,6 +16,7 @@ from livekit.agents.voice.audio_recognition import (
 
 from .fake_llm import FakeLLM
 from .fake_realtime import FakeRealtimeModel, fake_capabilities
+from .fake_stt import FakeSTT
 from .fake_vad import FakeVAD
 
 pytestmark = pytest.mark.unit
@@ -151,11 +153,55 @@ async def test_backchannel_dropped_after_agent_finishes_speaking(
     assert activity.on_end_of_turn(_end_of_turn_info(backchannel_over_agent=True)) is False
 
 
-def _recognition_for_overlap() -> AudioRecognition:
+async def test_backchannel_confirmed_clears_rt_audio_even_with_stt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # a realtime session buffers input even with an STT attached, so the clear isn't stt-gated
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = AgentSession(
+        llm=FakeRealtimeModel(capabilities=fake_capabilities(turn_detection=False)),
+        stt=FakeSTT(),
+        vad=FakeVAD(fake_user_speeches=[]),
+        turn_handling=TurnHandlingOptions(
+            turn_detection="vad",
+            interruption={"mode": "adaptive"},
+        ),
+    )
+    activity = _make_activity(session)
+    assert activity.stt is not None
+    activity._rt_session = MagicMock()
+
+    activity.on_backchannel_confirmed()
+
+    activity._rt_session.clear_audio.assert_called_once()
+
+
+async def test_backchannel_confirmed_noop_when_barge_in_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # a late event after barge-in was disabled must not clear the buffer
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    activity = _make_activity(_realtime_barge_in_session())
+    activity._interruption_detection_enabled = False
+    activity._rt_session = MagicMock()
+
+    activity.on_backchannel_confirmed()
+
+    activity._rt_session.clear_audio.assert_not_called()
+
+
+def _recognition_for_overlap(*, speaking: bool = False) -> AudioRecognition:
     ar = AudioRecognition.__new__(AudioRecognition)
     ar._backchannel_boundary_timer = None
     ar._overlap_in_current_turn = True
     ar._turn_backchannel_over_agent = False
+    ar._user_silence_ev = asyncio.Event()
+    if not speaking:
+        ar._user_silence_ev.set()  # silent (between segments) unless told otherwise
     ar._hooks = MagicMock()
     return ar
 
@@ -171,12 +217,28 @@ async def test_user_ended_overlap_latches_backchannel() -> None:
     assert ar._turn_backchannel_over_agent is True
 
 
+async def test_confirmed_backchannel_between_segments_clears_audio() -> None:
+    # confirmed between segments (user silent) — cleared so it can't prefix the next turn
+    ar = _recognition_for_overlap(speaking=False)
+    await ar._on_overlap_speech_event(_overlap_event(is_interruption=False, agent_ended=False))
+    ar._hooks.on_backchannel_confirmed.assert_called_once()
+
+
+async def test_confirmed_backchannel_while_speaking_defers_clear() -> None:
+    # user already mid next-segment — latch the verdict but defer the clear (else we'd clip it)
+    ar = _recognition_for_overlap(speaking=True)
+    await ar._on_overlap_speech_event(_overlap_event(is_interruption=False, agent_ended=False))
+    assert ar._turn_backchannel_over_agent is True
+    ar._hooks.on_backchannel_confirmed.assert_not_called()
+
+
 async def test_agent_ended_overlap_is_not_a_backchannel() -> None:
     # the overlap ended because the agent finished, not the user — the user may still be
     # mid-turn, so this inconclusive verdict must not mark the turn a backchannel
     ar = _recognition_for_overlap()
     await ar._on_overlap_speech_event(_overlap_event(is_interruption=False, agent_ended=True))
     assert ar._turn_backchannel_over_agent is False
+    ar._hooks.on_backchannel_confirmed.assert_not_called()
 
 
 async def test_agent_ended_overlap_preserves_prior_backchannel() -> None:
@@ -195,3 +257,4 @@ async def test_interruption_clears_backchannel() -> None:
     await ar._on_overlap_speech_event(_overlap_event(is_interruption=True, agent_ended=False))
     assert ar._turn_backchannel_over_agent is False
     ar._hooks.on_interruption.assert_called_once()
+    ar._hooks.on_backchannel_confirmed.assert_not_called()

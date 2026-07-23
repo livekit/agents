@@ -2054,6 +2054,15 @@ class AgentActivity(RecognitionHooks):
         else:
             self._user_silence_event.set()
 
+    def on_backchannel_confirmed(self) -> None:
+        # clear the buffered backchannel audio so it can't prefix the next committed turn
+        if (
+            self._interruption_detection_enabled
+            and self._rt_session is not None
+            and self._turn_detection not in ("manual", "realtime_llm")
+        ):
+            self._rt_session.clear_audio()
+
     def on_interruption(self, ev: inference.OverlappingSpeechEvent) -> None:
         # restore interruption by audio activity and then immediately interrupt
         self._restore_interruption_by_audio_activity()

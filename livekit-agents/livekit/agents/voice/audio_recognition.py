@@ -133,6 +133,7 @@ class _UserTurnTracker:
 
 class RecognitionHooks(Protocol):
     def on_interruption(self, ev: inference.OverlappingSpeechEvent) -> None: ...
+    def on_backchannel_confirmed(self) -> None: ...
     def on_start_of_speech(self, ev: vad.VADEvent | None, speech_start_time: float) -> None: ...
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None: ...
     def on_end_of_speech(self, ev: vad.VADEvent | None) -> None: ...
@@ -1403,6 +1404,9 @@ class AudioRecognition:
         # can't leak into the next turn; an interruption supersedes a prior backchannel
         if self._overlap_in_current_turn and not ev.agent_ended:
             self._turn_backchannel_over_agent = not ev.is_interruption
+            # clear the backchannel audio, but only between segments — else we'd clip a real turn
+            if not ev.is_interruption and not self._speaking:
+                self._hooks.on_backchannel_confirmed()
 
         if ev.is_interruption:
             self._hooks.on_interruption(ev)
