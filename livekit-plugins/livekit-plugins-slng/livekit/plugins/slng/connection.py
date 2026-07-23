@@ -24,7 +24,6 @@ class TTSConnectionConfig:
     voice: str | None = None
     headers: Mapping[str, str] = field(default_factory=dict)
     init: Mapping[str, Any] | None = None
-    control_profile: str | None = None
 
 
 @dataclass(frozen=True)

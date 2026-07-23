@@ -21,7 +21,6 @@ import json
 import os
 import time
 import weakref
-from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from types import TracebackType
 from typing import Any, Literal
@@ -217,7 +216,6 @@ class _TTSOptions:
     model_options: dict[str, object]
     extra_headers: dict[str, str]
     runtime_init: dict[str, Any] | None
-    control_profile: str | None
     warm_standby_enabled: bool
     text_chunking: Literal["auto", "word", "phrase"]
     phrase_max_chars: int
@@ -252,7 +250,7 @@ class TTS(tts.TTS):
         *,
         api_key: str | None = None,
         model: str | None = None,
-        connections: Sequence[str | TTSConnectionConfig | TTS] | None = None,
+        connections: list[str | TTSConnectionConfig] | None = None,
         model_endpoint: str | None = None,
         provider_api_key: str | None = None,
         voice: str,
@@ -270,7 +268,6 @@ class TTS(tts.TTS):
         # Advanced / optional. Used by integrations that drive the session
         # themselves; a typical client can ignore these.
         runtime_init: dict[str, Any] | None = None,
-        control_profile: str | None = None,
         warm_standby_enabled: bool = False,
         text_chunking: Literal["auto", "word", "phrase"] = "auto",
         phrase_max_chars: int = 60,
@@ -326,15 +323,13 @@ class TTS(tts.TTS):
         if model is not None and connections:
             raise ValueError("use model or connections, not both")
 
-        raw_connections: Sequence[str | TTSConnectionConfig | TTS]
+        raw_connections: list[str | TTSConnectionConfig]
         if connections:
             raw_connections = connections
         elif model is not None:
             raw_connections = [model]
         else:
             raise ValueError("model or connections is required")
-        if isinstance(raw_connections[0], TTS):
-            raise ValueError("the primary TTS candidate must be a model or connection")
 
         primary = raw_connections[0]
         if isinstance(primary, TTSConnectionConfig):
@@ -404,7 +399,6 @@ class TTS(tts.TTS):
                 if runtime_init is not None
                 else None
             ),
-            control_profile=primary.control_profile or control_profile,
             warm_standby_enabled=warm_standby_enabled,
             text_chunking=text_chunking,
             phrase_max_chars=phrase_max_chars,
@@ -415,11 +409,10 @@ class TTS(tts.TTS):
         self._active_candidate_index = 0
         self._candidate_tts: list[TTS] = [self]
         self._is_candidate = _candidate
-        # Set by the parent chain on candidates it constructs itself: such
-        # candidates safely receive runtime option updates, and their voice is
-        # only updated when it was inherited from the chain-level default
-        # rather than set explicitly per candidate.
-        self._managed_candidate = False
+        # Set by the parent chain on the candidates it constructs: a
+        # candidate's voice is only updated at runtime when it was inherited
+        # from the chain-level default rather than set explicitly per
+        # candidate.
         self._inherits_voice = False
         self._streams = weakref.WeakSet[SynthesizeStream]()
         self._ws_connection_timings: dict[int, _WsConnectionTiming] = {}
@@ -429,53 +422,43 @@ class TTS(tts.TTS):
 
         if not _candidate:
             for fallback in raw_connections[1:]:
-                if isinstance(fallback, TTS):
-                    if any(
-                        "/v1/bridges/unmute/tts/" not in item._opts.model_endpoint
-                        for item in fallback._candidate_tts
-                    ):
-                        raise ValueError("prebuilt TTS candidates must use Unmute Bridge")
-                    candidate = fallback
-                else:
-                    config = (
-                        fallback
-                        if isinstance(fallback, TTSConnectionConfig)
-                        else TTSConnectionConfig(
-                            endpoint=(
-                                fallback
-                                if "://" in fallback
-                                else bridge_endpoint(slng_base_url, "tts", fallback)
-                            )
+                config = (
+                    fallback
+                    if isinstance(fallback, TTSConnectionConfig)
+                    else TTSConnectionConfig(
+                        endpoint=(
+                            fallback
+                            if "://" in fallback
+                            else bridge_endpoint(slng_base_url, "tts", fallback)
                         )
                     )
-                    candidate = TTS(
-                        api_key=resolved_key,
-                        connections=[config],
-                        provider_api_key=provider_api_key,
-                        voice=config.voice or voice,
-                        slng_base_url=slng_base_url,
-                        region_override=region_override,
-                        world_part_override=world_part_override,
-                        external_agent_id=external_agent_id,
-                        external_session_id=external_session_id,
-                        language=language,
-                        sample_rate=sample_rate,
-                        speed=speed,
-                        word_tokenizer=word_tokenizer,
-                        http_session=http_session,
-                        extra_headers=extra_headers,
-                        runtime_init=runtime_init,
-                        control_profile=control_profile,
-                        warm_standby_enabled=warm_standby_enabled,
-                        text_chunking=text_chunking,
-                        phrase_max_chars=phrase_max_chars,
-                        first_audio_timeout_s=first_audio_timeout_s,
-                        fallback_recovery_cooldown_s=fallback_recovery_cooldown_s,
-                        _candidate=True,
-                        **model_options,
-                    )
-                    candidate._managed_candidate = True
-                    candidate._inherits_voice = config.voice is None
+                )
+                candidate = TTS(
+                    api_key=resolved_key,
+                    connections=[config],
+                    provider_api_key=provider_api_key,
+                    voice=config.voice or voice,
+                    slng_base_url=slng_base_url,
+                    region_override=region_override,
+                    world_part_override=world_part_override,
+                    external_agent_id=external_agent_id,
+                    external_session_id=external_session_id,
+                    language=language,
+                    sample_rate=sample_rate,
+                    speed=speed,
+                    word_tokenizer=word_tokenizer,
+                    http_session=http_session,
+                    extra_headers=extra_headers,
+                    runtime_init=runtime_init,
+                    warm_standby_enabled=warm_standby_enabled,
+                    text_chunking=text_chunking,
+                    phrase_max_chars=phrase_max_chars,
+                    first_audio_timeout_s=first_audio_timeout_s,
+                    fallback_recovery_cooldown_s=fallback_recovery_cooldown_s,
+                    _candidate=True,
+                    **model_options,
+                )
+                candidate._inherits_voice = config.voice is None
                 if (
                     candidate.sample_rate != self.sample_rate
                     or candidate.num_channels != self.num_channels
@@ -570,7 +553,6 @@ class TTS(tts.TTS):
                 "tts_model": self._opts.model,
                 "tts_provider": self.provider,
                 "tts_endpoint": model_endpoint,
-                "control_profile": self._opts.control_profile,
                 "ws_connect_ms": timing.ws_connect_ms,
                 "init_send_ms": timing.init_send_ms,
                 "connect_total_ms": timing.connect_total_ms,
@@ -664,11 +646,13 @@ class TTS(tts.TTS):
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         """
         Args:
             voice (str): Voice to use.
             language (str): Language code.
+            speed (float): Playback speed multiplier.
         """
         invalidate_pool = False
         if is_given(voice):
@@ -679,6 +663,9 @@ class TTS(tts.TTS):
         if is_given(language):
             invalidate_pool = invalidate_pool or self._opts.language != language
             self._opts.language = language
+        if is_given(speed):
+            invalidate_pool = invalidate_pool or self._opts.speed != speed
+            self._opts.speed = speed
 
         # Warm-standby sockets were initialized with the old voice/language;
         # drop them so the next segment reconnects with the updated init payload.
@@ -686,17 +673,15 @@ class TTS(tts.TTS):
             with contextlib.suppress(RuntimeError):
                 asyncio.get_running_loop().create_task(self._close_standby())
 
-        # Keep chain-built fallback candidates consistent with the primary so a
-        # later failover does not synthesize with construction-time settings.
-        # A candidate with an explicit per-candidate voice keeps it; prebuilt
-        # TTS candidates are user-owned and are not mutated.
+        # Keep fallback candidates consistent with the primary so a later
+        # failover does not synthesize with construction-time settings. A
+        # candidate with an explicit per-candidate voice keeps it.
         if not self._is_candidate:
             for candidate in self._candidate_tts[1:]:
-                if not candidate._managed_candidate:
-                    continue
                 candidate.update_options(
                     voice=voice if is_given(voice) and candidate._inherits_voice else NOT_GIVEN,
                     language=language,
+                    speed=speed,
                 )
 
     def synthesize(
@@ -1032,7 +1017,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     "tts_model": self._opts.model,
                     "tts_provider": self._tts.provider,
                     "tts_endpoint": self._opts.model_endpoint,
-                    "control_profile": self._opts.control_profile,
                     "segment_id": segment_id,
                     "outcome": outcome,
                     "ws_connect_ms": ws_connect_ms,

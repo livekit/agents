@@ -91,6 +91,7 @@ are set.
 Version 2.0 is a breaking change:
 
 - All traffic goes through the Unmute Bridge. `model_endpoint` and `model_endpoints` were removed; pass a model identifier or `connections=[...]` instead.
+- STT no longer defaults to `model="deepgram/nova:3"`; pass a model (or `connections`) explicitly.
 - TTS `voice` is required and passed verbatim as the provider's voice identifier.
 - Language codes are no longer normalized client-side; send the value the model expects (for example BCP-47 `hi-IN` for Sarvam, not `hi`).
 - STT `recognize()` (HTTP batch) is no longer supported; use `stream()`. Only `pcm_s16le` input audio is supported.

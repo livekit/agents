@@ -68,6 +68,10 @@ DEFAULT_BUFFER_SIZE_SECONDS = 0.064
 _FINALIZE_MSG = json.dumps({"type": "finalize"})
 _KEEPALIVE_MSG = json.dumps({"type": "keepalive"})
 _KEEPALIVE_INTERVAL_S = 5.0
+# Consecutive graceful server closes (no transcripts, input still open)
+# tolerated before the connection is treated as failed. Prevents an
+# unbounded silent reconnect loop against a misbehaving endpoint.
+_MAX_SILENT_RECONNECTS = 3
 
 
 def _safe_error_code(exc: BaseException) -> int | None:
@@ -138,7 +142,7 @@ class STT(stt.STT):
         api_key: str | None = None,
         api_token: str | None = None,
         model: str | None = None,
-        connections: Sequence[str | STTConnectionConfig] | None = None,
+        connections: list[str | STTConnectionConfig] | None = None,
         model_endpoint: str | None = None,
         model_endpoints: Sequence[str] | None = None,
         provider_api_key: str | None = None,
@@ -585,6 +589,8 @@ class SpeechStream(stt.SpeechStream):
         wait_switch: asyncio.Task[bool] | None = None
         wait_reconnect: asyncio.Task[bool] | None = None
         candidate_attempts = 0
+        silent_reconnects = 0
+        connection_had_transcript = False
         recover_primary_after_final = False
 
         def current_model() -> str | None:
@@ -743,7 +749,7 @@ class SpeechStream(stt.SpeechStream):
             nonlocal input_finished, closing, protocol_close_sent
             nonlocal pending_non_empty_transcript, pending_replay
             nonlocal pending_switch_succeeded, sent_audio_since_finalize
-            nonlocal candidate_attempts
+            nonlocal candidate_attempts, silent_reconnects
             from_model = current_model()
             exc_info = (
                 (type(exc), exc, exc.__traceback__)
@@ -796,6 +802,7 @@ class SpeechStream(stt.SpeechStream):
             pending_switch_succeeded = (from_model, to_model, reason, timeout_s)
             self._active_endpoint_index = next_index
             candidate_attempts = 0
+            silent_reconnects = 0
             input_finished = False
             closing = False
             protocol_close_sent = False
@@ -921,7 +928,8 @@ class SpeechStream(stt.SpeechStream):
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> bool:
             nonlocal awaiting_final, pending_non_empty_transcript, speech_started
             nonlocal recover_primary_after_final, candidate_attempts
-            nonlocal finalize_requested_for_buffer
+            nonlocal finalize_requested_for_buffer, silent_reconnects
+            nonlocal connection_had_transcript
             while True:
                 msg = await ws.receive()
                 if msg.type in (
@@ -1067,6 +1075,9 @@ class SpeechStream(stt.SpeechStream):
                             )
                         ],
                     )
+                    # Genuine transcript progress clears the silent-close debt.
+                    silent_reconnects = 0
+                    connection_had_transcript = True
                     self._event_ch.send_nowait(event)
                     if is_final:
                         speech_started = False
@@ -1122,6 +1133,7 @@ class SpeechStream(stt.SpeechStream):
                     )
                     pending_switch_succeeded = None
 
+                connection_had_transcript = False
                 send = asyncio.create_task(
                     send_task(
                         ws,
@@ -1260,6 +1272,13 @@ class SpeechStream(stt.SpeechStream):
                         )
                         if input_exhausted:
                             return
+                        if not connection_had_transcript:
+                            silent_reconnects += 1
+                            if silent_reconnects >= _MAX_SILENT_RECONNECTS:
+                                raise APIStatusError(
+                                    "SLNG STT closed the connection repeatedly"
+                                    " without producing transcripts"
+                                )
                         retry_connection = True
                         break
 
