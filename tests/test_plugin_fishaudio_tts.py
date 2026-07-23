@@ -135,6 +135,138 @@ def test_temperature_and_top_p_validated():
         tts.update_options(top_p=-0.1)
 
 
+def test_normalize_loudness_sets_prosody():
+    """normalize_loudness rides inside prosody, alongside speed/volume."""
+    from livekit.plugins.fishaudio.tts import _build_tts_request
+
+    prosody = _build_tts_request(TTS_opts(normalize_loudness=False), text="hi")["prosody"]
+    assert prosody == {"normalize_loudness": False}
+
+
+def test_normalize_loudness_with_speed_and_volume():
+    """All three prosody fields are populated together."""
+    from livekit.plugins.fishaudio.tts import _build_tts_request
+
+    prosody = _build_tts_request(
+        TTS_opts(speed=1.2, volume=-3.0, normalize_loudness=True), text="hi"
+    )["prosody"]
+    assert prosody == {"speed": 1.2, "volume": -3.0, "normalize_loudness": True}
+
+
+def test_generation_tuning_omitted_by_default():
+    """Unset tuning params are absent from the request so Fish's defaults apply."""
+    from livekit.plugins.fishaudio.tts import _build_tts_request
+
+    request = _build_tts_request(TTS_opts(), text="hi")
+    assert "max_new_tokens" not in request
+    assert "min_chunk_length" not in request
+    assert "condition_on_previous_chunks" not in request
+    assert "early_stop_threshold" not in request
+
+
+def test_constructor_sets_generation_tuning_params():
+    """max_new_tokens/min_chunk_length/condition_on_previous_chunks/early_stop_threshold
+    flow onto the request."""
+    from livekit.plugins.fishaudio import TTS
+    from livekit.plugins.fishaudio.tts import _build_tts_request
+
+    tts = TTS(
+        api_key="test-key",
+        max_new_tokens=512,
+        min_chunk_length=25,
+        condition_on_previous_chunks=False,
+        early_stop_threshold=0.8,
+    )
+    request = _build_tts_request(tts._opts, text="hi")
+    assert request["max_new_tokens"] == 512
+    assert request["min_chunk_length"] == 25
+    assert request["condition_on_previous_chunks"] is False
+    assert request["early_stop_threshold"] == 0.8
+
+
+def test_update_options_sets_generation_tuning_params():
+    """update_options forwards the tuning params onto the request."""
+    from livekit.plugins.fishaudio import TTS
+    from livekit.plugins.fishaudio.tts import _build_tts_request
+
+    tts = TTS(api_key="test-key")
+    tts.update_options(
+        max_new_tokens=2048,
+        min_chunk_length=30,
+        condition_on_previous_chunks=False,
+        early_stop_threshold=0.5,
+        normalize_loudness=False,
+    )
+    request = _build_tts_request(tts._opts, text="hi")
+    assert request["max_new_tokens"] == 2048
+    assert request["min_chunk_length"] == 30
+    assert request["condition_on_previous_chunks"] is False
+    assert request["early_stop_threshold"] == 0.5
+    assert request["prosody"] == {"normalize_loudness": False}
+
+
+def test_generation_tuning_validated():
+    """Out-of-range tuning params raise, in the constructor and update_options."""
+    from livekit.plugins.fishaudio import TTS
+
+    with pytest.raises(ValueError):
+        TTS(api_key="test-key", max_new_tokens=-1)
+    with pytest.raises(ValueError):
+        TTS(api_key="test-key", min_chunk_length=150)
+    with pytest.raises(ValueError):
+        TTS(api_key="test-key", early_stop_threshold=1.5)
+
+    tts = TTS(api_key="test-key")
+    with pytest.raises(ValueError):
+        tts.update_options(max_new_tokens=-1)
+    with pytest.raises(ValueError):
+        tts.update_options(min_chunk_length=-5)
+    with pytest.raises(ValueError):
+        tts.update_options(early_stop_threshold=-0.1)
+
+
+def test_normalize_loudness_dropped_on_s1_constructor():
+    """On the s1 model normalize_loudness is dropped (warn log), not sent."""
+    from livekit.plugins.fishaudio import TTS
+    from livekit.plugins.fishaudio.tts import _build_tts_request
+
+    tts = TTS(api_key="test-key", model="s1", normalize_loudness=True)
+    assert _build_tts_request(tts._opts, text="hi")["prosody"] is None
+
+
+def test_normalize_loudness_dropped_on_s1_update_options():
+    """update_options refuses normalize_loudness while the model is s1."""
+    from livekit.plugins.fishaudio import TTS
+    from livekit.plugins.fishaudio.tts import _build_tts_request
+
+    tts = TTS(api_key="test-key", model="s1")
+    tts.update_options(normalize_loudness=True)
+    assert _build_tts_request(tts._opts, text="hi")["prosody"] is None
+
+
+def test_normalize_loudness_dropped_on_model_switch_to_s1():
+    """Switching to s1 drops a previously set normalize_loudness."""
+    from livekit.plugins.fishaudio import TTS
+    from livekit.plugins.fishaudio.tts import _build_tts_request
+
+    tts = TTS(api_key="test-key", model="s2-pro", normalize_loudness=True)
+    assert _build_tts_request(tts._opts, text="hi")["prosody"] == {"normalize_loudness": True}
+
+    tts.update_options(model="s1")
+    assert _build_tts_request(tts._opts, text="hi")["prosody"] is None
+
+
+def test_normalize_loudness_kept_on_s2_pro_family():
+    """s2-pro and s2.1-pro keep normalize_loudness."""
+    from livekit.plugins.fishaudio import TTS
+    from livekit.plugins.fishaudio.tts import _build_tts_request
+
+    for model in ("s2-pro", "s2.1-pro"):
+        tts = TTS(api_key="test-key", model=model, normalize_loudness=False)
+        prosody = _build_tts_request(tts._opts, text="hi")["prosody"]
+        assert prosody == {"normalize_loudness": False}
+
+
 def TTS_opts(**overrides):
     """Build a _TTSOptions with sensible test defaults, overriding as needed."""
     from livekit.plugins.fishaudio.tts import DEFAULT_BASE_URL, DEFAULT_MODEL, _TTSOptions
@@ -155,6 +287,11 @@ def TTS_opts(**overrides):
         "mp3_bitrate": 64,
         "opus_bitrate": 64000,
         "normalize": True,
+        "normalize_loudness": NOT_GIVEN,
+        "max_new_tokens": NOT_GIVEN,
+        "min_chunk_length": NOT_GIVEN,
+        "condition_on_previous_chunks": NOT_GIVEN,
+        "early_stop_threshold": NOT_GIVEN,
     }
     opts.update(overrides)
     return _TTSOptions(**opts)

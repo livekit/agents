@@ -7,6 +7,14 @@ all change without dropping the call.
 
 Try it in the [LiveKit Playground](https://agents.livekit.io/?example=avatar).
 
+> **Inference variant:** [`inference_agent.py`](./inference_agent.py) is a
+> minimal version that provisions the avatar through **LiveKit Inference**
+> instead of the BYOK plugin — the agent needs only `LIVEKIT_API_KEY` /
+> `LIVEKIT_API_SECRET` (no `LEMONSLICE_API_KEY`); the gateway creates the
+> provider session with LiveKit's wholesale key. Requires the
+> `avatar_lemonslice` feature flag on your project. Run with
+> `python inference_agent.py dev` and set `LEMONSLICE_IMAGE_URL`.
+
 ## What's in here
 
 - **9 personas** to choose from — each has its own face, voice, system

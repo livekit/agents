@@ -1777,6 +1777,9 @@ class _TestRecognitionHooks:
     def on_interruption(self, ev: inference.OverlappingSpeechEvent) -> None:
         self.interruptions.append(ev)
 
+    def on_backchannel_confirmed(self) -> None:
+        pass
+
     def on_start_of_speech(self, ev: object, speech_start_time: float) -> None:
         pass
 
