@@ -40,6 +40,23 @@ load_dotenv(".env.local")
 logger = logging.getLogger("hotel-receptionist")
 
 
+def _expected_state_statements(userdata: dict[str, object]) -> list[str] | None:
+    """Return configured state statements; an explicit empty list means unchanged state."""
+    if "expected_state" not in userdata:
+        return None
+    expected_state = userdata["expected_state"]
+    if expected_state is None:
+        return []
+    if not isinstance(expected_state, list):
+        raise TypeError("expected_state must be a list of SQL statements")
+    statements: list[str] = []
+    for statement in expected_state:
+        if not isinstance(statement, str):
+            raise TypeError("expected_state must be a list of SQL statements")
+        statements.append(statement)
+    return statements
+
+
 class HotelReceptionistAgent(RoomToolsMixin, RestaurantToolsMixin, ServicesToolsMixin, Agent):
     def __init__(self) -> None:
         super().__init__(instructions=build_instructions(), tools=[build_lookup_policy_tool()])
@@ -67,8 +84,8 @@ async def on_simulation_end(ctx: SimulationContext) -> None:
     # agent-decided facts only (room type, dates, extras, status), so minted
     # codes / order / which-king don't matter and the agent need not reproduce the
     # statements — while collateral damage still surfaces.
-    expected_state = ctx.userdata().get("expected_state") or []
-    if not expected_state:
+    expected_state = _expected_state_statements(ctx.userdata())
+    if expected_state is None:
         return
 
     session = ctx.job_context.primary_session
@@ -98,6 +115,7 @@ async def on_session_end(ctx: JobContext) -> None:
     userdata = ctx.primary_session.userdata
 
     db_diffs: list[str] = []
+    expected_state_configured = False
     try:
         sim_ctx = ctx.simulation_context()
         if sim_ctx is None:
@@ -105,10 +123,11 @@ async def on_session_end(ctx: JobContext) -> None:
                 "local expected-state diff skipped: no simulation context "
                 "(job/room metadata carried no SimulationDispatch)"
             )
-        expected_state = (sim_ctx.userdata().get("expected_state") if sim_ctx else None) or []
-        if sim_ctx is not None and not expected_state:
+        expected_state = _expected_state_statements(sim_ctx.userdata()) if sim_ctx else None
+        expected_state_configured = expected_state is not None
+        if sim_ctx is not None and expected_state is None:
             logger.info("local expected-state diff skipped: scenario has no expected_state")
-        if expected_state:
+        if expected_state is not None:
             logger.info("running local expected-state diff (%d statement(s))", len(expected_state))
             expected = await build_expected(_SEED_DB_BYTES, expected_state)
             try:
@@ -158,6 +177,8 @@ async def on_session_end(ctx: JobContext) -> None:
 
     if db_diffs:
         ctx.tagger.fail(reason="final DB diverges from expected: " + " | ".join(db_diffs[:8]))
+    elif expected_state_configured:
+        ctx.tagger.success()
     elif state_changes or served_reads:
         ctx.tagger.success()
     else:
