@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, time
-from typing import Annotated
+from typing import Annotated, Literal
 
 from context import speech_only
 from hotel_db import MAX_PARTY_SIZE, TODAY, HotelDB, RestaurantReservation, Unavailable, speak_time
@@ -115,13 +115,22 @@ class BookRestaurantTask(AgentTask[RestaurantReservation]):
         return f"party recorded ({on_date.strftime('%A, %B %-d')}, {party_size} guests); open times: {labels} | {self._status()}"
 
     @function_tool()
-    async def choose_time(self, at_time: time, notes: str | None = None) -> str:
+    async def choose_time(
+        self,
+        hr: Annotated[int, Field(ge=1, le=12)],
+        minute: Annotated[int, Field(ge=0, le=59)],
+        ampm: Literal["am", "pm"],
+        notes: str | None = None,
+    ) -> str:
         """Record the chosen time slot and any special request.
 
         Args:
-            at_time: The slot the CALLER picked, from the open times set_party returned.
+            hr: Hour of the slot the CALLER picked, from 1 through 12.
+            minute: Minute of the slot the CALLER picked, from 0 through 59.
+            ampm: Whether the chosen slot is in the morning ("am") or evening ("pm").
             notes: Optional special request (allergy, anniversary...), or null.
         """
+        at_time = time(hour=(hr % 12) + (12 if ampm == "pm" else 0), minute=minute)
         if self._date is None:
             raise ToolError("date and party size not yet recorded")
         if at_time not in self._open_times:
