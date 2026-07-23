@@ -928,7 +928,11 @@ class HotelDB:
         conn = self.connection
         row = conn.execute(
             _SQL_FREE_TABLE,
-            {"party_size": party_size, "date": on_date.isoformat(), "time": at_time.isoformat()},
+            {
+                "party_size": party_size,
+                "date": on_date.isoformat(),
+                "time": wall_clock_iso(at_time),
+            },
         ).fetchone()
         if not row:
             raise Unavailable(f"restaurant full: {on_date} {at_time}")
@@ -945,7 +949,7 @@ class HotelDB:
                 "phone": "".join(c for c in phone if c.isdigit()),
                 "party_size": party_size,
                 "date": on_date.isoformat(),
-                "time": at_time.isoformat(),
+                "time": wall_clock_iso(at_time),
                 "notes": notes,
             },
         )
@@ -1011,7 +1015,7 @@ class HotelDB:
                 {
                     "party_size": new_party,
                     "date": on_date.isoformat(),
-                    "time": at_time.isoformat(),
+                    "time": wall_clock_iso(at_time),
                     "code": code,
                     "current_table_id": current_table_id,
                 },
@@ -1026,7 +1030,7 @@ class HotelDB:
                     "table_id": table_id,
                     "party_size": new_party,
                     "date": on_date.isoformat(),
-                    "time": at_time.isoformat(),
+                    "time": wall_clock_iso(at_time),
                 },
                 {"code": code, "status": "confirmed"},
             )
@@ -1115,7 +1119,7 @@ class HotelDB:
                     "room_id": room_id,
                     "guest_name": guest_name,
                     "date": call_date.isoformat(),
-                    "time": call_time.isoformat(),
+                    "time": wall_clock_iso(call_time),
                 },
             )
         if self.on_change:
@@ -1189,7 +1193,7 @@ class HotelDB:
                     "guest_name": guest_name,
                     "guest_phone": "".join(c for c in guest_phone if c.isdigit()),
                     "date": on_date.isoformat(),
-                    "time": at_time.isoformat(),
+                    "time": wall_clock_iso(at_time),
                     "party_size": party_size,
                     "total": total,
                 },
@@ -1229,7 +1233,7 @@ class HotelDB:
                     "guest_name": guest_name,
                     "guest_phone": "".join(c for c in guest_phone if c.isdigit()),
                     "date": on_date.isoformat(),
-                    "time": at_time.isoformat(),
+                    "time": wall_clock_iso(at_time),
                     "duration_hours": duration_hours,
                     "total": total,
                 },
