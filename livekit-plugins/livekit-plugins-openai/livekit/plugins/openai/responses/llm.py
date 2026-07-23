@@ -51,6 +51,11 @@ Verbosity = Literal["low", "medium", "high"]
 
 OPENAI_RESPONSES_WS_URL = "wss://api.openai.com/v1/responses"
 
+# ws ping interval; keeps idle pooled sockets warm and lets aiohttp detect dead peers
+_WS_HEARTBEAT = 30.0
+# max connections to try when a reused socket is stale, before the outer retry takes over
+_WS_SEND_MAX_ATTEMPTS = 6
+
 
 class _ResponsesWebsocket:
     def __init__(
@@ -87,6 +92,7 @@ class _ResponsesWebsocket:
                 self._ensure_http_session().ws_connect(
                     self._base_url,
                     headers={"Authorization": f"Bearer {self._api_key}"},
+                    heartbeat=_WS_HEARTBEAT,
                 ),
                 timeout,
             )
@@ -124,12 +130,9 @@ class _ResponsesWebsocket:
         except TypeError as e:
             raise APIConnectionError(f"failed to serialize request: {e}") from e
 
-        async with self._pool.connection(timeout=self._timeout) as ws:
-            try:
-                await ws.send_str(data)
-            except Exception as e:
-                raise APIConnectionError("failed to send request over WebSocket") from e
-
+        ws = await self._acquire_and_send(data)
+        completed = False
+        try:
             while True:
                 raw_msg = await ws.receive()
                 if raw_msg.type == aiohttp.WSMsgType.ERROR:
@@ -154,7 +157,30 @@ class _ResponsesWebsocket:
                 event = json.loads(raw_msg.data)
                 yield event
                 if event["type"] in ["response.completed", "response.failed", "error"]:
+                    completed = True
                     return
+        finally:
+            # only a cleanly completed exchange is safe to reuse; discard on any error
+            if completed:
+                self._pool.put(ws)
+            else:
+                self._pool.remove(ws)
+
+    async def _acquire_and_send(self, data: str) -> aiohttp.ClientWebSocketResponse:
+        # a socket closed while idle surfaces only as a send failure on reuse
+        last_exc: Exception | None = None
+        for _ in range(_WS_SEND_MAX_ATTEMPTS):
+            ws = await self._pool.get(timeout=self._timeout)
+            reused = self._pool.last_connection_reused
+            try:
+                await ws.send_str(data)
+                return ws
+            except Exception as e:
+                self._pool.remove(ws)  # discard the failed socket
+                last_exc = e
+                if not reused:
+                    break  # a fresh connection failing to send is a real error, not staleness
+        raise APIConnectionError("failed to send request over WebSocket") from last_exc
 
 
 @dataclass
