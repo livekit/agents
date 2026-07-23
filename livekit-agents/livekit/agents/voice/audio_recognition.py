@@ -51,6 +51,7 @@ if TYPE_CHECKING:
     from .agent_session import AgentSession
 
 MIN_LANGUAGE_DETECTION_LENGTH = 5
+_NON_SPECIFIC_LANGUAGE_CODES = frozenset({"auto", "multi"})
 # Mirrors turn_detector.base.MAX_HISTORY_TURNS for tracing
 _EOU_MAX_HISTORY_TURNS = 6
 # backoff before recreating the stt stream after an unrecoverable error
@@ -367,6 +368,13 @@ class AudioRecognition:
                     if self._turn_detector_stream is not None:
                         self._turn_detector_stream.cancel_inference()
                     self._turn_detector_prediction_fut = None
+
+    def _update_last_language(self, language: LanguageCode, transcript: str) -> None:
+        if not language or language.language in _NON_SPECIFIC_LANGUAGE_CODES:
+            return
+
+        if not self._last_language or len(transcript) > MIN_LANGUAGE_DETECTION_LENGTH:
+            self._last_language = language
 
     @property
     def _input_started_at(self) -> float | None:
@@ -1163,10 +1171,7 @@ class AudioRecognition:
             language = ev.alternatives[0].language
             confidence = ev.alternatives[0].confidence
 
-            if not self._last_language or (
-                language and len(transcript) > MIN_LANGUAGE_DETECTION_LENGTH
-            ):
-                self._last_language = language
+            self._update_last_language(language, transcript)
 
             self._final_transcript_received.set()
             if not transcript:
@@ -1236,10 +1241,7 @@ class AudioRecognition:
             language = ev.alternatives[0].language
             confidence = ev.alternatives[0].confidence
 
-            if not self._last_language or (
-                language and len(transcript) > MIN_LANGUAGE_DETECTION_LENGTH
-            ):
-                self._last_language = language
+            self._update_last_language(language, transcript)
 
             if not transcript:
                 return
