@@ -58,6 +58,11 @@ class _TTSOptions:
     mp3_bitrate: MP3Bitrate
     opus_bitrate: OpusBitrate
     normalize: bool
+    normalize_loudness: NotGivenOr[bool]
+    max_new_tokens: NotGivenOr[int]
+    min_chunk_length: NotGivenOr[int]
+    condition_on_previous_chunks: NotGivenOr[bool]
+    early_stop_threshold: NotGivenOr[float]
 
     def get_http_url(self, path: str) -> str:
         return f"{self.base_url}{path}"
@@ -85,6 +90,11 @@ class TTS(tts.TTS):
         mp3_bitrate: MP3Bitrate = 64,
         opus_bitrate: OpusBitrate = 64000,
         normalize: bool = True,
+        normalize_loudness: NotGivenOr[bool] = NOT_GIVEN,
+        max_new_tokens: NotGivenOr[int] = NOT_GIVEN,
+        min_chunk_length: NotGivenOr[int] = NOT_GIVEN,
+        condition_on_previous_chunks: NotGivenOr[bool] = NOT_GIVEN,
+        early_stop_threshold: NotGivenOr[float] = NOT_GIVEN,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
@@ -124,6 +134,19 @@ class TTS(tts.TTS):
                 Defaults to 64000.
             normalize (bool): Whether Fish normalizes the input text (numbers, dates,
                 abbreviations) before synthesis. Defaults to True.
+            normalize_loudness (NotGivenOr[bool]): Whether Fish normalizes the output
+                loudness for more consistent volume (Fish ``prosody.normalize_loudness``).
+                S2-Pro family only: on the ``s1`` model the option is dropped with a
+                warning. Unset uses Fish's server default (True).
+            max_new_tokens (NotGivenOr[int]): Maximum audio tokens Fish generates per
+                text chunk. Unset uses Fish's server default (1024).
+            min_chunk_length (NotGivenOr[int]): Minimum characters before Fish splits
+                text into a new chunk (0-100). Unset uses Fish's server default (50).
+            condition_on_previous_chunks (NotGivenOr[bool]): Whether Fish uses previous
+                audio as context for voice consistency across chunks. Unset uses Fish's
+                server default (True).
+            early_stop_threshold (NotGivenOr[float]): Early stopping threshold for batch
+                processing (0-1). Unset uses Fish's server default (1.0).
             tokenizer (tokenize.SentenceTokenizer): Sentence tokenizer used to detect
                 sentence boundaries. Defaults to ``tokenize.blingfire.SentenceTokenizer()``.
             http_session (aiohttp.ClientSession | None): Optional aiohttp session.
@@ -157,6 +180,15 @@ class TTS(tts.TTS):
             raise ValueError("temperature must be between 0 and 1")
         if not 0 <= top_p <= 1:
             raise ValueError("top_p must be between 0 and 1")
+        if is_given(max_new_tokens) and max_new_tokens < 0:
+            raise ValueError("max_new_tokens must be non-negative")
+        if is_given(min_chunk_length) and not 0 <= min_chunk_length <= 100:
+            raise ValueError("min_chunk_length must be between 0 and 100")
+        if is_given(early_stop_threshold) and not 0 <= early_stop_threshold <= 1:
+            raise ValueError("early_stop_threshold must be between 0 and 1")
+        if is_given(normalize_loudness) and model == "s1":
+            logger.warning("normalize_loudness is not supported by the s1 model, dropping")
+            normalize_loudness = NOT_GIVEN
 
         self._opts = _TTSOptions(
             model=model,
@@ -174,6 +206,11 @@ class TTS(tts.TTS):
             mp3_bitrate=mp3_bitrate,
             opus_bitrate=opus_bitrate,
             normalize=normalize,
+            normalize_loudness=normalize_loudness,
+            max_new_tokens=max_new_tokens,
+            min_chunk_length=min_chunk_length,
+            condition_on_previous_chunks=condition_on_previous_chunks,
+            early_stop_threshold=early_stop_threshold,
         )
 
         self._session = http_session
@@ -253,6 +290,11 @@ class TTS(tts.TTS):
         mp3_bitrate: NotGivenOr[MP3Bitrate] = NOT_GIVEN,
         opus_bitrate: NotGivenOr[OpusBitrate] = NOT_GIVEN,
         normalize: NotGivenOr[bool] = NOT_GIVEN,
+        normalize_loudness: NotGivenOr[bool] = NOT_GIVEN,
+        max_new_tokens: NotGivenOr[int] = NOT_GIVEN,
+        min_chunk_length: NotGivenOr[int] = NOT_GIVEN,
+        condition_on_previous_chunks: NotGivenOr[bool] = NOT_GIVEN,
+        early_stop_threshold: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if is_given(model) and model != self._opts.model:
             self._opts.model = model
@@ -261,6 +303,9 @@ class TTS(tts.TTS):
             # connections so the next stream reconnects with the new model. Other
             # options ride in the per-request body and need no reconnect.
             self._pool.invalidate()
+            if model == "s1" and is_given(self._opts.normalize_loudness):
+                logger.warning("normalize_loudness is not supported by the s1 model, dropping")
+                self._opts.normalize_loudness = NOT_GIVEN
         if is_given(voice_id):
             self._opts.voice_id = voice_id
         if is_given(latency_mode):
@@ -287,6 +332,25 @@ class TTS(tts.TTS):
             self._opts.opus_bitrate = opus_bitrate
         if is_given(normalize):
             self._opts.normalize = normalize
+        if is_given(normalize_loudness):
+            if self._opts.model == "s1":
+                logger.warning("normalize_loudness is not supported by the s1 model, dropping")
+            else:
+                self._opts.normalize_loudness = normalize_loudness
+        if is_given(max_new_tokens):
+            if max_new_tokens < 0:
+                raise ValueError("max_new_tokens must be non-negative")
+            self._opts.max_new_tokens = max_new_tokens
+        if is_given(min_chunk_length):
+            if not 0 <= min_chunk_length <= 100:
+                raise ValueError("min_chunk_length must be between 0 and 100")
+            self._opts.min_chunk_length = min_chunk_length
+        if is_given(condition_on_previous_chunks):
+            self._opts.condition_on_previous_chunks = condition_on_previous_chunks
+        if is_given(early_stop_threshold):
+            if not 0 <= early_stop_threshold <= 1:
+                raise ValueError("early_stop_threshold must be between 0 and 1")
+            self._opts.early_stop_threshold = early_stop_threshold
 
     def synthesize(
         self,
@@ -317,16 +381,18 @@ def _build_tts_request(opts: _TTSOptions, *, text: str = "") -> dict[str, Any]:
     # server doesn't fall back to its own (larger) defaults — in particular the
     # docs default of `chunk_length=300` produces large bursts that leave audible
     # gaps between Fish's chunk boundaries.
-    # `prosody` stays None unless the caller set speed/volume, so the default
-    # request is byte-for-byte unchanged.
-    prosody: dict[str, float] | None = None
-    if is_given(opts.speed) or is_given(opts.volume):
+    # `prosody` stays None unless the caller set speed/volume/normalize_loudness,
+    # so the default request is byte-for-byte unchanged.
+    prosody: dict[str, Any] | None = None
+    if is_given(opts.speed) or is_given(opts.volume) or is_given(opts.normalize_loudness):
         prosody = {}
         if is_given(opts.speed):
             prosody["speed"] = opts.speed
         if is_given(opts.volume):
             prosody["volume"] = opts.volume
-    return {
+        if is_given(opts.normalize_loudness):
+            prosody["normalize_loudness"] = opts.normalize_loudness
+    request: dict[str, Any] = {
         "text": text,
         "chunk_length": opts.chunk_length,
         "format": opts.output_format,
@@ -343,6 +409,17 @@ def _build_tts_request(opts: _TTSOptions, *, text: str = "") -> dict[str, Any]:
         "top_p": opts.top_p,
         "temperature": opts.temperature,
     }
+    # Generation-tuning fields have no plugin default: they are omitted unless
+    # set so Fish's server-side defaults stay in effect.
+    if is_given(opts.max_new_tokens):
+        request["max_new_tokens"] = opts.max_new_tokens
+    if is_given(opts.min_chunk_length):
+        request["min_chunk_length"] = opts.min_chunk_length
+    if is_given(opts.condition_on_previous_chunks):
+        request["condition_on_previous_chunks"] = opts.condition_on_previous_chunks
+    if is_given(opts.early_stop_threshold):
+        request["early_stop_threshold"] = opts.early_stop_threshold
+    return request
 
 
 class ChunkedStream(tts.ChunkedStream):
