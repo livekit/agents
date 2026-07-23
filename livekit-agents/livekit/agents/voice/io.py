@@ -244,6 +244,17 @@ class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished", "playback_s
         return self.__playback_segments_count - self.__playback_finished_count
 
     @property
+    def captured_playout_segments(self) -> int:
+        """Count of playback segments captured so far.
+
+        Increments when the first frame of a new segment is accepted by
+        ``capture_frame`` (segments are delimited by ``flush``/``clear_buffer``).
+        Lets callers detect — free of races with concurrent finishes — whether a
+        frame they forwarded was actually accepted into a counted playout segment.
+        """
+        return self.__playback_segments_count
+
+    @property
     def sample_rate(self) -> int | None:
         """The sample rate required by the audio sink, if None, any sample rate is accepted"""
         return self._sample_rate
