@@ -495,7 +495,7 @@ def prepare_function_arguments(
         except ValueError as e:
             logger.error(
                 f"error parsing arguments for `{fnc.info.name}`",
-                extra={"function": fnc.info.name, "arguments": json_arguments},
+                extra={"function": fnc.info.name, "lk.pii.arguments": json_arguments},
             )
             raise ToolError(f"Error parsing arguments for `{fnc.info.name}`: {e}") from e
 
@@ -514,13 +514,13 @@ def prepare_function_arguments(
     except (pydantic.ValidationError, ValueError, TypeError) as e:
         logger.error(
             f"error parsing arguments for `{fnc.info.name}`",
-            extra={"function": fnc.info.name, "arguments": json_arguments},
+            extra={"function": fnc.info.name, "lk.pii.arguments": json_arguments},
         )
         raise ToolError(f"Error parsing arguments for `{fnc.info.name}`: {e}") from e
     except Exception:
         logger.exception(
             f"error parsing arguments for `{fnc.info.name}`",
-            extra={"function": fnc.info.name, "arguments": json_arguments},
+            extra={"function": fnc.info.name, "lk.pii.arguments": json_arguments},
         )
         raise
 
@@ -751,7 +751,7 @@ def make_function_call_output(
     if not _is_valid_function_output(output):
         logger.error(
             f"AI function `{fnc_call.name}` returned an invalid output",
-            extra={"call_id": fnc_call.call_id, "output": output},
+            extra={"call_id": fnc_call.call_id, "lk.pii.output": output},
         )
         return FunctionCallResult(
             fnc_call=fnc_call,
@@ -827,7 +827,7 @@ async def execute_function_call(
         if not isinstance(e, ToolError):
             logger.exception(
                 f"exception executing AI function `{tool_call.name}`",
-                extra={"call_id": tool_call.call_id, "arguments": tool_call.arguments},
+                extra={"call_id": tool_call.call_id, "lk.pii.arguments": tool_call.arguments},
             )
         out = make_function_call_output(fnc_call=fnc_call, output=None, exception=e)
 

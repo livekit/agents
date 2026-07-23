@@ -486,12 +486,12 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
         if data["type"] == "error":
             message = data.get("message") or data.get("title") or "unknown error from cartesia"
             status_code = data.get("status_code") or 500
-            logger.warning("cartesia sent an error", extra={"data": data})
+            logger.warning("cartesia sent an error", extra={"lk.pii.data": data})
             if status_code >= 500:
                 raise APIConnectionError(message=message, retryable=True)
             return
 
-        logger.warning("received unexpected message from Cartesia STT: %s", data)
+        logger.warning("received unexpected message from Cartesia STT", extra={"lk.pii.data": data})
 
     def update_options(
         self,

@@ -609,7 +609,7 @@ class SpeechStream(stt.SpeechStream):
             ]
 
         if message_type == "partial_transcript":
-            logger.debug("Received message type partial_transcript: %s", data)
+            logger.debug("Received message type partial_transcript", extra={"lk.pii.data": data})
 
             if text:
                 # Send START_OF_SPEECH if we're not already speaking
@@ -690,7 +690,11 @@ class SpeechStream(stt.SpeechStream):
         ):
             pass
         else:
-            logger.warning("ElevenLabs STT unknown message type: %s, data: %s", message_type, data)
+            logger.warning(
+                "ElevenLabs STT unknown message type: %s",
+                message_type,
+                extra={"lk.pii.data": data},
+            )
 
 
 def _synthesize_url(opts: STTOptions) -> str:
