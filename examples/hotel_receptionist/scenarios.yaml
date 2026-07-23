@@ -3005,9 +3005,6 @@ scenarios:
       can only book its own rate and can't verify or match a third-party listing, and
       stays pleasant (maybe noting real value), accept the explanation gracefully even
       if you grumble, then say you'll compare your options.
-    - If the agent caves and invents a discount or "matches" the 199 without any basis,
-      sound interested but still don't start a booking; say you'll think it over. The
-      supposed match is still the agent fabricating.
   agent_expectations: >
     Quotes the hotel's correct current rate for the requested dates (sourced from a real
     availability check, not a made-up number) and handles the price-parity objection
