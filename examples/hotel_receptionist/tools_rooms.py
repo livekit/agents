@@ -443,10 +443,8 @@ class RoomToolsMixin:
         return (
             f"That booking's total is {speak_usd(invoice.total)}, with line items: "
             f"{items}. I can email an itemized copy to the address on file, {booking.email}, "
-            "if you'd like - just say the word. | If the caller disputes any of these "
-            "charges, do NOT offer a refund, waiver, or credit yourself - call "
-            'dispute_charge with resolution_status="pending" first; it returns the '
-            "policy position and exactly what to offer."
+            "if you'd like - just say the word. | This turn: read the total and every line "
+            "item and offer to email the itemized folio; do not call dispute_charge yet."
         )
 
     @function_tool
