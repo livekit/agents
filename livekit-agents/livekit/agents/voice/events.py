@@ -98,8 +98,15 @@ class RunContext(Generic[Userdata_T]):
         Unlike `SpeechHandle.wait_for_playout`, which waits for the full
         assistant turn to complete (including all function tools),
         this method only waits for the assistant's spoken response prior running
-        this tool to finish playing."""
-        await self.speech_handle._wait_for_generation(step_idx=self._initial_step_idx)
+        this tool to finish playing.
+
+        Returns as soon as the speech is interrupted (``speech_handle.interrupted``
+        is ``True``) instead of blocking until the generation is torn down.
+        """
+        sh = self.speech_handle
+        if not sh._generations:
+            raise RuntimeError("cannot use wait_for_playout: no active generation is running.")
+        await sh._race_against_interrupt(sh._generations[self._initial_step_idx])
 
     @asynccontextmanager
     async def with_filler(

@@ -178,7 +178,13 @@ class SpeechHandle:
         This method waits until the assistant has fully finished speaking,
         including any finalization steps beyond initial response generation.
         This is appropriate to call when you want to ensure the speech output
-        has entirely played out, including any tool calls and response follow-ups."""
+        has entirely played out, including any tool calls and response follow-ups.
+
+        Returns as soon as the speech is interrupted (``self.interrupted`` is
+        ``True``) instead of blocking until the underlying generation is torn
+        down. Callers that want to ignore interrupts can check ``self.interrupted``
+        on return and decide whether to proceed.
+        """
 
         # raise an error to avoid developer mistakes
         from .agent import _get_activity_task_info
@@ -198,7 +204,7 @@ class SpeechHandle:
                     "To wait for the assistant’s spoken response prior to running this tool, use `RunContext.wait_for_playout()` instead."
                 )
 
-        await asyncio.shield(self._done_fut)
+        await self._race_against_interrupt(self._done_fut)
 
     def __await__(self) -> Generator[None, None, SpeechHandle]:
         async def _await_impl() -> SpeechHandle:
@@ -226,6 +232,25 @@ class SpeechHandle:
             with contextlib.suppress(asyncio.CancelledError):
                 gather_fut.cancel()
                 await gather_fut
+
+    async def _race_against_interrupt(self, playout_fut: asyncio.Future[None]) -> None:
+        """Wait for ``playout_fut`` or interruption, whichever happens first.
+
+        Returns as soon as either future resolves; callers can read
+        ``self.interrupted`` to distinguish between completion and interruption.
+        Mirrors ``wait_if_not_interrupted`` but accepts a single playout future
+        instead of an arbitrary list.
+        """
+        playout_aw = asyncio.ensure_future(asyncio.shield(playout_fut))
+        interrupt_aw = asyncio.ensure_future(asyncio.shield(self._interrupt_fut))
+        try:
+            await asyncio.wait({playout_aw, interrupt_aw}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for aw in (playout_aw, interrupt_aw):
+                if not aw.done():
+                    aw.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await aw
 
     def _cancel(self) -> SpeechHandle:
         if self.done():
