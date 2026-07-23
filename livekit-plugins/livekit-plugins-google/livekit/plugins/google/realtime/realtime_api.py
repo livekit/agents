@@ -741,13 +741,12 @@ class RealtimeSession(llm.RealtimeSession):
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         if is_given(tools):
             logger.warning("per-response tools is not supported by Google Realtime API, ignoring")
-        if not self._realtime_model.capabilities.mutable_chat_context:
-            logger.warning(
-                f"generate_reply is not compatible with '{self._opts.model}' and will be ignored."
-            )
+        if not self._realtime_model.capabilities.mutable_chat_context and is_given(instructions):
             fut = asyncio.Future[llm.GenerationCreatedEvent]()
             fut.set_exception(
-                llm.RealtimeError(f"generate_reply is not compatible with '{self._opts.model}'")
+                llm.RealtimeError(
+                    f"generate_reply with 'instructions' is not compatible with '{self._opts.model}'"
+                )
             )
             return fut
         if self._pending_generation_fut and not self._pending_generation_fut.done():
