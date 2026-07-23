@@ -232,6 +232,9 @@ class _WsConnectionTiming:
 class _WarmStandbyConnection:
     ws: aiohttp.ClientWebSocketResponse
     standby_ready_ms: float
+    # Settings epoch the socket was opened under; a checkout whose epoch no
+    # longer matches the current one is stale (voice/language/speed changed).
+    epoch: int
 
 
 def _elapsed_ms(started_at: float) -> float:
@@ -418,6 +421,8 @@ class TTS(tts.TTS):
         self._ws_connection_timings: dict[int, _WsConnectionTiming] = {}
         self._standby_lock = asyncio.Lock()
         self._standby: _WarmStandbyConnection | None = None
+        # Bumped on every option change; invalidates any standby opened earlier.
+        self._standby_epoch = 0
         self._standby_task: asyncio.Task[None] | None = None
         # Retain fire-and-forget standby-close tasks so the event loop cannot
         # garbage-collect them mid-run before the socket is actually closed.
@@ -576,13 +581,20 @@ class TTS(tts.TTS):
             async with self._standby_lock:
                 if self._standby is not None and self._is_ws_usable(self._standby.ws):
                     return
+                epoch = self._standby_epoch
                 standby_started_at = time.perf_counter()
                 ws: aiohttp.ClientWebSocketResponse | None = None
                 try:
                     ws = await self._connect_ws(timeout=timeout)
+                    if epoch != self._standby_epoch:
+                        # Options changed while connecting; this socket carries
+                        # the old init payload, so discard it rather than
+                        # installing a stale standby.
+                        return
                     self._standby = _WarmStandbyConnection(
                         ws=ws,
                         standby_ready_ms=_elapsed_ms(standby_started_at),
+                        epoch=epoch,
                     )
                     ws = None
                 finally:
@@ -624,17 +636,25 @@ class TTS(tts.TTS):
                 if self._standby_task is not None and not self._standby_task.done():
                     return None, None, "standby_pending"
                 return None, None, "standby_empty"
+            if standby.epoch != self._standby_epoch:
+                # Opened before an option change: never hand it out. Leave it
+                # for the scheduled _close_standby and open a fresh connection.
+                return None, None, "standby_stale"
             self._standby = None
             if not self._is_ws_usable(standby.ws):
                 return None, None, "standby_closed"
             return standby.ws, standby.standby_ready_ms, None
 
     async def _close_standby(self) -> None:
-        if self._standby_task is not None:
-            await utils.aio.gracefully_cancel(self._standby_task)
-            self._standby_task = None
-        standby = self._standby
-        self._standby = None
+        # Cancel the opener first (outside the lock, since it holds the lock
+        # while connecting) so it cannot install a socket after we clear state.
+        task = self._standby_task
+        self._standby_task = None
+        if task is not None:
+            await utils.aio.gracefully_cancel(task)
+        async with self._standby_lock:
+            standby = self._standby
+            self._standby = None
         if standby is not None:
             self._ws_connection_timings.pop(id(standby.ws), None)
             await _close_ws(standby.ws, context="warm_standby_close")
@@ -670,8 +690,12 @@ class TTS(tts.TTS):
             invalidate_pool = invalidate_pool or self._opts.speed != speed
             self._opts.speed = speed
 
-        # Warm-standby sockets were initialized with the old voice/language;
-        # drop them so the next segment reconnects with the updated init payload.
+        # Warm-standby sockets were initialized with the old voice/language.
+        # Bump the epoch synchronously so any already-open standby is treated as
+        # stale on checkout immediately (no await here, so no checkout can
+        # interleave), then drop the socket in the background.
+        if invalidate_pool:
+            self._standby_epoch += 1
         if invalidate_pool and (self._standby is not None or self._standby_task is not None):
             with contextlib.suppress(RuntimeError):
                 close_task = asyncio.get_running_loop().create_task(self._close_standby())
