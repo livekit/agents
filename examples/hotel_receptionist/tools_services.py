@@ -25,6 +25,7 @@ from pydantic import Field, RootModel
 
 from livekit.agents import (
     Agent,
+    AgentSession,
     CloseEvent,
     RunContext,
     ToolError,
@@ -41,6 +42,48 @@ _pending_shutdowns: set[asyncio.Task[None]] = set()
 # Callers usually hang up within a couple of seconds of the farewell; this is only
 # the fallback for the ones who don't.
 _CALLER_HANGUP_GRACE = 10.0
+
+# The shorter fuse for a REPEAT close: the farewell already happened and the caller
+# has indicated twice that they're done, so the line closes soon no matter what -
+# a caller who keeps acknowledging ("okay, heading down now") must not be able to
+# postpone the hangup forever while the agent stays deliberately silent.
+_REPEAT_CLOSE_GRACE = 3.0
+
+
+def _arm_close_watchdog(
+    session: AgentSession, *, grace: float, reopen_on_caller_speech: bool
+) -> asyncio.Task[None]:
+    """Hang up after `grace` seconds of caller silence.
+
+    With `reopen_on_caller_speech` (the first close), anything the caller says
+    cancels the pending close - callers routinely answer a farewell, and that
+    re-opens the conversation. On a repeat close the close is unconditional:
+    chatter no longer cancels it, otherwise a chatty caller holds a mute line
+    open indefinitely. shutdown() is idempotent, so a caller who hangs up during
+    the wait is a no-op.
+    """
+
+    def _on_item_added(ev: object) -> None:
+        item = getattr(ev, "item", None)
+        if item is not None and getattr(item, "role", None) == "user":
+            task.cancel()
+
+    async def _close_after_silence() -> None:
+        try:
+            await asyncio.sleep(grace)
+            session.shutdown()
+        except asyncio.CancelledError:
+            pass  # caller spoke again - the conversation is back on
+        finally:
+            if reopen_on_caller_speech:
+                session.off("conversation_item_added", _on_item_added)
+
+    if reopen_on_caller_speech:
+        session.on("conversation_item_added", _on_item_added)
+    task = asyncio.create_task(_close_after_silence())
+    _pending_shutdowns.add(task)
+    task.add_done_callback(_pending_shutdowns.discard)
+    return task
 
 
 def _farewell_instruction(userdata: Userdata) -> str:
@@ -456,9 +499,9 @@ class ServicesToolsMixin:
             card_message: The gift-card message exactly as the caller dictates it.
             guest_name: The caller's full name.
             guest_phone: The caller's phone number, in case the florist needs to reach them.
-            room: The destination room, ONLY if the caller named one. Pass a numbered room or suite as its integer room number; pass the penthouse suite as "penthouse". Omit when no room was named - never guess; if you don't know where it goes, ask.
-            recipient_name: Who it's for, when no room or suite is known (e.g. they haven't checked in yet). Omit if a room or suite was given.
-            delivery_instruction: A delivery preference. Pass "as_early_as_possible", "before_noon_if_possible", or "leave_with_front_desk" when the caller requests that handling. These are requests for the florist, not guaranteed delivery times. Omit if none.
+            room: The destination room. Pass a numbered room or suite as its integer room number; pass the penthouse suite as "penthouse". If the caller says the delivery goes to a room or suite here - including for a guest who hasn't arrived yet - the destination IS that room: ask WHICH room or suite and pass it. Never guess; if you don't know where it goes, ask.
+            recipient_name: Who it's for, ONLY when the caller cannot name a room or suite at all (no room assigned or known yet). Naming the recipient does not capture the destination - if the caller mentioned a room or suite, ask which one and use room instead.
+            delivery_instruction: A delivery preference. Pass "as_early_as_possible", "before_noon_if_possible", or "leave_with_front_desk" when the caller requests that handling. Match the caller's actual constraint: a deadline ("before she arrives around noon", "before checkout") is "before_noon_if_possible"; reserve "as_early_as_possible" for callers who want the earliest slot with no deadline. These are requests for the florist, not guaranteed delivery times. Omit if none.
         """
         room_id, recipient = _florist_destination(room, recipient_name)
         try:
@@ -497,7 +540,7 @@ class ServicesToolsMixin:
 
         Args:
             order_code: The order's reference code (FLR-...).
-            delivery_instruction: The delivery preference to add: "as_early_as_possible", "before_noon_if_possible", or "leave_with_front_desk". These are requests for the florist, not guaranteed delivery times.
+            delivery_instruction: The delivery preference to add: "as_early_as_possible", "before_noon_if_possible", or "leave_with_front_desk". Match the caller's actual constraint: a deadline ("before she arrives around noon") is "before_noon_if_possible"; reserve "as_early_as_possible" for callers who want the earliest slot with no deadline. These are requests for the florist, not guaranteed delivery times.
         """
         value = _delivery_instruction_value(delivery_instruction)
         try:
@@ -797,32 +840,23 @@ class ServicesToolsMixin:
         # ("okay, bye!"), and a session torn down under that reply leaves their turn
         # hanging (observed in simulations as 60s turn timeouts). Do what a real
         # receptionist does: say goodbye, give the caller the chance to hang up
-        # first, and only close the line after it stays quiet. Anything the caller
-        # says re-opens the conversation and cancels the pending close; shutdown()
-        # is idempotent, so a caller who hangs up during the wait is a no-op.
+        # first, and only close the line after it stays quiet. On the FIRST close
+        # anything the caller says re-opens the conversation and cancels the pending
+        # close; on a REPEAT close the hangup is unconditional and on a short fuse -
+        # otherwise a caller who keeps acknowledging ("okay, on my way down") cancels
+        # every close while the agent stays deliberately silent, and the line never
+        # ends (observed in simulations as consecutive-empty-response failures).
         session = ctx.session
+        repeat_close = ctx.userdata.goodbye_said
 
-        def _arm_close_watchdog(_: object) -> None:
-            def _on_item_added(ev: object) -> None:
-                item = getattr(ev, "item", None)
-                if item is not None and getattr(item, "role", None) == "user":
-                    task.cancel()
+        def _arm_after_reply(_: object) -> None:
+            _arm_close_watchdog(
+                session,
+                grace=_REPEAT_CLOSE_GRACE if repeat_close else _CALLER_HANGUP_GRACE,
+                reopen_on_caller_speech=not repeat_close,
+            )
 
-            async def _close_after_silence() -> None:
-                try:
-                    await asyncio.sleep(_CALLER_HANGUP_GRACE)
-                    session.shutdown()
-                except asyncio.CancelledError:
-                    pass  # caller spoke again - the conversation is back on
-                finally:
-                    session.off("conversation_item_added", _on_item_added)
-
-            session.on("conversation_item_added", _on_item_added)
-            task = asyncio.create_task(_close_after_silence())
-            _pending_shutdowns.add(task)
-            task.add_done_callback(_pending_shutdowns.discard)
-
-        ctx.speech_handle.add_done_callback(_arm_close_watchdog)
+        ctx.speech_handle.add_done_callback(_arm_after_reply)
 
         @ctx.session.once("close")
         def _on_close(ev: CloseEvent) -> None:
