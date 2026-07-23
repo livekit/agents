@@ -126,3 +126,23 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
 - Google-style docstrings
 - Strict mypy type checking enabled
 - Use `make check` and `make fix` before committing
+
+## Cursor Cloud specific instructions
+
+This workspace at `/agent/repos/` contains multiple LiveKit repositories. The update script handles dependency installation; these notes cover non-obvious runtime caveats.
+
+### PATH requirement
+
+Commands in Python repos need uv on PATH, Go repos need go 1.24+ and mage:
+```bash
+export PATH="$HOME/.local/bin:$HOME/go/bin:/usr/local/go/bin:$PATH"
+```
+
+### Key gotchas
+
+- **Docker unavailable**: `tests/test_room.py` requires Docker. Use `make unit-tests` (defined in the root Makefile) which runs the full offline test suite excluding Docker-dependent tests.
+- **python-sdks FFI**: After syncing deps, download the native FFI binary: `cd /agent/repos/python-sdks && uv run python livekit-rtc/rust-sdks/download_ffi.py --platform linux --arch x86_64 --output livekit-rtc/livekit/rtc/resources`
+- **web submodules**: `backend-common` is a private repo. Init only the accessible ones: `git submodule update --init submodules/cloud-protocol submodules/opentelemetry-proto submodules/protocol submodules/psrpc`
+- **web turbo**: Use `pnpm exec turbo` (not bare `turbo`) — it's a devDependency.
+- **agents-js**: Must `pnpm build` after install before running tests (TypeScript must compile).
+- **Go toolchain**: Protocol repos declare `go 1.26`; set `GOTOOLCHAIN=auto` to let it download automatically.
