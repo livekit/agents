@@ -92,14 +92,38 @@ class TestConstructorValidation:
         # A catalog id in the model string and an image_url are mutually
         # exclusive (the gateway rejects both); the constructor fails fast.
         with pytest.raises(ValueError, match="not both"):
-            _make_avatar(model="lemonslice/agent_abc", image_url="https://x/y.png")
+            _make_avatar(
+                model="lemonslice/agent_abc", extra_kwargs={"image_url": "https://x/y.png"}
+            )
 
     def test_extra_kwargs_is_copied(self) -> None:
         # A later mutation of the caller's dict must not change what we send.
-        extra: dict[str, Any] = {"foo": 1}
+        extra: dict[str, Any] = {"prompt": "hi"}
         av = _make_avatar(extra_kwargs=extra)
-        extra["foo"] = 999
-        assert av._extra_kwargs == {"foo": 1}
+        extra["prompt"] = "changed"
+        assert av._extra_kwargs == {"prompt": "hi"}
+
+
+async def test_extra_kwargs_splits_known_and_unknown_keys() -> None:
+    """Known LemonSliceOptions keys map onto first-class gateway fields; any
+    other key is forwarded verbatim under extra_kwargs (gateway allowlist)."""
+    captured: dict[str, Any] = {}
+
+    async def handler(request: web.Request) -> web.Response:
+        captured["body"] = await request.json()
+        return web.json_response({"session_id": "AVS_1"})
+
+    async with _gateway(handler) as (base_url, session):
+        av = _make_avatar(
+            base_url=base_url,
+            http_session=session,
+            extra_kwargs={"idle_prompt": "look attentive", "some_future_knob": True},
+        )
+        await _call_create(av)
+
+    body = captured["body"]
+    assert body["idle_prompt"] == "look attentive"  # known -> first-class field
+    assert body["extra_kwargs"] == {"some_future_knob": True}  # unknown -> passthrough
 
 
 @contextlib.asynccontextmanager
@@ -143,9 +167,11 @@ async def test_create_session_success() -> None:
             model="lemonslice",
             base_url=base_url,
             http_session=session,
-            image_url="https://example.com/face.png",
-            prompt="be expressive",
-            idle_timeout=300,
+            extra_kwargs={
+                "image_url": "https://example.com/face.png",
+                "prompt": "be expressive",
+                "idle_timeout": 300,
+            },
         )
         resp = await _call_create(av)
 
@@ -158,9 +184,11 @@ async def test_create_session_success() -> None:
     assert body["avatar_identity"] == "lemonslice-inference-avatar"
     assert body["agent_identity"] == "agent-worker-1"
     assert body["room_sid"] == "RM_123"
+    # Known LemonSliceOptions keys map onto the gateway's first-class fields.
     assert body["image_url"] == "https://example.com/face.png"
     assert body["prompt"] == "be expressive"
     assert body["idle_timeout_s"] == 300
+    assert "extra_kwargs" not in body
 
     headers = captured["headers"]
     assert headers["Authorization"].startswith("Bearer ")
@@ -322,7 +350,7 @@ async def test_start_uses_response_sample_rate(monkeypatch: pytest.MonkeyPatch) 
         av = _make_avatar(
             base_url=base_url,
             http_session=session,
-            image_url="https://example.com/face.png",
+            extra_kwargs={"image_url": "https://example.com/face.png"},
         )
         agent_session = _FakeAgentSession()
         await av.start(

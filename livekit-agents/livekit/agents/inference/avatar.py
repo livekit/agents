@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict
 
 import aiohttp
 
@@ -51,6 +51,31 @@ _REQUEST_TIMEOUT = 60.0
 _ATTRIBUTE_AVATAR_PROVIDER = "lk.avatar_provider"
 
 
+class LemonSliceOptions(TypedDict, total=False):
+    """Provider-specific options for a LemonSlice inference avatar.
+
+    Mirrors the per-provider option dicts in :mod:`inference.stt` /
+    :mod:`inference.tts` (e.g. ``CartesiaOptions``); passed via ``extra_kwargs``.
+    All keys are optional.
+    """
+
+    image_url: str  # appearance source; mutually exclusive with a model-string agent id
+    prompt: str  # speaking prompt (mapped to the provider's agent_prompt)
+    idle_prompt: str  # idle prompt (mapped to the provider's agent_idle_prompt)
+    idle_timeout: int  # provider idle timeout in seconds; the gateway clamps it
+
+
+# Maps LemonSliceOptions keys onto the gateway avatar-request's first-class
+# fields. Keys not listed here are forwarded verbatim under ``extra_kwargs``
+# (subject to the gateway's per-provider allowlist).
+_OPTION_TO_PAYLOAD_FIELD = {
+    "image_url": "image_url",
+    "prompt": "prompt",
+    "idle_prompt": "idle_prompt",
+    "idle_timeout": "idle_timeout_s",
+}
+
+
 def _parse_avatar_model(model: str) -> tuple[str, str | None]:
     """Parse an avatar model string into (provider, avatar_id).
 
@@ -81,7 +106,10 @@ class AvatarSession(BaseAvatarSession):
 
     Example::
 
-        avatar = inference.AvatarSession("lemonslice", image_url="https://...", prompt="...")
+        avatar = inference.AvatarSession(
+            "lemonslice",
+            extra_kwargs=LemonSliceOptions(image_url="https://...", prompt="..."),
+        )
         await avatar.start(session, room=ctx.room)
         await avatar.wait_for_join()
 
@@ -101,13 +129,9 @@ class AvatarSession(BaseAvatarSession):
         self,
         model: str,
         *,
-        image_url: NotGivenOr[str] = NOT_GIVEN,
-        prompt: NotGivenOr[str] = NOT_GIVEN,
-        idle_prompt: NotGivenOr[str] = NOT_GIVEN,
-        idle_timeout: NotGivenOr[int] = NOT_GIVEN,
         avatar_participant_identity: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
-        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[LemonSliceOptions | dict[str, Any]] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
@@ -121,19 +145,18 @@ class AvatarSession(BaseAvatarSession):
                 LemonSlice the ``<avatar_id>`` is the agent id (the gateway maps
                 it onto LemonSlice's ``agent_id``); pass a pre-built agent as
                 ``"lemonslice/<agent_id>"``.
-            image_url: Appearance source for image-sourced avatars (LemonSlice).
-                Mutually exclusive with a catalog id in the model string; passing
-                both raises here (and the gateway rejects the combination too).
-            prompt: Speaking prompt (mapped to the provider's agent_prompt).
-            idle_prompt: Idle prompt (mapped to the provider's agent_idle_prompt).
-            idle_timeout: Provider idle timeout in seconds; the gateway clamps it
-                to the provider's configured bounds.
             avatar_participant_identity: Room identity for the avatar worker.
                 Defaults to ``"<provider>-inference-avatar"`` (the ``inference``
                 marker distinguishes it from the BYOK plugins' worker identity).
             avatar_participant_name: Display name for the avatar worker.
-            extra_kwargs: Provider-specific extras forwarded verbatim (subject to
-                the gateway's per-provider allowlist).
+            extra_kwargs: Provider-specific options. For LemonSlice use
+                :class:`LemonSliceOptions` (``image_url`` / ``prompt`` /
+                ``idle_prompt`` / ``idle_timeout``); known keys map onto the
+                gateway's first-class request fields and anything else is
+                forwarded verbatim, subject to the gateway's per-provider
+                allowlist. ``image_url`` is mutually exclusive with a catalog id
+                in the model string — passing both raises here (and the gateway
+                rejects the combination too).
             base_url: Inference gateway base URL. Defaults to the environment's
                 gateway (see ``get_default_inference_url``).
             api_key: Gateway API key (see the class docstring for resolution).
@@ -145,19 +168,15 @@ class AvatarSession(BaseAvatarSession):
         super().__init__()
 
         self._provider, self._avatar_id = _parse_avatar_model(model)
-        if self._avatar_id and is_given(image_url):
+        # Copy so a later mutation of the caller's dict can't change what we send.
+        self._extra_kwargs: dict[str, Any] = dict(extra_kwargs) if is_given(extra_kwargs) else {}
+        if self._avatar_id and "image_url" in self._extra_kwargs:
             # The gateway (e.g. the LemonSlice adapter) rejects both; fail fast
             # here so the caller doesn't spend a round trip to learn that.
             raise ValueError(
                 "pass either a catalog id in the model string "
                 f"('{self._provider}/<avatar_id>') or image_url, not both"
             )
-        self._image_url = image_url
-        self._prompt = prompt
-        self._idle_prompt = idle_prompt
-        self._idle_timeout = idle_timeout
-        # Copy so a later mutation of the caller's dict can't change what we send.
-        self._extra_kwargs = dict(extra_kwargs) if is_given(extra_kwargs) else extra_kwargs
         self._conn_options = conn_options
         self._http_session = http_session
 
@@ -407,16 +426,17 @@ class AvatarSession(BaseAvatarSession):
         }
         if self._avatar_id:
             payload["avatar_id"] = self._avatar_id
-        if is_given(self._image_url):
-            payload["image_url"] = self._image_url
-        if is_given(self._prompt):
-            payload["prompt"] = self._prompt
-        if is_given(self._idle_prompt):
-            payload["idle_prompt"] = self._idle_prompt
-        if is_given(self._idle_timeout):
-            payload["idle_timeout_s"] = self._idle_timeout
-        if is_given(self._extra_kwargs):
-            payload["extra_kwargs"] = self._extra_kwargs
+        # Map known LemonSlice options onto the gateway's first-class request
+        # fields; forward anything else via extra_kwargs (gateway allowlist).
+        extra: dict[str, Any] = {}
+        for key, value in self._extra_kwargs.items():
+            payload_field = _OPTION_TO_PAYLOAD_FIELD.get(key)
+            if payload_field is not None:
+                payload[payload_field] = value
+            else:
+                extra[key] = value
+        if extra:
+            payload["extra_kwargs"] = extra
 
         # One idempotency key per start(), stable across retries, so a retried
         # create replays the first result on the gateway instead of paying for a

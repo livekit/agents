@@ -13,7 +13,7 @@ from .tts import TTS, TTSModels
 from .vad import VAD, VADModels
 
 if TYPE_CHECKING:
-    from .avatar import AvatarSession
+    from .avatar import AvatarSession, LemonSliceOptions
 
 
 # AvatarSession subclasses voice.avatar.AvatarSession. Because this package is
@@ -22,10 +22,10 @@ if TYPE_CHECKING:
 # it lazily on first attribute access, by which point voice is fully
 # initialized. See PEP 562.
 def __getattr__(name: str) -> Any:
-    if name == "AvatarSession":
-        from .avatar import AvatarSession
+    if name in ("AvatarSession", "LemonSliceOptions"):
+        from . import avatar
 
-        return AvatarSession
+        return getattr(avatar, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -35,6 +35,7 @@ __all__ = [
     "LLM",
     "VAD",
     "AvatarSession",
+    "LemonSliceOptions",
     "LLMStream",
     "STTModels",
     "TTSModels",
