@@ -88,7 +88,7 @@ dev = [
     "python-dotenv>=1.0.1",
     "mypy",
     "scikit-learn",
-    "pytest>=9.0.3,<9.1",
+    "pytest>=9.1.1,<9.2",
     "ruff",
     "pytest-asyncio>=0.25.3",
     "pytest-asyncio-concurrent==0.5.2",
