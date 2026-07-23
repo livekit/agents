@@ -19,10 +19,11 @@ Support for speech-to-text with [Deepgram](https://deepgram.com/).
 See https://docs.livekit.io/agents/integrations/stt/deepgram/ for more information.
 """
 
-from .models import DeepgramLanguages, DeepgramModels, TTSModels
+from .models import DeepgramLanguages, DeepgramModels, FluxTTSModels, TTSModels
 from .stt import STT, SpeechStream
 from .stt_v2 import SpeechStreamv2, STTv2
 from .tts import TTS
+from .tts_v2 import TTSv2
 from .version import __version__
 
 __all__ = [
@@ -31,9 +32,11 @@ __all__ = [
     "STTv2",
     "SpeechStreamv2",
     "TTS",
+    "TTSv2",
     "DeepgramModels",
     "DeepgramLanguages",
     "TTSModels",
+    "FluxTTSModels",
     "__version__",
 ]
 
