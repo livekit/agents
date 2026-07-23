@@ -760,22 +760,26 @@ class SpeechStream(stt.SpeechStream):
             details = error_details(exc)
             next_index = self._candidate_state.advance(self._active_endpoint_index)
             if next_index is None:
-                # No further fallback candidate. If the error is transient and
+                # No further fallback candidate. If the failure is transient
+                # (a connection drop OR a stalled finalize watchdog timeout) and
                 # we still hold buffered audio for the in-flight utterance,
                 # reconnect the SAME endpoint and replay it rather than ending
-                # the stream (the common single-candidate case on a brief blip).
-                # Bounded by _candidate_max_retry so a persistently failing
-                # endpoint still surfaces the error.
+                # the stream (the common single-candidate case). Gated by
+                # retryability, not by reason: a timeout carries a synthetic
+                # TimeoutError (no HTTP status), which is_non_retryable_client_error
+                # treats as retryable. Bounded by _candidate_max_retry so a
+                # persistently failing endpoint still surfaces the error.
                 if (
-                    reason == "hard_fail"
-                    and exc is not None
+                    exc is not None
                     and not is_non_retryable_client_error(exc)
                     and buffered_audio
                     and same_endpoint_replays < self._candidate_max_retry
                 ):
                     same_endpoint_replays += 1
                     logger.warning(
-                        "STT reconnecting same endpoint with replay (attempt=%s error=%s): %s",
+                        "STT reconnecting same endpoint with replay "
+                        "(reason=%s attempt=%s error=%s): %s",
+                        reason,
                         same_endpoint_replays,
                         details["error_message"],
                         from_model,
