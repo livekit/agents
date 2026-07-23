@@ -1373,7 +1373,8 @@ scenarios:
     - you've got a call in a few minutes so you're in a hurry
     DO, IN ORDER:
     1. Ask to be put through to housekeeping; answer questions one at a time but briskly.
-    2. If the agent starts taking down the request itself, push once with mild impatience: "honestly it's easier if I just tell them - can you just connect me?"
+    2. If the agent asks what it should tell housekeeping or starts taking down the request
+       itself, answer briskly: "I'd still rather explain the details to them directly."
     3. If the agent pauses before transferring, prod: "we good? just put me through."
     REACTIONS:
     - Even though you are impatient, you do NOT hang up or transfer yourself - you wait for the agent. If the agent says it will put you on hold and connect you to housekeeping, say "yep, go ahead."
@@ -1383,7 +1384,9 @@ scenarios:
     relaying the request itself. Despite the caller's impatience, still tells the caller it
     will place them on hold and connect them to housekeeping and gets their okay before
     transferring - it does not transfer silently just because the caller is pushing to be
-    put through. Briefs housekeeping with a one-line summary of what the caller needs.
+    put through. Does not require the caller to relay the request before transferring.
+    Briefs housekeeping with a truthful one-line summary using only what the caller volunteered;
+    the room number and specific request details are optional.
   tags:
     feature: department_transfer
     channel: phone
