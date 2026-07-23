@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
@@ -42,6 +43,7 @@ from openai.types.chat import ChatCompletionToolChoiceOptionParam, completion_cr
 from .models import (
     CerebrasChatModels,
     ChatModels,
+    CloudflareGatewayOptions,
     CometAPIChatModels,
     DeepSeekChatModels,
     NebiusChatModels,
@@ -936,6 +938,123 @@ class LLM(llm.LLM):
             temperature=NOT_GIVEN,
             parallel_tool_calls=NOT_GIVEN,
             tool_choice=NOT_GIVEN,
+        )
+
+    @staticmethod
+    def with_cloudflare(
+        *,
+        model: str,
+        account_id: str | None = None,
+        api_key: str | None = None,
+        gateway_id: str | None = None,
+        base_url: str | None = None,
+        gateway_options: CloudflareGatewayOptions | None = None,
+        client: openai.AsyncClient | None = None,
+        user: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: ToolChoice = "auto",
+        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        safety_identifier: NotGivenOr[str] = NOT_GIVEN,
+        prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+        timeout: httpx.Timeout | None = None,
+    ) -> LLM:
+        """
+        Create a new instance of an LLM backed by the Cloudflare AI Gateway.
+
+        Uses the gateway's OpenAI-compatible REST API
+        (``https://api.cloudflare.com/client/v4/accounts/<account_id>/ai/v1``). The endpoint URL
+        is built from ``account_id`` unless an explicit ``base_url`` is given, and the model is a
+        ``provider/model`` string.
+
+        Args:
+            model (str): Model in ``provider/model`` form, e.g.
+                ``"workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast"`` or ``"openai/gpt-4o"``.
+            account_id (str | None, optional): Cloudflare account ID used to build the endpoint
+                URL. Falls back to ``CLOUDFLARE_ACCOUNT_ID``. Required unless ``base_url`` is set.
+            api_key (str | None, optional): Cloudflare API token with the ``AI Gateway``
+                permission, sent as the ``Authorization: Bearer`` header. Falls back to
+                ``CLOUDFLARE_API_KEY``.
+            gateway_id (str | None, optional): Route through a specific gateway via the
+                ``cf-aig-gateway-id`` header. Defaults to the account's default gateway.
+            base_url (str | None, optional): Full endpoint URL, e.g.
+                ``"https://api.cloudflare.com/client/v4/accounts/<account_id>/ai/v1"``.
+                Overrides ``account_id`` when provided.
+            gateway_options (CloudflareGatewayOptions | None, optional): Per-request gateway
+                options (caching, retries, timeout, metadata), translated into ``cf-aig-*``
+                request headers.
+
+        Returns:
+            LLM: A configured LLM instance routed through the Cloudflare AI Gateway.
+        """
+
+        api_key = api_key or os.environ.get("CLOUDFLARE_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "Cloudflare API token is required, either as argument or set "
+                "CLOUDFLARE_API_KEY environment variable"
+            )
+
+        if base_url is None:
+            account_id = account_id or os.environ.get("CLOUDFLARE_ACCOUNT_ID")
+            if account_id is None:
+                raise ValueError(
+                    "Cloudflare account_id is required, either as argument or set "
+                    "CLOUDFLARE_ACCOUNT_ID environment variable (or pass base_url directly)"
+                )
+            base_url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1"
+
+        parsed = urlparse(base_url)
+        if parsed.scheme not in {"http", "https"}:
+            raise ValueError(f"Invalid URL scheme: '{parsed.scheme}'. Must be 'http' or 'https'.")
+        if not parsed.netloc:
+            raise ValueError(f"URL '{base_url}' is missing a network location (e.g., domain name).")
+
+        default_headers: dict[str, str] = {}
+        if gateway_id:
+            default_headers["cf-aig-gateway-id"] = gateway_id
+
+        if gateway_options:
+            if "cache_ttl" in gateway_options:
+                default_headers["cf-aig-cache-ttl"] = str(gateway_options["cache_ttl"])
+            if gateway_options.get("skip_cache"):
+                default_headers["cf-aig-skip-cache"] = "true"
+            if "cache_key" in gateway_options:
+                default_headers["cf-aig-cache-key"] = gateway_options["cache_key"]
+            if "request_timeout" in gateway_options:
+                default_headers["cf-aig-request-timeout"] = str(gateway_options["request_timeout"])
+            if "max_attempts" in gateway_options:
+                default_headers["cf-aig-max-attempts"] = str(gateway_options["max_attempts"])
+            if "retry_delay" in gateway_options:
+                default_headers["cf-aig-retry-delay"] = str(gateway_options["retry_delay"])
+            if "backoff" in gateway_options:
+                default_headers["cf-aig-backoff"] = gateway_options["backoff"]
+            if "collect_log" in gateway_options:
+                default_headers["cf-aig-collect-log"] = (
+                    "true" if gateway_options["collect_log"] else "false"
+                )
+            if "metadata" in gateway_options:
+                metadata = gateway_options["metadata"]
+                default_headers["cf-aig-metadata"] = (
+                    metadata if isinstance(metadata, str) else json.dumps(metadata)
+                )
+
+        return LLM(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            client=client,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+            reasoning_effort=reasoning_effort,
+            safety_identifier=safety_identifier,
+            prompt_cache_key=prompt_cache_key,
+            top_p=top_p,
+            extra_headers=default_headers,
+            timeout=timeout,
         )
 
     def chat(

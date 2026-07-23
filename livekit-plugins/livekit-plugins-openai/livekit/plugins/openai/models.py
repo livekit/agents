@@ -326,3 +326,29 @@ class OpenRouterProviderPreferences(TypedDict, total=False):
     quantizations: list[str]
     sort: Literal["price", "throughput", "latency"]
     max_price: dict[str, float]
+
+
+class CloudflareGatewayOptions(TypedDict, total=False):
+    """Per-request Cloudflare AI Gateway options, mapped to ``cf-aig-*`` request headers.
+
+    See https://developers.cloudflare.com/ai-gateway/configuration/ for details.
+    """
+
+    cache_ttl: int
+    """Cache duration in seconds (``cf-aig-cache-ttl``)."""
+    skip_cache: bool
+    """Bypass the cache for this request (``cf-aig-skip-cache``)."""
+    cache_key: str
+    """Override the default cache key (``cf-aig-cache-key``)."""
+    request_timeout: int
+    """Per-request timeout in milliseconds (``cf-aig-request-timeout``)."""
+    max_attempts: int
+    """Maximum number of request attempts (``cf-aig-max-attempts``)."""
+    retry_delay: int
+    """Delay between retries in milliseconds (``cf-aig-retry-delay``)."""
+    backoff: Literal["constant", "linear", "exponential"]
+    """Retry backoff strategy (``cf-aig-backoff``)."""
+    collect_log: bool
+    """Enable or disable logging for this request (``cf-aig-collect-log``)."""
+    metadata: dict[str, str | int | bool] | str
+    """Custom metadata attached to the request (``cf-aig-metadata``); a dict or a JSON string."""
