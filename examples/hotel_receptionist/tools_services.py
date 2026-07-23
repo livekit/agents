@@ -37,31 +37,32 @@ logger = logging.getLogger("hotel-receptionist")
 
 # Strong refs to in-flight post-goodbye shutdown tasks (see say_goodbye_and_close_call).
 _pending_shutdowns: set[asyncio.Task[None]] = set()
+# At most one close watchdog may own a session. A newer close supersedes the old
+# timer so stale work can never shut down a later turn.
+_close_watchdogs: dict[AgentSession, asyncio.Task[None]] = {}
 
 # How long the line stays quiet after the goodbye before the agent hangs up itself.
 # Callers usually hang up within a couple of seconds of the farewell; this is only
 # the fallback for the ones who don't.
 _CALLER_HANGUP_GRACE = 10.0
 
-# The shorter fuse for a REPEAT close: the farewell already happened and the caller
-# has indicated twice that they're done, so the line closes soon no matter what -
-# a caller who keeps acknowledging ("okay, heading down now") must not be able to
-# postpone the hangup forever while the agent stays deliberately silent.
+# The shorter quiet period for a REPEAT close: the farewell already happened and
+# the caller has indicated twice that they're done. New caller speech still
+# cancels this timer; the next completed response can arm a replacement.
 _REPEAT_CLOSE_GRACE = 3.0
 
 
-def _arm_close_watchdog(
-    session: AgentSession, *, grace: float, reopen_on_caller_speech: bool
-) -> asyncio.Task[None]:
+def _arm_close_watchdog(session: AgentSession, *, grace: float) -> asyncio.Task[None]:
     """Hang up after `grace` seconds of caller silence.
 
-    With `reopen_on_caller_speech` (the first close), anything the caller says
-    cancels the pending close - callers routinely answer a farewell, and that
-    re-opens the conversation. On a repeat close the close is unconditional:
-    chatter no longer cancels it, otherwise a chatty caller holds a mute line
-    open indefinitely. shutdown() is idempotent, so a caller who hangs up during
-    the wait is a no-op.
+    Caller speech always cancels the pending close, including after a repeat
+    farewell, so a stale timer cannot shut down the newer active turn. A later
+    close invocation replaces the cancelled timer after that turn's response.
+    shutdown() is idempotent, so a caller who hangs up during the wait is a no-op.
     """
+
+    if previous := _close_watchdogs.get(session):
+        previous.cancel()
 
     def _on_item_added(ev: object) -> None:
         item = getattr(ev, "item", None)
@@ -75,12 +76,13 @@ def _arm_close_watchdog(
         except asyncio.CancelledError:
             pass  # caller spoke again - the conversation is back on
         finally:
-            if reopen_on_caller_speech:
-                session.off("conversation_item_added", _on_item_added)
+            session.off("conversation_item_added", _on_item_added)
+            if _close_watchdogs.get(session) is task:
+                del _close_watchdogs[session]
 
-    if reopen_on_caller_speech:
-        session.on("conversation_item_added", _on_item_added)
+    session.on("conversation_item_added", _on_item_added)
     task = asyncio.create_task(_close_after_silence())
+    _close_watchdogs[session] = task
     _pending_shutdowns.add(task)
     task.add_done_callback(_pending_shutdowns.discard)
     return task
@@ -842,10 +844,9 @@ class ServicesToolsMixin:
         # receptionist does: say goodbye, give the caller the chance to hang up
         # first, and only close the line after it stays quiet. On the FIRST close
         # anything the caller says re-opens the conversation and cancels the pending
-        # close; on a REPEAT close the hangup is unconditional and on a short fuse -
-        # otherwise a caller who keeps acknowledging ("okay, on my way down") cancels
-        # every close while the agent stays deliberately silent, and the line never
-        # ends (observed in simulations as consecutive-empty-response failures).
+        # close. Repeat closes use a shorter quiet period, but caller speech still
+        # cancels the old timer so it cannot shut down a newer active turn. When that
+        # turn finishes, a repeat close replaces the timer.
         session = ctx.session
         repeat_close = ctx.userdata.goodbye_said
 
@@ -853,7 +854,6 @@ class ServicesToolsMixin:
             _arm_close_watchdog(
                 session,
                 grace=_REPEAT_CLOSE_GRACE if repeat_close else _CALLER_HANGUP_GRACE,
-                reopen_on_caller_speech=not repeat_close,
             )
 
         ctx.speech_handle.add_done_callback(_arm_after_reply)
