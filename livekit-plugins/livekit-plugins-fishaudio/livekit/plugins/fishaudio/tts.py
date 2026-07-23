@@ -135,8 +135,9 @@ class TTS(tts.TTS):
             normalize (bool): Whether Fish normalizes the input text (numbers, dates,
                 abbreviations) before synthesis. Defaults to True.
             normalize_loudness (NotGivenOr[bool]): Whether Fish normalizes the output
-                loudness for more consistent volume (Fish ``prosody.normalize_loudness``,
-                S2-Pro family). Unset uses Fish's server default (True).
+                loudness for more consistent volume (Fish ``prosody.normalize_loudness``).
+                S2-Pro family only: on the ``s1`` model the option is dropped with a
+                warning. Unset uses Fish's server default (True).
             max_new_tokens (NotGivenOr[int]): Maximum audio tokens Fish generates per
                 text chunk. Unset uses Fish's server default (1024).
             min_chunk_length (NotGivenOr[int]): Minimum characters before Fish splits
@@ -185,6 +186,9 @@ class TTS(tts.TTS):
             raise ValueError("min_chunk_length must be between 0 and 100")
         if is_given(early_stop_threshold) and not 0 <= early_stop_threshold <= 1:
             raise ValueError("early_stop_threshold must be between 0 and 1")
+        if is_given(normalize_loudness) and model == "s1":
+            logger.warning("normalize_loudness is not supported by the s1 model, dropping")
+            normalize_loudness = NOT_GIVEN
 
         self._opts = _TTSOptions(
             model=model,
@@ -299,6 +303,9 @@ class TTS(tts.TTS):
             # connections so the next stream reconnects with the new model. Other
             # options ride in the per-request body and need no reconnect.
             self._pool.invalidate()
+            if model == "s1" and is_given(self._opts.normalize_loudness):
+                logger.warning("normalize_loudness is not supported by the s1 model, dropping")
+                self._opts.normalize_loudness = NOT_GIVEN
         if is_given(voice_id):
             self._opts.voice_id = voice_id
         if is_given(latency_mode):
@@ -326,7 +333,10 @@ class TTS(tts.TTS):
         if is_given(normalize):
             self._opts.normalize = normalize
         if is_given(normalize_loudness):
-            self._opts.normalize_loudness = normalize_loudness
+            if self._opts.model == "s1":
+                logger.warning("normalize_loudness is not supported by the s1 model, dropping")
+            else:
+                self._opts.normalize_loudness = normalize_loudness
         if is_given(max_new_tokens):
             if max_new_tokens < 0:
                 raise ValueError("max_new_tokens must be non-negative")

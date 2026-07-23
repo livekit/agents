@@ -225,6 +225,48 @@ def test_generation_tuning_validated():
         tts.update_options(early_stop_threshold=-0.1)
 
 
+def test_normalize_loudness_dropped_on_s1_constructor():
+    """On the s1 model normalize_loudness is dropped (warn log), not sent."""
+    from livekit.plugins.fishaudio import TTS
+    from livekit.plugins.fishaudio.tts import _build_tts_request
+
+    tts = TTS(api_key="test-key", model="s1", normalize_loudness=True)
+    assert _build_tts_request(tts._opts, text="hi")["prosody"] is None
+
+
+def test_normalize_loudness_dropped_on_s1_update_options():
+    """update_options refuses normalize_loudness while the model is s1."""
+    from livekit.plugins.fishaudio import TTS
+    from livekit.plugins.fishaudio.tts import _build_tts_request
+
+    tts = TTS(api_key="test-key", model="s1")
+    tts.update_options(normalize_loudness=True)
+    assert _build_tts_request(tts._opts, text="hi")["prosody"] is None
+
+
+def test_normalize_loudness_dropped_on_model_switch_to_s1():
+    """Switching to s1 drops a previously set normalize_loudness."""
+    from livekit.plugins.fishaudio import TTS
+    from livekit.plugins.fishaudio.tts import _build_tts_request
+
+    tts = TTS(api_key="test-key", model="s2-pro", normalize_loudness=True)
+    assert _build_tts_request(tts._opts, text="hi")["prosody"] == {"normalize_loudness": True}
+
+    tts.update_options(model="s1")
+    assert _build_tts_request(tts._opts, text="hi")["prosody"] is None
+
+
+def test_normalize_loudness_kept_on_s2_pro_family():
+    """s2-pro and s2.1-pro keep normalize_loudness."""
+    from livekit.plugins.fishaudio import TTS
+    from livekit.plugins.fishaudio.tts import _build_tts_request
+
+    for model in ("s2-pro", "s2.1-pro"):
+        tts = TTS(api_key="test-key", model=model, normalize_loudness=False)
+        prosody = _build_tts_request(tts._opts, text="hi")["prosody"]
+        assert prosody == {"normalize_loudness": False}
+
+
 def TTS_opts(**overrides):
     """Build a _TTSOptions with sensible test defaults, overriding as needed."""
     from livekit.plugins.fishaudio.tts import DEFAULT_BASE_URL, DEFAULT_MODEL, _TTSOptions
