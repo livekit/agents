@@ -1,6 +1,6 @@
 from typing import Literal
 
-TTSModels = Literal["s1", "s2-pro", "s2.1-pro"]
+TTSModels = Literal["s1", "s2-pro", "s2.1-pro", "s2.1-pro-free"]
 
 OutputFormat = Literal["wav", "pcm", "mp3", "opus"]
 
