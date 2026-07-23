@@ -13,7 +13,10 @@ import aiohttp
 import cv2
 import numpy as np
 from loguru import logger as _logger
-from PIL import Image
+try:
+    from PIL import Image
+except ModuleNotFoundError:  # Pillow only needed for cloud-mode avatar_image
+    Image = None
 
 from livekit import api, rtc
 from livekit.agents import (
@@ -196,10 +199,15 @@ class AvatarSession(BaseAvatarSession):
                 raise BitHumanException("BITHUMAN_API_URL are required for cloud mode")
 
         self._avatar_image: Image.Image | str | None = None
-        if isinstance(avatar_image, Image.Image):
+        if Image is not None and isinstance(avatar_image, Image.Image):
             self._avatar_image = avatar_image
         elif isinstance(avatar_image, str):
             if os.path.exists(avatar_image):
+                if Image is None:
+                    raise BitHumanException(
+                        "Pillow is required to load an avatar image from a file path. "
+                        "Install it with: pip install Pillow"
+                    )
                 self._avatar_image = Image.open(avatar_image)
             elif avatar_image.startswith(("http://", "https://")):
                 self._avatar_image = avatar_image
@@ -423,7 +431,7 @@ class AvatarSession(BaseAvatarSession):
         }
 
         # Handle avatar image - convert to base64 for JSON serialization
-        if isinstance(self._avatar_image, Image.Image):
+        if Image is not None and isinstance(self._avatar_image, Image.Image):
             img_byte_arr = io.BytesIO()
             self._avatar_image.save(img_byte_arr, format="JPEG", quality=95)
             img_byte_arr.seek(0)
@@ -502,7 +510,7 @@ class AvatarSession(BaseAvatarSession):
             form_data.add_field("async_mode", "true" if async_mode else "false")
 
         # Handle avatar image - send as file upload or URL
-        if isinstance(self._avatar_image, Image.Image):
+        if Image is not None and isinstance(self._avatar_image, Image.Image):
             # Convert PIL Image to bytes and upload as file
             img_byte_arr = io.BytesIO()
             self._avatar_image.save(img_byte_arr, format="JPEG", quality=95)
@@ -624,6 +632,13 @@ class AvatarSession(BaseAvatarSession):
 
     async def aclose(self) -> None:
         await super().aclose()
+        # Tear down the AvatarRunner too: the base aclose() only removes the
+        # room participant, leaving the runner's read/forward tasks, the AV
+        # synchronizer, and the rust audio/video sources open — a native leak
+        # that accumulates per session/reconnect.
+        if self._avatar_runner is not None:
+            await self._avatar_runner.aclose()
+            self._avatar_runner = None
         if self._mode == "local" and utils.is_given(self._runtime) and self._runtime is not None:
             self._runtime.cleanup()
 
