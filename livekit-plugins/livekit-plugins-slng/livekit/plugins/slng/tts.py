@@ -807,6 +807,7 @@ class ChunkedStream(tts.ChunkedStream):
         )
 
         ws: aiohttp.ClientWebSocketResponse | None = None
+        audio_received = False
 
         try:
             # Chunked synthesis always uses a dedicated connection: terminal
@@ -823,10 +824,18 @@ class ChunkedStream(tts.ChunkedStream):
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSING,
                 ):
+                    # Several bridge providers (Rime, Cartesia) terminate a
+                    # segment by closing the socket. Mirror the streaming path:
+                    # a close after audio is a normal end-of-segment, not an
+                    # error. Only a close with no audio at all is a failure.
+                    if audio_received:
+                        output_emitter.flush()
+                        break
                     raise APIStatusError("SLNG websocket connection closed unexpectedly")
 
                 if msg.type == aiohttp.WSMsgType.BINARY:
                     output_emitter.push(msg.data)
+                    audio_received = True
                     continue
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
@@ -856,6 +865,7 @@ class ChunkedStream(tts.ChunkedStream):
                     if isinstance(audio_b64, str) and audio_b64:
                         try:
                             output_emitter.push(base64.b64decode(audio_b64))
+                            audio_received = True
                         except Exception:
                             logger.warning(
                                 "[TTS] invalid base64 audio in chunked synthesis",
@@ -879,9 +889,11 @@ class ChunkedStream(tts.ChunkedStream):
                 if event.kind == "audio_chunk":
                     if event.audio:
                         output_emitter.push(event.audio)
+                        audio_received = True
                 elif event.kind == "audio_end":
                     if event.audio:
                         output_emitter.push(event.audio)
+                        audio_received = True
                     output_emitter.flush()
                     break
                 elif event.kind == "error":
