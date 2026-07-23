@@ -1335,6 +1335,57 @@ async def test_presence_long_speech_with_transcript_refreshes_away_deadline() ->
         await _close_test_session(session)
 
 
+async def test_conversation_rearms_away_after_agent_while_user_speaking() -> None:
+    """Conversation mode must re-arm away when agent idles during VAD noise speaking."""
+    session = create_session(
+        FakeActions(),
+        extra_kwargs={"user_away_timeout": 0.4, "user_away_on": "conversation"},
+    )
+    try:
+        session._agent_state = "listening"
+        session._user_state = "listening"
+        session._set_user_away_timer(reset=True)
+
+        # continuous noise keeps user in speaking; countdown must survive
+        session._update_user_state("speaking")
+        assert session._user_away_timer is not None
+
+        session._update_agent_state("speaking")
+        assert session._user_away_timer is None
+
+        # agent done while noise still "speaking" — must not stall the countdown
+        session._update_agent_state("listening")
+        assert session.user_state == "speaking"
+        assert session._user_away_timer is not None
+
+        await asyncio.sleep(0.5)
+        assert session.user_state == "away"
+    finally:
+        await _close_test_session(session)
+
+
+async def test_presence_does_not_arm_away_while_user_speaking_after_agent() -> None:
+    """Presence mode still requires user listening before arming after agent speech."""
+    session = create_session(
+        FakeActions(),
+        extra_kwargs={"user_away_timeout": 15.0, "user_away_on": "presence"},
+    )
+    try:
+        session._agent_state = "listening"
+        session._user_state = "listening"
+        session._set_user_away_timer(reset=True)
+
+        session._update_user_state("speaking")
+        assert session._user_away_timer is None
+
+        session._update_agent_state("speaking")
+        session._update_agent_state("listening")
+        assert session.user_state == "speaking"
+        assert session._user_away_timer is None
+    finally:
+        await _close_test_session(session)
+
+
 async def test_stt_error_count_resets_on_user_transcript() -> None:
     from livekit.agents.voice.agent_session import SessionConnectOptions
 

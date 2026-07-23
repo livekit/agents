@@ -1791,7 +1791,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._aec_warmup_remaining,
             )
 
-        if state == "listening" and self._user_state == "listening":
+        # conversation mode treats user VAD "speaking" as idle for away purposes
+        # (noise must not block re-arm after the agent finishes talking)
+        user_idle_for_away = self._user_state == "listening" or (
+            self._opts.user_away_on == "conversation" and self._user_state == "speaking"
+        )
+        if state == "listening" and user_idle_for_away:
             self._set_user_away_timer()
         else:
             self._cancel_user_away_timer()
