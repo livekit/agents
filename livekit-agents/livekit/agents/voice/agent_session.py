@@ -480,11 +480,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # eagerly establish DNS/TLS to the LLM provider so the first inference
         # request doesn't pay connection setup costs
         if isinstance(self._llm, LLM):
-            try:
-                asyncio.get_running_loop()
-                self._llm.prewarm()
-            except RuntimeError:
-                pass  # no running event loop, prewarm runs at agent activity start instead
+            self._llm.prewarm(loop=self._loop)
 
         self._keyterm_detector = KeytermDetector(
             static_keyterms=self._opts.stt_context_options["keyterms"],

@@ -144,7 +144,7 @@ class LLM(
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream: ...
 
-    def prewarm(self) -> None:
+    def prewarm(self, *, loop: asyncio.AbstractEventLoop | None = None) -> None:
         """Pre-warm connection to the LLM service.
 
         Establishes DNS resolution and the TLS connection to the provider before the
@@ -152,8 +152,12 @@ class LLM(
         It is called automatically when an ``AgentSession`` is constructed and when an
         agent activity starts, but can also be called directly.
 
-        Non-blocking (fire-and-forget), idempotent, and a no-op when no event loop
-        is running. Providers enable it by overriding ``_prewarm_impl``.
+        Non-blocking (fire-and-forget) and idempotent. Providers enable it by
+        overriding ``_prewarm_impl``.
+
+        Args:
+            loop: Event loop to schedule the prewarm request on. Defaults to the
+                running event loop.
         """
         if type(self)._prewarm_impl is LLM._prewarm_impl:
             return  # no provider-specific prewarm implemented
@@ -161,10 +165,8 @@ class LLM(
         if self._prewarm_task is not None:
             return
 
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            return  # no running event loop, prewarm will be retried when the agent starts
+        if loop is None:
+            loop = asyncio.get_event_loop()
 
         async def _prewarm() -> None:
             try:
@@ -172,7 +174,7 @@ class LLM(
             except Exception:
                 pass
 
-        self._prewarm_task = asyncio.create_task(_prewarm())
+        self._prewarm_task = loop.create_task(_prewarm())
 
     async def _prewarm_impl(self) -> None:
         """Provider-specific prewarm request, overriding it enables ``prewarm()``.
