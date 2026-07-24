@@ -3575,6 +3575,20 @@ class AgentActivity(RecognitionHooks):
                     generate_reply_fut.cancel()
                 return
 
+            # Check if generate_reply raised before awaiting (gather with
+            # return_exceptions=True captures the exception as a result).
+            if generate_reply_fut.done() and not generate_reply_fut.cancelled():
+                exc = generate_reply_fut.exception()
+                if exc is not None:
+                    logger.error(
+                        "failed to generate a reply%s: %s",
+                        " after tool execution" if tool_reply else "",
+                        str(exc),
+                    )
+                    speech_handle._mark_done(error=exc)
+                    self._session._update_agent_state("listening")
+                    return
+
             try:
                 generation_ev = await generate_reply_fut
             except llm.RealtimeError as e:
