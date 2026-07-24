@@ -190,7 +190,7 @@ class LLM(llm.LLM):
     @staticmethod
     def with_azure(
         *,
-        model: str | ChatModels = "gpt-4o",
+        model: str | ChatModels | None = None,
         azure_endpoint: str | None = None,
         azure_deployment: str | None = None,
         api_version: str | None = None,
@@ -239,7 +239,7 @@ class LLM(llm.LLM):
         )  # type: ignore
 
         llm = LLM(
-            model=model,
+            model=model if model is not None else (azure_deployment or ""),
             client=azure_client,
             user=user,
             temperature=temperature,
