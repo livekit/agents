@@ -21,6 +21,7 @@ members = [
     "livekit-plugins-aws",
     "livekit-plugins-azure",
     "livekit-plugins-baseten",
+    "livekit-plugins-boson",
     "livekit-plugins-bey",
     "livekit-plugins-bithuman",
     "livekit-plugins-browser",
@@ -2331,6 +2332,17 @@ requires-dist = [
     { name = "livekit" },
     { name = "livekit-agents", editable = "livekit-agents" },
 ]
+
+[[package]]
+name = "livekit-plugins-boson"
+version = "1.0.0.dev0"
+source = { editable = "livekit-plugins/livekit-plugins-boson" }
+dependencies = [
+    { name = "livekit-agents", extra = ["openai"] },
+]
+
+[package.metadata]
+requires-dist = [{ name = "livekit-agents", extras = ["openai"], specifier = ">=1.6.4", editable = "livekit-agents" }]
 
 [[package]]
 name = "livekit-plugins-bey"
