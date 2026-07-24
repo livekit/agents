@@ -13,6 +13,7 @@ from hotel_db import (
     RoomExtra,
     RoomType,
     Unavailable,
+    describe_room_options,
     speak_usd,
 )
 from persona import COMMON_INSTRUCTIONS
@@ -24,11 +25,13 @@ from livekit.agents.llm.tool_context import ToolError, ToolFlag, function_tool
 from livekit.agents.voice.agent import AgentTask
 
 _BOOK_ROOM_INSTRUCTIONS = """\
-You're handling a room booking from start to finish. Collect details in whatever order the caller offers them - don't follow a fixed script, and never re-ask something already given.
+You're handling a room booking from start to finish. Collect details in whatever order the caller offers them - don't follow a fixed script, and never re-ask a detail this booking already holds. The tool returns tell you what it holds; they are the record, not your memory of the conversation.
 
 This flow holds exactly ONE room - there is one stay and one room choice, and calling set_stay or choose_room again REPLACES the values, it never adds a second room. When the caller wants more than one room (a family booking two rooms, different checkout days), pick one room, carry it through confirm_booking, and let the receptionist start a fresh flow for the next room once this one has completed - never try to capture two stays in the same flow.
 
-Before asking anything, scan the conversation so far. If dates, room type, party size, or smoking preference were already discussed, call the matching recording tools (set_stay, choose_room) right away with those values - don't re-ask the caller for details they already gave.
+Before asking anything, scan the conversation so far. If dates, room type, party size, or smoking preference were already discussed, call the matching recording tools (set_stay, choose_room) right away with those values - don't re-ask the caller for details they already gave. That scan covers the stay and the room; it is not a licence to skip a dialog.
+
+When you booked a room for this caller earlier in the call, this room already carries their name, email, and phone - the tool returns will show them, and asking again wastes the caller's time. Their card is the one detail that never carries between rooms: call open_credit_card_dialog for this room and let them give the card again. Until that return says a card is recorded, you hold no card for this room - never read back a card ending you saw earlier in the call.
 
 Run set_stay before choose_room - available rooms depend on the dates. set_stay's options are for YOU to offer, not to act on: name the room types to the caller and let them pick (ask about any preference they've hinted at, like a view) before calling choose_room. Before calling confirm_booking, make sure you've collected the stay, the room choice, plus the caller's name, email, phone, and card - then read the whole booking back in one short sentence (dates, room type and extras, total, card last four) and let the caller say "go ahead" or correct something. confirm_booking only fires once they've agreed to the read-back.
 
@@ -112,6 +115,7 @@ class BookRoomTask(AgentTask[RoomBooking]):
             "caller agrees. Quote ONLY this total - never compute your own."
         )
 
+
     @function_tool()
     async def set_stay(
         self,
@@ -146,17 +150,13 @@ class BookRoomTask(AgentTask[RoomBooking]):
         available_types = {a.type for a in avail}
         if self._room_type and self._room_type not in available_types:
             self._room_type = None  # prior choice no longer fits the new dates
-        options = " | ".join(
-            f"{a.type.replace('_', ' ')} ({speak_usd(a.nightly_rate)}/night, "
-            f"{' or '.join(a.views)} view{'s' if len(a.views) > 1 else ''})"
-            for a in avail
-        )
         # Weekdays come from the computed dates, never from model arithmetic - a
         # hallucinated "Friday the thirteenth" survives every read-back otherwise.
         return (
             f"stay recorded ({check_in:%A} {check_in} to {check_out:%A} {check_out}, "
             f"{guests} guests; those weekday names are computed - use them, never your "
-            f"own day-counting); options: {options} | {self._status()}"
+            f"own day-counting)\noptions (the views on a type's line are the only views "
+            f"that type has):\n{describe_room_options(avail)}\n{self._status()}"
         )
 
     @function_tool()
