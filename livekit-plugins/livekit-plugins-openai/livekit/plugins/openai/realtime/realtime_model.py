@@ -457,6 +457,7 @@ class RealtimeModel(llm.RealtimeModel):
             capabilities=llm.RealtimeCapabilities(
                 message_truncation=True,
                 turn_detection=turn_detection is not None,
+                can_disable_turn_detection=not is_given(turn_detection),
                 user_transcription=input_audio_transcription is not None,
                 auto_tool_reply_generation=False,
                 audio_output="audio" in modalities,
@@ -671,10 +672,13 @@ class RealtimeModel(llm.RealtimeModel):
         if not is_given(input_audio_transcription):
             input_audio_transcription = AZURE_DEFAULT_INPUT_AUDIO_TRANSCRIPTION
 
+        # capture intent before applying the azure default, so the framework can still
+        # auto-disable server-side turn detection when the user didn't configure it
+        can_disable_turn_detection = not is_given(turn_detection)
         if not is_given(turn_detection):
             turn_detection = AZURE_DEFAULT_TURN_DETECTION
 
-        return RealtimeModel(
+        model = RealtimeModel(
             voice=voice,
             modalities=modalities,
             input_audio_transcription=input_audio_transcription,
@@ -691,6 +695,8 @@ class RealtimeModel(llm.RealtimeModel):
             base_url=base_url,
             max_session_duration=max_session_duration,
         )
+        model._capabilities.can_disable_turn_detection = can_disable_turn_detection
+        return model
 
     def update_options(
         self,
@@ -746,7 +752,9 @@ class RealtimeModel(llm.RealtimeModel):
         for sess in self._sessions:
             sess.update_options(
                 voice=voice,
-                turn_detection=self._opts.turn_detection,
+                # only propagate when the caller set it, so a session that opted out of
+                # server-side turn detection isn't force-synced back on by an unrelated update
+                turn_detection=self._opts.turn_detection if is_given(turn_detection) else NOT_GIVEN,
                 tool_choice=tool_choice,
                 input_audio_transcription=self._opts.input_audio_transcription,
                 input_audio_noise_reduction=self._opts.input_audio_noise_reduction,
@@ -767,8 +775,8 @@ class RealtimeModel(llm.RealtimeModel):
 
         return self._http_session
 
-    def session(self) -> RealtimeSession:
-        sess = RealtimeSession(self)
+    def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
+        sess = RealtimeSession(self, turn_detection_disabled=turn_detection_disabled)
         self._sessions.add(sess)
         return sess
 
@@ -841,11 +849,16 @@ class RealtimeSession(
     - openai_client_event_queued: expose the raw client events sent to the OpenAI Realtime API
     """
 
-    def __init__(self, realtime_model: RealtimeModel) -> None:
+    def __init__(
+        self, realtime_model: RealtimeModel, *, turn_detection_disabled: bool = False
+    ) -> None:
         super().__init__(realtime_model)
         self._realtime_model: RealtimeModel = realtime_model
         # per-session copy of opts so update_options can diff against session's own state
-        self._opts = replace(realtime_model._opts)
+        self._opts = replace(
+            realtime_model._opts,
+            turn_detection=None if turn_detection_disabled else realtime_model._opts.turn_detection,
+        )
         self._tools = llm.ToolContext.empty()
         self._msg_ch = utils.aio.Chan[RealtimeClientEvent | dict[str, Any]]()
         self._input_resampler: rtc.AudioResampler | None = None

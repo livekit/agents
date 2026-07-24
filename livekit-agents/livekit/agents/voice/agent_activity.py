@@ -221,11 +221,19 @@ class AgentActivity(RecognitionHooks):
         self._on_enter_task: asyncio.Task | None = None
         self._on_exit_task: asyncio.Task | None = None
 
+        # session-scoped truth read by every server-side turn-detection check below
+        self._rt_turn_detection_enabled = self._resolve_rt_turn_detection_enabled()
         if (
             isinstance(self.llm, llm.RealtimeModel)
+            and not self._rt_turn_detection_enabled
             and self.llm.capabilities.turn_detection
-            and not self.allow_interruptions
         ):
+            logger.info(
+                "client-side turn-taking is configured, disabling realtime server-side "
+                "turn detection."
+            )
+
+        if self._rt_turn_detection_enabled and not self.allow_interruptions:
             raise ValueError(
                 "the RealtimeModel uses a server-side turn detection, "
                 "allow_interruptions cannot be False, disable turn_detection in "
@@ -263,6 +271,51 @@ class AgentActivity(RecognitionHooks):
         # model to auto-generate a tool reply (auto_tool_reply_generation=True).
         self._pending_auto_tool_reply_fut: asyncio.Future[None] | None = None
 
+    def _resolve_rt_turn_detection_enabled(self) -> bool:
+        """Whether a realtime model's server-side turn detection is on for this session.
+
+        Off when the model can hand turn-taking to the client and the user configured
+        client-side turn-taking; otherwise the model's own setting stands.
+        """
+        if not isinstance(self.llm, llm.RealtimeModel):
+            return False
+
+        # a model that without turn_detection
+        # or can't hand turn-taking to the client keeps its own setting
+        if (
+            not (caps := self.llm.capabilities).turn_detection
+            or not caps.can_disable_turn_detection
+        ):
+            return caps.turn_detection
+
+        # resolve client-side turn detection (agent overrides session)
+        if is_given(self._agent.turn_detection):
+            client_td: TurnDetectionMode | None = self._agent.turn_detection
+            client_td_explicit = True
+        elif self._session._turn_detection_explicit:
+            client_td = self._session.turn_detection
+            client_td_explicit = True
+        else:
+            client_td = None
+            client_td_explicit = False
+
+        if client_td_explicit and client_td == "realtime_llm":
+            return True  # user wants the model to keep doing turn-taking
+        if client_td_explicit and client_td == "manual":
+            return False  # client commits turns manually, no VAD needed
+
+        # disable server-side turn detection if the user has a client-side turn detector or interruption detection
+        if self.vad is not None and (
+            (
+                client_td_explicit
+                and (isinstance(client_td, _StreamingTurnDetector) or client_td == "vad")
+            )
+            or is_given(self._agent.interruption_detection)
+            or is_given(self._session.interruption_detection)
+        ):
+            return False
+        return True
+
     def _validate_turn_detection(
         self, turn_detection: TurnDetectionMode | None
     ) -> TurnDetectionMode | None:
@@ -275,7 +328,7 @@ class AgentActivity(RecognitionHooks):
                     )
                     return None
 
-                if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.turn_detection:
+                if self._rt_turn_detection_enabled:
                     logger.warning(
                         "turn_detection is a TurnDetector, but the LLM is a RealtimeModel "
                         "with server-side turn detection enabled, ignoring the turn_detection setting"
@@ -304,7 +357,7 @@ class AgentActivity(RecognitionHooks):
             mode = None
 
         if isinstance(llm_model, llm.RealtimeModel):
-            if mode == "realtime_llm" and not llm_model.capabilities.turn_detection:
+            if mode == "realtime_llm" and not self._rt_turn_detection_enabled:
                 logger.warning(
                     "turn_detection is set to 'realtime_llm', but the LLM is not a RealtimeModel "
                     "or the server-side turn detection is not supported/enabled, "
@@ -319,7 +372,7 @@ class AgentActivity(RecognitionHooks):
                 )
                 mode = None
 
-            elif mode and mode != "realtime_llm" and llm_model.capabilities.turn_detection:
+            elif mode and mode != "realtime_llm" and self._rt_turn_detection_enabled:
                 logger.warning(
                     f"turn_detection is set to '{mode}', but the LLM "
                     "is a RealtimeModel and server-side turn detection enabled, "
@@ -329,7 +382,7 @@ class AgentActivity(RecognitionHooks):
 
             # fallback to VAD if server side turn detection is disabled and user supplied VAD is available
             if (
-                not llm_model.capabilities.turn_detection
+                not self._rt_turn_detection_enabled
                 and vad_model is not None
                 and not self.using_default_vad
                 and mode is None
@@ -544,6 +597,21 @@ class AgentActivity(RecognitionHooks):
             self._rt_session.update_options(tool_choice=self._tool_choice)
 
         if utils.is_given(turn_detection):
+            # a realtime model's server-side turn detection is resolved once at session start;
+            # runtime re-sync isn't supported yet, so warn when an explicit change would flip it.
+            if (
+                isinstance(self.llm, llm.RealtimeModel)
+                and self.llm.capabilities.can_disable_turn_detection
+                and turn_detection is not None
+                and self._resolve_rt_turn_detection_enabled() != self._rt_turn_detection_enabled
+            ):
+                logger.warning(
+                    "changing turn_detection at runtime does not update a realtime model's "
+                    "server-side turn detection (resolved at session start); it stays %s "
+                    "for this session.",
+                    "enabled" if self._rt_turn_detection_enabled else "disabled",
+                )
+
             turn_detection = self._validate_turn_detection(turn_detection)
 
             if (
@@ -807,6 +875,10 @@ class AgentActivity(RecognitionHooks):
                     self.llm.capabilities.mutable_tools
                     or llm.ToolContext(self.tools) == llm.ToolContext(new_activity.tools)
                 )
+                # only reuse if the new activity resolves server-side turn detection the same way
+                reusable = reusable and (
+                    self._rt_turn_detection_enabled == new_activity._rt_turn_detection_enabled
+                )
 
                 if reusable:
                     # detach: remove event listeners but don't close the session
@@ -912,7 +984,13 @@ class AgentActivity(RecognitionHooks):
                 self._rt_session.interrupt()
                 self._rt_session.clear_audio()
             else:
-                self._rt_session = self.llm.session()
+                # disable only when we resolved it off AND the model can (guards a model whose
+                # turn detection is explicitly pinned off from a spurious disable)
+                turn_detection_disabled = (
+                    not self._rt_turn_detection_enabled
+                    and self.llm.capabilities.can_disable_turn_detection
+                )
+                self._rt_session = self.llm.session(turn_detection_disabled=turn_detection_disabled)
                 logger.debug("created new realtime session for activity, id=%s", self._rt_session)
 
             self._rt_session.on("generation_created", self._on_generation_created)
@@ -987,12 +1065,7 @@ class AgentActivity(RecognitionHooks):
         await self._resume_scheduling_task()
         # skip default vad when llm does not need it
         wired_vad = self.vad
-        if (
-            wired_vad is not None
-            and self.using_default_vad
-            and isinstance(self.llm, llm.RealtimeModel)
-            and self.llm.capabilities.turn_detection
-        ):
+        if wired_vad is not None and self.using_default_vad and self._rt_turn_detection_enabled:
             wired_vad = None
         self._audio_recognition = AudioRecognition(
             self._session,
@@ -1327,11 +1400,7 @@ class AgentActivity(RecognitionHooks):
                 "add a TTS model to AgentSession to enable say()"
             )
 
-        if (
-            isinstance(self.llm, llm.RealtimeModel)
-            and self.llm.capabilities.turn_detection
-            and allow_interruptions is False
-        ):
+        if self._rt_turn_detection_enabled and allow_interruptions is False:
             logger.warning(
                 "the RealtimeModel uses a server-side turn detection, allow_interruptions cannot be False when using VoiceAgent.say(), "  # noqa: E501
                 "disable turn_detection in the RealtimeModel and use VAD on the AgentTask/VoiceAgent instead"  # noqa: E501
@@ -1397,11 +1466,7 @@ class AgentActivity(RecognitionHooks):
         schedule_speech: bool = True,
         input_details: InputDetails = DEFAULT_INPUT_DETAILS,
     ) -> SpeechHandle:
-        if (
-            isinstance(self.llm, llm.RealtimeModel)
-            and self.llm.capabilities.turn_detection
-            and allow_interruptions is False
-        ):
+        if self._rt_turn_detection_enabled and allow_interruptions is False:
             logger.warning(
                 "the RealtimeModel uses a server-side turn detection, allow_interruptions cannot be False when using VoiceAgent.generate_reply(), "  # noqa: E501
                 "disable turn_detection in the RealtimeModel and use VAD on the AgentTask/VoiceAgent instead"  # noqa: E501
@@ -1907,7 +1972,7 @@ class AgentActivity(RecognitionHooks):
             # disable interruption from audio activity while aec warmup is active
             return
 
-        if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.turn_detection:
+        if self._rt_turn_detection_enabled:
             # ignore if realtime model has turn detection enabled
             return
 
@@ -2249,7 +2314,7 @@ class AgentActivity(RecognitionHooks):
             self.stt is None
             and self._turn_detection != "manual"
             and isinstance(self.llm, llm.RealtimeModel)
-            and not self.llm.capabilities.turn_detection
+            and not self._rt_turn_detection_enabled
             and self._interruption_detection_enabled
             and (
                 # confirmed backchannel for this turn (survives the agent stopping)
@@ -2311,7 +2376,7 @@ class AgentActivity(RecognitionHooks):
             user_message.metrics = metrics_report
 
         if isinstance(self.llm, llm.RealtimeModel):
-            if self.llm.capabilities.turn_detection:
+            if self._rt_turn_detection_enabled:
                 return
 
             if self._rt_session is not None:
@@ -4337,7 +4402,7 @@ class AgentActivity(RecognitionHooks):
         realtime_llm = self.llm if isinstance(self.llm, llm.RealtimeModel) else None
         if realtime_llm is not None:
             # realtime commits turns manually; barge-in withholds the commit, so no STT is needed
-            can_gatekeep = not realtime_llm.capabilities.turn_detection
+            can_gatekeep = not self._rt_turn_detection_enabled
         else:
             # the STT pipeline gatekeeps by holding and flushing transcripts
             can_gatekeep = (

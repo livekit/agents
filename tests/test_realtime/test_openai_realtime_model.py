@@ -8,9 +8,57 @@ import pytest
 from livekit.agents import llm
 from livekit.agents._exceptions import APIError
 from livekit.agents.llm.remote_chat_context import RemoteChatContext
-from livekit.plugins.openai.realtime.realtime_model import RealtimeSession, _is_fatal_error
+from livekit.agents.utils import is_given
+from livekit.plugins.openai.realtime.realtime_model import (
+    RealtimeModel,
+    RealtimeSession,
+    _is_fatal_error,
+)
 
 pytestmark = pytest.mark.unit
+
+
+def test_update_options_only_propagates_given_turn_detection() -> None:
+    # RealtimeModel.update_options must not force-sync turn_detection to sessions when the
+    # caller didn't set it, else a session that opted out of server-side turn detection gets
+    # server VAD re-enabled by an unrelated change (e.g. voice). An explicit value still
+    # propagates, so callers can re-enable it. (PR #6495 review)
+    class _StubSession:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        def update_options(self, **kw: object) -> None:
+            self.calls.append(kw)
+
+    model = RealtimeModel(api_key="fake")
+    stub = _StubSession()
+    model._sessions.add(cast(RealtimeSession, stub))
+
+    model.update_options(voice="verse")
+    assert not is_given(stub.calls[-1]["turn_detection"])
+
+    model.update_options(turn_detection=model._opts.turn_detection)
+    assert is_given(stub.calls[-1]["turn_detection"])
+
+
+def test_with_azure_preserves_can_disable_turn_detection() -> None:
+    # with_azure fills in a default turn_detection, but the framework must still be allowed to
+    # auto-disable server-side turn detection when the caller didn't configure it. An explicit
+    # value is respected. (PR #6495 review)
+    default_td = RealtimeModel.with_azure(
+        azure_deployment="dep", api_key="fake", base_url="https://example.com/openai"
+    )
+    assert default_td.capabilities.turn_detection is True
+    assert default_td.capabilities.can_disable_turn_detection is True
+
+    explicit_off = RealtimeModel.with_azure(
+        azure_deployment="dep",
+        api_key="fake",
+        base_url="https://example.com/openai",
+        turn_detection=None,
+    )
+    assert explicit_off.capabilities.turn_detection is False
+    assert explicit_off.capabilities.can_disable_turn_detection is False
 
 
 def test_update_chat_ctx_deletes_empty_remote_items() -> None:

@@ -472,8 +472,9 @@ class RealtimeModel(llm.RealtimeModel):
     def provider(self) -> str:
         return "Amazon"
 
-    def session(self) -> RealtimeSession:
+    def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         """Return a new RealtimeSession bound to this model instance."""
+        # disabling server-side turn detection is unsupported (can_disable_turn_detection=False)
         sess = RealtimeSession(self)
         self._sessions.add(sess)
         return sess
