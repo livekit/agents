@@ -8,7 +8,7 @@ import pytest
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from fake_data.seed import build_seed_bytes
-from hotel_db import TODAY, HotelDB
+from hotel_db import TODAY, HotelDB, NotFound
 
 pytestmark = pytest.mark.unit
 
@@ -24,32 +24,23 @@ def _dispatch_rows(db: HotelDB) -> list[tuple[str, str, str]]:
 
 
 @pytest.mark.asyncio
-async def test_dispatch_to_known_room_reports_room_on_file() -> None:
+async def test_dispatch_to_known_room_records_the_dispatch() -> None:
     db = _db()
-    code, room_on_file = await db.dispatch_emergency(
-        room="402", kind="medical", situation="guest collapsed"
-    )
+    code = await db.dispatch_emergency(room="402", kind="medical", situation="guest collapsed")
     assert code.startswith("EMG-")
-    assert room_on_file is True
     assert _dispatch_rows(db) == [("RM_402", "medical", "guest collapsed")]
 
 
 @pytest.mark.asyncio
-async def test_unknown_room_never_blocks_the_dispatch() -> None:
-    # A panicked caller's room number may not check out against inventory - the
-    # dispatch still happens on their word, flagged so the agent re-confirms the
-    # room while staff is already moving.
+async def test_unknown_room_raises_so_the_agent_reconfirms() -> None:
     db = _db()
-    code, room_on_file = await db.dispatch_emergency(
-        room="408", kind="medical", situation="husband unresponsive"
-    )
-    assert code.startswith("EMG-")
-    assert room_on_file is False
-    assert _dispatch_rows(db) == [("RM_408", "medical", "husband unresponsive")]
+    with pytest.raises(NotFound):
+        await db.dispatch_emergency(room="408", kind="medical", situation="husband unresponsive")
+    assert _dispatch_rows(db) == []
 
 
 @pytest.mark.asyncio
-async def test_bad_kind_is_still_rejected() -> None:
+async def test_bad_kind_is_rejected_distinctly_from_a_bad_room() -> None:
     db = _db()
     with pytest.raises(ValueError):
         await db.dispatch_emergency(room="402", kind="noise", situation="loud neighbour")

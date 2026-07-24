@@ -330,21 +330,18 @@ class ServicesToolsMixin:
         """
         room_id = room_to_id(room)
         spoken = speak_room(room_id)
-        # A room number that doesn't check out against inventory never blocks the
-        # dispatch - staff is sent on the caller's word and the room gets
-        # re-confirmed while they're moving.
-        code, room_on_file = await ctx.userdata.db.dispatch_emergency(
-            room=room_id, kind=kind, situation=situation
-        )
+        try:
+            code = await ctx.userdata.db.dispatch_emergency(
+                room=room_id, kind=kind, situation=situation
+            )
+        except NotFound:
+            raise ToolError(
+                f"{spoken} doesn't exist here - re-confirm the room, calmly, right now"
+            ) from None
         head = (
             f"DISPATCHED (ref {code}): duty manager alerted, staff heading to {spoken} now | "
             "tell the caller, short and calm, that our people are on their way up right now"
         )
-        if not room_on_file:
-            head += (
-                f" | note: {spoken} doesn't match our room list - help is already moving, but "
-                "calmly re-confirm the room number with the caller so staff lands on the right door"
-            )
         if kind == "medical":
             tail = (
                 " - then have them hang up and dial 9-1-1; the dispatcher stays on the line and "
