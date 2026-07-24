@@ -2429,7 +2429,10 @@ class AgentActivity(RecognitionHooks):
             # (We still create the SpeechHandle and the generate_reply coroutine, otherwise we may
             # lose data like the beginning of a user speech).
             # await the interrupt to make sure user message is added to the chat context before the new task starts
-            await speech_handle.interrupt()
+            # force=True: this is internal cleanup of an outdated reply, not a user-initiated
+            # interruption. The handle inherits the session's allow_interruptions, which may be
+            # False (e.g. interruption.enabled=False) and would otherwise raise a RuntimeError.
+            await speech_handle.interrupt(force=True)
 
         metadata: Metadata | None = None
         if isinstance(self._turn_detection, str):

@@ -1628,6 +1628,60 @@ async def test_interrupt_during_on_user_turn_completed(
     assert conversation_events[3].item.text_content == "Here is a story about a firefighter..."
 
 
+@pytest.mark.parametrize("preemptive_generation", [False, True])
+async def test_consecutive_user_turns_when_interruptions_disabled(
+    preemptive_generation: bool,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    With interruption disabled, reply speech handles inherit allow_interruptions=False.
+    A new user turn arriving while the previous on_user_turn_completed is still running
+    must still discard the now-outdated reply (internal cleanup) instead of raising
+    RuntimeError("This generation handle does not allow interruptions").
+    """
+    speed = 1
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.0, "Tell me a story", stt_delay=0.2)
+    actions.add_llm("Here is a story for you...", ttft=0.1, duration=0.3)
+    actions.add_tts(10.0, ttfb=1.0)
+    # second turn arrives while on_user_turn_completed of the first turn is still running
+    actions.add_user_speech(2.6, 3.2, "about a firefighter.")
+    actions.add_llm("Here is a story about a firefighter...", ttft=0.1, duration=0.3)
+    actions.add_tts(10.0, ttfb=0.3)
+
+    session = create_session(
+        actions,
+        speed_factor=speed,
+        turn_handling={
+            "preemptive_generation": {"enabled": preemptive_generation},
+            "interruption": {"enabled": False},
+        },
+    )
+    agent = MyAgent(on_user_turn_completed_delay=2.0 / speed)
+
+    conversation_events: list[ConversationItemAddedEvent] = []
+    session.on("conversation_item_added", conversation_events.append)
+
+    caplog.set_level(logging.ERROR, logger="livekit.agents")
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    assert not [record for record in caplog.records if record.levelno >= logging.ERROR], (
+        "discarding an outdated reply must not raise even if it is not interruptable"
+    )
+
+    assert len(conversation_events) == 4
+    assert conversation_events[0].item.type == "agent_handoff"
+    assert conversation_events[1].item.type == "message"
+    assert conversation_events[1].item.role == "user"
+    assert conversation_events[1].item.text_content == "Tell me a story"
+    assert conversation_events[2].item.type == "message"
+    assert conversation_events[2].item.role == "user"
+    assert conversation_events[2].item.text_content == "about a firefighter."
+    assert conversation_events[3].item.type == "message"
+    assert conversation_events[3].item.role == "assistant"
+    assert conversation_events[3].item.text_content == "Here is a story about a firefighter..."
+
+
 async def test_unknown_function_call() -> None:
     speed = 1
     actions = FakeActions()
