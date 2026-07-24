@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import time
+from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
 import pytest
 from openai.types import Reasoning
 
-from livekit.plugins.openai.responses.llm import LLMStream, _ResponsesWebsocket
+from livekit.agents import APIConnectionError
+from livekit.plugins.openai.responses.llm import (
+    _WS_HEARTBEAT,
+    LLMStream,
+    _ResponsesWebsocket,
+)
 
 pytestmark = pytest.mark.plugin("openai")
 
@@ -20,46 +28,50 @@ class _FakeWSMsg:
 
 class _RecordingWS:
     """Minimal aiohttp-websocket stand-in: records what was sent, then replays
-    a single terminal frame so `generate_response` returns."""
+    a single terminal frame so `generate_response` returns. When ``dead`` is set,
+    send_str fails the way a socket closed while idle does (and ws.closed stays
+    False, mirroring aiohttp)."""
 
-    def __init__(self, reply: dict) -> None:
+    def __init__(self, reply: dict, *, dead: bool = False) -> None:
         self.sent: str | None = None
         self._reply = reply
+        self._dead = dead
+        self.closed = False
 
     async def send_str(self, data: str) -> None:
+        if self._dead:
+            raise ConnectionResetError("Cannot write to closing transport")
         self.sent = data
 
     async def receive(self) -> _FakeWSMsg:
         return _FakeWSMsg(json.dumps(self._reply))
 
+    async def close(self) -> None:
+        self.closed = True
 
-class _FakePool:
-    def __init__(self, ws: _RecordingWS) -> None:
-        self._ws = ws
 
-    def connection(self, timeout: float | None = None):  # noqa: ANN201
-        ws = self._ws
+def _make_transport() -> _ResponsesWebsocket:
+    return _ResponsesWebsocket(api_key="test-key", timeout=1.0, model="gpt-4.1")
 
-        class _Ctx:
-            async def __aenter__(self):  # noqa: ANN202
-                return ws
 
-            async def __aexit__(self, *exc):  # noqa: ANN002, ANN202
-                return False
+def _use_connections(transport: _ResponsesWebsocket, *conns: _RecordingWS) -> None:
+    """Wire a connect callback that hands out ``conns`` in order (last one repeats)."""
+    remaining = list(conns)
 
-        return _Ctx()
+    async def _connect(_timeout: float) -> _RecordingWS:
+        return remaining.pop(0) if len(remaining) > 1 else remaining[0]
 
-    async def aclose(self) -> None:
-        return None
+    transport._pool._connect_cb = _connect  # type: ignore[assignment]
 
 
 async def _capture_sent_payload(msg: dict) -> dict:
-    """Run the real `_ResponsesWebsocket.generate_response` against a fake pool
-    and return the JSON that was actually put on the wire."""
-    ws = _ResponsesWebsocket(api_key="test-key", timeout=1.0)
+    """Run the real `_ResponsesWebsocket.generate_response` against a real
+    ConnectionPool whose connect callback yields a recording websocket, and
+    return the JSON that was actually put on the wire."""
+    transport = _make_transport()
     rec = _RecordingWS({"type": "response.completed", "response": {"output": []}})
-    ws._pool = _FakePool(rec)  # type: ignore[assignment]
-    async for _ in ws.generate_response(msg):
+    _use_connections(transport, rec)
+    async for _ in transport.generate_response(msg):
         pass
     assert rec.sent is not None
     return json.loads(rec.sent)
@@ -107,3 +119,81 @@ def test_error_event_missing_sequence_number_parses_cleanly() -> None:
     assert parsed.type == "error"
     assert parsed.message == frame["message"]
     assert parsed.param == "reasoning.mode"
+
+
+async def test_stale_reused_ws_is_discarded_and_request_succeeds() -> None:
+    """Regression for #6513: a pooled WebSocket that OpenAI (or an intermediary
+    such as a NAT/proxy) closed while idle only fails on send when reused —
+    aiohttp keeps ws.closed False until a read observes the close. The transport
+    must discard the stale connection and reconnect in place, instead of raising
+    a retryable error that costs a full outer LLM retry (with backoff) for every
+    stale socket."""
+    reply = {"type": "response.completed", "response": {"output": []}}
+    fresh = _RecordingWS(reply)
+
+    transport = _make_transport()
+    _use_connections(transport, fresh)
+
+    # two pooled connections dropped while idle: not expired, send fails, and
+    # ws.closed is still False (so a `not ws.closed` validation would not help).
+    stale = [_RecordingWS(reply, dead=True), _RecordingWS(reply, dead=True)]
+    for ws in stale:
+        transport._pool._connections[ws] = time.time()  # type: ignore[index]
+        transport._pool._available.add(ws)  # type: ignore[arg-type]
+
+    async for _ in transport.generate_response({"type": "response.create"}):
+        pass
+
+    assert all(s.sent is None for s in stale), "stale sockets must not carry the request"
+    assert fresh.sent is not None, "request must be sent on a fresh connection"
+    await transport.aclose()
+
+
+async def test_fresh_ws_send_failure_is_raised() -> None:
+    """A brand-new connection that fails to send is a genuine error and must be
+    surfaced, not silently retried the way a stale reused connection is."""
+    reply = {"type": "response.completed", "response": {"output": []}}
+    dead_fresh = _RecordingWS(reply, dead=True)
+
+    transport = _make_transport()
+    _use_connections(transport, dead_fresh)
+
+    with pytest.raises(APIConnectionError):
+        async for _ in transport.generate_response({"type": "response.create"}):
+            pass
+    await transport.aclose()
+
+
+async def test_send_cancellation_discards_socket() -> None:
+    """A cancellation during send must discard the acquired socket, not leave it
+    orphaned in the pool (never reused, never closed until aclose)."""
+    ws = _RecordingWS({"type": "response.completed", "response": {"output": []}})
+
+    async def _cancel(_data: str) -> None:
+        raise asyncio.CancelledError
+
+    ws.send_str = _cancel  # type: ignore[method-assign]
+
+    transport = _make_transport()
+    _use_connections(transport, ws)
+
+    with pytest.raises(asyncio.CancelledError):
+        await transport._acquire_and_send("{}")
+
+    assert ws not in transport._pool._connections
+    assert ws not in transport._pool._available
+    await transport.aclose()
+
+
+async def test_create_ws_enables_heartbeat() -> None:
+    """Pooled Responses sockets set a ws heartbeat so idle connections stay warm
+    and dead peers are detected instead of surfacing only on the next send."""
+    transport = _make_transport()
+    fake_ws = object()
+    session = MagicMock()
+    session.ws_connect = AsyncMock(return_value=fake_ws)
+    transport._ensure_http_session = lambda: session  # type: ignore[method-assign]
+
+    assert await transport._create_ws(timeout=1.0) is fake_ws
+    _, kwargs = session.ws_connect.call_args
+    assert kwargs["heartbeat"] == _WS_HEARTBEAT
