@@ -49,6 +49,7 @@ livekit-plugins-protoface = { workspace = true }
 livekit-plugins-resemble = { workspace = true }
 livekit-plugins-respeecher = { workspace = true }
 livekit-plugins-rime = { workspace = true }
+livekit-plugins-rnnoise = { workspace = true }
 livekit-plugins-runway = { workspace = true }
 livekit-plugins-rtzr = { workspace = true }
 livekit-plugins-sarvam = { workspace = true }
