@@ -634,9 +634,12 @@ _EXPR_OPEN_RE = re.compile(r"<expr\b([^>]*?)/?\s*>")
 _EXPR_CLOSE_RE = re.compile(r"</expr\s*>")
 # self-closing markers only (the trailing / is required)
 _EXPR_SELF_RE = re.compile(r"<expr\b([^>]*?)/\s*>")
-# a wrapping marker (prosody/spell) and its span; non-greedy, instructed not to nest
+# a wrapping marker (prosody/spell) and its span; non-greedy, instructed not to nest.
+# the opening tag must not itself be self-closing, or a self-closing prosody point
+# control ahead of a later wrapping marker gets mistaken for that marker's opener,
+# swallowing everything up to the next </expr> into its span.
 _EXPR_WRAP_RE = re.compile(
-    r'<expr\b(?=[^>]*type="(?:prosody|spell)")([^>]*?)>(.*?)</expr\s*>', re.DOTALL
+    r'<expr\b(?=[^>]*type="(?:prosody|spell)")([^>]*?)(?<!/)>(.*?)</expr\s*>', re.DOTALL
 )
 # a non-wrapping type the LLM forgot to self-close (normalize_markup fixes these)
 _EXPR_UNCLOSED_RE = re.compile(
