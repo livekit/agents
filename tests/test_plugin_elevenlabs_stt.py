@@ -35,6 +35,7 @@ def _new_stream(*, server_vad=NOT_GIVEN) -> elevenlabs_stt.SpeechStream:
         keyterms=NOT_GIVEN,
         no_verbatim=False,
         enable_logging=True,
+        previous_text=None,
     )
     stream._language = None
     stream._event_ch = _EventSink()

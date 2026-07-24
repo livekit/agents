@@ -76,6 +76,7 @@ class STTOptions:
     keyterms: NotGivenOr[list[str]]
     no_verbatim: bool
     enable_logging: bool
+    previous_text: str | None
 
 
 class STT(stt.STT):
@@ -96,6 +97,7 @@ class STT(stt.STT):
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
         no_verbatim: NotGivenOr[bool] = NOT_GIVEN,
         enable_logging: bool = True,
+        previous_text: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of ElevenLabs STT.
@@ -123,6 +125,8 @@ class STT(stt.STT):
                 Scribe v2 (batch) and Scribe v2 realtime. Default is False.
             enable_logging (bool): Enable logging of the request. When set to false, zero retention
                 mode will be used. Defaults to True.
+            previous_text (NotGivenOr[str]): Preceding text context sent once on the first realtime
+                audio chunk to improve transcription accuracy. Only supported for Scribe v2 realtime.
         """
 
         if is_given(model_id):
@@ -179,6 +183,7 @@ class STT(stt.STT):
             keyterms=keyterms,
             no_verbatim=no_verbatim if is_given(no_verbatim) else False,
             enable_logging=enable_logging,
+            previous_text=previous_text if is_given(previous_text) else None,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -490,6 +495,19 @@ class SpeechStream(stt.SpeechStream):
         while True:
             try:
                 ws = await self._connect_ws()
+                if self._opts.previous_text:
+                    # Must be the first input_audio_chunk on the connection.
+                    await ws.send_str(
+                        json.dumps(
+                            {
+                                "message_type": "input_audio_chunk",
+                                "audio_base_64": "",
+                                "commit": False,
+                                "sample_rate": self._opts.sample_rate,
+                                "previous_text": self._opts.previous_text,
+                            }
+                        )
+                    )
                 tasks = [
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
