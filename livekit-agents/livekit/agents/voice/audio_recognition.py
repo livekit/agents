@@ -65,7 +65,6 @@ class _EndOfTurnMetrics:
     end_of_turn_delay: float | None
     first_interim_delay: float | None = None
     first_interim_status: Literal["received", "absent"] | None = None
-    utterance_id: str | None = None
 
 
 @dataclass
@@ -86,7 +85,6 @@ def _compute_end_of_turn_metrics(
     last_final_transcript_time: float | None,
     now: float,
     first_interim_time: float | None = None,
-    utterance_id: str | None = None,
 ) -> _EndOfTurnMetrics:
     """Compute the end-of-turn timing metrics from the captured turn anchors.
 
@@ -114,7 +112,6 @@ def _compute_end_of_turn_metrics(
             end_of_turn_delay=None,
             first_interim_delay=None,
             first_interim_status=None,
-            utterance_id=utterance_id,
         )
 
     return _EndOfTurnMetrics(
@@ -128,7 +125,6 @@ def _compute_end_of_turn_metrics(
             else None
         ),
         first_interim_status="received" if first_interim_time is not None else "absent",
-        utterance_id=utterance_id,
     )
 
 
@@ -287,7 +283,6 @@ class AudioRecognition:
         self._last_speaking_time: float | None = None
         self._speech_start_time: float | None = None
         self._first_interim_time: float | None = None
-        self._utterance_id: str | None = None
 
         # used for manual commit_user_turn
         self._final_transcript_received = asyncio.Event()
@@ -997,7 +992,6 @@ class AudioRecognition:
         self._last_final_transcript_time = None
         self._speech_start_time = None
         self._first_interim_time = None
-        self._utterance_id = None
         self._last_speaking_time = None
         self._vad_speech_started = False
         self._user_turn_committed = False
@@ -1342,7 +1336,6 @@ class AudioRecognition:
             # otherwise fall back to message arrival time.
             if self._speech_start_time is None:
                 self._speech_start_time = ev.speech_start_time or time.time()
-                self._utterance_id = utils.shortuuid("utterance_")
 
             with trace.use_span(self._ensure_user_turn_span(start_time=self._speech_start_time)):
                 self._hooks.on_start_of_speech(None, speech_start_time=self._speech_start_time)
@@ -1359,7 +1352,6 @@ class AudioRecognition:
             speech_start_time = time.time() - ev.speech_duration - ev.inference_duration
             if not self._vad_speech_started:
                 self._speech_start_time = speech_start_time
-                self._utterance_id = utils.shortuuid("utterance_")
                 self._vad_speech_started = True
 
             with trace.use_span(self._ensure_user_turn_span(start_time=speech_start_time)):
@@ -1387,7 +1379,6 @@ class AudioRecognition:
 
                 if self._speech_start_time is None:
                     self._speech_start_time = time.time() - ev.raw_accumulated_speech
-                    self._utterance_id = utils.shortuuid("utterance_")
                 if self._speaking and self._turn_detector_prediction_fut is not None:
                     if self._turn_detector_stream is not None:
                         self._turn_detector_stream.cancel_inference()
@@ -1673,7 +1664,6 @@ class AudioRecognition:
                 last_speaking_time=last_speaking_time,
                 last_final_transcript_time=last_final_transcript_time,
                 first_interim_time=self._first_interim_time,
-                utterance_id=self._utterance_id,
                 now=time.time(),
             )
             committed = self._hooks.on_end_of_turn(
@@ -1724,7 +1714,6 @@ class AudioRecognition:
                 if self._last_speaking_time == last_speaking_time:
                     self._speech_start_time = None
                     self._first_interim_time = None
-                    self._utterance_id = None
                     self._vad_speech_started = False
                     self._last_speaking_time = None
 

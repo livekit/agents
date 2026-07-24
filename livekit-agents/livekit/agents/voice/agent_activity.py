@@ -2447,7 +2447,6 @@ class AgentActivity(RecognitionHooks):
             first_interim_status=info.metrics.first_interim_status,
             on_user_turn_completed_delay=on_user_turn_completed_delay,
             speech_id=speech_handle.id,
-            utterance_id=info.metrics.utterance_id,
             metadata=metadata,
         )
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=eou_metrics))

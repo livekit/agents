@@ -113,7 +113,6 @@ class EOUMetrics(_BaseMetrics):
     """Time taken to invoke the user's `Agent.on_user_turn_completed` callback."""
 
     speech_id: str | None = None
-    utterance_id: str | None = None
 
     metadata: Metadata | None = None
 
