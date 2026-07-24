@@ -63,7 +63,7 @@ class _EndOfTurnMetrics:
     stopped_speaking_at: float | None
     transcription_delay: float | None
     end_of_turn_delay: float | None
-    first_interim_delay: float | None
+    first_interim_delay: float | None = None
 
 
 @dataclass
