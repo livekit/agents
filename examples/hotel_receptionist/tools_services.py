@@ -666,28 +666,20 @@ class ServicesToolsMixin:
         room: Room,
         pickup_date: date,
         pickup_time: time,
+        flight_departure_time: time,
         passengers: Annotated[int, Field(ge=1, le=4)],
     ) -> str:
-        """Book the hotel car to the airport for an in-house guest: flat eighty-five dollars to SFO, seats up to four with luggage, charged to the room. (Taxis are hailed at the door, metered roughly fifty-five to seventy dollars, and can't be reserved ahead - cost comparison in lookup_policy topic "location_and_transport".) Sanity-check the pickup time against the flight when you know it - about three hours before departure is right for international.
+        """Book the hotel car to the airport for an in-house guest: flat eighty-five dollars to SFO, seats up to four with luggage, charged to the room. (Taxis are hailed at the door, metered roughly fifty-five to seventy dollars, and can't be reserved ahead - cost comparison in lookup_policy topic "location_and_transport".) The scheduled flight departure is required so the pickup can always be sanity-checked - about three hours before departure is right for international.
 
         Args:
             room: The guest's room.
             pickup_date: Pickup date in ISO YYYY-MM-DD format. Resolve a weekday against today and confirm the concrete date with the caller before booking.
             pickup_time: Pickup time in 24-hour HH:MM format (2:30 p.m. = "14:30").
+            flight_departure_time: Scheduled flight departure in 24-hour HH:MM format. ASK the caller; never infer it from the requested pickup time.
             passengers: How many people are riding - ASK the caller; never assume one.
         """
         room_id = room_to_id(room)
         try:
-            departure = await ctx.userdata.db.latest_flight_departure(
-                room=room_id, flight_date=pickup_date
-            )
-            if departure is None:
-                raise ToolError(
-                    "Airport car NOT booked: the flight reconfirmation request must be logged with "
-                    "its departure time first. After request_flight_reconfirmation succeeds "
-                    "(including if it succeeded in this tool batch), retry book_airport_car now; "
-                    "do not tell the caller the car is booked until that retry succeeds."
-                )
             code = await ctx.userdata.db.book_airport_car(
                 room=room_id,
                 pickup_date=pickup_date,
@@ -700,7 +692,9 @@ class ServicesToolsMixin:
             ) from None
         except Unavailable as e:
             raise ToolError(f"can't book that: {e} - re-confirm the date") from None
-        margin_note = " " + _departure_margin_note(pickup=pickup_time, departure=departure)
+        margin_note = " " + _departure_margin_note(
+            pickup=pickup_time, departure=flight_departure_time
+        )
         return (
             f"hotel car booked; reference {_speak_code(code)}. Pickup "
             f"{pickup_date.strftime('%A, %B %-d')} at {speak_time(pickup_time)}, front entrance, "
