@@ -256,7 +256,11 @@ class LLM(llm.LLM):
             ),
         )
 
+    async def _prewarm_impl(self) -> None:
+        await self._client.models.list()
+
     async def aclose(self) -> None:
+        await super().aclose()
         await self._client.close()
 
     @classmethod
