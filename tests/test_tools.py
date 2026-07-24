@@ -17,6 +17,7 @@ from livekit.agents.llm import (
 )
 from livekit.agents.llm._strict import to_strict_json_schema
 from livekit.agents.llm.utils import (
+    _json_schema_allows_null,
     build_legacy_openai_schema,
     build_strict_openai_schema,
     function_arguments_to_pydantic_model,
@@ -466,11 +467,41 @@ class TestToolExecution:
         output = await agent.mock_tool_in_agent(*args, **kwargs)
         assert output == {"arg1": "test", "opt_arg2": None}
 
+    async def test_null_uses_default_for_non_optional_param(self):
+        @function_tool
+        async def tool(arg1: str, count: int = 5) -> int:
+            """Tool with a defaulted non-optional parameter"""
+            return count
+
+        args, kwargs = prepare_function_arguments(
+            fnc=tool, json_arguments='{"arg1": "test", "count": null}'
+        )
+        assert args == ("test", 5)
+        assert kwargs == {}
+
+    async def test_null_uses_default_in_nested_model_arg(self):
+        class Preferences(BaseModel):
+            color: str = "red"
+            note: str | None = None
+
+        @function_tool
+        async def set_prefs(prefs: Preferences) -> str:
+            """Tool with a nested model argument"""
+            return prefs.color
+
+        args, kwargs = prepare_function_arguments(
+            fnc=set_prefs, json_arguments='{"prefs": {"color": null, "note": null}}'
+        )
+        assert args == (Preferences(color="red", note=None),)
+        assert kwargs == {}
+
     def test_unexpected_arguments(self):
         with pytest.raises(ToolError, match="validation error"):
             prepare_function_arguments(fnc=mock_tool_1, json_arguments='{"opt_arg2": "test2"}')
 
-        with pytest.raises(ToolError, match="Received no value for required parameter"):
+        # a null for a required parameter with no default stays null and is
+        # rejected by pydantic validation
+        with pytest.raises(ToolError, match="validation error"):
             prepare_function_arguments(fnc=mock_tool_2, json_arguments='{"arg1": null}')
 
         with pytest.raises(ToolError, match="validation error"):
@@ -695,6 +726,75 @@ class TestStrictJsonSchema:
         status = schema["properties"]["status"]
         assert None not in status["enum"], f"enum should not contain None: {status}"
         assert "null" not in status.get("type", []), f"type should not contain 'null': {status}"
+
+
+class _SentinelChildModel(BaseModel):
+    x: int = 1
+
+
+class _DefaultedFieldsModel(BaseModel):
+    count: int = 5
+    label: Literal["a", "b"] = "a"
+    value: int | str = 5
+    child: _SentinelChildModel = _SentinelChildModel()
+
+
+class TestNullSentinelForDefaults:
+    """Tool schemas advertise null for defaulted fields — the tool-args pipeline
+    resolves the sentinel in _prepare_function_arguments. Without the flag,
+    defaults are dropped and fields stay required and non-nullable."""
+
+    def test_sentinel_flag_advertises_null_for_all_defaulted_shapes(self):
+        schema = to_strict_json_schema(_DefaultedFieldsModel, null_sentinel_for_defaults=True)
+        for field in ("count", "label", "value", "child"):
+            prop = schema["properties"][field]
+            assert _json_schema_allows_null(prop, root=schema), f"{field}: {prop}"
+            assert "default" not in prop
+
+    def test_no_flag_keeps_defaulted_fields_required_and_non_nullable(self):
+        schema = to_strict_json_schema(_DefaultedFieldsModel)
+        assert schema["required"] == ["count", "label", "value", "child"]
+        for field in ("count", "label", "value", "child"):
+            prop = schema["properties"][field]
+            assert not _json_schema_allows_null(prop, root=schema), f"{field}: {prop}"
+            assert "default" not in prop
+
+    def test_described_ref_default_keeps_ref_free_of_siblings(self):
+        # a documented tool param whose type is a nested model and that has a
+        # default arrives as {"$ref", "default", "description"}; strict mode
+        # forbids siblings on $ref, so the description must stay on the wrapper
+        @function_tool
+        async def tool_with_documented_model_arg(
+            query: str,
+            config: _SentinelChildModel = _SentinelChildModel(),  # noqa: B008
+        ) -> str:
+            """Does a thing.
+
+            Args:
+                query: What to search for.
+                config: Optional configuration for the search.
+            """
+            return "ok"
+
+        schema = build_strict_openai_schema(tool_with_documented_model_arg)["function"][
+            "parameters"
+        ]
+
+        def assert_no_ref_siblings(node, path="$"):
+            if isinstance(node, dict):
+                if "$ref" in node:
+                    assert len(node) == 1, f"$ref with siblings at {path}: {sorted(node)}"
+                for key, value in node.items():
+                    assert_no_ref_siblings(value, f"{path}.{key}")
+            elif isinstance(node, list):
+                for i, value in enumerate(node):
+                    assert_no_ref_siblings(value, f"{path}[{i}]")
+
+        assert_no_ref_siblings(schema)
+
+        config = schema["properties"]["config"]
+        assert config["description"] == "Optional configuration for the search."
+        assert _json_schema_allows_null(config, root=schema)
 
 
 class _CarModel(BaseModel):
