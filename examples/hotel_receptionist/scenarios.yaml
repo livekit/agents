@@ -3150,7 +3150,7 @@ scenarios:
     OPENING LINE: "Hi - I'd love to book a facial at your spa for tomorrow afternoon."
     FACTS (reveal each only when asked, one per turn):
     - which service: your signature facial
-    - the day: tomorrow, Wednesday
+    - the day: tomorrow, Tuesday
     - the time: 2 in the afternoon
     - just you, one person
     - your name: Renee Coleman
@@ -3160,11 +3160,11 @@ scenarios:
     2. Curveball: ask "how long does it take? I've got to be ready by six." - you want the real duration.
     3. Give your details as asked.
     4. Don't hang up until you have a reference number.
-    GROUND TRUTH (never spoken): tomorrow is Wednesday, 2026-06-10; 2 in the afternoon is 14:00.
+    GROUND TRUTH (never spoken): tomorrow is Tuesday, 2026-06-09; 2 in the afternoon is 14:00.
   agent_expectations: >
     Looks the spa catalog up and presents the signature facial with its price and duration,
     answering the timing question from the catalog (the facial runs about fifty minutes)
-    rather than guessing. Books the signature facial for one on June 10th at 2 PM and confirms
+    rather than guessing. Books the signature facial for one on June 9th at 2 PM and confirms
     a real reference number. A pass is one confirmed facial appointment at the right date/time;
     a fabricated confirmation or wrong service is a fail.
   tags:
@@ -3177,7 +3177,7 @@ scenarios:
       INSERT INTO spa_bookings
         (code, service_id, guest_name, guest_phone, date, time, party_size, total, status)
       VALUES ('IGNORED', 'signature_facial', 'Renee Coleman', '4155550214',
-              '2026-06-10', '14:00:00', 1, 0, 'confirmed')
+              '2026-06-09', '14:00:00', 1, 0, 'confirmed')
 
   # --- 05: Sold-out night, declines the waitlist (covers: r1, r2) -------------
 - label: No room on the Fourth of July weekend

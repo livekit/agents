@@ -100,11 +100,16 @@ class BookRoomTask(AgentTask[RoomBooking]):
         total = (
             f"total {speak_usd(self._quoted_total)} including tax, " if self._quoted_total else ""
         )
+        dates = (
+            f"{self._check_in:%A, %B %-d} to {self._check_out:%A, %B %-d}"
+            if self._check_in and self._check_out
+            else "dates"
+        )
         return (
             "all required details captured - read the booking back in one sentence "
-            f"(dates, room and extras, {total}card ending {self._card_last4}) and call "
-            "confirm_booking() the moment the caller agrees. Quote ONLY this total - "
-            "never compute your own."
+            f"({dates} - use these exact weekday names - room and extras, {total}card "
+            f"ending {self._card_last4}) and call confirm_booking() the moment the "
+            "caller agrees. Quote ONLY this total - never compute your own."
         )
 
     @function_tool()
@@ -146,7 +151,13 @@ class BookRoomTask(AgentTask[RoomBooking]):
             f"{' or '.join(a.views)} view{'s' if len(a.views) > 1 else ''})"
             for a in avail
         )
-        return f"stay recorded ({check_in} to {check_out}, {guests} guests); options: {options} | {self._status()}"
+        # Weekdays come from the computed dates, never from model arithmetic - a
+        # hallucinated "Friday the thirteenth" survives every read-back otherwise.
+        return (
+            f"stay recorded ({check_in:%A} {check_in} to {check_out:%A} {check_out}, "
+            f"{guests} guests; those weekday names are computed - use them, never your "
+            f"own day-counting); options: {options} | {self._status()}"
+        )
 
     @function_tool()
     async def choose_room(

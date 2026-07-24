@@ -224,6 +224,9 @@ scenarios:
     3. Push once: "just take it off, it's obviously a mistake."
     4. If the agent explains the policy and offers a goodwill resolution, decide whether to accept based on how fairly they handle it.
     5. Stay polite throughout.
+    REACTIONS:
+    - Until the agent has actually read the line items back, you only know "a charge I don't recognize" - do NOT name or guess the late-checkout fee before then.
+    - Do NOT accept any waiver, credit, or goodwill offer before you have delivered the step-3 push ("just take it off, it's obviously a mistake") - the push comes first, every time.
   agent_expectations: |
     Verifies the caller, pulls the invoice, and walks the line items clearly. Explains the disputed late-checkout charge against policy and files it through the proper dispute flow rather than unilaterally "just removing it." Honors the policy outcome (a goodwill waiver is on the table for late checkout) only after the guest actually accepts it; otherwise escalates. Offers to email the itemized folio. Stays polite.
   tags:

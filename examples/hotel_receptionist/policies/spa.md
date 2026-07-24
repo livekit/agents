@@ -8,4 +8,4 @@ Signature facial: 50 minutes, all skin types, 120 dollars per person, up to 2 gu
 Personal training session: 45 minutes, one-on-one in the health club, 80 dollars, single guest only.
 Group yoga class: 60 minutes in the studio, 40 dollars per person, up to 8 guests.
 
-Narrow before booking: which service, the date, the start time, and party size. Quote the duration and price from this list when confirming - they're fixed, so the caller gets concrete details, not "the spa will tell you".
+Narrow before booking: which service, the date, the start time, and party size. Quote the chosen service's duration and price from this list BEFORE booking - a caller who names the service up front still hears both first - and again when confirming; they're fixed, so the caller gets concrete details, not "the spa will tell you".

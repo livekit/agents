@@ -101,7 +101,10 @@ def _say_dispute_outcome(
         return (
             f"{policy_explanation} | Explain that position to the caller calmly first, "
             f"then let them know it's been escalated to the manager, who will review and "
-            f"follow up by email - case number {_speak_code(case_number)}."
+            f"follow up - case number {_speak_code(case_number)}. Take the caller's callback "
+            'number and record it (record_followup, kind="callback") so the manager can '
+            "reach them; do NOT offer a live transfer unless the caller explicitly asks to "
+            "be put through."
         )
     if outcome == "accounting_ticket_opened":
         return (
@@ -181,10 +184,14 @@ class RoomToolsMixin:
             f"{r.walk_partner} (two blocks away, room and taxi both on us), guest's room back "
             f"here {r.walk_return_date.strftime('%A, %B %-d')} | deliver this per the guest_walks "
             "policy: own the overbooking and explain plainly why it happened, then the plan above, "
-            "all at no extra cost to them. The guest is angry and will interrupt - give it in short "
-            "pieces and make sure every piece lands before the call ends, resuming any that got "
-            "talked over. If still upset after the full plan, record a manager callback "
-            '(record_followup, kind="callback") before wrapping up.'
+            "all at no extra cost to them. The guest is angry and will interrupt - the plan has "
+            "FOUR pieces (why it happened; tonight's room at the partner hotel; room and taxi "
+            "both covered; their own room back here on the return date) and every reassurance "
+            "turn should also deliver the next piece not yet said, until all four have landed. "
+            "Answering only the guest's latest objection, turn after turn, is how the return "
+            "date never gets said. Before the call wraps up, if the guest was upset at ANY "
+            'point, record a manager callback (record_followup, kind="callback") - do this '
+            "even if the plan never got fully delivered."
         )
 
     @function_tool
@@ -253,7 +260,20 @@ class RoomToolsMixin:
                 "room, ask them to confirm that first; otherwise just ask if there's anything else."
             )
 
-        booking = await BookRoomTask(db=ctx.userdata.db, chat_ctx=speech_only(self.chat_ctx))
+        # Inline AgentTasks cannot run in parallel: a second activation supplants the
+        # first and its function call never resolves, deadlocking the session. Bounce
+        # a same-turn second call back to the model instead of starting the task.
+        if ctx.userdata.room_booking_in_flight:
+            raise ToolError(
+                "a room-booking flow is already in progress - booking flows run one at a "
+                "time. Finish this room through confirm_booking first; start_room_booking "
+                "for the next room only after this one has returned its result."
+            )
+        ctx.userdata.room_booking_in_flight = True
+        try:
+            booking = await BookRoomTask(db=ctx.userdata.db, chat_ctx=speech_only(self.chat_ctx))
+        finally:
+            ctx.userdata.room_booking_in_flight = False
         ctx.userdata.last_room_booking = booking
         ctx.userdata.caller_turns_at_last_booking = _count_caller_turns(self.session.history)
         logger.info("[stub] would email confirmation to %s for %s", booking.email, booking.code)
@@ -283,7 +303,17 @@ class RoomToolsMixin:
             raise ToolError(
                 f"booking {booking.code} is {booking.status} - there's no active booking to update"
             )
-        card = await GetCardTask(chat_ctx=speech_only(self.chat_ctx))
+        try:
+            card = await GetCardTask(chat_ctx=speech_only(self.chat_ctx))
+        except ToolError as e:
+            # The capture ended without a usable card (refused, or their only card is
+            # expired/failing). The card on file stays; hand the agent the resolution.
+            raise ToolError(
+                f"{e} - the booking stays held on the current card and a working card "
+                "isn't needed until check-in: reassure the caller of that, suggest they "
+                "check with their card issuer in case it's a technical fault, and offer "
+                'a callback to retry (record_followup, kind="callback").'
+            ) from None
         await ctx.userdata.db.update_booking_card(
             booking_code=booking.code, card_last4=card.card_number[-4:]
         )
@@ -366,6 +396,10 @@ class RoomToolsMixin:
             f"checking in {b.check_in.strftime('%A %B %-d')} and out {b.check_out.strftime('%A %B %-d')} "
             f"({nights} night{'s' if nights != 1 else ''}, {b.guests} guest{'s' if b.guests != 1 else ''}), "
             f"extras: {extras}. Total {speak_usd(b.total)} on card ending in {b.card_last4}."
+            " | a caller checking or confirming their own booking gets the record's key facts "
+            "read back - room type, smoking status, dates, party size, and extras - not just "
+            "the one field their question named; this is their chance to catch a mismatch "
+            "before arrival. The hold-back rule is for option lists, not the caller's own record."
         )
         if conflict := await ctx.userdata.db.room_conflict(booking_code=b.code):
             info += (
@@ -462,10 +496,17 @@ class RoomToolsMixin:
         """Verify the caller, fetch their invoice, and read it back."""
         booking = await self._verified_booking(ctx)
         invoice = await ctx.userdata.db.get_invoice(booking.code)
-        items = ", ".join(f"{li.label} {speak_usd(li.amount_cents)}" for li in invoice.line_items)
+        # Quote each label so the label/amount boundary is unambiguous: rendered as
+        # "Room (2 nights) 560 dollars", the model copies the merged string into
+        # dispute_charge's line_item_label and the exact-label match fails.
+        items = ", ".join(
+            f'"{li.label}" at {speak_usd(li.amount_cents)}' for li in invoice.line_items
+        )
         return (
             f"That booking's total is {speak_usd(invoice.total)}, with line items: "
-            f"{items}. I can email an itemized copy to the address on file, {booking.email}, "
+            f"{items}. The quoted labels are the exact line-item names dispute_charge takes - "
+            "the label only, never with the amount appended. I can email an itemized copy to "
+            f"the address on file, {booking.email}, "
             "if you'd like - just say the word. | This turn: read the total and every line "
             "item and offer to email the itemized folio; do not call dispute_charge yet."
         )
@@ -482,8 +523,8 @@ class RoomToolsMixin:
         """Handle a guest dispute on a line item.
 
         Args:
-            category: Pick the category that best matches what the caller is disputing.
-            line_item_label: The label of the line item on the invoice, as it appears.
+            category: Pick the category that best matches what the caller is disputing. A charge for a stay the guest never arrived for, with no cancellation on record ("I never showed up", "I thought I cancelled"), is "no_show" - never "cancellation_fee", which is only for a fee from an actual recorded cancellation.
+            line_item_label: The label of the line item exactly as lookup_invoice quoted it - the label only, never with the amount appended to it.
             caller_note: A short summary of what the caller said about the charge.
             resolution_status: Required. Use "pending" on the first call, before the policy
                 resolution has been offered. After presenting the returned resolution, use
@@ -502,9 +543,11 @@ class RoomToolsMixin:
         target = line_item_label.casefold()
         item = next((li for li in invoice.line_items if li.label.casefold() == target), None)
         if item is None:
+            labels = ", ".join(f'"{li.label}"' for li in invoice.line_items)
             raise ToolError(
-                f"No line item labelled {line_item_label!r} on that invoice. "
-                "Read the line items back and ask the caller to pick one."
+                f"No line item labelled {line_item_label!r} on that invoice - do NOT retry "
+                f"the same value. The invoice's exact labels are: {labels}. Call again with "
+                "one of those, exactly as quoted (no amount appended)."
             )
 
         amount = item.amount_cents
