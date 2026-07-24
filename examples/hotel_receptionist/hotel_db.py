@@ -1441,20 +1441,14 @@ class HotelDB:
             await self.on_change()
         return code
 
-    async def dispatch_emergency(self, *, room: str, kind: str, situation: str) -> tuple[str, bool]:
-        """Returns (dispatch code, whether the room is in the hotel's inventory).
-
-        A room number the desk can't validate never blocks a life-safety dispatch -
-        staff is sent regardless and the room gets re-confirmed while they're moving.
-        """
+    async def dispatch_emergency(self, *, room: str, kind: str, situation: str) -> str:
         # A bad kind is an invalid argument, not a missing entity - keep it distinct
         # from the room's NotFound so the tool can't misreport it as a bad room number.
         if kind not in get_args(EmergencyKind):
             raise ValueError(
                 f"unknown emergency kind: {kind} - options: {', '.join(get_args(EmergencyKind))}"
             )
-        room_id = self._normalize_room(room)
-        room_on_file = self._room_exists(room_id)
+        room_id = self._require_room(room)
         code = _new_code("EMG-")
         with self.connection as conn:
             _insert(
@@ -1464,7 +1458,7 @@ class HotelDB:
             )
         if self.on_change:
             await self.on_change()
-        return code, room_on_file
+        return code
 
     async def room_conflict(self, *, booking_code: str) -> tuple[date, date] | None:
         """The overlap window if another confirmed booking holds this booking's room."""
@@ -1962,9 +1956,7 @@ CREATE TABLE IF NOT EXISTS airport_cars (
 CREATE TABLE IF NOT EXISTS emergency_dispatches (
     id        INTEGER PRIMARY KEY,
     code      TEXT    NOT NULL UNIQUE,
-    -- Deliberately NOT a foreign key: a panicked caller's room number may not
-    -- check out against inventory, and that never blocks a life-safety dispatch.
-    room_id   TEXT    NOT NULL,
+    room_id   TEXT    NOT NULL REFERENCES hotel_rooms(id),
     kind      TEXT    NOT NULL DEFAULT 'medical' CHECK (kind IN ('medical','fire','security')),
     situation TEXT    NOT NULL,
     status    TEXT    NOT NULL DEFAULT 'dispatched' CHECK (status IN ('dispatched','resolved'))
