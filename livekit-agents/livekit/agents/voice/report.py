@@ -66,6 +66,8 @@ class SessionReport:
                 "preemptive_generation": dict(self.options.preemptive_generation),
             },
             "chat_history": self.chat_history.to_dict(exclude_timestamp=False),
+            "duration": self.duration,
+            "started_at": self.started_at,
             "timestamp": self.timestamp,
             "usage": self._usage_to_dict() if self.model_usage else None,
             "sdk_version": self.sdk_version,
