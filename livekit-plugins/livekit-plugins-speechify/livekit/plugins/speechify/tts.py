@@ -151,7 +151,15 @@ class TTS(tts.TTS):
                 )
             # Fixed httpx.AsyncClient default header so every request the SDK
             # issues is attributed to this integration, regardless of call site.
-            self._httpx_client = httpx.AsyncClient(headers={CALLER_HEADER: "livekit"})
+            # Timeout/limits mirror the openai plugin's owned-client defaults —
+            # httpx's own 5s default is too short for longer synthesis requests.
+            self._httpx_client = httpx.AsyncClient(
+                headers={CALLER_HEADER: "livekit"},
+                timeout=httpx.Timeout(connect=15.0, read=30.0, write=30.0, pool=5.0),
+                limits=httpx.Limits(
+                    max_connections=50, max_keepalive_connections=50, keepalive_expiry=120
+                ),
+            )
             self._client = AsyncSpeechify(
                 token=resolved_key,
                 base_url=base_url if is_given(base_url) else None,
