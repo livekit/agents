@@ -99,6 +99,16 @@ def test_amend_sets_instructions(db: HotelDB) -> None:
     assert _row(db, code) == ("RM_304", None, "before_noon_if_possible")
 
 
+def test_amend_accepts_code_as_spoken_to_the_caller(db: HotelDB) -> None:
+    # The model only ever sees the code via _speak_code, which uppercases it,
+    # so the code it passes back to amend_florist_order is the uppercase form.
+    code, _, _ = _order(db, room_id="RM_304")
+    asyncio.run(
+        db.amend_florist_order(code=code.upper(), delivery_instructions="before_noon_if_possible")
+    )
+    assert _row(db, code) == ("RM_304", None, "before_noon_if_possible")
+
+
 def test_amend_unknown_code_is_not_found(db: HotelDB) -> None:
     with pytest.raises(NotFound):
         asyncio.run(db.amend_florist_order(code="FLR-NOPE", delivery_instructions="x"))
