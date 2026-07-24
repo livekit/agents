@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Speech-to-Text implementation for Gnani Vachana
+"""Speech-to-Text implementation for Gnani
 
-This module provides an STT implementation that uses the Gnani Vachana API,
+This module provides an STT implementation that uses the Gnani API,
 supporting both REST recognition and real-time streaming (WebSocket).
 """
 
@@ -46,12 +46,55 @@ from livekit.agents.utils.misc import is_given
 if TYPE_CHECKING:
     from livekit.agents.utils import AudioBuffer
 
+from ._compat import ws_header_kwargs as _ws_header_kwargs
 from .log import logger
-from .models import GnaniSTTLanguages
 
 GnaniSTTFormat = Literal["verbatim", "transcribe"]
 
 GNANI_STT_BASE_URL = "https://api.vachana.ai"
+
+GnaniSTTLanguages = Literal[
+    "bn-IN",
+    "en-IN",
+    "gu-IN",
+    "hi-IN",
+    "kn-IN",
+    "ml-IN",
+    "mr-IN",
+    "pa-IN",
+    "ta-IN",
+    "te-IN",
+    "en-IN,hi-IN",
+]
+
+SUPPORTED_LANGUAGES: set[str] = {
+    "bn-IN",
+    "en-IN",
+    "gu-IN",
+    "hi-IN",
+    "kn-IN",
+    "ml-IN",
+    "mr-IN",
+    "pa-IN",
+    "ta-IN",
+    "te-IN",
+    "en-IN,hi-IN",
+}
+
+STREAM_SUPPORTED_LANGUAGES: set[str] = {
+    "bn-IN",
+    "en-IN",
+    "gu-IN",
+    "hi-IN",
+    "kn-IN",
+    "ml-IN",
+    "mr-IN",
+    "pa-IN",
+    "ta-IN",
+    "te-IN",
+}
+
+REST_SINGLE_LANGUAGES: set[str] = {code for code in SUPPORTED_LANGUAGES if "," not in code}
 
 SAMPLE_RATE_16K = 16000
 SAMPLE_RATE_8K = 8000
@@ -66,6 +109,25 @@ STREAM_SUPPORTED_SAMPLE_RATES = (
 STREAM_CHUNK_BYTES = 1024
 
 
+def _validate_rest_language_code(language_code: str) -> None:
+    """Validate a REST language_code.
+
+    Accepts a single supported code, a pre-defined combo from
+    ``SUPPORTED_LANGUAGES``, or any comma-separated combination of supported
+    single codes (e.g. ``"en-IN,ta-IN"``) to enable auto-detection.
+    """
+    if language_code in SUPPORTED_LANGUAGES:
+        return
+    parts = [p.strip() for p in language_code.split(",") if p.strip()]
+    if len(parts) >= 2 and all(p in REST_SINGLE_LANGUAGES for p in parts):
+        return
+    raise ValueError(
+        f"Unsupported language_code '{language_code}'. "
+        f"Choose from: {', '.join(sorted(REST_SINGLE_LANGUAGES))} "
+        f"or a comma-separated combination of these for auto-detection."
+    )
+
+
 @dataclass
 class GnaniSTTOptions:
     api_key: str
@@ -75,7 +137,7 @@ class GnaniSTTOptions:
     preferred_language: str | None = None
     format: str = "verbatim"
     itn_native_numerals: bool = False
-    use_streaming: bool = True
+    streaming: bool = True
 
 
 _DEPRECATED_STT_KWARGS = frozenset(("organization_id", "user_id", "http_session"))
@@ -95,23 +157,22 @@ def _check_deprecated_args(kwargs: dict[str, Any], *, caller: str = "STT.__init_
 
 
 class STT(stt.STT):
-    """Gnani Vachana Speech-to-Text implementation.
+    """Gnani Speech-to-Text implementation.
 
-    Provides speech-to-text functionality using Gnani's Vachana platform.
+    Provides speech-to-text functionality using Gnani's platform.
     Supports REST recognition and real-time streaming via WebSocket.
 
     Args:
         language: BCP-47 language code (e.g. "hi-IN", "en-IN").
         api_key: Gnani API key (falls back to GNANI_API_KEY env var).
         sample_rate: Audio sample rate for streaming (8000, 16000, 44100, or 48000).
-        base_url: Vachana API base URL.
+        base_url: Gnani API base URL.
         preferred_language: Force single-language model for this code.
         format: "verbatim" (default) or "transcribe" (enables ITN).
         itn_native_numerals: Render digits in native script when format="transcribe".
-        use_streaming: When True (default), transcribe over the WebSocket stream
-            (wss://.../stt/v3/stream). When False, use REST recognition
-            (POST /stt/v3), which requires a local VAD — LiveKit wraps the STT
-            with ``stt.StreamAdapter`` automatically.
+        streaming: If True (default), use WebSocket streaming (wss://.../stt/v3/stream).
+            If False, use REST recognition (POST /stt/v3); REST mode requires a local VAD
+            (LiveKit wraps with ``stt.StreamAdapter`` automatically).
     """
 
     def __init__(
@@ -124,12 +185,12 @@ class STT(stt.STT):
         preferred_language: str | None = None,
         format: GnaniSTTFormat = "verbatim",
         itn_native_numerals: bool = False,
-        use_streaming: bool = True,
+        streaming: bool = True,
         **kwargs: Any,
     ) -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=use_streaming,
+                streaming=streaming,
                 interim_results=False,
                 aligned_transcript=False,
             )
@@ -148,6 +209,8 @@ class STT(stt.STT):
             allowed = ", ".join(str(r) for r in STREAM_SUPPORTED_SAMPLE_RATES)
             raise ValueError(f"sample_rate must be one of {allowed}, got {sample_rate}")
 
+        _validate_rest_language_code(language)
+
         self._opts = GnaniSTTOptions(
             api_key=self._api_key,
             language=language,
@@ -156,7 +219,7 @@ class STT(stt.STT):
             preferred_language=preferred_language,
             format=format,
             itn_native_numerals=itn_native_numerals,
-            use_streaming=use_streaming,
+            streaming=streaming,
         )
         self._session: aiohttp.ClientSession | None = None
 
@@ -267,7 +330,7 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
-        if not self._opts.use_streaming:
+        if not self._opts.streaming:
             return cast(
                 "SpeechStream",
                 super().stream(language=language, conn_options=conn_options),
@@ -287,7 +350,7 @@ class STT(stt.STT):
 
 
 class SpeechStream(stt.RecognizeStream):
-    """WebSocket-based streaming STT for Gnani Vachana.
+    """WebSocket-based streaming STT for Gnani.
 
     Connects to wss://api.vachana.ai/stt/v3/stream and sends raw PCM audio
     in 1024-byte chunks (512 samples, 16-bit mono).
@@ -336,7 +399,7 @@ class SpeechStream(stt.RecognizeStream):
         try:
             async with websockets.connect(
                 ws_url,
-                additional_headers=headers,
+                **_ws_header_kwargs(headers),
                 ping_interval=20,
                 ping_timeout=20,
                 close_timeout=10,
@@ -455,3 +518,13 @@ class SpeechStream(stt.RecognizeStream):
             raise
         except Exception as e:
             raise APIConnectionError(f"Error receiving Gnani STT messages: {e}") from e
+
+
+__all__ = [
+    "GnaniSTTFormat",
+    "GnaniSTTLanguages",
+    "STT",
+    "STREAM_SUPPORTED_LANGUAGES",
+    "SUPPORTED_LANGUAGES",
+    "SpeechStream",
+]

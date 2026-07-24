@@ -67,21 +67,39 @@ def test_stt_accepts_8k_sample_rate():
     assert stt._opts.sample_rate == 8000
 
 
-def test_stt_rejects_invalid_sample_rate():
-    """STT rejects sample rates outside STREAM_SUPPORTED_SAMPLE_RATES."""
-    from livekit.plugins.gnani import STT
-
-    with pytest.raises(ValueError, match="sample_rate"):
-        STT(api_key="test-key", sample_rate=12345)
-
-
-def test_stt_accepts_44k_and_48k_sample_rates():
+def test_stt_accepts_high_sample_rates():
     """STT accepts 44100 and 48000 Hz sample rates."""
     from livekit.plugins.gnani import STT
 
-    for rate in (44100, 48000):
-        stt = STT(api_key="test-key", sample_rate=rate)
-        assert stt._opts.sample_rate == rate
+    stt_44k = STT(api_key="test-key", sample_rate=44100)
+    assert stt_44k._opts.sample_rate == 44100
+
+    stt_48k = STT(api_key="test-key", sample_rate=48000)
+    assert stt_48k._opts.sample_rate == 48000
+
+
+def test_stt_rejects_invalid_sample_rate():
+    """STT rejects unsupported sample rates."""
+    from livekit.plugins.gnani import STT
+
+    with pytest.raises(ValueError, match="sample_rate"):
+        STT(api_key="test-key", sample_rate=96000)
+
+
+def test_stt_accepts_auto_detect_language():
+    """STT accepts comma-separated language codes for REST auto-detection."""
+    from livekit.plugins.gnani import STT
+
+    stt = STT(api_key="test-key", language="en-IN,ta-IN")
+    assert stt._opts.language == "en-IN,ta-IN"
+
+
+def test_stt_rejects_invalid_language():
+    """STT rejects unsupported language codes."""
+    from livekit.plugins.gnani import STT
+
+    with pytest.raises(ValueError, match="Unsupported language_code"):
+        STT(api_key="test-key", language="xx-XX")
 
 
 def test_stt_capabilities():
